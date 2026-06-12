@@ -7,6 +7,7 @@ mod configs;
 mod extension_manager;
 mod extension_render;
 mod font;
+mod inline_webview;
 mod input;
 mod multiplexer;
 mod osc_webview;

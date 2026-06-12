@@ -1,6 +1,9 @@
 //! Observes `OscWebviewRequest` and mounts/unmounts a registered webview as a
 //! tab in the requesting terminal's pane, reusing the extension-surface path.
 
+use crate::inline_webview::{
+    InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline,
+};
 use bevy::prelude::*;
 use bevy_terminal::{OscWebviewRequest, OscWebviewVerb};
 use ozmux_extension_host::ViewRegistry;
@@ -55,9 +58,10 @@ fn init_gate_from_config(
     gate.0.store(configs.osc_webview.enabled, Ordering::Relaxed);
 }
 
-fn on_osc_webview_request(
+pub(crate) fn on_osc_webview_request(
     ev: On<OscWebviewRequest>,
     mut mux: MultiplexerCommands,
+    mut inline: InlineWebviewParams,
     registry: Res<ViewRegistry>,
     surface_of: Query<&SurfaceOf>,
     mounted: Query<(Entity, &OscMounted, &SurfaceOf)>,
@@ -105,11 +109,31 @@ fn on_osc_webview_request(
             }
             let _ = mux.set_active_surface(pane, surface);
         }
-        OscWebviewVerb::MountInline { view_id, .. } => {
-            tracing::debug!(%view_id, "osc-webview: mount-inline arrives in phase 3; dropping");
+        OscWebviewVerb::MountInline {
+            view_id,
+            rows,
+            cols,
+        } => {
+            let Some(workspace) = mux.workspace_of_pane(pane) else {
+                tracing::debug!(%view_id, "osc-webview: mount-inline from a pane with no workspace, dropping");
+                return;
+            };
+            mount_inline(
+                &mut inline,
+                &registry,
+                InlineMountContext {
+                    terminal_surface,
+                    workspace,
+                    pane,
+                    view_id,
+                    rows: *rows,
+                    cols: *cols,
+                    anchor: req.anchor,
+                },
+            );
         }
-        OscWebviewVerb::UnmountInline { .. } => {
-            tracing::debug!("osc-webview: unmount-inline arrives in phase 3; dropping");
+        OscWebviewVerb::UnmountInline { view_id } => {
+            unmount_inline(&mut inline, terminal_surface, view_id.as_deref());
         }
         OscWebviewVerb::Unmount { view_id } => {
             let target = mounted.iter().find(|(_, m, so)| {
@@ -143,6 +167,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
             .init_resource::<ViewRegistry>()
+            .init_resource::<Assets<Image>>()
             .add_observer(on_osc_webview_request);
         app
     }
