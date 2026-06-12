@@ -10,7 +10,6 @@ pub mod control;
 pub mod error;
 pub mod extension_discovery;
 pub mod extension_manifest;
-pub mod handlers_bridge;
 pub mod host;
 pub mod host_descriptor;
 pub mod host_process;
@@ -34,7 +33,6 @@ pub use control::{
 pub use error::{ExtensionError, ExtensionResult};
 pub use extension_discovery::{DiscoveredExtension, discover_extensions};
 pub use extension_manifest::{ExtensionManifest, ExtensionView};
-pub use handlers_bridge::{HandlersBridge, SurfaceIdFrame};
 pub use host_descriptor::{BuiltHostManifest, ExtensionDescriptorJson, HostManifestJson};
 pub use host_process::{HostProcess, PreparedHost};
 pub use manifest::{Manifest, ManifestError};
