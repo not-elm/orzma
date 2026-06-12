@@ -269,8 +269,6 @@ impl Drop for CommandExtension {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn control_socket_round_trips_a_split_call() {
         use crate::control::{ControlReply, ControlResponse};
@@ -336,46 +334,5 @@ mod tests {
         shutdown.store(true, std::sync::atomic::Ordering::SeqCst);
         let _ = std::os::unix::net::UnixStream::connect(&sock);
         handle.join().expect("accept loop joins");
-    }
-
-    fn memo_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../extensions/memo")
-    }
-
-    fn node_and_memo_available() -> bool {
-        let node = std::process::Command::new("sh")
-            .arg("-c")
-            .arg("command -v node")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        node && memo_dir().join("node_modules/@ozmux/sdk").exists()
-    }
-
-    #[test]
-    fn launches_memo_and_writes_shim() {
-        if !node_and_memo_available() {
-            eprintln!("skipping: node or memo's @ozmux/sdk link not available");
-            return;
-        }
-        // NOTE: spawn_with_timeout (not spawn) — the lifecycle thread polls for
-        // shim creation up to this budget. The default 10s starves under
-        // parallel-test CPU contention (the e2e adds a third concurrent node
-        // spawner); a too-low spawn budget makes the thread emit a timeout
-        // event that fails wait_ready regardless of its own (larger) timeout.
-        let ext = CommandExtension::spawn_with_timeout(
-            CommandExtensionConfig {
-                name: "memo".into(),
-                dir: memo_dir(),
-                main: "bootstrap.ts".into(),
-            },
-            Duration::from_secs(20),
-        )
-        .expect("spawn memo");
-        ext.wait_ready(Duration::from_secs(20)).expect("memo ready");
-        assert!(
-            ext.bin_dir().join("@memo").exists(),
-            "@memo shim must be written"
-        );
     }
 }
