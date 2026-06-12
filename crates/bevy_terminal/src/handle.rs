@@ -100,6 +100,11 @@ pub struct TerminalHandle {
     row_hashes: HashMap<i32, u64>,
     window_open_mode: Option<TermMode>,
     frame_seq: u32,
+    #[expect(
+        dead_code,
+        reason = "stamped frames are wired in the follow-up advance-loop task"
+    )]
+    control_tx: Sender<ControlFrame>,
     reply_rx: Receiver<Vec<u8>>,
     control_rx: Receiver<ControlFrame>,
     osc7_parser: Parser,
@@ -122,7 +127,10 @@ impl TerminalHandle {
     ) -> Self {
         let size = LocalDim::new(cols, rows);
         let term = Term::new(Config::default(), &size, listener);
-        let control_tx2 = control_tx.clone();
+        let osc7 = Osc7Capture::new(
+            control_tx.clone(),
+            gethostname::gethostname().to_string_lossy().into_owned(),
+        );
         Self {
             term,
             parser: Processor::new(),
@@ -138,15 +146,13 @@ impl TerminalHandle {
             row_hashes: HashMap::new(),
             window_open_mode: None,
             frame_seq: 0,
+            control_tx,
             reply_rx,
             control_rx,
             osc7_parser: Parser::new(),
-            osc7: Osc7Capture::new(
-                control_tx,
-                gethostname::gethostname().to_string_lossy().into_owned(),
-            ),
+            osc7,
             osc_webview_parser: Parser::new(),
-            osc_webview: OscWebviewCapture::new(control_tx2, gate),
+            osc_webview: OscWebviewCapture::new(gate),
         }
     }
 
@@ -159,6 +165,15 @@ impl TerminalHandle {
         self.osc7_parser.advance(&mut self.osc7, chunk);
         self.osc_webview_parser
             .advance(&mut self.osc_webview, chunk);
+    }
+
+    /// Drains the buffered OSC 5379 verb left by the last `advance` call,
+    /// if any. Returns `None` when no OSC 5379 sequence was parsed or the
+    /// gate was off.
+    pub(crate) fn take_pending_osc_webview(
+        &mut self,
+    ) -> Option<crate::vt::listener::OscWebviewVerb> {
+        self.osc_webview.take_pending()
     }
 
     /// Returns true if the current `Term` cursor differs from the most
@@ -1741,22 +1756,9 @@ mod tests {
     }
 
     #[test]
-    fn advance_osc_webview_then_drain_triggers_request() {
-        use crate::events::OscWebviewRequest;
-        use crate::title::TerminalTitle;
-        use crate::vt::listener::{ControlFrame, TermListener};
-        use bevy::ecs::system::RunSystemOnce;
-        use bevy::prelude::*;
+    fn advance_osc_webview_buffers_pending_verb() {
+        use crate::vt::listener::{ControlFrame, OscWebviewVerb, TermListener};
         use crossbeam_channel::unbounded;
-
-        #[derive(Resource, Default)]
-        struct Seen(Vec<crate::vt::listener::OscWebviewVerb>);
-
-        let mut app = App::new();
-        app.init_resource::<Seen>();
-        app.add_observer(|ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
-            seen.0.push(ev.event().verb.clone());
-        });
 
         let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
         let (control_tx, control_rx) = unbounded::<ControlFrame>();
@@ -1775,24 +1777,16 @@ mod tests {
         );
         handle.advance(b"\x1b]5379;mount;dash\x07");
 
-        app.world_mut().spawn((handle, TerminalTitle::default()));
-        app.world_mut()
-            .run_system_once(
-                |mut commands: Commands,
-                 q: Query<(Entity, &TerminalHandle, &mut TerminalTitle)>| {
-                    for (entity, handle, mut title) in q {
-                        handle.drain_control_events(&mut commands, entity, &mut title);
-                    }
-                },
-            )
-            .unwrap();
-        app.world_mut().flush();
-
         assert_eq!(
-            app.world().resource::<Seen>().0,
-            vec![crate::vt::listener::OscWebviewVerb::Mount {
+            handle.take_pending_osc_webview(),
+            Some(OscWebviewVerb::Mount {
                 view_id: "dash".into()
-            }]
+            }),
+            "advance must buffer the parsed OSC 5379 verb in osc_webview"
+        );
+        assert!(
+            handle.take_pending_osc_webview().is_none(),
+            "second take must return None"
         );
     }
 }

@@ -10,7 +10,7 @@
 use crossbeam_channel::Sender;
 use std::path::PathBuf;
 
-/// Verb carried by `ControlFrame::OscWebview`: mount a registered view by id, or unmount.
+/// Verb carried by `ControlFrame::OscWebview`: tab mount/unmount or inline mount/unmount of a registered view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscWebviewVerb {
     /// Mount a registered webview by its unique identifier.
