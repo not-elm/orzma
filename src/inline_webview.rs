@@ -11,12 +11,12 @@ use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{WebviewSize, WebviewSource, WebviewTextureTarget};
 use bevy_terminal::InlineAnchor;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::prelude::OVERLAY_SLOTS;
+use bevy_terminal_renderer::material::TerminalMaterialSystems;
+use bevy_terminal_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
+use bevy_terminal_renderer::schema::TerminalGrid;
 use ozmux_extension_host::ViewRegistry;
 
-// TODO: Task 5 adds the per-frame projection / size-sync systems and their
-// plugin. Task 3 registers nothing — the mount/unmount arms ride the existing
-// `on_osc_webview_request` observer wired by `OzmuxOscWebviewPlugin`.
+// TODO: Task 5 adds the WebviewSize/DPR size-sync system to this plugin.
 
 /// Marks an inline webview entity and records its identity: the mounted
 /// `view_id` and the overlay texture `slot` (0..`OVERLAY_SLOTS`) it occupies
@@ -35,8 +35,8 @@ pub(crate) struct InlineWebview {
 /// Where an inline webview sits in its terminal's scrollback: the anchor cell
 /// (absolute line = `history_base + history_size + cursor row` at the OSC byte
 /// position, plus the cursor column), the rect extent in cells, and the VT
-/// `frame_seq` the next grid emit carries (Task 5 defers first projection
-/// until the grid catches up to it).
+/// `frame_seq` the next grid emit carries (`project_inline_overlays` defers
+/// first projection until the grid catches up to it).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InlinePlacement {
     /// Absolute scrollback line of the rect's TOP row.
@@ -50,6 +50,24 @@ pub(crate) struct InlinePlacement {
     /// The VT frame seq stamped at mount; grid frames at or after this seq
     /// (wrap-aware compare) may project the placement.
     pub(crate) frame_seq: u32,
+}
+
+/// Registers the per-frame projection that derives `TerminalOverlays` from
+/// inline-webview children (spec §5).
+///
+/// Scheduled in `PostUpdate` before `TerminalMaterialSystems::UpdateMaterial`:
+/// grid state settles during `Update` (the PTY drain systems flush the
+/// `FrameSnapshot` / `FrameDelta` observers there), so projecting just before
+/// the material rebuild hands the same frame's overlays to the shader.
+pub(crate) struct OzmuxInlineWebviewPlugin;
+
+impl Plugin for OzmuxInlineWebviewPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            PostUpdate,
+            project_inline_overlays.before(TerminalMaterialSystems::UpdateMaterial),
+        );
+    }
 }
 
 /// Everything the `MountInline` verb carries into `mount_inline`: the target
@@ -93,8 +111,8 @@ pub(crate) struct InlineWebviewParams<'w, 's> {
 /// multiplexer Surface entity itself: `finish_terminal_setup` inserts both
 /// `TerminalBundle` (`TerminalHandle`, which emits the OSC request) and
 /// `TerminalRenderBundle` (`TerminalGrid`) onto that one entity, so the
-/// `ChildOf` parent is also the entity Task 5's projection reads grid state
-/// from.
+/// `ChildOf` parent is also the entity `project_inline_overlays` reads grid
+/// state from.
 ///
 /// `WebviewSize` is seeded here because `bevy_cef` builds the CEF browser
 /// from it at creation. The seed is `(cols × cell_w, rows × cell_h) /
@@ -245,6 +263,87 @@ fn seed_logical_size(
         / scale_factor.max(f32::EPSILON)
 }
 
+/// The wire mode string `bevy_terminal`'s `mode_diff` emits for
+/// `TermMode::ALT_SCREEN`.
+const ALT_SCREEN_MODE: &str = "alt-screen";
+
+/// Derives each terminal's `TerminalOverlays` from its live inline-webview
+/// children, every frame, starting from the all-sentinel default (spec §5).
+///
+/// Per-child projection rules, in order:
+/// 1. Alt-screen: while the grid is on the alternate screen, every slot stays
+///    sentinel (the placement re-projects on return to the primary screen).
+/// 2. Seq-hold: a placement is skipped until the grid's `last_seq` reaches the
+///    mount-stamped `frame_seq` (wrap-aware compare).
+/// 3. `viewport_row = anchor_line - (history_base + history_size -
+///    display_offset)`; rects fully above/below the viewport or anchored at or
+///    past the right edge are culled; a partially-above rect keeps its
+///    negative row (the shader clips).
+///
+/// The component is (re)inserted for every terminal that has inline children
+/// OR already carries `TerminalOverlays`, so a terminal whose last inline
+/// child despawned converges to all-sentinel / all-`None` instead of keeping
+/// stale texture handles alive.
+fn project_inline_overlays(
+    mut commands: Commands,
+    terminals: Query<(
+        Entity,
+        &TerminalGrid,
+        Option<&Children>,
+        Has<TerminalOverlays>,
+    )>,
+    inline: Query<(&InlineWebview, &InlinePlacement, &WebviewTextureTarget)>,
+) {
+    for (terminal, grid, children, has_overlays) in &terminals {
+        // NOTE: `grid.modes` refreshes only on snapshots (FrameDelta carries
+        // no modes), which suffices here: alt-screen entry/exit always
+        // arrives as a snapshot — alacritty's `Term::swap_alt` calls
+        // `mark_fully_damaged()`, full damage collects as `DirtyRows::Full`,
+        // and `decide_frame_kind` maps that to `FrameKind::Snapshot`. A
+        // delta can therefore never carry an alt-screen flip past this check.
+        let on_alt_screen = grid.modes.iter().any(|m| m == ALT_SCREEN_MODE);
+        let mut overlays = TerminalOverlays::default();
+        let mut has_inline_child = false;
+        if let Some(kids) = children {
+            for child in kids.iter() {
+                let Ok((view, placement, texture)) = inline.get(child) else {
+                    continue;
+                };
+                has_inline_child = true;
+                if on_alt_screen {
+                    continue;
+                }
+                if (grid.last_seq.wrapping_sub(placement.frame_seq) as i32) < 0 {
+                    continue;
+                }
+                let viewport_row = placement.anchor_line as i64
+                    - (grid.history_base as i64 + i64::from(grid.history_size)
+                        - i64::from(grid.display_offset));
+                if viewport_row + i64::from(placement.rows) <= 0
+                    || viewport_row >= i64::from(grid.rows)
+                    || u32::from(placement.anchor_col) >= u32::from(grid.cols)
+                {
+                    continue;
+                }
+                let slot = usize::from(view.slot);
+                if slot >= OVERLAY_SLOTS {
+                    continue;
+                }
+                overlays.rects[slot] = IVec4::new(
+                    viewport_row as i32,
+                    i32::from(placement.anchor_col),
+                    i32::from(placement.rows),
+                    i32::from(placement.cols),
+                );
+                overlays.textures[slot] = Some(texture.0.clone());
+            }
+        }
+        if has_inline_child || has_overlays {
+            commands.entity(terminal).insert(overlays);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,7 +417,7 @@ mod tests {
             anchor: None,
         });
         app.world_mut().flush();
-        // Despawn is deferred; an update applies it.
+        // NOTE: despawn is deferred; a flush + update applies it.
         app.update();
     }
 
@@ -565,6 +664,319 @@ mod tests {
         assert_eq!(
             cell_size_phys(None),
             (FALLBACK_CELL_W_PHYS, FALLBACK_CELL_H_PHYS)
+        );
+    }
+
+    fn projection_grid(last_seq: u32) -> TerminalGrid {
+        TerminalGrid {
+            cols: 80,
+            rows: 24,
+            last_seq,
+            history_base: 0,
+            history_size: 40,
+            display_offset: 0,
+            ..Default::default()
+        }
+    }
+
+    fn spawn_projection_child(
+        app: &mut App,
+        terminal: Entity,
+        slot: u8,
+        placement: InlinePlacement,
+    ) -> Handle<Image> {
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        app.world_mut().spawn((
+            ChildOf(terminal),
+            InlineWebview {
+                view_id: format!("view-{slot}"),
+                slot,
+            },
+            placement,
+            WebviewTextureTarget(handle.clone()),
+        ));
+        handle
+    }
+
+    fn project(app: &mut App) {
+        app.world_mut()
+            .run_system_once(project_inline_overlays)
+            .unwrap();
+    }
+
+    fn overlays_of(app: &App, terminal: Entity) -> &TerminalOverlays {
+        app.world()
+            .get::<TerminalOverlays>(terminal)
+            .expect("projection must insert TerminalOverlays on the terminal")
+    }
+
+    fn assert_all_sentinel(overlays: &TerminalOverlays) {
+        assert_eq!(
+            overlays.rects,
+            [IVec4::ZERO; OVERLAY_SLOTS],
+            "every rect must stay at the rows == 0 sentinel"
+        );
+        assert!(
+            overlays.textures.iter().all(Option::is_none),
+            "every texture slot must stay None"
+        );
+    }
+
+    #[test]
+    fn projection_holds_until_grid_seq_reaches_anchor_seq() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(projection_grid(6)).id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor_line: 42,
+                anchor_col: 3,
+                rows: 10,
+                cols: 40,
+                frame_seq: 7,
+            },
+        );
+
+        project(&mut app);
+        assert_all_sentinel(overlays_of(&app, terminal));
+
+        app.world_mut()
+            .get_mut::<TerminalGrid>(terminal)
+            .unwrap()
+            .last_seq = 7;
+        project(&mut app);
+        let overlays = overlays_of(&app, terminal);
+        assert_eq!(
+            overlays.rects[0],
+            IVec4::new(2, 3, 10, 40),
+            "once last_seq reaches frame_seq the rect must project (42 - 40 = row 2)"
+        );
+        assert!(overlays.textures[0].is_some());
+    }
+
+    #[test]
+    fn projection_formula_maps_absolute_line_to_viewport_row() {
+        let mut app = make_test_app();
+        let terminal = app
+            .world_mut()
+            .spawn(TerminalGrid {
+                cols: 80,
+                rows: 5,
+                last_seq: 1,
+                history_base: 0,
+                history_size: 26,
+                display_offset: 0,
+                ..Default::default()
+            })
+            .id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor_line: 30,
+                anchor_col: 2,
+                rows: 4,
+                cols: 10,
+                frame_seq: 0,
+            },
+        );
+
+        project(&mut app);
+        assert_eq!(
+            overlays_of(&app, terminal).rects[0],
+            IVec4::new(4, 2, 4, 10),
+            "30 - (0 + 26 - 0) must land on viewport row 4"
+        );
+
+        app.world_mut()
+            .get_mut::<TerminalGrid>(terminal)
+            .unwrap()
+            .display_offset = 3;
+        project(&mut app);
+        assert_all_sentinel(overlays_of(&app, terminal));
+
+        {
+            let mut grid = app.world_mut().get_mut::<TerminalGrid>(terminal).unwrap();
+            grid.display_offset = 0;
+            grid.history_size = 32;
+        }
+        project(&mut app);
+        assert_eq!(
+            overlays_of(&app, terminal).rects[0],
+            IVec4::new(-2, 2, 4, 10),
+            "a partially-above rect must pass its negative row through as i32"
+        );
+    }
+
+    #[test]
+    fn projection_culls_fully_outside_rects() {
+        let mut app = make_test_app();
+        let terminal = app
+            .world_mut()
+            .spawn(TerminalGrid {
+                cols: 80,
+                rows: 24,
+                last_seq: 1,
+                history_base: 0,
+                history_size: 30,
+                display_offset: 0,
+                ..Default::default()
+            })
+            .id();
+        let above = InlinePlacement {
+            anchor_line: 10,
+            anchor_col: 0,
+            rows: 10,
+            cols: 10,
+            frame_seq: 0,
+        };
+        let below = InlinePlacement {
+            anchor_line: 100,
+            anchor_col: 0,
+            rows: 10,
+            cols: 10,
+            frame_seq: 0,
+        };
+        let col_out = InlinePlacement {
+            anchor_line: 35,
+            anchor_col: 80,
+            rows: 10,
+            cols: 10,
+            frame_seq: 0,
+        };
+        spawn_projection_child(&mut app, terminal, 0, above);
+        spawn_projection_child(&mut app, terminal, 1, below);
+        spawn_projection_child(&mut app, terminal, 2, col_out);
+
+        project(&mut app);
+        assert_all_sentinel(overlays_of(&app, terminal));
+    }
+
+    #[test]
+    fn alt_screen_blanks_all_slots() {
+        let mut app = make_test_app();
+        let terminal = app
+            .world_mut()
+            .spawn(TerminalGrid {
+                modes: vec![ALT_SCREEN_MODE.to_string()],
+                ..projection_grid(7)
+            })
+            .id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor_line: 42,
+                anchor_col: 3,
+                rows: 10,
+                cols: 40,
+                frame_seq: 7,
+            },
+        );
+
+        project(&mut app);
+        assert_all_sentinel(overlays_of(&app, terminal));
+
+        app.world_mut()
+            .get_mut::<TerminalGrid>(terminal)
+            .unwrap()
+            .modes
+            .clear();
+        project(&mut app);
+        assert_eq!(
+            overlays_of(&app, terminal).rects[0],
+            IVec4::new(2, 3, 10, 40),
+            "returning to the primary screen must re-project the placement"
+        );
+    }
+
+    #[test]
+    fn texture_handle_lands_in_the_childs_slot() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        let handle = spawn_projection_child(
+            &mut app,
+            terminal,
+            2,
+            InlinePlacement {
+                anchor_line: 42,
+                anchor_col: 3,
+                rows: 10,
+                cols: 40,
+                frame_seq: 7,
+            },
+        );
+
+        project(&mut app);
+        let overlays = overlays_of(&app, terminal);
+        assert_eq!(
+            overlays.textures[2].as_ref().map(Handle::id),
+            Some(handle.id()),
+            "the child's texture handle must land in ITS slot"
+        );
+        assert_ne!(overlays.rects[2], IVec4::ZERO);
+        for slot in [0, 1, 3] {
+            assert!(overlays.textures[slot].is_none());
+            assert_eq!(overlays.rects[slot], IVec4::ZERO);
+        }
+    }
+
+    #[test]
+    fn stale_overlays_clear_after_unmount_all() {
+        let mut app = make_test_app();
+        register_view(&mut app, "dash", true, &[]);
+        let terminal = spawn_terminal(&mut app);
+        app.world_mut()
+            .entity_mut(terminal)
+            .insert(projection_grid(7));
+
+        mount(&mut app, terminal, "dash", Some(test_anchor()));
+        project(&mut app);
+        let overlays = overlays_of(&app, terminal);
+        assert_ne!(overlays.rects[0], IVec4::ZERO);
+        assert!(overlays.textures[0].is_some());
+
+        unmount(&mut app, terminal, None);
+        project(&mut app);
+        assert_all_sentinel(overlays_of(&app, terminal));
+    }
+
+    #[test]
+    fn seq_hold_is_wrap_aware_near_u32_max() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(projection_grid(u32::MAX - 3)).id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor_line: 42,
+                anchor_col: 3,
+                rows: 10,
+                cols: 40,
+                frame_seq: u32::MAX - 1,
+            },
+        );
+
+        project(&mut app);
+        assert_all_sentinel(overlays_of(&app, terminal));
+
+        app.world_mut()
+            .get_mut::<TerminalGrid>(terminal)
+            .unwrap()
+            .last_seq = 2;
+        project(&mut app);
+        assert_eq!(
+            overlays_of(&app, terminal).rects[0],
+            IVec4::new(2, 3, 10, 40),
+            "a last_seq that wrapped past 0 must release the hold"
         );
     }
 }
