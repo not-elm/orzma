@@ -58,10 +58,6 @@ pub(crate) enum ControlFrame {
     CurrentDir(PathBuf),
     /// An OSC-driven webview mount/unmount request from the PTY.
     /// `anchor` is `Some` only for `MountInline` (stamped in `handle.rs`).
-    #[expect(
-        dead_code,
-        reason = "construction moves to advance-loop stamping in the follow-up task"
-    )]
     OscWebview {
         verb: OscWebviewVerb,
         anchor: Option<InlineAnchor>,

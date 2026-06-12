@@ -15,7 +15,7 @@ use crate::vt::frame_builder::{
     viewport_row_to_line,
 };
 use crate::vt::hyperlink::HyperlinkInterner;
-use crate::vt::listener::{ControlFrame, TermListener};
+use crate::vt::listener::{ControlFrame, InlineAnchor, OscWebviewVerb, TermListener};
 use crate::vt::mode_diff::diff_mode;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -100,10 +100,24 @@ pub struct TerminalHandle {
     row_hashes: HashMap<i32, u64>,
     window_open_mode: Option<TermMode>,
     frame_seq: u32,
+    history_base: u64,
     #[expect(
         dead_code,
-        reason = "stamped frames are wired in the follow-up advance-loop task"
+        reason = "read once run_history_maintenance is fleshed out in the follow-up task"
     )]
+    frozen_history: usize,
+    #[expect(
+        dead_code,
+        reason = "read once run_history_maintenance is fleshed out in the follow-up task"
+    )]
+    frozen_valid: bool,
+    saturated: bool,
+    force_next_emit: bool,
+    #[expect(
+        dead_code,
+        reason = "read once run_history_maintenance is fleshed out in the follow-up task"
+    )]
+    scroll_cap: usize,
     control_tx: Sender<ControlFrame>,
     reply_rx: Receiver<Vec<u8>>,
     control_rx: Receiver<ControlFrame>,
@@ -126,7 +140,9 @@ impl TerminalHandle {
         gate: Arc<AtomicBool>,
     ) -> Self {
         let size = LocalDim::new(cols, rows);
-        let term = Term::new(Config::default(), &size, listener);
+        let config = Config::default();
+        let scroll_cap = config.scrolling_history;
+        let term = Term::new(config, &size, listener);
         let osc7 = Osc7Capture::new(
             control_tx.clone(),
             gethostname::gethostname().to_string_lossy().into_owned(),
@@ -146,6 +162,12 @@ impl TerminalHandle {
             row_hashes: HashMap::new(),
             window_open_mode: None,
             frame_seq: 0,
+            history_base: 0,
+            frozen_history: 0,
+            frozen_valid: true,
+            saturated: false,
+            force_next_emit: false,
+            scroll_cap,
             control_tx,
             reply_rx,
             control_rx,
@@ -156,15 +178,34 @@ impl TerminalHandle {
         }
     }
 
-    /// Feeds a chunk of PTY bytes through the vte parser into `Term`.
+    /// Feeds a chunk of PTY bytes through the vte parsers into `Term`.
+    ///
+    /// The webview sibling parser LEADS via `advance_until_terminated`:
+    /// it stops right after each OSC 5379 sequence so the main parser can
+    /// be advanced exactly to that byte and the cursor sampled there
+    /// (spec §3). For ST-terminated sequences the stop offset lands
+    /// between ESC and `\`; the leftover `\` is consumed harmlessly by
+    /// the next segment.
     pub fn advance(&mut self, chunk: &[u8]) {
         if chunk.is_empty() {
             return;
         }
-        self.parser.advance(&mut self.term, chunk);
-        self.osc7_parser.advance(&mut self.osc7, chunk);
-        self.osc_webview_parser
-            .advance(&mut self.osc_webview, chunk);
+        let mut rest = chunk;
+        loop {
+            let k = self
+                .osc_webview_parser
+                .advance_until_terminated(&mut self.osc_webview, rest);
+            self.parser.advance(&mut self.term, &rest[..k]);
+            self.osc7_parser.advance(&mut self.osc7, &rest[..k]);
+            match self.osc_webview.take_pending() {
+                Some(verb) => self.handle_webview_verb(verb),
+                None => self.run_history_maintenance(),
+            }
+            if k == rest.len() {
+                break;
+            }
+            rest = &rest[k..];
+        }
     }
 
     /// Returns true if the current `Term` cursor differs from the most
@@ -855,6 +896,46 @@ impl TerminalHandle {
         self.term.reset_damage();
         coalescer.disarm();
     }
+
+    /// Stamps the anchor / applies state gates for a buffered OSC 5379 verb
+    /// at an `advance_until_terminated` stop point, then forwards the frame.
+    fn handle_webview_verb(&mut self, verb: OscWebviewVerb) {
+        if self.parser.sync_bytes_count() > 0 {
+            self.parser.stop_sync(&mut self.term);
+        }
+        self.run_history_maintenance();
+        let anchor = if matches!(verb, OscWebviewVerb::MountInline { .. }) {
+            if self.term.mode().contains(TermMode::ALT_SCREEN) {
+                tracing::debug!("mount-inline rejected: alternate screen active");
+                return;
+            }
+            if self.saturated {
+                tracing::debug!("mount-inline rejected: scrollback saturated");
+                return;
+            }
+            let cursor = self.term.grid().cursor.point;
+            self.force_next_emit = true;
+            Some(InlineAnchor {
+                line: self.history_base
+                    + self.term.history_size() as u64
+                    + cursor.line.0.max(0) as u64,
+                col: cursor.column.0 as u16,
+                frame_seq: self.frame_seq,
+            })
+        } else {
+            None
+        };
+        if let Err(e) = self
+            .control_tx
+            .send(ControlFrame::OscWebview { verb, anchor })
+        {
+            tracing::warn!(?e, "control_tx send(OscWebview) failed");
+        }
+    }
+
+    /// Per-segment history_base maintenance (spec §3). Fleshed out in a
+    /// follow-up task; the call sites are already final.
+    fn run_history_maintenance(&mut self) {}
 }
 
 /// Classification used by `decide_frame_kind` to select snapshot vs
@@ -1744,6 +1825,108 @@ mod tests {
             app.world().resource::<Seen>().0,
             vec![PathBuf::from("/tmp")]
         );
+    }
+
+    fn handle_with_gate_on(
+        cols: u16,
+        rows: u16,
+    ) -> (TerminalHandle, crossbeam_channel::Receiver<ControlFrame>) {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) = crossbeam_channel::unbounded::<ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let h = TerminalHandle::new(
+            cols,
+            rows,
+            listener,
+            reply_rx,
+            crossbeam_channel::unbounded::<ControlFrame>().1,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(true)),
+        );
+        (h, ctrl_rx)
+    }
+
+    #[test]
+    fn mount_inline_anchor_is_cursor_at_osc_byte_position_not_chunk_end() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let mut payload = b"\x1b]5379;mount-inline;memo;3;10\x1b\\".to_vec();
+        payload.extend_from_slice(b"\r\n\r\n\r\n");
+        h.advance(&payload);
+        let frame = rx.try_recv().expect("MountInline frame");
+        let ControlFrame::OscWebview { verb, anchor } = frame else {
+            panic!("expected OscWebview, got {frame:?}");
+        };
+        assert!(matches!(verb, OscWebviewVerb::MountInline { .. }));
+        let anchor = anchor.expect("MountInline carries an anchor");
+        assert_eq!(
+            anchor.line, 0,
+            "anchor = cursor at the OSC byte, before the newlines"
+        );
+        assert_eq!(anchor.col, 0);
+    }
+
+    #[test]
+    fn mount_inline_anchor_accounts_for_prior_output_in_same_chunk() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let mut payload = b"\r\n\r\n".to_vec();
+        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x07");
+        payload.extend_from_slice(b"\r\n\r\n");
+        h.advance(&payload);
+        let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
+            panic!("expected OscWebview");
+        };
+        assert_eq!(anchor.expect("anchor").line, 2);
+    }
+
+    #[test]
+    fn legacy_mount_still_arrives_without_anchor() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b]5379;mount;dash\x1b\\");
+        let ControlFrame::OscWebview { verb, anchor } = rx.try_recv().expect("frame") else {
+            panic!("expected OscWebview");
+        };
+        assert_eq!(
+            verb,
+            OscWebviewVerb::Mount {
+                view_id: "dash".into()
+            }
+        );
+        assert!(anchor.is_none());
+    }
+
+    #[test]
+    fn osc_split_across_two_chunks_still_anchors_correctly() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let full = b"\x1b]5379;mount-inline;memo;3;10\x1b\\";
+        let (a, b) = full.split_at(10);
+        h.advance(a);
+        h.advance(b);
+        let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
+            panic!("expected OscWebview");
+        };
+        assert_eq!(anchor.expect("anchor").line, 0);
+    }
+
+    #[test]
+    fn two_mounts_in_one_chunk_each_get_their_own_anchor() {
+        let (mut h, rx) = handle_with_gate_on(20, 6);
+        let mut payload = b"\x1b]5379;mount-inline;a1;2;10\x1b\\".to_vec();
+        payload.extend_from_slice(b"\r\n\r\n");
+        payload.extend_from_slice(b"\x1b]5379;mount-inline;b2;2;10\x1b\\");
+        h.advance(&payload);
+        let first = rx.try_recv().expect("first frame");
+        let second = rx.try_recv().expect("second frame");
+        let get = |f: ControlFrame| match f {
+            ControlFrame::OscWebview {
+                anchor: Some(a), ..
+            } => a.line,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(get(first), 0);
+        assert_eq!(get(second), 2);
     }
 }
 

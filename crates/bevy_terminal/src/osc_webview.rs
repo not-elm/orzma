@@ -37,12 +37,6 @@ impl OscWebviewCapture {
     // NOTE: the caller MUST take the pending verb after every
     // advance_until_terminated stop; a stuck pending makes the next call
     // return 0 forever (infinite loop in TerminalHandle::advance).
-    // NOTE: cfg_attr(not(test)) because the tests below call this method —
-    // a bare #[expect] would be unfulfilled in test builds and warn.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "drain point for the follow-up advance-loop task")
-    )]
     pub(crate) fn take_pending(&mut self) -> Option<OscWebviewVerb> {
         self.pending.take()
     }
@@ -63,6 +57,9 @@ fn valid_view_id(s: &[u8]) -> Option<String> {
 
 fn parse_dim(raw: Option<&[u8]>, max: u16) -> Option<u16> {
     let s = std::str::from_utf8(raw?).ok()?;
+    if !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
     let v: u16 = s.parse().ok()?;
     (1..=max).contains(&v).then_some(v)
 }
@@ -233,6 +230,61 @@ mod tests {
             assert!(
                 c.take_pending().is_none(),
                 "rows={r} cols={w} must be malformed"
+            );
+        }
+    }
+
+    #[test]
+    fn mount_inline_minimum_dims_accepted() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"1", b"1"],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 1,
+                cols: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_maximum_dims_accepted() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"200", b"400"],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 200,
+                cols: 400,
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_non_digit_dims_dropped() {
+        for (r, w) in [("3", "y"), ("+3", "20"), ("3", "+20")] {
+            let mut c = cap(true);
+            c.osc_dispatch(
+                &[
+                    OSC_WEBVIEW_CODE,
+                    b"mount-inline",
+                    b"memo",
+                    r.as_bytes(),
+                    w.as_bytes(),
+                ],
+                true,
+            );
+            assert!(
+                c.take_pending().is_none(),
+                "rows={r} cols={w} must be malformed (digits only)"
             );
         }
     }
