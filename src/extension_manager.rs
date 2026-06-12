@@ -49,7 +49,8 @@ impl ExtensionManagerPlugin {
             }) {
             Ok(host) => {
                 for extension in &extensions {
-                    self.endpoints.insert(extension.name.clone(), extension.dir.clone());
+                    self.endpoints
+                        .insert(extension.name.clone(), extension.dir.clone());
                 }
                 app.insert_resource(HostRuntime { host });
             }
