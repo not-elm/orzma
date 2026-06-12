@@ -173,6 +173,15 @@ fn discover_command_extensions(roots: &[PathBuf]) -> Vec<DiscoveredCommandExtens
         let mut dirs: Vec<PathBuf> = entries.filter_map(|e| e.ok().map(|e| e.path())).collect();
         dirs.sort();
         for dir in dirs {
+            // NOTE: a dir carrying `ozmux.toml` is a new-model extension; legacy
+            // discovery must skip it before touching `package.json`. The new-model
+            // `package.json` has no `name`, so parsing it would log a spurious
+            // "failed to parse" error every boot; skipping here keeps the two
+            // discovery models structurally separate instead of relying on that
+            // parse-error side effect.
+            if dir.join("ozmux.toml").is_file() {
+                continue;
+            }
             let manifest_path = dir.join(PACKAGE_JSON);
             if !manifest_path.is_file() {
                 continue;
@@ -392,7 +401,21 @@ mod tests {
         let found = discover_command_extensions(&[bundled]);
         assert!(
             !found.iter().any(|d| d.config.name == "memo"),
-            "memo's package.json has no name (new-model); legacy discovery must skip it"
+            "memo carries an ozmux.toml (new-model); legacy discovery must skip it"
+        );
+    }
+
+    #[test]
+    fn legacy_discovery_skips_dirs_with_ozmux_toml_even_when_named() {
+        let tmp = tempfile::tempdir().unwrap();
+        let d = tmp.path().join("ext");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("package.json"), r#"{"name":"ext"}"#).unwrap();
+        std::fs::write(d.join("ozmux.toml"), "api = [\"api.ts\"]\n").unwrap();
+        let found = discover_command_extensions(&[tmp.path().to_path_buf()]);
+        assert!(
+            found.is_empty(),
+            "a dir with ozmux.toml is new-model; legacy discovery skips it before parsing package.json, even when package.json has a name"
         );
     }
 

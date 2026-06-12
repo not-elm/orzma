@@ -8,6 +8,6 @@ import { readFile } from 'node:fs/promises';
  */
 export default {
   fs: {
-    read: async (path: string): Promise<Uint8Array> => await readFile(path),
+    read: (path: string): Promise<Uint8Array> => readFile(path),
   },
 };

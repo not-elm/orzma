@@ -47,7 +47,7 @@
           out.textContent = new TextDecoder().decode(bytes);
         } catch (e) {
           out.classList.add("err");
-          out.textContent = `error: ${e.message}`;
+          out.textContent = `error: ${e?.message ?? e}`;
         }
       });
     </script>
