@@ -17,5 +17,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["surfaces/**/*.ts", "bootstrap.ts"]
+  "include": ["api.ts"]
 }
