@@ -134,8 +134,9 @@ pub const OVERLAY_SLOTS: usize = 4;
 ///
 /// - `rects[i]` is `(row, col, rows, cols)` in CELL coordinates; `row` may be
 ///   negative (rect partially above the viewport). `rows == 0` is the
-///   inactive-slot sentinel — the shader skips the slot and
-///   `update_terminal_material` ignores `textures[i]`.
+///   inactive-slot sentinel — the shader skips the slot; the renderer binds
+///   `textures[i]` regardless, so consumers should set freed slots to `None`
+///   (the rebuild-every-frame contract below does this naturally).
 /// - Consumers must rebuild this component from live state every frame
 ///   (all-sentinel start), so stale texture handles cannot outlive their
 ///   producers (spec §5).
@@ -819,14 +820,15 @@ mod tests {
 
     #[test]
     fn set_overlays_maps_slot_index_to_field_order() {
+        const H_A: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000001");
+        const H_B: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000002");
         let mut mat = TerminalUiMaterial::default();
-        let h0 = Handle::<Image>::default();
-        let textures = [Some(h0.clone()), None, Some(h0.clone()), None];
+        let textures = [Some(H_A), None, Some(H_B), None];
         mat.set_overlays(&textures);
-        assert!(mat.overlay0.is_some());
-        assert!(mat.overlay1.is_none());
-        assert!(mat.overlay2.is_some());
-        assert!(mat.overlay3.is_none());
+        assert_eq!(mat.overlay0, Some(H_A));
+        assert_eq!(mat.overlay1, None);
+        assert_eq!(mat.overlay2, Some(H_B));
+        assert_eq!(mat.overlay3, None);
     }
 
     #[test]
