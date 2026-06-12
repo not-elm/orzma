@@ -4,6 +4,7 @@
 //! surface (capability-gated `host.call` frames forwarded to the single Node host
 //! via `HostRpc`, with replies routed back on the `ozmux` channel).
 
+use self::preload::{build_preload, webview_url};
 use crate::osc_webview::GrantedNamespaces;
 use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
@@ -20,11 +21,7 @@ use ozmux_multiplexer::{
 };
 use serde_json::Value;
 
-/// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension surface,
-/// where `entry` is the client's HTML path relative to the extension dir.
-fn webview_url(extension_name: &str, entry: &str) -> String {
-    format!("ozmux-ext://{extension_name}/{entry}")
-}
+pub(crate) mod preload;
 
 /// One frame emitted by the page bridge `host_bridge.js` via
 /// `cef.emit({ kind: 'host.call', … })`, inspected by `on_host_call_frame`.
@@ -91,11 +88,6 @@ impl HostRpc {
 #[derive(Component)]
 struct WebviewMountUnresolved;
 
-/// JS defining the new-model `window.<ns>.<method>` host-API bridge over
-/// `cef.emit` / `cef.listen`, injected (with `window.__ozmuxGranted`) per
-/// webview as a `PreloadScripts` entry.
-const HOST_BRIDGE_JS: &str = include_str!("extension_render/host_bridge.js");
-
 /// The `kind` discriminator that routes a `Receive<OzmuxFrame>` to the new-model
 /// host-API path (`on_host_call_frame`). The page side emits the matching literal
 /// in `host_bridge.js`.
@@ -107,7 +99,7 @@ const HOST_CALL_KIND: &str = "host.call";
 /// registry on each request, so entries registered after `CefPlugin::build()`
 /// resolve; unregistered names 404. The host-API bridge is intentionally NOT
 /// registered as a global extension here; it is injected per-webview via
-/// `PreloadScripts` in `finish_extension_setup` (see the NOTE there).
+/// `PreloadScripts` by `preload::build_preload` (see the NOTE there).
 pub fn cef_plugin(registry: AssetSourceRegistry) -> CefPlugin {
     CefPlugin {
         custom_schemes: vec![custom_scheme(registry)],
@@ -262,16 +254,8 @@ fn finish_extension_setup(
         let name = owner.0.as_str();
         let url = webview_url(name, &entry);
         tracing::debug!(?surface, ?logical, %url, "spawning extension webview");
-        // NOTE: `window.<ns>` MUST be a PreloadScript, not a global CefExtension.
-        // host_bridge.js calls cef.listen() at top level; a global extension runs
-        // that during V8 context creation, where there is no entered V8 context, so
-        // the native cef.listen handler's v8_context_get_current_context() crashes
-        // the render process. PreloadScripts are eval'd at on_context_created inside
-        // an entered context (and their exceptions are caught, not fatal), so
-        // cef.listen registers correctly there.
-        let ctx_js = context_preload_js(workspace, pane, surface, name);
-        let granted_json = match granted.get(surface) {
-            Ok(g) => serde_json::to_string(&g.0).expect("namespace set serializes infallibly"),
+        let preload = match granted.get(surface) {
+            Ok(g) => build_preload(workspace, pane, surface, name, g),
             Err(_) => {
                 // NOTE: every OSC-mounted Extension surface is stamped with
                 // GrantedNamespaces at mount; reaching setup without it means a
@@ -281,11 +265,15 @@ fn finish_extension_setup(
                     ?surface,
                     "extension surface has no GrantedNamespaces; injecting empty grant"
                 );
-                "[]".to_string()
+                build_preload(
+                    workspace,
+                    pane,
+                    surface,
+                    name,
+                    &GrantedNamespaces::default(),
+                )
             }
         };
-        let granted_js = format!("window.__ozmuxGranted={granted_json};");
-        let preload = PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()]);
         commands.entity(surface).insert((
             WebviewSource::new(url),
             WebviewSize(logical),
@@ -306,28 +294,6 @@ fn surface_multiplexer_chain(
     let pane = mux.pane_of_surface(surface)?;
     let workspace = mux.workspace_of_pane(pane)?;
     Some((workspace, pane))
-}
-
-/// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`.
-///
-/// NOTE: PreloadScripts are joined with `;` and eval'd as one unit, so this MUST
-/// be a complete statement; a syntax error here would break the bridge eval too.
-fn context_preload_js(
-    workspace: Entity,
-    pane: Entity,
-    surface: Entity,
-    extension_name: &str,
-) -> String {
-    let workspace_id = workspace.to_bits().to_string();
-    // NOTE: the JS keys "sessionId"/"windowId" keep their legacy names on purpose — a
-    // browser-side wire contract the SDK surface client reads; renaming them breaks extensions.
-    format!(
-        "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:\"extension\",extensionName:{n:?}}};",
-        s = workspace_id,
-        p = pane.to_bits().to_string(),
-        a = surface.to_bits().to_string(),
-        n = extension_name,
-    )
 }
 
 /// Converts a host pane's `ComputedNode` physical-pixel size to the logical
@@ -729,36 +695,6 @@ mod tests {
     }
 
     #[test]
-    fn context_preload_js_assigns_window_context_with_workspace_bits_as_window_id() {
-        let world = &mut App::new();
-        world
-            .add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
-        let (workspace, pane, surface) = world
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.workspace, o.pane, o.surface)
-            })
-            .unwrap();
-        world.world_mut().flush();
-
-        let js = context_preload_js(workspace, pane, surface, "memo");
-        let s = workspace.to_bits().to_string();
-        assert!(js.starts_with("window.__ozmuxContext="));
-        assert!(js.ends_with("};"));
-        assert!(js.contains(&format!("sessionId:\"{s}\"")));
-        assert!(
-            js.contains(&format!("windowId:\"{s}\"")),
-            "windowId must equal sessionId per the design"
-        );
-        assert!(js.contains(&format!("paneId:\"{}\"", pane.to_bits())));
-        assert!(js.contains(&format!("surfaceId:\"{}\"", surface.to_bits())));
-        assert!(js.contains("role:\"extension\""));
-        assert!(js.contains("extensionName:\"memo\""));
-    }
-
-    #[test]
     fn pane_logical_size_scales_physical_to_logical() {
         assert_eq!(
             pane_logical_size(Vec2::new(640.0, 480.0), 1.0),
@@ -1128,7 +1064,7 @@ mod tests {
             .get::<PreloadScripts>(host)
             .expect("new-model surface must carry the host bridge as a PreloadScript");
         assert!(
-            preload.0.iter().any(|s| s == HOST_BRIDGE_JS),
+            preload.0.iter().any(|s| s == preload::HOST_BRIDGE_JS),
             "the host-API bridge JS must be injected for a surface with GrantedNamespaces"
         );
         assert!(
