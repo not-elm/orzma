@@ -20,7 +20,7 @@ const WRITER_POLL: Duration = Duration::from_millis(100);
 /// via [`HostRpcClient::try_recv_response`]. The writer/reader threads are
 /// joined on drop.
 pub struct HostRpcClient {
-    outbound: Sender<String>,
+    outbound: Option<Sender<String>>,
     responses: Receiver<String>,
     shutdown: Arc<AtomicBool>,
     stream: UnixStream,
@@ -80,7 +80,7 @@ impl HostRpcClient {
         });
 
         Ok(Self {
-            outbound: out_tx,
+            outbound: Some(out_tx),
             responses: in_rx,
             shutdown,
             stream,
@@ -91,7 +91,9 @@ impl HostRpcClient {
 
     /// Queues an NDJSON request line for the host (the writer appends `\n`).
     pub fn send_line(&self, line: String) {
-        let _ = self.outbound.send(line);
+        if let Some(outbound) = self.outbound.as_ref() {
+            let _ = outbound.send(line);
+        }
     }
 
     /// Pops the next NDJSON reply line, or `None` if none is queued.
@@ -102,10 +104,13 @@ impl HostRpcClient {
 
 impl Drop for HostRpcClient {
     fn drop(&mut self) {
-        // NOTE: signal shutdown, then shut the stream so the reader's blocking
-        // read_line returns; the writer exits within one WRITER_POLL even though
-        // a sender clone may still live in the HostRpc resource.
+        // NOTE: drop the only Sender (so the writer's recv returns Disconnected at
+        // once) and shut the stream (so the reader's blocking read_line returns)
+        // BEFORE joining — otherwise the writer's join would block up to a
+        // WRITER_POLL tick and the reader's would block forever. This runs on the
+        // Bevy main thread (clear_client), so a stalled join freezes the frame loop.
         self.shutdown.store(true, Ordering::SeqCst);
+        self.outbound.take();
         let _ = self.stream.shutdown(Shutdown::Both);
         if let Some(w) = self.writer.take() {
             let _ = w.join();

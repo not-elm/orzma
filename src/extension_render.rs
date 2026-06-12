@@ -117,6 +117,11 @@ pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
 /// new-model webview as a `PreloadScripts` entry instead of `OZMUX_EXTENSION_JS`.
 const HOST_BRIDGE_JS: &str = include_str!("extension_render/host_bridge.js");
 
+/// The `kind` discriminator that routes a `Receive<OzmuxFrame>` to the new-model
+/// host-API path (`on_host_call_frame`) instead of the legacy handler path
+/// (`on_ozmux_frame`). The page side emits the matching literal in `host_bridge.js`.
+const HOST_CALL_KIND: &str = "host.call";
+
 /// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
 /// `AssetSourceRegistry` the extension manager populates: `Static(<dir>)` for
 /// new-model extensions (served directly by Rust) and `Legacy(...)` for legacy
@@ -423,7 +428,7 @@ fn on_ozmux_frame(
         .0
         .get("kind")
         .and_then(serde_json::Value::as_str)
-        == Some("host.call")
+        == Some(HOST_CALL_KIND)
     {
         return;
     }
@@ -464,7 +469,7 @@ fn on_host_call_frame(
     granted: Query<&GrantedNamespaces>,
 ) {
     let payload = &frame.payload.0;
-    if payload.get("kind").and_then(Value::as_str) != Some("host.call") {
+    if payload.get("kind").and_then(Value::as_str) != Some(HOST_CALL_KIND) {
         return;
     }
     let webview = frame.webview;

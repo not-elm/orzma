@@ -246,6 +246,9 @@ fn poll_host_lifecycle(mut host_rpc: Option<ResMut<HostRpc>>, host: Option<Res<H
                 }
                 Err(error) => {
                     tracing::error!(%error, "single host ready but RPC connect failed");
+                    if let Some(hr) = host_rpc.as_mut() {
+                        hr.clear_client();
+                    }
                 }
             },
             LifecycleEvent::SpawnFailed { error } => {

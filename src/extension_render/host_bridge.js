@@ -51,10 +51,11 @@
         {},
         {
           get: function (_t, method) {
-            // NOTE: a Symbol key (e.g. Symbol.toPrimitive, or `then` probing for
-            // a thenable) must NOT return a callable, or window[ns] would look
-            // like a Promise and break. Only string method names dispatch.
-            if (typeof method !== 'string') return undefined;
+            // NOTE: a Symbol key, or the string 'then', must NOT return a
+            // callable — otherwise window[ns] is detected as a thenable and
+            // `await window.fs` / Promise.resolve(window.fs) would dispatch a
+            // bogus `then` host call. Only real (string, non-'then') methods do.
+            if (typeof method !== 'string' || method === 'then') return undefined;
             return function () {
               return hostCall(ns, method, Array.prototype.slice.call(arguments));
             };
