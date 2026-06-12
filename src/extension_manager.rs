@@ -5,7 +5,7 @@
 use crate::extension_render::HostRpc;
 use bevy::prelude::*;
 use ozmux_configs::path::{SystemEnv, extensions_dir};
-use ozmux_extension_host::host::{AssetSource, AssetSourceRegistry, LifecycleEvent, RuntimeRoot};
+use ozmux_extension_host::host::{AssetSourceRegistry, LifecycleEvent, RuntimeRoot};
 use ozmux_extension_host::{
     BuiltHostManifest, HostProcess, HostRpcClient, RegisteredView, ViewId, ViewRegistry,
     discover_extensions,
@@ -49,10 +49,7 @@ impl ExtensionManagerPlugin {
             }) {
             Ok(host) => {
                 for extension in &extensions {
-                    self.endpoints.insert(
-                        extension.name.clone(),
-                        AssetSource::Static(extension.dir.clone()),
-                    );
+                    self.endpoints.insert(extension.name.clone(), extension.dir.clone());
                 }
                 app.insert_resource(HostRuntime { host });
             }

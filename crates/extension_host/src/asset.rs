@@ -59,8 +59,8 @@ pub fn serve_static_asset(root: &Path, raw_path: &str) -> AssetOutcome {
     }
 }
 
-/// Upper bound on a single static asset, mirroring `protocol::MAX_BODY_LEN`
-/// (64 MiB): a larger file would buffer wholesale into the render process.
+/// Upper bound on a single static asset (64 MiB): a larger file would buffer
+/// wholesale into the render process.
 const MAX_ASSET_LEN: u64 = 64 * 1024 * 1024;
 
 fn exceeds_limit(len: u64) -> bool {
