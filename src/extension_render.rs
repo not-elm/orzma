@@ -102,13 +102,12 @@ const HOST_BRIDGE_JS: &str = include_str!("extension_render/host_bridge.js");
 const HOST_CALL_KIND: &str = "host.call";
 
 /// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
-/// `AssetSourceRegistry` the extension manager populates: `Static(<dir>)` for
-/// new-model extensions (served directly by Rust) and `Legacy(...)` for legacy
-/// command-extensions. The handler reads the live registry on each request, so
-/// entries registered after `CefPlugin::build()` resolve; unregistered names
-/// 404. The host-API bridge is intentionally NOT registered as a global
-/// extension here; it is injected per-webview via `PreloadScripts` in
-/// `finish_extension_setup` (see the NOTE there).
+/// `AssetSourceRegistry` (extension name → on-disk asset root) the extension
+/// manager populates; Rust serves the files directly. The handler reads the live
+/// registry on each request, so entries registered after `CefPlugin::build()`
+/// resolve; unregistered names 404. The host-API bridge is intentionally NOT
+/// registered as a global extension here; it is injected per-webview via
+/// `PreloadScripts` in `finish_extension_setup` (see the NOTE there).
 pub fn cef_plugin(registry: AssetSourceRegistry) -> CefPlugin {
     CefPlugin {
         custom_schemes: vec![custom_scheme(registry)],
@@ -301,14 +300,21 @@ fn finish_extension_setup(
         // an entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
         let ctx_js = context_preload_js(workspace, pane, surface, name);
-        let granted_list: Vec<String> = granted
-            .get(surface)
-            .map(|g| g.0.iter().cloned().collect())
-            .unwrap_or_default();
-        let granted_js = format!(
-            "window.__ozmuxGranted={};",
-            serde_json::to_string(&granted_list).unwrap_or_else(|_| "[]".to_string())
-        );
+        let granted_json = match granted.get(surface) {
+            Ok(g) => serde_json::to_string(&g.0).expect("namespace set serializes infallibly"),
+            Err(_) => {
+                // NOTE: every OSC-mounted Extension surface is stamped with
+                // GrantedNamespaces at mount; reaching setup without it means a
+                // non-OSC creation path skipped the stamp, so the webview would
+                // silently get zero capabilities — flag the invariant break.
+                tracing::warn!(
+                    ?surface,
+                    "extension surface has no GrantedNamespaces; injecting empty grant"
+                );
+                "[]".to_string()
+            }
+        };
+        let granted_js = format!("window.__ozmuxGranted={granted_json};");
         let preload = PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()]);
         commands.entity(surface).insert((
             WebviewSource::new(url),

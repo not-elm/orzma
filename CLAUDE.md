@@ -13,13 +13,13 @@ The workspace root package is the one and only binary; library crates live under
 - `ozmux-gui` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.18 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "ozmux") plus `cef_plugin(&asset_endpoint)` (from `bevy_cef`), then the ozmux plugins:
   - `TerminalHandlePlugin` (from `bevy_terminal`), `TerminalRendererPlugin` (from `bevy_terminal_renderer`), `MultiplexerPlugin` (from `ozmux_multiplexer`), `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxLayoutLogPlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxExtensionRenderPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`;
   - the input plugins `MouseWheelInputPlugin`, `MouseButtonsInputPlugin`, `HyperlinkInputPlugin`, `ImePlugin`, `ImeOverlayPlugin`, and `OzmuxShortcutActionPlugin`;
-  - `ExtensionControlPlugin::new(CommandExtensionConfig { name: "memo", dir: <CARGO_MANIFEST_DIR>/extensions/memo, main: "bootstrap.ts", commands: ["@memo"] })` — wires the `@memo` Node extension into the app.
+  - `OzmuxOscWebviewPlugin` (OSC 5379 mount/unmount of registered webview views) and `ExtensionManagerPlugin::new(registry)` — the latter spawns the single Node host process and populates the shared `AssetSourceRegistry` / `ViewRegistry` from the discovered `ozmux.toml` extensions.
 
   The root `Cargo.toml` depends on `bevy_cef` (path dep, `features = ["debug"]`) and on `ozmux_extension_host` with the `cef` feature enabled. A root `[features] debug` flag enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded extension webview; it is off by default (`cargo run --features debug`).
 
 - `crates/bevy_terminal` (`bevy_terminal`) — Bevy-native terminal: PTY ownership and `alacritty_terminal` VT emulation, emitting coalesced `FrameSnapshot` / `FrameDelta` against the `bevy_terminal_renderer` schema. Exposes `TerminalHandlePlugin`.
 - `crates/bevy_terminal_renderer` (`bevy_terminal_renderer`) — GPU terminal renderer plus the grid schema shared with `bevy_terminal`. `TerminalRendererPlugin` wires the grid, material, and glyph sub-plugins (`TerminalGridPlugin`, `TerminalMaterialPlugin`, `TerminalGlyphPlugin`) and hyperlink-hover state; `schema` holds the cell/grid types both crates render against.
-- `crates/extension_host` (`ozmux_extension_host`) — Tokio-free host for ozmux Node extensions: spawns an extension process, speaks a minimal length-prefixed byte protocol over its Unix socket, and (behind the `cef` feature) bridges its UI bytes through a `bevy_cef` `ozmux-ext://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std + crossbeam only. Exposes `ExtensionControlPlugin` and `CommandExtensionConfig`.
+- `crates/extension_host` (`ozmux_extension_host`) — Tokio-free host integration for ozmux: discovers `ozmux.toml` extensions, spawns the single Node host process, speaks NDJSON RPC over its Unix socket, and (behind the `cef` feature) serves extension assets directly from disk through a `bevy_cef` `ozmux-ext://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std + crossbeam only. Exposes `HostProcess`, `AssetSourceRegistry`, `ViewRegistry`, and `discover_extensions`.
 - `crates/multiplexer` (`ozmux_multiplexer`) — ECS-native multiplexer. Session, Pane, and Surface are Bevy entities related by `ChildOf`; there are no typed IDs (every reference is a Bevy `Entity`, each carrying a `Name`). All mutations route through the `MultiplexerCommands` `SystemParam`; the only observers handle dangling `Entity` references when a child is despawned. Exposes `MultiplexerPlugin`.
 - `crates/configs` (`ozmux_configs`) — config loader. Reads `~/.config/ozmux/config.toml` (or `$OZMUX_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
 
@@ -27,15 +27,16 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 
 ### TypeScript workspace (`pnpm-workspace.yaml`)
 
-`packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest`, `zod` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace globs are `sdk/*` and `extensions/*`:
+`packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest`, `zod` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace packages are `host`, `sdk/*`, and `extensions/*`:
 
-- `sdk/typescript` (`@ozmux/sdk`) — server-side SDK for extensions, with `./server`, `./cmd-shim`, and `./surface` exports; tests via `vitest`.
-- `extensions/memo` (`memo`) — the `@memo` Node extension, consuming `@ozmux/sdk` via `workspace:*`.
+- `sdk/typescript` (`@ozmux/sdk`) — SDK for extension authors, exposing the `./extension` (`defineApi`) entry; tests via `vitest`.
+- `host/` (`@ozmux/host`) — the bundled single-host runtime (esbuild → `assets/host.mjs`): dynamic-imports each extension's `api.ts`, merges their namespaces, and dispatches `window.<ns>.<method>` calls as NDJSON RPC over one Unix socket.
+- `extensions/memo` (`memo`) — the new-model sample extension (`api.ts` + `ozmux.toml`), mounted as a webview via OSC and calling the host API through `window.<ns>.<method>`.
 
 ### How the pieces connect at runtime
 
 1. `ozmux-gui` boots a single Bevy `App`. `OzmuxBootstrapPlugin` seeds the initial session / pane / surface; `bevy_terminal` spawns the PTY and runs VT emulation, emitting frame snapshots/deltas that `bevy_terminal_renderer` draws on the GPU. Layout, input, copy-mode, IME, and shortcuts are all plugins in the same world.
-2. `ozmux_extension_host`'s `ExtensionControlPlugin` launches the `@memo` extension as `node bootstrap.ts` (working dir `extensions/memo`), wiring it up over Unix sockets and (behind the `cef` feature) bridging its UI through `bevy_cef`'s `ozmux-ext://` scheme so the webview renders in-process. `node bootstrap.ts` runs the TypeScript entry directly, so it relies on a Node with native TypeScript type-stripping (Node ≥ 23.6).
+2. `ExtensionManagerPlugin` spawns one Node host process (`node host.mjs`, the bundled `@ozmux/host` runtime) that dynamic-imports every discovered `ozmux.toml` extension's `api.ts`. An OSC 5379 `mount` sequence mounts a registered view as an in-process `bevy_cef` webview (assets served directly from disk via `ozmux-ext://`); the page calls `window.<ns>.<method>(...)`, capability-gated per the view's `ozmux.toml`, bridged over a single NDJSON RPC socket to the host. The host runs `api.ts` directly, so it relies on a Node with native TypeScript type-stripping (Node ≥ 23.6).
 
 ### `src/` module map
 
