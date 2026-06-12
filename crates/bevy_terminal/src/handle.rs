@@ -105,10 +105,6 @@ pub struct TerminalHandle {
     frozen_valid: bool,
     saturated: bool,
     force_next_emit: bool,
-    #[expect(
-        dead_code,
-        reason = "read by the saturation gate in the follow-up task"
-    )]
     scroll_cap: usize,
     control_tx: Sender<ControlFrame>,
     reply_rx: Receiver<Vec<u8>>,
@@ -957,9 +953,21 @@ impl TerminalHandle {
         self.update_saturation(h);
     }
 
-    /// Saturation gate state (spec §3). Fleshed out in the next task;
-    /// the call site is already final.
-    fn update_saturation(&mut self, _history_size: usize) {}
+    /// Saturation policy (spec §3): once `history_size` reaches the
+    /// scrollback cap, trims become unobservable, so all inline webviews
+    /// are unmounted once and further mounts are rejected until the
+    /// history shrinks below the cap again (e.g. CSI 3 J).
+    fn update_saturation(&mut self, history_size: usize) {
+        if history_size >= self.scroll_cap {
+            if !self.saturated {
+                self.saturated = true;
+                tracing::debug!("scrollback saturated: unmounting all inline webviews");
+                self.send_synthetic_unmount_all();
+            }
+        } else {
+            self.saturated = false;
+        }
+    }
 
     /// Sends the VT-synthesized unmount-all used by both the fold rule and
     /// the saturation first-arrival rule.
@@ -2085,6 +2093,63 @@ mod tests {
         };
         assert_eq!(a.col, 2, "cursor column after printing 'ab' is 2");
         assert_eq!(a.line, 0);
+    }
+
+    #[test]
+    fn saturation_first_arrival_unmounts_all_and_rejects_mounts() {
+        let (mut h, rx) = handle_with_gate_on(10, 3);
+        let mut payload = Vec::with_capacity(64 * 1024);
+        for _ in 0..10_010 {
+            payload.extend_from_slice(b"x\r\n");
+        }
+        h.advance(&payload);
+        let frame = rx
+            .try_recv()
+            .expect("saturation first-arrival synthesizes unmount-all");
+        assert!(matches!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                ..
+            }
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "unmount-all fires exactly once while saturated"
+        );
+        h.advance(b"\x1b]5379;mount-inline;memo;2;5\x1b\\");
+        assert!(
+            rx.try_recv().is_err(),
+            "mount-inline rejected while saturated"
+        );
+        h.advance(b"\x1b[3J");
+        let _fold = rx.try_recv().expect("fold unmount on clear");
+        h.advance(b"\x1b]5379;mount-inline;memo;2;5\x1b\\");
+        let frame = rx.try_recv().expect("mount accepted after clear");
+        assert!(matches!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::MountInline { .. },
+                anchor: Some(_)
+            }
+        ));
+    }
+
+    #[test]
+    fn alt_screen_mount_rejected() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b[?1049h");
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        assert!(
+            rx.try_recv().is_err(),
+            "mount-inline rejected on alt screen"
+        );
+        h.advance(b"\x1b[?1049l");
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        assert!(
+            rx.try_recv().is_ok(),
+            "accepted again after returning to primary"
+        );
     }
 }
 
