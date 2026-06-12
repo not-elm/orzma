@@ -19,7 +19,7 @@ pub enum AssetOutcome {
     NotFound,
     /// The request path was malformed or attempted to escape the asset root.
     Forbidden,
-    /// The file exceeded [`MAX_ASSET_LEN`].
+    /// The file exceeded the internal `MAX_ASSET_LEN` cap.
     TooLarge,
 }
 
