@@ -1,22 +1,26 @@
 //! Inline webviews: `ChildOf` children of a terminal surface that render a
 //! registered view into the terminal's text flow. This module owns the
-//! components and the mount/unmount policy executed by the `MountInline` /
-//! `UnmountInline` arms of `osc_webview::on_osc_webview_request`.
+//! components, the mount/unmount policy executed by the `MountInline` /
+//! `UnmountInline` arms of `osc_webview::on_osc_webview_request`, and the
+//! `OzmuxInlineWebviewPlugin` runtime systems that keep `WebviewSize` in
+//! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use crate::extension_render::preload::{build_preload, webview_url};
 use crate::osc_webview::{GrantedNamespaces, NonInteractive};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
+use bevy::ui_render::PreparedUiMaterial;
 use bevy::window::PrimaryWindow;
-use bevy_cef::prelude::{WebviewSize, WebviewSource, WebviewTextureTarget};
+use bevy_cef::prelude::{
+    WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
+};
 use bevy_terminal::InlineAnchor;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::material::TerminalMaterialSystems;
+use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
 use bevy_terminal_renderer::schema::TerminalGrid;
 use ozmux_extension_host::ViewRegistry;
-
-// TODO: Task 5 adds the WebviewSize/DPR size-sync system to this plugin.
 
 /// Marks an inline webview entity and records its identity: the mounted
 /// `view_id` and the overlay texture `slot` (0..`OVERLAY_SLOTS`) it occupies
@@ -52,21 +56,40 @@ pub(crate) struct InlinePlacement {
     pub(crate) frame_seq: u32,
 }
 
-/// Registers the per-frame projection that derives `TerminalOverlays` from
-/// inline-webview children (spec §5).
+/// Registers the inline-webview runtime systems: the `WebviewSize` size sync
+/// (`Update`), the per-frame projection that derives `TerminalOverlays` from
+/// inline-webview children (spec §5), and the render-world ordering edge that
+/// keeps webview GPU texture injection ahead of the terminal material's
+/// bind-group rebuild.
 ///
-/// Scheduled in `PostUpdate` before `TerminalMaterialSystems::UpdateMaterial`:
-/// grid state settles during `Update` (the PTY drain systems flush the
-/// `FrameSnapshot` / `FrameDelta` observers there), so projecting just before
-/// the material rebuild hands the same frame's overlays to the shader.
+/// The projection is scheduled in `PostUpdate` before
+/// `TerminalMaterialSystems::UpdateMaterial`: grid state settles during
+/// `Update` (the PTY drain systems flush the `FrameSnapshot` / `FrameDelta`
+/// observers there), so projecting just before the material rebuild hands the
+/// same frame's overlays to the shader.
 pub(crate) struct OzmuxInlineWebviewPlugin;
 
 impl Plugin for OzmuxInlineWebviewPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(Update, sync_inline_webview_size);
         app.add_systems(
             PostUpdate,
             project_inline_overlays.before(TerminalMaterialSystems::UpdateMaterial),
         );
+        // NOTE: without this edge, `TerminalUiMaterial`'s bind-group rebuild
+        // can run between bevy_cef's rebind image-touch (which re-uploads the
+        // CPU placeholder) and the GPU texture injection, capturing the
+        // placeholder permanently — a forever-black overlay (see the
+        // `WebviewGpuImageInjectSet` docs in bevy_cef's texture_target.rs).
+        // It also transitively orders the GpuImage prepare before the
+        // material prepare, avoiding a 1-frame RetryNextUpdate stall.
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.configure_sets(
+                Render,
+                WebviewGpuImageInjectSet
+                    .before(prepare_assets::<PreparedUiMaterial<TerminalUiMaterial>>),
+            );
+        }
     }
 }
 
@@ -118,8 +141,8 @@ pub(crate) struct InlineWebviewParams<'w, 's> {
 /// from it at creation. The seed is `(cols × cell_w, rows × cell_h) /
 /// scale_factor` in logical px from `TerminalCellMetricsResource` and the
 /// primary window; when neither exists yet (headless tests, pre-first-render)
-/// a placeholder cell of 8×16 physical px at scale 1.0 is used — Task 5's
-/// size-sync system corrects it.
+/// a placeholder cell of 8×16 physical px at scale 1.0 is used —
+/// `sync_inline_webview_size` corrects it once real metrics arrive.
 pub(crate) fn mount_inline(
     params: &mut InlineWebviewParams,
     registry: &ViewRegistry,
@@ -263,6 +286,36 @@ fn seed_logical_size(
         / scale_factor.max(f32::EPSILON)
 }
 
+/// Recomputes every inline webview's `WebviewSize` from the current cell
+/// metrics and primary-window scale factor (spec §6.5), writing only when the
+/// value differs — `bevy_cef` commits sizes to CEF on `Changed<WebviewSize>`,
+/// so a spurious write each frame would re-commit (and re-create the
+/// IOSurface) every frame. Exact equality suffices: the inputs are identical
+/// frame-to-frame unless metrics/scale actually changed, and this math is
+/// deterministic.
+fn sync_inline_webview_size(
+    mut sizes: Query<(&mut WebviewSize, &InlinePlacement)>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let scale_factor = windows
+        .iter()
+        .next()
+        .map(Window::scale_factor)
+        .unwrap_or(1.0);
+    let (cell_w_phys, cell_h_phys) = cell_size_phys(metrics.as_deref());
+    for (mut size, placement) in &mut sizes {
+        let next = seed_logical_size(
+            placement.rows,
+            placement.cols,
+            cell_w_phys,
+            cell_h_phys,
+            scale_factor,
+        );
+        size.set_if_neq(WebviewSize(next));
+    }
+}
+
 /// The wire mode string `bevy_terminal`'s `mode_diff` emits for
 /// `TermMode::ALT_SCREEN`.
 const ALT_SCREEN_MODE: &str = "alt-screen";
@@ -351,6 +404,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
     use bevy_terminal::{OscWebviewRequest, OscWebviewVerb};
+    use bevy_terminal_renderer::CellMetrics;
     use ozmux_extension_host::RegisteredView;
     use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 
@@ -759,33 +813,33 @@ mod tests {
         assert!(overlays.textures[0].is_some());
     }
 
+    fn formula_grid(history_size: u32, display_offset: u32) -> TerminalGrid {
+        TerminalGrid {
+            cols: 80,
+            rows: 5,
+            last_seq: 1,
+            history_base: 0,
+            history_size,
+            display_offset,
+            ..Default::default()
+        }
+    }
+
+    fn formula_placement() -> InlinePlacement {
+        InlinePlacement {
+            anchor_line: 30,
+            anchor_col: 2,
+            rows: 4,
+            cols: 10,
+            frame_seq: 0,
+        }
+    }
+
     #[test]
     fn projection_formula_maps_absolute_line_to_viewport_row() {
         let mut app = make_test_app();
-        let terminal = app
-            .world_mut()
-            .spawn(TerminalGrid {
-                cols: 80,
-                rows: 5,
-                last_seq: 1,
-                history_base: 0,
-                history_size: 26,
-                display_offset: 0,
-                ..Default::default()
-            })
-            .id();
-        spawn_projection_child(
-            &mut app,
-            terminal,
-            0,
-            InlinePlacement {
-                anchor_line: 30,
-                anchor_col: 2,
-                rows: 4,
-                cols: 10,
-                frame_seq: 0,
-            },
-        );
+        let terminal = app.world_mut().spawn(formula_grid(26, 0)).id();
+        spawn_projection_child(&mut app, terminal, 0, formula_placement());
 
         project(&mut app);
         assert_eq!(
@@ -793,19 +847,24 @@ mod tests {
             IVec4::new(4, 2, 4, 10),
             "30 - (0 + 26 - 0) must land on viewport row 4"
         );
+    }
 
-        app.world_mut()
-            .get_mut::<TerminalGrid>(terminal)
-            .unwrap()
-            .display_offset = 3;
+    #[test]
+    fn projection_formula_culls_rect_pushed_below_viewport_by_scrollback() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(formula_grid(26, 3)).id();
+        spawn_projection_child(&mut app, terminal, 0, formula_placement());
+
         project(&mut app);
         assert_all_sentinel(overlays_of(&app, terminal));
+    }
 
-        {
-            let mut grid = app.world_mut().get_mut::<TerminalGrid>(terminal).unwrap();
-            grid.display_offset = 0;
-            grid.history_size = 32;
-        }
+    #[test]
+    fn projection_formula_keeps_negative_row_for_partially_above_rect() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(formula_grid(32, 0)).id();
+        spawn_projection_child(&mut app, terminal, 0, formula_placement());
+
         project(&mut app);
         assert_eq!(
             overlays_of(&app, terminal).rects[0],
@@ -856,6 +915,31 @@ mod tests {
 
         project(&mut app);
         assert_all_sentinel(overlays_of(&app, terminal));
+    }
+
+    #[test]
+    fn projection_keeps_rect_anchored_at_last_valid_column() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor_line: 42,
+                anchor_col: 79,
+                rows: 10,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+
+        project(&mut app);
+        assert_eq!(
+            overlays_of(&app, terminal).rects[0],
+            IVec4::new(2, 79, 10, 10),
+            "a rect anchored at the last valid column (cols - 1) must project, not cull"
+        );
     }
 
     #[test]
@@ -977,6 +1061,83 @@ mod tests {
             overlays_of(&app, terminal).rects[0],
             IVec4::new(2, 3, 10, 40),
             "a last_seq that wrapped past 0 must release the hold"
+        );
+    }
+
+    #[test]
+    fn size_sync_updates_webview_size_when_metrics_change() {
+        let mut app = make_test_app();
+        register_view(&mut app, "dash", true, &[]);
+        let terminal = spawn_terminal(&mut app);
+        mount(&mut app, terminal, "dash", Some(test_anchor()));
+        let child = inline_children_of(&app, terminal)[0];
+        assert_eq!(
+            app.world().get::<WebviewSize>(child),
+            Some(&WebviewSize(Vec2::new(320.0, 160.0))),
+            "the metrics-less mount must seed from the 8x16 placeholder"
+        );
+
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 10.0,
+                line_height_phys: 20.0,
+                ascent_phys: 15.0,
+                descent_phys: 5.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 24,
+        });
+        app.world_mut()
+            .run_system_once(sync_inline_webview_size)
+            .unwrap();
+
+        assert_eq!(
+            app.world().get::<WebviewSize>(child),
+            Some(&WebviewSize(Vec2::new(400.0, 200.0))),
+            "size sync must recompute the 40x10-cell rect at the real 10x20 px pitch"
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct SizeChangeProbe(bool);
+
+    fn probe_webview_size_changed(
+        mut probe: ResMut<SizeChangeProbe>,
+        sizes: Query<Ref<WebviewSize>>,
+    ) {
+        probe.0 = sizes.iter().any(|size| size.is_changed());
+    }
+
+    #[test]
+    fn size_sync_is_quiescent_when_nothing_changed() {
+        let mut app = make_test_app();
+        register_view(&mut app, "dash", true, &[]);
+        app.init_resource::<SizeChangeProbe>();
+        app.add_systems(
+            Update,
+            (sync_inline_webview_size, probe_webview_size_changed).chain(),
+        );
+        let terminal = spawn_terminal(&mut app);
+        mount(&mut app, terminal, "dash", Some(test_anchor()));
+
+        app.update();
+        assert!(
+            app.world().resource::<SizeChangeProbe>().0,
+            "the first update after mount must see the freshly-added WebviewSize as changed"
+        );
+
+        app.update();
+        assert!(
+            !app.world().resource::<SizeChangeProbe>().0,
+            "a second run with identical inputs must not change-flag WebviewSize"
+        );
+        let child = inline_children_of(&app, terminal)[0];
+        assert_eq!(
+            app.world().get::<WebviewSize>(child),
+            Some(&WebviewSize(Vec2::new(320.0, 160.0))),
+            "the value must stay at the placeholder seed"
         );
     }
 }
