@@ -17,6 +17,28 @@ pub enum OscWebviewVerb {
     Mount { view_id: String },
     /// Unmount the active webview, optionally scoped to a specific view id.
     Unmount { view_id: Option<String> },
+    /// Mount a registered webview INLINE at the cursor anchor, sized in cells.
+    MountInline {
+        view_id: String,
+        rows: u16,
+        cols: u16,
+    },
+    /// Unmount inline webview(s): a specific view id, or all for this terminal.
+    UnmountInline { view_id: Option<String> },
+}
+
+/// Anchor stamped by the VT thread at the exact byte position of a
+/// `mount-inline` OSC: absolute scrollback line (top of the rect),
+/// column, and the `frame_seq` the next grid emit will carry (used by
+/// the GUI to defer first projection until the grid catches up).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InlineAnchor {
+    /// Absolute line = history_base + history_size + live-grid cursor row.
+    pub line: u64,
+    /// Cursor column at the OSC byte position.
+    pub col: u16,
+    /// The seq value the next emitted frame will carry (wrap-aware compare).
+    pub frame_seq: u32,
 }
 
 /// Best-effort control frames forwarded from `TermListener`. The
@@ -35,7 +57,11 @@ pub(crate) enum ControlFrame {
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
     /// An OSC-driven webview mount/unmount request from the PTY.
-    OscWebview(OscWebviewVerb),
+    /// `anchor` is `Some` only for `MountInline` (stamped in `handle.rs`).
+    OscWebview {
+        verb: OscWebviewVerb,
+        anchor: Option<InlineAnchor>,
+    },
 }
 
 /// Reply-required reply bytes (currently just `PtyWrite`). The
@@ -97,6 +123,17 @@ mod tests {
     use super::*;
     use alacritty_terminal::event::{Event, EventListener};
     use crossbeam_channel::unbounded;
+
+    #[test]
+    fn inline_anchor_is_copy_and_eq() {
+        let a = InlineAnchor {
+            line: 42,
+            col: 7,
+            frame_seq: 3,
+        };
+        let b = a;
+        assert_eq!(a, b);
+    }
 
     #[test]
     fn pty_write_event_is_forwarded() {

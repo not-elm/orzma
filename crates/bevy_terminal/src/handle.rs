@@ -597,8 +597,12 @@ impl TerminalHandle {
                 ControlFrame::CurrentDir(path) => {
                     commands.trigger(TerminalCurrentDir { entity, path });
                 }
-                ControlFrame::OscWebview(verb) => {
-                    commands.trigger(OscWebviewRequest { entity, verb });
+                ControlFrame::OscWebview { verb, anchor } => {
+                    commands.trigger(OscWebviewRequest {
+                        entity,
+                        verb,
+                        anchor,
+                    });
                 }
             }
         }

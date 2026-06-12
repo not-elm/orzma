@@ -69,7 +69,10 @@ impl Perform for OscWebviewCapture {
             }
             _ => return,
         };
-        if let Err(e) = self.control_tx.send(ControlFrame::OscWebview(verb)) {
+        if let Err(e) = self
+            .control_tx
+            .send(ControlFrame::OscWebview { verb, anchor: None })
+        {
             tracing::warn!(?e, "control_tx send(OscWebview) failed");
         }
     }
@@ -95,9 +98,12 @@ mod tests {
         cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"dash"], true);
         assert_eq!(
             rx.try_recv(),
-            Ok(ControlFrame::OscWebview(OscWebviewVerb::Mount {
-                view_id: "dash".into()
-            }))
+            Ok(ControlFrame::OscWebview {
+                verb: OscWebviewVerb::Mount {
+                    view_id: "dash".into()
+                },
+                anchor: None,
+            })
         );
     }
 
@@ -124,9 +130,10 @@ mod tests {
         cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount"], true);
         assert_eq!(
             rx.try_recv(),
-            Ok(ControlFrame::OscWebview(OscWebviewVerb::Unmount {
-                view_id: None
-            }))
+            Ok(ControlFrame::OscWebview {
+                verb: OscWebviewVerb::Unmount { view_id: None },
+                anchor: None,
+            })
         );
     }
 
@@ -137,9 +144,12 @@ mod tests {
         cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"dash"], true);
         assert_eq!(
             rx.try_recv(),
-            Ok(ControlFrame::OscWebview(OscWebviewVerb::Unmount {
-                view_id: Some("dash".into())
-            }))
+            Ok(ControlFrame::OscWebview {
+                verb: OscWebviewVerb::Unmount {
+                    view_id: Some("dash".into())
+                },
+                anchor: None,
+            })
         );
     }
 

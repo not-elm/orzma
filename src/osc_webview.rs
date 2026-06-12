@@ -105,6 +105,12 @@ fn on_osc_webview_request(
             }
             let _ = mux.set_active_surface(pane, surface);
         }
+        OscWebviewVerb::MountInline { view_id, .. } => {
+            tracing::debug!(%view_id, "osc-webview: mount-inline arrives in phase 3; dropping");
+        }
+        OscWebviewVerb::UnmountInline { .. } => {
+            tracing::debug!("osc-webview: unmount-inline arrives in phase 3; dropping");
+        }
         OscWebviewVerb::Unmount { view_id } => {
             let target = mounted.iter().find(|(_, m, so)| {
                 so.0 == pane && view_id.as_ref().is_none_or(|v| m.view_id == *v)
@@ -196,6 +202,7 @@ mod tests {
             verb: OscWebviewVerb::Mount {
                 view_id: "dash".into(),
             },
+            anchor: None,
         });
         app.world_mut().flush();
 
@@ -242,6 +249,7 @@ mod tests {
             verb: OscWebviewVerb::Mount {
                 view_id: "dash".into(),
             },
+            anchor: None,
         });
         app.world_mut().flush();
 
@@ -251,6 +259,7 @@ mod tests {
         app.world_mut().trigger(OscWebviewRequest {
             entity: terminal_surface,
             verb: OscWebviewVerb::Unmount { view_id: None },
+            anchor: None,
         });
         app.world_mut().flush();
         // NOTE: despawn is deferred; a flush + update applies it.
@@ -300,6 +309,7 @@ mod tests {
             verb: OscWebviewVerb::Mount {
                 view_id: "dash".into(),
             },
+            anchor: None,
         });
         app.world_mut().flush();
         let webview = active_surface(&app, pane).expect("webview active");
@@ -312,6 +322,7 @@ mod tests {
         app.world_mut().trigger(OscWebviewRequest {
             entity: survivor,
             verb: OscWebviewVerb::Unmount { view_id: None },
+            anchor: None,
         });
         app.world_mut().flush();
         app.update();
@@ -351,6 +362,7 @@ mod tests {
             verb: OscWebviewVerb::Mount {
                 view_id: "hud".into(),
             },
+            anchor: None,
         });
         app.world_mut().flush();
 
@@ -384,6 +396,7 @@ mod tests {
             verb: OscWebviewVerb::Mount {
                 view_id: "ghost".into(),
             },
+            anchor: None,
         });
         app.world_mut().flush();
 
@@ -419,6 +432,7 @@ mod tests {
             verb: OscWebviewVerb::Mount {
                 view_id: "dash".into(),
             },
+            anchor: None,
         });
         app.world_mut().flush();
 
@@ -431,6 +445,7 @@ mod tests {
             verb: OscWebviewVerb::Mount {
                 view_id: "dash".into(),
             },
+            anchor: None,
         });
         app.world_mut().flush();
 
@@ -465,6 +480,7 @@ mod tests {
             verb: OscWebviewVerb::Mount {
                 view_id: "dash".into(),
             },
+            anchor: None,
         });
         app.world_mut().flush();
 
