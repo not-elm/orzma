@@ -5,6 +5,7 @@ import { decodeHostValue } from './binary-codec.ts';
 import { dispatchHostCall, type HostCallFrame } from './dispatch.ts';
 
 const MAX_RPC_LINE_BYTES = 8 * 1024 * 1024;
+const MAX_RPC_RESULT_BYTES = 8 * 1024 * 1024;
 
 /**
  * Binds a Unix-socket NDJSON RPC server that dispatches `{reqId, ns, method, args}`
@@ -81,7 +82,19 @@ export async function bindHostRpcServer(
     }
     const frame: HostCallFrame = { reqId, ns, method, args: args.map(decodeHostValue) };
     dispatchHostCall(api, frame)
-      .then((result) => conn.write(`${JSON.stringify(result)}\n`))
+      .then((result) => {
+        const resultLine = JSON.stringify(result);
+        if (Buffer.byteLength(resultLine, 'utf8') > MAX_RPC_RESULT_BYTES) {
+          // NOTE: an oversized result would choke the render process crossing the
+          // CEF IPC boundary; reject with an addressable error frame so the
+          // caller's reqId Promise settles.
+          conn.write(
+            `${JSON.stringify({ reqId: frame.reqId, ok: false, error: 'host result exceeds max size' })}\n`,
+          );
+          return;
+        }
+        conn.write(`${resultLine}\n`);
+      })
       .catch((err) => {
         // NOTE: dispatchHostCall is contracted never to reject; reply with an
         // error frame anyway so a future regression cannot leave the caller's

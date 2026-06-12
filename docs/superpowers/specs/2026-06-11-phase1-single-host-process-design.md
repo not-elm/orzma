@@ -59,7 +59,7 @@ capability は **namespace 単位**。`capabilities = ["fs"]` は `window.fs.*` 
 - **host runtime はアプリ同梱**(ユーザー提供ではない)。esbuild が `host/` パッケージを `assets/host.mjs` にバンドルし、Rust バイナリへ `include_str!` で埋め込む。実行時にランタイムディレクトリへ `host.mjs` として書き出し、`node host.mjs` として spawn する。host は `<repo>/extensions/*` と `~/.config/ozmux/extensions/*` の `api.ts` を **dynamic import** して API オブジェクトを集約し、**RPC ディスパッチを担う**。**静的アセット配信は host を経由せず Rust が直接行う**(④の決定 C を参照。host はアセットソケットを持たない)。
 - **spawn 時の env:** `OZMUX_HOST_RPC_SOCK`・`OZMUX_HOST_MANIFEST`・`OZMUX_HOST_READY_PATH` の 3 つ(拡張ディレクトリは manifest の `apiPaths`/`assetRoot` が持つので env では渡さない)。ランタイムルート(ソケット置き場)は **1 つだけ**(0700 perms)。現状の per-PID / per-extension ディレクトリツリーは廃止。アセットソケットは無い(Rust 直接配信)。
 - **readiness:** host が全拡張のロード後に `.ready` を返す。ロード失敗(後述の type-stripping 制約違反を含む)は名前付きで報告 → Rust 側でログ。Rust はタイムアウト付きで待機。
-- **監視 / 障害:** Phase 1 は **自動再起動なし(YAGNI)**。host がクラッシュ / exit したら `HostProcessDown` 状態を立て、以降の host-API 呼び出しは `host_unavailable` で **グレースフルに reject**。自動再起動は将来課題。
+- **監視 / 障害:** Phase 1 は **自動再起動なし(YAGNI)**。host がクラッシュ / exit したら `HostProcessDown` 状態を立て、以降の host-API 呼び出しは `host_unavailable` で **グレースフルに reject**。**(現状の manager は host ライフサイクルを**ログするのみ**で `HostProcessDown` リソースは未実装。Step 4 でこの可用性状態を新設し、bridge がそれを参照して reject する。)** 自動再起動は将来課題。
 - **終了:** アプリ終了時に子プロセスへ SIGTERM、ランタイムルートを掃除。
 
 **Node ネイティブ TS type-stripping の制約(設計拘束):** host loader は `import('/abs/path/api.ts')` で読む。Node のネイティブ stripping は **(a) erasable な TS 構文のみ**(`enum` / parameter properties / `namespace` 不可、違反は `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`)、**(b) dynamic import 指定子に `.ts` 拡張子必須**、**(c) `tsconfig` を無視**(`paths` 不可)、**(d) `node_modules` 配下の TS は stripping 対象外**。拡張 `api.ts` は erasable TS に限定する。将来フルトランスパイルが要る場合は `tsx` / 同梱バンドル host へ切替(§5)。
@@ -76,6 +76,8 @@ capability は **namespace 単位**。`capabilities = ["fs"]` は `window.fs.*` 
 ├── ozmux.toml      # views と必要 capability の宣言(Rust が読む信頼データ)
 └── <assets>        # index.html 等。ozmux-ext://<extension>/<entry> で配信
 ```
+
+> **NOTE:** 実装済み manifest/descriptor は **複数 api パス(`api = [...]`)** を許す(`extension_manifest.rs`、`host_descriptor.rs`)。上図は最小形(単一 `api.ts`)で、1 拡張が複数の API ファイルを宣言してもよい。
 
 **`api.ts`(host が読む / コード)**
 ```ts
@@ -127,19 +129,21 @@ Approach A の心臓部。**既存の `JsEmitEventPlugin` / `HostEmitEvent` / `P
 1. `window.fs.read(p)` → `__hostCall` が `reqId` を採番し Promise を保留 → **`cef.emit({reqId, ns, method, args})`**。
    - **注意:** bevy_cef の binding は `arguments.first()` だけを直列化する(`cef_api_handler.rs`)。`cef.emit(eventName, payload)` の 2 引数形は payload を**捨てる**ため使わない。固定の `ozmux` チャネル上に **単一オブジェクト**を載せる。
 2. **Rust が capability を検査(信頼の関所)**: 信頼される発信元は **`Receive<_>.webview: Entity`**(per-webview client handler で束縛、JS payload 由来ではない)。その entity の **`GrantedNamespaces`** を読み、`ns ∉ caps` なら即 `capability_denied` で reject、**host へは転送しない**。文字列の "surfaceId" を信頼鍵にしない。
-3. 検査通過 → 単一 host ソケットへ **`{reqId, ns, method, args}`** を framed 送信(`reqId` は相関用、信頼鍵ではない)。
+3. 検査通過 → 単一 host ソケットへ **`{reqId, ns, method, args}`** を **NDJSON(改行区切り JSON)1 行**として送信(`reqId` は相関用、信頼鍵ではない)。**host の `rpc-server.ts` は NDJSON で read/write する(アセットの length-prefixed プロトコルとは別物)ので、Rust RPC クライアントも NDJSON に揃える。**
 4. host が `api[ns][method](...args)` を実行。Rust が信頼の関所なので host 側は再検査しない(単純さ優先)。
 
+> **NOTE(単一 IPC チャネル — 重要):** bevy_cef の生 IPC 受信は **`IpcEventRawReceiver` 1 本**で、`receive_events::<E>` が `try_recv()` で各メッセージを**消費**する。Step 4 で **2 つ目の `JsEmitEventPlugin` を登録してはならない**(2 つの receiver が同一チャネルを奪い合う)。加えて現行 `OzmuxFrame` は `#[serde(transparent)] struct OzmuxFrame(Value)` で**任意の JSON オブジェクトにマッチ**するため、host-call フレーム `{reqId, ns, method, args}` も既存の `on_ozmux_frame`(レガシー handlers 経路)に**サイレントに吸われる**。よって host-call は **既存の単一 `Receive<OzmuxFrame>` observer に通し、フレーム内の判別子(例 `kind: "host.call"`、レガシー `ozmux.js` は既に `kind` を出している)で分岐**するか、`OzmuxFrame` をタグ付き enum 化する。レガシーと新経路が互いのフレームをパースしないよう判別子は必須。
+
 **結果(host → Rust → webview)**
-- host は **`{reqId, ok: true, value}` / `{reqId, ok: false, error}`** を返す(discriminated union; これが実装済み `dispatch.ts` の `HostResultFrame` の正準形)。Rust は **`reqId → webview Entity` の in-flight 相関**から発信元 entity を引き、**`HostEmitEvent::new(webview, ...)`**(既存 outbound `ozmux` チャネル)で**その webview にだけ**返す。Proxy が Promise を resolve/reject。
+- host は **`{reqId, ok: true, value}` / `{reqId, ok: false, error}`** を返す(discriminated union; これが実装済み `dispatch.ts` の `HostResultFrame` の正準形)。Rust は **`reqId → webview Entity` の in-flight 相関**から発信元 entity を引き、**`HostEmitEvent::new(webview, ...)`**(既存 outbound `ozmux` チャネル)で**その webview にだけ**返す。**`reqId` は各 webview がクライアント側で採番するため webview 間で衝突しうる。in-flight マップは `(webview Entity, reqId)` でキーするか、pending を webview Entity 上の Component として持ち despawn で自動解放する(後者は別途の prune observer も不要)。** Proxy が Promise を resolve/reject。
 
 **シリアライズ**
 - 既存 CEF ブリッジは **JSON 文字列チャネル**(`HostEmitEvent` は文字列を配送)。プレーン値は JSON でそのまま。
 - バイナリ(`fs.read` の `Buffer`/`Uint8Array`)は **`{ __u8: "<base64>" }` ラッパーに符号化**。**境界タグ方式**:host が明示的に返したトップレベルの `Buffer`/`Uint8Array` をラップする(任意のネスト結果を再帰ディープウォークしない — CPU 税と `__u8` キー衝突を避ける)。webview 側 Proxy は境界でデコード。引数経路も対称。
-- **ガードレール:** `fs.read` 等で巨大ファイルが単一 JSON 文字列として render プロセスを跨ぐと詰まる。**最大レスポンスサイズ上限**を設け、超過はエラーにする(閾値は実装時に決定)。base64 は +33% のオーバーヘッドを許容(Phase 1)。専用バイナリチャネル / MessagePack は将来(§5)。
+- **ガードレール:** `fs.read` 等で巨大ファイルが単一 JSON 文字列として render プロセスを跨ぐと詰まる。**最大レスポンスサイズ上限**を設け、超過はエラーにする(閾値は実装時に決定)。**(未実装の確認:現行 `rpc-server.ts` は受信側を 8 MiB で上限する(`rpc-server.ts:7`)が、ディスパッチ結果書き込み側にレスポンスサイズ検査は無い。Step 4 で結果フレーム送信前に上限検査を追加する。)** base64 は +33% のオーバーヘッドを許容(Phase 1)。専用バイナリチャネル / MessagePack は将来(§5)。
 
 **エラー伝播**
-- host method の throw → `{err, message}` → webview の Promise が `Error` で reject。
+- host method の throw → `{reqId, ok: false, error}`(line 134 の正準形と同一。`{err, message}` ではない)→ webview の Promise が `Error` で reject。
 - `capability_denied` / 未知 ns・method / `host_unavailable`(① のクラッシュ時)も構造化 reject。
 
 **型付け**

@@ -1,10 +1,13 @@
-//! CEF integration for extension surfaces: the `ozmux-ext://` asset scheme and
-//! the `window.ozmux` JS extension, the webview spawn-once system that attaches
-//! a `bevy_cef` webview to each Extension Surface host, and the handler RPC
-//! bridge (Task 9) that routes `window.ozmux` frames between the page and the
-//! extension's handlers socket.
+//! CEF integration for extension surfaces: the `ozmux-ext://` asset scheme, the
+//! webview spawn-once system that attaches a `bevy_cef` webview to each Extension
+//! Surface host, and two coexisting JS bridges injected per surface — the legacy
+//! `window.ozmux` handler RPC bridge (routing frames to the extension's handlers
+//! socket) and the new-model `window.<ns>.<method>` host-API bridge
+//! (capability-gated `host.call` frames forwarded to the single Node host via
+//! `HostRpc`, with replies routed back on the `ozmux` channel).
 
 use crate::extension_manager::ExtensionRegistry;
+use crate::osc_webview::GrantedNamespaces;
 use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
 use crate::ui::{AddressBarFocus, BrowserPageWebview, ExtensionSurfaceMarker};
@@ -12,12 +15,14 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
 use ozmux_extension_host::HandlersBridge;
+use ozmux_extension_host::HostRpcClient;
 use ozmux_extension_host::host::AssetSourceRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
     AttachedWorkspace, ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind,
     SurfaceMarker, WorkspaceMarker,
 };
+use serde_json::Value;
 
 /// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension surface,
 /// where `entry` is the client's HTML path relative to the extension dir.
@@ -48,6 +53,54 @@ struct ExtensionHandlersBridge(HandlersBridge);
 #[derive(Resource, Default)]
 struct WebviewSurfaceIdMap(HashMap<String, Entity>);
 
+/// The connected host RPC client plus the in-flight `globalReqId → (webview,
+/// pageReqId)` correlation. `globalReqId` is minted Rust-side (a monotonic
+/// counter) so page-local `reqId`s — which collide across webviews — are never
+/// used as a routing key. Populated by `extension_manager` on host readiness.
+#[derive(Resource, Default)]
+pub(crate) struct HostRpc {
+    client: Option<HostRpcClient>,
+    inflight: HashMap<String, (Entity, String)>,
+    next_id: u64,
+}
+
+impl HostRpc {
+    /// Installs a freshly-connected client, clearing any stale correlation /
+    /// counter from a previous host generation.
+    pub(crate) fn set_client(&mut self, client: HostRpcClient) {
+        self.client = Some(client);
+        self.inflight.clear();
+        self.next_id = 0;
+    }
+
+    /// Drops the client and clears in-flight correlation (host exited):
+    /// subsequent calls reject `host_unavailable`. `next_id` is reset by the
+    /// following `set_client`, not here. In-flight calls awaiting a host reply
+    /// are dropped without settling their page Promise (Phase 1 has no per-call
+    /// timeout); the page sees a hung Promise until reload — acceptable under the
+    /// no-auto-restart scope.
+    pub(crate) fn clear_client(&mut self) {
+        self.client = None;
+        self.inflight.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn note_in_flight_for_test(
+        &mut self,
+        global_id: &str,
+        webview: Entity,
+        local: &str,
+    ) {
+        self.inflight
+            .insert(global_id.to_string(), (webview, local.to_string()));
+    }
+
+    #[cfg(test)]
+    pub(crate) fn count_in_flight_for_test(&self) -> usize {
+        self.inflight.len()
+    }
+}
+
 /// Marks an extension-surface host whose webview could not be mounted because
 /// its surface has no `OwningExtension`. Excluding marked hosts from the
 /// `finish_extension_setup` query makes its diagnostic fire once, not every frame.
@@ -58,6 +111,16 @@ struct WebviewMountUnresolved;
 /// webview as a `PreloadScripts` entry (see `finish_extension_setup`). Mirrors
 /// `sdk/typescript/src/surface/ozmux-bridge.ts`.
 pub const OZMUX_EXTENSION_JS: &str = include_str!("extension_render/ozmux.js");
+
+/// JS defining the new-model `window.<ns>.<method>` host-API bridge over
+/// `cef.emit` / `cef.listen`, injected (with `window.__ozmuxGranted`) per
+/// new-model webview as a `PreloadScripts` entry instead of `OZMUX_EXTENSION_JS`.
+const HOST_BRIDGE_JS: &str = include_str!("extension_render/host_bridge.js");
+
+/// The `kind` discriminator that routes a `Receive<OzmuxFrame>` to the new-model
+/// host-API path (`on_host_call_frame`) instead of the legacy handler path
+/// (`on_ozmux_frame`). The page side emits the matching literal in `host_bridge.js`.
+const HOST_CALL_KIND: &str = "host.call";
 
 /// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
 /// `AssetSourceRegistry` the extension manager populates: `Static(<dir>)` for
@@ -107,7 +170,9 @@ impl Plugin for OzmuxExtensionRenderPlugin {
         app.add_plugins(JsEmitEventPlugin::<OzmuxFrame>::default())
             .init_resource::<ExtensionHandlersBridge>()
             .init_resource::<WebviewSurfaceIdMap>()
+            .init_resource::<HostRpc>()
             .add_observer(on_ozmux_frame)
+            .add_observer(on_host_call_frame)
             .add_observer(prune_webview_id_map_on_remove)
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
@@ -117,6 +182,7 @@ impl Plugin for OzmuxExtensionRenderPlugin {
                 (
                     finish_extension_setup.in_set(OzmuxSystems::SetupSurface),
                     drain_handler_responses,
+                    drain_host_rpc_responses,
                     sync_focused_webview.after(OzmuxSystems::Input),
                 ),
             );
@@ -227,6 +293,7 @@ fn finish_extension_setup(
             Without<WebviewMountUnresolved>,
         ),
     >,
+    granted: Query<&GrantedNamespaces>,
 ) {
     for (surface, computed) in surfaces.iter() {
         let Some(logical) = pane_logical_size(computed.size(), computed.inverse_scale_factor())
@@ -259,10 +326,21 @@ fn finish_extension_setup(
         // entered context (and their exceptions are caught, not fatal), so
         // cef.listen registers correctly there.
         let ctx_js = context_preload_js(workspace, pane, surface, name);
+        let preload = match granted.get(surface) {
+            Ok(g) => {
+                let list: Vec<&String> = g.0.iter().collect();
+                let granted_js = format!(
+                    "window.__ozmuxGranted={};",
+                    serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
+                );
+                PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()])
+            }
+            Err(_) => PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
+        };
         commands.entity(surface).insert((
             WebviewSource::new(url),
             WebviewSize(logical),
-            PreloadScripts::from([ctx_js, OZMUX_EXTENSION_JS.to_string()]),
+            preload,
             MaterialNode(materials.add(WebviewUiMaterial::default())),
         ));
     }
@@ -345,6 +423,15 @@ fn on_ozmux_frame(
     surface_ids: Query<&ExtensionSurfaceId>,
 ) {
     let webview = frame.webview;
+    if frame
+        .payload
+        .0
+        .get("kind")
+        .and_then(serde_json::Value::as_str)
+        == Some(HOST_CALL_KIND)
+    {
+        return;
+    }
     let Some(surface_id) = surface_id_for_webview(webview, &surface_ids) else {
         return;
     };
@@ -365,6 +452,85 @@ fn on_ozmux_frame(
     }
 }
 
+/// Inbound (new-model host API): a `window.<ns>.<method>` call arrives as a
+/// `Receive<OzmuxFrame>` with `kind:"host.call"`. The trusted caller is
+/// `frame.webview` (bound per-webview by `bevy_cef`, never the JS payload); its
+/// `GrantedNamespaces` decides whether the call may proceed. Allowed calls are
+/// forwarded to the single host over a Rust-minted global `reqId`; denied or
+/// host-down calls reject the page-local Promise directly.
+///
+/// Runs as a SECOND observer on the shared `Receive<OzmuxFrame>` event (NOT a
+/// second `JsEmitEventPlugin`): observers are broadcast, so the legacy
+/// `on_ozmux_frame` still fires for the same frame and ignores `host.call`.
+fn on_host_call_frame(
+    frame: On<Receive<OzmuxFrame>>,
+    mut commands: Commands,
+    mut host_rpc: ResMut<HostRpc>,
+    granted: Query<&GrantedNamespaces>,
+) {
+    let payload = &frame.payload.0;
+    if payload.get("kind").and_then(Value::as_str) != Some(HOST_CALL_KIND) {
+        return;
+    }
+    let webview = frame.webview;
+    let req_id = payload
+        .get("reqId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let ns = payload
+        .get("ns")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let method = payload
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    let allowed = granted
+        .get(webview)
+        .map(|g| g.0.contains(ns))
+        .unwrap_or(false);
+    if !allowed {
+        reject_host_call(
+            &mut commands,
+            webview,
+            req_id,
+            &format!("capability_denied: {ns}"),
+        );
+        return;
+    }
+    if host_rpc.client.is_none() {
+        reject_host_call(&mut commands, webview, req_id, "host_unavailable");
+        return;
+    }
+
+    let global_id = host_rpc.next_id.to_string();
+    host_rpc.next_id += 1;
+    let args = payload
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let line = serde_json::json!({
+        "reqId": global_id, "ns": ns, "method": method, "args": args
+    })
+    .to_string();
+    host_rpc
+        .client
+        .as_ref()
+        .expect("client present: guarded by the is_none() check above")
+        .send_line(line);
+    host_rpc
+        .inflight
+        .insert(global_id, (webview, req_id.to_string()));
+}
+
+/// Emits a `{reqId, ok:false, error}` reply to a single webview on the `"ozmux"`
+/// channel (shared with the legacy outbound), settling the page-local Promise.
+fn reject_host_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
+    let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
+    commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+}
+
 /// Outbound: drains handler responses `(surface_id, frame)` and re-emits each to the
 /// originating webview as a `HostEmitEvent` on the `"ozmux"` channel, which the
 /// page's `cef.listen('ozmux', …)` receives (as a JSON string it `JSON.parse`s).
@@ -382,6 +548,37 @@ fn drain_handler_responses(
         let value: serde_json::Value =
             serde_json::from_str(&frame).unwrap_or(serde_json::Value::Null);
         commands.trigger(HostEmitEvent::new(webview, "ozmux", &value));
+    }
+}
+
+/// Outbound (new-model host API): drains the host's NDJSON reply lines, maps the
+/// Rust-minted global `reqId` back to its `(webview, pageReqId)`, restores the
+/// page-local `reqId`, and re-emits each reply to the originating webview on the
+/// `"ozmux"` channel. A reply with no live in-flight entry (surface despawned)
+/// is dropped.
+fn drain_host_rpc_responses(mut commands: Commands, mut host_rpc: ResMut<HostRpc>) {
+    let mut lines = Vec::new();
+    if let Some(client) = host_rpc.client.as_ref() {
+        while let Some(line) = client.try_recv_response() {
+            lines.push(line);
+        }
+    }
+    for line in lines {
+        let Ok(mut frame) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let Some(global_id) = frame
+            .get("reqId")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        let Some((webview, local_id)) = host_rpc.inflight.remove(&global_id) else {
+            continue;
+        };
+        frame["reqId"] = Value::String(local_id);
+        commands.trigger(HostEmitEvent::new(webview, "ozmux", &frame));
     }
 }
 
@@ -413,12 +610,13 @@ fn log_webview_load_error(load: On<LoadError>) {
     );
 }
 
-/// Prunes the `WebviewSurfaceIdMap` entry and disconnects the handler connection
-/// for a surface that is being despawned. Runs pre-removal so `ExtensionSurfaceId`
-/// is still readable on the entity.
+/// Prunes the `WebviewSurfaceIdMap` entry, disconnects the handler connection,
+/// and drops any in-flight host RPC calls for a surface that is being despawned.
+/// Runs pre-removal so `ExtensionSurfaceId` is still readable on the entity.
 fn prune_webview_id_map_on_remove(
     ev: On<Remove, SurfaceMarker>,
     mut map: ResMut<WebviewSurfaceIdMap>,
+    mut host_rpc: ResMut<HostRpc>,
     bridge: Res<ExtensionHandlersBridge>,
     ids: Query<&ExtensionSurfaceId>,
 ) {
@@ -426,6 +624,9 @@ fn prune_webview_id_map_on_remove(
         map.0.remove(&id.0);
         bridge.0.disconnect(&id.0);
     }
+    host_rpc
+        .inflight
+        .retain(|_, (entity, _)| *entity != ev.entity);
 }
 
 #[cfg(test)]
@@ -932,6 +1133,7 @@ mod tests {
             .add_plugins(MultiplexerPlugin);
         app.init_resource::<ExtensionHandlersBridge>();
         app.init_resource::<WebviewSurfaceIdMap>();
+        app.init_resource::<HostRpc>();
         app.add_observer(prune_webview_id_map_on_remove);
 
         let (pane, surface) = app
@@ -974,6 +1176,292 @@ mod tests {
                 .0
                 .contains_key("x"),
             "entry must be pruned after surface is despawned"
+        );
+    }
+
+    use std::collections::HashSet;
+
+    #[derive(Resource, Default)]
+    struct CapturedEmits(Vec<(Entity, String)>);
+
+    fn capture_emits(ev: On<HostEmitEvent>, mut cap: ResMut<CapturedEmits>) {
+        cap.0.push((ev.webview, ev.payload.clone()));
+    }
+
+    fn gate_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<HostRpc>();
+        app.init_resource::<CapturedEmits>();
+        app.add_observer(on_host_call_frame);
+        app.add_observer(capture_emits);
+        app
+    }
+
+    fn host_call(req_id: &str, ns: &str, method: &str) -> OzmuxFrame {
+        OzmuxFrame(serde_json::json!({
+            "kind": "host.call", "reqId": req_id, "ns": ns, "method": method, "args": []
+        }))
+    }
+
+    #[test]
+    fn host_call_denied_for_ungranted_namespace_is_not_forwarded() {
+        let mut app = gate_app();
+        let mut caps = HashSet::new();
+        caps.insert("clipboard".to_string());
+        let webview = app.world_mut().spawn(GrantedNamespaces(caps)).id();
+
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: host_call("h0", "fs", "read"),
+        });
+        app.world_mut().flush();
+
+        assert!(
+            app.world().resource::<HostRpc>().inflight.is_empty(),
+            "a denied call must NOT be forwarded (no in-flight entry)"
+        );
+        let cap = app.world().resource::<CapturedEmits>();
+        assert_eq!(cap.0.len(), 1, "exactly one reject emitted");
+        assert_eq!(cap.0[0].0, webview);
+        assert!(
+            cap.0[0].1.contains("capability_denied"),
+            "rejected as capability_denied"
+        );
+        assert!(
+            cap.0[0].1.contains("\"reqId\":\"h0\""),
+            "reply carries the page-local reqId"
+        );
+    }
+
+    #[test]
+    fn host_call_trust_key_is_the_webview_entity_not_the_payload() {
+        let mut app = gate_app();
+        let mut caps = HashSet::new();
+        caps.insert("fs".to_string());
+        let _granted = app.world_mut().spawn(GrantedNamespaces(caps)).id();
+        let caller = app
+            .world_mut()
+            .spawn(GrantedNamespaces(HashSet::new()))
+            .id();
+
+        app.world_mut().trigger(Receive {
+            webview: caller,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "host.call", "reqId": "h0", "ns": "fs", "method": "read",
+                "args": [], "surfaceId": "spoofed", "granted": ["fs"]
+            })),
+        });
+        app.world_mut().flush();
+
+        assert!(app.world().resource::<HostRpc>().inflight.is_empty());
+        let cap = app.world().resource::<CapturedEmits>();
+        assert_eq!(cap.0.len(), 1);
+        assert!(cap.0[0].1.contains("capability_denied"));
+    }
+
+    #[test]
+    fn host_call_rejects_when_host_unavailable() {
+        let mut app = gate_app();
+        let mut caps = HashSet::new();
+        caps.insert("fs".to_string());
+        let webview = app.world_mut().spawn(GrantedNamespaces(caps)).id();
+
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: host_call("h0", "fs", "read"),
+        });
+        app.world_mut().flush();
+
+        assert!(app.world().resource::<HostRpc>().inflight.is_empty());
+        let cap = app.world().resource::<CapturedEmits>();
+        assert_eq!(cap.0.len(), 1);
+        assert!(cap.0[0].1.contains("host_unavailable"));
+    }
+
+    #[test]
+    fn host_call_for_granted_namespace_is_forwarded_and_tracked() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("rpc.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            if let Ok((stream, _)) = listener.accept() {
+                let mut r = BufReader::new(stream);
+                let mut line = String::new();
+                while r.read_line(&mut line).map(|n| n > 0).unwrap_or(false) {
+                    line.clear();
+                }
+            }
+        });
+
+        let mut app = gate_app();
+        let client = ozmux_extension_host::HostRpcClient::connect(&sock).unwrap();
+        app.world_mut().resource_mut::<HostRpc>().set_client(client);
+
+        let mut caps = HashSet::new();
+        caps.insert("fs".to_string());
+        let webview = app.world_mut().spawn(GrantedNamespaces(caps)).id();
+
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: host_call("h0", "fs", "read"),
+        });
+
+        let hr = app.world().resource::<HostRpc>();
+        assert_eq!(hr.inflight.len(), 1, "an allowed call is tracked in-flight");
+        let entry = hr.inflight.values().next().unwrap();
+        assert_eq!(entry.0, webview);
+        assert_eq!(
+            entry.1.as_str(),
+            "h0",
+            "in-flight maps the global id back to the page-local reqId"
+        );
+        app.world_mut().flush();
+        assert!(
+            app.world().resource::<CapturedEmits>().0.is_empty(),
+            "an allowed call is forwarded, not rejected"
+        );
+
+        app.world_mut().resource_mut::<HostRpc>().clear_client();
+        let _ = server.join();
+    }
+
+    #[test]
+    fn host_reply_routed_back_to_origin_with_page_local_req_id() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixListener;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("rpc.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let frame: serde_json::Value = serde_json::from_str(&line).unwrap();
+            let gid = frame
+                .get("reqId")
+                .and_then(|v| v.as_str())
+                .unwrap()
+                .to_string();
+            let mut w = stream;
+            w.write_all(
+                format!("{{\"reqId\":\"{gid}\",\"ok\":true,\"value\":\"hi\"}}\n").as_bytes(),
+            )
+            .unwrap();
+            w.flush().unwrap();
+        });
+
+        let mut app = gate_app();
+        app.add_systems(Update, drain_host_rpc_responses);
+        let client = ozmux_extension_host::HostRpcClient::connect(&sock).unwrap();
+        app.world_mut().resource_mut::<HostRpc>().set_client(client);
+
+        let mut caps = std::collections::HashSet::new();
+        caps.insert("fs".to_string());
+        let webview = app.world_mut().spawn(GrantedNamespaces(caps)).id();
+
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: host_call("h0", "fs", "read"),
+        });
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            app.update();
+            if !app.world().resource::<CapturedEmits>().0.is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reply never routed back"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        let cap = app.world().resource::<CapturedEmits>();
+        assert_eq!(cap.0[0].0, webview, "reply targets the originating webview");
+        assert!(
+            cap.0[0].1.contains("\"reqId\":\"h0\""),
+            "page-local reqId restored"
+        );
+        assert!(
+            cap.0[0].1.contains("\"value\":\"hi\""),
+            "value forwarded through"
+        );
+        assert!(
+            app.world().resource::<HostRpc>().inflight.is_empty(),
+            "the in-flight entry is consumed on reply"
+        );
+
+        app.world_mut().resource_mut::<HostRpc>().clear_client();
+        let _ = server.join();
+    }
+
+    #[test]
+    fn new_model_surface_gets_host_bridge_and_granted_list() {
+        let mut app = make_test_app();
+        app.add_systems(Update, finish_extension_setup);
+        let mut caps = std::collections::HashSet::new();
+        caps.insert("fs".to_string());
+        let (host, ..) = spawn_extension_host(
+            &mut app,
+            (
+                laid_out_node(Vec2::new(800.0, 600.0)),
+                GrantedNamespaces(caps),
+            ),
+        );
+        app.update();
+
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(host)
+            .expect("new-model surface must carry the host bridge as a PreloadScript");
+        assert!(
+            preload.0.iter().any(|s| s == HOST_BRIDGE_JS),
+            "the host-API bridge JS must be injected for a surface with GrantedNamespaces"
+        );
+        assert!(
+            preload
+                .0
+                .iter()
+                .any(|s| s.starts_with("window.__ozmuxGranted=") && s.contains("\"fs\"")),
+            "the granted-namespace list must be injected before the bridge"
+        );
+        assert!(
+            !preload.0.iter().any(|s| s == OZMUX_EXTENSION_JS),
+            "legacy ozmux.js must NOT be injected for a new-model surface"
+        );
+    }
+
+    #[test]
+    fn pruning_drops_in_flight_calls_for_a_despawned_surface() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<HostRpc>();
+        app.init_resource::<ExtensionHandlersBridge>();
+        app.init_resource::<WebviewSurfaceIdMap>();
+        app.add_observer(prune_webview_id_map_on_remove);
+
+        let surface = app.world_mut().spawn(SurfaceMarker).id();
+        let other = app.world_mut().spawn(SurfaceMarker).id();
+        {
+            let mut hr = app.world_mut().resource_mut::<HostRpc>();
+            hr.note_in_flight_for_test("0", surface, "h0");
+            hr.note_in_flight_for_test("1", other, "h1");
+        }
+
+        app.world_mut().entity_mut(surface).despawn();
+
+        assert_eq!(
+            app.world().resource::<HostRpc>().count_in_flight_for_test(),
+            1,
+            "prune must drop ONLY the despawned surface's in-flight calls (retain, not clear)"
         );
     }
 }

@@ -104,4 +104,15 @@ describe('bindHostRpcServer', () => {
     expect(r).toEqual({ reqId: '9', ok: true, value: 'contents:/y' });
     s.destroy();
   });
+
+  it('rejects an over-sized result with an error frame instead of writing it', async () => {
+    const bigApi: ApiNamespaceMap = {
+      big: { blob: async () => 'x'.repeat(9 * 1024 * 1024) },
+    };
+    server = await bindHostRpcServer(sockPath, bigApi);
+    const s = await connect();
+    const reply = await rpc(s, { reqId: '1', ns: 'big', method: 'blob', args: [] });
+    s.end();
+    expect(reply).toEqual({ reqId: '1', ok: false, error: 'host result exceeds max size' });
+  });
 });

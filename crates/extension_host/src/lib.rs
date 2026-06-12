@@ -18,6 +18,7 @@ pub mod manifest;
 pub mod path_prefix;
 pub mod protocol;
 pub mod registry;
+pub mod rpc_client;
 pub mod scheme;
 
 pub use bridge::{
@@ -40,3 +41,4 @@ pub use manifest::{Manifest, ManifestError};
 pub use path_prefix::extension_path_prefix;
 pub use protocol::{ProtocolError, Request, Response};
 pub use registry::{RegisteredView, ViewId, ViewRegistry};
+pub use rpc_client::HostRpcClient;
