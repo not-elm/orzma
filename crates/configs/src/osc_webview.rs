@@ -1,13 +1,20 @@
-//! Configuration for the OSC-driven webview feature (default-off gate).
+//! Configuration for the OSC-driven webview feature (default-on gate).
 
 use serde::{Deserialize, Serialize};
 
-/// OSC-driven webview settings. Disabled by default: a foreground program's
-/// `OSC 5379 ; mount ; <view-id>` is dropped unless `enabled = true`.
-#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+/// OSC-driven webview settings. Enabled by default: a foreground program's
+/// `OSC 5379 ; mount ; <view-id>` mounts the registered view unless
+/// `enabled = false`.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct OscWebviewConfig {
     /// Master switch for the OSC-driven webview feature.
     pub enabled: bool,
+}
+
+impl Default for OscWebviewConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 /// Per-field-optional view of `[osc_webview]` for TOML deserialization.
@@ -31,16 +38,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_disabled() {
-        assert!(!OscWebviewConfig::default().enabled);
+    fn default_is_enabled() {
+        assert!(OscWebviewConfig::default().enabled);
     }
 
     #[test]
     fn patch_overrides_when_present() {
         let patched = OscWebviewPatch {
-            enabled: Some(true),
+            enabled: Some(false),
         }
         .apply_to(OscWebviewConfig::default());
-        assert!(patched.enabled);
+        assert!(
+            !patched.enabled,
+            "an explicit override flips the default-on gate off"
+        );
     }
 }

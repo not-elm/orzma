@@ -166,23 +166,23 @@ opacity = 2.0
     }
 
     #[test]
-    fn osc_webview_enabled_merges_from_toml() {
+    fn osc_webview_setting_merges_from_toml() {
         let toml_str = r#"
 [osc_webview]
-enabled = true
+enabled = false
 "#;
         let raw: RawConfigs = toml::from_str(toml_str).unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert!(
-            merged.osc_webview.enabled,
-            "[osc_webview] enabled = true must merge through the real Raw->apply_to path"
+            !merged.osc_webview.enabled,
+            "[osc_webview] enabled = false must merge through the real Raw->apply_to path, flipping the default-on gate off"
         );
 
         let empty: RawConfigs = toml::from_str("").unwrap();
         let defaulted = empty.apply_to(OzmuxConfigs::default());
         assert!(
-            !defaulted.osc_webview.enabled,
-            "empty TOML must keep the default-off gate"
+            defaulted.osc_webview.enabled,
+            "empty TOML must keep the default-on gate"
         );
     }
 
