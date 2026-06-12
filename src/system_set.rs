@@ -4,9 +4,9 @@ use bevy::prelude::*;
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
 pub enum OzmuxSystems {
     /// The phase that builds per-pane chrome (tab bar + surface slot) once on
-    /// `Added<PaneMarker>`. Runs after the control-bridge drain and input so a
-    /// freshly-spawned pane (whose `ChildOf` / `ActiveSurface` were queued via
-    /// deferred `Commands`) is fully committed before chrome attaches.
+    /// `Added<PaneMarker>`. Runs after input so a freshly-spawned pane (whose
+    /// `ChildOf` / `ActiveSurface` were queued via deferred `Commands`) is fully
+    /// committed before chrome attaches.
     BuildChrome,
     /// The phase that setup surfaces.
     SetupSurface,

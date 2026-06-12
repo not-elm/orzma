@@ -10,7 +10,6 @@ use crate::ui::{PaneDimOverlay, TerminalSurfaceMarker, WorkspaceUiRoot};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
-use ozmux_extension_host::ExtensionControlSet;
 use ozmux_multiplexer::{
     ActivePane, AttachedWorkspace, OwningWorkspace, PaneMarker, SurfaceOf, WorkspaceUiSubtree,
 };
@@ -35,8 +34,8 @@ impl Plugin for OzmuxWorkspaceUiPlugin {
 
 /// Orders the per-frame surface pipeline so each stage sees the previous
 /// stage's committed `Commands` — Bevy inserts an `ApplyDeferred` sync point on
-/// each ordering edge: control-bridge drain ([`ExtensionControlSet::Drain`]) →
-/// chrome build ([`OzmuxSystems::BuildChrome`]) → surface setup
+/// each ordering edge: input ([`OzmuxSystems::Input`]) → chrome build
+/// ([`OzmuxSystems::BuildChrome`]) → surface setup
 /// ([`OzmuxSystems::SetupSurface`], which attaches terminals/webviews).
 ///
 /// Without this, unordered stages race nondeterministically: chrome can run
@@ -47,9 +46,7 @@ fn order_surface_pipeline(app: &mut App) {
     app.configure_sets(
         Update,
         (
-            OzmuxSystems::BuildChrome
-                .after(ExtensionControlSet::Drain)
-                .after(OzmuxSystems::Input),
+            OzmuxSystems::BuildChrome.after(OzmuxSystems::Input),
             OzmuxSystems::SetupSurface.after(OzmuxSystems::BuildChrome),
         ),
     );
@@ -223,19 +220,16 @@ mod tests {
     }
 
     #[test]
-    fn chrome_runs_after_control_drain_so_deferred_commands_are_visible() {
-        // Regression for the intermittent dark/empty extension pane: the `@memo`
-        // split spawns the new pane via deferred `Commands`. The chrome-build
-        // stage (`OzmuxSystems::BuildChrome`) must run after the control-bridge
-        // drain (`ExtensionControlSet::Drain`) so the inserted `ApplyDeferred`
-        // flushes those commands before chrome reads the new pane. This adds the
-        // real `OzmuxWorkspaceUiPlugin` (which wires the ordering) and proves a
-        // BuildChrome-set system observes a Drain-set system's deferred spawn
-        // within the same frame.
+    fn chrome_runs_after_input_so_deferred_commands_are_visible() {
+        // Regression for the intermittent dark/empty pane: an in-app split spawns
+        // the new pane via deferred `Commands` in the input phase
+        // (`OzmuxSystems::Input`). The chrome-build stage
+        // (`OzmuxSystems::BuildChrome`) must run after input so the inserted
+        // `ApplyDeferred` flushes those commands before chrome reads the new pane.
         #[derive(Resource, Default)]
         struct ChromeSaw(Option<bool>);
         #[derive(Component)]
-        struct DrainSpawned;
+        struct InputSpawned;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -245,10 +239,10 @@ mod tests {
             Update,
             (
                 (|mut commands: Commands| {
-                    commands.spawn(DrainSpawned);
+                    commands.spawn(InputSpawned);
                 })
-                .in_set(ExtensionControlSet::Drain),
-                (|q: Query<(), With<DrainSpawned>>, mut saw: ResMut<ChromeSaw>| {
+                .in_set(OzmuxSystems::Input),
+                (|q: Query<(), With<InputSpawned>>, mut saw: ResMut<ChromeSaw>| {
                     saw.0 = Some(!q.is_empty());
                 })
                 .in_set(OzmuxSystems::BuildChrome),
@@ -260,9 +254,9 @@ mod tests {
         assert_eq!(
             app.world().resource::<ChromeSaw>().0,
             Some(true),
-            "a BuildChrome-set system must observe the control drain's deferred \
+            "a BuildChrome-set system must observe an Input-set system's deferred \
              spawn within the same frame; BuildChrome must be ordered after \
-             ExtensionControlSet::Drain (inserting an ApplyDeferred sync point)"
+             OzmuxSystems::Input (inserting an ApplyDeferred sync point)"
         );
     }
 
