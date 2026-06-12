@@ -167,15 +167,6 @@ impl TerminalHandle {
             .advance(&mut self.osc_webview, chunk);
     }
 
-    /// Drains the buffered OSC 5379 verb left by the last `advance` call,
-    /// if any. Returns `None` when no OSC 5379 sequence was parsed or the
-    /// gate was off.
-    pub(crate) fn take_pending_osc_webview(
-        &mut self,
-    ) -> Option<crate::vt::listener::OscWebviewVerb> {
-        self.osc_webview.take_pending()
-    }
-
     /// Returns true if the current `Term` cursor differs from the most
     /// recently emitted cursor (`prev_cursor`).
     pub fn cursor_changed(&self) -> bool {
@@ -1752,41 +1743,6 @@ mod tests {
         assert_eq!(
             app.world().resource::<Seen>().0,
             vec![PathBuf::from("/tmp")]
-        );
-    }
-
-    #[test]
-    fn advance_osc_webview_buffers_pending_verb() {
-        use crate::vt::listener::{ControlFrame, OscWebviewVerb, TermListener};
-        use crossbeam_channel::unbounded;
-
-        let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
-        let (control_tx, control_rx) = unbounded::<ControlFrame>();
-        let listener = TermListener {
-            reply_tx,
-            control_tx: control_tx.clone(),
-        };
-        let mut handle = TerminalHandle::new(
-            80,
-            24,
-            listener,
-            reply_rx,
-            control_rx,
-            control_tx,
-            Arc::new(AtomicBool::new(true)),
-        );
-        handle.advance(b"\x1b]5379;mount;dash\x07");
-
-        assert_eq!(
-            handle.take_pending_osc_webview(),
-            Some(OscWebviewVerb::Mount {
-                view_id: "dash".into()
-            }),
-            "advance must buffer the parsed OSC 5379 verb in osc_webview"
-        );
-        assert!(
-            handle.take_pending_osc_webview().is_none(),
-            "second take must return None"
         );
     }
 }
