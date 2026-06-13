@@ -503,6 +503,42 @@ mod apply_tests {
     }
 
     #[test]
+    fn apply_register_inline_populates_dyn_asset_registry_with_html_bytes() {
+        use ozmux_extension_host::DynAsset;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let dyn_assets = DynAssetRegistry::default();
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.add_systems(Update, apply_control_events);
+
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: Entity::from_bits(11),
+                kind: RegisterKind::Inline {
+                    html: "<h1>x</h1>".into(),
+                    interactive: true,
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+
+        app.update();
+
+        let handle = match reply_rx.try_recv().expect("apply must reply") {
+            ServerMsg::Ok { handle, .. } => handle,
+            ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
+        };
+        assert!(
+            matches!(dyn_assets.get(&handle), Some(DynAsset::Inline(bytes)) if bytes == b"<h1>x</h1>"),
+            "DynAssetRegistry must carry the inline HTML bytes for the minted handle"
+        );
+    }
+
+    #[test]
     fn apply_register_invalid_root_replies_err() {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();

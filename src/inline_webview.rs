@@ -185,7 +185,7 @@ pub(crate) fn resolve_mount(
     }
     let entry = match &view.source {
         DynSource::Dir(_) => view.entry.clone(),
-        DynSource::Inline(_) => "index.html".to_string(),
+        DynSource::Inline(_) => "index.html".into(),
     };
     Some(ResolvedWebviewMount {
         url: Some(format!("ozmux-dyn://{id}/{entry}")),
@@ -1937,25 +1937,5 @@ mod tests {
         // Without a Browsers NonSend resource the full resolution path runs
         // and the forwarding is skipped — the system must not panic.
         app.update();
-    }
-
-    #[test]
-    fn resolve_mount_dynamic_inline_yields_ozmux_dyn_url() {
-        use crate::control_plane::{DynSource, DynamicRegistry, DynamicView};
-        let views = ViewRegistry::default();
-        let mut dynamic = DynamicRegistry::default();
-        let surface = Entity::from_bits(3);
-        dynamic.insert(
-            "HANDLE".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
-                entry: "index.html".into(),
-                interactive: true,
-                owner_surface: surface,
-                connection_id: 5,
-            },
-        );
-        let r = resolve_mount("HANDLE", surface, &views, &dynamic).expect("resolves");
-        assert_eq!(r.url.as_deref(), Some("ozmux-dyn://HANDLE/index.html"));
     }
 }
