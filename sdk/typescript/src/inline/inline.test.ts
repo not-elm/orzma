@@ -38,6 +38,21 @@ describe('mountInline', () => {
   it('accepts the full legal view-id charset', () => {
     expect(() => mountInline('a.b_c-D9', { rows: 1, cols: 1 })).not.toThrow();
   });
+
+  it('appends the instance id as the 5th field when given', () => {
+    const out = mountInline('memo.main', { rows: 3, cols: 20, instanceId: 'a' });
+    expect(out).toBe(`${ESC}]5379;mount-inline;memo.main;3;20;a${ST}\n\n\n`);
+  });
+
+  it('omits the instance field when instanceId is undefined', () => {
+    const out = mountInline('memo.main', { rows: 3, cols: 20 });
+    expect(out).toBe(`${ESC}]5379;mount-inline;memo.main;3;20${ST}\n\n\n`);
+  });
+
+  it('rejects an invalid instance id', () => {
+    expect(() => mountInline('memo.main', { rows: 1, cols: 1, instanceId: 'a;b' })).toThrow();
+    expect(() => mountInline('memo.main', { rows: 1, cols: 1, instanceId: '' })).toThrow();
+  });
 });
 
 describe('unmountInline', () => {
@@ -51,5 +66,17 @@ describe('unmountInline', () => {
 
   it('rejects an invalid view id', () => {
     expect(() => unmountInline('a;b')).toThrow();
+  });
+
+  it('emits an instance-scoped unmount with both ids', () => {
+    expect(unmountInline('memo.main', 'a')).toBe(`${ESC}]5379;unmount-inline;memo.main;a${ST}`);
+  });
+
+  it('throws when an instanceId is given without a viewId', () => {
+    expect(() => unmountInline(undefined, 'a')).toThrow();
+  });
+
+  it('rejects an invalid instance id', () => {
+    expect(() => unmountInline('memo.main', 'a;b')).toThrow();
   });
 });

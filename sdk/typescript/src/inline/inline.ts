@@ -13,12 +13,14 @@ export interface InlineGeometry {
   rows: number;
   /** Rect width in cells; integer 1..=400. */
   cols: number;
+  /** Optional client-assigned instance id; same charset/length as a view id. */
+  instanceId?: string;
 }
 
-function assertViewId(viewId: string): void {
-  if (!VIEW_ID_RE.test(viewId)) {
+function assertId(label: string, value: string): void {
+  if (!VIEW_ID_RE.test(value)) {
     throw new RangeError(
-      `invalid inline webview id ${JSON.stringify(viewId)}: must match ${VIEW_ID_RE}`,
+      `invalid inline webview ${label} ${JSON.stringify(value)}: must match ${VIEW_ID_RE}`,
     );
   }
 }
@@ -37,25 +39,40 @@ function assertDim(name: string, value: number, max: number): void {
  * caller positions the cursor first (e.g. print a heading). `view_id` must be
  * registered in an extension's `ozmux.toml`; `rows`/`cols` are validated to
  * 1..=200 / 1..=400 (out-of-range throws `RangeError` rather than emitting a
- * sequence the terminal would silently drop).
+ * sequence the terminal would silently drop). An optional `instanceId` is
+ * appended as a 5th field to address a specific instance of the view.
  */
 export function mountInline(viewId: string, geometry: InlineGeometry): string {
-  assertViewId(viewId);
+  assertId('view id', viewId);
   assertDim('rows', geometry.rows, MAX_ROWS);
   assertDim('cols', geometry.cols, MAX_COLS);
-  const seq = `${OSC}${OSC_WEBVIEW_CODE};mount-inline;${viewId};${geometry.rows};${geometry.cols}${ST}`;
+  let seq = `${OSC}${OSC_WEBVIEW_CODE};mount-inline;${viewId};${geometry.rows};${geometry.cols}`;
+  if (geometry.instanceId !== undefined) {
+    assertId('instance id', geometry.instanceId);
+    seq += `;${geometry.instanceId}`;
+  }
+  seq += ST;
   return seq + '\n'.repeat(geometry.rows);
 }
 
 /**
- * Builds the `unmount-inline` OSC 5379 sequence. With a `viewId`, unmounts that
- * inline webview; with none, unmounts every inline webview on the terminal
- * (emitted with no trailing separator — an empty id field is malformed).
+ * Builds the `unmount-inline` OSC 5379 sequence. With `viewId` + `instanceId`,
+ * unmounts that one instance; with `viewId` only, unmounts every instance of
+ * that view; with neither, unmounts every inline webview on the terminal
+ * (emitted with no trailing separator — an empty field is malformed). Passing
+ * an `instanceId` without a `viewId` throws `RangeError`.
  */
-export function unmountInline(viewId?: string): string {
-  if (viewId !== undefined) {
-    assertViewId(viewId);
+export function unmountInline(viewId?: string, instanceId?: string): string {
+  if (viewId === undefined) {
+    if (instanceId !== undefined) {
+      throw new RangeError('unmountInline: instanceId requires a viewId');
+    }
+    return `${OSC}${OSC_WEBVIEW_CODE};unmount-inline${ST}`;
+  }
+  assertId('view id', viewId);
+  if (instanceId === undefined) {
     return `${OSC}${OSC_WEBVIEW_CODE};unmount-inline;${viewId}${ST}`;
   }
-  return `${OSC}${OSC_WEBVIEW_CODE};unmount-inline${ST}`;
+  assertId('instance id', instanceId);
+  return `${OSC}${OSC_WEBVIEW_CODE};unmount-inline;${viewId};${instanceId}${ST}`;
 }
