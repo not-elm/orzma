@@ -8,7 +8,7 @@ use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{RegisterKind, ServerMsg};
 use crate::inline_webview::InlineWebview;
 use bevy::prelude::*;
-use crossbeam_channel::Receiver;
+use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use ozmux_extension_host::DynAssetRegistry;
 use ozmux_extension_host::host::RuntimeRoot;
@@ -118,6 +118,35 @@ impl TokenRegistry {
     }
 }
 
+/// A shared `connection_id → outbound-line sender` table. Each live control
+/// connection owns a writer thread draining a `Sender<String>`; ECS pushes
+/// server-initiated `{op:"call",…}` lines here to reach a specific program.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct ConnectionWriters(Arc<RwLock<HashMap<u64, Sender<String>>>>);
+
+impl ConnectionWriters {
+    /// Registers a writer channel for `connection_id`.
+    pub(crate) fn insert(&self, connection_id: u64, tx: Sender<String>) {
+        self.0.write().unwrap().insert(connection_id, tx);
+    }
+
+    /// Removes the writer channel for `connection_id` when the connection closes.
+    pub(crate) fn remove(&self, connection_id: u64) {
+        self.0.write().unwrap().remove(&connection_id);
+    }
+
+    /// Queues one NDJSON line to `connection_id`; returns false if the connection
+    /// is gone or its writer has exited.
+    #[allow(dead_code)]
+    pub(crate) fn send(&self, connection_id: u64, line: String) -> bool {
+        let guard = self.0.read().unwrap();
+        guard
+            .get(&connection_id)
+            .map(|tx| tx.send(line).is_ok())
+            .unwrap_or(false)
+    }
+}
+
 /// Mints a per-surface env token (same generator as handles).
 pub(crate) fn mint_token() -> String {
     mint_id()
@@ -167,10 +196,11 @@ impl OzmuxControlPlanePlugin {
 impl Plugin for OzmuxControlPlanePlugin {
     fn build(&self, app: &mut App) {
         let tokens = TokenRegistry::default();
+        let writers = ConnectionWriters::default();
         match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "control") {
             Ok(runtime) => {
                 let sock_path = runtime.sock_dir().join("control.sock");
-                match spawn_listener(&sock_path, tokens.clone()) {
+                match spawn_listener(&sock_path, tokens.clone(), writers.clone()) {
                     Ok(events) => {
                         app.insert_resource(ControlEvents(events));
                         app.insert_resource(ControlPlaneHandle { sock_path, tokens });
@@ -181,6 +211,7 @@ impl Plugin for OzmuxControlPlanePlugin {
             }
             Err(e) => tracing::error!(error = %e, "control-plane runtime dir failed"),
         }
+        app.insert_resource(writers);
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(DynAssetRegistryRes(self.dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
