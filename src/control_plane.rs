@@ -8,6 +8,7 @@ use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{RegisterKind, ServerMsg};
 use crate::inline_webview::InlineWebview;
 use bevy::prelude::*;
+use bevy_cef::prelude::HostEmitEvent;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use ozmux_extension_host::DynAssetRegistry;
@@ -141,20 +142,12 @@ impl OzmuxRpc {
     }
 
     /// Removes and returns one in-flight entry.
-    #[allow(
-        dead_code,
-        reason = "consumed by apply_control_events Reply drain in stage1 task 9"
-    )]
     pub(crate) fn take(&mut self, global_id: &str) -> Option<(Entity, String, u64)> {
         self.inflight.remove(global_id)
     }
 
     /// Removes every in-flight call for `connection_id`, returning each
     /// `(webview, pageReqId)` so the caller can reject the page Promise.
-    #[allow(
-        dead_code,
-        reason = "consumed by apply_control_events Disconnect drain in stage1 task 9"
-    )]
     pub(crate) fn drain_connection(&mut self, connection_id: u64) -> Vec<(Entity, String)> {
         self.inflight
             .extract_if(|_, (_, _, c)| *c == connection_id)
@@ -310,6 +303,7 @@ struct ControlRuntime(
 fn apply_control_events(
     mut commands: Commands,
     mut registry: ResMut<DynamicRegistry>,
+    mut rpc: ResMut<OzmuxRpc>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<DynAssetRegistryRes>,
     inline: Query<(Entity, &InlineWebview)>,
@@ -366,9 +360,54 @@ fn apply_control_events(
                     dyn_assets.0.remove(h);
                 }
                 despawn_mounted(&mut commands, &inline, &removed);
+                for (webview, page_req) in rpc.drain_connection(connection_id) {
+                    let payload = serde_json::json!({ "reqId": page_req, "ok": false, "error": "owner_disconnected" });
+                    commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+                }
             }
-            // TODO(stage1 task 9): handle Reply/Emit (back-channel drain) here.
-            ControlEvent::Reply { .. } | ControlEvent::Emit { .. } => {}
+            ControlEvent::Reply {
+                req_id,
+                ok,
+                value,
+                error,
+                connection_id,
+            } => {
+                let Some((webview, page_req, conn)) = rpc.take(&req_id) else {
+                    continue;
+                };
+                // NOTE: a reply from a different connection than the one that
+                // registered the call is a spoofing attempt; drop it.
+                if conn != connection_id {
+                    continue;
+                }
+                let payload = if ok {
+                    serde_json::json!({ "reqId": page_req, "ok": true, "value": value })
+                } else {
+                    serde_json::json!({ "reqId": page_req, "ok": false, "error": error.unwrap_or_default() })
+                };
+                commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+            }
+            ControlEvent::Emit {
+                connection_id,
+                handle,
+                event,
+                payload,
+            } => {
+                // NOTE: only the connection that registered the handle may emit
+                // to its webviews; guard prevents cross-connection spoofing.
+                let owns = registry
+                    .get(&handle)
+                    .is_some_and(|v| v.connection_id == connection_id);
+                if !owns {
+                    continue;
+                }
+                let frame = serde_json::json!({ "event": event, "payload": payload });
+                for (entity, view) in &inline {
+                    if view.view_id == handle {
+                        commands.trigger(HostEmitEvent::new(entity, "ozmux.event", &frame));
+                    }
+                }
+            }
         }
     }
 }
@@ -572,6 +611,7 @@ mod apply_tests {
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let dyn_assets = DynAssetRegistry::default();
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
@@ -616,6 +656,7 @@ mod apply_tests {
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let dyn_assets = DynAssetRegistry::default();
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
@@ -650,6 +691,7 @@ mod apply_tests {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
@@ -692,6 +734,7 @@ mod apply_tests {
         );
         dyn_assets.insert_dir("h", "/x".into());
         app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
@@ -706,12 +749,12 @@ mod apply_tests {
 
     #[test]
     fn apply_is_a_noop_when_control_events_missing() {
-        // Simulates the control plane failing to bind: ControlEvents was never inserted.
         let mut app = App::new();
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
-        app.update(); // must not panic
+        app.update();
         assert!(app.world().get_resource::<ControlEvents>().is_none());
     }
 
@@ -774,6 +817,7 @@ mod apply_tests {
             })
             .id();
         app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(DynAssetRegistryRes(dyn_assets));
         app.insert_resource(ControlEvents(ev_rx));
         app.add_systems(Update, apply_control_events);
@@ -791,6 +835,113 @@ mod apply_tests {
                 .get("HMOUNT")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn apply_reply_reemits_to_the_originating_webview() {
+        use bevy_cef::prelude::HostEmitEvent;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let mut rpc = OzmuxRpc::default();
+        let webview = app.world_mut().spawn_empty().id();
+        let g = rpc.mint();
+        rpc.note(&g, webview, "p9", 5);
+        app.insert_resource(rpc);
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct Caps(Vec<(Entity, String, serde_json::Value)>);
+        app.insert_resource(Caps::default());
+        app.add_observer(|e: On<HostEmitEvent>, mut c: ResMut<Caps>| {
+            let payload: serde_json::Value = serde_json::from_str(&e.payload).unwrap_or_default();
+            c.0.push((e.webview, e.id.clone(), payload));
+        });
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Reply {
+                req_id: g.clone(),
+                ok: true,
+                value: serde_json::json!(99),
+                error: None,
+                connection_id: 5,
+            })
+            .unwrap();
+        app.update();
+
+        let caps = app.world().resource::<Caps>();
+        assert_eq!(caps.0.len(), 1);
+        let (wv, channel, payload) = &caps.0[0];
+        assert_eq!(*wv, webview);
+        assert_eq!(channel, "ozmux");
+        assert_eq!(payload["reqId"], "p9");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["value"], 99);
+    }
+
+    #[test]
+    fn apply_emit_broadcasts_only_to_owning_connections_handle() {
+        use bevy_cef::prelude::HostEmitEvent;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "H".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: Entity::from_bits(1),
+                connection_id: 5,
+            },
+        );
+        let mounted = app
+            .world_mut()
+            .spawn((
+                InlineWebview {
+                    view_id: "H".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+                WebviewOwner {
+                    connection_id: 5,
+                    handle: "H".into(),
+                },
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct Caps(Vec<(Entity, String)>);
+        app.insert_resource(Caps::default());
+        app.add_observer(|e: On<HostEmitEvent>, mut c: ResMut<Caps>| {
+            c.0.push((e.webview, e.id.clone()))
+        });
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Emit {
+                connection_id: 5,
+                handle: "H".into(),
+                event: "tick".into(),
+                payload: serde_json::json!(1),
+            })
+            .unwrap();
+        ev_tx
+            .send(ControlEvent::Emit {
+                connection_id: 99,
+                handle: "H".into(),
+                event: "tick".into(),
+                payload: serde_json::json!(1),
+            })
+            .unwrap();
+        app.update();
+
+        let caps = app.world().resource::<Caps>();
+        assert_eq!(caps.0, vec![(mounted, "ozmux.event".to_string())]);
     }
 }
 

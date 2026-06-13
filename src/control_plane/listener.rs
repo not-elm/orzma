@@ -45,7 +45,6 @@ pub(crate) enum ControlEvent {
         connection_id: u64,
     },
     /// A program's reply to an ozmux-initiated back-channel `call`.
-    #[allow(dead_code, reason = "Reply fields are consumed in stage1 task 9")]
     Reply {
         /// The global reqId the apply system correlates.
         req_id: String,
@@ -59,7 +58,6 @@ pub(crate) enum ControlEvent {
         connection_id: u64,
     },
     /// A program-initiated push to its handle's webviews.
-    #[allow(dead_code, reason = "Emit fields are consumed in stage1 task 9")]
     Emit {
         /// The connection that sent the emit (ownership is checked in apply).
         connection_id: u64,
