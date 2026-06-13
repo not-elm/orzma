@@ -375,8 +375,10 @@ fn apply_control_events(
                 let Some((webview, page_req, conn)) = rpc.take(&req_id) else {
                     continue;
                 };
-                // NOTE: a reply from a different connection than the one that
-                // registered the call is a spoofing attempt; drop it.
+                // NOTE: conn is the connection that originated this call (stored
+                // at routing time); a reply whose sending connection differs is a
+                // different program trying to answer a call it didn't make, which
+                // would redirect the page response to an unrelated program. Drop it.
                 if conn != connection_id {
                     continue;
                 }
@@ -393,8 +395,6 @@ fn apply_control_events(
                 event,
                 payload,
             } => {
-                // NOTE: only the connection that registered the handle may emit
-                // to its webviews; guard prevents cross-connection spoofing.
                 let owns = registry
                     .get(&handle)
                     .is_some_and(|v| v.connection_id == connection_id);
