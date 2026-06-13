@@ -126,12 +126,12 @@ pub(crate) struct OzmuxRpc {
     next_id: u64,
 }
 
+#[allow(
+    dead_code,
+    reason = "consumed by back-channel routing in stage1 tasks 7-9"
+)]
 impl OzmuxRpc {
     /// Mints the next global reqId.
-    #[allow(
-        dead_code,
-        reason = "consumed by back-channel routing in stage1 tasks 7-9"
-    )]
     pub(crate) fn mint(&mut self) -> String {
         let id = self.next_id.to_string();
         self.next_id += 1;
@@ -139,10 +139,6 @@ impl OzmuxRpc {
     }
 
     /// Records an in-flight call.
-    #[allow(
-        dead_code,
-        reason = "consumed by back-channel routing in stage1 tasks 7-9"
-    )]
     pub(crate) fn note(
         &mut self,
         global_id: &str,
@@ -157,37 +153,20 @@ impl OzmuxRpc {
     }
 
     /// Removes and returns one in-flight entry.
-    #[allow(
-        dead_code,
-        reason = "consumed by back-channel routing in stage1 tasks 7-9"
-    )]
     pub(crate) fn take(&mut self, global_id: &str) -> Option<(Entity, String, u64)> {
         self.inflight.remove(global_id)
     }
 
     /// Removes every in-flight call for `connection_id`, returning each
     /// `(webview, pageReqId)` so the caller can reject the page Promise.
-    #[allow(
-        dead_code,
-        reason = "consumed by back-channel routing in stage1 tasks 7-9"
-    )]
     pub(crate) fn drain_connection(&mut self, connection_id: u64) -> Vec<(Entity, String)> {
-        let hit: Vec<String> = self
-            .inflight
-            .iter()
-            .filter(|(_, (_, _, c))| *c == connection_id)
-            .map(|(g, _)| g.clone())
-            .collect();
-        hit.into_iter()
-            .filter_map(|g| self.inflight.remove(&g).map(|(e, p, _)| (e, p)))
+        self.inflight
+            .extract_if(|_, (_, _, c)| *c == connection_id)
+            .map(|(_, (e, p, _))| (e, p))
             .collect()
     }
 
     /// Removes every in-flight call targeting `webview` (despawn prune).
-    #[allow(
-        dead_code,
-        reason = "consumed by back-channel routing in stage1 tasks 7-9"
-    )]
     pub(crate) fn drain_webview(&mut self, webview: Entity) {
         self.inflight.retain(|_, (e, _, _)| *e != webview);
     }
@@ -843,6 +822,18 @@ mod back_channel_state_tests {
         rpc.note(&b, Entity::from_bits(2), "p", 9);
         let drained = rpc.drain_connection(5);
         assert_eq!(drained, vec![(Entity::from_bits(1), "p".to_string())]);
+        assert!(rpc.take(&a).is_none());
+        assert!(rpc.take(&b).is_some());
+    }
+
+    #[test]
+    fn ozmux_rpc_drain_webview_drops_only_that_webviews_calls() {
+        let mut rpc = OzmuxRpc::default();
+        let a = rpc.mint();
+        let b = rpc.mint();
+        rpc.note(&a, Entity::from_bits(1), "p", 5);
+        rpc.note(&b, Entity::from_bits(2), "p", 5);
+        rpc.drain_webview(Entity::from_bits(1));
         assert!(rpc.take(&a).is_none());
         assert!(rpc.take(&b).is_some());
     }
