@@ -119,11 +119,6 @@ impl TokenRegistry {
     pub(crate) fn insert(&self, token: impl Into<String>, surface: Entity) {
         self.0.write().unwrap().insert(token.into(), surface);
     }
-
-    /// Removes a token binding.
-    pub(crate) fn remove(&self, token: &str) {
-        self.0.write().unwrap().remove(token);
-    }
 }
 
 /// Mints a per-surface env token (same generator as handles).
@@ -199,7 +194,13 @@ impl Plugin for OzmuxControlPlanePlugin {
 /// Keeps the control runtime dir alive for the app's lifetime (drop removes the
 /// 0700 dir + socket).
 #[derive(Resource)]
-struct ControlRuntime(RuntimeRoot);
+struct ControlRuntime(
+    #[expect(
+        dead_code,
+        reason = "held only for its Drop impl that removes the 0700 runtime dir"
+    )]
+    RuntimeRoot,
+);
 
 /// Drains queued `ControlEvent`s: mints handles for `register` and populates the
 /// `DynamicRegistry` (+ `DynAssetRegistry` for `Dir`), releases on `unregister`,
@@ -430,7 +431,6 @@ mod registry_tests {
 #[cfg(test)]
 mod apply_tests {
     use super::*;
-    use bevy::prelude::*;
     use crossbeam_channel::{bounded, unbounded};
 
     #[test]

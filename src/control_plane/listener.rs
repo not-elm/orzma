@@ -166,7 +166,6 @@ fn write_reply(stream: &mut UnixStream, reply: &ServerMsg) -> std::io::Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use std::time::{Duration, Instant};
 
     #[test]
