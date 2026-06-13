@@ -1,6 +1,6 @@
 //! Parsed control-mode events and the typed entity ids they carry.
 
-use crate::error::TmuxResult;
+use crate::{TmuxError, error::TmuxResult};
 
 /// A tmux pane id (`%N`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,7 +27,11 @@ pub enum ControlEvent {
     /// `%output <pane> <data>` — pane output, octal-decoded to raw bytes.
     Output { pane: PaneId, data: Vec<u8> },
     /// `%extended-output <pane> <age> ... : <data>` — output with buffering age (ms).
-    ExtendedOutput { pane: PaneId, age: u64, data: Vec<u8> },
+    ExtendedOutput {
+        pane: PaneId,
+        age: u64,
+        data: Vec<u8>,
+    },
 
     /// `%window-add <window>`.
     WindowAdd { window: WindowId },
@@ -51,16 +55,28 @@ pub enum ControlEvent {
     /// `%session-renamed <name>`.
     SessionRenamed { name: String },
     /// `%session-window-changed <session> <window>`.
-    SessionWindowChanged { session: SessionId, window: WindowId },
+    SessionWindowChanged {
+        session: SessionId,
+        window: WindowId,
+    },
     /// `%sessions-changed`.
     SessionsChanged,
 
     /// `%client-detached <client>`.
     ClientDetached { client: String },
     /// `%client-session-changed <client> <session> <name>`.
-    ClientSessionChanged { client: String, session: SessionId, name: String },
+    ClientSessionChanged {
+        client: String,
+        session: SessionId,
+        name: String,
+    },
     /// `%layout-change <window> <layout> <visible-layout> <flags>`.
-    LayoutChange { window: WindowId, layout: String, visible_layout: String, flags: String },
+    LayoutChange {
+        window: WindowId,
+        layout: String,
+        visible_layout: String,
+        flags: String,
+    },
     /// `%continue <pane>`.
     Continue { pane: PaneId },
     /// `%pause <pane>`.
@@ -92,9 +108,95 @@ pub enum ControlEvent {
 impl ControlEvent {
     /// Parses a single control-mode line into a [`ControlEvent`].
     pub fn parse(line: &[u8]) -> TmuxResult<Self> {
-        let _ = line;
-        todo!("ControlEvent::parse")
+        let mut fields = Fields(line);
+        let argv = fields.next().ok_or(TmuxError::NotControlLine)?;
+        match argv {
+            b"%begin" => fields.parse_guard("begin", |time, number, flags| ControlEvent::Begin {
+                time,
+                number,
+                flags,
+            }),
+            b"%end" => fields.parse_guard("end", |time, number, flags| ControlEvent::End {
+                time,
+                number,
+                flags,
+            }),
+            b"%error" => fields.parse_guard("error", |time, number, flags| ControlEvent::Error {
+                time,
+                number,
+                flags,
+            }),
+            _ => todo!("ControlEvent::parse"),
+        }
     }
+}
+
+struct Fields<'a>(&'a [u8]);
+
+impl<'a> Fields<'a> {
+    /// Next space-delimited field, or None when exhausted.
+    fn next(&mut self) -> Option<&'a [u8]> {
+        if self.0.is_empty() {
+            return None;
+        }
+        match self.0.iter().position(|&b| b == b' ') {
+            Some(i) => {
+                let (field, rest) = self.0.split_at(i);
+                self.0 = &rest[1..]; // drop the single separating space
+                Some(field)
+            }
+            None => {
+                let field = self.0;
+                self.0 = &[];
+                Some(field)
+            }
+        }
+    }
+
+    /// Everything left, verbatim — the trailing name/message/value.
+    fn rest(&self) -> &'a [u8] {
+        self.0
+    }
+
+    fn parse_guard(
+        &mut self,
+        event: &'static str,
+        build: fn(u64, u32, u32) -> ControlEvent,
+    ) -> TmuxResult<ControlEvent> {
+        let time = int(
+            self.next().ok_or(TmuxError::MissingField {
+                event,
+                field: "time",
+            })?,
+            "time",
+        )?;
+        let number = int(
+            self.next().ok_or(TmuxError::MissingField {
+                event,
+                field: "number",
+            })?,
+            "number",
+        )?;
+        let flags = int(
+            self.next().ok_or(TmuxError::MissingField {
+                event,
+                field: "flags",
+            })?,
+            "flags",
+        )?;
+        Ok(build(time, number, flags))
+    }
+}
+
+/// Parses an ASCII integer field into `T`, mapping failures to [`TmuxError::InvalidInt`].
+fn int<T: core::str::FromStr>(bytes: &[u8], field: &'static str) -> TmuxResult<T> {
+    core::str::from_utf8(bytes)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| TmuxError::InvalidInt {
+            field,
+            raw: String::from_utf8_lossy(bytes).into_owned(),
+        })
 }
 
 #[cfg(test)]
@@ -110,60 +212,117 @@ mod tests {
     fn command_block_guards() {
         assert_eq!(
             ev(b"%begin 1363006971 2 1"),
-            ControlEvent::Begin { time: 1363006971, number: 2, flags: 1 }
+            ControlEvent::Begin {
+                time: 1363006971,
+                number: 2,
+                flags: 1
+            }
         );
         assert_eq!(
             ev(b"%end 1363006971 2 1"),
-            ControlEvent::End { time: 1363006971, number: 2, flags: 1 }
+            ControlEvent::End {
+                time: 1363006971,
+                number: 2,
+                flags: 1
+            }
         );
         assert_eq!(
             ev(b"%error 1363006971 2 1"),
-            ControlEvent::Error { time: 1363006971, number: 2, flags: 1 }
+            ControlEvent::Error {
+                time: 1363006971,
+                number: 2,
+                flags: 1
+            }
         );
     }
 
     #[test]
     fn window_lifecycle() {
-        assert_eq!(ev(b"%window-add @1"), ControlEvent::WindowAdd { window: WindowId(1) });
-        assert_eq!(ev(b"%window-close @2"), ControlEvent::WindowClose { window: WindowId(2) });
+        assert_eq!(
+            ev(b"%window-add @1"),
+            ControlEvent::WindowAdd {
+                window: WindowId(1)
+            }
+        );
+        assert_eq!(
+            ev(b"%window-close @2"),
+            ControlEvent::WindowClose {
+                window: WindowId(2)
+            }
+        );
         assert_eq!(
             ev(b"%window-renamed @3 my window"),
-            ControlEvent::WindowRenamed { window: WindowId(3), name: "my window".to_string() }
+            ControlEvent::WindowRenamed {
+                window: WindowId(3),
+                name: "my window".to_string()
+            }
         );
         assert_eq!(
             ev(b"%window-pane-changed @3 %7"),
-            ControlEvent::WindowPaneChanged { window: WindowId(3), pane: PaneId(7) }
+            ControlEvent::WindowPaneChanged {
+                window: WindowId(3),
+                pane: PaneId(7)
+            }
         );
     }
 
     #[test]
     fn unlinked_window() {
-        assert_eq!(ev(b"%unlinked-window-add @9"), ControlEvent::UnlinkedWindowAdd { window: WindowId(9) });
-        assert_eq!(ev(b"%unlinked-window-close @9"), ControlEvent::UnlinkedWindowClose { window: WindowId(9) });
-        assert_eq!(ev(b"%unlinked-window-renamed @9"), ControlEvent::UnlinkedWindowRenamed { window: WindowId(9) });
+        assert_eq!(
+            ev(b"%unlinked-window-add @9"),
+            ControlEvent::UnlinkedWindowAdd {
+                window: WindowId(9)
+            }
+        );
+        assert_eq!(
+            ev(b"%unlinked-window-close @9"),
+            ControlEvent::UnlinkedWindowClose {
+                window: WindowId(9)
+            }
+        );
+        assert_eq!(
+            ev(b"%unlinked-window-renamed @9"),
+            ControlEvent::UnlinkedWindowRenamed {
+                window: WindowId(9)
+            }
+        );
     }
 
     #[test]
     fn session_notifications() {
         assert_eq!(
             ev(b"%session-changed $1 main"),
-            ControlEvent::SessionChanged { session: SessionId(1), name: "main".to_string() }
+            ControlEvent::SessionChanged {
+                session: SessionId(1),
+                name: "main".to_string()
+            }
         );
         assert_eq!(
             ev(b"%session-renamed renamed"),
-            ControlEvent::SessionRenamed { name: "renamed".to_string() }
+            ControlEvent::SessionRenamed {
+                name: "renamed".to_string()
+            }
         );
         assert_eq!(
             ev(b"%session-window-changed $1 @4"),
-            ControlEvent::SessionWindowChanged { session: SessionId(1), window: WindowId(4) }
+            ControlEvent::SessionWindowChanged {
+                session: SessionId(1),
+                window: WindowId(4)
+            }
         );
         assert_eq!(ev(b"%sessions-changed"), ControlEvent::SessionsChanged);
     }
 
     #[test]
     fn pane_mode_continue_pause() {
-        assert_eq!(ev(b"%pane-mode-changed %5"), ControlEvent::PaneModeChanged { pane: PaneId(5) });
-        assert_eq!(ev(b"%continue %5"), ControlEvent::Continue { pane: PaneId(5) });
+        assert_eq!(
+            ev(b"%pane-mode-changed %5"),
+            ControlEvent::PaneModeChanged { pane: PaneId(5) }
+        );
+        assert_eq!(
+            ev(b"%continue %5"),
+            ControlEvent::Continue { pane: PaneId(5) }
+        );
         assert_eq!(ev(b"%pause %5"), ControlEvent::Pause { pane: PaneId(5) });
     }
 
@@ -171,7 +330,9 @@ mod tests {
     fn client_notifications() {
         assert_eq!(
             ev(b"%client-detached /dev/ttys003"),
-            ControlEvent::ClientDetached { client: "/dev/ttys003".to_string() }
+            ControlEvent::ClientDetached {
+                client: "/dev/ttys003".to_string()
+            }
         );
         assert_eq!(
             ev(b"%client-session-changed /dev/ttys003 $2 work"),
@@ -201,7 +362,9 @@ mod tests {
         assert_eq!(ev(b"%exit"), ControlEvent::Exit { reason: None });
         assert_eq!(
             ev(b"%exit server exited unexpectedly"),
-            ControlEvent::Exit { reason: Some("server exited unexpectedly".to_string()) }
+            ControlEvent::Exit {
+                reason: Some("server exited unexpectedly".to_string())
+            }
         );
     }
 
@@ -209,11 +372,15 @@ mod tests {
     fn message_and_config_error() {
         assert_eq!(
             ev(b"%message hello there"),
-            ControlEvent::Message { message: "hello there".to_string() }
+            ControlEvent::Message {
+                message: "hello there".to_string()
+            }
         );
         assert_eq!(
             ev(b"%config-error /home/u/.tmux.conf:3: unknown command"),
-            ControlEvent::ConfigError { message: "/home/u/.tmux.conf:3: unknown command".to_string() }
+            ControlEvent::ConfigError {
+                message: "/home/u/.tmux.conf:3: unknown command".to_string()
+            }
         );
     }
 
@@ -221,11 +388,15 @@ mod tests {
     fn paste_buffer_notifications() {
         assert_eq!(
             ev(b"%paste-buffer-changed buffer0"),
-            ControlEvent::PasteBufferChanged { name: "buffer0".to_string() }
+            ControlEvent::PasteBufferChanged {
+                name: "buffer0".to_string()
+            }
         );
         assert_eq!(
             ev(b"%paste-buffer-deleted buffer0"),
-            ControlEvent::PasteBufferDeleted { name: "buffer0".to_string() }
+            ControlEvent::PasteBufferDeleted {
+                name: "buffer0".to_string()
+            }
         );
     }
 
@@ -250,7 +421,10 @@ mod tests {
     fn output_octal_round_trip() {
         assert_eq!(
             ControlEvent::parse(b"%output %1 abc\\015\\012def"),
-            Ok(ControlEvent::Output { pane: PaneId(1), data: b"abc\r\ndef".to_vec() })
+            Ok(ControlEvent::Output {
+                pane: PaneId(1),
+                data: b"abc\r\ndef".to_vec()
+            })
         );
     }
 
@@ -258,7 +432,10 @@ mod tests {
     fn output_escaped_backslash() {
         assert_eq!(
             ControlEvent::parse(b"%output %1 a\\134b"),
-            Ok(ControlEvent::Output { pane: PaneId(1), data: b"a\\b".to_vec() })
+            Ok(ControlEvent::Output {
+                pane: PaneId(1),
+                data: b"a\\b".to_vec()
+            })
         );
     }
 
@@ -266,7 +443,10 @@ mod tests {
     fn output_value_keeps_spaces() {
         assert_eq!(
             ControlEvent::parse(b"%output %1 echo hello world"),
-            Ok(ControlEvent::Output { pane: PaneId(1), data: b"echo hello world".to_vec() })
+            Ok(ControlEvent::Output {
+                pane: PaneId(1),
+                data: b"echo hello world".to_vec()
+            })
         );
     }
 
@@ -274,7 +454,10 @@ mod tests {
     fn output_empty_value() {
         assert_eq!(
             ControlEvent::parse(b"%output %1 "),
-            Ok(ControlEvent::Output { pane: PaneId(1), data: Vec::new() })
+            Ok(ControlEvent::Output {
+                pane: PaneId(1),
+                data: Vec::new()
+            })
         );
     }
 
@@ -284,7 +467,10 @@ mod tests {
         line.extend_from_slice(&[0xC3, 0xA9]);
         assert_eq!(
             ControlEvent::parse(&line),
-            Ok(ControlEvent::Output { pane: PaneId(2), data: vec![b'c', b'a', b'f', 0xC3, 0xA9] })
+            Ok(ControlEvent::Output {
+                pane: PaneId(2),
+                data: vec![b'c', b'a', b'f', 0xC3, 0xA9]
+            })
         );
     }
 
@@ -292,7 +478,10 @@ mod tests {
     fn output_octal_escape_to_control_byte() {
         assert_eq!(
             ControlEvent::parse(b"%output %1 \\033[31m"),
-            Ok(ControlEvent::Output { pane: PaneId(1), data: vec![0x1b, b'[', b'3', b'1', b'm'] })
+            Ok(ControlEvent::Output {
+                pane: PaneId(1),
+                data: vec![0x1b, b'[', b'3', b'1', b'm']
+            })
         );
     }
 
@@ -300,7 +489,11 @@ mod tests {
     fn extended_output_basic() {
         assert_eq!(
             ControlEvent::parse(b"%extended-output %1 250 : abc\\015"),
-            Ok(ControlEvent::ExtendedOutput { pane: PaneId(1), age: 250, data: b"abc\r".to_vec() })
+            Ok(ControlEvent::ExtendedOutput {
+                pane: PaneId(1),
+                age: 250,
+                data: b"abc\r".to_vec()
+            })
         );
     }
 
@@ -308,7 +501,11 @@ mod tests {
     fn extended_output_skips_future_args() {
         assert_eq!(
             ControlEvent::parse(b"%extended-output %1 0 reserved1 reserved2 : data"),
-            Ok(ControlEvent::ExtendedOutput { pane: PaneId(1), age: 0, data: b"data".to_vec() })
+            Ok(ControlEvent::ExtendedOutput {
+                pane: PaneId(1),
+                age: 0,
+                data: b"data".to_vec()
+            })
         );
     }
 
@@ -346,7 +543,10 @@ mod tests {
 
     #[test]
     fn rejects_non_control_line() {
-        assert!(matches!(ControlEvent::parse(b"hello world"), Err(TmuxError::NotControlLine)));
+        assert!(matches!(
+            ControlEvent::parse(b"hello world"),
+            Err(TmuxError::NotControlLine)
+        ));
     }
 
     #[test]

@@ -57,7 +57,14 @@ mod tests {
     #[test]
     fn empty_reply_block() {
         let frames = feed_all(&[b"%begin 1 7 1", b"%end 1 7 1"]);
-        assert_eq!(frames, vec![Frame::Reply { number: 7, ok: true, body: Vec::new() }]);
+        assert_eq!(
+            frames,
+            vec![Frame::Reply {
+                number: 7,
+                ok: true,
+                body: Vec::new()
+            }]
+        );
     }
 
     #[test]
@@ -129,7 +136,9 @@ mod tests {
         let frames = feed_all(&[b"%window-add @1"]);
         assert_eq!(
             frames,
-            vec![Frame::Notification(ControlEvent::WindowAdd { window: WindowId(1) })]
+            vec![Frame::Notification(ControlEvent::WindowAdd {
+                window: WindowId(1)
+            })]
         );
     }
 
@@ -145,9 +154,18 @@ mod tests {
         assert_eq!(
             frames,
             vec![
-                Frame::Notification(ControlEvent::Output { pane: PaneId(1), data: b"hi".to_vec() }),
-                Frame::Reply { number: 12, ok: true, body: vec!["reply".to_string()] },
-                Frame::Notification(ControlEvent::WindowClose { window: WindowId(4) }),
+                Frame::Notification(ControlEvent::Output {
+                    pane: PaneId(1),
+                    data: b"hi".to_vec()
+                }),
+                Frame::Reply {
+                    number: 12,
+                    ok: true,
+                    body: vec!["reply".to_string()]
+                },
+                Frame::Notification(ControlEvent::WindowClose {
+                    window: WindowId(4)
+                }),
             ]
         );
     }
@@ -159,14 +177,21 @@ mod tests {
         assert_eq!(asm.feed(b"line"), Ok(None));
         assert_eq!(
             asm.feed(b"%end 1 13 1"),
-            Ok(Some(Frame::Reply { number: 13, ok: true, body: vec!["line".to_string()] }))
+            Ok(Some(Frame::Reply {
+                number: 13,
+                ok: true,
+                body: vec!["line".to_string()]
+            }))
         );
     }
 
     #[test]
     fn end_without_open_block_errors() {
         let mut asm = BlockAssembler::new();
-        assert!(matches!(asm.feed(b"%end 1 14 1"), Err(TmuxError::UnexpectedEnd { number: 14 })));
+        assert!(matches!(
+            asm.feed(b"%end 1 14 1"),
+            Err(TmuxError::UnexpectedEnd { number: 14 })
+        ));
     }
 
     #[test]
@@ -185,12 +210,18 @@ mod tests {
         assert_eq!(
             frames,
             vec![
-                Frame::Reply { number: 1, ok: true, body: Vec::new() },
+                Frame::Reply {
+                    number: 1,
+                    ok: true,
+                    body: Vec::new()
+                },
                 Frame::Notification(ControlEvent::SessionChanged {
                     session: SessionId(0),
                     name: "0".to_string(),
                 }),
-                Frame::Notification(ControlEvent::WindowAdd { window: WindowId(0) }),
+                Frame::Notification(ControlEvent::WindowAdd {
+                    window: WindowId(0)
+                }),
                 Frame::Notification(ControlEvent::Output {
                     pane: PaneId(0),
                     data: b"\x1b]0;ksh\x07$ ".to_vec(),
