@@ -17,6 +17,11 @@ pub(crate) fn webview_url(extension_name: &str, entry: &str) -> String {
 /// webview as a `PreloadScripts` entry.
 pub(super) const HOST_BRIDGE_JS: &str = include_str!("host_bridge.js");
 
+/// JS defining the unified `window.ozmux` back-channel bridge (`.call` / `.on`),
+/// injected per Tier 1 dynamic webview as a `PreloadScripts` entry. Frozen onto
+/// `window` so a page cannot shadow it.
+pub(super) const OZMUX_BRIDGE_JS: &str = include_str!("ozmux_bridge.js");
+
 /// Builds the full preload script set for an ozmux-managed webview:
 /// context globals, the capability grant, and the host-API bridge.
 pub(crate) fn build_preload(
@@ -40,16 +45,16 @@ pub(crate) fn build_preload(
     PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()])
 }
 
-/// Builds the preload for a Tier 1 dynamic webview: context globals only, with
-/// `role: "dynamic"`. No capability grant and no host bridge — a dynamic view
-/// has `capabilities = []`, so `window.<ns>` would only reject every call.
+/// Builds the preload for a Tier 1 dynamic webview: context globals + the
+/// `window.ozmux` back-channel bridge. No capability grant (the bridge routes to
+/// the registering program, not the host).
 pub(crate) fn build_dynamic_preload(
     workspace: Entity,
     pane: Entity,
     surface: Entity,
 ) -> PreloadScripts {
     let ctx_js = context_preload_js_role(workspace, pane, surface, "dynamic", "");
-    PreloadScripts::from([ctx_js])
+    PreloadScripts::from([ctx_js, OZMUX_BRIDGE_JS.to_string()])
 }
 
 /// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`
@@ -153,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_preload_has_context_only_no_bridge() {
+    fn dynamic_preload_injects_context_and_ozmux_bridge() {
         let world = &mut App::new();
         world
             .add_plugins(MinimalPlugins)
@@ -168,15 +173,14 @@ mod tests {
         world.world_mut().flush();
 
         let preload = build_dynamic_preload(workspace, pane, surface);
-        assert_eq!(preload.0.len(), 1, "dynamic preload is context-only");
+        assert_eq!(preload.0.len(), 2, "context + ozmux bridge");
         assert!(preload.0[0].starts_with("window.__ozmuxContext="));
+        assert_eq!(preload.0[1], OZMUX_BRIDGE_JS);
         assert!(
-            !preload
-                .0
-                .iter()
-                .any(|s| s.contains("__ozmuxGranted") || s == HOST_BRIDGE_JS),
-            "no capability grant, no host bridge for a Tier 1 dynamic view"
+            OZMUX_BRIDGE_JS.contains("window, 'ozmux'")
+                && OZMUX_BRIDGE_JS.contains("defineProperty")
         );
+        assert!(OZMUX_BRIDGE_JS.contains("kind: 'ozmux.call'"));
     }
 
     #[test]
