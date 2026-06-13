@@ -12,7 +12,6 @@ use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use std::io::{BufRead, BufReader, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// An event the listener emits to the ECS apply system.
 pub(crate) enum ControlEvent {
@@ -52,7 +51,7 @@ pub(crate) fn spawn_listener(
     let _ = std::fs::remove_file(sock_path);
     let listener = UnixListener::bind(sock_path)?;
     let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-    let next_id = AtomicU64::new(1);
+    let mut next_id: u64 = 1;
     // SAFETY: `getuid` has no preconditions and cannot fail.
     let own_uid = unsafe { libc::getuid() } as u32;
     std::thread::spawn(move || {
@@ -61,7 +60,8 @@ pub(crate) fn spawn_listener(
             if peer_uid(&stream) != Some(own_uid) {
                 continue;
             }
-            let connection_id = next_id.fetch_add(1, Ordering::SeqCst);
+            let connection_id = next_id;
+            next_id += 1;
             let ev_tx = ev_tx.clone();
             let tokens = tokens.clone();
             std::thread::spawn(move || serve_connection(stream, connection_id, tokens, ev_tx));

@@ -6,6 +6,7 @@
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{RegisterKind, ServerMsg};
+use crate::inline_webview::InlineWebview;
 use bevy::prelude::*;
 use crossbeam_channel::Receiver;
 use data_encoding::BASE32_NOPAD;
@@ -74,25 +75,20 @@ impl DynamicRegistry {
     /// Removes every handle owned by `connection_id`, returning the removed
     /// handles (so the caller can purge the `DynAssetRegistry` too).
     pub(crate) fn remove_by_connection(&mut self, connection_id: u64) -> Vec<String> {
-        let drained: Vec<String> = self
-            .by_handle
-            .iter()
-            .filter(|(_, v)| v.connection_id == connection_id)
-            .map(|(h, _)| h.clone())
-            .collect();
-        for h in &drained {
-            self.by_handle.remove(h);
-        }
-        drained
+        self.drain_where(|v| v.connection_id == connection_id)
     }
 
     /// Removes every handle owned by `owner_surface`, returning the removed
     /// handles (so the caller can purge the `DynAssetRegistry` too).
     pub(crate) fn remove_by_surface(&mut self, owner_surface: Entity) -> Vec<String> {
+        self.drain_where(|v| v.owner_surface == owner_surface)
+    }
+
+    fn drain_where(&mut self, pred: impl Fn(&DynamicView) -> bool) -> Vec<String> {
         let drained: Vec<String> = self
             .by_handle
             .iter()
-            .filter(|(_, v)| v.owner_surface == owner_surface)
+            .filter(|(_, v)| pred(v))
             .map(|(h, _)| h.clone())
             .collect();
         for h in &drained {
@@ -206,9 +202,11 @@ struct ControlRuntime(
 /// `DynamicRegistry` (+ `DynAssetRegistry` for `Dir`), releases on `unregister`,
 /// and purges a connection's handles on `Disconnect`.
 fn apply_control_events(
+    mut commands: Commands,
     mut registry: ResMut<DynamicRegistry>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<DynAssetRegistryRes>,
+    inline: Query<(Entity, &InlineWebview)>,
 ) {
     let Some(events) = events else {
         return;
@@ -239,18 +237,24 @@ fn apply_control_events(
                 connection_id,
                 handle,
             } => {
-                if registry
+                let removed = if registry
                     .get(&handle)
                     .is_some_and(|v| v.connection_id == connection_id)
                 {
                     registry.remove(&handle);
                     dyn_assets.0.remove(&handle);
-                }
+                    vec![handle]
+                } else {
+                    vec![]
+                };
+                despawn_mounted(&mut commands, &inline, &removed);
             }
             ControlEvent::Disconnect { connection_id } => {
-                for handle in registry.remove_by_connection(connection_id) {
-                    dyn_assets.0.remove(&handle);
+                let removed = registry.remove_by_connection(connection_id);
+                for h in &removed {
+                    dyn_assets.0.remove(h);
                 }
+                despawn_mounted(&mut commands, &inline, &removed);
             }
         }
     }
@@ -266,6 +270,18 @@ fn purge_dynamic_on_surface_removed(
 ) {
     for handle in registry.remove_by_surface(ev.entity) {
         dyn_assets.0.remove(&handle);
+    }
+}
+
+fn despawn_mounted(
+    commands: &mut Commands,
+    inline: &Query<(Entity, &InlineWebview)>,
+    removed: &[String],
+) {
+    for (entity, view) in inline {
+        if removed.contains(&view.view_id) {
+            commands.entity(entity).despawn();
+        }
     }
 }
 
@@ -580,6 +596,51 @@ mod apply_tests {
         assert!(
             dyn_assets.get("h").is_none(),
             "purged from DynAssetRegistry"
+        );
+    }
+
+    #[test]
+    fn disconnect_despawns_mounted_webviews_for_its_handles() {
+        use crate::inline_webview::InlineWebview;
+        let mut app = App::new();
+        let dyn_assets = DynAssetRegistry::default();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "HMOUNT".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: Entity::from_bits(1),
+                connection_id: 9,
+            },
+        );
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let mounted = app
+            .world_mut()
+            .spawn(InlineWebview {
+                view_id: "HMOUNT".into(),
+                instance_id: None,
+                slot: 0,
+            })
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(DynAssetRegistryRes(dyn_assets));
+        app.insert_resource(ControlEvents(ev_rx));
+        app.add_systems(Update, apply_control_events);
+        ev_tx
+            .send(ControlEvent::Disconnect { connection_id: 9 })
+            .unwrap();
+        app.update();
+        assert!(
+            app.world().get_entity(mounted).is_err(),
+            "mounted webview for a disconnected handle must be despawned"
+        );
+        assert!(
+            app.world()
+                .resource::<DynamicRegistry>()
+                .get("HMOUNT")
+                .is_none()
         );
     }
 }
