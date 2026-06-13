@@ -108,8 +108,14 @@ pub enum ControlEvent {
 impl ControlEvent {
     /// Parses a single control-mode line into a [`ControlEvent`].
     pub fn parse(line: &[u8]) -> TmuxResult<Self> {
+        if line.iter().all(|b| b.is_ascii_whitespace()) {
+            return Err(TmuxError::Empty);
+        }
+        if line[0] != b'%' {
+            return Err(TmuxError::NotControlLine);
+        }
         let mut fields = Fields(line);
-        let argv = fields.next().ok_or(TmuxError::NotControlLine)?;
+        let argv = fields.next().ok_or(TmuxError::Empty)?;
         match argv {
             b"%begin" => fields.parse_guard("begin", |time, number, flags| ControlEvent::Begin {
                 time,
@@ -232,7 +238,11 @@ impl ControlEvent {
                 let data = unescape_output(fields.rest())?;
                 Ok(ControlEvent::ExtendedOutput { pane, age, data })
             }
-            _ => todo!("ControlEvent::parse"),
+            _ => {
+                let name = text(&argv[1..], "name")?;
+                let rest = text(fields.rest(), "rest")?;
+                Ok(ControlEvent::Unknown { name, rest })
+            }
         }
     }
 }
