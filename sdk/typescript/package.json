@@ -7,6 +7,10 @@
     "./extension": {
       "types": "./src/extension/index.ts",
       "default": "./src/extension/index.ts"
+    },
+    "./inline": {
+      "types": "./src/inline/index.ts",
+      "default": "./src/inline/index.ts"
     }
   },
   "scripts": {
