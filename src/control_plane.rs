@@ -137,7 +137,10 @@ impl ConnectionWriters {
 
     /// Queues one NDJSON line to `connection_id`; returns false if the connection
     /// is gone or its writer has exited.
-    #[allow(dead_code)]
+    #[allow(
+        dead_code,
+        reason = "consumed by on_ozmux_call_frame in Task 8; until then only the test target calls send, so #[expect] would misfire under --all-targets"
+    )]
     pub(crate) fn send(&self, connection_id: u64, line: String) -> bool {
         let guard = self.0.read().unwrap();
         guard
