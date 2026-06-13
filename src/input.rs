@@ -27,6 +27,7 @@ use crate::ui::copy_mode::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use bevy_cef::prelude::FocusedWebview;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
     Direction as ConfigDirection, KeyChord, Modifiers, ShortcutAction, SplitDirection,
@@ -109,6 +110,7 @@ pub(crate) fn dispatch_focused_key(
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
+    mut focused_webview: Option<ResMut<FocusedWebview>>,
     mux: MultiplexerCommands,
     windows: Query<&Window>,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
@@ -196,7 +198,13 @@ pub(crate) fn dispatch_focused_key(
                 if ev.repeat {
                     continue;
                 }
-                execute_action(&mut commands, &mux, action, workspace);
+                execute_action(
+                    focused_webview.as_deref_mut(),
+                    &mut commands,
+                    &mux,
+                    action,
+                    workspace,
+                );
                 continue;
             }
         }
@@ -298,7 +306,11 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 /// actions target the active Terminal Surface; workspace and pane/surface
 /// actions target `workspace`; not-yet-implemented variants fall through to a
 /// `tracing::debug!` log.
+///
+/// `focused_webview` is `Option<>` so callers that run without `bevy_cef`
+/// (e.g., unit tests) can pass `None` and remain green.
 fn execute_action(
+    mut focused_webview: Option<&mut FocusedWebview>,
     commands: &mut Commands,
     mux: &MultiplexerCommands,
     action: ShortcutAction,
@@ -373,6 +385,11 @@ fn execute_action(
         }
         ShortcutAction::CloseSurface => {
             commands.trigger(CloseSurfaceActionEvent { workspace });
+        }
+        ShortcutAction::ReleaseInlineFocus => {
+            if let Some(ref mut fw) = focused_webview {
+                fw.0 = None;
+            }
         }
         other => tracing::debug!(
             target: "ozmux_gui::input",
@@ -1245,7 +1262,7 @@ mod tests {
     fn run_execute_action(app: &mut App, action: ShortcutAction, workspace: Entity) {
         app.world_mut()
             .run_system_once(move |mut commands: Commands, mux: MultiplexerCommands| {
-                execute_action(&mut commands, &mux, action.clone(), workspace);
+                execute_action(None, &mut commands, &mux, action.clone(), workspace);
             })
             .unwrap();
         app.world_mut().flush();
