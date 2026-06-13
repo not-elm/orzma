@@ -25,7 +25,8 @@ mod protocol;
 pub(crate) enum DynSource {
     /// Files served under this absolute root via `ozmux-dyn://`.
     Dir(PathBuf),
-    /// A single inline HTML document served via `WebviewSource::InlineHtml`.
+    /// A single inline HTML document, registered into `DynAssetRegistry` and
+    /// served under `ozmux-dyn://<handle>/`.
     Inline(String),
 }
 
