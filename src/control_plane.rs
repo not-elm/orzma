@@ -52,10 +52,6 @@ pub(crate) struct DynamicView {
 /// Stamped on a Tier 1 inline webview entity at mount: the control-plane
 /// connection that registered it (back-channel routing target) and its handle.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
-#[allow(
-    dead_code,
-    reason = "consumed by back-channel routing in stage1 tasks 7-9"
-)]
 pub(crate) struct WebviewOwner {
     /// The owning connection (push `call` frames here).
     pub(crate) connection_id: u64,

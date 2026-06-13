@@ -155,6 +155,10 @@ pub(crate) struct ResolvedWebviewMount {
     pub(crate) host_bridge: bool,
     /// The owning extension name for the preload context (`""` for dynamic).
     pub(crate) extension_name: String,
+    /// For Tier 1 dynamic mounts: `(connection_id, handle)` of the registering
+    /// program, used to stamp `WebviewOwner` for back-channel routing. `None` for
+    /// Tier 2 (static extension) mounts.
+    pub(crate) owner: Option<(u64, String)>,
 }
 
 /// Resolves a `mount-inline` `<id>` to its content + trust facts: the static
@@ -177,6 +181,7 @@ pub(crate) fn resolve_mount(
             capabilities: view.capabilities.clone(),
             host_bridge: true,
             extension_name: view.owning_ext.clone(),
+            owner: None,
         });
     }
     let view = dynamic.get(id)?;
@@ -193,6 +198,7 @@ pub(crate) fn resolve_mount(
         capabilities: Vec::new(),
         host_bridge: false,
         extension_name: String::new(),
+        owner: Some((view.connection_id, id.to_string())),
     })
 }
 
@@ -299,6 +305,15 @@ pub(crate) fn mount_inline(
     ));
     if !resolved.interactive {
         params.commands.entity(webview).insert(NonInteractive);
+    }
+    if let Some((connection_id, handle)) = resolved.owner {
+        params
+            .commands
+            .entity(webview)
+            .insert(crate::control_plane::WebviewOwner {
+                connection_id,
+                handle,
+            });
     }
     tracing::debug!(
         view_id = %ctx.view_id,
@@ -1886,6 +1901,39 @@ mod tests {
         assert_eq!(r.url.as_deref(), Some("ozmux-dyn://INLINEH/index.html"));
         assert!(!r.host_bridge);
         assert!(r.capabilities.is_empty());
+    }
+
+    #[test]
+    fn dynamic_mount_stamps_webview_owner() {
+        use crate::control_plane::{DynSource, DynamicView, WebviewOwner};
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "HANDLE".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>hi</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: terminal,
+                connection_id: 42,
+            },
+        );
+
+        mount(&mut app, terminal, "HANDLE", Some(test_anchor()));
+
+        let children = inline_children_of(&app, terminal);
+        assert_eq!(
+            children.len(),
+            1,
+            "dynamic mount must spawn one inline child"
+        );
+        let child = children[0];
+        let owner = app
+            .world()
+            .get::<WebviewOwner>(child)
+            .expect("dynamic mount must stamp WebviewOwner");
+        assert_eq!(owner.connection_id, 42);
+        assert_eq!(owner.handle, "HANDLE");
     }
 
     #[test]
