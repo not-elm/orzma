@@ -17,9 +17,9 @@ pub mod registry;
 pub mod rpc_client;
 pub mod scheme;
 
-pub use dyn_scheme::DynAssetRegistry;
 #[cfg(feature = "cef")]
 pub use dyn_scheme::custom_dyn_scheme;
+pub use dyn_scheme::{DynAsset, DynAssetRegistry};
 pub use error::{ExtensionError, ExtensionResult};
 pub use extension_discovery::{DiscoveredExtension, discover_extensions};
 pub use extension_manifest::{ExtensionManifest, ExtensionView};

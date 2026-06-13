@@ -4,9 +4,10 @@
 //! OSC parser ethos).
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// One inbound control-plane request line.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum ClientMsg {
     /// Connection handshake: binds this connection to the pane whose env
@@ -21,6 +22,30 @@ pub(crate) enum ClientMsg {
     Unregister {
         /// The handle returned by a prior `register`.
         handle: String,
+    },
+    /// A program's reply to an ozmux-initiated `call` (back-channel).
+    Reply {
+        /// The global reqId ozmux assigned to the originating `call`.
+        #[serde(rename = "reqId")]
+        req_id: String,
+        /// Whether the call succeeded.
+        ok: bool,
+        /// The success value (absent ⇒ `null`).
+        #[serde(default)]
+        value: Value,
+        /// The error message when `ok` is false.
+        #[serde(default)]
+        error: Option<String>,
+    },
+    /// A program-initiated push event to its handle's mounted webviews.
+    Emit {
+        /// The handle whose mounted webviews receive the event.
+        handle: String,
+        /// The event name dispatched to page `window.ozmux.on(name, …)`.
+        event: String,
+        /// The event payload.
+        #[serde(default)]
+        payload: Value,
     },
 }
 
@@ -145,6 +170,48 @@ mod tests {
     #[test]
     fn rejects_unknown_op() {
         assert!(serde_json::from_str::<ClientMsg>(r#"{"op":"nope"}"#).is_err());
+    }
+
+    #[test]
+    fn parses_reply_ok_and_err() {
+        let ok: ClientMsg =
+            serde_json::from_str(r#"{"op":"reply","reqId":"g7","ok":true,"value":42}"#).unwrap();
+        assert_eq!(
+            ok,
+            ClientMsg::Reply {
+                req_id: "g7".into(),
+                ok: true,
+                value: serde_json::json!(42),
+                error: None
+            }
+        );
+        let err: ClientMsg =
+            serde_json::from_str(r#"{"op":"reply","reqId":"g8","ok":false,"error":"boom"}"#)
+                .unwrap();
+        assert_eq!(
+            err,
+            ClientMsg::Reply {
+                req_id: "g8".into(),
+                ok: false,
+                value: serde_json::Value::Null,
+                error: Some("boom".into())
+            }
+        );
+    }
+
+    #[test]
+    fn parses_emit() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"op":"emit","handle":"H","event":"tick","payload":{"n":1}}"#)
+                .unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Emit {
+                handle: "H".into(),
+                event: "tick".into(),
+                payload: serde_json::json!({"n":1})
+            }
+        );
     }
 
     #[test]

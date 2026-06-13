@@ -8,7 +8,8 @@ use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{RegisterKind, ServerMsg};
 use crate::inline_webview::InlineWebview;
 use bevy::prelude::*;
-use crossbeam_channel::Receiver;
+use bevy_cef::prelude::HostEmitEvent;
+use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use ozmux_extension_host::DynAssetRegistry;
 use ozmux_extension_host::host::RuntimeRoot;
@@ -25,7 +26,8 @@ mod protocol;
 pub(crate) enum DynSource {
     /// Files served under this absolute root via `ozmux-dyn://`.
     Dir(PathBuf),
-    /// A single inline HTML document served via `WebviewSource::InlineHtml`.
+    /// A single inline HTML document, registered into `DynAssetRegistry` and
+    /// served under `ozmux-dyn://<handle>/`.
     Inline(String),
 }
 
@@ -46,6 +48,16 @@ pub(crate) struct DynamicView {
     pub(crate) owner_surface: Entity,
     /// The control-plane connection that registered it.
     pub(crate) connection_id: u64,
+}
+
+/// Stamped on a Tier 1 inline webview entity at mount: the control-plane
+/// connection that registered it (back-channel routing target) and its handle.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WebviewOwner {
+    /// The owning connection (push `call` frames here).
+    pub(crate) connection_id: u64,
+    /// The registration handle (for `emit` fan-out + ownership checks).
+    pub(crate) handle: String,
 }
 
 /// Maps an opaque `handle` to its dynamic registration. The single Bevy-side
@@ -98,6 +110,81 @@ impl DynamicRegistry {
     }
 }
 
+/// In-flight `globalReqId → (webview, pageReqId, connection_id)` correlation for
+/// the back-channel, plus the Rust-minted id counter. Mirrors `HostRpc` but
+/// routes to a control-plane connection rather than the single host.
+#[derive(Resource, Default)]
+pub(crate) struct OzmuxRpc {
+    inflight: HashMap<String, (Entity, String, u64)>,
+    next_id: u64,
+}
+
+impl OzmuxRpc {
+    /// Mints the next global reqId.
+    pub(crate) fn mint(&mut self) -> String {
+        let id = self.next_id.to_string();
+        self.next_id += 1;
+        id
+    }
+
+    /// Records an in-flight call.
+    pub(crate) fn note(
+        &mut self,
+        global_id: &str,
+        webview: Entity,
+        page_req: &str,
+        connection_id: u64,
+    ) {
+        self.inflight.insert(
+            global_id.to_string(),
+            (webview, page_req.to_string(), connection_id),
+        );
+    }
+
+    /// Removes and returns the in-flight call for `global_id`, but ONLY when it
+    /// was registered by `connection_id`. A mismatching connection leaves the
+    /// entry intact and returns `None`.
+    ///
+    /// # Invariants
+    /// The match-before-remove order is load-bearing: global reqIds are a
+    /// monotonic counter shared across all connections, so they are guessable. A
+    /// foreign program replaying another connection's reqId must NOT be able to
+    /// consume (and thereby drop) that connection's pending call — checking
+    /// ownership only AFTER removing would orphan the page Promise.
+    pub(crate) fn take_for_connection(
+        &mut self,
+        global_id: &str,
+        connection_id: u64,
+    ) -> Option<(Entity, String)> {
+        match self.inflight.get(global_id) {
+            Some((_, _, conn)) if *conn == connection_id => self
+                .inflight
+                .remove(global_id)
+                .map(|(webview, page_req, _)| (webview, page_req)),
+            _ => None,
+        }
+    }
+
+    /// Removes every in-flight call for `connection_id`, returning each
+    /// `(webview, pageReqId)` so the caller can reject the page Promise.
+    pub(crate) fn drain_connection(&mut self, connection_id: u64) -> Vec<(Entity, String)> {
+        self.inflight
+            .extract_if(|_, (_, _, c)| *c == connection_id)
+            .map(|(_, (e, p, _))| (e, p))
+            .collect()
+    }
+
+    /// Removes every in-flight call targeting `webview` (despawn prune).
+    pub(crate) fn drain_webview(&mut self, webview: Entity) {
+        self.inflight.retain(|_, (e, _, _)| *e != webview);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn count_in_flight_for_test(&self) -> usize {
+        self.inflight.len()
+    }
+}
+
 /// A shared `token → surface` map: the env-injected `$OZMUX_TOKEN` of each PTY
 /// resolves to the surface that owns it. Read by the listener thread on `hello`,
 /// written when a terminal surface is spawned. `Entity` is stored directly; it
@@ -117,18 +204,52 @@ impl TokenRegistry {
     }
 }
 
+/// A shared `connection_id → outbound-line sender` table. Each live control
+/// connection owns a writer thread draining a `Sender<String>`; ECS pushes
+/// server-initiated `{op:"call",…}` lines here to reach a specific program.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct ConnectionWriters(Arc<RwLock<HashMap<u64, Sender<String>>>>);
+
+impl ConnectionWriters {
+    /// Registers a writer channel for `connection_id`.
+    pub(crate) fn insert(&self, connection_id: u64, tx: Sender<String>) {
+        self.0.write().unwrap().insert(connection_id, tx);
+    }
+
+    /// Removes the writer channel for `connection_id` when the connection closes.
+    pub(crate) fn remove(&self, connection_id: u64) {
+        self.0.write().unwrap().remove(&connection_id);
+    }
+
+    /// Queues one NDJSON line to `connection_id`; returns false if the connection
+    /// is gone or its writer has exited.
+    pub(crate) fn send(&self, connection_id: u64, line: String) -> bool {
+        let guard = self.0.read().unwrap();
+        guard
+            .get(&connection_id)
+            .map(|tx| tx.send(line).is_ok())
+            .unwrap_or(false)
+    }
+}
+
 /// Mints a per-surface env token (same generator as handles).
 pub(crate) fn mint_token() -> String {
     mint_id()
 }
 
-/// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded). The
-/// alphabet `A-Z2-7` is a subset of the OSC `view_id` charset
+/// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded) and
+/// lowercased. The alphabet `a-z2-7` is a subset of the OSC `view_id` charset
 /// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount-inline;<id>`.
+///
+/// # Invariants
+/// The output MUST be lowercase. A handle is used as the host of the
+/// `ozmux-dyn://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
+/// of a STANDARD-scheme URL before it reaches the scheme handler; an uppercase
+/// handle would then miss the case-sensitive `DynAssetRegistry` lookup → 404.
 fn mint_id() -> String {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).expect("OS CSPRNG is available");
-    BASE32_NOPAD.encode(&bytes)
+    BASE32_NOPAD.encode(&bytes).to_ascii_lowercase()
 }
 
 /// The receiver of `ControlEvent`s from the listener threads.
@@ -166,10 +287,11 @@ impl OzmuxControlPlanePlugin {
 impl Plugin for OzmuxControlPlanePlugin {
     fn build(&self, app: &mut App) {
         let tokens = TokenRegistry::default();
+        let writers = ConnectionWriters::default();
         match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "control") {
             Ok(runtime) => {
                 let sock_path = runtime.sock_dir().join("control.sock");
-                match spawn_listener(&sock_path, tokens.clone()) {
+                match spawn_listener(&sock_path, tokens.clone(), writers.clone()) {
                     Ok(events) => {
                         app.insert_resource(ControlEvents(events));
                         app.insert_resource(ControlPlaneHandle { sock_path, tokens });
@@ -180,7 +302,9 @@ impl Plugin for OzmuxControlPlanePlugin {
             }
             Err(e) => tracing::error!(error = %e, "control-plane runtime dir failed"),
         }
+        app.insert_resource(writers);
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(DynAssetRegistryRes(self.dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
         app.add_observer(purge_dynamic_on_surface_removed);
@@ -204,6 +328,7 @@ struct ControlRuntime(
 fn apply_control_events(
     mut commands: Commands,
     mut registry: ResMut<DynamicRegistry>,
+    mut rpc: ResMut<OzmuxRpc>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<DynAssetRegistryRes>,
     inline: Query<(Entity, &InlineWebview)>,
@@ -227,8 +352,13 @@ fn apply_control_events(
                     }
                 };
                 let handle = mint_id();
-                if let DynSource::Dir(root) = &view.source {
-                    dyn_assets.0.insert(handle.clone(), root.clone());
+                match &view.source {
+                    DynSource::Dir(root) => dyn_assets.0.insert_dir(handle.clone(), root.clone()),
+                    DynSource::Inline(html) => {
+                        dyn_assets
+                            .0
+                            .insert_inline(handle.clone(), html.clone().into_bytes());
+                    }
                 }
                 registry.insert(handle.clone(), view);
                 let _ = reply.send(ServerMsg::ok(handle));
@@ -255,6 +385,51 @@ fn apply_control_events(
                     dyn_assets.0.remove(h);
                 }
                 despawn_mounted(&mut commands, &inline, &removed);
+                for (webview, page_req) in rpc.drain_connection(connection_id) {
+                    let payload = serde_json::json!({ "reqId": page_req, "ok": false, "error": "owner_disconnected" });
+                    commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+                }
+            }
+            ControlEvent::Reply {
+                req_id,
+                ok,
+                value,
+                error,
+                connection_id,
+            } => {
+                // NOTE: take_for_connection drops a reply whose sending connection
+                // is not the one that originated the call, WITHOUT consuming the
+                // pending entry — a foreign program replaying another connection's
+                // (monotonic, guessable) global reqId must not settle or drop its call.
+                let Some((webview, page_req)) = rpc.take_for_connection(&req_id, connection_id)
+                else {
+                    continue;
+                };
+                let payload = if ok {
+                    serde_json::json!({ "reqId": page_req, "ok": true, "value": value })
+                } else {
+                    serde_json::json!({ "reqId": page_req, "ok": false, "error": error.unwrap_or_default() })
+                };
+                commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+            }
+            ControlEvent::Emit {
+                connection_id,
+                handle,
+                event,
+                payload,
+            } => {
+                let owns = registry
+                    .get(&handle)
+                    .is_some_and(|v| v.connection_id == connection_id);
+                if !owns {
+                    continue;
+                }
+                let frame = serde_json::json!({ "event": event, "payload": payload });
+                for (entity, view) in &inline {
+                    if view.view_id == handle {
+                        commands.trigger(HostEmitEvent::new(entity, "ozmux.event", &frame));
+                    }
+                }
             }
         }
     }
@@ -358,6 +533,10 @@ mod token_tests {
                     .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'),
                 "minted id {id} must satisfy the OSC charset"
             );
+            assert!(
+                !id.chars().any(|c| c.is_ascii_uppercase()),
+                "minted id {id} must be lowercase — it is used as an ozmux-dyn:// host that Chromium lowercases"
+            );
         }
     }
 
@@ -459,6 +638,7 @@ mod apply_tests {
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let dyn_assets = DynAssetRegistry::default();
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
@@ -497,10 +677,48 @@ mod apply_tests {
     }
 
     #[test]
+    fn apply_register_inline_populates_dyn_asset_registry_with_html_bytes() {
+        use ozmux_extension_host::DynAsset;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let dyn_assets = DynAssetRegistry::default();
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.add_systems(Update, apply_control_events);
+
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: Entity::from_bits(11),
+                kind: RegisterKind::Inline {
+                    html: "<h1>x</h1>".into(),
+                    interactive: true,
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+
+        app.update();
+
+        let handle = match reply_rx.try_recv().expect("apply must reply") {
+            ServerMsg::Ok { handle, .. } => handle,
+            ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
+        };
+        assert!(
+            matches!(dyn_assets.get(&handle), Some(DynAsset::Inline(bytes)) if bytes == b"<h1>x</h1>"),
+            "DynAssetRegistry must carry the inline HTML bytes for the minted handle"
+        );
+    }
+
+    #[test]
     fn apply_register_invalid_root_replies_err() {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
@@ -541,8 +759,9 @@ mod apply_tests {
                 connection_id: 5,
             },
         );
-        dyn_assets.insert("h", "/x".into());
+        dyn_assets.insert_dir("h", "/x".into());
         app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
@@ -557,12 +776,12 @@ mod apply_tests {
 
     #[test]
     fn apply_is_a_noop_when_control_events_missing() {
-        // Simulates the control plane failing to bind: ControlEvents was never inserted.
         let mut app = App::new();
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
-        app.update(); // must not panic
+        app.update();
         assert!(app.world().get_resource::<ControlEvents>().is_none());
     }
 
@@ -583,7 +802,7 @@ mod apply_tests {
                 connection_id: 1,
             },
         );
-        dyn_assets.insert("h", "/x".into());
+        dyn_assets.insert_dir("h", "/x".into());
         app.insert_resource(reg);
         app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
 
@@ -625,6 +844,7 @@ mod apply_tests {
             })
             .id();
         app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(DynAssetRegistryRes(dyn_assets));
         app.insert_resource(ControlEvents(ev_rx));
         app.add_systems(Update, apply_control_events);
@@ -642,5 +862,207 @@ mod apply_tests {
                 .get("HMOUNT")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn apply_reply_reemits_to_the_originating_webview() {
+        use bevy_cef::prelude::HostEmitEvent;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let mut rpc = OzmuxRpc::default();
+        let webview = app.world_mut().spawn_empty().id();
+        let g = rpc.mint();
+        rpc.note(&g, webview, "p9", 5);
+        app.insert_resource(rpc);
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct Caps(Vec<(Entity, String, serde_json::Value)>);
+        app.insert_resource(Caps::default());
+        app.add_observer(|e: On<HostEmitEvent>, mut c: ResMut<Caps>| {
+            let payload: serde_json::Value = serde_json::from_str(&e.payload).unwrap_or_default();
+            c.0.push((e.webview, e.id.clone(), payload));
+        });
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Reply {
+                req_id: g.clone(),
+                ok: true,
+                value: serde_json::json!(99),
+                error: None,
+                connection_id: 5,
+            })
+            .unwrap();
+        app.update();
+
+        let caps = app.world().resource::<Caps>();
+        assert_eq!(caps.0.len(), 1);
+        let (wv, channel, payload) = &caps.0[0];
+        assert_eq!(*wv, webview);
+        assert_eq!(channel, "ozmux");
+        assert_eq!(payload["reqId"], "p9");
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["value"], 99);
+    }
+
+    #[test]
+    fn apply_reply_from_wrong_connection_does_not_drop_the_pending_call() {
+        use bevy_cef::prelude::HostEmitEvent;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let mut rpc = OzmuxRpc::default();
+        let webview = app.world_mut().spawn_empty().id();
+        let g = rpc.mint();
+        rpc.note(&g, webview, "p9", 5);
+        app.insert_resource(rpc);
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct Caps(Vec<(Entity, String)>);
+        app.insert_resource(Caps::default());
+        app.add_observer(|e: On<HostEmitEvent>, mut c: ResMut<Caps>| {
+            c.0.push((e.webview, e.id.clone()));
+        });
+        app.add_systems(Update, apply_control_events);
+
+        // A reply replaying the (monotonic, guessable) global reqId from a DIFFERENT
+        // connection must be dropped WITHOUT consuming the pending entry...
+        ev_tx
+            .send(ControlEvent::Reply {
+                req_id: g.clone(),
+                ok: true,
+                value: serde_json::json!(1),
+                error: None,
+                connection_id: 9,
+            })
+            .unwrap();
+        // ...so the legitimate reply from the originating connection still settles.
+        ev_tx
+            .send(ControlEvent::Reply {
+                req_id: g.clone(),
+                ok: true,
+                value: serde_json::json!(2),
+                error: None,
+                connection_id: 5,
+            })
+            .unwrap();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Caps>().0,
+            vec![(webview, "ozmux".to_string())],
+            "only the owning connection's reply settles the page"
+        );
+    }
+
+    #[test]
+    fn apply_emit_broadcasts_only_to_owning_connections_handle() {
+        use bevy_cef::prelude::HostEmitEvent;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "H".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: Entity::from_bits(1),
+                connection_id: 5,
+            },
+        );
+        let mounted = app
+            .world_mut()
+            .spawn((
+                InlineWebview {
+                    view_id: "H".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+                WebviewOwner {
+                    connection_id: 5,
+                    handle: "H".into(),
+                },
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct Caps(Vec<(Entity, String)>);
+        app.insert_resource(Caps::default());
+        app.add_observer(|e: On<HostEmitEvent>, mut c: ResMut<Caps>| {
+            c.0.push((e.webview, e.id.clone()))
+        });
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Emit {
+                connection_id: 5,
+                handle: "H".into(),
+                event: "tick".into(),
+                payload: serde_json::json!(1),
+            })
+            .unwrap();
+        ev_tx
+            .send(ControlEvent::Emit {
+                connection_id: 99,
+                handle: "H".into(),
+                event: "tick".into(),
+                payload: serde_json::json!(1),
+            })
+            .unwrap();
+        app.update();
+
+        let caps = app.world().resource::<Caps>();
+        assert_eq!(caps.0, vec![(mounted, "ozmux.event".to_string())]);
+    }
+}
+
+#[cfg(test)]
+mod back_channel_state_tests {
+    use super::*;
+    use bevy::prelude::Entity;
+
+    #[test]
+    fn ozmux_rpc_take_for_connection_matches_only_the_owning_connection() {
+        let mut rpc = OzmuxRpc::default();
+        let g = rpc.mint();
+        assert_eq!(g, "0");
+        rpc.note(&g, Entity::from_bits(2), "p1", 5);
+        // A mismatching connection must NOT consume the entry.
+        assert!(rpc.take_for_connection(&g, 999).is_none());
+        let taken = rpc.take_for_connection(&g, 5).expect("present");
+        assert_eq!(taken, (Entity::from_bits(2), "p1".to_string()));
+        assert!(rpc.take_for_connection(&g, 5).is_none());
+    }
+
+    #[test]
+    fn ozmux_rpc_drains_a_connections_inflight() {
+        let mut rpc = OzmuxRpc::default();
+        let a = rpc.mint();
+        let b = rpc.mint();
+        rpc.note(&a, Entity::from_bits(1), "p", 5);
+        rpc.note(&b, Entity::from_bits(2), "p", 9);
+        let drained = rpc.drain_connection(5);
+        assert_eq!(drained, vec![(Entity::from_bits(1), "p".to_string())]);
+        assert!(rpc.take_for_connection(&a, 5).is_none());
+        assert!(rpc.take_for_connection(&b, 9).is_some());
+    }
+
+    #[test]
+    fn ozmux_rpc_drain_webview_drops_only_that_webviews_calls() {
+        let mut rpc = OzmuxRpc::default();
+        let a = rpc.mint();
+        let b = rpc.mint();
+        rpc.note(&a, Entity::from_bits(1), "p", 5);
+        rpc.note(&b, Entity::from_bits(2), "p", 5);
+        rpc.drain_webview(Entity::from_bits(1));
+        assert!(rpc.take_for_connection(&a, 5).is_none());
+        assert!(rpc.take_for_connection(&b, 5).is_some());
     }
 }
