@@ -205,6 +205,22 @@ impl ControlEvent {
                 session: fields.session("client-session-changed")?,
                 name: fields.name("client-session-changed")?,
             }),
+            b"%subscription-changed" => {
+                let name = fields.token("subscription-changed", "name")?;
+                let session = fields.session("subscription-changed")?;
+                let window = fields.window("subscription-changed")?;
+                let window_index = fields.int_field("subscription-changed", "window_index")?;
+                let pane = fields.pane("subscription-changed")?;
+                let value = fields.skip_to_colon_value("subscription-changed")?;
+                Ok(ControlEvent::SubscriptionChanged {
+                    name,
+                    session,
+                    window,
+                    window_index,
+                    pane,
+                    value,
+                })
+            }
             _ => todo!("ControlEvent::parse"),
         }
     }
@@ -242,27 +258,9 @@ impl<'a> Fields<'a> {
         event: &'static str,
         build: fn(u64, u32, u32) -> ControlEvent,
     ) -> TmuxResult<ControlEvent> {
-        let time = int(
-            self.next().ok_or(TmuxError::MissingField {
-                event,
-                field: "time",
-            })?,
-            "time",
-        )?;
-        let number = int(
-            self.next().ok_or(TmuxError::MissingField {
-                event,
-                field: "number",
-            })?,
-            "number",
-        )?;
-        let flags = int(
-            self.next().ok_or(TmuxError::MissingField {
-                event,
-                field: "flags",
-            })?,
-            "flags",
-        )?;
+        let time = self.int_field(event, "time")?;
+        let number = self.int_field(event, "number")?;
+        let flags = self.int_field(event, "flags")?;
         Ok(build(time, number, flags))
     }
 
@@ -302,6 +300,33 @@ impl<'a> Fields<'a> {
             .next()
             .ok_or(TmuxError::MissingField { event, field })?;
         text(bytes, field)
+    }
+
+    fn int_field<T: core::str::FromStr>(
+        &mut self,
+        event: &'static str,
+        field: &'static str,
+    ) -> TmuxResult<T> {
+        let bytes = self
+            .next()
+            .ok_or(TmuxError::MissingField { event, field })?;
+        int(bytes, field)
+    }
+
+    fn skip_to_colon_value(&mut self, event: &'static str) -> TmuxResult<String> {
+        loop {
+            match self.next() {
+                Some(b":") => break,
+                Some(_) => {}
+                None => {
+                    return Err(TmuxError::MissingField {
+                        event,
+                        field: "value",
+                    });
+                }
+            }
+        }
+        text(self.rest(), "value")
     }
 
     fn name(&self, event: &'static str) -> TmuxResult<String> {
