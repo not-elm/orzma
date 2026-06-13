@@ -6,6 +6,7 @@
 (function () {
   var cef = window.cef;
   var nextId = 0;
+  // NOTE: a call that never receives a reply leaks its calls entry and pending Promise; the Rust side MUST send an error reply (e.g. on owner disconnect) to clear it. There is no client-side timeout.
   var calls = new Map();
   var listeners = new Map();
 
