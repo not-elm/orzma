@@ -71,7 +71,7 @@ pub(crate) struct WheelAccumulator {
 /// `focused_webview` and `browsers` are optional so CEF-less tests construct
 /// the system.
 #[derive(SystemParam)]
-pub(crate) struct InlineWheelParams<'w, 's> {
+struct InlineWheelParams<'w, 's> {
     focused_webview: Option<Res<'w, FocusedWebview>>,
     inline_parents: Query<'w, 's, &'static ChildOf, With<InlineWebview>>,
     hosts: Query<
@@ -130,8 +130,6 @@ fn dispatch_mouse_wheel(
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    // The active surface is the focused terminal; an inline child of it that
-    // holds keyboard focus AND sits under the pointer claims the wheel.
     let active_surface = super::resolve_focused_terminal(&mux, &attached_workspace);
     let inline_target = resolve_inline_wheel_target(
         &inline_wheel,

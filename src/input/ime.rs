@@ -177,7 +177,7 @@ pub(crate) fn ime_policy_system(
         if !window.ime_enabled {
             window.ime_enabled = true;
         }
-        // Inline arm (spec §7): an inline child has no UI node, so the
+        // NOTE: Inline arm (spec §7): an inline child has no UI node, so the
         // tab-webview `webview_anchors` arm below cannot anchor it. Derive the
         // candidate-window position from the owning terminal's node transform
         // plus the inline placement rect's origin — the SAME px conversion the
@@ -293,7 +293,7 @@ pub(crate) fn read_ime_events(
     let active_surface = super::resolve_focused_terminal(&mux, &attached_workspace);
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
-            // Inline-focus commit suppression (spec §7): bevy_cef's own IME
+            // NOTE: Inline-focus commit suppression (spec §7): bevy_cef's own IME
             // systems independently consume the winit `Ime` events for the
             // focused webview, so ozmux must NOT also commit this text to the
             // PTY — doing so double-delivers the composition (once to the page,
