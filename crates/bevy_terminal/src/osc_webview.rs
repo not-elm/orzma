@@ -100,11 +100,18 @@ impl Perform for OscWebviewCapture {
                 let Some(cols) = parse_dim(params.get(4).copied(), MAX_COLS) else {
                     return;
                 };
+                let instance_id = match params.get(5).copied() {
+                    Some(raw) => match valid_view_id(raw) {
+                        Some(v) => Some(v),
+                        None => return,
+                    },
+                    None => None,
+                };
                 OscWebviewVerb::MountInline {
                     view_id,
                     rows,
                     cols,
-                    instance_id: None,
+                    instance_id,
                 }
             }
             Some(b"unmount-inline") => {
@@ -304,6 +311,82 @@ mod tests {
         let mut c = cap(true);
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3"], true);
         assert!(c.take_pending().is_none());
+    }
+
+    #[test]
+    fn mount_inline_parses_instance_id() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[
+                OSC_WEBVIEW_CODE,
+                b"mount-inline",
+                b"memo",
+                b"3",
+                b"20",
+                b"a",
+            ],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 3,
+                cols: 20,
+                instance_id: Some("a".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_absent_instance_id_is_none() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 3,
+                cols: 20,
+                instance_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_trailing_empty_instance_id_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20", b""],
+            true,
+        );
+        assert!(
+            c.take_pending().is_none(),
+            "a trailing empty instance id (mount-inline;memo;3;20;) is malformed"
+        );
+    }
+
+    #[test]
+    fn mount_inline_bad_instance_id_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[
+                OSC_WEBVIEW_CODE,
+                b"mount-inline",
+                b"memo",
+                b"3",
+                b"20",
+                b"../etc",
+            ],
+            true,
+        );
+        assert!(
+            c.take_pending().is_none(),
+            "an out-of-charset instance id is malformed"
+        );
     }
 
     #[test]
