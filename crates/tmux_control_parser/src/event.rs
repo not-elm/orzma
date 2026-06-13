@@ -149,6 +149,18 @@ impl ControlEvent {
             b"%unlinked-window-renamed" => Ok(ControlEvent::UnlinkedWindowRenamed {
                 window: fields.window("unlinked-window-renamed")?,
             }),
+            b"%session-changed" => Ok(ControlEvent::SessionChanged {
+                session: fields.session("session-changed")?,
+                name: fields.name("session-changed")?,
+            }),
+            b"%session-renamed" => Ok(ControlEvent::SessionRenamed {
+                name: fields.name("session-renamed")?,
+            }),
+            b"%session-window-changed" => Ok(ControlEvent::SessionWindowChanged {
+                session: fields.session("session-window-changed")?,
+                window: fields.window("session-window-changed")?,
+            }),
+            b"%sessions-changed" => Ok(ControlEvent::SessionsChanged),
             _ => todo!("ControlEvent::parse"),
         }
     }
@@ -224,6 +236,14 @@ impl<'a> Fields<'a> {
             field: "pane",
         })?;
         parse_id(bytes, b'%').map(PaneId)
+    }
+
+    fn session(&mut self, event: &'static str) -> TmuxResult<SessionId> {
+        let bytes = self.next().ok_or(TmuxError::MissingField {
+            event,
+            field: "session",
+        })?;
+        parse_id(bytes, b'$').map(SessionId)
     }
 
     fn name(&self, event: &'static str) -> TmuxResult<String> {
