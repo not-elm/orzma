@@ -5,6 +5,7 @@
 //! exactly once. Failures mark the entity with `TerminalSpawnFailed` so the
 //! system does not retry on subsequent frames.
 
+use crate::control_plane::{ControlPlaneHandle, mint_token};
 use crate::osc_webview::OscWebviewGate;
 use crate::system_set::OzmuxSystems;
 use crate::ui::{TerminalSpawnFailed, TerminalSurfaceMarker};
@@ -55,10 +56,12 @@ fn finish_terminal_setup(
     >,
     cwds: Query<&Cwd>,
     gate: Option<Res<OscWebviewGate>>,
+    control: Option<Res<ControlPlaneHandle>>,
 ) {
     for surface in surfaces.iter() {
-        let env: Vec<(String, String)> =
+        let mut env: Vec<(String, String)> =
             vec![("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string())];
+        inject_dyn_env(&mut env, control.as_deref(), surface);
         let seed = cwds.get(surface).ok().map(|c| c.0.clone());
         let osc_gate = gate
             .as_ref()
@@ -85,6 +88,26 @@ fn finish_terminal_setup(
             .entity(surface)
             .insert((bundle, TerminalRenderBundle::new(material_handle)));
     }
+}
+
+/// Appends `$OZMUX_SOCK` and a freshly-minted, surface-bound `$OZMUX_TOKEN` to
+/// `env` when the control plane is up. A program in this PTY uses them to
+/// register Tier 1 dynamic webviews. No-op when the listener is absent.
+fn inject_dyn_env(
+    env: &mut Vec<(String, String)>,
+    handle: Option<&ControlPlaneHandle>,
+    surface: Entity,
+) {
+    let Some(handle) = handle else {
+        return;
+    };
+    let token = mint_token();
+    handle.tokens.insert(&token, surface);
+    env.push((
+        "OZMUX_SOCK".to_string(),
+        handle.sock_path.to_string_lossy().into_owned(),
+    ));
+    env.push(("OZMUX_TOKEN".to_string(), token));
 }
 
 /// Resolves a surface's seed cwd to a concrete spawn directory: the path when
@@ -322,5 +345,42 @@ mod tests {
             app.world().get::<Cwd>(surface),
             Some(&Cwd(std::path::PathBuf::from("/tmp/proj"))),
         );
+    }
+
+    #[test]
+    fn dyn_env_adds_sock_and_token_when_handle_present() {
+        use crate::control_plane::{ControlPlaneHandle, TokenRegistry};
+        use bevy::prelude::Entity;
+        use std::path::PathBuf;
+
+        let handle = ControlPlaneHandle {
+            sock_path: PathBuf::from("/tmp/ctl.sock"),
+            tokens: TokenRegistry::default(),
+        };
+        let surface = Entity::from_bits(3);
+        let mut env = vec![("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string())];
+        inject_dyn_env(&mut env, Some(&handle), surface);
+
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == "OZMUX_SOCK" && v == "/tmp/ctl.sock")
+        );
+        let token = env
+            .iter()
+            .find(|(k, _)| k == "OZMUX_TOKEN")
+            .map(|(_, v)| v.clone());
+        assert!(token.is_some(), "OZMUX_TOKEN injected");
+        assert_eq!(
+            handle.tokens.resolve(&token.unwrap()),
+            Some(surface),
+            "token binds to the surface"
+        );
+    }
+
+    #[test]
+    fn dyn_env_is_a_noop_without_a_handle() {
+        let mut env = vec![("TERM_PROGRAM".to_string(), "Apple_Terminal".to_string())];
+        inject_dyn_env(&mut env, None, bevy::prelude::Entity::from_bits(1));
+        assert_eq!(env.len(), 1);
     }
 }
