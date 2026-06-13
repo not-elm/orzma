@@ -13,7 +13,7 @@ use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
 use bevy::ui_render::PreparedUiMaterial;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{
-    WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
+    FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
 use bevy_terminal::InlineAnchor;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
@@ -234,6 +234,21 @@ pub(crate) fn unmount_inline(
     for entity in targets {
         params.commands.entity(entity).despawn();
     }
+}
+
+/// Returns the inline webview entity that currently holds keyboard focus on
+/// `active_surface`: `Some(e)` iff `FocusedWebview` points at `e`, `e` carries
+/// `InlineWebview`, and its `ChildOf` parent is the active surface. The input
+/// dispatcher uses this to hoist the release-chord check, restrict the Escape
+/// scroll-to-bottom pre-handler, and suppress PTY key forwarding (spec §7).
+pub(crate) fn focused_inline_of(
+    focused: Option<&FocusedWebview>,
+    inline_parents: &Query<&ChildOf, With<InlineWebview>>,
+    active_surface: Option<Entity>,
+) -> Option<Entity> {
+    let candidate = focused?.0?;
+    let parent = inline_parents.get(candidate).ok()?.parent();
+    (Some(parent) == active_surface).then_some(candidate)
 }
 
 const FALLBACK_CELL_W_PHYS: f32 = 8.0;
