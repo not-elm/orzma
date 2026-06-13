@@ -227,8 +227,13 @@ fn apply_control_events(
                     }
                 };
                 let handle = mint_id();
-                if let DynSource::Dir(root) = &view.source {
-                    dyn_assets.0.insert(handle.clone(), root.clone());
+                match &view.source {
+                    DynSource::Dir(root) => dyn_assets.0.insert_dir(handle.clone(), root.clone()),
+                    DynSource::Inline(html) => {
+                        dyn_assets
+                            .0
+                            .insert_inline(handle.clone(), html.clone().into_bytes());
+                    }
                 }
                 registry.insert(handle.clone(), view);
                 let _ = reply.send(ServerMsg::ok(handle));
@@ -541,7 +546,7 @@ mod apply_tests {
                 connection_id: 5,
             },
         );
-        dyn_assets.insert("h", "/x".into());
+        dyn_assets.insert_dir("h", "/x".into());
         app.insert_resource(reg);
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
@@ -583,7 +588,7 @@ mod apply_tests {
                 connection_id: 1,
             },
         );
-        dyn_assets.insert("h", "/x".into());
+        dyn_assets.insert_dir("h", "/x".into());
         app.insert_resource(reg);
         app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
 
