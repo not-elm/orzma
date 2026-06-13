@@ -19,7 +19,6 @@ use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 
 /// An event the listener emits to the ECS apply system.
-#[allow(dead_code, reason = "Reply/Emit fields are consumed in stage1 task 9")]
 pub(crate) enum ControlEvent {
     /// A `register` from a hello'd connection; the apply system mints a handle,
     /// populates the registries, and sends the reply back on `reply`.
@@ -46,12 +45,13 @@ pub(crate) enum ControlEvent {
         connection_id: u64,
     },
     /// A program's reply to an ozmux-initiated back-channel `call`.
+    #[allow(dead_code, reason = "Reply fields are consumed in stage1 task 9")]
     Reply {
         /// The global reqId the apply system correlates.
         req_id: String,
         /// Whether the call succeeded.
         ok: bool,
-        /// The success value.
+        /// The success value; `null` when `ok` is false.
         value: Value,
         /// The error message when `ok` is false.
         error: Option<String>,
@@ -59,6 +59,7 @@ pub(crate) enum ControlEvent {
         connection_id: u64,
     },
     /// A program-initiated push to its handle's webviews.
+    #[allow(dead_code, reason = "Emit fields are consumed in stage1 task 9")]
     Emit {
         /// The connection that sent the emit (ownership is checked in apply).
         connection_id: u64,
@@ -416,6 +417,36 @@ mod tests {
                 break;
             }
             assert!(Instant::now() < deadline, "no Reply event within 2s");
+        }
+    }
+
+    #[test]
+    fn client_emit_line_emits_an_emit_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let tokens = TokenRegistry::default();
+        tokens.insert("tok", Entity::from_bits(1));
+        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+
+        let mut client = UnixStream::connect(&sock).unwrap();
+        writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
+        writeln!(
+            client,
+            r#"{{"op":"emit","handle":"H","event":"tick","payload":{{"n":1}}}}"#
+        )
+        .unwrap();
+        client.flush().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(ControlEvent::Emit { handle, event, .. }) =
+                events.recv_timeout(Duration::from_millis(50))
+            {
+                assert_eq!(handle, "H");
+                assert_eq!(event, "tick");
+                break;
+            }
+            assert!(Instant::now() < deadline, "no Emit event within 2s");
         }
     }
 
