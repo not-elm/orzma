@@ -296,6 +296,8 @@ fn apply_control_events(
                 }
                 despawn_mounted(&mut commands, &inline, &removed);
             }
+            // TODO(stage1 task 9): handle Reply/Emit (back-channel drain) here.
+            ControlEvent::Reply { .. } | ControlEvent::Emit { .. } => {}
         }
     }
 }

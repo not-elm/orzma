@@ -12,12 +12,14 @@ use crate::control_plane::TokenRegistry;
 use crate::control_plane::protocol::{ClientMsg, RegisterKind, ServerMsg};
 use bevy::prelude::Entity;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
+use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::ops::ControlFlow;
 use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 
 /// An event the listener emits to the ECS apply system.
+#[allow(dead_code, reason = "Reply/Emit fields are consumed in stage1 task 9")]
 pub(crate) enum ControlEvent {
     /// A `register` from a hello'd connection; the apply system mints a handle,
     /// populates the registries, and sends the reply back on `reply`.
@@ -42,6 +44,30 @@ pub(crate) enum ControlEvent {
     Disconnect {
         /// Connection id.
         connection_id: u64,
+    },
+    /// A program's reply to an ozmux-initiated back-channel `call`.
+    Reply {
+        /// The global reqId the apply system correlates.
+        req_id: String,
+        /// Whether the call succeeded.
+        ok: bool,
+        /// The success value.
+        value: Value,
+        /// The error message when `ok` is false.
+        error: Option<String>,
+        /// The connection that sent the reply (for in-flight ownership).
+        connection_id: u64,
+    },
+    /// A program-initiated push to its handle's webviews.
+    Emit {
+        /// The connection that sent the emit (ownership is checked in apply).
+        connection_id: u64,
+        /// The target handle.
+        handle: String,
+        /// The event name.
+        event: String,
+        /// The event payload.
+        payload: Value,
     },
 }
 
@@ -240,6 +266,32 @@ fn handle_client_msg(
             });
         }
         ClientMsg::Hello { .. } => {}
+        ClientMsg::Reply {
+            req_id,
+            ok,
+            value,
+            error,
+        } => {
+            let _ = events.send(ControlEvent::Reply {
+                req_id,
+                ok,
+                value,
+                error,
+                connection_id,
+            });
+        }
+        ClientMsg::Emit {
+            handle,
+            event,
+            payload,
+        } => {
+            let _ = events.send(ControlEvent::Emit {
+                connection_id,
+                handle,
+                event,
+                payload,
+            });
+        }
     }
     ControlFlow::Continue(())
 }
@@ -334,6 +386,36 @@ mod tests {
                 break;
             }
             assert!(Instant::now() < deadline, "no Disconnect within 2s");
+        }
+    }
+
+    #[test]
+    fn client_reply_line_emits_a_reply_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let tokens = TokenRegistry::default();
+        tokens.insert("tok", Entity::from_bits(1));
+        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+
+        let mut client = UnixStream::connect(&sock).unwrap();
+        writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
+        writeln!(
+            client,
+            r#"{{"op":"reply","reqId":"g1","ok":true,"value":7}}"#
+        )
+        .unwrap();
+        client.flush().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(ControlEvent::Reply { req_id, ok, .. }) =
+                events.recv_timeout(Duration::from_millis(50))
+            {
+                assert_eq!(req_id, "g1");
+                assert!(ok);
+                break;
+            }
+            assert!(Instant::now() < deadline, "no Reply event within 2s");
         }
     }
 
