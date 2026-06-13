@@ -115,7 +115,24 @@ impl Perform for OscWebviewCapture {
                 }
             }
             Some(b"unmount-inline") => {
+                // NOTE: a present-but-invalid view id is malformed, not "unmount
+                // any"; only an ABSENT third param means "all inline on this
+                // terminal". An empty third param (`unmount-inline ; ;`) is
+                // rejected by valid_view_id.
                 let view_id = match params.get(2).copied() {
+                    Some(raw) => match valid_view_id(raw) {
+                        Some(v) => Some(v),
+                        None => return,
+                    },
+                    None => None,
+                };
+                // NOTE: an instance id is addressable only alongside a view id
+                // (Kitty placement model); the empty-view-id case is already
+                // dropped above, so reaching here with `view_id == None` and a
+                // present fourth param is impossible, but the guard keeps the
+                // `view_id == None ⟹ instance_id == None` invariant explicit.
+                let instance_id = match params.get(3).copied() {
+                    Some(_) if view_id.is_none() => return,
                     Some(raw) => match valid_view_id(raw) {
                         Some(v) => Some(v),
                         None => return,
@@ -124,7 +141,7 @@ impl Perform for OscWebviewCapture {
                 };
                 OscWebviewVerb::UnmountInline {
                     view_id,
-                    instance_id: None,
+                    instance_id,
                 }
             }
             _ => return,
@@ -414,6 +431,65 @@ mod tests {
                 view_id: Some("memo".into()),
                 instance_id: None,
             })
+        );
+    }
+
+    #[test]
+    fn unmount_inline_parses_view_and_instance() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b"a"], true);
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::UnmountInline {
+                view_id: Some("memo".into()),
+                instance_id: Some("a".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn unmount_inline_view_only_has_no_instance() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo"], true);
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::UnmountInline {
+                view_id: Some("memo".into()),
+                instance_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn unmount_inline_trailing_empty_instance_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b""], true);
+        assert!(
+            c.take_pending().is_none(),
+            "unmount-inline;memo; (empty instance) is malformed"
+        );
+    }
+
+    #[test]
+    fn unmount_inline_empty_view_with_instance_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"", b"a"], true);
+        assert!(
+            c.take_pending().is_none(),
+            "unmount-inline;;a (empty view id + instance) is malformed"
+        );
+    }
+
+    #[test]
+    fn unmount_inline_bad_instance_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b"../x"],
+            true,
+        );
+        assert!(
+            c.take_pending().is_none(),
+            "an out-of-charset instance id is malformed"
         );
     }
 }
