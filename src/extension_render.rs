@@ -36,7 +36,7 @@ pub(crate) mod preload;
 /// `Receive<OzmuxFrame>`.
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(transparent)]
-pub(crate) struct OzmuxFrame(pub(crate) serde_json::Value);
+struct OzmuxFrame(serde_json::Value);
 
 /// The connected host RPC client plus the in-flight `globalReqId → (webview,
 /// pageReqId)` correlation. `globalReqId` is minted Rust-side (a monotonic
