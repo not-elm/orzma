@@ -111,4 +111,8 @@ pub enum LayoutError {
     /// Bytes remained after the root cell was fully parsed.
     #[error("trailing data after layout root cell")]
     TrailingData,
+
+    /// The layout nested deeper than the supported limit.
+    #[error("layout nesting too deep")]
+    TooDeep,
 }

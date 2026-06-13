@@ -52,8 +52,8 @@ pub enum ControlEvent {
 
     /// `%session-changed <session> <name>`.
     SessionChanged { session: SessionId, name: String },
-    /// `%session-renamed <name>`.
-    SessionRenamed { name: String },
+    /// `%session-renamed <session> <name>`.
+    SessionRenamed { session: SessionId, name: String },
     /// `%session-window-changed <session> <window>`.
     SessionWindowChanged {
         session: SessionId,
@@ -160,6 +160,7 @@ impl ControlEvent {
                 name: fields.name("session-changed")?,
             }),
             b"%session-renamed" => Ok(ControlEvent::SessionRenamed {
+                session: fields.session("session-renamed")?,
                 name: fields.name("session-renamed")?,
             }),
             b"%session-window-changed" => Ok(ControlEvent::SessionWindowChanged {
@@ -529,8 +530,9 @@ mod tests {
             }
         );
         assert_eq!(
-            ev(b"%session-renamed renamed"),
+            ev(b"%session-renamed $0 renamed"),
             ControlEvent::SessionRenamed {
+                session: SessionId(0),
                 name: "renamed".to_string()
             }
         );

@@ -40,27 +40,25 @@ impl BlockAssembler {
     /// line is never reparsed as a notification.
     pub fn feed(&mut self, line: &[u8]) -> TmuxResult<Option<Frame>> {
         match self.open.take() {
-            Some(mut block) => match ControlEvent::parse(line) {
-                Ok(ControlEvent::End { number, .. }) if number == block.number => {
-                    Ok(Some(Frame::Reply {
+            Some(mut block) => {
+                let closed_ok = match ControlEvent::parse(line) {
+                    Ok(ControlEvent::End { number, .. }) if number == block.number => Some(true),
+                    Ok(ControlEvent::Error { number, .. }) if number == block.number => Some(false),
+                    _ => None,
+                };
+                match closed_ok {
+                    Some(ok) => Ok(Some(Frame::Reply {
                         number: block.number,
-                        ok: true,
+                        ok,
                         body: block.body,
-                    }))
+                    })),
+                    None => {
+                        block.body.push(String::from_utf8_lossy(line).into_owned());
+                        self.open = Some(block);
+                        Ok(None)
+                    }
                 }
-                Ok(ControlEvent::Error { number, .. }) if number == block.number => {
-                    Ok(Some(Frame::Reply {
-                        number: block.number,
-                        ok: false,
-                        body: block.body,
-                    }))
-                }
-                _ => {
-                    block.body.push(String::from_utf8_lossy(line).into_owned());
-                    self.open = Some(block);
-                    Ok(None)
-                }
-            },
+            }
             None => match ControlEvent::parse(line)? {
                 ControlEvent::Begin { number, .. } => {
                     self.open = Some(OpenBlock {

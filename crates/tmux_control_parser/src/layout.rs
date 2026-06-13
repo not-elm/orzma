@@ -80,7 +80,7 @@ impl WindowLayout {
         let checksum = parse_checksum(&input[..comma])?;
         let body = &input[comma + 1..];
         let mut cur = Cursor::new(body);
-        let root = parse_cell(&mut cur)?;
+        let root = parse_cell(&mut cur, 0)?;
         if !cur.at_end() {
             return Err(TmuxError::InvalidLayout {
                 reason: LayoutError::TrailingData,
@@ -199,7 +199,16 @@ fn parse_checksum(bytes: &[u8]) -> TmuxResult<u16> {
     Ok(value)
 }
 
-fn parse_cell(cur: &mut Cursor) -> TmuxResult<Cell> {
+/// Recursion-depth cap for nested splits; guards against a stack overflow on a
+/// pathologically nested layout string (tmux's own layouts are far shallower).
+const MAX_DEPTH: usize = 256;
+
+fn parse_cell(cur: &mut Cursor, depth: usize) -> TmuxResult<Cell> {
+    if depth > MAX_DEPTH {
+        return Err(TmuxError::InvalidLayout {
+            reason: LayoutError::TooDeep,
+        });
+    }
     let dims = parse_dims(cur)?;
     match cur.peek() {
         None => Ok(Cell::Leaf {
@@ -208,7 +217,7 @@ fn parse_cell(cur: &mut Cursor) -> TmuxResult<Cell> {
         }),
         Some(b'{') => {
             cur.bump();
-            let children = parse_children(cur, b'}')?;
+            let children = parse_children(cur, b'}', depth)?;
             Ok(Cell::Split {
                 dims,
                 dir: SplitDir::LeftRight,
@@ -217,7 +226,7 @@ fn parse_cell(cur: &mut Cursor) -> TmuxResult<Cell> {
         }
         Some(b'[') => {
             cur.bump();
-            let children = parse_children(cur, b']')?;
+            let children = parse_children(cur, b']', depth)?;
             Ok(Cell::Split {
                 dims,
                 dir: SplitDir::TopBottom,
@@ -226,7 +235,7 @@ fn parse_cell(cur: &mut Cursor) -> TmuxResult<Cell> {
         }
         Some(b'<') => {
             cur.bump();
-            let children = parse_children(cur, b'>')?;
+            let children = parse_children(cur, b'>', depth)?;
             Ok(Cell::Split {
                 dims,
                 dir: SplitDir::Floating,
@@ -281,10 +290,10 @@ fn parse_after_comma(cur: &mut Cursor, dims: CellDims) -> TmuxResult<Cell> {
     })
 }
 
-fn parse_children(cur: &mut Cursor, close: u8) -> TmuxResult<Vec<Cell>> {
+fn parse_children(cur: &mut Cursor, close: u8, depth: usize) -> TmuxResult<Vec<Cell>> {
     let mut children = Vec::new();
     loop {
-        children.push(parse_cell(cur)?);
+        children.push(parse_cell(cur, depth + 1)?);
         match cur.peek() {
             Some(b',') => cur.bump(),
             Some(b) if b == close => {
@@ -576,6 +585,22 @@ mod tests {
             err(b""),
             TmuxError::InvalidLayout {
                 reason: LayoutError::MissingChecksumComma
+            }
+        ));
+    }
+
+    #[test]
+    fn rejects_excessive_nesting() {
+        let mut s = b"0000,".to_vec();
+        for _ in 0..400 {
+            s.extend_from_slice(b"80x24,0,0{");
+        }
+        s.extend_from_slice(b"80x24,0,0,1");
+        s.resize(s.len() + 400, b'}');
+        assert!(matches!(
+            err(&s),
+            TmuxError::InvalidLayout {
+                reason: LayoutError::TooDeep
             }
         ));
     }
