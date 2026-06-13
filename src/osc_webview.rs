@@ -113,6 +113,7 @@ pub(crate) fn on_osc_webview_request(
             view_id,
             rows,
             cols,
+            instance_id: _,
         } => {
             let Some(workspace) = mux.workspace_of_pane(pane) else {
                 tracing::debug!(%view_id, "osc-webview: mount-inline from a pane with no workspace, dropping");
@@ -132,7 +133,10 @@ pub(crate) fn on_osc_webview_request(
                 },
             );
         }
-        OscWebviewVerb::UnmountInline { view_id } => {
+        OscWebviewVerb::UnmountInline {
+            view_id,
+            instance_id: _,
+        } => {
             unmount_inline(&mut inline, terminal_surface, view_id.as_deref());
         }
         OscWebviewVerb::Unmount { view_id } => {

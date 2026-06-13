@@ -104,6 +104,7 @@ impl Perform for OscWebviewCapture {
                     view_id,
                     rows,
                     cols,
+                    instance_id: None,
                 }
             }
             Some(b"unmount-inline") => {
@@ -114,7 +115,10 @@ impl Perform for OscWebviewCapture {
                     },
                     None => None,
                 };
-                OscWebviewVerb::UnmountInline { view_id }
+                OscWebviewVerb::UnmountInline {
+                    view_id,
+                    instance_id: None,
+                }
             }
             _ => return,
         };
@@ -203,6 +207,7 @@ mod tests {
                 view_id: "memo".into(),
                 rows: 3,
                 cols: 20,
+                instance_id: None,
             })
         );
     }
@@ -247,6 +252,7 @@ mod tests {
                 view_id: "memo".into(),
                 rows: 1,
                 cols: 1,
+                instance_id: None,
             })
         );
     }
@@ -264,6 +270,7 @@ mod tests {
                 view_id: "memo".into(),
                 rows: 200,
                 cols: 400,
+                instance_id: None,
             })
         );
     }
@@ -305,7 +312,10 @@ mod tests {
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline"], true);
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::UnmountInline { view_id: None })
+            Some(OscWebviewVerb::UnmountInline {
+                view_id: None,
+                instance_id: None,
+            })
         );
         let mut c = cap(true);
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b""], true);
@@ -318,7 +328,8 @@ mod tests {
         assert_eq!(
             c.take_pending(),
             Some(OscWebviewVerb::UnmountInline {
-                view_id: Some("memo".into())
+                view_id: Some("memo".into()),
+                instance_id: None,
             })
         );
     }

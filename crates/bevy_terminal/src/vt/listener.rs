@@ -22,9 +22,20 @@ pub enum OscWebviewVerb {
         view_id: String,
         rows: u16,
         cols: u16,
+        /// Client-assigned instance id (Kitty placement model); `None` is the
+        /// implicit default instance. `(view_id, instance_id)` is the address.
+        instance_id: Option<String>,
     },
-    /// Unmount inline webview(s): a specific view id, or all for this terminal.
-    UnmountInline { view_id: Option<String> },
+    /// Unmount inline webview(s): a specific `(view_id, instance_id)`, all
+    /// instances of a `view_id`, or all for this terminal.
+    ///
+    /// # Invariants
+    /// `view_id == None` implies `instance_id == None` (an instance is
+    /// addressable only alongside its view id; enforced at the capture stage).
+    UnmountInline {
+        view_id: Option<String>,
+        instance_id: Option<String>,
+    },
 }
 
 /// Anchor stamped by the VT thread at the exact byte position of a

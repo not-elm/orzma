@@ -1002,7 +1002,10 @@ impl TerminalHandle {
     /// the saturation first-arrival rule.
     fn send_synthetic_unmount_all(&mut self) {
         let frame = ControlFrame::OscWebview {
-            verb: OscWebviewVerb::UnmountInline { view_id: None },
+            verb: OscWebviewVerb::UnmountInline {
+                view_id: None,
+                instance_id: None,
+            },
             anchor: None,
         };
         if let Err(e) = self.control_tx.send(frame) {
@@ -2031,7 +2034,10 @@ mod tests {
         assert_eq!(
             frame,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
                 anchor: None,
             }
         );
@@ -2049,7 +2055,10 @@ mod tests {
         assert!(matches!(
             first,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
                 ..
             }
         ));
@@ -2092,7 +2101,10 @@ mod tests {
         assert!(matches!(
             frame,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
                 ..
             }
         ));
@@ -2148,7 +2160,10 @@ mod tests {
         assert!(matches!(
             frame,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
                 ..
             }
         ));
@@ -2166,7 +2181,10 @@ mod tests {
         assert!(matches!(
             fold,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline { view_id: None },
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
                 ..
             }
         ));
@@ -2359,6 +2377,7 @@ mod tests {
                     view_id: "memo".into(),
                     rows: 3,
                     cols: 10,
+                    instance_id: None,
                 },
                 anchor: Some(InlineAnchor {
                     line: 42,
@@ -2390,7 +2409,8 @@ mod tests {
                 OscWebviewVerb::MountInline {
                     ref view_id,
                     rows: 3,
-                    cols: 10
+                    cols: 10,
+                    instance_id: None,
                 } if view_id == "memo"
             ),
             "verb must be MountInline{{memo, 3, 10}}, got {:?}",

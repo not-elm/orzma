@@ -624,6 +624,7 @@ mod tests {
                 view_id: view_id.into(),
                 rows: 10,
                 cols: 40,
+                instance_id: None,
             },
             anchor,
         });
@@ -635,6 +636,7 @@ mod tests {
             entity: terminal,
             verb: OscWebviewVerb::UnmountInline {
                 view_id: view_id.map(str::to_string),
+                instance_id: None,
             },
             anchor: None,
         });
