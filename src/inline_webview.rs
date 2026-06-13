@@ -1368,6 +1368,36 @@ mod tests {
     }
 
     #[test]
+    fn projection_draws_two_instances_in_their_own_slots() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        let placement = InlinePlacement {
+            anchor_line: 42,
+            anchor_col: 3,
+            rows: 10,
+            cols: 40,
+            frame_seq: 7,
+        };
+        let h0 = spawn_projection_child(&mut app, terminal, 0, placement);
+        let h1 = spawn_projection_child(&mut app, terminal, 1, placement);
+
+        project(&mut app);
+        let overlays = overlays_of(&app, terminal);
+        assert_eq!(
+            overlays.textures[0].as_ref().map(Handle::id),
+            Some(h0.id()),
+            "slot 0 must carry the first instance's texture"
+        );
+        assert_eq!(
+            overlays.textures[1].as_ref().map(Handle::id),
+            Some(h1.id()),
+            "slot 1 must carry the second instance's texture"
+        );
+        assert_ne!(overlays.rects[0], IVec4::ZERO);
+        assert_ne!(overlays.rects[1], IVec4::ZERO);
+    }
+
+    #[test]
     fn stale_overlays_clear_after_unmount_all() {
         let mut app = make_test_app();
         register_view(&mut app, "dash", true, &[]);
