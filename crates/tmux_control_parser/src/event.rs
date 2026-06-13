@@ -179,6 +179,12 @@ impl ControlEvent {
                 };
                 Ok(ControlEvent::Exit { reason })
             }
+            b"%message" => Ok(ControlEvent::Message {
+                message: fields.required_text("message", "message")?,
+            }),
+            b"%config-error" => Ok(ControlEvent::ConfigError {
+                message: fields.required_text("config-error", "message")?,
+            }),
             _ => todo!("ControlEvent::parse"),
         }
     }
@@ -265,13 +271,14 @@ impl<'a> Fields<'a> {
     }
 
     fn name(&self, event: &'static str) -> TmuxResult<String> {
+        self.required_text(event, "name")
+    }
+
+    fn required_text(&self, event: &'static str, field: &'static str) -> TmuxResult<String> {
         if self.0.is_empty() {
-            return Err(TmuxError::MissingField {
-                event,
-                field: "name",
-            });
+            return Err(TmuxError::MissingField { event, field });
         }
-        text(self.rest(), "name")
+        text(self.rest(), field)
     }
 }
 
