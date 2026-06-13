@@ -806,6 +806,7 @@ mod tests {
                 ChildOf(terminal_surface),
                 InlineWebview {
                     view_id: "inline-test".into(),
+                    instance_id: None,
                     slot: 0,
                 },
             ))

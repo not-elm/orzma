@@ -535,6 +535,7 @@ mod tests {
                 ChildOf(surface),
                 InlineWebview {
                     view_id: "inline".into(),
+                    instance_id: None,
                     slot: 0,
                 },
             ))

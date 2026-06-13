@@ -722,6 +722,7 @@ mod tests {
                 ChildOf(surface),
                 InlineWebview {
                     view_id: "inline".into(),
+                    instance_id: None,
                     slot: 0,
                 },
             ))
@@ -766,6 +767,7 @@ mod tests {
                 ChildOf(term_entity),
                 InlineWebview {
                     view_id: "inline".into(),
+                    instance_id: None,
                     slot: 0,
                 },
             ))

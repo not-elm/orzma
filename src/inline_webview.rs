@@ -38,6 +38,9 @@ use ozmux_multiplexer::SurfaceMarker;
 pub(crate) struct InlineWebview {
     /// The registered view id this inline webview was mounted from.
     pub(crate) view_id: String,
+    /// The client-assigned instance id; `None` is the implicit default
+    /// instance. `(view_id, instance_id)` is the per-terminal address.
+    pub(crate) instance_id: Option<String>,
     /// The overlay texture slot (0..`OVERLAY_SLOTS`) on the parent terminal.
     pub(crate) slot: u8,
 }
@@ -115,6 +118,8 @@ pub(crate) struct InlineMountContext<'a> {
     pub(crate) pane: Entity,
     /// The registered view id to mount.
     pub(crate) view_id: &'a str,
+    /// The client-assigned instance id (`None` = implicit default instance).
+    pub(crate) instance_id: Option<&'a str>,
     /// Rect height in terminal cells (validated 1..=200 by `bevy_terminal`).
     pub(crate) rows: u16,
     /// Rect width in terminal cells (validated 1..=400 by `bevy_terminal`).
@@ -167,8 +172,15 @@ pub(crate) fn mount_inline(
         return;
     };
     let live = live_inline_children(&params.children, &params.views, ctx.terminal_surface);
-    if live.iter().any(|(_, v)| v.view_id == ctx.view_id) {
-        tracing::debug!(view_id = %ctx.view_id, "osc-webview: duplicate inline mount on this terminal, dropping");
+    if live
+        .iter()
+        .any(|(_, v)| v.view_id == ctx.view_id && v.instance_id.as_deref() == ctx.instance_id)
+    {
+        tracing::debug!(
+            view_id = %ctx.view_id,
+            instance_id = ?ctx.instance_id,
+            "osc-webview: duplicate inline mount on this terminal, dropping"
+        );
         return;
     }
     let Some(slot) = smallest_free_slot(&live) else {
@@ -200,6 +212,7 @@ pub(crate) fn mount_inline(
         WebviewSize(size),
         InlineWebview {
             view_id: ctx.view_id.to_string(),
+            instance_id: ctx.instance_id.map(str::to_string),
             slot,
         },
         InlinePlacement {
@@ -226,19 +239,27 @@ pub(crate) fn mount_inline(
     );
 }
 
-/// Despawns the inline child(ren) of `terminal_surface` matching `view_id`,
-/// or ALL of them when `view_id` is `None`. The all-case is an explicit
-/// iteration over every live inline child — it also executes the
-/// VT-synthesized fold/saturation `UnmountInline { view_id: None }` frames.
+/// Despawns the inline child(ren) of `terminal_surface` matching the scope:
+/// `(Some(vid), Some(inst))` removes that one instance; `(Some(vid), None)`
+/// removes every instance of `vid`; `(None, _)` removes all inline children
+/// (the VT-synthesized fold/saturation `UnmountInline { view_id: None }`
+/// frames take this path).
 pub(crate) fn unmount_inline(
     params: &mut InlineWebviewParams,
     terminal_surface: Entity,
     view_id: Option<&str>,
+    instance_id: Option<&str>,
 ) {
     let targets: Vec<Entity> =
         live_inline_children(&params.children, &params.views, terminal_surface)
             .into_iter()
-            .filter(|(_, v)| view_id.is_none_or(|id| v.view_id == id))
+            .filter(|(_, v)| match (view_id, instance_id) {
+                (Some(vid), Some(inst)) => {
+                    v.view_id == vid && v.instance_id.as_deref() == Some(inst)
+                }
+                (Some(vid), None) => v.view_id == vid,
+                (None, _) => true,
+            })
             .map(|(entity, _)| entity)
             .collect();
     for entity in targets {
@@ -669,6 +690,58 @@ mod tests {
             })
     }
 
+    #[expect(dead_code, reason = "used by Task 2.2 multi-instance tests")]
+    fn mount_instance(
+        app: &mut App,
+        terminal: Entity,
+        view_id: &str,
+        instance_id: &str,
+        anchor: Option<InlineAnchor>,
+    ) {
+        app.world_mut().trigger(OscWebviewRequest {
+            entity: terminal,
+            verb: OscWebviewVerb::MountInline {
+                view_id: view_id.into(),
+                rows: 10,
+                cols: 40,
+                instance_id: Some(instance_id.into()),
+            },
+            anchor,
+        });
+        app.world_mut().flush();
+    }
+
+    #[expect(dead_code, reason = "used by Task 2.2 multi-instance tests")]
+    fn unmount_instance(app: &mut App, terminal: Entity, view_id: &str, instance_id: &str) {
+        app.world_mut().trigger(OscWebviewRequest {
+            entity: terminal,
+            verb: OscWebviewVerb::UnmountInline {
+                view_id: Some(view_id.into()),
+                instance_id: Some(instance_id.into()),
+            },
+            anchor: None,
+        });
+        app.world_mut().flush();
+        app.update();
+    }
+
+    #[expect(dead_code, reason = "used by Task 2.2 multi-instance tests")]
+    fn slot_of_instance(
+        app: &App,
+        terminal: Entity,
+        view_id: &str,
+        instance_id: Option<&str>,
+    ) -> Option<u8> {
+        inline_children_of(app, terminal)
+            .into_iter()
+            .find_map(|child| {
+                app.world()
+                    .get::<InlineWebview>(child)
+                    .filter(|v| v.view_id == view_id && v.instance_id.as_deref() == instance_id)
+                    .map(|v| v.slot)
+            })
+    }
+
     #[test]
     fn mount_spawns_child_with_inline_components() {
         let mut app = make_test_app();
@@ -690,6 +763,7 @@ mod tests {
             app.world().get::<InlineWebview>(child),
             Some(&InlineWebview {
                 view_id: "dash".into(),
+                instance_id: None,
                 slot: 0
             }),
         );
@@ -917,6 +991,7 @@ mod tests {
             ChildOf(terminal),
             InlineWebview {
                 view_id: format!("view-{slot}"),
+                instance_id: None,
                 slot,
             },
             placement,
@@ -1322,6 +1397,7 @@ mod tests {
                 ChildOf(terminal),
                 InlineWebview {
                     view_id: format!("view-{slot}"),
+                    instance_id: None,
                     slot,
                 },
             ))

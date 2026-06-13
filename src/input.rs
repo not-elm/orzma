@@ -684,6 +684,7 @@ mod tests {
                 ChildOf(surface),
                 crate::inline_webview::InlineWebview {
                     view_id: "inline-test".into(),
+                    instance_id: None,
                     slot: 0,
                 },
             ))
