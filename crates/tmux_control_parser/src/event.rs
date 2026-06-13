@@ -197,6 +197,14 @@ impl ControlEvent {
                 visible_layout: fields.layout("layout-change", "visible_layout")?,
                 flags: text(fields.rest(), "flags")?,
             }),
+            b"%client-detached" => Ok(ControlEvent::ClientDetached {
+                client: fields.required_text("client-detached", "client")?,
+            }),
+            b"%client-session-changed" => Ok(ControlEvent::ClientSessionChanged {
+                client: fields.token("client-session-changed", "client")?,
+                session: fields.session("client-session-changed")?,
+                name: fields.name("client-session-changed")?,
+            }),
             _ => todo!("ControlEvent::parse"),
         }
     }
@@ -287,6 +295,13 @@ impl<'a> Fields<'a> {
             .next()
             .ok_or(TmuxError::MissingField { event, field })?;
         WindowLayout::parse(bytes)
+    }
+
+    fn token(&mut self, event: &'static str, field: &'static str) -> TmuxResult<String> {
+        let bytes = self
+            .next()
+            .ok_or(TmuxError::MissingField { event, field })?;
+        text(bytes, field)
     }
 
     fn name(&self, event: &'static str) -> TmuxResult<String> {
