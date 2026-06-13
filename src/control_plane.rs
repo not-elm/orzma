@@ -237,13 +237,19 @@ pub(crate) fn mint_token() -> String {
     mint_id()
 }
 
-/// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded). The
-/// alphabet `A-Z2-7` is a subset of the OSC `view_id` charset
+/// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded) and
+/// lowercased. The alphabet `a-z2-7` is a subset of the OSC `view_id` charset
 /// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount-inline;<id>`.
+///
+/// # Invariants
+/// The output MUST be lowercase. A handle is used as the host of the
+/// `ozmux-dyn://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
+/// of a STANDARD-scheme URL before it reaches the scheme handler; an uppercase
+/// handle would then miss the case-sensitive `DynAssetRegistry` lookup → 404.
 fn mint_id() -> String {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).expect("OS CSPRNG is available");
-    BASE32_NOPAD.encode(&bytes)
+    BASE32_NOPAD.encode(&bytes).to_ascii_lowercase()
 }
 
 /// The receiver of `ControlEvent`s from the listener threads.
@@ -526,6 +532,10 @@ mod token_tests {
                 id.chars()
                     .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'),
                 "minted id {id} must satisfy the OSC charset"
+            );
+            assert!(
+                !id.chars().any(|c| c.is_ascii_uppercase()),
+                "minted id {id} must be lowercase — it is used as an ozmux-dyn:// host that Chromium lowercases"
             );
         }
     }

@@ -127,7 +127,13 @@ impl OzmuxDynScheme {
 impl CefSchemeHandler for OzmuxDynScheme {
     fn handle(&self, request: &CefSchemeRequest) -> CefSchemeResponse {
         match resolve_request(&self.registry, &request.url) {
-            Err(_) => CefSchemeResponse::not_found(),
+            Err(_) => {
+                bevy::log::debug!(
+                    url = %request.url,
+                    "ozmux-dyn request unresolved (unknown handle or non-index inline path) -> 404"
+                );
+                CefSchemeResponse::not_found()
+            }
             Ok(ResolvedDyn::Inline(html)) => {
                 bevy::log::debug!(
                     url = %request.url,
