@@ -161,6 +161,15 @@ impl ControlEvent {
                 window: fields.window("session-window-changed")?,
             }),
             b"%sessions-changed" => Ok(ControlEvent::SessionsChanged),
+            b"%pane-mode-changed" => Ok(ControlEvent::PaneModeChanged {
+                pane: fields.pane("pane-mode-changed")?,
+            }),
+            b"%continue" => Ok(ControlEvent::Continue {
+                pane: fields.pane("continue")?,
+            }),
+            b"%pause" => Ok(ControlEvent::Pause {
+                pane: fields.pane("pause")?,
+            }),
             _ => todo!("ControlEvent::parse"),
         }
     }
