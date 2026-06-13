@@ -126,6 +126,29 @@ impl ControlEvent {
                 number,
                 flags,
             }),
+            b"%window-add" => Ok(ControlEvent::WindowAdd {
+                window: fields.window("window-add")?,
+            }),
+            b"%window-close" => Ok(ControlEvent::WindowClose {
+                window: fields.window("window-close")?,
+            }),
+            b"%window-renamed" => Ok(ControlEvent::WindowRenamed {
+                window: fields.window("window-renamed")?,
+                name: fields.name("window-renamed")?,
+            }),
+            b"%window-pane-changed" => Ok(ControlEvent::WindowPaneChanged {
+                window: fields.window("window-pane-changed")?,
+                pane: fields.pane("window-pane-changed")?,
+            }),
+            b"%unlinked-window-add" => Ok(ControlEvent::UnlinkedWindowAdd {
+                window: fields.window("unlinked-window-add")?,
+            }),
+            b"%unlinked-window-close" => Ok(ControlEvent::UnlinkedWindowClose {
+                window: fields.window("unlinked-window-close")?,
+            }),
+            b"%unlinked-window-renamed" => Ok(ControlEvent::UnlinkedWindowRenamed {
+                window: fields.window("unlinked-window-renamed")?,
+            }),
             _ => todo!("ControlEvent::parse"),
         }
     }
@@ -186,6 +209,32 @@ impl<'a> Fields<'a> {
         )?;
         Ok(build(time, number, flags))
     }
+
+    fn window(&mut self, event: &'static str) -> TmuxResult<WindowId> {
+        let bytes = self.next().ok_or(TmuxError::MissingField {
+            event,
+            field: "window",
+        })?;
+        parse_id(bytes, b'@').map(WindowId)
+    }
+
+    fn pane(&mut self, event: &'static str) -> TmuxResult<PaneId> {
+        let bytes = self.next().ok_or(TmuxError::MissingField {
+            event,
+            field: "pane",
+        })?;
+        parse_id(bytes, b'%').map(PaneId)
+    }
+
+    fn name(&self, event: &'static str) -> TmuxResult<String> {
+        if self.0.is_empty() {
+            return Err(TmuxError::MissingField {
+                event,
+                field: "name",
+            });
+        }
+        text(self.rest(), "name")
+    }
 }
 
 /// Parses an ASCII integer field into `T`, mapping failures to [`TmuxError::InvalidInt`].
@@ -197,6 +246,28 @@ fn int<T: core::str::FromStr>(bytes: &[u8], field: &'static str) -> TmuxResult<T
             field,
             raw: String::from_utf8_lossy(bytes).into_owned(),
         })
+}
+
+/// Parses an entity id (`@3` / `%7` / `$1`) into its numeric part, checking the prefix.
+fn parse_id(bytes: &[u8], prefix: u8) -> TmuxResult<u32> {
+    let err = || TmuxError::InvalidId {
+        raw: String::from_utf8_lossy(bytes).into_owned(),
+        expected: prefix as char,
+    };
+    match bytes.split_first() {
+        Some((&p, rest)) if p == prefix => core::str::from_utf8(rest)
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .ok_or_else(err),
+        _ => Err(err()),
+    }
+}
+
+/// Decodes a byte slice tmux guarantees to be UTF-8 (name/layout/message) into a [`String`].
+fn text(bytes: &[u8], field: &'static str) -> TmuxResult<String> {
+    core::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|_| TmuxError::InvalidUtf8 { field })
 }
 
 #[cfg(test)]
