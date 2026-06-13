@@ -111,7 +111,7 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
             &mut len,
         )
     };
-    (rc == 0).then_some(cred.uid as u32)
+    (rc == 0).then_some(cred.uid)
 }
 
 /// Reads one connection: requires a valid `hello`, then forwards each
