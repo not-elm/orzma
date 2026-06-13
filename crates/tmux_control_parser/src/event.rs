@@ -185,6 +185,12 @@ impl ControlEvent {
             b"%config-error" => Ok(ControlEvent::ConfigError {
                 message: fields.required_text("config-error", "message")?,
             }),
+            b"%paste-buffer-changed" => Ok(ControlEvent::PasteBufferChanged {
+                name: fields.name("paste-buffer-changed")?,
+            }),
+            b"%paste-buffer-deleted" => Ok(ControlEvent::PasteBufferDeleted {
+                name: fields.name("paste-buffer-deleted")?,
+            }),
             _ => todo!("ControlEvent::parse"),
         }
     }
