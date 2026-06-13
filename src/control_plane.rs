@@ -4,8 +4,14 @@
 //! disconnect or surface despawn. Mirrors the Tokio-free thread model of
 //! `ozmux_extension_host::rpc_client`.
 
+use crate::control_plane::listener::{ControlEvent, spawn_listener};
+use crate::control_plane::protocol::{RegisterKind, ServerMsg};
 use bevy::prelude::*;
+use crossbeam_channel::Receiver;
 use data_encoding::BASE32_NOPAD;
+use ozmux_extension_host::DynAssetRegistry;
+use ozmux_extension_host::host::RuntimeRoot;
+use ozmux_multiplexer::SurfaceMarker;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -129,6 +135,186 @@ fn mint_id() -> String {
     BASE32_NOPAD.encode(&bytes)
 }
 
+/// The receiver of `ControlEvent`s from the listener threads.
+#[derive(Resource)]
+pub(crate) struct ControlEvents(pub(crate) Receiver<ControlEvent>);
+
+/// The CEF-facing `DynAssetRegistry`, held as a resource so the apply system and
+/// teardown can populate/purge `Dir` handles the scheme handler reads.
+#[derive(Resource, Clone)]
+pub(crate) struct DynAssetRegistryRes(pub(crate) DynAssetRegistry);
+
+/// The bound control-socket path + token registry, surfaced so terminal-surface
+/// setup can mint per-surface tokens and inject `$OZMUX_SOCK` / `$OZMUX_TOKEN`.
+#[derive(Resource, Clone)]
+pub(crate) struct ControlPlaneHandle {
+    /// The bound listener socket path (`$OZMUX_SOCK`).
+    pub(crate) sock_path: PathBuf,
+    /// The shared `token → surface` registry.
+    pub(crate) tokens: TokenRegistry,
+}
+
+/// Wires the control-plane listener, the event-apply system, and the teardown
+/// observer. Takes the `DynAssetRegistry` shared with the `ozmux-dyn` scheme handler.
+pub(crate) struct OzmuxControlPlanePlugin {
+    dyn_assets: DynAssetRegistry,
+}
+
+impl OzmuxControlPlanePlugin {
+    /// Builds the plugin sharing `dyn_assets` with the `ozmux-dyn` scheme handler.
+    pub(crate) fn new(dyn_assets: DynAssetRegistry) -> Self {
+        Self { dyn_assets }
+    }
+}
+
+impl Plugin for OzmuxControlPlanePlugin {
+    fn build(&self, app: &mut App) {
+        let tokens = TokenRegistry::default();
+        match RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "control") {
+            Ok(runtime) => {
+                let sock_path = runtime.sock_dir().join("control.sock");
+                match spawn_listener(&sock_path, tokens.clone()) {
+                    Ok(events) => {
+                        app.insert_resource(ControlEvents(events));
+                        app.insert_resource(ControlPlaneHandle { sock_path, tokens });
+                        app.insert_resource(ControlRuntime(runtime));
+                    }
+                    Err(e) => tracing::error!(error = %e, "control-plane listener failed to bind"),
+                }
+            }
+            Err(e) => tracing::error!(error = %e, "control-plane runtime dir failed"),
+        }
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(DynAssetRegistryRes(self.dyn_assets.clone()));
+        app.add_systems(Update, apply_control_events);
+        app.add_observer(purge_dynamic_on_surface_removed);
+    }
+}
+
+/// Keeps the control runtime dir alive for the app's lifetime (drop removes the
+/// 0700 dir + socket).
+#[derive(Resource)]
+struct ControlRuntime(RuntimeRoot);
+
+/// Drains queued `ControlEvent`s: mints handles for `register` and populates the
+/// `DynamicRegistry` (+ `DynAssetRegistry` for `Dir`), releases on `unregister`,
+/// and purges a connection's handles on `Disconnect`.
+fn apply_control_events(
+    mut registry: ResMut<DynamicRegistry>,
+    events: Res<ControlEvents>,
+    dyn_assets: Res<DynAssetRegistryRes>,
+) {
+    while let Ok(event) = events.0.try_recv() {
+        match event {
+            ControlEvent::Register {
+                connection_id,
+                owner_surface,
+                kind,
+                reply,
+            } => {
+                let view = match build_view(kind, owner_surface, connection_id) {
+                    Ok(v) => v,
+                    Err(code) => {
+                        let _ = reply.send(ServerMsg::err(code));
+                        continue;
+                    }
+                };
+                let handle = mint_id();
+                if let DynSource::Dir(root) = &view.source {
+                    dyn_assets.0.insert(handle.clone(), root.clone());
+                }
+                registry.insert(handle.clone(), view);
+                let _ = reply.send(ServerMsg::ok(handle));
+            }
+            ControlEvent::Unregister {
+                connection_id,
+                handle,
+            } => {
+                if registry
+                    .get(&handle)
+                    .is_some_and(|v| v.connection_id == connection_id)
+                {
+                    registry.remove(&handle);
+                    dyn_assets.0.remove(&handle);
+                }
+            }
+            ControlEvent::Disconnect { connection_id } => {
+                for handle in registry.remove_by_connection(connection_id) {
+                    dyn_assets.0.remove(&handle);
+                }
+            }
+        }
+    }
+}
+
+/// Despawn observer: when a terminal surface goes away (tab close, or pane
+/// despawn cascading to its surfaces), purge every dynamic registration owned by
+/// that surface. Mirrors the multiplexer's existing `on_remove_*` observers.
+fn purge_dynamic_on_surface_removed(
+    ev: On<Remove, SurfaceMarker>,
+    mut registry: ResMut<DynamicRegistry>,
+    dyn_assets: Res<DynAssetRegistryRes>,
+) {
+    for handle in registry.remove_by_surface(ev.entity) {
+        dyn_assets.0.remove(&handle);
+    }
+}
+
+/// Validates a `RegisterKind` and builds a `DynamicView`. Returns a short error
+/// code for an unsafe entry, a missing/relative root, or oversized inline HTML.
+fn build_view(
+    kind: RegisterKind,
+    owner_surface: Entity,
+    connection_id: u64,
+) -> Result<DynamicView, &'static str> {
+    match kind {
+        RegisterKind::Dir {
+            root,
+            entry,
+            interactive,
+        } => {
+            let root_path = PathBuf::from(&root);
+            if !root_path.is_absolute() || !root_path.is_dir() {
+                return Err("invalid_root");
+            }
+            if !is_safe_entry(&entry) {
+                return Err("unsafe_entry");
+            }
+            Ok(DynamicView {
+                source: DynSource::Dir(root_path),
+                entry,
+                interactive,
+                owner_surface,
+                connection_id,
+            })
+        }
+        RegisterKind::Inline { html, interactive } => {
+            if html.len() > MAX_INLINE_HTML {
+                return Err("html_too_large");
+            }
+            Ok(DynamicView {
+                source: DynSource::Inline(html),
+                entry: "index.html".into(),
+                interactive,
+                owner_surface,
+                connection_id,
+            })
+        }
+    }
+}
+
+/// True when `entry` is a non-empty relative path of normal components only
+/// (no `..`, `.`, or leading `/`). Same shape as `asset::is_safe_rel_path`.
+fn is_safe_entry(entry: &str) -> bool {
+    let p = std::path::Path::new(entry);
+    !p.as_os_str().is_empty()
+        && p.components()
+            .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// Upper bound on a single inline HTML document (4 MiB).
+const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
+
 #[cfg(test)]
 mod token_tests {
     use super::*;
@@ -233,5 +419,148 @@ mod registry_tests {
             owner_surface: owner,
             connection_id: conn,
         }
+    }
+}
+
+#[cfg(test)]
+mod apply_tests {
+    use super::*;
+    use bevy::prelude::*;
+    use crossbeam_channel::{bounded, unbounded};
+
+    #[test]
+    fn apply_register_dir_mints_handle_and_populates_both_registries() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let dyn_assets = DynAssetRegistry::default();
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.add_systems(Update, apply_control_events);
+
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: Entity::from_bits(11),
+                kind: RegisterKind::Dir {
+                    root: dir.path().to_string_lossy().into_owned(),
+                    entry: "index.html".into(),
+                    interactive: true,
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+
+        app.update();
+
+        let handle = match reply_rx.try_recv().expect("apply must reply") {
+            ServerMsg::Ok { handle, .. } => handle,
+            ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
+        };
+        assert!(
+            dyn_assets.get(&handle).is_some(),
+            "DynAssetRegistry populated for Dir"
+        );
+        assert!(
+            app.world()
+                .resource::<DynamicRegistry>()
+                .get(&handle)
+                .is_some(),
+            "DynamicRegistry populated"
+        );
+    }
+
+    #[test]
+    fn apply_register_invalid_root_replies_err() {
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.add_systems(Update, apply_control_events);
+
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: Entity::from_bits(1),
+                kind: RegisterKind::Dir {
+                    root: "/nonexistent/abs/xyz".into(),
+                    entry: "index.html".into(),
+                    interactive: true,
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+        assert!(
+            matches!(reply_rx.try_recv(), Ok(ServerMsg::Err { .. })),
+            "invalid root must reply Err"
+        );
+    }
+
+    #[test]
+    fn apply_disconnect_purges_that_connections_handles() {
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let dyn_assets = DynAssetRegistry::default();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "h".into(),
+            DynamicView {
+                source: DynSource::Dir("/x".into()),
+                entry: "i".into(),
+                interactive: true,
+                owner_surface: Entity::from_bits(1),
+                connection_id: 5,
+            },
+        );
+        dyn_assets.insert("h", "/x".into());
+        app.insert_resource(reg);
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Disconnect { connection_id: 5 })
+            .unwrap();
+        app.update();
+        assert!(app.world().resource::<DynamicRegistry>().get("h").is_none());
+        assert!(dyn_assets.get("h").is_none());
+    }
+
+    #[test]
+    fn surface_despawn_purges_its_dynamic_registrations() {
+        let mut app = App::new();
+        app.add_observer(purge_dynamic_on_surface_removed);
+        let dyn_assets = DynAssetRegistry::default();
+        let surface = app.world_mut().spawn(SurfaceMarker).id();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "h".into(),
+            DynamicView {
+                source: DynSource::Dir("/x".into()),
+                entry: "i".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 1,
+            },
+        );
+        dyn_assets.insert("h", "/x".into());
+        app.insert_resource(reg);
+        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+
+        app.world_mut().entity_mut(surface).despawn();
+
+        assert!(
+            app.world().resource::<DynamicRegistry>().get("h").is_none(),
+            "purged from DynamicRegistry on surface despawn"
+        );
+        assert!(
+            dyn_assets.get("h").is_none(),
+            "purged from DynAssetRegistry"
+        );
     }
 }

@@ -18,6 +18,7 @@ mod ui;
 
 use crate::action::OzmuxActionPlugin;
 use crate::clipboard::ClipboardActionPlugin;
+use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::extension_manager::ExtensionManagerPlugin;
 use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
@@ -83,6 +84,7 @@ fn main() {
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
             ExtensionManagerPlugin::new(registry),
+            OzmuxControlPlanePlugin::new(dyn_registry),
             OzmuxActionPlugin,
         ))
         .run();
