@@ -207,9 +207,12 @@ struct ControlRuntime(
 /// and purges a connection's handles on `Disconnect`.
 fn apply_control_events(
     mut registry: ResMut<DynamicRegistry>,
-    events: Res<ControlEvents>,
+    events: Option<Res<ControlEvents>>,
     dyn_assets: Res<DynAssetRegistryRes>,
 ) {
+    let Some(events) = events else {
+        return;
+    };
     while let Ok(event) = events.0.try_recv() {
         match event {
             ControlEvent::Register {
@@ -534,6 +537,17 @@ mod apply_tests {
         app.update();
         assert!(app.world().resource::<DynamicRegistry>().get("h").is_none());
         assert!(dyn_assets.get("h").is_none());
+    }
+
+    #[test]
+    fn apply_is_a_noop_when_control_events_missing() {
+        // Simulates the control plane failing to bind: ControlEvents was never inserted.
+        let mut app = App::new();
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.add_systems(Update, apply_control_events);
+        app.update(); // must not panic
+        assert!(app.world().get_resource::<ControlEvents>().is_none());
     }
 
     #[test]
