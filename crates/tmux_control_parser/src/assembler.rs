@@ -1,7 +1,7 @@
 //! Stateful assembler that groups `%begin`..`%end`/`%error` blocks into replies
 //! and passes standalone notifications through.
 
-use crate::error::TmuxResult;
+use crate::error::{TmuxError, TmuxResult};
 use crate::event::ControlEvent;
 
 /// A higher-level frame emitted by [`BlockAssembler`].
@@ -22,19 +22,66 @@ pub enum Frame {
 
 /// Groups raw control-mode lines into [`Frame`]s, tracking the active block.
 #[derive(Debug, Default, Clone)]
-pub struct BlockAssembler;
+pub struct BlockAssembler {
+    open: Option<OpenBlock>,
+}
 
 impl BlockAssembler {
     /// Returns a new assembler with no block open.
     pub fn new() -> Self {
-        Self
+        Self::default()
     }
 
     /// Feeds one raw line, returning a completed [`Frame`] when one is ready.
+    ///
+    /// Outside a block, a line is a standalone notification and `%begin` opens a
+    /// block. Inside a block, every line is collected verbatim until the
+    /// `%end`/`%error` whose command number matches the open `%begin` — a body
+    /// line is never reparsed as a notification.
     pub fn feed(&mut self, line: &[u8]) -> TmuxResult<Option<Frame>> {
-        let _ = line;
-        todo!("BlockAssembler::feed")
+        match self.open.take() {
+            Some(mut block) => match ControlEvent::parse(line) {
+                Ok(ControlEvent::End { number, .. }) if number == block.number => {
+                    Ok(Some(Frame::Reply {
+                        number: block.number,
+                        ok: true,
+                        body: block.body,
+                    }))
+                }
+                Ok(ControlEvent::Error { number, .. }) if number == block.number => {
+                    Ok(Some(Frame::Reply {
+                        number: block.number,
+                        ok: false,
+                        body: block.body,
+                    }))
+                }
+                _ => {
+                    block.body.push(String::from_utf8_lossy(line).into_owned());
+                    self.open = Some(block);
+                    Ok(None)
+                }
+            },
+            None => match ControlEvent::parse(line)? {
+                ControlEvent::Begin { number, .. } => {
+                    self.open = Some(OpenBlock {
+                        number,
+                        body: Vec::new(),
+                    });
+                    Ok(None)
+                }
+                ControlEvent::End { number, .. } | ControlEvent::Error { number, .. } => {
+                    Err(TmuxError::UnexpectedEnd { number })
+                }
+                event => Ok(Some(Frame::Notification(event))),
+            },
+        }
     }
+}
+
+#[derive(Debug, Clone)]
+struct OpenBlock {
+    number: u32,
+    body: Vec<String>,
 }
 
 #[cfg(test)]
