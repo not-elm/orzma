@@ -5,8 +5,10 @@
 //! `ozmux_extension_host::rpc_client`.
 
 use bevy::prelude::*;
+use data_encoding::BASE32_NOPAD;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 mod protocol;
 
@@ -90,6 +92,76 @@ impl DynamicRegistry {
             self.by_handle.remove(h);
         }
         drained
+    }
+}
+
+/// A shared `token → surface` map: the env-injected `$OZMUX_TOKEN` of each PTY
+/// resolves to the surface that owns it. Read by the listener thread on `hello`,
+/// written when a terminal surface is spawned. `Entity` is stored directly; it
+/// is only meaningful inside the same `World` generation.
+#[derive(Resource, Clone, Default)]
+pub(crate) struct TokenRegistry(Arc<RwLock<HashMap<String, Entity>>>);
+
+impl TokenRegistry {
+    /// Resolves a token to the surface that owns it.
+    pub(crate) fn resolve(&self, token: &str) -> Option<Entity> {
+        self.0.read().unwrap().get(token).copied()
+    }
+
+    /// Binds a token to a surface.
+    pub(crate) fn insert(&self, token: impl Into<String>, surface: Entity) {
+        self.0.write().unwrap().insert(token.into(), surface);
+    }
+
+    /// Removes a token binding.
+    pub(crate) fn remove(&self, token: &str) {
+        self.0.write().unwrap().remove(token);
+    }
+}
+
+/// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded). The
+/// alphabet `A-Z2-7` is a subset of the OSC `view_id` charset
+/// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount-inline;<id>`.
+fn mint_id() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).expect("OS CSPRNG is available");
+    BASE32_NOPAD.encode(&bytes)
+}
+
+#[cfg(test)]
+mod token_tests {
+    use super::*;
+    use bevy::prelude::Entity;
+
+    #[test]
+    fn minted_ids_match_the_osc_view_id_charset() {
+        for _ in 0..50 {
+            let id = mint_id();
+            assert!(
+                !id.is_empty() && id.len() <= 128,
+                "id length out of range: {id:?}"
+            );
+            assert!(
+                id.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '_' || c == '-'),
+                "minted id {id} must satisfy the OSC charset"
+            );
+        }
+    }
+
+    #[test]
+    fn minted_ids_are_unique() {
+        let a = mint_id();
+        let b = mint_id();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn token_registry_binds_and_resolves() {
+        let reg = TokenRegistry::default();
+        reg.insert("tok", Entity::from_bits(5));
+        assert_eq!(reg.resolve("tok"), Some(Entity::from_bits(5)));
+        assert_eq!(reg.resolve("nope"), None);
     }
 }
 
