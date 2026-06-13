@@ -1,6 +1,6 @@
 //! Parsed control-mode events and the typed entity ids they carry.
 
-use crate::{TmuxError, error::TmuxResult};
+use crate::{TmuxError, error::TmuxResult, layout::WindowLayout};
 
 /// A tmux pane id (`%N`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -73,8 +73,8 @@ pub enum ControlEvent {
     /// `%layout-change <window> <layout> <visible-layout> <flags>`.
     LayoutChange {
         window: WindowId,
-        layout: String,
-        visible_layout: String,
+        layout: WindowLayout,
+        visible_layout: WindowLayout,
         flags: String,
     },
     /// `%continue <pane>`.
@@ -191,6 +191,12 @@ impl ControlEvent {
             b"%paste-buffer-deleted" => Ok(ControlEvent::PasteBufferDeleted {
                 name: fields.name("paste-buffer-deleted")?,
             }),
+            b"%layout-change" => Ok(ControlEvent::LayoutChange {
+                window: fields.window("layout-change")?,
+                layout: fields.layout("layout-change", "layout")?,
+                visible_layout: fields.layout("layout-change", "visible_layout")?,
+                flags: text(fields.rest(), "flags")?,
+            }),
             _ => todo!("ControlEvent::parse"),
         }
     }
@@ -276,6 +282,13 @@ impl<'a> Fields<'a> {
         parse_id(bytes, b'$').map(SessionId)
     }
 
+    fn layout(&mut self, event: &'static str, field: &'static str) -> TmuxResult<WindowLayout> {
+        let bytes = self
+            .next()
+            .ok_or(TmuxError::MissingField { event, field })?;
+        WindowLayout::parse(bytes)
+    }
+
     fn name(&self, event: &'static str) -> TmuxResult<String> {
         self.required_text(event, "name")
     }
@@ -325,6 +338,7 @@ fn text(bytes: &[u8], field: &'static str) -> TmuxResult<String> {
 mod tests {
     use super::*;
     use crate::error::TmuxError;
+    use crate::layout::{Cell, CellDims};
 
     fn ev(line: &[u8]) -> ControlEvent {
         ControlEvent::parse(line).expect("line should parse")
@@ -472,8 +486,30 @@ mod tests {
             ev(b"%layout-change @1 b25f,80x24,0,0,2 b25f,80x24,0,0,2 *"),
             ControlEvent::LayoutChange {
                 window: WindowId(1),
-                layout: "b25f,80x24,0,0,2".to_string(),
-                visible_layout: "b25f,80x24,0,0,2".to_string(),
+                layout: WindowLayout {
+                    checksum: 0xb25f,
+                    root: Cell::Leaf {
+                        dims: CellDims {
+                            width: 80,
+                            height: 24,
+                            xoff: 0,
+                            yoff: 0,
+                        },
+                        pane_id: Some(2),
+                    },
+                },
+                visible_layout: WindowLayout {
+                    checksum: 0xb25f,
+                    root: Cell::Leaf {
+                        dims: CellDims {
+                            width: 80,
+                            height: 24,
+                            xoff: 0,
+                            yoff: 0,
+                        },
+                        pane_id: Some(2),
+                    },
+                },
                 flags: "*".to_string(),
             }
         );

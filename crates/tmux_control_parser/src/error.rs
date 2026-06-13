@@ -63,4 +63,52 @@ pub enum TmuxError {
         /// The command number carried by the stray guard.
         number: u32,
     },
+
+    /// A tmux window-layout string was malformed.
+    #[error("invalid layout: {reason}")]
+    InvalidLayout {
+        /// The specific structural failure.
+        reason: LayoutError,
+    },
+}
+
+/// The specific structural failure behind a [`TmuxError::InvalidLayout`].
+#[derive(Error, Debug, Clone, PartialEq, Eq)]
+pub enum LayoutError {
+    /// The string had no comma separating checksum from body.
+    #[error("missing comma after checksum")]
+    MissingChecksumComma,
+
+    /// The checksum was not exactly 4 lowercase hex digits.
+    #[error("checksum must be 4 lowercase hex digits")]
+    BadChecksum,
+
+    /// Expected a specific literal byte that was absent.
+    #[error("expected byte {expected:?}")]
+    Expected {
+        /// The byte the grammar required at this position.
+        expected: u8,
+    },
+
+    /// A `,` introduced a pane id but no digits followed.
+    #[error("expected pane id digits after ','")]
+    ExpectedPaneId,
+
+    /// A split was never closed by its matching bracket.
+    #[error("unbalanced bracket, expected {expected:?}")]
+    UnbalancedBracket {
+        /// The closing byte (`}`, `]`, or `>`) that was expected.
+        expected: u8,
+    },
+
+    /// An unexpected byte appeared where a cell or separator was expected.
+    #[error("unexpected byte {byte:?}")]
+    UnexpectedByte {
+        /// The offending byte.
+        byte: u8,
+    },
+
+    /// Bytes remained after the root cell was fully parsed.
+    #[error("trailing data after layout root cell")]
+    TrailingData,
 }
