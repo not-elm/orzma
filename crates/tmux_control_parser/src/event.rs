@@ -170,6 +170,15 @@ impl ControlEvent {
             b"%pause" => Ok(ControlEvent::Pause {
                 pane: fields.pane("pause")?,
             }),
+            b"%exit" => {
+                let rest = fields.rest();
+                let reason = if rest.is_empty() {
+                    None
+                } else {
+                    Some(text(rest, "reason")?)
+                };
+                Ok(ControlEvent::Exit { reason })
+            }
             _ => todo!("ControlEvent::parse"),
         }
     }
