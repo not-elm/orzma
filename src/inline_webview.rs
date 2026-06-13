@@ -690,7 +690,6 @@ mod tests {
             })
     }
 
-    #[expect(dead_code, reason = "used by Task 2.2 multi-instance tests")]
     fn mount_instance(
         app: &mut App,
         terminal: Entity,
@@ -711,7 +710,6 @@ mod tests {
         app.world_mut().flush();
     }
 
-    #[expect(dead_code, reason = "used by Task 2.2 multi-instance tests")]
     fn unmount_instance(app: &mut App, terminal: Entity, view_id: &str, instance_id: &str) {
         app.world_mut().trigger(OscWebviewRequest {
             entity: terminal,
@@ -725,7 +723,6 @@ mod tests {
         app.update();
     }
 
-    #[expect(dead_code, reason = "used by Task 2.2 multi-instance tests")]
     fn slot_of_instance(
         app: &App,
         terminal: Entity,
@@ -943,6 +940,119 @@ mod tests {
             inline_children_of(&app, terminal).is_empty(),
             "a mount-inline for an unregistered view must be dropped"
         );
+    }
+
+    #[test]
+    fn two_instances_of_same_view_both_mount_in_separate_slots() {
+        let mut app = make_test_app();
+        register_view(&mut app, "memo", true, &[]);
+        let terminal = spawn_terminal(&mut app);
+
+        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
+
+        assert_eq!(
+            inline_children_of(&app, terminal).len(),
+            2,
+            "two distinct (view_id, instance_id) tuples must both mount"
+        );
+        assert_eq!(slot_of_instance(&app, terminal, "memo", Some("a")), Some(0));
+        assert_eq!(slot_of_instance(&app, terminal, "memo", Some("b")), Some(1));
+    }
+
+    #[test]
+    fn duplicate_view_instance_tuple_is_rejected() {
+        let mut app = make_test_app();
+        register_view(&mut app, "memo", true, &[]);
+        let terminal = spawn_terminal(&mut app);
+
+        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
+
+        assert_eq!(
+            inline_children_of(&app, terminal).len(),
+            1,
+            "a duplicate (view_id, instance_id) mount must be dropped"
+        );
+    }
+
+    #[test]
+    fn default_instance_and_named_instance_coexist() {
+        let mut app = make_test_app();
+        register_view(&mut app, "memo", true, &[]);
+        let terminal = spawn_terminal(&mut app);
+
+        mount(&mut app, terminal, "memo", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
+
+        assert_eq!(
+            inline_children_of(&app, terminal).len(),
+            2,
+            "the default (None) instance and a named instance are distinct"
+        );
+        assert_eq!(slot_of_instance(&app, terminal, "memo", None), Some(0));
+        assert_eq!(slot_of_instance(&app, terminal, "memo", Some("a")), Some(1));
+    }
+
+    #[test]
+    fn unmount_one_instance_leaves_the_other() {
+        let mut app = make_test_app();
+        register_view(&mut app, "memo", true, &[]);
+        let terminal = spawn_terminal(&mut app);
+
+        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
+
+        unmount_instance(&mut app, terminal, "memo", "a");
+
+        assert_eq!(
+            inline_children_of(&app, terminal).len(),
+            1,
+            "unmounting one instance must despawn exactly that instance"
+        );
+        assert_eq!(slot_of_instance(&app, terminal, "memo", Some("a")), None);
+        assert_eq!(slot_of_instance(&app, terminal, "memo", Some("b")), Some(1));
+    }
+
+    #[test]
+    fn unmount_view_scope_despawns_every_instance_of_that_view() {
+        let mut app = make_test_app();
+        register_view(&mut app, "memo", true, &[]);
+        register_view(&mut app, "other", true, &[]);
+        let terminal = spawn_terminal(&mut app);
+
+        mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
+        mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
+        mount(&mut app, terminal, "other", Some(test_anchor()));
+
+        unmount(&mut app, terminal, Some("memo"));
+
+        assert_eq!(
+            inline_children_of(&app, terminal).len(),
+            1,
+            "view-scoped unmount must despawn every instance of that view_id only"
+        );
+        assert_eq!(slot_of_instance(&app, terminal, "other", None), Some(2));
+    }
+
+    #[test]
+    fn slot_cap_counts_all_instances_together() {
+        let mut app = make_test_app();
+        register_view(&mut app, "memo", true, &[]);
+        let terminal = spawn_terminal(&mut app);
+
+        for inst in ["a", "b", "c", "d"] {
+            mount_instance(&mut app, terminal, "memo", inst, Some(test_anchor()));
+        }
+        assert_eq!(inline_children_of(&app, terminal).len(), OVERLAY_SLOTS);
+
+        mount_instance(&mut app, terminal, "memo", "e", Some(test_anchor()));
+        assert_eq!(
+            inline_children_of(&app, terminal).len(),
+            OVERLAY_SLOTS,
+            "the 4-slot cap is per-terminal across all instances; a 5th is rejected"
+        );
+        assert_eq!(slot_of_instance(&app, terminal, "memo", Some("e")), None);
     }
 
     #[test]
