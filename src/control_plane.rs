@@ -49,6 +49,20 @@ pub(crate) struct DynamicView {
     pub(crate) connection_id: u64,
 }
 
+/// Stamped on a Tier 1 inline webview entity at mount: the control-plane
+/// connection that registered it (back-channel routing target) and its handle.
+#[derive(Component, Clone, Debug, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "consumed by back-channel routing in stage1 tasks 7-9"
+)]
+pub(crate) struct WebviewOwner {
+    /// The owning connection (push `call` frames here).
+    pub(crate) connection_id: u64,
+    /// The registration handle (for `emit` fan-out + ownership checks).
+    pub(crate) handle: String,
+}
+
 /// Maps an opaque `handle` to its dynamic registration. The single Bevy-side
 /// registry for Tier 1 (the CEF scheme handler reads the thin `DynAssetRegistry`
 /// separately). Carries scoped removal for teardown.
@@ -96,6 +110,86 @@ impl DynamicRegistry {
             self.by_handle.remove(h);
         }
         drained
+    }
+}
+
+/// In-flight `globalReqId → (webview, pageReqId, connection_id)` correlation for
+/// the back-channel, plus the Rust-minted id counter. Mirrors `HostRpc` but
+/// routes to a control-plane connection rather than the single host.
+#[derive(Resource, Default)]
+pub(crate) struct OzmuxRpc {
+    inflight: HashMap<String, (Entity, String, u64)>,
+    #[allow(
+        dead_code,
+        reason = "consumed by back-channel routing in stage1 tasks 7-9"
+    )]
+    next_id: u64,
+}
+
+impl OzmuxRpc {
+    /// Mints the next global reqId.
+    #[allow(
+        dead_code,
+        reason = "consumed by back-channel routing in stage1 tasks 7-9"
+    )]
+    pub(crate) fn mint(&mut self) -> String {
+        let id = self.next_id.to_string();
+        self.next_id += 1;
+        id
+    }
+
+    /// Records an in-flight call.
+    #[allow(
+        dead_code,
+        reason = "consumed by back-channel routing in stage1 tasks 7-9"
+    )]
+    pub(crate) fn note(
+        &mut self,
+        global_id: &str,
+        webview: Entity,
+        page_req: &str,
+        connection_id: u64,
+    ) {
+        self.inflight.insert(
+            global_id.to_string(),
+            (webview, page_req.to_string(), connection_id),
+        );
+    }
+
+    /// Removes and returns one in-flight entry.
+    #[allow(
+        dead_code,
+        reason = "consumed by back-channel routing in stage1 tasks 7-9"
+    )]
+    pub(crate) fn take(&mut self, global_id: &str) -> Option<(Entity, String, u64)> {
+        self.inflight.remove(global_id)
+    }
+
+    /// Removes every in-flight call for `connection_id`, returning each
+    /// `(webview, pageReqId)` so the caller can reject the page Promise.
+    #[allow(
+        dead_code,
+        reason = "consumed by back-channel routing in stage1 tasks 7-9"
+    )]
+    pub(crate) fn drain_connection(&mut self, connection_id: u64) -> Vec<(Entity, String)> {
+        let hit: Vec<String> = self
+            .inflight
+            .iter()
+            .filter(|(_, (_, _, c))| *c == connection_id)
+            .map(|(g, _)| g.clone())
+            .collect();
+        hit.into_iter()
+            .filter_map(|g| self.inflight.remove(&g).map(|(e, p, _)| (e, p)))
+            .collect()
+    }
+
+    /// Removes every in-flight call targeting `webview` (despawn prune).
+    #[allow(
+        dead_code,
+        reason = "consumed by back-channel routing in stage1 tasks 7-9"
+    )]
+    pub(crate) fn drain_webview(&mut self, webview: Entity) {
+        self.inflight.retain(|_, (e, _, _)| *e != webview);
     }
 }
 
@@ -216,6 +310,7 @@ impl Plugin for OzmuxControlPlanePlugin {
         }
         app.insert_resource(writers);
         app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
         app.insert_resource(DynAssetRegistryRes(self.dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
         app.add_observer(purge_dynamic_on_surface_removed);
@@ -720,5 +815,35 @@ mod apply_tests {
                 .get("HMOUNT")
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod back_channel_state_tests {
+    use super::*;
+    use bevy::prelude::Entity;
+
+    #[test]
+    fn ozmux_rpc_notes_and_takes_inflight() {
+        let mut rpc = OzmuxRpc::default();
+        let g = rpc.mint();
+        assert_eq!(g, "0");
+        rpc.note(&g, Entity::from_bits(2), "p1", 5);
+        let taken = rpc.take(&g).expect("present");
+        assert_eq!(taken, (Entity::from_bits(2), "p1".to_string(), 5));
+        assert!(rpc.take(&g).is_none());
+    }
+
+    #[test]
+    fn ozmux_rpc_drains_a_connections_inflight() {
+        let mut rpc = OzmuxRpc::default();
+        let a = rpc.mint();
+        let b = rpc.mint();
+        rpc.note(&a, Entity::from_bits(1), "p", 5);
+        rpc.note(&b, Entity::from_bits(2), "p", 9);
+        let drained = rpc.drain_connection(5);
+        assert_eq!(drained, vec![(Entity::from_bits(1), "p".to_string())]);
+        assert!(rpc.take(&a).is_none());
+        assert!(rpc.take(&b).is_some());
     }
 }
