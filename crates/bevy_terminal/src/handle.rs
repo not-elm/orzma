@@ -906,7 +906,12 @@ impl TerminalHandle {
     /// Stamps the anchor / applies state gates for a buffered OSC 5379 verb
     /// at an `advance_until_terminated` stop point, then forwards the frame.
     fn handle_webview_verb(&mut self, verb: OscWebviewVerb) {
-        if self.parser.sync_bytes_count() > 0 {
+        // NOTE: only MountInline samples the cursor, so only it needs the
+        // synchronized-update (CSI ?2026) buffer flushed before the anchor is
+        // read. Flushing for the other verbs would force-end an in-flight
+        // synchronized update and tear a partial frame for no benefit.
+        if matches!(verb, OscWebviewVerb::MountInline { .. }) && self.parser.sync_bytes_count() > 0
+        {
             self.parser.stop_sync(&mut self.term);
         }
         // NOTE: maintenance (fold) must run BEFORE the anchor is stamped —
@@ -977,9 +982,12 @@ impl TerminalHandle {
     /// scrollback cap, trims become unobservable, so all inline webviews
     /// are unmounted once and further mounts are rejected until the
     /// history shrinks below the cap again (e.g. CSI 3 J).
-    // TODO: decide scroll_cap == 0 semantics when config-driven scrollback lands (0 >= 0 saturates immediately).
+    ///
+    /// `scroll_cap == 0` means "no scrollback limit configured" and never
+    /// saturates — without the guard `0 >= 0` would saturate on the first
+    /// segment and reject every inline mount permanently.
     fn update_saturation(&mut self, history_size: usize) {
-        if history_size >= self.scroll_cap {
+        if self.scroll_cap > 0 && history_size >= self.scroll_cap {
             if !self.saturated {
                 self.saturated = true;
                 tracing::debug!("scrollback saturated: unmounting all inline webviews");

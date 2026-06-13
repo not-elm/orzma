@@ -192,7 +192,13 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
+        // NOTE: a focused inline webview wins over copy mode (same precedence
+        // as the wheel path in `mouse_wheel.rs`): without the `focused_inline`
+        // guard the copy-mode gate would consume keystrokes before the
+        // inline-focus PTY suppression below, so keys would drive the vi cursor
+        // instead of reaching the focused page while copy mode is active.
         if let Some(entity) = focused_entity
+            && focused_inline.is_none()
             && copy_modes.get(entity).is_ok()
             && !just_exited.contains(&entity)
         {
@@ -1597,6 +1603,43 @@ mod tests {
             captured.is_empty(),
             "copy mode must still swallow ordinary keys after the chord released focus; captured: {:?}",
             captured,
+        );
+    }
+
+    #[test]
+    fn focused_inline_webview_wins_over_copy_mode_for_shortcuts() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedClipboardOps::default());
+        app.add_observer(capture_copy_op);
+        let surface = install_active_terminal_surface(&mut app);
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        spawn_focused_inline_child(&mut app, surface);
+
+        // Copy mode normally SWALLOWS Cmd+C (see
+        // `cmd_c_in_copy_mode_does_not_trigger_copy_event`). With an inline
+        // webview focused the copy-mode gate must be skipped so global
+        // shortcuts still fire — the firing Copy is what distinguishes the
+        // fixed precedence (focused inline wins over copy mode, matching the
+        // wheel path) from the pre-fix behavior, where copy mode ate the chord.
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("c".into()));
+        app.update();
+
+        let ops = app
+            .world()
+            .resource::<CapturedClipboardOps>()
+            .0
+            .lock()
+            .unwrap();
+        assert_eq!(
+            *ops,
+            vec!["copy"],
+            "a focused inline webview must let the Cmd+C shortcut fire past the copy-mode gate"
         );
     }
 
