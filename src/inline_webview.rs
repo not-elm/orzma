@@ -5,6 +5,7 @@
 //! `OzmuxInlineWebviewPlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
+use crate::control_plane::{DynSource, DynamicRegistry};
 use crate::extension_render::preload::{build_preload, webview_url};
 use crate::input::InputPhase;
 use crate::input::mouse_buttons::resolve_pane_at_phys;
@@ -138,6 +139,64 @@ pub(crate) struct InlineWebviewParams<'w, 's> {
     views: Query<'w, 's, &'static InlineWebview>,
     metrics: Option<Res<'w, TerminalCellMetricsResource>>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+}
+
+/// The resolved content + trust facts for a `mount-inline;<id>`: either a URL
+/// (`ozmux-ext://` static or `ozmux-dyn://` dynamic-Dir) or inline HTML
+/// (dynamic-Inline), the input policy, the granted capabilities, and whether the
+/// host bridge preload is injected.
+pub(crate) struct ResolvedWebviewMount {
+    /// The `WebviewSource::Url` to load, when the source is URL-backed.
+    pub(crate) url: Option<String>,
+    /// The HTML for `WebviewSource::InlineHtml`, when the source is inline.
+    pub(crate) inline_html: Option<String>,
+    /// Whether the page receives pointer/keyboard input.
+    pub(crate) interactive: bool,
+    /// Host-API namespaces granted (empty for Tier 1 dynamic).
+    pub(crate) capabilities: Vec<String>,
+    /// Whether to inject the `window.<ns>` host bridge preload.
+    pub(crate) host_bridge: bool,
+    /// The owning extension name for the preload context (`""` for dynamic).
+    pub(crate) extension_name: String,
+}
+
+/// Resolves a `mount-inline` `<id>` to its content + trust facts: the static
+/// `ViewRegistry` (Tier 2) takes precedence, then the `DynamicRegistry`
+/// (Tier 1). A dynamic handle resolves ONLY when `requesting_surface` is its
+/// `owner_surface` — the scoping gate that stops one surface from mounting
+/// another's handle. Returns `None` for an unregistered or unowned id.
+pub(crate) fn resolve_mount(
+    id: &str,
+    requesting_surface: Entity,
+    views: &ViewRegistry,
+    dynamic: &DynamicRegistry,
+) -> Option<ResolvedWebviewMount> {
+    if let Some(view) = views.get(id) {
+        return Some(ResolvedWebviewMount {
+            url: Some(webview_url(&view.owning_ext, &view.entry)),
+            inline_html: None,
+            interactive: view.interactive,
+            capabilities: view.capabilities.clone(),
+            host_bridge: true,
+            extension_name: view.owning_ext.clone(),
+        });
+    }
+    let view = dynamic.get(id)?;
+    if view.owner_surface != requesting_surface {
+        return None;
+    }
+    let (url, inline_html) = match &view.source {
+        DynSource::Dir(_) => (Some(format!("ozmux-dyn://{id}/{}", view.entry)), None),
+        DynSource::Inline(html) => (None, Some(html.clone())),
+    };
+    Some(ResolvedWebviewMount {
+        url,
+        inline_html,
+        interactive: view.interactive,
+        capabilities: Vec::new(),
+        host_bridge: false,
+        extension_name: String::new(),
+    })
 }
 
 /// Mounts a registered view as an inline webview child of the requesting
@@ -1712,6 +1771,68 @@ mod tests {
             None,
             "an out-of-range slot has no DIP mapping"
         );
+    }
+
+    #[test]
+    fn resolve_mount_prefers_static_then_dynamic_and_enforces_owner_surface() {
+        use crate::control_plane::{DynSource, DynamicRegistry, DynamicView};
+        let owner = Entity::from_bits(1);
+        let other = Entity::from_bits(2);
+        let mut views = ViewRegistry::default();
+        views.register(
+            "static.view".into(),
+            RegisteredView {
+                entry: "dash.html".into(),
+                owning_ext: "memo".into(),
+                interactive: true,
+                capabilities: vec!["fs".into()],
+            },
+        );
+        let mut dynamic = DynamicRegistry::default();
+        dynamic.insert(
+            "DYNHANDLE".into(),
+            DynamicView {
+                source: DynSource::Dir("/abs/ui".into()),
+                entry: "index.html".into(),
+                interactive: false,
+                owner_surface: owner,
+                connection_id: 1,
+            },
+        );
+
+        let s = resolve_mount("static.view", other, &views, &dynamic).expect("static resolves");
+        assert_eq!(s.url.as_deref(), Some("ozmux-ext://memo/dash.html"));
+        assert!(s.host_bridge, "static (Tier 2) keeps the host bridge");
+
+        let d = resolve_mount("DYNHANDLE", owner, &views, &dynamic).expect("dynamic resolves");
+        assert_eq!(d.url.as_deref(), Some("ozmux-dyn://DYNHANDLE/index.html"));
+        assert!(d.inline_html.is_none());
+        assert!(!d.host_bridge, "dynamic (Tier 1) has no host bridge");
+        assert!(d.capabilities.is_empty());
+
+        assert!(resolve_mount("DYNHANDLE", other, &views, &dynamic).is_none());
+        assert!(resolve_mount("ghost", owner, &views, &dynamic).is_none());
+    }
+
+    #[test]
+    fn resolve_mount_dynamic_inline_carries_html_not_url() {
+        use crate::control_plane::{DynSource, DynamicRegistry, DynamicView};
+        let owner = Entity::from_bits(1);
+        let views = ViewRegistry::default();
+        let mut dynamic = DynamicRegistry::default();
+        dynamic.insert(
+            "INLINEH".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: owner,
+                connection_id: 1,
+            },
+        );
+        let r = resolve_mount("INLINEH", owner, &views, &dynamic).expect("inline resolves");
+        assert_eq!(r.inline_html.as_deref(), Some("<h1>x</h1>"));
+        assert!(r.url.is_none());
     }
 
     #[test]

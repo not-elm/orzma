@@ -40,7 +40,20 @@ pub(crate) fn build_preload(
     PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()])
 }
 
-/// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`.
+/// Builds the preload for a Tier 1 dynamic webview: context globals only, with
+/// `role: "dynamic"`. No capability grant and no host bridge — a dynamic view
+/// has `capabilities = []`, so `window.<ns>` would only reject every call.
+pub(crate) fn build_dynamic_preload(
+    workspace: Entity,
+    pane: Entity,
+    surface: Entity,
+) -> PreloadScripts {
+    let ctx_js = context_preload_js_role(workspace, pane, surface, "dynamic", "");
+    PreloadScripts::from([ctx_js])
+}
+
+/// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`
+/// with `role:"extension"`.
 ///
 /// NOTE: PreloadScripts are joined with `;` and eval'd as one unit, so this MUST
 /// be a complete statement; a syntax error here would break the bridge eval too.
@@ -50,14 +63,28 @@ fn context_preload_js(
     surface: Entity,
     extension_name: &str,
 ) -> String {
+    context_preload_js_role(workspace, pane, surface, "extension", extension_name)
+}
+
+/// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`
+/// with the given `role` and `extension_name`.
+///
+/// NOTE: the JS keys "sessionId"/"windowId" keep their legacy names on purpose — a
+/// browser-side wire contract the SDK surface client reads; renaming them breaks extensions.
+fn context_preload_js_role(
+    workspace: Entity,
+    pane: Entity,
+    surface: Entity,
+    role: &str,
+    extension_name: &str,
+) -> String {
     let workspace_id = workspace.to_bits().to_string();
-    // NOTE: the JS keys "sessionId"/"windowId" keep their legacy names on purpose — a
-    // browser-side wire contract the SDK surface client reads; renaming them breaks extensions.
     format!(
-        "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:\"extension\",extensionName:{n:?}}};",
+        "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:{r:?},extensionName:{n:?}}};",
         s = workspace_id,
         p = pane.to_bits().to_string(),
         a = surface.to_bits().to_string(),
+        r = role,
         n = extension_name,
     )
 }
@@ -123,6 +150,33 @@ mod tests {
         assert!(preload.0[0].starts_with("window.__ozmuxContext="));
         assert_eq!(preload.0[1], "window.__ozmuxGranted=[\"fs\"];");
         assert_eq!(preload.0[2], HOST_BRIDGE_JS);
+    }
+
+    #[test]
+    fn dynamic_preload_has_context_only_no_bridge() {
+        let world = &mut App::new();
+        world
+            .add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        let (workspace, pane, surface) = world
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane, o.surface)
+            })
+            .unwrap();
+        world.world_mut().flush();
+
+        let preload = build_dynamic_preload(workspace, pane, surface);
+        assert_eq!(preload.0.len(), 1, "dynamic preload is context-only");
+        assert!(preload.0[0].starts_with("window.__ozmuxContext="));
+        assert!(
+            !preload
+                .0
+                .iter()
+                .any(|s| s.contains("__ozmuxGranted") || s == HOST_BRIDGE_JS),
+            "no capability grant, no host bridge for a Tier 1 dynamic view"
+        );
     }
 
     #[test]
