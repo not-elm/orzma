@@ -4,6 +4,7 @@ mod action;
 mod bootstrap;
 mod clipboard;
 mod configs;
+mod control_plane;
 mod extension_manager;
 mod extension_render;
 mod font;
