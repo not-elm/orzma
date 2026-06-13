@@ -221,6 +221,17 @@ impl ControlEvent {
                     value,
                 })
             }
+            b"%output" => Ok(ControlEvent::Output {
+                pane: fields.pane("output")?,
+                data: unescape_output(fields.rest())?,
+            }),
+            b"%extended-output" => {
+                let pane = fields.pane("extended-output")?;
+                let age = fields.int_field("extended-output", "age")?;
+                fields.skip_to_colon("extended-output")?;
+                let data = unescape_output(fields.rest())?;
+                Ok(ControlEvent::ExtendedOutput { pane, age, data })
+            }
             _ => todo!("ControlEvent::parse"),
         }
     }
@@ -313,10 +324,10 @@ impl<'a> Fields<'a> {
         int(bytes, field)
     }
 
-    fn skip_to_colon_value(&mut self, event: &'static str) -> TmuxResult<String> {
+    fn skip_to_colon(&mut self, event: &'static str) -> TmuxResult<()> {
         loop {
             match self.next() {
-                Some(b":") => break,
+                Some(b":") => return Ok(()),
                 Some(_) => {}
                 None => {
                     return Err(TmuxError::MissingField {
@@ -326,6 +337,10 @@ impl<'a> Fields<'a> {
                 }
             }
         }
+    }
+
+    fn skip_to_colon_value(&mut self, event: &'static str) -> TmuxResult<String> {
+        self.skip_to_colon(event)?;
         text(self.rest(), "value")
     }
 
@@ -372,6 +387,36 @@ fn text(bytes: &[u8], field: &'static str) -> TmuxResult<String> {
     core::str::from_utf8(bytes)
         .map(str::to_owned)
         .map_err(|_| TmuxError::InvalidUtf8 { field })
+}
+
+/// Decodes `%output` data: `\xxx` octal escapes back to bytes, others verbatim.
+fn unescape_output(bytes: &[u8]) -> TmuxResult<Vec<u8>> {
+    let invalid = |raw: &[u8]| TmuxError::InvalidOctal {
+        raw: String::from_utf8_lossy(raw).into_owned(),
+    };
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        match bytes.get(i + 1..i + 4) {
+            Some(triple) if triple.iter().all(|&d| matches!(d, b'0'..=b'7')) => {
+                let value = u16::from(triple[0] - b'0') * 64
+                    + u16::from(triple[1] - b'0') * 8
+                    + u16::from(triple[2] - b'0');
+                if value > u16::from(u8::MAX) {
+                    return Err(invalid(&bytes[i..i + 4]));
+                }
+                out.push(value as u8);
+                i += 4;
+            }
+            _ => return Err(invalid(&bytes[i..bytes.len().min(i + 4)])),
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
