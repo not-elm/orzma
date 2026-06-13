@@ -1643,7 +1643,7 @@ mod tests {
     }
 
     #[test]
-    fn modified_escape_does_not_snap_to_bottom() {
+    fn modified_escape_skips_the_escape_pre_handler() {
         let (mut app, window_entity) = make_app(true);
         let surface = install_active_terminal_surface_with_handle(&mut app);
         scroll_surface_back(&mut app, surface);

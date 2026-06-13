@@ -6,21 +6,27 @@
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use crate::extension_render::preload::{build_preload, webview_url};
+use crate::input::InputPhase;
+use crate::input::mouse_buttons::resolve_pane_at_phys;
 use crate::osc_webview::{GrantedNamespaces, NonInteractive};
+use crate::ui::Slotted;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
+use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::ui_render::PreparedUiMaterial;
-use bevy::window::PrimaryWindow;
+use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::{
     FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
+use bevy_cef_core::prelude::Browsers;
 use bevy_terminal::InlineAnchor;
 use bevy_terminal_renderer::TerminalCellMetricsResource;
 use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use bevy_terminal_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
 use bevy_terminal_renderer::schema::TerminalGrid;
 use ozmux_extension_host::ViewRegistry;
+use ozmux_multiplexer::SurfaceMarker;
 
 /// Marks an inline webview entity and records its identity: the mounted
 /// `view_id` and the overlay texture `slot` (0..`OVERLAY_SLOTS`) it occupies
@@ -57,10 +63,11 @@ pub(crate) struct InlinePlacement {
 }
 
 /// Registers the inline-webview runtime systems: the `WebviewSize` size sync
-/// (`Update`), the per-frame projection that derives `TerminalOverlays` from
-/// inline-webview children (spec §5), and the render-world ordering edge that
-/// keeps webview GPU texture injection ahead of the terminal material's
-/// bind-group rebuild.
+/// (`Update`), the pointer-move forwarder that hands `CursorMoved` motion
+/// over interactive inline rects to CEF (spec §7, `InputPhase::Hover`), the
+/// per-frame projection that derives `TerminalOverlays` from inline-webview
+/// children (spec §5), and the render-world ordering edge that keeps webview
+/// GPU texture injection ahead of the terminal material's bind-group rebuild.
 ///
 /// The projection is scheduled in `PostUpdate` before
 /// `TerminalMaterialSystems::UpdateMaterial`: grid state settles during
@@ -71,7 +78,10 @@ pub(crate) struct OzmuxInlineWebviewPlugin;
 
 impl Plugin for OzmuxInlineWebviewPlugin {
     fn build(&self, app: &mut App) {
+        app.add_message::<CursorMoved>();
+        app.init_resource::<ButtonInput<MouseButton>>();
         app.add_systems(Update, sync_inline_webview_size);
+        app.add_systems(Update, forward_inline_mouse_moves.in_set(InputPhase::Hover));
         app.add_systems(
             PostUpdate,
             project_inline_overlays.before(TerminalMaterialSystems::UpdateMaterial),
@@ -251,6 +261,92 @@ pub(crate) fn focused_inline_of(
     (Some(parent) == active_surface).then_some(candidate)
 }
 
+/// A pointer hit on an interactive inline webview rect: the child entity that
+/// owns the rect and the pointer position in webview-local DIP (logical px).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct InlineHit {
+    /// The interactive inline webview child under the pointer.
+    pub(crate) child: Entity,
+    /// `(local_phys − rect_origin_phys) / scale_factor` — the pointer in
+    /// webview-local DIP, the coordinate space CEF mouse events expect.
+    pub(crate) local_dip: Vec2,
+}
+
+/// Hit-tests a terminal-local physical-pixel point against the terminal's
+/// ACTIVE inline overlay rects (the same `TerminalOverlays` projection the
+/// shader composites, spec §7's single coordinate source) and returns the
+/// interactive child whose rect contains it.
+///
+/// Cell coordinates are 0-indexed (`row = floor(local_phys.y / cell_h)`,
+/// column analog) — NOT the 1-indexed `cell_at_local` convention the terminal
+/// click pipeline uses. `rows == 0` sentinel slots never match; a
+/// partially-scrolled rect with a negative `row` origin still hits in its
+/// visible cells (its DIP origin lies above the viewport, so `local_dip.y`
+/// lands past the clipped rows). `NonInteractive` children are invisible to
+/// the hit-test, so their rects pass through as plain terminal input.
+pub(crate) fn inline_hit_at(
+    children: &Query<&Children>,
+    inline: &Query<(&InlineWebview, Has<NonInteractive>)>,
+    overlays: &TerminalOverlays,
+    terminal: Entity,
+    local_phys: Vec2,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    scale_factor: f32,
+) -> Option<InlineHit> {
+    let row = (local_phys.y / cell_h_phys).floor() as i32;
+    let col = (local_phys.x / cell_w_phys).floor() as i32;
+    let kids = children.get(terminal).ok()?;
+    kids.iter().find_map(|child| {
+        let Ok((view, non_interactive)) = inline.get(child) else {
+            return None;
+        };
+        if non_interactive {
+            return None;
+        }
+        let rect = *overlays.rects.get(usize::from(view.slot))?;
+        let contains = rect.z != 0
+            && row >= rect.x
+            && row < rect.x + rect.z
+            && col >= rect.y
+            && col < rect.y + rect.w;
+        if !contains {
+            return None;
+        }
+        let local_dip = inline_local_dip(
+            overlays,
+            view.slot,
+            local_phys,
+            cell_w_phys,
+            cell_h_phys,
+            scale_factor,
+        )?;
+        Some(InlineHit { child, local_dip })
+    })
+}
+
+/// Converts a terminal-local physical-pixel point to webview-local DIP
+/// relative to a slot's active overlay rect, WITHOUT containment checking —
+/// the release leg of an in-flight inline press uses this so a pointer that
+/// drifted off the rect still produces a (possibly out-of-view) release
+/// position. Returns `None` for an out-of-range slot or a `rows == 0`
+/// sentinel rect.
+pub(crate) fn inline_local_dip(
+    overlays: &TerminalOverlays,
+    slot: u8,
+    local_phys: Vec2,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    scale_factor: f32,
+) -> Option<Vec2> {
+    let rect = *overlays.rects.get(usize::from(slot))?;
+    if rect.z == 0 {
+        return None;
+    }
+    let origin_phys = Vec2::new(rect.y as f32 * cell_w_phys, rect.x as f32 * cell_h_phys);
+    Some((local_phys - origin_phys) / scale_factor.max(f32::EPSILON))
+}
+
 const FALLBACK_CELL_W_PHYS: f32 = 8.0;
 const FALLBACK_CELL_H_PHYS: f32 = 16.0;
 
@@ -328,6 +424,63 @@ fn sync_inline_webview_size(
             scale_factor,
         );
         size.set_if_neq(WebviewSize(next));
+    }
+}
+
+/// Forwards pointer motion over an interactive inline rect to the child's CEF
+/// browser as `send_mouse_move` in webview-local DIP (spec §7).
+///
+/// The attempt is focus-independent — `bevy_cef`'s `send_mouse_move` is gated
+/// on CEF's `focused_frame()` internally, so hovers over an unfocused browser
+/// are dropped browser-side, not here. Forwarding is driven by `CursorMoved`
+/// (at most one forward per frame, at the latest position), never by per-frame
+/// polling. `Browsers` is optional so CEF-less tests can construct the system;
+/// without it the resolution still runs but nothing is forwarded.
+fn forward_inline_mouse_moves(
+    mut cursor_msg: MessageReader<CursorMoved>,
+    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), (With<SurfaceMarker>, With<Slotted>)>,
+    children: Query<&Children>,
+    inline: Query<(&InlineWebview, Has<NonInteractive>)>,
+    overlay_rects: Query<&TerminalOverlays>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    browsers: Option<NonSend<Browsers>>,
+) {
+    let Some(moved) = cursor_msg.read().last() else {
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let scale_factor = window.scale_factor();
+    let cursor_phys = moved.position * scale_factor;
+    let (cell_w_phys, cell_h_phys) = cell_size_phys(metrics.as_deref());
+    let Some((terminal, local_phys)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
+        return;
+    };
+    let Ok(overlays) = overlay_rects.get(terminal) else {
+        return;
+    };
+    let Some(hit) = inline_hit_at(
+        &children,
+        &inline,
+        overlays,
+        terminal,
+        local_phys,
+        cell_w_phys,
+        cell_h_phys,
+        scale_factor,
+    ) else {
+        return;
+    };
+    if let Some(browsers) = browsers.as_ref() {
+        browsers.send_mouse_move(
+            &hit.child,
+            mouse_buttons.get_pressed(),
+            hit.local_dip,
+            false,
+        );
     }
 }
 
@@ -1154,5 +1307,243 @@ mod tests {
             Some(&WebviewSize(Vec2::new(320.0, 160.0))),
             "the value must stay at the placeholder seed"
         );
+    }
+
+    // Hit-test fixtures use an 8x16 physical-pixel cell pitch throughout.
+    const HIT_CELL_W: f32 = 8.0;
+    const HIT_CELL_H: f32 = 16.0;
+
+    fn spawn_hit_child(app: &mut App, terminal: Entity, slot: u8, non_interactive: bool) -> Entity {
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(terminal),
+                InlineWebview {
+                    view_id: format!("view-{slot}"),
+                    slot,
+                },
+            ))
+            .id();
+        if non_interactive {
+            app.world_mut().entity_mut(child).insert(NonInteractive);
+        }
+        child
+    }
+
+    fn overlays_with(rects: &[(usize, IVec4)]) -> TerminalOverlays {
+        let mut overlays = TerminalOverlays::default();
+        for (slot, rect) in rects {
+            overlays.rects[*slot] = *rect;
+        }
+        overlays
+    }
+
+    fn run_hit(
+        app: &mut App,
+        overlays: TerminalOverlays,
+        terminal: Entity,
+        local_phys: Vec2,
+        scale: f32,
+    ) -> Option<InlineHit> {
+        app.world_mut()
+            .run_system_once(
+                move |children: Query<&Children>,
+                      inline: Query<(&InlineWebview, Has<NonInteractive>)>| {
+                    inline_hit_at(
+                        &children, &inline, &overlays, terminal, local_phys, HIT_CELL_W,
+                        HIT_CELL_H, scale,
+                    )
+                },
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn hit_inside_active_rect_returns_child_and_dip() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn_empty().id();
+        let child = spawn_hit_child(&mut app, terminal, 0, false);
+        // Rect rows 2..12, cols 3..43 → phys y 32..192, x 24..344.
+        let overlays = overlays_with(&[(0, IVec4::new(2, 3, 10, 40))]);
+
+        let hit = run_hit(&mut app, overlays, terminal, Vec2::new(100.0, 100.0), 1.0);
+        assert_eq!(
+            hit,
+            Some(InlineHit {
+                child,
+                local_dip: Vec2::new(100.0 - 24.0, 100.0 - 32.0),
+            }),
+            "a point inside the rect must hit the slot's child with rect-relative DIP"
+        );
+    }
+
+    #[test]
+    fn hit_misses_outside_the_rect() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn_empty().id();
+        spawn_hit_child(&mut app, terminal, 0, false);
+        let overlays = overlays_with(&[(0, IVec4::new(2, 3, 10, 40))]);
+
+        assert_eq!(
+            run_hit(&mut app, overlays, terminal, Vec2::new(400.0, 300.0), 1.0),
+            None,
+            "a point outside every rect must miss"
+        );
+    }
+
+    #[test]
+    fn hit_maps_each_slot_to_its_own_child() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn_empty().id();
+        let _slot0 = spawn_hit_child(&mut app, terminal, 0, false);
+        let slot1 = spawn_hit_child(&mut app, terminal, 1, false);
+        let overlays = overlays_with(&[(0, IVec4::new(0, 0, 2, 2)), (1, IVec4::new(4, 4, 2, 2))]);
+
+        // (36, 72) → col 4, row 4: inside slot 1's rect only.
+        let hit = run_hit(&mut app, overlays, terminal, Vec2::new(36.0, 72.0), 1.0)
+            .expect("the point lies inside slot 1's rect");
+        assert_eq!(
+            hit.child, slot1,
+            "the hit must resolve slot → child via InlineWebview.slot"
+        );
+        assert_eq!(hit.local_dip, Vec2::new(36.0 - 32.0, 72.0 - 64.0));
+    }
+
+    #[test]
+    fn hit_skips_non_interactive_children() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn_empty().id();
+        spawn_hit_child(&mut app, terminal, 0, true);
+        let overlays = overlays_with(&[(0, IVec4::new(2, 3, 10, 40))]);
+
+        assert_eq!(
+            run_hit(&mut app, overlays, terminal, Vec2::new(100.0, 100.0), 1.0),
+            None,
+            "a NonInteractive child must be invisible to the hit-test"
+        );
+    }
+
+    #[test]
+    fn hit_dip_divides_physical_offset_by_scale_factor() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn_empty().id();
+        spawn_hit_child(&mut app, terminal, 0, false);
+        let overlays = overlays_with(&[(0, IVec4::new(2, 3, 10, 40))]);
+
+        let hit = run_hit(&mut app, overlays, terminal, Vec2::new(100.0, 100.0), 2.0)
+            .expect("the point lies inside the rect regardless of scale");
+        assert_eq!(
+            hit.local_dip,
+            Vec2::new((100.0 - 24.0) / 2.0, (100.0 - 32.0) / 2.0),
+            "DIP must be the physical rect offset divided by the scale factor"
+        );
+    }
+
+    #[test]
+    fn hit_ignores_sentinel_slots() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn_empty().id();
+        spawn_hit_child(&mut app, terminal, 0, false);
+
+        assert_eq!(
+            run_hit(
+                &mut app,
+                TerminalOverlays::default(),
+                terminal,
+                Vec2::new(1.0, 1.0),
+                1.0,
+            ),
+            None,
+            "a rows == 0 sentinel slot must never match, even with a live child"
+        );
+    }
+
+    #[test]
+    fn hit_negative_row_rect_still_hits_in_its_visible_cells() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn_empty().id();
+        let child = spawn_hit_child(&mut app, terminal, 0, false);
+        // Partially scrolled above: rows -2..2 visible in viewport rows 0..2.
+        let overlays = overlays_with(&[(0, IVec4::new(-2, 3, 4, 10))]);
+
+        // (44, 24) → col 5, row 1: inside the visible remainder.
+        let hit = run_hit(&mut app, overlays, terminal, Vec2::new(44.0, 24.0), 1.0)
+            .expect("the visible cells of a negative-row rect must still hit");
+        assert_eq!(hit.child, child);
+        assert_eq!(
+            hit.local_dip,
+            Vec2::new(44.0 - 24.0, 24.0 - (-2.0 * HIT_CELL_H)),
+            "the DIP origin lies above the viewport, so local y lands past the clipped rows"
+        );
+    }
+
+    #[test]
+    fn inline_local_dip_rejects_sentinel_and_out_of_range_slots() {
+        let overlays = overlays_with(&[(0, IVec4::new(2, 3, 10, 40))]);
+        assert_eq!(
+            inline_local_dip(&overlays, 0, Vec2::new(100.0, 100.0), 8.0, 16.0, 1.0),
+            Some(Vec2::new(76.0, 68.0)),
+        );
+        assert_eq!(
+            inline_local_dip(&overlays, 1, Vec2::new(100.0, 100.0), 8.0, 16.0, 1.0),
+            None,
+            "a sentinel slot has no DIP mapping"
+        );
+        assert_eq!(
+            inline_local_dip(&overlays, OVERLAY_SLOTS as u8, Vec2::ZERO, 8.0, 16.0, 1.0),
+            None,
+            "an out-of-range slot has no DIP mapping"
+        );
+    }
+
+    #[test]
+    fn move_forwarder_constructs_and_runs_without_cef() {
+        use bevy::math::DVec2;
+        use bevy::window::WindowResolution;
+
+        let mut app = make_test_app();
+        app.add_message::<CursorMoved>();
+        app.init_resource::<ButtonInput<MouseButton>>();
+        app.add_systems(Update, forward_inline_mouse_moves);
+
+        let terminal = app
+            .world_mut()
+            .spawn((
+                SurfaceMarker,
+                Slotted,
+                ComputedNode {
+                    size: Vec2::new(800.0, 600.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(400.0, 300.0),
+                overlays_with(&[(0, IVec4::new(2, 3, 10, 40))]),
+            ))
+            .id();
+        spawn_hit_child(&mut app, terminal, 0, false);
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(800, 600),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(DVec2::new(100.0, 100.0)));
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<CursorMoved>>()
+            .write(CursorMoved {
+                window,
+                position: Vec2::new(100.0, 100.0),
+                delta: None,
+            });
+        // Without a Browsers NonSend resource the full resolution path runs
+        // and the forwarding is skipped — the system must not panic.
+        app.update();
     }
 }

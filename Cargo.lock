@@ -4630,6 +4630,7 @@ dependencies = [
  "arboard",
  "bevy",
  "bevy_cef",
+ "bevy_cef_core",
  "bevy_terminal",
  "bevy_terminal_renderer",
  "cosmic-text",
