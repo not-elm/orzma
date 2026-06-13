@@ -35,9 +35,9 @@ function assertDim(name: string, value: number, max: number): void {
  *
  * The webview is anchored at the cursor position when this is written, so the
  * caller positions the cursor first (e.g. print a heading). `view_id` must be
- * registered in an extension's `ozmux.toml`; `rows`/`cols` are clamped to
- * 1..=200 / 1..=400 by the validator (out-of-range throws rather than emitting
- * a sequence the terminal would silently drop).
+ * registered in an extension's `ozmux.toml`; `rows`/`cols` are validated to
+ * 1..=200 / 1..=400 (out-of-range throws `RangeError` rather than emitting a
+ * sequence the terminal would silently drop).
  */
 export function mountInline(viewId: string, geometry: InlineGeometry): string {
   assertViewId(viewId);
