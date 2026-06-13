@@ -40,8 +40,8 @@ fn parse_url(url: &str) -> Option<(&str, &str)> {
 /// to classify the document and renders blank. An empty `mime_type` triggers the
 /// same blank render, so it is floored to `application/octet-stream` (matching
 /// the SDK file handler's default) rather than passed through empty.
-#[cfg_attr(not(feature = "cef"), allow(dead_code))]
-fn bare_mime(content_type: &str) -> String {
+#[cfg(feature = "cef")]
+pub(crate) fn bare_mime(content_type: &str) -> String {
     let bare = content_type.split(';').next().unwrap_or("").trim();
     if bare.is_empty() {
         "application/octet-stream".to_string()
@@ -116,7 +116,7 @@ impl CefSchemeHandler for OzmuxExtScheme {
 /// A minimal text `CefSchemeResponse` for error statuses (bevy_cef provides only
 /// `not_found()` / `bytes()`).
 #[cfg(feature = "cef")]
-fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
+pub(crate) fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
     CefSchemeResponse {
         status,
         mime_type: "text/plain".into(),
@@ -187,6 +187,7 @@ mod tests {
         assert_eq!(parse_url("ozmux-ext:///x"), None);
     }
 
+    #[cfg(feature = "cef")]
     #[test]
     fn bare_mime_strips_charset_parameter() {
         assert_eq!(bare_mime("text/html; charset=utf-8"), "text/html");
@@ -197,6 +198,7 @@ mod tests {
         assert_eq!(bare_mime("application/wasm"), "application/wasm");
     }
 
+    #[cfg(feature = "cef")]
     #[test]
     fn bare_mime_floors_empty_to_octet_stream() {
         assert_eq!(bare_mime(""), "application/octet-stream");
