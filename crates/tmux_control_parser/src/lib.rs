@@ -8,9 +8,3 @@ pub use crate::event::{ControlEvent, PaneId, SessionId, WindowId};
 pub mod assembler;
 pub mod error;
 pub mod event;
-
-/// Parses a single control-mode line into a [`ControlEvent`].
-pub fn parse_line(line: &[u8]) -> TmuxResult<ControlEvent> {
-    let _ = line;
-    todo!("parse_line")
-}
