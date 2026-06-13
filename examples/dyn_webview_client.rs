@@ -5,6 +5,9 @@
 //!   - replying to `ping` calls from the page (`window.ozmux.call`)
 //!   - emitting a `tick` event every second (`window.ozmux.on`)
 //!
+//! The page also has an `<input>`, so clicking it shows the focus ring and typing
+//! (routed to the focused inline webview) echoes back into the page.
+//!
 //! Usage (inside an ozmux pane, with the control plane up):
 //!   cargo run --example dyn_webview_client
 
@@ -31,11 +34,17 @@ fn main() -> std::io::Result<()> {
             "<h1>window.ozmux demo</h1>",
             "<div id='out'>calling ping\u{2026}</div>",
             "<div id='tick'>no ticks yet</div>",
+            // A focusable element so click-to-focus is visible: clicking it shows the
+            // browser focus ring, and typing (routed to the focused webview) echoes here.
+            "<input id='field' placeholder='click here, then type\u{2026}' ",
+            "style='font:16px sans-serif;padding:4px;width:92%;margin-top:8px'>",
             "<script>",
             "window.ozmux.call('ping',['hi'])",
             ".then(function(v){document.getElementById('out').textContent='ping \u{2192} '+v;})",
             ".catch(function(e){document.getElementById('out').textContent='error: '+e.message;});",
             "window.ozmux.on('tick',function(n){document.getElementById('tick').textContent='tick #'+n;});",
+            "document.getElementById('field').addEventListener('input',function(e){",
+            "document.getElementById('out').textContent='typed: '+e.target.value;});",
             "</script>",
             "</body>"
         );
