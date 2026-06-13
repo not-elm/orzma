@@ -34,6 +34,10 @@ importers:
         version: 24.12.2
 
   extensions/memo:
+    dependencies:
+      '@ozmux/sdk':
+        specifier: workspace:*
+        version: link:../../sdk/typescript
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

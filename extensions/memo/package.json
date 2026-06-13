@@ -1,7 +1,11 @@
 {
   "type": "module",
   "scripts": {
-    "check-types": "tsc --noEmit"
+    "check-types": "tsc --noEmit",
+    "mount": "node mount.ts"
+  },
+  "dependencies": {
+    "@ozmux/sdk": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "catalog:",
