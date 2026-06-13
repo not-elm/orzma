@@ -141,9 +141,28 @@ impl OzmuxRpc {
         );
     }
 
-    /// Removes and returns one in-flight entry.
-    pub(crate) fn take(&mut self, global_id: &str) -> Option<(Entity, String, u64)> {
-        self.inflight.remove(global_id)
+    /// Removes and returns the in-flight call for `global_id`, but ONLY when it
+    /// was registered by `connection_id`. A mismatching connection leaves the
+    /// entry intact and returns `None`.
+    ///
+    /// # Invariants
+    /// The match-before-remove order is load-bearing: global reqIds are a
+    /// monotonic counter shared across all connections, so they are guessable. A
+    /// foreign program replaying another connection's reqId must NOT be able to
+    /// consume (and thereby drop) that connection's pending call — checking
+    /// ownership only AFTER removing would orphan the page Promise.
+    pub(crate) fn take_for_connection(
+        &mut self,
+        global_id: &str,
+        connection_id: u64,
+    ) -> Option<(Entity, String)> {
+        match self.inflight.get(global_id) {
+            Some((_, _, conn)) if *conn == connection_id => self
+                .inflight
+                .remove(global_id)
+                .map(|(webview, page_req, _)| (webview, page_req)),
+            _ => None,
+        }
     }
 
     /// Removes every in-flight call for `connection_id`, returning each
@@ -372,16 +391,14 @@ fn apply_control_events(
                 error,
                 connection_id,
             } => {
-                let Some((webview, page_req, conn)) = rpc.take(&req_id) else {
+                // NOTE: take_for_connection drops a reply whose sending connection
+                // is not the one that originated the call, WITHOUT consuming the
+                // pending entry — a foreign program replaying another connection's
+                // (monotonic, guessable) global reqId must not settle or drop its call.
+                let Some((webview, page_req)) = rpc.take_for_connection(&req_id, connection_id)
+                else {
                     continue;
                 };
-                // NOTE: conn is the connection that originated this call (stored
-                // at routing time); a reply whose sending connection differs is a
-                // different program trying to answer a call it didn't make, which
-                // would redirect the page response to an unrelated program. Drop it.
-                if conn != connection_id {
-                    continue;
-                }
                 let payload = if ok {
                     serde_json::json!({ "reqId": page_req, "ok": true, "value": value })
                 } else {
@@ -881,6 +898,57 @@ mod apply_tests {
     }
 
     #[test]
+    fn apply_reply_from_wrong_connection_does_not_drop_the_pending_call() {
+        use bevy_cef::prelude::HostEmitEvent;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let mut rpc = OzmuxRpc::default();
+        let webview = app.world_mut().spawn_empty().id();
+        let g = rpc.mint();
+        rpc.note(&g, webview, "p9", 5);
+        app.insert_resource(rpc);
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct Caps(Vec<(Entity, String)>);
+        app.insert_resource(Caps::default());
+        app.add_observer(|e: On<HostEmitEvent>, mut c: ResMut<Caps>| {
+            c.0.push((e.webview, e.id.clone()));
+        });
+        app.add_systems(Update, apply_control_events);
+
+        // A reply replaying the (monotonic, guessable) global reqId from a DIFFERENT
+        // connection must be dropped WITHOUT consuming the pending entry...
+        ev_tx
+            .send(ControlEvent::Reply {
+                req_id: g.clone(),
+                ok: true,
+                value: serde_json::json!(1),
+                error: None,
+                connection_id: 9,
+            })
+            .unwrap();
+        // ...so the legitimate reply from the originating connection still settles.
+        ev_tx
+            .send(ControlEvent::Reply {
+                req_id: g.clone(),
+                ok: true,
+                value: serde_json::json!(2),
+                error: None,
+                connection_id: 5,
+            })
+            .unwrap();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Caps>().0,
+            vec![(webview, "ozmux".to_string())],
+            "only the owning connection's reply settles the page"
+        );
+    }
+
+    #[test]
     fn apply_emit_broadcasts_only_to_owning_connections_handle() {
         use bevy_cef::prelude::HostEmitEvent;
         let mut app = App::new();
@@ -951,14 +1019,16 @@ mod back_channel_state_tests {
     use bevy::prelude::Entity;
 
     #[test]
-    fn ozmux_rpc_notes_and_takes_inflight() {
+    fn ozmux_rpc_take_for_connection_matches_only_the_owning_connection() {
         let mut rpc = OzmuxRpc::default();
         let g = rpc.mint();
         assert_eq!(g, "0");
         rpc.note(&g, Entity::from_bits(2), "p1", 5);
-        let taken = rpc.take(&g).expect("present");
-        assert_eq!(taken, (Entity::from_bits(2), "p1".to_string(), 5));
-        assert!(rpc.take(&g).is_none());
+        // A mismatching connection must NOT consume the entry.
+        assert!(rpc.take_for_connection(&g, 999).is_none());
+        let taken = rpc.take_for_connection(&g, 5).expect("present");
+        assert_eq!(taken, (Entity::from_bits(2), "p1".to_string()));
+        assert!(rpc.take_for_connection(&g, 5).is_none());
     }
 
     #[test]
@@ -970,8 +1040,8 @@ mod back_channel_state_tests {
         rpc.note(&b, Entity::from_bits(2), "p", 9);
         let drained = rpc.drain_connection(5);
         assert_eq!(drained, vec![(Entity::from_bits(1), "p".to_string())]);
-        assert!(rpc.take(&a).is_none());
-        assert!(rpc.take(&b).is_some());
+        assert!(rpc.take_for_connection(&a, 5).is_none());
+        assert!(rpc.take_for_connection(&b, 9).is_some());
     }
 
     #[test]
@@ -982,7 +1052,7 @@ mod back_channel_state_tests {
         rpc.note(&a, Entity::from_bits(1), "p", 5);
         rpc.note(&b, Entity::from_bits(2), "p", 5);
         rpc.drain_webview(Entity::from_bits(1));
-        assert!(rpc.take(&a).is_none());
-        assert!(rpc.take(&b).is_some());
+        assert!(rpc.take_for_connection(&a, 5).is_none());
+        assert!(rpc.take_for_connection(&b, 5).is_some());
     }
 }

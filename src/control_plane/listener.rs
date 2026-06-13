@@ -209,6 +209,12 @@ fn serve_connection(
     // thread exit so writer.join() below doesn't hang.
     writers.remove(connection_id);
     drop(out_tx);
+    // NOTE: shut the shared socket fd down before joining. Dropping out_tx unblocks
+    // a writer parked in recv(), but a writer parked in write_all() (peer stopped
+    // reading with a full send buffer) only unblocks when the fd is shut down —
+    // otherwise writer.join() hangs forever and this connection's Disconnect (and
+    // its registry / in-flight cleanup) is never delivered.
+    let _ = stream.shutdown(std::net::Shutdown::Both);
     let _ = writer.join();
     let _ = events.send(ControlEvent::Disconnect { connection_id });
 }

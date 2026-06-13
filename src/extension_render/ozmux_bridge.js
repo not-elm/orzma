@@ -51,7 +51,14 @@
       var encoded = (args || []).map(encodeArg);
       return new Promise(function (resolve, reject) {
         calls.set(reqId, { resolve: resolve, reject: reject });
-        cef.emit({ kind: 'ozmux.call', reqId: reqId, method: method, args: encoded });
+        try {
+          cef.emit({ kind: 'ozmux.call', reqId: reqId, method: method, args: encoded });
+        } catch (e) {
+          // A synchronous emit failure never gets a reply, so settle and drop the
+          // entry here — otherwise it leaks in calls forever.
+          calls.delete(reqId);
+          reject(e);
+        }
       });
     },
     on: function (event, handler) {

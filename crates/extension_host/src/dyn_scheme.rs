@@ -96,7 +96,12 @@ fn resolve_request<'a>(registry: &DynAssetRegistry, url: &'a str) -> Result<Reso
     let (handle, path) = parse_dyn_url(url).ok_or(404u16)?;
     match registry.get(handle).ok_or(404u16)? {
         DynAsset::Dir(root) => Ok(ResolvedDyn::Dir { root, path }),
-        DynAsset::Inline(html) => Ok(ResolvedDyn::Inline(html)),
+        // NOTE: an inline registration is a single self-contained document served
+        // at the canonical entry only. A relative subresource request gets 404
+        // rather than the document body under a mismatched MIME type — use a Dir
+        // registration for multi-file content.
+        DynAsset::Inline(html) if path == "index.html" => Ok(ResolvedDyn::Inline(html)),
+        DynAsset::Inline(_) => Err(404),
     }
 }
 
@@ -244,6 +249,22 @@ mod tests {
             ResolvedDyn::Inline(html) => assert_eq!(html, b"<h1>hi</h1>"),
             ResolvedDyn::Dir { .. } => panic!("expected inline"),
         }
+    }
+
+    #[test]
+    fn inline_404s_subresource_paths_other_than_the_index() {
+        let reg = DynAssetRegistry::default();
+        reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
+        assert!(resolve_request(&reg, "ozmux-dyn://i1/").is_ok());
+        assert!(resolve_request(&reg, "ozmux-dyn://i1/index.html").is_ok());
+        assert_eq!(
+            resolve_request(&reg, "ozmux-dyn://i1/app.js").err(),
+            Some(404)
+        );
+        assert_eq!(
+            resolve_request(&reg, "ozmux-dyn://i1/logo.png").err(),
+            Some(404)
+        );
     }
 
     #[test]
