@@ -70,7 +70,17 @@ pub(crate) fn spawn_listener(
     Ok(ev_rx)
 }
 
-/// Returns the connecting peer's UID via `getpeereid`, or `None` on error.
+/// Returns the connecting peer's UID via `getpeereid` (Apple/BSD), or `None` on
+/// error. The `libc` crate exposes `getpeereid` only on these targets; Linux
+/// uses the `SO_PEERCRED` variant below.
+#[cfg(any(
+    target_os = "macos",
+    target_os = "ios",
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "dragonfly",
+))]
 fn peer_uid(stream: &UnixStream) -> Option<u32> {
     let mut uid: libc::uid_t = 0;
     let mut gid: libc::gid_t = 0;
@@ -78,6 +88,30 @@ fn peer_uid(stream: &UnixStream) -> Option<u32> {
     // call; `uid`/`gid` are valid out-params.
     let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
     (rc == 0).then_some(uid as u32)
+}
+
+/// Returns the connecting peer's UID via the `SO_PEERCRED` socket option
+/// (Linux/Android), or `None` on error.
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn peer_uid(stream: &UnixStream) -> Option<u32> {
+    let mut cred = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: `stream` owns a valid connected socket fd; `getsockopt` writes a
+    // `ucred` of `len` bytes into `cred`, and both out-params are valid.
+    let rc = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            (&mut cred as *mut libc::ucred).cast::<libc::c_void>(),
+            &mut len,
+        )
+    };
+    (rc == 0).then_some(cred.uid as u32)
 }
 
 /// Reads one connection: requires a valid `hello`, then forwards each
