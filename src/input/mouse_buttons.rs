@@ -135,13 +135,34 @@ pub(crate) fn resolve_pane_at_phys(
         if !node.contains_point(*transform, cursor_phys_px) {
             continue;
         }
-        let Some(normalized) = node.normalize_point(*transform, cursor_phys_px) else {
+        let Some(local) = phys_to_terminal_local(node, transform, cursor_phys_px) else {
             continue;
         };
-        let local = (normalized + Vec2::splat(0.5)) * node.size;
         return Some((entity, local));
     }
     None
+}
+
+/// Maps a window physical-pixel point to a terminal node's local physical px
+/// with origin at the node's TOP-LEFT corner (`(0, 0)` top-left,
+/// `(size.x, size.y)` bottom-right) — the coordinate space the inline overlay
+/// rects and `cell_at_local` are expressed in.
+///
+/// Uses the affine inverse of `UiGlobalTransform` (via
+/// `ComputedNode::normalize_point`) so the projection stays correct under any
+/// transform, not just a pure translation. Returns `None` for a degenerate
+/// (zero-area) node, mirroring `normalize_point`.
+///
+/// This is the single projection both the inline hit-test paths
+/// (`inline_release_dip`, the wheel router) and `resolve_pane_at_phys` share,
+/// so a coordinate-space change has one place to live.
+pub(crate) fn phys_to_terminal_local(
+    node: &ComputedNode,
+    transform: &UiGlobalTransform,
+    cursor_phys_px: Vec2,
+) -> Option<Vec2> {
+    node.normalize_point(*transform, cursor_phys_px)
+        .map(|normalized| (normalized + Vec2::splat(0.5)) * node.size)
 }
 
 /// Projects a pane-local physical-pixel point onto 1-indexed
@@ -806,10 +827,7 @@ fn inline_release_dip(
 ) -> Option<Vec2> {
     let terminal = route.inline_parents.get(child).ok()?.parent();
     let (_, node, transform) = hosts.get(terminal).ok()?;
-    // NOTE: UiGlobalTransform.translation is the node CENTER, not the
-    // top-left corner — every hit-test in this file relies on the
-    // `translation ± half * size` form.
-    let local_phys = cursor_phys - (transform.translation - node.size * 0.5);
+    let local_phys = phys_to_terminal_local(node, transform, cursor_phys)?;
     let (view, _) = route.inline.get(child).ok()?;
     inline_local_dip(
         route.overlay_rects.get(terminal).ok()?,
