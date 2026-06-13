@@ -13,7 +13,9 @@ use crate::ui::ExtensionSurfaceMarker;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
+use ozmux_extension_host::DynAssetRegistry;
 use ozmux_extension_host::HostRpcClient;
+use ozmux_extension_host::dyn_scheme::custom_dyn_scheme;
 use ozmux_extension_host::host::AssetSourceRegistry;
 use ozmux_extension_host::scheme::custom_scheme;
 use ozmux_multiplexer::{
@@ -94,16 +96,11 @@ struct WebviewMountUnresolved;
 /// in `host_bridge.js`.
 const HOST_CALL_KIND: &str = "host.call";
 
-/// Builds the `CefPlugin` with the `ozmux-ext://` scheme bound to the shared
-/// `AssetSourceRegistry` (extension name → on-disk asset root) the extension
-/// manager populates; Rust serves the files directly. The handler reads the live
-/// registry on each request, so entries registered after `CefPlugin::build()`
-/// resolve; unregistered names 404. The host-API bridge is intentionally NOT
-/// registered as a global extension here; it is injected per-webview via
-/// `PreloadScripts` by `preload::build_preload` (see the NOTE there).
-pub fn cef_plugin(registry: AssetSourceRegistry) -> CefPlugin {
+/// Builds the `CefPlugin` with the `ozmux-ext://` (static, Tier 2) and
+/// `ozmux-dyn://` (dynamic, Tier 1) schemes bound to their shared registries.
+pub fn cef_plugin(ext_registry: AssetSourceRegistry, dyn_registry: DynAssetRegistry) -> CefPlugin {
     CefPlugin {
-        custom_schemes: vec![custom_scheme(registry)],
+        custom_schemes: vec![custom_scheme(ext_registry), custom_dyn_scheme(dyn_registry)],
         command_line_config: cef_command_line_config(),
         ..Default::default()
     }
