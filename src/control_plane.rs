@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
+mod listener;
 mod protocol;
 
 /// Where a dynamic view's content lives.
