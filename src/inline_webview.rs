@@ -5,7 +5,7 @@
 //! `OzmuxInlineWebviewPlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
-use crate::control_plane::{DynSource, DynamicRegistry};
+use crate::control_plane::{DynSource, DynamicRegistry, WebviewOwner};
 use crate::extension_render::preload::{build_dynamic_preload, build_preload, webview_url};
 use crate::input::InputPhase;
 use crate::input::mouse_buttons::resolve_pane_at_phys;
@@ -307,13 +307,10 @@ pub(crate) fn mount_inline(
         params.commands.entity(webview).insert(NonInteractive);
     }
     if let Some((connection_id, handle)) = resolved.owner {
-        params
-            .commands
-            .entity(webview)
-            .insert(crate::control_plane::WebviewOwner {
-                connection_id,
-                handle,
-            });
+        params.commands.entity(webview).insert(WebviewOwner {
+            connection_id,
+            handle,
+        });
     }
     tracing::debug!(
         view_id = %ctx.view_id,
