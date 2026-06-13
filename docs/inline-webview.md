@@ -23,8 +23,8 @@ sequence to stdout. The 7-bit `ESC ]` introducer and `ESC \` (ST) terminator
 are the canonical forms.
 
 ```
-mount-inline:    ESC ] 5379 ; mount-inline ; <view_id> ; <rows> ; <cols> ESC \
-unmount-inline:  ESC ] 5379 ; unmount-inline [ ; <view_id> ] ESC \
+mount-inline:    ESC ] 5379 ; mount-inline ; <view_id> ; <rows> ; <cols> [ ; <instance_id> ] ESC \
+unmount-inline:  ESC ] 5379 ; unmount-inline [ ; <view_id> [ ; <instance_id> ] ] ESC \
 ```
 
 - `<view_id>` — a view declared in an extension's `ozmux.toml`; must match
@@ -33,11 +33,18 @@ unmount-inline:  ESC ] 5379 ; unmount-inline [ ; <view_id> ] ESC \
   `1..=200` and `1..=400`. The CEF page is laid out at exactly that cell
   rectangle (× DPR); content is not scaled, so the page reflows to fit (no
   crop — a small browser window, not a shrunken screenshot).
+- `<instance_id>` — optional, client-assigned, same charset as `<view_id>`.
+  It lets the **same `<view_id>` mount more than once** on one terminal:
+  `(view_id, instance_id)` is the address. Omitting it selects the implicit
+  default instance (the original "one per view_id" behavior is unchanged).
 - Out-of-range, non-numeric, or malformed sequences are silently dropped by the
   VT layer.
-- `unmount-inline` with a `<view_id>` removes that view; with **no third
-  parameter** (and no trailing `;`) it removes *every* inline webview on the
-  terminal. A present-but-empty id field is malformed.
+- `unmount-inline` scopes by how many fields are present: `; <view_id> ;
+  <instance_id>` removes that one instance; `; <view_id>` removes *every*
+  instance of that view; **no third parameter** (and no trailing `;`) removes
+  *every* inline webview on the terminal. A present-but-empty field — a
+  trailing `;`, or `; ; <instance_id>` with no view id — is malformed and
+  dropped.
 
 ### Anchor and vertical space
 
@@ -74,8 +81,13 @@ import { mountInline, unmountInline } from '@ozmux/sdk/inline';
 
 process.stdout.write('memo:\n');                          // anchor heading
 process.stdout.write(mountInline('memo.main', { rows: 12, cols: 48 }));
+// a second instance of the same view, addressed by instanceId:
+process.stdout.write('\nmemo (second):\n');
+process.stdout.write(mountInline('memo.main', { rows: 12, cols: 48, instanceId: 'b' }));
 // later:
-process.stdout.write(unmountInline('memo.main'));         // or unmountInline() for all
+process.stdout.write(unmountInline('memo.main', 'b'));    // just instance 'b'
+process.stdout.write(unmountInline('memo.main'));         // every instance of memo.main
+process.stdout.write(unmountInline());                    // every inline webview
 ```
 
 `mountInline` returns the OSC sequence followed by `rows` newlines as one
