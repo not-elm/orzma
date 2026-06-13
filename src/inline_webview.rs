@@ -6,7 +6,7 @@
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use crate::control_plane::{DynSource, DynamicRegistry};
-use crate::extension_render::preload::{build_preload, webview_url};
+use crate::extension_render::preload::{build_dynamic_preload, build_preload, webview_url};
 use crate::input::InputPhase;
 use crate::input::mouse_buttons::resolve_pane_at_phys;
 use crate::osc_webview::{GrantedNamespaces, NonInteractive};
@@ -220,14 +220,15 @@ pub(crate) fn resolve_mount(
 pub(crate) fn mount_inline(
     params: &mut InlineWebviewParams,
     registry: &ViewRegistry,
+    dynamic: &DynamicRegistry,
     ctx: InlineMountContext<'_>,
 ) {
     let Some(anchor) = ctx.anchor else {
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline without anchor, dropping");
         return;
     };
-    let Some(view) = registry.get(ctx.view_id) else {
-        tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline for unregistered view, dropping");
+    let Some(resolved) = resolve_mount(ctx.view_id, ctx.terminal_surface, registry, dynamic) else {
+        tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline for unregistered or unowned id, dropping");
         return;
     };
     let live = live_inline_children(&params.children, &params.views, ctx.terminal_surface);
@@ -255,9 +256,27 @@ pub(crate) fn mount_inline(
     let (cell_w_phys, cell_h_phys) = cell_size_phys(params.metrics.as_deref());
     let size = seed_logical_size(ctx.rows, ctx.cols, cell_w_phys, cell_h_phys, scale_factor);
     let texture = WebviewTextureTarget(params.images.add(Image::default()));
-    let granted = GrantedNamespaces(view.capabilities.iter().cloned().collect());
+    let source = match (&resolved.url, &resolved.inline_html) {
+        (Some(url), _) => WebviewSource::new(url),
+        (None, Some(html)) => WebviewSource::InlineHtml(html.clone()),
+        (None, None) => {
+            tracing::debug!(view_id = %ctx.view_id, "osc-webview: resolved mount had no source, dropping");
+            return;
+        }
+    };
+    let granted = GrantedNamespaces(resolved.capabilities.iter().cloned().collect());
     let webview = params.commands.spawn_empty().id();
-    let preload = build_preload(ctx.workspace, ctx.pane, webview, &view.owning_ext, &granted);
+    let preload = if resolved.host_bridge {
+        build_preload(
+            ctx.workspace,
+            ctx.pane,
+            webview,
+            &resolved.extension_name,
+            &granted,
+        )
+    } else {
+        build_dynamic_preload(ctx.workspace, ctx.pane, webview)
+    };
     // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
     // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
     // input paths and display-size allocators key on `With<WebviewSource>`
@@ -266,7 +285,7 @@ pub(crate) fn mount_inline(
     // (design spec §4 invariant).
     params.commands.entity(webview).insert((
         ChildOf(ctx.terminal_surface),
-        WebviewSource::new(webview_url(&view.owning_ext, &view.entry)),
+        source,
         texture,
         WebviewSize(size),
         InlineWebview {
@@ -284,7 +303,7 @@ pub(crate) fn mount_inline(
         granted,
         preload,
     ));
-    if !view.interactive {
+    if !resolved.interactive {
         params.commands.entity(webview).insert(NonInteractive);
     }
     tracing::debug!(
@@ -661,6 +680,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
             .init_resource::<ViewRegistry>()
+            .init_resource::<DynamicRegistry>()
             .init_resource::<Assets<Image>>()
             .add_observer(on_osc_webview_request);
         app
@@ -1770,6 +1790,45 @@ mod tests {
             inline_local_dip(&overlays, OVERLAY_SLOTS as u8, Vec2::ZERO, 8.0, 16.0, 1.0),
             None,
             "an out-of-range slot has no DIP mapping"
+        );
+    }
+
+    fn register_dynamic_dir(app: &mut App, handle: &str, owner_surface: Entity) {
+        use crate::control_plane::DynamicView;
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            handle.into(),
+            DynamicView {
+                source: DynSource::Dir("/abs/ui".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface,
+                connection_id: 1,
+            },
+        );
+    }
+
+    #[test]
+    fn mount_of_dynamic_handle_uses_ozmux_dyn_url_and_no_bridge() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_dynamic_dir(&mut app, "DYN1", terminal);
+
+        mount(&mut app, terminal, "DYN1", Some(test_anchor()));
+
+        let children = inline_children_of(&app, terminal);
+        assert_eq!(
+            children.len(),
+            1,
+            "dynamic mount must spawn one inline child"
+        );
+        match app.world().get::<WebviewSource>(children[0]).unwrap() {
+            WebviewSource::Url(u) => assert_eq!(u, "ozmux-dyn://DYN1/index.html"),
+            other => panic!("expected ozmux-dyn URL, got {other:?}"),
+        }
+        let preload = app.world().get::<PreloadScripts>(children[0]).unwrap();
+        assert!(
+            !preload.0.iter().any(|s| s.contains("__ozmuxGranted")),
+            "a dynamic view must carry no capability grant / host bridge"
         );
     }
 

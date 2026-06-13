@@ -1,6 +1,7 @@
 //! Observes `OscWebviewRequest` and mounts/unmounts a registered webview as a
 //! tab in the requesting terminal's pane, reusing the extension-surface path.
 
+use crate::control_plane::DynamicRegistry;
 use crate::inline_webview::{
     InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline,
 };
@@ -63,6 +64,7 @@ pub(crate) fn on_osc_webview_request(
     mut mux: MultiplexerCommands,
     mut inline: InlineWebviewParams,
     registry: Res<ViewRegistry>,
+    dynamic: Res<DynamicRegistry>,
     surface_of: Query<&SurfaceOf>,
     mounted: Query<(Entity, &OscMounted, &SurfaceOf)>,
 ) {
@@ -122,6 +124,7 @@ pub(crate) fn on_osc_webview_request(
             mount_inline(
                 &mut inline,
                 &registry,
+                &dynamic,
                 InlineMountContext {
                     terminal_surface,
                     workspace,
@@ -177,6 +180,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
             .init_resource::<ViewRegistry>()
+            .init_resource::<DynamicRegistry>()
             .init_resource::<Assets<Image>>()
             .add_observer(on_osc_webview_request);
         app
