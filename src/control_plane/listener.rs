@@ -179,6 +179,9 @@ fn serve_connection(
         }
     }
 
+    // NOTE: remove the table's Sender clone BEFORE dropping out_tx — only when the
+    // last Sender is gone does out_rx.recv() return Disconnected, letting the writer
+    // thread exit so writer.join() below doesn't hang.
     writers.remove(connection_id);
     drop(out_tx);
     let _ = writer.join();
