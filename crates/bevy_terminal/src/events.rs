@@ -10,7 +10,7 @@
 //! `#[event_target] entity` field routes the trigger to the
 //! correct observer.
 
-use crate::vt::listener::OscWebviewVerb;
+use crate::vt::listener::{InlineAnchor, OscWebviewVerb};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use std::path::PathBuf;
@@ -73,8 +73,11 @@ pub struct TerminalCurrentDir {
 pub struct OscWebviewRequest {
     #[event_target]
     pub entity: Entity,
-    /// The verb (mount or unmount) parsed from the OSC 5379 payload.
+    /// The verb (tab or inline mount/unmount) parsed from the OSC 5379 payload.
     pub verb: OscWebviewVerb,
+    /// Anchor metadata for `MountInline` (absolute line + column + frame seq);
+    /// `None` for every other verb.
+    pub anchor: Option<InlineAnchor>,
 }
 
 /// Subset of keys the terminal input codec understands. Keeps the public

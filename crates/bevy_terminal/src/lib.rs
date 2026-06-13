@@ -34,5 +34,5 @@ pub use mouse_encode::ProtocolModifiers;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
 pub use title::{TerminalTitle, sanitize_title};
-pub use vt::listener::OscWebviewVerb;
+pub use vt::listener::{InlineAnchor, OscWebviewVerb};
 pub use wheel::{CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers};

@@ -7,16 +7,23 @@
 //! §6.
 
 use crate::configs::OzmuxConfigsResource;
+use crate::inline_webview::{InlineWebview, inline_hit_at, inline_local_dip};
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::input::{InputPhase, current_modifiers};
+use crate::osc_webview::NonInteractive;
 use crate::ui::Slotted;
 use crate::ui::copy_mode::CopyModeState;
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
+use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
+use bevy_cef::prelude::FocusedWebview;
+use bevy_cef_core::prelude::Browsers;
 use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType, Side};
+use bevy_terminal_renderer::prelude::TerminalOverlays;
 use std::time::Instant;
 
 /// Per-frame state for the mouse-selection system.
@@ -26,6 +33,11 @@ pub(crate) struct MouseSelectionState {
     last_click: Option<LastClick>,
     /// Next allowed autoscroll tick. `None` outside autoscroll.
     next_autoscroll_at: Option<Instant>,
+    /// The inline webview child holding an in-flight left press: the press
+    /// was forwarded to it instead of the terminal pipeline, so the matching
+    /// release must reach the SAME child even if the pointer drifted off the
+    /// rect. `None` outside an inline press.
+    inline_press: Option<Entity>,
 }
 
 #[derive(Clone)]
@@ -73,6 +85,20 @@ struct LastClick {
     count: u8,
 }
 
+/// The system params the inline-webview routing leg of
+/// `dispatch_mouse_buttons` needs (`route_inline_left_click`), bundled so the
+/// system stays within Bevy's system-parameter limit. `focused_webview` and
+/// `browsers` are optional so CEF-less tests construct the system.
+#[derive(SystemParam)]
+struct InlineRouteParams<'w, 's> {
+    focused_webview: Option<ResMut<'w, FocusedWebview>>,
+    children: Query<'w, 's, &'static Children>,
+    inline: Query<'w, 's, (&'static InlineWebview, Has<NonInteractive>)>,
+    inline_parents: Query<'w, 's, &'static ChildOf, With<InlineWebview>>,
+    overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
+    browsers: Option<NonSend<'w, Browsers>>,
+}
+
 /// Bevy plugin that registers `MouseSelectionState` and the per-frame
 /// `dispatch_mouse_buttons` system in `OzmuxSystems::Input`.
 pub(crate) struct MouseButtonsInputPlugin;
@@ -109,13 +135,34 @@ pub(crate) fn resolve_pane_at_phys(
         if !node.contains_point(*transform, cursor_phys_px) {
             continue;
         }
-        let Some(normalized) = node.normalize_point(*transform, cursor_phys_px) else {
+        let Some(local) = phys_to_terminal_local(node, transform, cursor_phys_px) else {
             continue;
         };
-        let local = (normalized + Vec2::splat(0.5)) * node.size;
         return Some((entity, local));
     }
     None
+}
+
+/// Maps a window physical-pixel point to a terminal node's local physical px
+/// with origin at the node's TOP-LEFT corner (`(0, 0)` top-left,
+/// `(size.x, size.y)` bottom-right) — the coordinate space the inline overlay
+/// rects and `cell_at_local` are expressed in.
+///
+/// Uses the affine inverse of `UiGlobalTransform` (via
+/// `ComputedNode::normalize_point`) so the projection stays correct under any
+/// transform, not just a pure translation. Returns `None` for a degenerate
+/// (zero-area) node, mirroring `normalize_point`.
+///
+/// This is the single projection both the inline hit-test paths
+/// (`inline_release_dip`, the wheel router) and `resolve_pane_at_phys` share,
+/// so a coordinate-space change has one place to live.
+pub(crate) fn phys_to_terminal_local(
+    node: &ComputedNode,
+    transform: &UiGlobalTransform,
+    cursor_phys_px: Vec2,
+) -> Option<Vec2> {
+    node.normalize_point(*transform, cursor_phys_px)
+        .map(|normalized| (normalized + Vec2::splat(0.5)) * node.size)
 }
 
 /// Projects a pane-local physical-pixel point onto 1-indexed
@@ -365,6 +412,13 @@ fn synthesize_drag_cell(
 /// press/release through `ButtonAction::route`, and pre-routes
 /// click-to-focus per spec §6 step 4. Drag-state tracking + autoscroll
 /// (Tasks 19-20) are layered on later.
+///
+/// Left presses/releases are first offered to the inline-webview layer
+/// (`route_inline_left_click`, spec §7): a press inside an interactive inline
+/// rect focuses + forwards to the child's CEF browser and never reaches the
+/// terminal click pipeline (no selection arm, no click-count update); a press
+/// on terminal text outside every rect drops inline focus and proceeds as a
+/// normal terminal click.
 fn dispatch_mouse_buttons(
     mut state: ResMut<MouseSelectionState>,
     mut mux: ozmux_multiplexer::MultiplexerCommands,
@@ -375,6 +429,7 @@ fn dispatch_mouse_buttons(
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
+    mut inline_route: InlineRouteParams,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
     hosts: Query<
@@ -445,6 +500,28 @@ fn dispatch_mouse_buttons(
             && let Ok(attached_workspace) = attached_workspace.single()
         {
             try_click_to_focus(&mut mux, attached_workspace, entity);
+        }
+
+        // NOTE: inline routing must stay AFTER click-to-focus (the clicked
+        // pane must still activate, or sync_focused_webview's inline
+        // preservation arm sees a non-active parent and clobbers the focus
+        // one frame later) and BEFORE the click-count / selection pipeline
+        // below (a consumed press must not arm a drag or bump the count).
+        if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left)
+            && route_inline_left_click(
+                &mut state,
+                &mut inline_route,
+                &hosts,
+                entity,
+                local,
+                cursor_phys,
+                ev.state,
+                cell_w_phys,
+                cell_h_phys,
+                scale,
+            )
+        {
+            continue;
         }
 
         let (cols, rows) = match handles.get(entity) {
@@ -630,6 +707,136 @@ fn dispatch_mouse_buttons(
         drag.anchor_cell.col = drag.anchor_cell.col.min(cols as u32).max(1);
         drag.anchor_cell.row = drag.anchor_cell.row.min(rows as u32).max(1);
     }
+}
+
+/// Routes a left press/release through the inline-webview layer (spec §7),
+/// returning `true` when the event was consumed and must NOT reach the
+/// terminal click pipeline.
+///
+/// Press inside an interactive inline rect: sets `FocusedWebview` to the
+/// child, issues the direct UNGATED `set_focus` BEFORE the gated
+/// `send_mouse_click` (CEF drops clicks to a browser with no
+/// `focused_frame()`, so without the pre-focus the first click on an
+/// unfocused browser would be swallowed), forwards the press in webview-local
+/// DIP, and records the in-flight press. Release while a press is in flight:
+/// forwards the release to the SAME child (pointer drift included) and clears
+/// the marker. A press outside every interactive rect returns `false` after
+/// clearing `FocusedWebview` if it held an inline child, so terminal-text
+/// clicks drop inline focus and proceed as normal clicks.
+///
+/// `route.focused_webview` / `route.browsers` are optional so CEF-less tests
+/// construct the caller; when `browsers` is absent the state effects (focus,
+/// in-flight marker, consumption) still apply — only the CEF forwarding is
+/// skipped.
+fn route_inline_left_click(
+    state: &mut MouseSelectionState,
+    route: &mut InlineRouteParams,
+    hosts: &Query<
+        (Entity, &ComputedNode, &UiGlobalTransform),
+        (With<ozmux_multiplexer::SurfaceMarker>, With<Slotted>),
+    >,
+    terminal: Entity,
+    local_phys: Vec2,
+    cursor_phys: Vec2,
+    button_state: ButtonState,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    scale: f32,
+) -> bool {
+    match button_state {
+        ButtonState::Pressed => {
+            // NOTE: a fresh left press invalidates any lingering in-flight
+            // marker — its matching release was lost (released outside the
+            // window, where the dispatcher early-returns before this layer)
+            // — or THIS press's release would be mis-routed to the stale
+            // child and the terminal pipeline would keep a phantom drag.
+            state.inline_press = None;
+            let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
+                inline_hit_at(
+                    &route.children,
+                    &route.inline,
+                    overlays,
+                    terminal,
+                    local_phys,
+                    cell_w_phys,
+                    cell_h_phys,
+                    scale,
+                )
+            });
+            let Some(hit) = hit else {
+                if let Some(focused) = route.focused_webview.as_deref_mut()
+                    && focused
+                        .0
+                        .is_some_and(|current| route.inline_parents.contains(current))
+                {
+                    focused.0 = None;
+                }
+                return false;
+            };
+            if let Some(focused) = route.focused_webview.as_deref_mut()
+                && focused.0 != Some(hit.child)
+            {
+                focused.0 = Some(hit.child);
+            }
+            if let Some(browsers) = route.browsers.as_deref() {
+                browsers.set_focus(&hit.child, true);
+                browsers.send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
+            }
+            state.inline_press = Some(hit.child);
+            true
+        }
+        ButtonState::Released => {
+            let Some(child) = state.inline_press.take() else {
+                return false;
+            };
+            if let Some(browsers) = route.browsers.as_deref()
+                && let Some(dip) = inline_release_dip(
+                    route,
+                    hosts,
+                    child,
+                    cursor_phys,
+                    cell_w_phys,
+                    cell_h_phys,
+                    scale,
+                )
+            {
+                browsers.send_mouse_click(&child, dip, PointerButton::Primary, true);
+            }
+            true
+        }
+    }
+}
+
+/// The current-cursor webview-local DIP for an in-flight inline press's
+/// child, derived from the child's LIVE overlay rect (the placement may have
+/// scrolled between press and release; the result may lie outside the rect,
+/// which CEF accepts for a release). `None` when the chain is gone — child or
+/// terminal despawned, terminal unslotted, or the rect back at the sentinel —
+/// in which case the release is dropped rather than mis-aimed.
+fn inline_release_dip(
+    route: &InlineRouteParams,
+    hosts: &Query<
+        (Entity, &ComputedNode, &UiGlobalTransform),
+        (With<ozmux_multiplexer::SurfaceMarker>, With<Slotted>),
+    >,
+    child: Entity,
+    cursor_phys: Vec2,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    scale: f32,
+) -> Option<Vec2> {
+    let terminal = route.inline_parents.get(child).ok()?.parent();
+    let (_, node, transform) = hosts.get(terminal).ok()?;
+    let local_phys = phys_to_terminal_local(node, transform, cursor_phys)?;
+    let (view, _) = route.inline.get(child).ok()?;
+    inline_local_dip(
+        route.overlay_rects.get(terminal).ok()?,
+        view.slot,
+        local_phys,
+        cell_w_phys,
+        cell_h_phys,
+        scale,
+    )
 }
 
 /// Converts a 1-indexed `CellCoord` (the wire format from
@@ -1597,5 +1804,258 @@ mod tests {
             Some(ext_pane),
             "clicking a pane whose host has no TerminalHandle must still move focus to it",
         );
+    }
+
+    /// Full-pipeline harness for the inline-webview click routing: one
+    /// terminal surface (REAL `TerminalHandle`, so a non-intercepted press
+    /// observably arms a drag) carrying a slot-0 overlay rect at rows 2..12,
+    /// cols 3..43 (8x16 px cells → phys y 32..192, x 24..344), plus one
+    /// inline child in that slot. Returns `(app, window, surface, child)`.
+    fn inline_click_harness(non_interactive: bool) -> (App, Entity, Entity, Entity) {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::window::WindowResolution;
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, MultiplexerPlugin};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<MouseSelectionState>();
+        app.init_resource::<FocusedWebview>();
+        app.insert_resource(ButtonInput::<KeyCode>::default());
+        app.insert_resource(OzmuxConfigsResource(ozmux_configs::OzmuxConfigs::default()));
+        app.insert_resource(bevy_terminal_renderer::TerminalCellMetricsResource {
+            metrics: bevy_terminal_renderer::CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+        app.add_message::<MouseButtonInput>();
+        app.add_message::<CursorMoved>();
+        app.add_systems(Update, dispatch_mouse_buttons);
+
+        let (workspace, surface) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.surface)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
+
+        let opts = bevy_terminal::SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        };
+        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let mut overlays = TerminalOverlays::default();
+        overlays.rects[0] = IVec4::new(2, 3, 10, 40);
+        app.world_mut().entity_mut(surface).insert((
+            Slotted,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            bundle,
+            overlays,
+        ));
+
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                InlineWebview {
+                    view_id: "inline-test".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+        if non_interactive {
+            app.world_mut().entity_mut(child).insert(NonInteractive);
+        }
+
+        let window = app
+            .world_mut()
+            .spawn((
+                Window {
+                    resolution: WindowResolution::new(800, 600),
+                    ..default()
+                },
+                PrimaryWindow,
+            ))
+            .id();
+        (app, window, surface, child)
+    }
+
+    fn set_cursor_phys(app: &mut App, window: Entity, pos: Vec2) {
+        use bevy::math::DVec2;
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(DVec2::new(pos.x as f64, pos.y as f64)));
+    }
+
+    fn send_left_button(app: &mut App, window: Entity, state: ButtonState) {
+        use bevy::ecs::message::Messages;
+        app.world_mut()
+            .resource_mut::<Messages<MouseButtonInput>>()
+            .write(MouseButtonInput {
+                button: MouseButton::Left,
+                state,
+                window,
+            });
+        app.update();
+    }
+
+    #[test]
+    fn press_inside_inline_rect_focuses_child_and_bypasses_terminal_click() {
+        let (mut app, window, _surface, child) = inline_click_harness(false);
+        set_cursor_phys(&mut app, window, Vec2::new(100.0, 100.0));
+
+        send_left_button(&mut app, window, ButtonState::Pressed);
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "a press inside an interactive inline rect must focus the child"
+        );
+        let state = app.world().resource::<MouseSelectionState>();
+        assert!(
+            state.drag.is_none(),
+            "an intercepted press must NOT arm a terminal selection drag"
+        );
+        assert!(
+            state.last_click.is_none(),
+            "an intercepted press must NOT update the click count"
+        );
+        assert_eq!(
+            state.inline_press,
+            Some(child),
+            "the press must be recorded in flight for the matching release"
+        );
+    }
+
+    #[test]
+    fn release_after_inline_press_clears_the_in_flight_marker() {
+        let (mut app, window, _surface, child) = inline_click_harness(false);
+        set_cursor_phys(&mut app, window, Vec2::new(100.0, 100.0));
+        send_left_button(&mut app, window, ButtonState::Pressed);
+        assert_eq!(
+            app.world().resource::<MouseSelectionState>().inline_press,
+            Some(child),
+        );
+
+        // Drift the pointer off the rect before releasing: the release must
+        // still resolve against the in-flight child, not the hit-test.
+        set_cursor_phys(&mut app, window, Vec2::new(700.0, 500.0));
+        send_left_button(&mut app, window, ButtonState::Released);
+
+        let state = app.world().resource::<MouseSelectionState>();
+        assert!(
+            state.inline_press.is_none(),
+            "the release must consume the in-flight inline press"
+        );
+        assert!(
+            state.drag.is_none(),
+            "the consumed release must not have reached the terminal pipeline"
+        );
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "the release must not disturb the inline focus"
+        );
+    }
+
+    #[test]
+    fn press_outside_inline_rect_clears_inline_focus_and_proceeds_as_terminal_click() {
+        let (mut app, window, _surface, child) = inline_click_harness(false);
+        app.insert_resource(FocusedWebview(Some(child)));
+        set_cursor_phys(&mut app, window, Vec2::new(400.0, 300.0));
+
+        send_left_button(&mut app, window, ButtonState::Pressed);
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "a press on terminal text outside every rect must drop inline focus"
+        );
+        let state = app.world().resource::<MouseSelectionState>();
+        assert!(
+            state.drag.is_some(),
+            "the same press must still arm the normal terminal selection drag"
+        );
+        assert!(
+            state.last_click.is_some(),
+            "the same press must still update the click count"
+        );
+        assert!(state.inline_press.is_none());
+    }
+
+    #[test]
+    fn stale_in_flight_press_is_invalidated_by_the_next_press() {
+        // A release dropped by the dispatcher's early-returns (cursor left
+        // the window) leaves the in-flight marker set; the next press must
+        // invalidate it so ITS release is not mis-routed to the stale child.
+        let (mut app, window, _surface, child) = inline_click_harness(false);
+        set_cursor_phys(&mut app, window, Vec2::new(100.0, 100.0));
+        send_left_button(&mut app, window, ButtonState::Pressed);
+        assert_eq!(
+            app.world().resource::<MouseSelectionState>().inline_press,
+            Some(child),
+        );
+
+        // No release arrives; the next press lands on terminal text.
+        set_cursor_phys(&mut app, window, Vec2::new(400.0, 300.0));
+        send_left_button(&mut app, window, ButtonState::Pressed);
+
+        let state = app.world().resource::<MouseSelectionState>();
+        assert!(
+            state.inline_press.is_none(),
+            "a fresh press must drop the stale in-flight marker"
+        );
+        assert!(
+            state.drag.is_some(),
+            "the fresh press must arm a normal terminal drag"
+        );
+
+        send_left_button(&mut app, window, ButtonState::Released);
+        assert!(
+            app.world().resource::<MouseSelectionState>().drag.is_none(),
+            "the matching release must reach the terminal pipeline and clear the drag"
+        );
+    }
+
+    #[test]
+    fn press_inside_non_interactive_rect_is_a_plain_terminal_click() {
+        let (mut app, window, _surface, _child) = inline_click_harness(true);
+        set_cursor_phys(&mut app, window, Vec2::new(100.0, 100.0));
+
+        send_left_button(&mut app, window, ButtonState::Pressed);
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "a NonInteractive rect must never take webview focus"
+        );
+        let state = app.world().resource::<MouseSelectionState>();
+        assert!(
+            state.drag.is_some(),
+            "a press over a NonInteractive rect must pass through as a terminal click"
+        );
+        assert!(state.inline_press.is_none());
     }
 }

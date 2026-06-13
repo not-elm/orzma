@@ -18,6 +18,8 @@ pub struct TerminalGrid {
     pub display_offset: u32,
     /// Total scrollback history line count.
     pub history_size: u32,
+    /// Cumulative trimmed-lines counter mirrored from the latest frame.
+    pub history_base: u64,
     /// Monotonic sequence number of the last applied frame.
     pub last_seq: u32,
     /// Active terminal modes from the last snapshot (e.g. "mouse-sgr-1006").

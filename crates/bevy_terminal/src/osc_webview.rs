@@ -1,9 +1,9 @@
-//! Sibling `vte::Perform` that captures the ozmux private OSC for webview
-//! mount/unmount and forwards it as a `ControlFrame::OscWebview` — but only when
-//! the shared default-off gate is enabled.
+//! Sibling `vte::Perform` that captures OSC 5379 payloads and buffers one
+//! parsed verb per sequence for `TerminalHandle::advance` to drain at the
+//! `advance_until_terminated` stop point — where the inline anchor is stamped.
+//! Never sends frames itself.
 
-use crate::vt::listener::{ControlFrame, OscWebviewVerb};
-use crossbeam_channel::Sender;
+use crate::vt::listener::OscWebviewVerb;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use vte::Perform;
@@ -13,18 +13,32 @@ use vte::Perform;
 pub(crate) const OSC_WEBVIEW_CODE: &[u8] = b"5379";
 
 const MAX_VIEW_ID: usize = 128;
+const MAX_ROWS: u16 = 200;
+const MAX_COLS: u16 = 400;
 
-/// A `vte::Perform` that captures OSC 5379 payloads and emits
-/// `ControlFrame::OscWebview` on the control channel when the gate is on.
+/// A `vte::Perform` that parses OSC 5379 payloads and buffers ONE verb for
+/// `TerminalHandle::advance` to drain at the `advance_until_terminated`
+/// stop point (where the anchor is stamped). It never sends frames itself.
 pub(crate) struct OscWebviewCapture {
-    control_tx: Sender<ControlFrame>,
     gate: Arc<AtomicBool>,
+    pending: Option<OscWebviewVerb>,
 }
 
 impl OscWebviewCapture {
-    /// Builds a capture that sends frames on `control_tx` only when `gate` is `true`.
-    pub(crate) fn new(control_tx: Sender<ControlFrame>, gate: Arc<AtomicBool>) -> Self {
-        Self { control_tx, gate }
+    /// Builds a capture that buffers verbs only while `gate` is `true`.
+    pub(crate) fn new(gate: Arc<AtomicBool>) -> Self {
+        Self {
+            gate,
+            pending: None,
+        }
+    }
+
+    /// Takes the buffered verb, clearing `terminated()`.
+    // NOTE: the caller MUST take the pending verb after every
+    // advance_until_terminated stop; a stuck pending makes the next call
+    // return 0 forever (infinite loop in TerminalHandle::advance).
+    pub(crate) fn take_pending(&mut self) -> Option<OscWebviewVerb> {
+        self.pending.take()
     }
 }
 
@@ -39,6 +53,15 @@ fn valid_view_id(s: &[u8]) -> Option<String> {
         return None;
     }
     Some(String::from_utf8_lossy(s).into_owned())
+}
+
+fn parse_dim(raw: Option<&[u8]>, max: u16) -> Option<u16> {
+    let s = std::str::from_utf8(raw?).ok()?;
+    if !s.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let v: u16 = s.parse().ok()?;
+    (1..=max).contains(&v).then_some(v)
 }
 
 impl Perform for OscWebviewCapture {
@@ -67,90 +90,406 @@ impl Perform for OscWebviewCapture {
                 };
                 OscWebviewVerb::Unmount { view_id }
             }
+            Some(b"mount-inline") => {
+                let Some(view_id) = params.get(2).copied().and_then(valid_view_id) else {
+                    return;
+                };
+                let Some(rows) = parse_dim(params.get(3).copied(), MAX_ROWS) else {
+                    return;
+                };
+                let Some(cols) = parse_dim(params.get(4).copied(), MAX_COLS) else {
+                    return;
+                };
+                let instance_id = match params.get(5).copied() {
+                    Some(raw) => match valid_view_id(raw) {
+                        Some(v) => Some(v),
+                        None => return,
+                    },
+                    None => None,
+                };
+                OscWebviewVerb::MountInline {
+                    view_id,
+                    rows,
+                    cols,
+                    instance_id,
+                }
+            }
+            Some(b"unmount-inline") => {
+                // NOTE: a present-but-invalid view id is malformed, not "unmount
+                // any"; only an ABSENT third param means "all inline on this
+                // terminal". An empty third param (`unmount-inline ; ;`) is
+                // rejected by valid_view_id.
+                let view_id = match params.get(2).copied() {
+                    Some(raw) => match valid_view_id(raw) {
+                        Some(v) => Some(v),
+                        None => return,
+                    },
+                    None => None,
+                };
+                // NOTE: an instance id is addressable only alongside a view id
+                // (Kitty placement model); the empty-view-id case is already
+                // dropped above, so reaching here with `view_id == None` and a
+                // present fourth param is impossible, but the guard keeps the
+                // `view_id == None ⟹ instance_id == None` invariant explicit.
+                let instance_id = match params.get(3).copied() {
+                    Some(_) if view_id.is_none() => return,
+                    Some(raw) => match valid_view_id(raw) {
+                        Some(v) => Some(v),
+                        None => return,
+                    },
+                    None => None,
+                };
+                OscWebviewVerb::UnmountInline {
+                    view_id,
+                    instance_id,
+                }
+            }
             _ => return,
         };
-        if let Err(e) = self.control_tx.send(ControlFrame::OscWebview(verb)) {
-            tracing::warn!(?e, "control_tx send(OscWebview) failed");
-        }
+        self.pending = Some(verb);
+    }
+
+    fn terminated(&self) -> bool {
+        self.pending.is_some()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossbeam_channel::unbounded;
 
-    #[test]
-    fn gate_off_drops_sequence() {
-        let (tx, rx) = unbounded();
-        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(false)));
-        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"dash"], true);
-        assert!(rx.try_recv().is_err());
+    fn cap(gate_on: bool) -> OscWebviewCapture {
+        OscWebviewCapture::new(Arc::new(AtomicBool::new(gate_on)))
     }
 
     #[test]
-    fn gate_on_emits_mount() {
-        let (tx, rx) = unbounded();
-        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
-        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"dash"], true);
+    fn gate_off_drops_sequence() {
+        let mut c = cap(false);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"dash"], true);
+        assert!(c.take_pending().is_none());
+    }
+
+    #[test]
+    fn gate_on_buffers_mount_and_terminated_reflects_pending() {
+        let mut c = cap(true);
+        assert!(!Perform::terminated(&c));
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"dash"], true);
+        assert!(Perform::terminated(&c), "pending verb must set terminated");
         assert_eq!(
-            rx.try_recv(),
-            Ok(ControlFrame::OscWebview(OscWebviewVerb::Mount {
+            c.take_pending(),
+            Some(OscWebviewVerb::Mount {
                 view_id: "dash".into()
-            }))
+            })
+        );
+        assert!(
+            !Perform::terminated(&c),
+            "take_pending must clear terminated or advance_until_terminated loops forever"
         );
     }
 
     #[test]
     fn other_osc_code_ignored() {
-        let (tx, rx) = unbounded();
-        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
-        cap.osc_dispatch(&[b"7", b"file://localhost/tmp"], true);
-        assert!(rx.try_recv().is_err());
+        let mut c = cap(true);
+        c.osc_dispatch(&[b"7", b"file://localhost/tmp"], true);
+        assert!(c.take_pending().is_none());
     }
 
     #[test]
     fn bad_view_id_rejected() {
-        let (tx, rx) = unbounded();
-        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
-        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"../etc/passwd"], true);
-        assert!(rx.try_recv().is_err());
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"../etc/passwd"], true);
+        assert!(c.take_pending().is_none());
     }
 
     #[test]
     fn unmount_without_view_id_targets_any() {
-        let (tx, rx) = unbounded();
-        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
-        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount"], true);
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount"], true);
         assert_eq!(
-            rx.try_recv(),
-            Ok(ControlFrame::OscWebview(OscWebviewVerb::Unmount {
-                view_id: None
-            }))
-        );
-    }
-
-    #[test]
-    fn unmount_with_valid_view_id_targets_it() {
-        let (tx, rx) = unbounded();
-        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
-        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"dash"], true);
-        assert_eq!(
-            rx.try_recv(),
-            Ok(ControlFrame::OscWebview(OscWebviewVerb::Unmount {
-                view_id: Some("dash".into())
-            }))
+            c.take_pending(),
+            Some(OscWebviewVerb::Unmount { view_id: None })
         );
     }
 
     #[test]
     fn unmount_with_invalid_view_id_dropped() {
-        let (tx, rx) = unbounded();
-        let mut cap = OscWebviewCapture::new(tx, Arc::new(AtomicBool::new(true)));
-        cap.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"../etc/passwd"], true);
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"../etc/passwd"], true);
+        assert!(c.take_pending().is_none());
+    }
+
+    #[test]
+    fn mount_inline_parses_rows_cols() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 3,
+                cols: 20,
+                instance_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_out_of_range_dims_dropped() {
+        for (r, w) in [
+            ("0", "20"),
+            ("201", "20"),
+            ("3", "0"),
+            ("3", "401"),
+            ("x", "20"),
+        ] {
+            let mut c = cap(true);
+            c.osc_dispatch(
+                &[
+                    OSC_WEBVIEW_CODE,
+                    b"mount-inline",
+                    b"memo",
+                    r.as_bytes(),
+                    w.as_bytes(),
+                ],
+                true,
+            );
+            assert!(
+                c.take_pending().is_none(),
+                "rows={r} cols={w} must be malformed"
+            );
+        }
+    }
+
+    #[test]
+    fn mount_inline_minimum_dims_accepted() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"1", b"1"],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 1,
+                cols: 1,
+                instance_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_maximum_dims_accepted() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"200", b"400"],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 200,
+                cols: 400,
+                instance_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_non_digit_dims_dropped() {
+        for (r, w) in [("3", "y"), ("+3", "20"), ("3", "+20")] {
+            let mut c = cap(true);
+            c.osc_dispatch(
+                &[
+                    OSC_WEBVIEW_CODE,
+                    b"mount-inline",
+                    b"memo",
+                    r.as_bytes(),
+                    w.as_bytes(),
+                ],
+                true,
+            );
+            assert!(
+                c.take_pending().is_none(),
+                "rows={r} cols={w} must be malformed (digits only)"
+            );
+        }
+    }
+
+    #[test]
+    fn mount_inline_missing_dims_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount-inline", b"memo"], true);
+        assert!(c.take_pending().is_none());
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3"], true);
+        assert!(c.take_pending().is_none());
+    }
+
+    #[test]
+    fn mount_inline_parses_instance_id() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[
+                OSC_WEBVIEW_CODE,
+                b"mount-inline",
+                b"memo",
+                b"3",
+                b"20",
+                b"a",
+            ],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 3,
+                cols: 20,
+                instance_id: Some("a".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_absent_instance_id_is_none() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            true,
+        );
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 3,
+                cols: 20,
+                instance_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn mount_inline_trailing_empty_instance_id_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20", b""],
+            true,
+        );
         assert!(
-            rx.try_recv().is_err(),
-            "a present-but-invalid unmount view-id must drop, not unmount-any"
+            c.take_pending().is_none(),
+            "a trailing empty instance id (mount-inline;memo;3;20;) is malformed"
+        );
+    }
+
+    #[test]
+    fn mount_inline_bad_instance_id_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[
+                OSC_WEBVIEW_CODE,
+                b"mount-inline",
+                b"memo",
+                b"3",
+                b"20",
+                b"../etc",
+            ],
+            true,
+        );
+        assert!(
+            c.take_pending().is_none(),
+            "an out-of-charset instance id is malformed"
+        );
+    }
+
+    #[test]
+    fn unmount_inline_absent_param_is_all_but_empty_param_is_malformed() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline"], true);
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::UnmountInline {
+                view_id: None,
+                instance_id: None,
+            })
+        );
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b""], true);
+        assert!(
+            c.take_pending().is_none(),
+            "empty third param is malformed, not unmount-all"
+        );
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo"], true);
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::UnmountInline {
+                view_id: Some("memo".into()),
+                instance_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn unmount_inline_parses_view_and_instance() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b"a"], true);
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::UnmountInline {
+                view_id: Some("memo".into()),
+                instance_id: Some("a".into()),
+            })
+        );
+    }
+
+    #[test]
+    fn unmount_inline_view_only_has_no_instance() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo"], true);
+        assert_eq!(
+            c.take_pending(),
+            Some(OscWebviewVerb::UnmountInline {
+                view_id: Some("memo".into()),
+                instance_id: None,
+            })
+        );
+    }
+
+    #[test]
+    fn unmount_inline_trailing_empty_instance_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b""], true);
+        assert!(
+            c.take_pending().is_none(),
+            "unmount-inline;memo; (empty instance) is malformed"
+        );
+    }
+
+    #[test]
+    fn unmount_inline_empty_view_with_instance_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"", b"a"], true);
+        assert!(
+            c.take_pending().is_none(),
+            "unmount-inline;;a (empty view id + instance) is malformed"
+        );
+    }
+
+    #[test]
+    fn unmount_inline_bad_instance_dropped() {
+        let mut c = cap(true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b"../x"],
+            true,
+        );
+        assert!(
+            c.take_pending().is_none(),
+            "an out-of-charset instance id is malformed"
         );
     }
 }

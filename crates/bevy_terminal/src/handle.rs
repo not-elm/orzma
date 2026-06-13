@@ -15,7 +15,7 @@ use crate::vt::frame_builder::{
     viewport_row_to_line,
 };
 use crate::vt::hyperlink::HyperlinkInterner;
-use crate::vt::listener::{ControlFrame, TermListener};
+use crate::vt::listener::{ControlFrame, InlineAnchor, OscWebviewVerb, TermListener};
 use crate::vt::mode_diff::diff_mode;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -70,10 +70,9 @@ impl Dimensions for LocalDim {
 /// Snapshot of the data the copy-mode indicator needs.
 ///
 /// Reading `Term` directly (rather than the renderer-side `TerminalGrid`
-/// component) is deliberate: `FrameDelta` does not carry `history_size`,
-/// so a `TerminalGrid` mirror would be stale between snapshots and the
-/// indicator would briefly display the wrong `total` under sustained
-/// PTY output.
+/// component) keeps the indicator exact under sustained PTY output:
+/// frames are coalesced, so the mirror may lag by up to one coalesce
+/// window even though `FrameDelta` now carries `history_size`.
 #[derive(Debug, Clone, Copy)]
 pub struct ViIndicatorSnapshot {
     /// 0-based scroll offset from the live tail (0 = bottom).
@@ -100,6 +99,13 @@ pub struct TerminalHandle {
     row_hashes: HashMap<i32, u64>,
     window_open_mode: Option<TermMode>,
     frame_seq: u32,
+    history_base: u64,
+    frozen_history: usize,
+    frozen_valid: bool,
+    saturated: bool,
+    force_next_emit: bool,
+    scroll_cap: usize,
+    control_tx: Sender<ControlFrame>,
     reply_rx: Receiver<Vec<u8>>,
     control_rx: Receiver<ControlFrame>,
     osc7_parser: Parser,
@@ -121,8 +127,13 @@ impl TerminalHandle {
         gate: Arc<AtomicBool>,
     ) -> Self {
         let size = LocalDim::new(cols, rows);
-        let term = Term::new(Config::default(), &size, listener);
-        let control_tx2 = control_tx.clone();
+        let config = Config::default();
+        let scroll_cap = config.scrolling_history;
+        let term = Term::new(config, &size, listener);
+        let osc7 = Osc7Capture::new(
+            control_tx.clone(),
+            gethostname::gethostname().to_string_lossy().into_owned(),
+        );
         Self {
             term,
             parser: Processor::new(),
@@ -138,27 +149,50 @@ impl TerminalHandle {
             row_hashes: HashMap::new(),
             window_open_mode: None,
             frame_seq: 0,
+            history_base: 0,
+            frozen_history: 0,
+            frozen_valid: true,
+            saturated: false,
+            force_next_emit: false,
+            scroll_cap,
+            control_tx,
             reply_rx,
             control_rx,
             osc7_parser: Parser::new(),
-            osc7: Osc7Capture::new(
-                control_tx,
-                gethostname::gethostname().to_string_lossy().into_owned(),
-            ),
+            osc7,
             osc_webview_parser: Parser::new(),
-            osc_webview: OscWebviewCapture::new(control_tx2, gate),
+            osc_webview: OscWebviewCapture::new(gate),
         }
     }
 
-    /// Feeds a chunk of PTY bytes through the vte parser into `Term`.
+    /// Feeds a chunk of PTY bytes through the vte parsers into `Term`.
+    ///
+    /// The webview sibling parser LEADS via `advance_until_terminated`:
+    /// it stops right after each OSC 5379 sequence so the main parser can
+    /// be advanced exactly to that byte and the cursor sampled there
+    /// (spec §3). For ST-terminated sequences the stop offset lands
+    /// between ESC and `\`; the leftover `\` is consumed harmlessly by
+    /// the next segment.
     pub fn advance(&mut self, chunk: &[u8]) {
         if chunk.is_empty() {
             return;
         }
-        self.parser.advance(&mut self.term, chunk);
-        self.osc7_parser.advance(&mut self.osc7, chunk);
-        self.osc_webview_parser
-            .advance(&mut self.osc_webview, chunk);
+        let mut rest = chunk;
+        loop {
+            let k = self
+                .osc_webview_parser
+                .advance_until_terminated(&mut self.osc_webview, rest);
+            self.parser.advance(&mut self.term, &rest[..k]);
+            self.osc7_parser.advance(&mut self.osc7, &rest[..k]);
+            match self.osc_webview.take_pending() {
+                Some(verb) => self.handle_webview_verb(verb),
+                None => self.run_history_maintenance(),
+            }
+            if k == rest.len() {
+                break;
+            }
+            rest = &rest[k..];
+        }
     }
 
     /// Returns true if the current `Term` cursor differs from the most
@@ -202,9 +236,7 @@ impl TerminalHandle {
         cols: u16,
         rows: u16,
     ) -> anyhow::Result<()> {
-        let dim = LocalDim::new(cols, rows);
-        self.term.resize(dim);
-        self.row_hashes.clear();
+        self.resize_grid(cols, rows);
         pty.resize(cols, rows)?;
         self.stage_full_damage_and_arm(coalescer);
         Ok(())
@@ -597,8 +629,12 @@ impl TerminalHandle {
                 ControlFrame::CurrentDir(path) => {
                     commands.trigger(TerminalCurrentDir { entity, path });
                 }
-                ControlFrame::OscWebview(verb) => {
-                    commands.trigger(OscWebviewRequest { entity, verb });
+                ControlFrame::OscWebview { verb, anchor } => {
+                    commands.trigger(OscWebviewRequest {
+                        entity,
+                        verb,
+                        anchor,
+                    });
                 }
             }
         }
@@ -633,14 +669,21 @@ impl TerminalHandle {
         let curr_vi_cursor = extract_vi_cursor(&self.term);
         let curr_selection = extract_selection_range(&self.term);
 
-        if self.is_noop_emit(
-            &dirty,
-            &curr_cursor,
-            prev_mode,
-            curr_mode,
-            curr_vi_cursor,
-            curr_selection,
-        ) {
+        // NOTE: force_next_emit guarantees a grid frame with the stamped seq
+        // reaches the renderer even for an OSC-only chunk (no damage, no
+        // cursor move) — without it the GUI's first-projection hold (spec §5)
+        // would never release for clients that violate the newline contract.
+        let force = std::mem::take(&mut self.force_next_emit);
+        if !force
+            && self.is_noop_emit(
+                &dirty,
+                &curr_cursor,
+                prev_mode,
+                curr_mode,
+                curr_vi_cursor,
+                curr_selection,
+            )
+        {
             self.finalize_emit(coalescer);
             return;
         }
@@ -799,7 +842,14 @@ impl TerminalHandle {
         seq: u32,
         reason: SnapshotReason,
     ) {
-        let snap = build_snapshot(&self.term, entity, seq, reason, &mut self.hyperlinks);
+        let snap = build_snapshot(
+            &self.term,
+            entity,
+            seq,
+            self.history_base,
+            reason,
+            &mut self.hyperlinks,
+        );
         commands.trigger(snap);
         self.rebuild_full_row_hashes();
     }
@@ -830,7 +880,14 @@ impl TerminalHandle {
         rows: Vec<u16>,
         kept_hashes: Vec<(i32, u64)>,
     ) {
-        let delta = build_delta(&self.term, entity, seq, &rows, &mut self.hyperlinks);
+        let delta = build_delta(
+            &self.term,
+            entity,
+            seq,
+            self.history_base,
+            &rows,
+            &mut self.hyperlinks,
+        );
         self.scratch_dirty = rows;
         commands.trigger(delta);
         for (line_i32, h) in kept_hashes {
@@ -844,6 +901,126 @@ impl TerminalHandle {
     fn finalize_emit(&mut self, coalescer: &mut Coalescer) {
         self.term.reset_damage();
         coalescer.disarm();
+    }
+
+    /// Stamps the anchor / applies state gates for a buffered OSC 5379 verb
+    /// at an `advance_until_terminated` stop point, then forwards the frame.
+    fn handle_webview_verb(&mut self, verb: OscWebviewVerb) {
+        // NOTE: only MountInline samples the cursor, so only it needs the
+        // synchronized-update (CSI ?2026) buffer flushed before the anchor is
+        // read. Flushing for the other verbs would force-end an in-flight
+        // synchronized update and tear a partial frame for no benefit.
+        if matches!(verb, OscWebviewVerb::MountInline { .. }) && self.parser.sync_bytes_count() > 0
+        {
+            self.parser.stop_sync(&mut self.term);
+        }
+        // NOTE: maintenance (fold) must run BEFORE the anchor is stamped —
+        // same-chunk "CSI 3 J then mount-inline" depends on this order
+        // (spec §3).
+        self.run_history_maintenance();
+        let anchor = if matches!(verb, OscWebviewVerb::MountInline { .. }) {
+            if self.term.mode().contains(TermMode::ALT_SCREEN) {
+                tracing::debug!("mount-inline rejected: alternate screen active");
+                return;
+            }
+            if self.saturated {
+                tracing::debug!("mount-inline rejected: scrollback saturated");
+                return;
+            }
+            let cursor = self.term.grid().cursor.point;
+            self.force_next_emit = true;
+            Some(InlineAnchor {
+                line: self.history_base
+                    + self.term.history_size() as u64
+                    + cursor.line.0.max(0) as u64,
+                col: cursor.column.0 as u16,
+                frame_seq: self.frame_seq,
+            })
+        } else {
+            None
+        };
+        if let Err(e) = self
+            .control_tx
+            .send(ControlFrame::OscWebview { verb, anchor })
+        {
+            tracing::warn!(?e, "control_tx send(OscWebview) failed");
+        }
+    }
+
+    /// Resizes the alacritty grid and invalidates the resize-sensitive
+    /// caches: `row_hashes` (post-resize rows must not be hash-filtered
+    /// against pre-resize hashes) and the frozen history baseline
+    /// (reflow changes `history_size`; the next primary-screen
+    /// observation skips the fold and re-baselines, spec §3).
+    fn resize_grid(&mut self, cols: u16, rows: u16) {
+        let dim = LocalDim::new(cols, rows);
+        self.term.resize(dim);
+        self.row_hashes.clear();
+        self.frozen_valid = false;
+    }
+
+    /// Per-segment `history_base` maintenance (spec §3):
+    /// fold `history_size` decreases into `history_base`, synthesize an
+    /// unmount-all on every fold, keep a frozen baseline across alt screen,
+    /// and track saturation (handled in `update_saturation`). Callers that
+    /// stamp anchors must run this first (see `handle_webview_verb`).
+    fn run_history_maintenance(&mut self) {
+        if self.term.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        let h = self.term.history_size();
+        if self.frozen_valid && h < self.frozen_history {
+            self.history_base += (self.frozen_history - h) as u64;
+            self.send_synthetic_unmount_all();
+        }
+        self.frozen_history = h;
+        self.frozen_valid = true;
+        self.update_saturation(h);
+    }
+
+    /// Saturation policy (spec §3): once `history_size` reaches the
+    /// scrollback cap, trims become unobservable, so all inline webviews
+    /// are unmounted once and further mounts are rejected until the
+    /// history shrinks below the cap again (e.g. CSI 3 J).
+    ///
+    /// `scroll_cap == 0` means "no scrollback limit configured" and never
+    /// saturates — without the guard `0 >= 0` would saturate on the first
+    /// segment and reject every inline mount permanently.
+    fn update_saturation(&mut self, history_size: usize) {
+        if self.scroll_cap > 0 && history_size >= self.scroll_cap {
+            if !self.saturated {
+                self.saturated = true;
+                tracing::debug!("scrollback saturated: unmounting all inline webviews");
+                self.send_synthetic_unmount_all();
+            }
+        } else {
+            self.saturated = false;
+        }
+    }
+
+    /// Sends the VT-synthesized unmount-all used by both the fold rule and
+    /// the saturation first-arrival rule.
+    fn send_synthetic_unmount_all(&mut self) {
+        let frame = ControlFrame::OscWebview {
+            verb: OscWebviewVerb::UnmountInline {
+                view_id: None,
+                instance_id: None,
+            },
+            anchor: None,
+        };
+        if let Err(e) = self.control_tx.send(frame) {
+            tracing::warn!(?e, "control_tx send(synthetic UnmountInline) failed");
+        }
+    }
+
+    #[cfg(test)]
+    fn test_force_next_emit(&self) -> bool {
+        self.force_next_emit
+    }
+
+    #[cfg(test)]
+    fn test_frame_seq(&self) -> u32 {
+        self.frame_seq
     }
 }
 
@@ -1736,40 +1913,479 @@ mod tests {
         );
     }
 
+    fn handle_with_gate_on(
+        cols: u16,
+        rows: u16,
+    ) -> (TerminalHandle, crossbeam_channel::Receiver<ControlFrame>) {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) = crossbeam_channel::unbounded::<ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let h = TerminalHandle::new(
+            cols,
+            rows,
+            listener,
+            reply_rx,
+            crossbeam_channel::unbounded::<ControlFrame>().1,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(true)),
+        );
+        (h, ctrl_rx)
+    }
+
     #[test]
-    fn advance_osc_webview_then_drain_triggers_request() {
+    fn mount_inline_anchor_is_cursor_at_osc_byte_position_not_chunk_end() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let mut payload = b"\x1b]5379;mount-inline;memo;3;10\x1b\\".to_vec();
+        payload.extend_from_slice(b"\r\n\r\n\r\n");
+        h.advance(&payload);
+        let frame = rx.try_recv().expect("MountInline frame");
+        let ControlFrame::OscWebview { verb, anchor } = frame else {
+            panic!("expected OscWebview, got {frame:?}");
+        };
+        assert!(matches!(verb, OscWebviewVerb::MountInline { .. }));
+        let anchor = anchor.expect("MountInline carries an anchor");
+        assert_eq!(
+            anchor.line, 0,
+            "anchor = cursor at the OSC byte, before the newlines"
+        );
+        assert_eq!(anchor.col, 0);
+    }
+
+    #[test]
+    fn mount_inline_anchor_accounts_for_prior_output_in_same_chunk() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let mut payload = b"\r\n\r\n".to_vec();
+        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x07");
+        payload.extend_from_slice(b"\r\n\r\n");
+        h.advance(&payload);
+        let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
+            panic!("expected OscWebview");
+        };
+        assert_eq!(anchor.expect("anchor").line, 2);
+    }
+
+    #[test]
+    fn legacy_mount_still_arrives_without_anchor() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b]5379;mount;dash\x1b\\");
+        let ControlFrame::OscWebview { verb, anchor } = rx.try_recv().expect("frame") else {
+            panic!("expected OscWebview");
+        };
+        assert_eq!(
+            verb,
+            OscWebviewVerb::Mount {
+                view_id: "dash".into()
+            }
+        );
+        assert!(anchor.is_none());
+    }
+
+    #[test]
+    fn osc_split_across_two_chunks_still_anchors_correctly() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let full = b"\x1b]5379;mount-inline;memo;3;10\x1b\\";
+        let (a, b) = full.split_at(10);
+        h.advance(a);
+        h.advance(b);
+        let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
+            panic!("expected OscWebview");
+        };
+        assert_eq!(anchor.expect("anchor").line, 0);
+    }
+
+    #[test]
+    fn two_mounts_in_one_chunk_each_get_their_own_anchor() {
+        let (mut h, rx) = handle_with_gate_on(20, 6);
+        let mut payload = b"\x1b]5379;mount-inline;a1;2;10\x1b\\".to_vec();
+        payload.extend_from_slice(b"\r\n\r\n");
+        payload.extend_from_slice(b"\x1b]5379;mount-inline;b2;2;10\x1b\\");
+        h.advance(&payload);
+        let first = rx.try_recv().expect("first frame");
+        let second = rx.try_recv().expect("second frame");
+        let get = |f: ControlFrame| match f {
+            ControlFrame::OscWebview {
+                anchor: Some(a), ..
+            } => a.line,
+            other => panic!("unexpected {other:?}"),
+        };
+        assert_eq!(get(first), 0);
+        assert_eq!(get(second), 2);
+    }
+
+    fn seed_scrollback(h: &mut TerminalHandle, lines: usize) {
+        let mut payload = Vec::new();
+        for i in 0..lines {
+            payload.extend_from_slice(format!("l{i}\r\n").as_bytes());
+        }
+        h.advance(&payload);
+    }
+
+    #[test]
+    fn clear_scrollback_folds_into_history_base_and_unmounts_all() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        let hist_before = h.vi_indicator_snapshot().history_size;
+        assert!(hist_before > 0, "precondition: scrollback non-empty");
+        h.advance(b"\x1b[3J");
+        let frame = rx.try_recv().expect("synthesized UnmountInline");
+        assert_eq!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
+                anchor: None,
+            }
+        );
+    }
+
+    #[test]
+    fn clear_then_mount_in_same_chunk_anchors_after_fold() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        let hist = h.vi_indicator_snapshot().history_size as u64;
+        let mut payload = b"\x1b[3J".to_vec();
+        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(&payload);
+        let first = rx.try_recv().expect("fold unmount first");
+        assert!(matches!(
+            first,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
+                ..
+            }
+        ));
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount second")
+        else {
+            panic!("expected mount frame with anchor");
+        };
+        // NOTE: the invariant is anchor = history_base(=hist)
+        // + history_size(0 after 3J) + live cursor row. cursor.y from
+        // read_geometry is the viewport row, which equals the live-grid
+        // row because display_offset is 0 at the live tail.
+        let (_, _, cursor) = h.read_geometry();
+        assert_eq!(anchor.line, hist + cursor.y as u64);
+    }
+
+    #[test]
+    fn alt_screen_roundtrip_does_not_fold() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        h.advance(b"\x1b[?1049h");
+        h.advance(b"\x1b[?1049l");
+        assert!(
+            rx.try_recv().is_err(),
+            "no synthesized frames on alt roundtrip"
+        );
+    }
+
+    #[test]
+    fn alt_exit_plus_clear_in_one_chunk_still_folds() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        h.advance(b"\x1b[?1049h");
+        h.advance(b"\x1b[?1049l\x1b[3J");
+        let frame = rx
+            .try_recv()
+            .expect("fold must be detected against the frozen baseline");
+        assert!(matches!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn resize_invalidates_baseline_and_next_segment_rebaselines_without_fold() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        seed_scrollback(&mut h, 30);
+        h.resize_grid(20, 8);
+        h.advance(b"x");
+        assert!(
+            rx.try_recv().is_err(),
+            "re-baseline after resize must not fold/unmount"
+        );
+    }
+
+    #[test]
+    fn bel_terminated_mount_at_exact_chunk_end_is_drained_in_same_call() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x07");
+        assert!(
+            matches!(rx.try_recv(), Ok(ControlFrame::OscWebview { .. })),
+            "verb must be drained in the same advance call even when the chunk ends at BEL"
+        );
+    }
+
+    #[test]
+    fn mount_anchor_col_reflects_text_before_osc_on_same_row() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"ab\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(a), ..
+        } = rx.try_recv().expect("frame")
+        else {
+            panic!("expected mount frame");
+        };
+        assert_eq!(a.col, 2, "cursor column after printing 'ab' is 2");
+        assert_eq!(a.line, 0);
+    }
+
+    #[test]
+    fn saturation_first_arrival_unmounts_all_and_rejects_mounts() {
+        let (mut h, rx) = handle_with_gate_on(10, 3);
+        let mut payload = Vec::new();
+        for _ in 0..h.scroll_cap + 10 {
+            payload.extend_from_slice(b"x\r\n");
+        }
+        h.advance(&payload);
+        let frame = rx
+            .try_recv()
+            .expect("saturation first-arrival synthesizes unmount-all");
+        assert!(matches!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
+                ..
+            }
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "unmount-all fires exactly once while saturated"
+        );
+        h.advance(b"\x1b]5379;mount-inline;memo;2;5\x1b\\");
+        assert!(
+            rx.try_recv().is_err(),
+            "mount-inline rejected while saturated"
+        );
+        h.advance(b"\x1b[3J");
+        let fold = rx.try_recv().expect("fold unmount on clear");
+        assert!(matches!(
+            fold,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::UnmountInline {
+                    view_id: None,
+                    instance_id: None,
+                },
+                ..
+            }
+        ));
+        h.advance(b"\x1b]5379;mount-inline;memo;2;5\x1b\\");
+        let frame = rx.try_recv().expect("mount accepted after clear");
+        assert!(matches!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::MountInline { .. },
+                anchor: Some(_)
+            }
+        ));
+    }
+
+    #[test]
+    fn alt_screen_mount_rejected() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b[?1049h");
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        assert!(
+            rx.try_recv().is_err(),
+            "mount-inline rejected on alt screen"
+        );
+        h.advance(b"\x1b[?1049l");
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let frame = rx
+            .try_recv()
+            .expect("accepted again after returning to primary");
+        assert!(matches!(
+            frame,
+            ControlFrame::OscWebview {
+                verb: OscWebviewVerb::MountInline { .. },
+                anchor: Some(_)
+            }
+        ));
+    }
+
+    #[test]
+    fn mount_inside_synchronized_update_samples_flushed_state() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let mut payload = b"\x1b[?2026h\r\n\r\n".to_vec();
+        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(&payload);
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount frame")
+        else {
+            panic!("expected mount with anchor");
+        };
+        assert_eq!(
+            anchor.line, 2,
+            "stop_sync must flush the BSU buffer before sampling"
+        );
+    }
+
+    #[test]
+    fn mount_stamps_next_emit_seq_and_force_flag_bypasses_noop() {
+        use bevy::ecs::world::{CommandQueue, World};
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount frame")
+        else {
+            panic!("expected mount with anchor");
+        };
+        assert_eq!(
+            anchor.frame_seq, 0,
+            "stamped seq = value the NEXT emit carries"
+        );
+        assert!(
+            h.test_force_next_emit(),
+            "accepted mount must arm the force flag"
+        );
+
+        h.first_emit = false;
+        h.prev_cursor = Some(extract_cursor(&h.term));
+        h.pending_damage = Some(crate::vt::damage::DirtyRows::Rows(Vec::new()));
+
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut coalescer = Coalescer::default();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            h.emit(&mut commands, entity, &mut coalescer);
+        }
+        queue.apply(&mut world);
+
+        assert_eq!(
+            h.test_frame_seq(),
+            1,
+            "forced emit must consume seq 0 (a frame was emitted despite no observable change)"
+        );
+        assert!(!h.test_force_next_emit(), "force flag is one-shot");
+
+        h.pending_damage = Some(crate::vt::damage::DirtyRows::Rows(Vec::new()));
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            h.emit(&mut commands, entity, &mut coalescer);
+        }
+        queue.apply(&mut world);
+        assert_eq!(
+            h.test_frame_seq(),
+            1,
+            "with the flag consumed, an identical staged-noop emit must not advance seq"
+        );
+    }
+
+    #[test]
+    fn force_flag_survives_a_no_damage_abort() {
+        use bevy::ecs::world::{CommandQueue, World};
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let _ = rx.try_recv().expect("mount frame");
+        assert!(h.test_force_next_emit());
+
+        h.pending_damage = None;
+        let mut world = World::new();
+        let entity = world.spawn_empty().id();
+        let mut coalescer = Coalescer::default();
+        let mut queue = CommandQueue::default();
+        {
+            let mut commands = Commands::new(&mut queue, &world);
+            h.emit(&mut commands, entity, &mut coalescer);
+        }
+        queue.apply(&mut world);
+
+        assert!(
+            h.test_force_next_emit(),
+            "a no-damage abort must DEFER the forced frame, not discard it — hoisting the mem::take above the pending_damage guard wedges the GUI's first-projection hold"
+        );
+    }
+
+    #[test]
+    fn seq_wrap_comparison_is_serial_number_arithmetic() {
+        fn reached(last_seq: u32, stamped: u32) -> bool {
+            last_seq.wrapping_sub(stamped) as i32 >= 0
+        }
+        assert!(reached(5, 5));
+        assert!(reached(6, 5));
+        assert!(!reached(4, 5));
+        assert!(
+            reached(2, u32::MAX - 1),
+            "wrap: last_seq passed the boundary"
+        );
+        assert!(!reached(u32::MAX - 1, 2));
+    }
+
+    #[test]
+    fn drain_forwards_mount_inline_anchor_to_request() {
         use crate::events::OscWebviewRequest;
         use crate::title::TerminalTitle;
-        use crate::vt::listener::{ControlFrame, TermListener};
+        use crate::vt::listener::{ControlFrame, InlineAnchor, OscWebviewVerb};
         use bevy::ecs::system::RunSystemOnce;
         use bevy::prelude::*;
-        use crossbeam_channel::unbounded;
 
         #[derive(Resource, Default)]
-        struct Seen(Vec<crate::vt::listener::OscWebviewVerb>);
+        struct Seen(Vec<OscWebviewRequest>);
 
         let mut app = App::new();
         app.init_resource::<Seen>();
         app.add_observer(|ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
-            seen.0.push(ev.event().verb.clone());
+            seen.0.push(ev.event().clone());
         });
 
-        let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
-        let (control_tx, control_rx) = unbounded::<ControlFrame>();
-        let listener = TermListener {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (inject_tx, inject_rx) = crossbeam_channel::unbounded::<ControlFrame>();
+        let (ctrl_tx, _ctrl_rx) = crossbeam_channel::unbounded::<ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
             reply_tx,
-            control_tx: control_tx.clone(),
+            control_tx: ctrl_tx.clone(),
         };
-        let mut handle = TerminalHandle::new(
-            80,
-            24,
+        let handle = TerminalHandle::new(
+            10,
+            5,
             listener,
             reply_rx,
-            control_rx,
-            control_tx,
-            Arc::new(AtomicBool::new(true)),
+            inject_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
         );
-        handle.advance(b"\x1b]5379;mount;dash\x07");
+
+        inject_tx
+            .send(ControlFrame::OscWebview {
+                verb: OscWebviewVerb::MountInline {
+                    view_id: "memo".into(),
+                    rows: 3,
+                    cols: 10,
+                    instance_id: None,
+                },
+                anchor: Some(InlineAnchor {
+                    line: 42,
+                    col: 7,
+                    frame_seq: 9,
+                }),
+            })
+            .unwrap();
 
         app.world_mut().spawn((handle, TerminalTitle::default()));
         app.world_mut()
@@ -1784,11 +2400,40 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
+        let seen = app.world().resource::<Seen>();
+        assert_eq!(seen.0.len(), 1, "exactly one OscWebviewRequest triggered");
+        let req = &seen.0[0];
+        assert!(
+            matches!(
+                req.verb,
+                OscWebviewVerb::MountInline {
+                    ref view_id,
+                    rows: 3,
+                    cols: 10,
+                    instance_id: None,
+                } if view_id == "memo"
+            ),
+            "verb must be MountInline{{memo, 3, 10}}, got {:?}",
+            req.verb
+        );
         assert_eq!(
-            app.world().resource::<Seen>().0,
-            vec![crate::vt::listener::OscWebviewVerb::Mount {
-                view_id: "dash".into()
-            }]
+            req.anchor,
+            Some(InlineAnchor {
+                line: 42,
+                col: 7,
+                frame_seq: 9
+            }),
+            "anchor must cross the drain boundary unchanged"
+        );
+    }
+
+    #[test]
+    fn c1_osc_introducer_is_rejected_not_parsed() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x9d5379;mount-inline;memo;3;10\x9c");
+        assert!(
+            rx.try_recv().is_err(),
+            "8-bit C1 OSC introducer must not reach the capture (spec section 2: 7-bit ESC ] only)"
         );
     }
 }

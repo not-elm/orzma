@@ -305,4 +305,4 @@ If you add a tool or script that detects any of these, move the corresponding en
 
 ## Existing legitimate exceptions
 
-- (None recorded yet — append entries here as they are discovered, with a brief justification.)
+- `frame_builder.rs` builder signatures keep `interner: &mut HyperlinkInterner` as the LAST parameter despite the mutable-params-first rule: the interner is an output-cache argument by convention across ~17 call sites, and reordering would churn them all for no readability gain.

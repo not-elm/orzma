@@ -655,7 +655,7 @@ dependencies = [
 [[package]]
 name = "bevy_cef"
 version = "0.11.0-dev"
-source = "git+https://github.com/not-elm/bevy_cef?branch=poc%2Fmacos-accelerated-paint-iosurface#7f99a9d600ea40f2206732ed37ad94e2e65d64d6"
+source = "git+https://github.com/not-elm/bevy_cef?branch=headless-gpu#e6c7b44820d3c68d75eb057ebe3439d2644ae1b7"
 dependencies = [
  "async-channel",
  "bevy",
@@ -671,7 +671,7 @@ dependencies = [
 [[package]]
 name = "bevy_cef_core"
 version = "0.11.0-dev"
-source = "git+https://github.com/not-elm/bevy_cef?branch=poc%2Fmacos-accelerated-paint-iosurface#7f99a9d600ea40f2206732ed37ad94e2e65d64d6"
+source = "git+https://github.com/not-elm/bevy_cef?branch=headless-gpu#e6c7b44820d3c68d75eb057ebe3439d2644ae1b7"
 dependencies = [
  "async-channel",
  "bevy",
@@ -4632,6 +4632,7 @@ dependencies = [
  "arboard",
  "bevy",
  "bevy_cef",
+ "bevy_cef_core",
  "bevy_terminal",
  "bevy_terminal_renderer",
  "cosmic-text",

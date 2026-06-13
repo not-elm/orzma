@@ -22,7 +22,8 @@ debug = []
 ab_glyph = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
-bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "poc/macos-accelerated-paint-iosurface", features = ["debug"] }
+bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "headless-gpu", features = ["debug"] }
+bevy_cef_core = { workspace = true }
 bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
@@ -75,7 +76,7 @@ toml = "0.8"
 dirs = "5"
 unicode-width = "0.2"
 open = "5"
-bevy_cef_core = { git = "https://github.com/not-elm/bevy_cef", branch = "poc/macos-accelerated-paint-iosurface"}
+bevy_cef_core = { git = "https://github.com/not-elm/bevy_cef", branch = "headless-gpu" }
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"

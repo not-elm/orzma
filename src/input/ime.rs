@@ -6,9 +6,11 @@
 //! the attached terminal), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
+use crate::inline_webview::{InlineWebview, focused_inline_of};
 use crate::ui::TerminalSurfaceMarker;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
+use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
@@ -21,7 +23,7 @@ use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_terminal::{TerminalKey, TerminalModifiers};
 use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::prelude::TerminalGrid;
+use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
@@ -144,7 +146,10 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// `ime_position` is the logical-pixel anchor for the OS candidate
 /// window — computed from the attached terminal's `UiGlobalTransform`
 /// translation + `TerminalGrid.cursor` × cell pitch, then divided by
-/// the window scale factor.
+/// the window scale factor. When the focused webview is an INLINE child of
+/// the active surface, the anchor instead comes from that child's overlay
+/// rect origin (`inline_ime_position`), since inline entities carry no UI
+/// node for `webview_anchors` to read (spec §7).
 pub(crate) fn ime_policy_system(
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
@@ -154,6 +159,9 @@ pub(crate) fn ime_policy_system(
     metrics: Res<TerminalCellMetricsResource>,
     focused_webview: Res<FocusedWebview>,
     webview_anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
+    inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    inline_slots: Query<&InlineWebview>,
+    overlays: Query<&TerminalOverlays>,
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
     let Ok(mut window) = primary_window.single_mut() else {
@@ -168,6 +176,30 @@ pub(crate) fn ime_policy_system(
     if let Some(target) = focused_webview.0 {
         if !window.ime_enabled {
             window.ime_enabled = true;
+        }
+        // NOTE: Inline arm (spec §7): an inline child has no UI node, so the
+        // tab-webview `webview_anchors` arm below cannot anchor it. Derive the
+        // candidate-window position from the owning terminal's node transform
+        // plus the inline placement rect's origin — the SAME px conversion the
+        // wheel/click hit-test uses (`inline_local_dip`'s `origin_phys`), so
+        // composition appears at the inline rect, not the terminal cursor.
+        let active_surface = super::resolve_focused_terminal(&mux, &attached_workspace);
+        if let Some(child) =
+            focused_inline_of(Some(&focused_webview), &inline_parents, active_surface)
+            && let Some(pos) = inline_ime_position(
+                window.resolution.scale_factor(),
+                &inline_parents,
+                &inline_slots,
+                &anchors,
+                &overlays,
+                &metrics,
+                child,
+            )
+        {
+            if window.ime_position != pos {
+                window.ime_position = pos;
+            }
+            return;
         }
         if let Ok((node, ui_xform)) = webview_anchors.get(target) {
             let scale = window.resolution.scale_factor();
@@ -240,7 +272,9 @@ pub(crate) fn ime_policy_system(
 }
 
 /// Drains `Ime` events, mutates `ImeState`, and forwards `Ime::Commit`
-/// text to the attached terminal.
+/// text to the attached terminal — UNLESS an inline webview owns focus, in
+/// which case the commit-to-PTY write is suppressed (bevy_cef commits it to
+/// the page; see spec §7).
 ///
 /// Modifiers are forced to `TerminalModifiers::default()` on commit:
 /// `crates/bevy_terminal/src/input_codec.rs::encode_key` converts
@@ -253,9 +287,22 @@ pub(crate) fn read_ime_events(
     mut commands: Commands,
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    focused_webview: Res<FocusedWebview>,
+    inline_parents: Query<&ChildOf, With<InlineWebview>>,
 ) {
+    let active_surface = super::resolve_focused_terminal(&mux, &attached_workspace);
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
+            // NOTE: Inline-focus commit suppression (spec §7): bevy_cef's own IME
+            // systems independently consume the winit `Ime` events for the
+            // focused webview, so ozmux must NOT also commit this text to the
+            // PTY — doing so double-delivers the composition (once to the page,
+            // once to the terminal). The state machine above still ran, so
+            // `ImeState` stays consistent; only the PTY write is skipped.
+            if focused_inline_of(Some(&focused_webview), &inline_parents, active_surface).is_some()
+            {
+                continue;
+            }
             let Some(workspace) = attached_workspace.iter().next() else {
                 tracing::warn!(
                     target: "ozmux_gui::input::ime",
@@ -272,6 +319,35 @@ pub(crate) fn read_ime_events(
             );
         }
     }
+}
+
+/// The logical-pixel anchor for the OS candidate window when an inline webview
+/// owns focus: the owning terminal node's top-left (physical px) plus the
+/// child's active overlay rect origin (`rect.y × cell_w`, `rect.x × cell_h`),
+/// divided by the window scale factor. `None` when the focus chain is gone
+/// (child/terminal despawned, no terminal node, or a sentinel rect) — the
+/// caller then leaves `ime_position` unchanged rather than mis-anchoring.
+fn inline_ime_position(
+    scale_factor: f32,
+    inline_parents: &Query<&ChildOf, With<InlineWebview>>,
+    inline_slots: &Query<&InlineWebview>,
+    anchors: &Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
+    overlays: &Query<&TerminalOverlays>,
+    metrics: &TerminalCellMetricsResource,
+    child: Entity,
+) -> Option<Vec2> {
+    let terminal = inline_parents.get(child).ok()?.parent();
+    let slot = inline_slots.get(child).ok()?.slot;
+    let (node, ui_xform, _) = anchors.get(terminal).ok()?;
+    let rect = *overlays.get(terminal).ok()?.rects.get(usize::from(slot))?;
+    if rect.z == 0 {
+        return None;
+    }
+    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
+    let host_origin_phys = ui_xform.translation - 0.5 * node.size();
+    let rect_origin_phys = Vec2::new(rect.y as f32 * cell_w_phys, rect.x as f32 * cell_h_phys);
+    Some((host_origin_phys + rect_origin_phys) / scale_factor.max(f32::EPSILON))
 }
 
 #[cfg(test)]
@@ -479,6 +555,7 @@ mod tests {
             .add_plugins(MultiplexerPlugin)
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
+        app.init_resource::<FocusedWebview>();
         app.insert_resource(CapturedKeys::default());
         app.add_observer(capture_key_input);
         app.add_message::<Ime>();
@@ -586,6 +663,142 @@ mod tests {
             captured[0].modifiers,
             TerminalModifiers::default(),
             "modifiers MUST be default — see input_codec.rs::encode_key ctrl path",
+        );
+    }
+
+    #[test]
+    fn ime_position_anchors_at_inline_rect_origin_for_focused_inline() {
+        use bevy::ui::{ComputedNode, UiGlobalTransform};
+        use bevy_terminal_renderer::CellMetrics;
+        use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalOverlays};
+        use ozmux_multiplexer::AttachedWorkspace;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<FocusedWebview>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+
+        let outcome = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.create_workspace(Some("default".into()))
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut()
+            .entity_mut(outcome.workspace)
+            .insert(AttachedWorkspace);
+        let surface = outcome.surface;
+
+        // Host node spans the window with no transform → top-left at (0, 0).
+        // Inline rect at rows 2.., cols 3.. → phys origin (24, 32) at 8x16 px.
+        let mut overlays = TerminalOverlays::default();
+        overlays.rects[0] = bevy::math::IVec4::new(2, 3, 10, 40);
+        app.world_mut().entity_mut(surface).insert((
+            crate::ui::TerminalSurfaceMarker,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            TerminalGrid::default(),
+            overlays,
+        ));
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                InlineWebview {
+                    view_id: "inline".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ime_enabled: false,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+
+        app.world_mut().run_system_once(ime_policy_system).unwrap();
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Window, With<PrimaryWindow>>();
+        let window = q.single(app.world()).expect("primary window");
+        assert!(
+            window.ime_enabled,
+            "IME must stay enabled while an inline webview owns focus"
+        );
+        assert!(
+            window.ime_position.abs_diff_eq(Vec2::new(24.0, 32.0), 1e-3),
+            "candidate window must anchor at the inline rect origin (phys 24,32 / scale 1), got {:?}",
+            window.ime_position,
+        );
+    }
+
+    #[test]
+    fn commit_suppressed_to_pty_while_inline_focused() {
+        let (mut app, term_entity) = build_app_with_attached_entity();
+
+        // Focus an inline child of the active surface.
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(term_entity),
+                InlineWebview {
+                    view_id: "inline".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .write(Ime::Commit {
+                window: Entity::PLACEHOLDER,
+                value: "こんにちは".into(),
+            });
+
+        app.update();
+
+        let captured = app
+            .world()
+            .resource::<CapturedKeys>()
+            .0
+            .lock()
+            .unwrap()
+            .clone();
+        assert!(
+            captured.is_empty(),
+            "an IME commit while inline-focused must NOT write to the PTY (bevy_cef commits it to the page); captured: {:?}",
+            captured,
+        );
+        // The composition state machine still ran: ImeState cleared on commit.
+        assert!(
+            !app.world().resource::<ImeState>().is_composing(),
+            "the state machine must still consume the commit, leaving ImeState non-composing",
         );
     }
 

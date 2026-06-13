@@ -4,6 +4,8 @@
 //! surface (capability-gated `host.call` frames forwarded to the single Node host
 //! via `HostRpc`, with replies routed back on the `ozmux` channel).
 
+use self::preload::{build_preload, webview_url};
+use crate::inline_webview::{InlineWebview, focused_inline_of};
 use crate::osc_webview::GrantedNamespaces;
 use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
@@ -20,11 +22,7 @@ use ozmux_multiplexer::{
 };
 use serde_json::Value;
 
-/// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension surface,
-/// where `entry` is the client's HTML path relative to the extension dir.
-fn webview_url(extension_name: &str, entry: &str) -> String {
-    format!("ozmux-ext://{extension_name}/{entry}")
-}
+pub(crate) mod preload;
 
 /// One frame emitted by the page bridge `host_bridge.js` via
 /// `cef.emit({ kind: 'host.call', … })`, inspected by `on_host_call_frame`.
@@ -91,11 +89,6 @@ impl HostRpc {
 #[derive(Component)]
 struct WebviewMountUnresolved;
 
-/// JS defining the new-model `window.<ns>.<method>` host-API bridge over
-/// `cef.emit` / `cef.listen`, injected (with `window.__ozmuxGranted`) per
-/// webview as a `PreloadScripts` entry.
-const HOST_BRIDGE_JS: &str = include_str!("extension_render/host_bridge.js");
-
 /// The `kind` discriminator that routes a `Receive<OzmuxFrame>` to the new-model
 /// host-API path (`on_host_call_frame`). The page side emits the matching literal
 /// in `host_bridge.js`.
@@ -107,7 +100,7 @@ const HOST_CALL_KIND: &str = "host.call";
 /// registry on each request, so entries registered after `CefPlugin::build()`
 /// resolve; unregistered names 404. The host-API bridge is intentionally NOT
 /// registered as a global extension here; it is injected per-webview via
-/// `PreloadScripts` in `finish_extension_setup` (see the NOTE there).
+/// `PreloadScripts` by `preload::build_preload` (see the NOTE there).
 pub fn cef_plugin(registry: AssetSourceRegistry) -> CefPlugin {
     CefPlugin {
         custom_schemes: vec![custom_scheme(registry)],
@@ -172,36 +165,36 @@ impl Plugin for OzmuxExtensionRenderPlugin {
 /// from the active pane fixes both — keyboard follows the focused pane, and CEF
 /// blurs the webview on focus-leave (`bevy_cef`'s `apply_webview_focus` releases
 /// CEF focus when `FocusedWebview` becomes `None`).
+///
+/// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
+/// inline webview child (`InlineWebview`) whose `ChildOf` parent is the
+/// resolved active surface, the click-granted inline focus stands (spec §7,
+/// single focus source). Without this arm the per-frame sync would map the
+/// active terminal surface to `None` and clobber an inline click one frame
+/// after `dispatch_mouse_buttons` set it. Every other case — a different pane
+/// or surface becoming active, the inline child despawning, a tab-type
+/// webview surface — keeps the drive-from-active-pane behavior above.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
+    inline_parents: Query<&ChildOf, With<InlineWebview>>,
 ) {
-    let active = active_webview(&mux, &attached_workspace, &webviews, &non_interactive);
+    let active_surface = attached_workspace
+        .iter()
+        .next()
+        .and_then(|workspace| mux.workspaces_active_pane(workspace))
+        .and_then(|pane| mux.panes_active_surface(pane));
+    if focused_inline_of(Some(&focused), &inline_parents, active_surface).is_some() {
+        return;
+    }
+    let active = active_surface
+        .filter(|surface| webviews.contains(*surface) && !non_interactive.contains(*surface));
     if focused.0 != active {
         focused.0 = active;
     }
-}
-
-/// The active pane's focused webview entity, or `None` when the active surface
-/// is not a webview (e.g. a terminal pane) or is render-only
-/// (`NonInteractive`). For extension surfaces the webview is on the Surface
-/// entity itself (`WebviewSource`).
-fn active_webview(
-    mux: &MultiplexerCommands,
-    attached_workspace: &Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    webviews: &Query<(), With<WebviewSource>>,
-    non_interactive: &Query<(), With<NonInteractive>>,
-) -> Option<Entity> {
-    let workspace = attached_workspace.iter().next()?;
-    let pane = mux.workspaces_active_pane(workspace)?;
-    let surface = mux.panes_active_surface(pane)?;
-    if webviews.contains(surface) && !non_interactive.contains(surface) {
-        return Some(surface);
-    }
-    None
 }
 
 /// Attaches a `bevy_cef` webview to each Extension Surface host once its pane
@@ -262,16 +255,8 @@ fn finish_extension_setup(
         let name = owner.0.as_str();
         let url = webview_url(name, &entry);
         tracing::debug!(?surface, ?logical, %url, "spawning extension webview");
-        // NOTE: `window.<ns>` MUST be a PreloadScript, not a global CefExtension.
-        // host_bridge.js calls cef.listen() at top level; a global extension runs
-        // that during V8 context creation, where there is no entered V8 context, so
-        // the native cef.listen handler's v8_context_get_current_context() crashes
-        // the render process. PreloadScripts are eval'd at on_context_created inside
-        // an entered context (and their exceptions are caught, not fatal), so
-        // cef.listen registers correctly there.
-        let ctx_js = context_preload_js(workspace, pane, surface, name);
-        let granted_json = match granted.get(surface) {
-            Ok(g) => serde_json::to_string(&g.0).expect("namespace set serializes infallibly"),
+        let preload = match granted.get(surface) {
+            Ok(g) => build_preload(workspace, pane, surface, name, g),
             Err(_) => {
                 // NOTE: every OSC-mounted Extension surface is stamped with
                 // GrantedNamespaces at mount; reaching setup without it means a
@@ -281,11 +266,15 @@ fn finish_extension_setup(
                     ?surface,
                     "extension surface has no GrantedNamespaces; injecting empty grant"
                 );
-                "[]".to_string()
+                build_preload(
+                    workspace,
+                    pane,
+                    surface,
+                    name,
+                    &GrantedNamespaces::default(),
+                )
             }
         };
-        let granted_js = format!("window.__ozmuxGranted={granted_json};");
-        let preload = PreloadScripts::from([ctx_js, granted_js, HOST_BRIDGE_JS.to_string()]);
         commands.entity(surface).insert((
             WebviewSource::new(url),
             WebviewSize(logical),
@@ -306,28 +295,6 @@ fn surface_multiplexer_chain(
     let pane = mux.pane_of_surface(surface)?;
     let workspace = mux.workspace_of_pane(pane)?;
     Some((workspace, pane))
-}
-
-/// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`.
-///
-/// NOTE: PreloadScripts are joined with `;` and eval'd as one unit, so this MUST
-/// be a complete statement; a syntax error here would break the bridge eval too.
-fn context_preload_js(
-    workspace: Entity,
-    pane: Entity,
-    surface: Entity,
-    extension_name: &str,
-) -> String {
-    let workspace_id = workspace.to_bits().to_string();
-    // NOTE: the JS keys "sessionId"/"windowId" keep their legacy names on purpose — a
-    // browser-side wire contract the SDK surface client reads; renaming them breaks extensions.
-    format!(
-        "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:\"extension\",extensionName:{n:?}}};",
-        s = workspace_id,
-        p = pane.to_bits().to_string(),
-        a = surface.to_bits().to_string(),
-        n = extension_name,
-    )
 }
 
 /// Converts a host pane's `ComputedNode` physical-pixel size to the logical
@@ -729,36 +696,6 @@ mod tests {
     }
 
     #[test]
-    fn context_preload_js_assigns_window_context_with_workspace_bits_as_window_id() {
-        let world = &mut App::new();
-        world
-            .add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
-        let (workspace, pane, surface) = world
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.workspace, o.pane, o.surface)
-            })
-            .unwrap();
-        world.world_mut().flush();
-
-        let js = context_preload_js(workspace, pane, surface, "memo");
-        let s = workspace.to_bits().to_string();
-        assert!(js.starts_with("window.__ozmuxContext="));
-        assert!(js.ends_with("};"));
-        assert!(js.contains(&format!("sessionId:\"{s}\"")));
-        assert!(
-            js.contains(&format!("windowId:\"{s}\"")),
-            "windowId must equal sessionId per the design"
-        );
-        assert!(js.contains(&format!("paneId:\"{}\"", pane.to_bits())));
-        assert!(js.contains(&format!("surfaceId:\"{}\"", surface.to_bits())));
-        assert!(js.contains("role:\"extension\""));
-        assert!(js.contains("extensionName:\"memo\""));
-    }
-
-    #[test]
     fn pane_logical_size_scales_physical_to_logical() {
         assert_eq!(
             pane_logical_size(Vec2::new(640.0, 480.0), 1.0),
@@ -837,6 +774,68 @@ mod tests {
             app.world().resource::<FocusedWebview>().0,
             None,
             "NonInteractive webview surface must never become FocusedWebview"
+        );
+    }
+
+    #[test]
+    fn sync_preserves_inline_focus_on_the_active_surface_and_clears_on_pane_switch() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(MultiplexerPlugin);
+        app.init_resource::<FocusedWebview>();
+        app.add_systems(Update, sync_focused_webview);
+
+        let (workspace, terminal_pane, terminal_surface) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane, o.surface)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
+
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(terminal_surface),
+                InlineWebview {
+                    view_id: "inline-test".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+        app.insert_resource(FocusedWebview(Some(child)));
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "an inline-focused child of the ACTIVE terminal surface must survive the sync"
+        );
+
+        // Splitting promotes the fresh pane to active; the focused child's
+        // parent is no longer the active surface, so the preservation arm
+        // must NOT hold and the terminal-pane mapping (None) must win.
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(terminal_pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split_pane")
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "inline focus must clear once a different pane/surface becomes active"
         );
     }
 
@@ -1128,7 +1127,7 @@ mod tests {
             .get::<PreloadScripts>(host)
             .expect("new-model surface must carry the host bridge as a PreloadScript");
         assert!(
-            preload.0.iter().any(|s| s == HOST_BRIDGE_JS),
+            preload.0.iter().any(|s| s == preload::HOST_BRIDGE_JS),
             "the host-API bridge JS must be injected for a surface with GrantedNamespaces"
         );
         assert!(

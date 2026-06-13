@@ -29,6 +29,24 @@ cargo run               # or: make run
 - `sdk/typescript` — `@ozmux/sdk` (consumed by extensions)
 - `extensions/memo` — the `@memo` Node extension
 
+## Inline webviews
+
+A registered extension view can render **inline in the terminal text flow** (a
+live CEF webview composited in the terminal shader, scrolling with the text).
+A program in the shell mounts one by writing an OSC 5379 sequence; the
+`@ozmux/sdk/inline` helper builds it:
+
+```ts
+import { mountInline } from '@ozmux/sdk/inline';
+process.stdout.write('memo:\n');
+process.stdout.write(mountInline('memo.main', { rows: 12, cols: 48 }));
+```
+
+Try the bundled sample inside an ozmux terminal (macOS, `cargo run --features
+debug`): `node extensions/memo/mount.ts`. Click the view to focus it; keys,
+wheel, and IME then route to the page; `Ctrl+Shift+Escape` returns focus to the
+terminal. Full protocol, focus model, and limits: [`docs/inline-webview.md`](docs/inline-webview.md).
+
 ## Development
 
 See `CLAUDE.md` for architecture and `.claude/rules/` for coding conventions.

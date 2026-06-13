@@ -301,7 +301,7 @@ pub struct Shortcuts {
 /// TOML reads the `[shortcuts.bindings]` table; the `kebab-case` serde
 /// rename maps each `close-pane = "Cmd+Shift+D"` line to the matching
 /// field. `#[serde(default)]` at struct level seeds missing fields from
-/// `Bindings::default()` (the 19 defaults). `deny_unknown_fields` rejects
+/// `Bindings::default()` (the 20 defaults). `deny_unknown_fields` rejects
 /// typos and unimplemented-action keys at load time.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
@@ -363,6 +363,9 @@ pub struct Bindings {
     /// Paste the system clipboard into the active terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub paste: Option<KeyChord>,
+    /// Releases keyboard focus from a focused inline webview back to the terminal.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub release_inline_focus: Option<KeyChord>,
 }
 
 fn parse_default_chord(s: &str) -> KeyChord {
@@ -391,6 +394,7 @@ impl Default for Bindings {
             focus_workspace_next: Some(parse_default_chord("Cmd+Shift+]")),
             copy: Some(parse_default_chord("Cmd+C")),
             paste: Some(parse_default_chord("Cmd+V")),
+            release_inline_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
         }
     }
 }
@@ -511,11 +515,16 @@ impl Bindings {
             ),
             ("copy", &self.copy, ShortcutAction::Copy),
             ("paste", &self.paste, ShortcutAction::Paste),
+            (
+                "release-inline-focus",
+                &self.release_inline_focus,
+                ShortcutAction::ReleaseInlineFocus,
+            ),
         ]
         .into_iter()
     }
 
-    /// KeyChord -> Action reverse lookup. Linear scan of 19 entries.
+    /// KeyChord -> Action reverse lookup. Linear scan of 20 entries.
     /// Hot path; cheap given the fixed size. HashMap caching deferred per spec.
     pub fn lookup(&self, chord: &KeyChord) -> Option<ShortcutAction> {
         self.iter().find_map(|(_, bound, action)| {
@@ -620,6 +629,8 @@ pub enum ShortcutAction {
     Copy,
     /// Paste the system clipboard into the active terminal.
     Paste,
+    /// Releases keyboard focus from a focused inline webview back to the terminal.
+    ReleaseInlineFocus,
 }
 
 /// Layout direction shared by `FocusPane` and `ResizePane`.
@@ -888,7 +899,7 @@ mod tests {
     }
 
     #[test]
-    fn bindings_default_has_all_19_fields_some() {
+    fn bindings_default_has_all_20_fields_some() {
         let b = Bindings::default();
         assert!(b.close_pane.is_some());
         assert!(b.focus_pane_left.is_some());
@@ -909,6 +920,7 @@ mod tests {
         assert!(b.focus_workspace_next.is_some());
         assert!(b.copy.is_some());
         assert!(b.paste.is_some());
+        assert!(b.release_inline_focus.is_some());
     }
 
     #[test]
@@ -976,9 +988,9 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_19_entries() {
+    fn iter_yields_20_entries() {
         let b = Bindings::default();
-        assert_eq!(b.iter().count(), 19);
+        assert_eq!(b.iter().count(), 20);
     }
 
     #[test]
@@ -986,7 +998,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Any change to defaults updates this string.
-        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-surface":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-surface":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-workspace":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-workspace-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-workspace-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}}}}"#;
+        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-surface":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-surface":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-workspace":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-workspace-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-workspace-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
         assert_eq!(json, expected);
     }
 

@@ -19,6 +19,7 @@ use crate::action::workspace::{
 };
 use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
 use crate::configs::OzmuxConfigsResource;
+use crate::inline_webview::{InlineWebview, focused_inline_of};
 use crate::input::ime::{ImeState, read_ime_events};
 use crate::system_set::OzmuxSystems;
 use crate::ui::copy_mode::{
@@ -27,6 +28,7 @@ use crate::ui::copy_mode::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use bevy_cef::prelude::FocusedWebview;
 use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
     Direction as ConfigDirection, KeyChord, Modifiers, ShortcutAction, SplitDirection,
@@ -109,17 +111,20 @@ pub(crate) fn dispatch_focused_key(
         &mut bevy_terminal::PtyHandle,
         &mut bevy_terminal::Coalescer,
     )>,
+    mut focused_webview: Option<ResMut<FocusedWebview>>,
     mux: MultiplexerCommands,
     windows: Query<&Window>,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
     keys: Res<ButtonInput<KeyCode>>,
     configs: Res<OzmuxConfigsResource>,
     copy_modes: Query<(), With<CopyModeState>>,
+    inline_parents: Query<&ChildOf, With<InlineWebview>>,
 ) {
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
     // sees the same modifier snapshot. Read once outside the loop.
     let mods = current_modifiers(&keys);
+    let mods_empty = mods == Modifiers::default();
     let mut just_exited: HashSet<Entity> = HashSet::new();
 
     for ev in events.read() {
@@ -153,8 +158,31 @@ pub(crate) fn dispatch_focused_key(
 
         let active_pane = mux.workspaces_active_pane(workspace);
         let focused_entity = active_pane.and_then(|p| mux.panes_active_surface(p));
+        let focused_inline =
+            focused_inline_of(focused_webview.as_deref(), &inline_parents, focused_entity);
+
+        // NOTE: the release-chord check is hoisted ABOVE both the Escape
+        // pre-handler and the copy-mode gate (spec §7): the pre-handler would
+        // otherwise consume the chord's Escape while scrolled back (snapping
+        // the viewport and culling the focused webview), and copy mode would
+        // swallow it outright — leaving no way to release inline focus.
+        if focused_inline.is_some()
+            && let Some(release_chord) = bindings.release_inline_focus.as_ref()
+            && bevy_to_configs_key(&ev.logical_key)
+                .is_some_and(|key| release_chord.key == key && release_chord.modifiers == mods)
+        {
+            if ev.repeat {
+                continue;
+            }
+            if let Some(ref mut fw) = focused_webview {
+                fw.0 = None;
+            }
+            continue;
+        }
 
         if matches!(ev.logical_key, Key::Escape)
+            && mods_empty
+            && focused_inline.is_none()
             && let Some(entity) = focused_entity
             && copy_modes.get(entity).is_err()
             && let Ok((mut handle, _pty, mut coalescer)) = handles.get_mut(entity)
@@ -164,7 +192,13 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
+        // NOTE: a focused inline webview wins over copy mode (same precedence
+        // as the wheel path in `mouse_wheel.rs`): without the `focused_inline`
+        // guard the copy-mode gate would consume keystrokes before the
+        // inline-focus PTY suppression below, so keys would drive the vi cursor
+        // instead of reaching the focused page while copy mode is active.
         if let Some(entity) = focused_entity
+            && focused_inline.is_none()
             && copy_modes.get(entity).is_ok()
             && !just_exited.contains(&entity)
         {
@@ -196,9 +230,19 @@ pub(crate) fn dispatch_focused_key(
                 if ev.repeat {
                     continue;
                 }
-                execute_action(&mut commands, &mux, action, workspace);
+                execute_action(
+                    focused_webview.as_deref_mut(),
+                    &mut commands,
+                    &mux,
+                    action,
+                    workspace,
+                );
                 continue;
             }
+        }
+
+        if focused_inline.is_some() {
+            continue;
         }
 
         if let Some(tk) = bevy_to_terminal_key(&ev.logical_key) {
@@ -298,7 +342,11 @@ fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
 /// actions target the active Terminal Surface; workspace and pane/surface
 /// actions target `workspace`; not-yet-implemented variants fall through to a
 /// `tracing::debug!` log.
+///
+/// `focused_webview` is `Option<>` so callers that run without `bevy_cef`
+/// (e.g., unit tests) can pass `None` and remain green.
 fn execute_action(
+    mut focused_webview: Option<&mut FocusedWebview>,
     commands: &mut Commands,
     mux: &MultiplexerCommands,
     action: ShortcutAction,
@@ -373,6 +421,11 @@ fn execute_action(
         }
         ShortcutAction::CloseSurface => {
             commands.trigger(CloseSurfaceActionEvent { workspace });
+        }
+        ShortcutAction::ReleaseInlineFocus => {
+            if let Some(ref mut fw) = focused_webview {
+                fw.0 = None;
+            }
         }
         other => tracing::debug!(
             target: "ozmux_gui::input",
@@ -620,6 +673,66 @@ mod tests {
         let surface = install_active_terminal_surface(app);
         app.world_mut().entity_mut(surface).insert(bundle);
         surface
+    }
+
+    /// Spawns an `InlineWebview` child of `surface` and points the
+    /// `FocusedWebview` resource at it, mirroring the click-to-focus path.
+    fn spawn_focused_inline_child(app: &mut App, surface: Entity) -> Entity {
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                crate::inline_webview::InlineWebview {
+                    view_id: "inline-test".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+        app.insert_resource(FocusedWebview(Some(child)));
+        child
+    }
+
+    /// Feeds enough lines into the surface's VT emulator to grow scrollback,
+    /// then scrolls the viewport up so `is_at_bottom()` turns false.
+    fn scroll_surface_back(app: &mut App, surface: Entity) {
+        app.world_mut()
+            .run_system_once(
+                move |mut q: Query<(
+                    &mut bevy_terminal::TerminalHandle,
+                    &mut bevy_terminal::Coalescer,
+                )>| {
+                    let (mut handle, mut coalescer) = q.get_mut(surface).unwrap();
+                    for _ in 0..30 {
+                        handle.advance(b"x\r\n");
+                    }
+                    handle.scroll(&mut coalescer, 3);
+                },
+            )
+            .unwrap();
+        assert!(
+            !is_at_bottom(app, surface),
+            "precondition: viewport must be scrolled back"
+        );
+    }
+
+    fn is_at_bottom(app: &App, surface: Entity) -> bool {
+        app.world()
+            .get::<bevy_terminal::TerminalHandle>(surface)
+            .unwrap()
+            .is_at_bottom()
+    }
+
+    fn press_ctrl_shift(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::ControlLeft);
+        keys.press(KeyCode::ShiftLeft);
+    }
+
+    fn release_ctrl_shift(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::ControlLeft);
+        keys.release(KeyCode::ShiftLeft);
     }
 
     #[test]
@@ -1245,7 +1358,7 @@ mod tests {
     fn run_execute_action(app: &mut App, action: ShortcutAction, workspace: Entity) {
         app.world_mut()
             .run_system_once(move |mut commands: Commands, mux: MultiplexerCommands| {
-                execute_action(&mut commands, &mux, action.clone(), workspace);
+                execute_action(None, &mut commands, &mux, action.clone(), workspace);
             })
             .unwrap();
         app.world_mut().flush();
@@ -1430,6 +1543,240 @@ mod tests {
             captured.is_empty(),
             "dispatch_focused_key must suppress keys while ImeState is composing; captured: {:?}",
             captured,
+        );
+    }
+
+    #[test]
+    fn release_chord_clears_inline_focus_even_when_scrolled_back() {
+        let (mut app, window_entity) = make_app(true);
+        let surface = install_active_terminal_surface_with_handle(&mut app);
+        scroll_surface_back(&mut app, surface);
+        spawn_focused_inline_child(&mut app, surface);
+
+        press_ctrl_shift(&mut app);
+        press(&mut app, window_entity, Bk::Escape);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "Ctrl+Shift+Escape must clear inline focus even while scrolled back"
+        );
+        assert!(
+            !is_at_bottom(&app, surface),
+            "the release chord must NOT snap the viewport to the bottom"
+        );
+    }
+
+    #[test]
+    fn release_chord_works_during_copy_mode() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let surface = install_active_terminal_surface_with_handle(&mut app);
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        spawn_focused_inline_child(&mut app, surface);
+
+        press_ctrl_shift(&mut app);
+        press(&mut app, window_entity, Bk::Escape);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "Ctrl+Shift+Escape must clear inline focus even while copy mode is active"
+        );
+        assert!(
+            app.world()
+                .get::<crate::ui::copy_mode::CopyModeState>(surface)
+                .is_some(),
+            "the hoisted chord check must consume the event before copy mode's Escape arm"
+        );
+
+        release_ctrl_shift(&mut app);
+        press(&mut app, window_entity, Bk::Character("x".into()));
+        app.update();
+
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "copy mode must still swallow ordinary keys after the chord released focus; captured: {:?}",
+            captured,
+        );
+    }
+
+    #[test]
+    fn focused_inline_webview_wins_over_copy_mode_for_shortcuts() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedClipboardOps::default());
+        app.add_observer(capture_copy_op);
+        let surface = install_active_terminal_surface(&mut app);
+        app.world_mut()
+            .entity_mut(surface)
+            .insert(crate::ui::copy_mode::CopyModeState);
+        spawn_focused_inline_child(&mut app, surface);
+
+        // Copy mode normally SWALLOWS Cmd+C (see
+        // `cmd_c_in_copy_mode_does_not_trigger_copy_event`). With an inline
+        // webview focused the copy-mode gate must be skipped so global
+        // shortcuts still fire — the firing Copy is what distinguishes the
+        // fixed precedence (focused inline wins over copy mode, matching the
+        // wheel path) from the pre-fix behavior, where copy mode ate the chord.
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("c".into()));
+        app.update();
+
+        let ops = app
+            .world()
+            .resource::<CapturedClipboardOps>()
+            .0
+            .lock()
+            .unwrap();
+        assert_eq!(
+            *ops,
+            vec!["copy"],
+            "a focused inline webview must let the Cmd+C shortcut fire past the copy-mode gate"
+        );
+    }
+
+    #[test]
+    fn release_chord_repeat_is_consumed_without_clearing_focus() {
+        let (mut app, window_entity) = make_app(true);
+        let surface = install_active_terminal_surface_with_handle(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+
+        press_ctrl_shift(&mut app);
+        let ev = KeyboardInput {
+            key_code: KeyCode::Unidentified(NativeKeyCode::Unidentified),
+            logical_key: Bk::Escape,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: true,
+            window: window_entity,
+        };
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+            .write(ev);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "a repeat release-chord event must be consumed without clearing focus"
+        );
+    }
+
+    #[test]
+    fn unmodified_escape_still_snaps_to_bottom_without_inline_focus() {
+        let (mut app, window_entity) = make_app(true);
+        let surface = install_active_terminal_surface_with_handle(&mut app);
+        scroll_surface_back(&mut app, surface);
+
+        press(&mut app, window_entity, Bk::Escape);
+        app.update();
+
+        assert!(
+            is_at_bottom(&app, surface),
+            "plain Escape while scrolled back (no inline focus) must snap to bottom"
+        );
+    }
+
+    #[test]
+    fn modified_escape_skips_the_escape_pre_handler() {
+        let (mut app, window_entity) = make_app(true);
+        let surface = install_active_terminal_surface_with_handle(&mut app);
+        scroll_surface_back(&mut app, surface);
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::AltLeft);
+        }
+        press(&mut app, window_entity, Bk::Escape);
+        app.update();
+
+        assert!(
+            !is_at_bottom(&app, surface),
+            "Alt+Escape must not trigger the scroll-to-bottom Escape pre-handler"
+        );
+    }
+
+    #[test]
+    fn escape_while_inline_focused_neither_snaps_nor_forwards() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let surface = install_active_terminal_surface_with_handle(&mut app);
+        scroll_surface_back(&mut app, surface);
+        let child = spawn_focused_inline_child(&mut app, surface);
+
+        press(&mut app, window_entity, Bk::Escape);
+        app.update();
+
+        assert!(
+            !is_at_bottom(&app, surface),
+            "plain Escape typed into a focused page must not snap the viewport"
+        );
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert!(
+            captured.is_empty(),
+            "plain Escape while inline-focused must not forward to the PTY; captured: {:?}",
+            captured,
+        );
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "plain Escape must not release inline focus"
+        );
+    }
+
+    #[test]
+    fn keys_suppressed_to_pty_while_inline_focused_but_shortcuts_fire() {
+        let (mut app, window_entity) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        app.insert_resource(CapturedClipboardOps::default());
+        app.add_observer(capture_copy_op);
+        let surface = install_active_terminal_surface_with_handle(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+
+        press(&mut app, window_entity, Bk::Character("h".into()));
+        app.update();
+        {
+            let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+            assert!(
+                captured.is_empty(),
+                "printable keys must not reach the PTY while an inline webview holds focus; captured: {:?}",
+                captured,
+            );
+        }
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press(&mut app, window_entity, Bk::Character("c".into()));
+        app.update();
+
+        let ops = app
+            .world()
+            .resource::<CapturedClipboardOps>()
+            .0
+            .lock()
+            .unwrap();
+        assert_eq!(
+            *ops,
+            vec!["copy"],
+            "bound global shortcuts must still execute while inline-focused"
+        );
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "Cmd+C must not clear inline focus"
         );
     }
 }

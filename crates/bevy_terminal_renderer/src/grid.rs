@@ -25,6 +25,7 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
     grid.cursor = Some(snap.cursor.clone());
     grid.display_offset = snap.display_offset;
     grid.history_size = snap.history_size;
+    grid.history_base = snap.history_base;
     grid.last_seq = snap.seq;
     grid.modes = snap.modes.clone();
     grid.hyperlinks.clear();
@@ -45,6 +46,8 @@ fn apply_delta(delta: On<FrameDelta>, mut terminals: Query<&mut TerminalGrid>) {
     };
     grid.cursor = Some(delta.cursor.clone());
     grid.display_offset = delta.display_offset;
+    grid.history_size = delta.history_size;
+    grid.history_base = delta.history_base;
     grid.last_seq = delta.seq;
     grid.vi_cursor = delta.vi_cursor;
     grid.selection = delta.selection;
@@ -124,6 +127,7 @@ mod tests {
             }],
             display_offset: 0,
             history_size: 0,
+            history_base: 0,
             vi_cursor: None,
             selection: None,
         });
@@ -132,6 +136,49 @@ mod tests {
         assert_eq!(grid.hyperlinks.len(), 1);
         assert_eq!(grid.hyperlinks[0].0, HyperlinkId(1));
         assert_eq!(grid.hyperlinks[0].1.as_str(), "https://new");
+    }
+
+    #[test]
+    fn apply_delta_mirrors_history_fields() {
+        let mut app = App::new();
+        app.add_observer(apply_snapshot).add_observer(apply_delta);
+        let entity = app.world_mut().spawn(grid_with(vec![])).id();
+        app.world_mut().trigger(FrameSnapshot {
+            entity,
+            seq: 1,
+            cols: 1,
+            rows: 1,
+            cursor: Default::default(),
+            rows_data: vec![Row { runs: vec![] }],
+            reason: Default::default(),
+            modes: vec![],
+            hyperlinks: vec![],
+            display_offset: 0,
+            history_size: 7,
+            history_base: 3,
+            vi_cursor: None,
+            selection: None,
+        });
+        app.update();
+        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
+        assert_eq!(grid.history_size, 7);
+        assert_eq!(grid.history_base, 3);
+        app.world_mut().trigger(FrameDelta {
+            entity,
+            seq: 2,
+            cursor: Default::default(),
+            dirty_rows: vec![],
+            hyperlinks: vec![],
+            display_offset: 0,
+            history_size: 9,
+            history_base: 5,
+            vi_cursor: None,
+            selection: None,
+        });
+        app.update();
+        let grid = app.world().get::<TerminalGrid>(entity).unwrap();
+        assert_eq!(grid.history_size, 9);
+        assert_eq!(grid.history_base, 5);
     }
 
     #[test]
@@ -161,6 +208,8 @@ mod tests {
                 },
             ],
             display_offset: 0,
+            history_size: 0,
+            history_base: 0,
             vi_cursor: None,
             selection: None,
         });

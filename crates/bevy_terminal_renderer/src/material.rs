@@ -75,11 +75,34 @@ pub struct TerminalUiMaterial {
     #[texture(3)]
     #[sampler(4)]
     atlas: Handle<Image>,
+    #[texture(5)]
+    #[sampler(6)]
+    overlay0: Option<Handle<Image>>,
+    #[texture(7)]
+    #[sampler(8)]
+    overlay1: Option<Handle<Image>>,
+    #[texture(9)]
+    #[sampler(10)]
+    overlay2: Option<Handle<Image>>,
+    #[texture(11)]
+    #[sampler(12)]
+    overlay3: Option<Handle<Image>>,
 }
 
 impl UiMaterial for TerminalUiMaterial {
     fn fragment_shader() -> ShaderRef {
         TERMINAL_SHADER_HANDLE.into()
+    }
+}
+
+impl TerminalUiMaterial {
+    /// Copies the slot-indexed overlay handles onto the per-slot material
+    /// fields. The ONLY place that maps slot index -> `overlay<i>` field.
+    fn set_overlays(&mut self, textures: &[Option<Handle<Image>>; OVERLAY_SLOTS]) {
+        self.overlay0 = textures[0].clone();
+        self.overlay1 = textures[1].clone();
+        self.overlay2 = textures[2].clone();
+        self.overlay3 = textures[3].clone();
     }
 }
 
@@ -93,6 +116,44 @@ pub struct PaneDim(pub f32);
 impl Default for PaneDim {
     fn default() -> Self {
         Self(1.0)
+    }
+}
+
+/// Number of inline-overlay texture slots on `TerminalUiMaterial`.
+///
+/// Slot index = array index = `overlay<i>` field order (NOT the WGSL binding
+/// number). Hard upper bound per terminal surface (spec §6.1).
+pub const OVERLAY_SLOTS: usize = 4;
+
+/// Per-terminal overlay placements + textures, derived every frame by the
+/// consumer (e.g. ozmux-gui's inline-webview projection) and consumed by
+/// `update_terminal_material` — the only material mutation site. The renderer
+/// knows nothing about what the textures contain.
+///
+/// # Invariants
+///
+/// - `rects[i]` is `(row, col, rows, cols)` in CELL coordinates; `row` may be
+///   negative (rect partially above the viewport). `rows == 0` is the
+///   inactive-slot sentinel — the shader skips the slot; the renderer binds
+///   `textures[i]` regardless, so consumers should set freed slots to `None`
+///   (the rebuild-every-frame contract below does this naturally).
+/// - Consumers must rebuild this component from live state every frame
+///   (all-sentinel start), so stale texture handles cannot outlive their
+///   producers (spec §5).
+#[derive(Component, Clone, Debug)]
+pub struct TerminalOverlays {
+    /// Placement rects, slot-indexed: `(row, col, rows, cols)` in cells.
+    pub rects: [IVec4; OVERLAY_SLOTS],
+    /// Texture handles, slot-indexed; `None` for inactive slots.
+    pub textures: [Option<Handle<Image>>; OVERLAY_SLOTS],
+}
+
+impl Default for TerminalOverlays {
+    fn default() -> Self {
+        Self {
+            rects: [IVec4::ZERO; OVERLAY_SLOTS],
+            textures: [const { None }; OVERLAY_SLOTS],
+        }
     }
 }
 
@@ -118,7 +179,9 @@ impl Default for PaneDim {
 ///
 /// Field offsets in bytes. `max_overflow_phys` fills the 4-byte padding slot
 /// at offset 76 that encase would otherwise insert before `bg_padding_color`
-/// (Vec4 needs 16-byte alignment, lands at offset 80; total 96 bytes,
+/// (Vec4 needs 16-byte alignment, lands at offset 80). `overlay_rects`
+/// (`array<vec4<i32>, 4>`) also needs 16-byte alignment, so encase pads
+/// 4 bytes after `dim` and lands it at offset 112 (total 176 bytes,
 /// 16-byte aligned):
 ///
 /// | Offset | Field                       |
@@ -143,6 +206,7 @@ impl Default for PaneDim {
 /// | 96     | `hover_hyperlink_id`        |
 /// | 100    | `hover_active`              |
 /// | 104    | `dim`                       |
+/// | 112    | `overlay_rects`             |
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -182,6 +246,9 @@ struct TerminalParams {
     /// hand-written `Default` below sets this to `1.0` so an un-updated
     /// material never renders dark (a derived `Default` would give `0.0`).
     dim: f32,
+    /// Slot-indexed inline-overlay rects `(row, col, rows, cols)` in cell
+    /// coords; `row` may be negative; `rows == 0` = inactive slot sentinel.
+    overlay_rects: [IVec4; OVERLAY_SLOTS],
 }
 
 impl Default for TerminalParams {
@@ -207,6 +274,7 @@ impl Default for TerminalParams {
             hover_hyperlink_id: 0,
             hover_active: 0,
             dim: 1.0,
+            overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
         }
     }
 }
@@ -277,6 +345,7 @@ impl TerminalParams {
             hover_hyperlink_id,
             hover_active,
             dim,
+            overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
         }
     }
 }
@@ -361,6 +430,7 @@ fn update_terminal_material(
         &mut TerminalMaterialState,
         &TerminalGrid,
         Option<&PaneDim>,
+        Option<&TerminalOverlays>,
     )>,
     fonts: Res<TerminalFonts>,
     palette_time: Res<Time>,
@@ -379,7 +449,10 @@ fn update_terminal_material(
     // reference to the initial (empty) atlas texture even after
     // `sync_atlas_image` re-uploads pixels — the glyphs are present on GPU
     // but the shader's `textureSampleLevel` returns 0. The actual GPU upload
-    // cost is bounded by `needs_rebuild` below.
+    // cost is bounded by `needs_rebuild` below. The same every-frame Modified
+    // is also the overlay-texture rebind lifeline: a bevy_cef headless target
+    // re-creates its GPU texture on resize, and only this rebuild repoints
+    // the bind group at it (spec §4).
     // NOTE: Skip the entire system when PrimaryWindow is transiently
     // absent (display hotplug, brief winit reconnect). Trade-off: the
     // `mat.params = ...` write below would fire AssetEvent::Modified
@@ -395,7 +468,7 @@ fn update_terminal_material(
     let dpr = window.scale_factor();
     let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
 
-    for (entity, handle, mut state, grid, pane_dim) in terminals.iter_mut() {
+    for (entity, handle, mut state, grid, pane_dim, overlays) in terminals.iter_mut() {
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
@@ -500,7 +573,7 @@ fn update_terminal_material(
 
         let dim = pane_dim.map_or(1.0, |d| d.0).clamp(0.0, 1.0);
         if let Some(mat) = materials.get_mut(&handle.0) {
-            mat.params = TerminalParams::new(
+            let mut params = TerminalParams::new(
                 grid,
                 cell_size_phys,
                 Vec2::new(atlas.width() as f32, atlas.height() as f32),
@@ -515,6 +588,16 @@ fn update_terminal_material(
                 hover_active,
                 dim,
             );
+            match overlays {
+                Some(o) => {
+                    params.overlay_rects = o.rects;
+                    mat.set_overlays(&o.textures);
+                }
+                None => {
+                    mat.set_overlays(&[const { None }; OVERLAY_SLOTS]);
+                }
+            }
+            mat.params = params;
         }
     }
 }
@@ -729,7 +812,30 @@ mod tests {
     }
 
     #[test]
-    fn terminal_params_uniform_size_is_112() {
-        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 112);
+    fn terminal_overlays_default_is_all_sentinel() {
+        let o = TerminalOverlays::default();
+        assert!(
+            o.rects.iter().all(|r| r.z == 0),
+            "rows == 0 sentinel on every slot"
+        );
+        assert!(o.textures.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn set_overlays_maps_slot_index_to_field_order() {
+        const H_A: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000001");
+        const H_B: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000002");
+        let mut mat = TerminalUiMaterial::default();
+        let textures = [Some(H_A), None, Some(H_B), None];
+        mat.set_overlays(&textures);
+        assert_eq!(mat.overlay0, Some(H_A));
+        assert_eq!(mat.overlay1, None);
+        assert_eq!(mat.overlay2, Some(H_B));
+        assert_eq!(mat.overlay3, None);
+    }
+
+    #[test]
+    fn terminal_params_uniform_size_includes_overlay_rects() {
+        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 176);
     }
 }
