@@ -115,17 +115,9 @@ impl DynamicRegistry {
 #[derive(Resource, Default)]
 pub(crate) struct OzmuxRpc {
     inflight: HashMap<String, (Entity, String, u64)>,
-    #[allow(
-        dead_code,
-        reason = "consumed by back-channel routing in stage1 tasks 7-9"
-    )]
     next_id: u64,
 }
 
-#[allow(
-    dead_code,
-    reason = "consumed by back-channel routing in stage1 tasks 7-9"
-)]
 impl OzmuxRpc {
     /// Mints the next global reqId.
     pub(crate) fn mint(&mut self) -> String {
@@ -149,12 +141,20 @@ impl OzmuxRpc {
     }
 
     /// Removes and returns one in-flight entry.
+    #[allow(
+        dead_code,
+        reason = "consumed by apply_control_events Reply drain in stage1 task 9"
+    )]
     pub(crate) fn take(&mut self, global_id: &str) -> Option<(Entity, String, u64)> {
         self.inflight.remove(global_id)
     }
 
     /// Removes every in-flight call for `connection_id`, returning each
     /// `(webview, pageReqId)` so the caller can reject the page Promise.
+    #[allow(
+        dead_code,
+        reason = "consumed by apply_control_events Disconnect drain in stage1 task 9"
+    )]
     pub(crate) fn drain_connection(&mut self, connection_id: u64) -> Vec<(Entity, String)> {
         self.inflight
             .extract_if(|_, (_, _, c)| *c == connection_id)
@@ -165,6 +165,11 @@ impl OzmuxRpc {
     /// Removes every in-flight call targeting `webview` (despawn prune).
     pub(crate) fn drain_webview(&mut self, webview: Entity) {
         self.inflight.retain(|_, (e, _, _)| *e != webview);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn count_in_flight_for_test(&self) -> usize {
+        self.inflight.len()
     }
 }
 
@@ -206,10 +211,6 @@ impl ConnectionWriters {
 
     /// Queues one NDJSON line to `connection_id`; returns false if the connection
     /// is gone or its writer has exited.
-    #[allow(
-        dead_code,
-        reason = "consumed by on_ozmux_call_frame in Task 8; until then only the test target calls send, so #[expect] would misfire under --all-targets"
-    )]
     pub(crate) fn send(&self, connection_id: u64, line: String) -> bool {
         let guard = self.0.read().unwrap();
         guard

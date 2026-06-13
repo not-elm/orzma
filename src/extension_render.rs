@@ -5,6 +5,7 @@
 //! via `HostRpc`, with replies routed back on the `ozmux` channel).
 
 use self::preload::{build_preload, webview_url};
+use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
 use crate::inline_webview::{InlineWebview, focused_inline_of};
 use crate::osc_webview::GrantedNamespaces;
 use crate::osc_webview::NonInteractive;
@@ -26,16 +27,16 @@ use serde_json::Value;
 
 pub(crate) mod preload;
 
-/// One frame emitted by the page bridge `host_bridge.js` via
-/// `cef.emit({ kind: 'host.call', … })`, inspected by `on_host_call_frame`.
+/// One frame emitted by the page bridge (`host_bridge.js` or `ozmux_bridge.js`)
+/// via `cef.emit({ kind: '…', … })`, inspected by the per-kind observers.
 ///
 /// `#[serde(transparent)]` makes it deserialize from the bare emitted object
-/// (`{kind, reqId, ns, method, args}`), not from a `{"0": …}` wrapper — `bevy_cef`'s
+/// (`{kind, reqId, …}`), not from a `{"0": …}` wrapper — `bevy_cef`'s
 /// `cef.emit(frame)` serializes only its first argument into one global
 /// `Receive<OzmuxFrame>`.
 #[derive(serde::Deserialize, Clone, Debug)]
 #[serde(transparent)]
-struct OzmuxFrame(serde_json::Value);
+pub(crate) struct OzmuxFrame(pub(crate) serde_json::Value);
 
 /// The connected host RPC client plus the in-flight `globalReqId → (webview,
 /// pageReqId)` correlation. `globalReqId` is minted Rust-side (a monotonic
@@ -96,6 +97,10 @@ struct WebviewMountUnresolved;
 /// in `host_bridge.js`.
 const HOST_CALL_KIND: &str = "host.call";
 
+/// The `kind` discriminator routing a `Receive<OzmuxFrame>` to the Tier 1
+/// back-channel (`on_ozmux_call_frame`). The page side emits it in `ozmux_bridge.js`.
+const OZMUX_CALL_KIND: &str = "ozmux.call";
+
 /// Builds the `CefPlugin` with the `ozmux-ext://` (static, Tier 2) and
 /// `ozmux-dyn://` (dynamic, Tier 1) schemes bound to their shared registries.
 pub fn cef_plugin(ext_registry: AssetSourceRegistry, dyn_registry: DynAssetRegistry) -> CefPlugin {
@@ -139,6 +144,8 @@ impl Plugin for OzmuxExtensionRenderPlugin {
             .init_resource::<HostRpc>()
             .add_observer(on_host_call_frame)
             .add_observer(drop_inflight_host_calls_on_webview_despawn)
+            .add_observer(on_ozmux_call_frame)
+            .add_observer(drop_ozmux_inflight_on_webview_despawn)
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
             .add_observer(log_webview_load_error)
@@ -384,6 +391,72 @@ fn on_host_call_frame(
 fn reject_host_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
     let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
     commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+}
+
+/// Inbound (Tier 1 back-channel): a `window.ozmux.call` arrives as a
+/// `Receive<OzmuxFrame>` with `kind:"ozmux.call"`. The trusted caller is
+/// `frame.webview` (bound per-webview by `bevy_cef`, never the JS payload); its
+/// `WebviewOwner` names the registering connection. The call is forwarded over
+/// that connection's writer under a Rust-minted global reqId; a missing
+/// owner/connection rejects the page Promise directly.
+///
+/// Registered as an observer on the shared `Receive<OzmuxFrame>` event (NOT a
+/// second `JsEmitEventPlugin`): the event carries all frames; non-`ozmux.call`
+/// frames are ignored via the early return on `OZMUX_CALL_KIND`.
+fn on_ozmux_call_frame(
+    frame: On<Receive<OzmuxFrame>>,
+    mut commands: Commands,
+    mut rpc: ResMut<OzmuxRpc>,
+    writers: Res<ConnectionWriters>,
+    owners: Query<&WebviewOwner>,
+) {
+    let payload = &frame.payload.0;
+    if payload.get("kind").and_then(Value::as_str) != Some(OZMUX_CALL_KIND) {
+        return;
+    }
+    let webview = frame.webview;
+    let req_id = payload
+        .get("reqId")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let method = payload
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let args = payload
+        .get("args")
+        .cloned()
+        .unwrap_or_else(|| Value::Array(Vec::new()));
+
+    let Ok(owner) = owners.get(webview) else {
+        reject_ozmux_call(&mut commands, webview, req_id, "no_owner");
+        return;
+    };
+    let global_id = rpc.mint();
+    let line = serde_json::json!({
+        "op": "call", "handle": owner.handle, "reqId": global_id, "method": method, "args": args
+    })
+    .to_string();
+    if !writers.send(owner.connection_id, line) {
+        reject_ozmux_call(&mut commands, webview, req_id, "owner_unavailable");
+        return;
+    }
+    rpc.note(&global_id, webview, req_id, owner.connection_id);
+}
+
+/// Emits a `{reqId, ok:false, error}` reply to one webview on the `"ozmux"`
+/// channel (settling the page Promise).
+fn reject_ozmux_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
+    let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
+    commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+}
+
+/// Despawn prune: drop a despawned webview's in-flight back-channel calls.
+fn drop_ozmux_inflight_on_webview_despawn(
+    remove: On<Remove, WebviewOwner>,
+    mut rpc: ResMut<OzmuxRpc>,
+) {
+    rpc.drain_webview(remove.entity);
 }
 
 /// Outbound (new-model host API): drains the host's NDJSON reply lines, maps the
@@ -1157,6 +1230,48 @@ mod tests {
             app.world().resource::<HostRpc>().count_in_flight_for_test(),
             1,
             "prune must drop ONLY the despawned surface's in-flight calls (retain, not clear)"
+        );
+    }
+
+    #[test]
+    fn ozmux_call_frame_pushes_call_to_owner_connection() {
+        use crossbeam_channel::unbounded;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(OzmuxRpc::default());
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_ozmux_call_frame);
+
+        let webview = app
+            .world_mut()
+            .spawn(WebviewOwner {
+                connection_id: 7,
+                handle: "H".into(),
+            })
+            .id();
+
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "ozmux.call", "reqId": "p0", "method": "save", "args": [1, 2]
+            })),
+        });
+
+        let line = rx.try_recv().expect("a call was pushed");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["op"], "call");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["method"], "save");
+        assert_eq!(v["reqId"], "0");
+        assert_eq!(
+            app.world()
+                .resource::<OzmuxRpc>()
+                .count_in_flight_for_test(),
+            1
         );
     }
 
