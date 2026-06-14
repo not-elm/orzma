@@ -1,5 +1,7 @@
 //! Parsing the `list-windows -F` reply used to enumerate windows on attach.
 
+use bevy::prelude::Resource;
+use tmux_control::CommandId;
 use tmux_control_parser::{WindowId, WindowLayout};
 
 /// The `-F` format ozmux sends to enumerate windows. Tab-separated, with the
@@ -67,6 +69,24 @@ fn parse_window_id(field: &str) -> Option<WindowId> {
     Some(WindowId(field.strip_prefix('@')?.parse().ok()?))
 }
 
+/// Builds the `list-windows` command ozmux sends on attach to enumerate the
+/// session's existing windows.
+///
+/// The `-F` format is double-quoted so its embedded tab field-separators
+/// survive tmux's control-mode command tokenizer (which otherwise splits the
+/// argument on whitespace).
+pub(crate) fn list_windows_command() -> String {
+    format!("list-windows -F \"{LIST_WINDOWS_FORMAT}\"")
+}
+
+/// Tracks the in-flight `list-windows` enumeration command so its reply can
+/// be correlated by [`CommandId`] and seeded into the projection.
+#[derive(Resource, Default)]
+pub(crate) struct EnumerationState {
+    /// The id of the in-flight `list-windows` command, if any.
+    pub(crate) pending: Option<CommandId>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +135,13 @@ mod tests {
     #[test]
     fn empty_input_is_empty() {
         assert_eq!(parse_window_rows(&[]).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn list_windows_command_quotes_the_format() {
+        let cmd = list_windows_command();
+        assert!(cmd.starts_with("list-windows -F \""));
+        assert!(cmd.ends_with('"'));
+        assert!(cmd.contains(LIST_WINDOWS_FORMAT));
     }
 }
