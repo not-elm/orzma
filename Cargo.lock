@@ -4644,9 +4644,11 @@ dependencies = [
  "ozmux_configs",
  "ozmux_extension_host",
  "ozmux_multiplexer",
+ "ozmux_tmux",
  "serde",
  "serde_json",
  "tempfile",
+ "tmux_control",
  "tracing",
  "unicode-width",
 ]
@@ -4692,6 +4694,7 @@ dependencies = [
  "bevy",
  "crossbeam-channel",
  "tmux_control",
+ "tmux_control_parser",
  "tracing",
 ]
 

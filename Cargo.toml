@@ -36,6 +36,7 @@ ozmux_configs = { path = "crates/configs" }
 ozmux_extension_host = { path = "crates/extension_host", features = ["cef"] }
 ozmux_multiplexer = { path = "crates/multiplexer" }
 ozmux_tmux = { path = "crates/tmux_session" }
+tmux_control = { path = "crates/tmux_control" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

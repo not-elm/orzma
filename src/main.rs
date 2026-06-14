@@ -12,6 +12,7 @@ mod inline_webview;
 mod input;
 mod multiplexer;
 mod osc_webview;
+mod tmux_boot;
 mod system_set;
 mod theme;
 mod ui;
@@ -38,6 +39,7 @@ use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_extension_host::DynAssetRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
+use tmux_boot::TmuxBootPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
     OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
@@ -63,6 +65,7 @@ fn main() {
             TerminalRendererPlugin,
             MultiplexerPlugin,
             TmuxSessionPlugin,
+            TmuxBootPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxLayoutLogPlugin,
@@ -73,8 +76,8 @@ fn main() {
             CopyModePlugin,
             ClipboardActionPlugin,
             CopyModeIndicatorPlugin,
-            TabInteractionPlugin,
         ))
+        .add_plugins(TabInteractionPlugin)
         .add_plugins((
             MouseWheelInputPlugin,
             MouseButtonsInputPlugin,
