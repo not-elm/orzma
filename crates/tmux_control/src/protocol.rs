@@ -305,8 +305,15 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ClientEvent::CommandComplete { id, number: 318, ok: true, output: vec![] },
-                ClientEvent::Notification(ControlEvent::WindowAdd { window: WindowId(0) }),
+                ClientEvent::CommandComplete {
+                    id,
+                    number: 318,
+                    ok: true,
+                    output: vec![]
+                },
+                ClientEvent::Notification(ControlEvent::WindowAdd {
+                    window: WindowId(0)
+                }),
             ]
         );
     }
@@ -491,9 +498,6 @@ mod tests {
 
     #[test]
     fn layout_change_passthrough() {
-        // NOTE: lenient checksum; if this string ever fails to parse, copy a
-        // known-good `%layout-change` line from the parser's layout tests in
-        // crates/tmux_control_parser/src/event.rs.
         let mut c = ProtocolClient::new();
         let events = c
             .feed(b"%layout-change @0 abcd,80x24,0,0,0 abcd,80x24,0,0,0 *\n")

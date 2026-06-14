@@ -151,11 +151,6 @@ impl Default for TmuxBuilder {
     }
 }
 
-struct Inner {
-    protocol: ProtocolClient,
-    writer: Box<dyn Write + Send>,
-}
-
 /// Cloneable handle for sending commands to tmux.
 ///
 /// The protocol state and the writer live behind one mutex, shared with the
@@ -223,6 +218,11 @@ impl Drop for TmuxClient {
             let _ = thread.join();
         }
     }
+}
+
+struct Inner {
+    protocol: ProtocolClient,
+    writer: Box<dyn Write + Send>,
 }
 
 #[cfg(unix)]
