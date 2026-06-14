@@ -5,7 +5,6 @@ mod bootstrap;
 mod clipboard;
 mod configs;
 mod control_plane;
-mod webview_render;
 mod font;
 mod inline_webview;
 mod input;
@@ -14,16 +13,17 @@ mod osc_webview;
 mod system_set;
 mod theme;
 mod ui;
+mod webview_render;
 
 use crate::action::OzmuxActionPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::control_plane::OzmuxControlPlanePlugin;
-use crate::webview_render::{OzmuxWebviewRenderPlugin, cef_plugin};
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
 use crate::osc_webview::OzmuxOscWebviewPlugin;
+use crate::webview_render::{OzmuxWebviewRenderPlugin, cef_plugin};
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
@@ -33,8 +33,8 @@ use input::ime::ImePlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
-use ozmux_webview_host::DynAssetRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
+use ozmux_webview_host::DynAssetRegistry;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
     OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,

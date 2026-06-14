@@ -27,12 +27,7 @@ pub(crate) fn build_dynamic_preload(
 ///
 /// NOTE: the JS keys "sessionId"/"windowId" keep their legacy names on purpose — a
 /// browser-side wire contract the SDK surface client reads; renaming them breaks the SDK.
-fn context_preload_js_role(
-    workspace: Entity,
-    pane: Entity,
-    surface: Entity,
-    role: &str,
-) -> String {
+fn context_preload_js_role(workspace: Entity, pane: Entity, surface: Entity, role: &str) -> String {
     let workspace_id = workspace.to_bits().to_string();
     format!(
         "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:{r:?}}};",

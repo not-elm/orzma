@@ -9,9 +9,9 @@ use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 use ozmux_webview_host::DynAssetRegistry;
 use ozmux_webview_host::dyn_scheme::custom_dyn_scheme;
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 use serde_json::Value;
 
 pub(crate) mod preload;
@@ -178,7 +178,7 @@ fn drop_ozmux_inflight_on_webview_despawn(
 }
 
 /// Logs the start of a webview page load. Debug-level diagnostics: these
-/// observers fire for every `bevy_cef` webview, not only extension hosts.
+/// observers fire for every `bevy_cef` webview, not only ozmux webviews.
 fn log_webview_load_started(load: On<LoadStarted>) {
     tracing::debug!(webview = ?load.webview, "webview load started");
 }
@@ -213,8 +213,8 @@ mod tests {
     #[test]
     fn focused_webview_follows_active_pane() {
         // Regression: moving focus to a terminal pane must clear FocusedWebview,
-        // so bevy_cef blurs the extension webview (releasing its DOM text area
-        // and stopping keyboard from routing to it). When the extension pane is
+        // so bevy_cef blurs the webview (releasing its DOM text area
+        // and stopping keyboard from routing to it). When the webview pane is
         // active, its webview must be focused.
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation};
@@ -256,7 +256,7 @@ mod tests {
             .insert(AttachedWorkspace);
 
         // The Surface entity IS its own host: the terminal surface carries no
-        // WebviewSource; the extension surface carries one.
+        // WebviewSource; the webview surface carries one.
         let _ = terminal_surface;
         app.world_mut()
             .entity_mut(ext_surface)
@@ -277,7 +277,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             Some(ext_surface),
-            "active extension pane must focus its webview"
+            "active webview pane must focus its webview"
         );
 
         set_active(&mut app, terminal_pane);
