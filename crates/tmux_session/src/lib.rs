@@ -9,4 +9,3 @@ mod plugin;
 mod state;
 
 pub use state::ConnectionState;
-pub use state::next_state;

@@ -27,7 +27,7 @@ pub enum ConnectionState {
 /// Any protocol event proves the transport is live, so it moves to
 /// `Attached`. A close moves to `Detached` if previously attached, or to
 /// `Error` otherwise (e.g. a close during `Connecting`).
-pub fn next_state(current: &ConnectionState, event: &TransportEvent) -> ConnectionState {
+pub(crate) fn next_state(current: &ConnectionState, event: &TransportEvent) -> ConnectionState {
     match event {
         TransportEvent::Protocol(_) => ConnectionState::Attached,
         TransportEvent::Closed { reason } => match current {
