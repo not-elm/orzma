@@ -62,6 +62,7 @@ fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model:
                 commands.entity(*entity).insert(TmuxWindow {
                     id: window.id,
                     active: window.active,
+                    index: window.index,
                     name: window.name.clone(),
                 });
             }
@@ -70,6 +71,7 @@ fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model:
                     .spawn(TmuxWindow {
                         id: window.id,
                         active: window.active,
+                        index: window.index,
                         name: window.name.clone(),
                     })
                     .id();
@@ -156,6 +158,7 @@ mod tests {
         app.world_mut().resource_mut::<ProjectionModel>().windows = vec![WindowModel {
             id: WindowId(1),
             active: true,
+            index: 0,
             name: "main".to_string(),
             panes: vec![PaneModel {
                 id: PaneId(9),
@@ -178,6 +181,7 @@ mod tests {
         app.world_mut().resource_mut::<ProjectionModel>().windows = vec![WindowModel {
             id: WindowId(1),
             active: true,
+            index: 0,
             name: "main".to_string(),
             panes: vec![PaneModel {
                 id: PaneId(9),
@@ -228,6 +232,7 @@ mod tests {
         app.world_mut().resource_mut::<ProjectionModel>().windows = vec![WindowModel {
             id: WindowId(1),
             active: true,
+            index: 0,
             name: "main".to_string(),
             panes: vec![PaneModel {
                 id: PaneId(9),

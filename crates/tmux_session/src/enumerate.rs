@@ -5,9 +5,8 @@ use tmux_control::CommandId;
 use tmux_control_parser::{WindowId, WindowLayout};
 
 /// The `-F` format ozmux sends to enumerate windows. Tab-separated, with the
-/// free-text `window_name` LAST so a `splitn(5, '\t')` keeps it intact.
-pub const LIST_WINDOWS_FORMAT: &str =
-    "#{window_active}\t#{window_id}\t#{window_layout}\t#{window_visible_layout}\t#{window_name}";
+/// free-text `window_name` LAST so a `splitn(6, '\t')` keeps it intact.
+pub const LIST_WINDOWS_FORMAT: &str = "#{window_active}\t#{window_id}\t#{window_index}\t#{window_layout}\t#{window_visible_layout}\t#{window_name}";
 
 /// One parsed row of the `list-windows` reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +15,8 @@ pub struct WindowRow {
     pub id: WindowId,
     /// Whether this is the session's active window.
     pub active: bool,
+    /// tmux display index (#{window_index}), e.g. 0, 1, 2.
+    pub index: u32,
     /// Window name.
     pub name: String,
     /// Parsed structural layout (panes + geometry).
@@ -24,7 +25,7 @@ pub struct WindowRow {
 
 /// Parses the lines of a `list-windows -F LIST_WINDOWS_FORMAT` reply.
 ///
-/// Each line is `active \t window_id \t layout \t visible_layout \t name`.
+/// Each line is `active \t id \t index \t layout \t visible_layout \t name`.
 /// The `visible_layout` field is currently ignored. Blank lines are skipped.
 /// Returns a descriptive `Err(String)` on a malformed row.
 pub fn parse_window_rows(lines: &[String]) -> Result<Vec<WindowRow>, String> {
@@ -39,12 +40,16 @@ pub fn parse_window_rows(lines: &[String]) -> Result<Vec<WindowRow>, String> {
 }
 
 fn parse_row(line: &str) -> Result<WindowRow, String> {
-    let mut fields = line.splitn(5, '\t');
+    let mut fields = line.splitn(6, '\t');
     let active = fields.next().is_some_and(|f| f == "1");
     let id = fields
         .next()
         .and_then(parse_window_id)
         .ok_or_else(|| format!("bad window id in row: {line}"))?;
+    let index = fields
+        .next()
+        .and_then(|f| f.parse::<u32>().ok())
+        .ok_or_else(|| format!("bad window index in row: {line}"))?;
     let layout_field = fields
         .next()
         .ok_or_else(|| format!("missing layout in row: {line}"))?;
@@ -60,6 +65,7 @@ fn parse_row(line: &str) -> Result<WindowRow, String> {
     Ok(WindowRow {
         id,
         active,
+        index,
         name,
         layout,
     })
@@ -115,7 +121,7 @@ mod tests {
 
     #[test]
     fn parses_one_active_window() {
-        let lines = vec!["1\t@1\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tmain".to_string()];
+        let lines = vec!["1\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tmain".to_string()];
         let rows = parse_window_rows(&lines).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, WindowId(1));
@@ -127,8 +133,8 @@ mod tests {
     #[test]
     fn parses_multiple_windows_active_flag() {
         let lines = vec![
-            "0\t@1\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tone".to_string(),
-            "1\t@2\tb25f,80x24,0,0,1\tb25f,80x24,0,0,1\ttwo".to_string(),
+            "0\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tone".to_string(),
+            "1\t@2\t1\tb25f,80x24,0,0,1\tb25f,80x24,0,0,1\ttwo".to_string(),
         ];
         let rows = parse_window_rows(&lines).unwrap();
         assert_eq!((rows[0].active, rows[1].active), (false, true));
@@ -137,14 +143,15 @@ mod tests {
 
     #[test]
     fn name_with_tabs_is_preserved_as_last_field() {
-        let lines = vec!["1\t@1\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tmy\tnamed\twin".to_string()];
+        let lines =
+            vec!["1\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tmy\tnamed\twin".to_string()];
         let rows = parse_window_rows(&lines).unwrap();
         assert_eq!(rows[0].name, "my\tnamed\twin");
     }
 
     #[test]
     fn bad_window_id_errors() {
-        let lines = vec!["1\t1\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tx".to_string()];
+        let lines = vec!["1\t1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tx".to_string()];
         assert!(parse_window_rows(&lines).is_err());
     }
 
@@ -169,5 +176,16 @@ mod tests {
     #[test]
     fn client_name_command_has_expected_format() {
         assert_eq!(client_name_command(), "display-message -p '#{client_name}'");
+    }
+
+    #[test]
+    fn parse_row_captures_window_index() {
+        // Format order: active \t id \t index \t layout \t visible \t name
+        let line = "1\t@2\t3\tb25d,80x24,0,0,0\tb25d,80x24,0,0,0\tmy-win";
+        let rows = parse_window_rows(&[line.to_string()]).expect("parse");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].index, 3);
+        assert_eq!(rows[0].name, "my-win");
+        assert!(rows[0].active);
     }
 }

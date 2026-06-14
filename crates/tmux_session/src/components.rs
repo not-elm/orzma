@@ -17,6 +17,8 @@ pub struct TmuxWindow {
     pub id: WindowId,
     /// Whether this is the session's active window.
     pub active: bool,
+    /// tmux display index (#{window_index}).
+    pub index: u32,
     /// Window name.
     pub name: String,
 }

@@ -195,7 +195,7 @@ mod tests {
             id: CommandId(1),
             number: 0,
             ok: true,
-            output: vec!["1\t@1\tabcd,80x24,0,0,5\tx\tmain".to_string()],
+            output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\tmain".to_string()],
         });
         let events = vec![reply, window_add(9)];
         let mut model = ProjectionModel::default();
@@ -212,7 +212,7 @@ mod tests {
             id: CommandId(2),
             number: 0,
             ok: true,
-            output: vec!["1\t@1\tabcd,80x24,0,0,5\tx\tmain".to_string()],
+            output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\tmain".to_string()],
         });
         let mut model = ProjectionModel::default();
         let mut pending = Some(CommandId(1));
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn seed_from_reply_populates_model() {
-        let output = vec!["1\t@1\tabcd,80x24,0,0,5\tx\tmain".to_string()];
+        let output = vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\tmain".to_string()];
         let mut model = ProjectionModel::default();
         assert!(seed_from_reply(&mut model, &output));
         assert_eq!(model.windows.len(), 1);

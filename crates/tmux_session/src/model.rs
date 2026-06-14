@@ -50,6 +50,8 @@ pub struct WindowModel {
     pub id: WindowId,
     /// Whether this is the session's active window.
     pub active: bool,
+    /// tmux display index (#{window_index}).
+    pub index: u32,
     /// Window name.
     pub name: String,
     /// Panes in layout order.
@@ -78,6 +80,7 @@ impl ProjectionModel {
             .map(|row| WindowModel {
                 id: row.id,
                 active: row.active,
+                index: row.index,
                 name: row.name.clone(),
                 panes: pane_leaves(&row.layout),
             })
@@ -140,6 +143,7 @@ impl ProjectionModel {
         self.windows.push(WindowModel {
             id,
             active: false,
+            index: 0,
             name: String::new(),
             panes: Vec::new(),
         });
@@ -274,7 +278,7 @@ mod tests {
     fn seed_from_rows_builds_windows_with_panes() {
         use crate::enumerate::parse_window_rows;
         let rows = parse_window_rows(&[
-            "1\t@1\tabcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}\tx\tmain".to_string()
+            "1\t@1\t0\tabcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}\tx\tmain".to_string(),
         ])
         .unwrap();
         let mut m = ProjectionModel::default();
