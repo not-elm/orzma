@@ -13,6 +13,7 @@ use ratatui::widgets::{Clear, StatefulWidget, Widget};
 pub struct WebviewWidget<'a, W = Blank> {
     handle: &'a str,
     fallback: W,
+    focused: bool,
 }
 
 impl<'a> WebviewWidget<'a, Blank> {
@@ -21,6 +22,7 @@ impl<'a> WebviewWidget<'a, Blank> {
         Self {
             handle,
             fallback: Blank,
+            focused: false,
         }
     }
 }
@@ -31,7 +33,20 @@ impl<'a, W> WebviewWidget<'a, W> {
         WebviewWidget {
             handle: self.handle,
             fallback: widget,
+            focused: self.focused,
         }
+    }
+
+    /// Marks the widget focused, a hint for drawing a focus frame/title around
+    /// the webview (the page content itself is composited by the host).
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.focused = focused;
+        self
+    }
+
+    /// Whether this widget is currently focused.
+    pub fn is_focused(&self) -> bool {
+        self.focused
     }
 }
 
@@ -99,5 +114,14 @@ mod tests {
             .render(area, &mut buf, &mut state);
 
         assert_eq!(buf[(0, 0)].symbol(), "h");
+    }
+
+    #[test]
+    fn focused_widget_constructs() {
+        let area = Rect { x: 0, y: 0, width: 4, height: 1 };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+        WebviewWidget::new("v").focused(true).render(area, &mut buf, &mut state);
+        assert_eq!(state.placements_for_test().len(), 1);
     }
 }
