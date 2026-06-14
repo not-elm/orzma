@@ -15,7 +15,7 @@ use crate::vt::frame_builder::{
     viewport_row_to_line,
 };
 use crate::vt::hyperlink::HyperlinkInterner;
-use crate::vt::listener::{ControlFrame, InlineAnchor, OscWebviewVerb, TermListener};
+use crate::vt::listener::{AnchorMode, ControlFrame, InlineAnchor, OscWebviewVerb, TermListener};
 use crate::vt::mode_diff::diff_mode;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -928,10 +928,12 @@ impl TerminalHandle {
             let cursor = self.term.grid().cursor.point;
             self.force_next_emit = true;
             Some(InlineAnchor {
-                line: self.history_base
-                    + self.term.history_size() as u64
-                    + cursor.line.0.max(0) as u64,
-                col: cursor.column.0 as u16,
+                mode: AnchorMode::Scrollback {
+                    line: self.history_base
+                        + self.term.history_size() as u64
+                        + cursor.line.0.max(0) as u64,
+                    col: cursor.column.0 as u16,
+                },
                 frame_seq: self.frame_seq,
             })
         } else {
@@ -1945,11 +1947,14 @@ mod tests {
         };
         assert!(matches!(verb, OscWebviewVerb::MountInline { .. }));
         let anchor = anchor.expect("MountInline carries an anchor");
+        let AnchorMode::Scrollback { line, col } = anchor.mode else {
+            panic!("expected scrollback anchor, got {:?}", anchor.mode);
+        };
         assert_eq!(
-            anchor.line, 0,
+            line, 0,
             "anchor = cursor at the OSC byte, before the newlines"
         );
-        assert_eq!(anchor.col, 0);
+        assert_eq!(col, 0);
     }
 
     #[test]
@@ -1962,7 +1967,10 @@ mod tests {
         let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
             panic!("expected OscWebview");
         };
-        assert_eq!(anchor.expect("anchor").line, 2);
+        assert_eq!(
+            anchor.expect("anchor").mode,
+            AnchorMode::Scrollback { line: 2, col: 0 }
+        );
     }
 
     #[test]
@@ -1991,7 +1999,10 @@ mod tests {
         let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
             panic!("expected OscWebview");
         };
-        assert_eq!(anchor.expect("anchor").line, 0);
+        let AnchorMode::Scrollback { line, .. } = anchor.expect("anchor").mode else {
+            panic!("expected scrollback anchor");
+        };
+        assert_eq!(line, 0);
     }
 
     #[test]
@@ -2005,8 +2016,13 @@ mod tests {
         let second = rx.try_recv().expect("second frame");
         let get = |f: ControlFrame| match f {
             ControlFrame::OscWebview {
-                anchor: Some(a), ..
-            } => a.line,
+                anchor:
+                    Some(InlineAnchor {
+                        mode: AnchorMode::Scrollback { line, .. },
+                        ..
+                    }),
+                ..
+            } => line,
             other => panic!("unexpected {other:?}"),
         };
         assert_eq!(get(first), 0);
@@ -2072,7 +2088,10 @@ mod tests {
         // read_geometry is the viewport row, which equals the live-grid
         // row because display_offset is 0 at the live tail.
         let (_, _, cursor) = h.read_geometry();
-        assert_eq!(anchor.line, hist + cursor.y as u64);
+        let AnchorMode::Scrollback { line, .. } = anchor.mode else {
+            panic!("expected scrollback anchor");
+        };
+        assert_eq!(line, hist + cursor.y as u64);
     }
 
     #[test]
@@ -2140,8 +2159,11 @@ mod tests {
         else {
             panic!("expected mount frame");
         };
-        assert_eq!(a.col, 2, "cursor column after printing 'ab' is 2");
-        assert_eq!(a.line, 0);
+        let AnchorMode::Scrollback { line, col } = a.mode else {
+            panic!("expected scrollback anchor");
+        };
+        assert_eq!(col, 2, "cursor column after printing 'ab' is 2");
+        assert_eq!(line, 0);
     }
 
     #[test]
@@ -2233,8 +2255,11 @@ mod tests {
         else {
             panic!("expected mount with anchor");
         };
+        let AnchorMode::Scrollback { line, .. } = anchor.mode else {
+            panic!("expected scrollback anchor");
+        };
         assert_eq!(
-            anchor.line, 2,
+            line, 2,
             "stop_sync must flush the BSU buffer before sampling"
         );
     }
@@ -2339,7 +2364,7 @@ mod tests {
     fn drain_forwards_mount_inline_anchor_to_request() {
         use crate::events::OscWebviewRequest;
         use crate::title::TerminalTitle;
-        use crate::vt::listener::{ControlFrame, InlineAnchor, OscWebviewVerb};
+        use crate::vt::listener::{AnchorMode, ControlFrame, InlineAnchor, OscWebviewVerb};
         use bevy::ecs::system::RunSystemOnce;
         use bevy::prelude::*;
 
@@ -2378,8 +2403,7 @@ mod tests {
                     instance_id: None,
                 },
                 anchor: Some(InlineAnchor {
-                    line: 42,
-                    col: 7,
+                    mode: AnchorMode::Scrollback { line: 42, col: 7 },
                     frame_seq: 9,
                 }),
             })
@@ -2417,8 +2441,7 @@ mod tests {
         assert_eq!(
             req.anchor,
             Some(InlineAnchor {
-                line: 42,
-                col: 7,
+                mode: AnchorMode::Scrollback { line: 42, col: 7 },
                 frame_seq: 9
             }),
             "anchor must cross the drain boundary unchanged"
