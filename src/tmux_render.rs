@@ -10,6 +10,7 @@ use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
+use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     PaneOutput, TmuxConnection, TmuxPane, TmuxProjection, TmuxProjectionSet, TmuxWindow,
     refresh_client_command,
@@ -141,7 +142,14 @@ fn pane_rect(
 }
 
 fn layout_tmux_panes(
-    mut panes: Query<(&TmuxPane, &mut Node, &mut TerminalHandle)>,
+    mut commands: Commands,
+    mut panes: Query<(
+        Entity,
+        &TmuxPane,
+        &mut Node,
+        &mut TerminalHandle,
+        &mut TerminalGrid,
+    )>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -151,7 +159,7 @@ fn layout_tmux_panes(
     let dpr = window.scale_factor().max(0.5);
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
-    for (pane, mut node, mut handle) in panes.iter_mut() {
+    for (entity, pane, mut node, mut handle, mut grid) in panes.iter_mut() {
         let d = pane.dims;
         let (left, top, width, height) =
             pane_rect(d.xoff, d.yoff, d.width, d.height, cell_w, cell_h);
@@ -164,6 +172,9 @@ fn layout_tmux_panes(
         let (cur_cols, cur_rows, _) = handle.read_geometry();
         if (cur_cols, cur_rows) != (cols, rows) {
             handle.resize_grid_only(cols, rows);
+            grid.cols = cols;
+            grid.rows = rows;
+            handle.flush_emit(&mut commands, entity);
         }
     }
 }
@@ -221,7 +232,6 @@ fn sync_active_window(mut windows: Query<(&TmuxWindow, &mut Node)>) {
 mod tests {
     use super::*;
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
-    use ozma_tty_renderer::schema::TerminalGrid;
     use ozmux_tmux::PaneOutput;
     use tmux_control_parser::{CellDims, PaneId};
 
@@ -308,6 +318,76 @@ mod tests {
         assert!(
             row0.starts_with("hi"),
             "rendered grid row 0 should start with 'hi', got {row0:?}",
+        );
+    }
+
+    #[test]
+    fn resize_only_updates_grid_dims_and_emits() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+        use ozma_tty_renderer::schema::FrameSnapshot;
+        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+
+        #[derive(Resource, Default)]
+        struct SnapHits(u32);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<SnapHits>();
+        app.add_observer(|_snap: On<FrameSnapshot>, mut hits: ResMut<SnapHits>| {
+            hits.0 += 1;
+        });
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 13.0,
+                descent_phys: 3.0,
+                underline_position_phys: -1.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        });
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        let entity = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 40,
+                        height: 10,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                Node::default(),
+                TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
+                TerminalGrid::default(),
+            ))
+            .id();
+
+        app.add_systems(Update, layout_tmux_panes);
+        app.update();
+
+        let grid = app
+            .world()
+            .get::<TerminalGrid>(entity)
+            .expect("pane has a TerminalGrid");
+        assert_eq!(
+            (grid.cols, grid.rows),
+            (40, 10),
+            "grid dims updated immediately on resize (#2)",
+        );
+        assert!(
+            app.world().resource::<SnapHits>().0 >= 1,
+            "resize emitted a FrameSnapshot (#1)",
         );
     }
 }
