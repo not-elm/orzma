@@ -25,11 +25,11 @@ use bevy::ui::{
     UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
-use bevy_terminal_renderer::CellMetrics;
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::TerminalFontInitSet;
-use bevy_terminal_renderer::material::TerminalMaterialSystems;
-use bevy_terminal_renderer::prelude::TerminalGrid;
+use ozma_tty_renderer::CellMetrics;
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::TerminalFontInitSet;
+use ozma_tty_renderer::material::TerminalMaterialSystems;
+use ozma_tty_renderer::prelude::TerminalGrid;
 use ozmux_multiplexer::{
     ActivePane, ActiveSurface, AttachedWorkspace, MultiplexerCommands, WorkspaceMarker,
 };
@@ -157,7 +157,7 @@ pub(crate) fn compute_overlay_pos(
 /// the IME caret/clause range relative to the start of `text`. Uses
 /// `unicode_width::UnicodeWidthStr::width` so fullwidth CJK
 /// preedit counts as 2 cells per glyph, matching the renderer's own
-/// width logic in `bevy_terminal_renderer::grid`.
+/// width logic in `ozma_tty_renderer::grid`.
 ///
 /// Caller is responsible for byte-offset validity (UTF-8 boundary,
 /// `begin <= end <= text.len()`); `Composition::try_new` enforces these.
@@ -372,7 +372,7 @@ const IME_OVERLAY_Z: i32 = 200;
 fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) {
     let text_font = TextFont {
         font: ui_font.0.clone(),
-        font_size: bevy_terminal_renderer::FONT_SIZE_PX,
+        font_size: ozma_tty_renderer::FONT_SIZE_PX,
         ..default()
     };
     let color = Color::WHITE;

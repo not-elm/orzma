@@ -14,8 +14,8 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::schema::{HyperlinkHoverState, TerminalGrid};
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;
 use ozmux_multiplexer::SurfaceMarker;
 
@@ -61,17 +61,17 @@ pub(crate) fn try_open_uri(uri: &str) {
 /// otherwise `None`. Centralizes the interception decision so
 /// `dispatch_mouse_buttons` only has to check the return value.
 pub(crate) fn should_open_at(
-    grid: &bevy_terminal_renderer::schema::TerminalGrid,
+    grid: &ozma_tty_renderer::schema::TerminalGrid,
     row: u16,
     col: u16,
-    button: bevy_terminal::MouseButtonKind,
-    kind: bevy_terminal::ButtonEventKind,
+    button: ozma_tty_engine::MouseButtonKind,
+    kind: ozma_tty_engine::ButtonEventKind,
     modifier_held: bool,
-) -> Option<bevy_terminal_renderer::schema::HyperlinkUri> {
-    if !modifier_held || button != bevy_terminal::MouseButtonKind::Left {
+) -> Option<ozma_tty_renderer::schema::HyperlinkUri> {
+    if !modifier_held || button != ozma_tty_engine::MouseButtonKind::Left {
         return None;
     }
-    if !matches!(kind, bevy_terminal::ButtonEventKind::Press) {
+    if !matches!(kind, ozma_tty_engine::ButtonEventKind::Press) {
         return None;
     }
     grid.hyperlink_at(row, col).map(|(_id, uri)| uri.clone())
@@ -255,8 +255,8 @@ mod tests {
     }
 
     use bevy::prelude::Color;
-    use bevy_terminal::{ButtonEventKind, MouseButtonKind};
-    use bevy_terminal_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+    use ozma_tty_engine::{ButtonEventKind, MouseButtonKind};
+    use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
 
     #[test]
     fn scheme_of_rejects_leading_digit() {
@@ -304,7 +304,7 @@ mod tests {
         row: usize,
         col: usize,
         id: HyperlinkId,
-    ) -> bevy_terminal_renderer::schema::TerminalGrid {
+    ) -> ozma_tty_renderer::schema::TerminalGrid {
         let cell = Cell {
             text: "x".to_string(),
             width: 1,
@@ -328,7 +328,7 @@ mod tests {
             row + 1
         ];
         cells[row][col] = cell;
-        bevy_terminal_renderer::schema::TerminalGrid {
+        ozma_tty_renderer::schema::TerminalGrid {
             cols: (col as u16) + 1,
             rows: (row as u16) + 1,
             cells,

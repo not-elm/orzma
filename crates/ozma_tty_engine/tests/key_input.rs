@@ -6,11 +6,11 @@
 
 use bevy::ecs::observer::On;
 use bevy::prelude::*;
-use bevy_terminal::{
+use ozma_tty_engine::{
     SpawnOptions, TerminalBundle, TerminalHandlePlugin, TerminalKey, TerminalKeyInput,
     TerminalModifiers,
 };
-use bevy_terminal_renderer::prelude::{FrameDelta, FrameSnapshot};
+use ozma_tty_renderer::prelude::{FrameDelta, FrameSnapshot};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

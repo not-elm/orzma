@@ -13,7 +13,7 @@ use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
 use bevy::input::keyboard::Key;
-use bevy_terminal::{Coalescer, PtyHandle, SelectionType, TerminalHandle, ViMotion};
+use ozma_tty_engine::{Coalescer, PtyHandle, SelectionType, TerminalHandle, ViMotion};
 use ozmux_configs::shortcuts::Modifiers;
 
 /// Bevy Plugin: registers the two observers and inserts the global
@@ -212,7 +212,7 @@ mod tests {
     use bevy::ecs::system::{Commands, Query, Res, ResMut, System};
     use bevy::input::keyboard::Key as Bk;
     use bevy::prelude::MinimalPlugins;
-    use bevy_terminal::{
+    use ozma_tty_engine::{
         Coalescer, PtyHandle, SelectionType, SpawnOptions, TerminalBundle, TerminalHandle, ViMotion,
     };
     use ozmux_configs::shortcuts::Modifiers;

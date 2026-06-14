@@ -9,7 +9,7 @@ use crate::ui::terminal::resolve_pane_workspace;
 use crate::ui::{PaneDimOverlay, TerminalSurfaceMarker, WorkspaceUiRoot};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use bevy_terminal_renderer::material::{PaneDim, TerminalUiMaterial};
+use ozma_tty_renderer::material::{PaneDim, TerminalUiMaterial};
 use ozmux_multiplexer::{
     ActivePane, AttachedWorkspace, OwningWorkspace, PaneMarker, SurfaceOf, WorkspaceUiSubtree,
 };
@@ -198,8 +198,8 @@ mod tests {
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
-    use bevy_terminal_renderer::material::TerminalUiMaterial;
-    use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
+    use ozma_tty_renderer::material::TerminalUiMaterial;
+    use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
     use ozmux_multiplexer::{MultiplexerPlugin, WorkspaceMarker};
 
     fn build_app() -> App {

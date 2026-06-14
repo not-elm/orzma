@@ -1,7 +1,7 @@
 //! Bevy system that translates mouse-wheel input into either an inline
 //! webview page scroll, host scrollback adjustments, or PTY-bound mouse /
 //! arrow-key bytes via the pure router in
-//! `bevy_terminal::wheel::WheelAction::route`.
+//! `ozma_tty_engine::wheel::WheelAction::route`.
 //!
 //! Inline-webview fork (spec §7): when a `FocusedWebview` holds an inline
 //! child of the active surface AND the pointer currently sits over THAT
@@ -42,11 +42,11 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use bevy_terminal::{
+use ozma_tty_engine::{
     CellCoord, Coalescer, PtyHandle, TerminalHandle, WheelAction, WheelConfig, WheelModifiers,
 };
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::prelude::TerminalOverlays;
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_configs::mouse::FineModifier;
 
 use crate::configs::OzmuxConfigsResource;
@@ -405,7 +405,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::math::DVec2;
     use bevy::window::WindowResolution;
-    use bevy_terminal_renderer::prelude::TerminalOverlays;
+    use ozma_tty_renderer::prelude::TerminalOverlays;
     use ozmux_multiplexer::SurfaceMarker;
 
     #[test]

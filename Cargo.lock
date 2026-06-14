@@ -1592,39 +1592,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_terminal"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "bevy",
- "bevy_terminal_renderer",
- "crossbeam-channel",
- "gethostname",
- "percent-encoding",
- "portable-pty",
- "tracing",
- "unicode-width",
- "vte",
-]
-
-[[package]]
-name = "bevy_terminal_renderer"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "bevy",
- "rmp-serde",
- "serde",
- "serde_bytes",
- "serde_json",
- "thiserror 2.0.18",
- "ttf-parser",
- "unicode-segmentation",
- "unicode-width",
-]
-
-[[package]]
 name = "bevy_text"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4625,6 +4592,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozma_tty_engine"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "bevy",
+ "crossbeam-channel",
+ "gethostname",
+ "ozma_tty_renderer",
+ "percent-encoding",
+ "portable-pty",
+ "tracing",
+ "unicode-width",
+ "vte",
+]
+
+[[package]]
+name = "ozma_tty_renderer"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "bevy",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "thiserror 2.0.18",
+ "ttf-parser",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "ozmux-gui"
 version = "0.1.0"
 dependencies = [
@@ -4633,14 +4633,14 @@ dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
- "bevy_terminal",
- "bevy_terminal_renderer",
  "cosmic-text",
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
  "libc",
  "open",
+ "ozma_tty_engine",
+ "ozma_tty_renderer",
  "ozmux_configs",
  "ozmux_extension_host",
  "ozmux_multiplexer",
@@ -5944,6 +5944,13 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "tmux_control_parser"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tokio"

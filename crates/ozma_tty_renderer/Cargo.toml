@@ -1,5 +1,5 @@
 [package]
-name = "bevy_terminal_renderer"
+name = "ozma_tty_renderer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
