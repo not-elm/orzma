@@ -3,6 +3,7 @@
 
 use crate::error::{TmuxError, TmuxResult};
 use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
+use crate::session::{LIST_FORMAT, SessionInfo};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
@@ -70,6 +71,28 @@ impl TmuxServer {
     /// Opens a control connection on a fresh session (`tmux -CC new-session`).
     pub fn new_session(&self) -> TmuxResult<TmuxClient> {
         self.spawn(&["new-session"])
+    }
+
+    /// Lists attachable sessions (`tmux [..] list-sessions -F ..`, plain pipe, no
+    /// control mode). Returns `Ok(vec![])` when no server is running.
+    pub fn list_sessions(&self) -> TmuxResult<Vec<SessionInfo>> {
+        let output = std::process::Command::new(&self.program)
+            .args(self.list_sessions_argv())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(TmuxError::Spawn)?;
+        classify_list_result(output.status.success(), &output.stdout, &output.stderr)
+    }
+
+    /// The argv (after the program) for the list-sessions query, for callers that
+    /// own their own I/O (e.g. running it off the Bevy main thread) and then call
+    /// [`SessionInfo::parse_list`].
+    pub fn list_sessions_argv(&self) -> Vec<String> {
+        let mut argv = self.socket_args();
+        argv.push("list-sessions".to_string());
+        argv.push("-F".to_string());
+        argv.push(LIST_FORMAT.to_string());
+        argv
     }
 
     fn socket_args(&self) -> Vec<String> {
@@ -216,6 +239,21 @@ fn spawn_err(e: impl std::fmt::Display) -> TmuxError {
     TmuxError::Spawn(std::io::Error::other(e.to_string()))
 }
 
+fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Vec<SessionInfo>> {
+    if ok {
+        return SessionInfo::parse_list(stdout);
+    }
+    let stderr = String::from_utf8_lossy(stderr);
+    let no_server = stdout.is_empty()
+        && (stderr.contains("no server running")
+            || (stderr.contains("error connecting") && stderr.contains("No such file or directory")));
+    if no_server {
+        Ok(Vec::new())
+    } else {
+        Err(TmuxError::Spawn(std::io::Error::other(stderr.trim().to_string())))
+    }
+}
+
 #[cfg(unix)]
 fn disable_pty_echo(fd: std::os::unix::io::RawFd) {
     // SAFETY: `fd` is the live PTY master fd owned by the `MasterPty` kept in
@@ -281,6 +319,7 @@ fn pump<R: Read>(
 mod tests {
     use super::*;
     use crate::ControlEvent;
+    use crate::SessionId;
     use std::collections::VecDeque;
     use tmux_control_parser::WindowId;
 
@@ -527,6 +566,62 @@ mod tests {
             let _ = h2.send("from-thread");
         });
         t.join().unwrap();
+    }
+
+    #[test]
+    fn list_sessions_argv_default() {
+        assert_eq!(
+            TmuxServer::new().list_sessions_argv(),
+            argv(&["list-sessions", "-F", LIST_FORMAT])
+        );
+    }
+
+    #[test]
+    fn list_sessions_argv_socket_name() {
+        assert_eq!(
+            TmuxServer::new().socket_name("foo").list_sessions_argv(),
+            argv(&["-L", "foo", "list-sessions", "-F", LIST_FORMAT])
+        );
+    }
+
+    #[test]
+    fn list_format_uses_real_tab_and_name_last() {
+        assert!(LIST_FORMAT.as_bytes().contains(&b'\t'));
+        assert!(!LIST_FORMAT.contains("\\t"));
+        assert!(LIST_FORMAT.ends_with("#{session_name}"));
+    }
+
+    #[test]
+    fn classify_ok_parses_stdout() {
+        let out = b"$0\t1\t0\t1\tmain\n";
+        assert_eq!(
+            classify_list_result(true, out, b"").unwrap(),
+            vec![SessionInfo {
+                id: SessionId(0),
+                name: "main".to_string(),
+                windows: 1,
+                attached: false,
+                created: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn classify_no_server_running_is_empty() {
+        let stderr = b"no server running on /tmp/tmux-501/foo\n";
+        assert_eq!(classify_list_result(false, b"", stderr).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn classify_socket_missing_is_empty() {
+        let stderr = b"error connecting to /tmp/tmux-501/foo (No such file or directory)\n";
+        assert_eq!(classify_list_result(false, b"", stderr).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn classify_real_error_is_err() {
+        let stderr = b"error connecting to /tmp/tmux-501/foo (Operation not permitted)\n";
+        assert!(classify_list_result(false, b"", stderr).is_err());
     }
 
     #[test]
