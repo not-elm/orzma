@@ -12,3 +12,5 @@ mod protocol;
 mod session;
 mod webview;
 mod widget;
+
+pub use webview::{Webview, WebviewHandle};
