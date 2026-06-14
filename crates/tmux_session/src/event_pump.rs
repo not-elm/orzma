@@ -1,6 +1,7 @@
 //! Draining, logging, and routing of tmux transport events: into
 //! `ConnectionState` and the `ProjectionModel`.
 
+use crate::enumerate::parse_window_rows;
 use crate::model::ProjectionModel;
 use crate::state::{ConnectionState, next_state};
 use crossbeam_channel::Receiver;
@@ -53,6 +54,21 @@ pub(crate) fn route_to_model(model: &mut ProjectionModel, events: &[TransportEve
         }
     }
     changed
+}
+
+/// Parses a `list-windows` reply and seeds it into `model`, returning `true`
+/// on success. A malformed reply is logged and leaves the model untouched.
+pub(crate) fn seed_from_reply(model: &mut ProjectionModel, output: &[String]) -> bool {
+    match parse_window_rows(output) {
+        Ok(rows) => {
+            model.seed_from_rows(&rows);
+            true
+        }
+        Err(error) => {
+            tracing::warn!(error = %error, "failed to parse list-windows reply");
+            false
+        }
+    }
 }
 
 /// Emits a `tracing` line describing a single transport event.
@@ -112,6 +128,24 @@ mod tests {
         assert_eq!(model.windows.len(), 1);
         assert_eq!(model.windows[0].panes.len(), 1);
         assert_eq!(model.windows[0].panes[0].id, PaneId(4));
+    }
+
+    #[test]
+    fn seed_from_reply_populates_model() {
+        let output = vec!["1\t@1\tabcd,80x24,0,0,5\tx\tmain".to_string()];
+        let mut model = ProjectionModel::default();
+        assert!(seed_from_reply(&mut model, &output));
+        assert_eq!(model.windows.len(), 1);
+        assert_eq!(model.windows[0].id, WindowId(1));
+        assert_eq!(model.windows[0].panes.first().map(|p| p.id), Some(PaneId(5)));
+    }
+
+    #[test]
+    fn seed_from_reply_rejects_malformed() {
+        let output = vec!["garbage".to_string()];
+        let mut model = ProjectionModel::default();
+        assert!(!seed_from_reply(&mut model, &output));
+        assert!(model.windows.is_empty());
     }
 
     #[test]
