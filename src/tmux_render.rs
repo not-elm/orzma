@@ -10,16 +10,26 @@ use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
-use ozmux_tmux::{PaneOutput, TmuxPane, TmuxProjection, TmuxProjectionSet, TmuxWindow};
+use ozmux_tmux::{
+    PaneOutput, TmuxConnection, TmuxPane, TmuxProjection, TmuxProjectionSet, TmuxWindow,
+    refresh_client_command,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
+#[derive(Resource, Default)]
+struct LastClientSize {
+    cols: u16,
+    rows: u16,
+}
 
 /// Wires the tmux pane render systems after the projection chain.
 pub struct OzmuxTmuxRenderPlugin;
 
 impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<LastClientSize>();
         app.add_systems(
             Update,
             (
@@ -32,6 +42,7 @@ impl Plugin for OzmuxTmuxRenderPlugin {
                 .chain()
                 .after(TmuxProjectionSet),
         );
+        app.add_systems(Update, sync_client_size.after(TmuxProjectionSet));
     }
 }
 
@@ -157,6 +168,42 @@ fn layout_tmux_panes(
     }
 }
 
+fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
+    let cols = ((w_px as f32 / cell_w).floor() as u16).max(1);
+    let rows = ((h_px as f32 / cell_h).floor() as u16).max(1);
+    (cols, rows)
+}
+
+fn sync_client_size(
+    mut last: ResMut<LastClientSize>,
+    connection: NonSend<TmuxConnection>,
+    metrics: Res<TerminalCellMetricsResource>,
+    window: Query<&Window, With<PrimaryWindow>>,
+) {
+    let Some(client) = connection.client() else {
+        return;
+    };
+    let Ok(window) = window.single() else {
+        return;
+    };
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let (cols, rows) = cells_for(
+        window.resolution.physical_width(),
+        window.resolution.physical_height(),
+        cell_w,
+        cell_h,
+    );
+    if (cols, rows) == (last.cols, last.rows) {
+        return;
+    }
+    last.cols = cols;
+    last.rows = rows;
+    if let Err(e) = client.handle().send(&refresh_client_command(cols, rows)) {
+        tracing::warn!(?e, cols, rows, "refresh-client send failed");
+    }
+}
+
 fn sync_active_window(mut windows: Query<(&TmuxWindow, &mut Node)>) {
     for (w, mut node) in windows.iter_mut() {
         let want = if w.active {
@@ -177,6 +224,14 @@ mod tests {
     use ozma_tty_renderer::schema::TerminalGrid;
     use ozmux_tmux::PaneOutput;
     use tmux_control_parser::{CellDims, PaneId};
+
+    #[test]
+    fn cells_for_divides_and_floors() {
+        assert_eq!(cells_for(800, 600, 8.0, 16.0), (100, 37));
+        assert_eq!(cells_for(1, 1, 8.0, 16.0), (1, 1));
+        assert_eq!(cells_for(0, 0, 8.0, 16.0), (1, 1));
+        assert_eq!(cells_for(807, 607, 8.0, 16.0), (100, 37));
+    }
 
     #[test]
     fn pane_rect_scales_cell_dims_to_pixels() {
