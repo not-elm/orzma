@@ -1,7 +1,7 @@
 //! Split-pane shortcut action: splits the active pane along an orientation
 //! when a `SplitPaneActionEvent` is triggered.
 use bevy::prelude::*;
-use ozmux_multiplexer::{Cwd, MultiplexerCommands, Side, SplitOrientation, SurfaceKind};
+use ozmux_multiplexer::{Cwd, MultiplexerCommands, Side, SplitOrientation};
 
 /// Registers the `apply_split` observer for `SplitPaneActionEvent`.
 pub struct SplitPaneActionPlugin;
@@ -41,12 +41,7 @@ fn apply_split(
     let seed = mux
         .panes_active_surface(active_pane)
         .and_then(|s| cwds.get(s).ok().cloned());
-    match mux.split_pane_with_surface(
-        active_pane,
-        Side::After,
-        *orientation,
-        SurfaceKind::Terminal,
-    ) {
+    match mux.split_pane_with_surface(active_pane, Side::After, *orientation) {
         Ok(outcome) => {
             if let Some(cwd) = seed {
                 commands.entity(outcome.surface).insert(cwd);

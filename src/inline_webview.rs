@@ -21,7 +21,7 @@ use bevy_cef::prelude::{
     FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
 use bevy_cef_core::prelude::Browsers;
-use ozma_tty_engine::InlineAnchor;
+use ozma_tty_engine::{AnchorMode, InlineAnchor, TerminalModeChanged};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
@@ -45,17 +45,14 @@ pub(crate) struct InlineWebview {
     pub(crate) slot: u8,
 }
 
-/// Where an inline webview sits in its terminal's scrollback: the anchor cell
-/// (absolute line = `history_base + history_size + cursor row` at the OSC byte
-/// position, plus the cursor column), the rect extent in cells, and the VT
-/// `frame_seq` the next grid emit carries (`project_inline_overlays` defers
-/// first projection until the grid catches up to it).
+/// Where an inline webview sits: its anchor mode (scrollback line vs fixed
+/// viewport cell), the rect extent in cells, and the VT `frame_seq` the next
+/// grid emit carries (`project_inline_overlays` defers first projection until
+/// the grid catches up).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InlinePlacement {
-    /// Absolute scrollback line of the rect's TOP row.
-    pub(crate) anchor_line: u64,
-    /// Column of the anchor cell.
-    pub(crate) anchor_col: u16,
+    /// Where the rect is anchored.
+    pub(crate) anchor: AnchorMode,
     /// Rect height in terminal cells.
     pub(crate) rows: u16,
     /// Rect width in terminal cells.
@@ -103,6 +100,7 @@ impl Plugin for OzmuxInlineWebviewPlugin {
                     .before(prepare_assets::<PreparedUiMaterial<TerminalUiMaterial>>),
             );
         }
+        app.add_observer(despawn_fixed_screen_on_alt_exit);
     }
 }
 
@@ -134,6 +132,7 @@ pub(crate) struct InlineMountContext<'a> {
 pub(crate) struct InlineWebviewParams<'w, 's> {
     commands: Commands<'w, 's>,
     images: ResMut<'w, Assets<Image>>,
+    placements: Query<'w, 's, &'static mut InlinePlacement>,
     children: Query<'w, 's, &'static Children>,
     views: Query<'w, 's, &'static InlineWebview>,
     metrics: Option<Res<'w, TerminalCellMetricsResource>>,
@@ -206,22 +205,28 @@ pub(crate) fn mount_inline(
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline without anchor, dropping");
         return;
     };
+    let live = live_inline_children(&params.children, &params.views, ctx.terminal_surface);
+    if let Some((existing, _)) = live
+        .iter()
+        .find(|(_, v)| v.view_id == ctx.view_id && v.instance_id.as_deref() == ctx.instance_id)
+    {
+        let next = InlinePlacement {
+            anchor: anchor.mode,
+            rows: ctx.rows,
+            cols: ctx.cols,
+            frame_seq: anchor.frame_seq,
+        };
+        if let Ok(mut placement) = params.placements.get_mut(*existing) {
+            // NOTE: set_if_neq elides a no-op re-emit so an unchanged frame
+            // triggers neither a projection move nor a CEF surface resize.
+            placement.set_if_neq(next);
+        }
+        return;
+    }
     let Some(resolved) = resolve_mount(ctx.view_id, ctx.terminal_surface, dynamic) else {
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline for unregistered or unowned id, dropping");
         return;
     };
-    let live = live_inline_children(&params.children, &params.views, ctx.terminal_surface);
-    if live
-        .iter()
-        .any(|(_, v)| v.view_id == ctx.view_id && v.instance_id.as_deref() == ctx.instance_id)
-    {
-        tracing::debug!(
-            view_id = %ctx.view_id,
-            instance_id = ?ctx.instance_id,
-            "osc-webview: duplicate inline mount on this terminal, dropping"
-        );
-        return;
-    }
     let Some(slot) = smallest_free_slot(&live) else {
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: all inline overlay slots occupied, dropping");
         return;
@@ -260,8 +265,7 @@ pub(crate) fn mount_inline(
             slot,
         },
         InlinePlacement {
-            anchor_line: anchor.line,
-            anchor_col: anchor.col,
+            anchor: anchor.mode,
             rows: ctx.rows,
             cols: ctx.cols,
             frame_seq: anchor.frame_seq,
@@ -284,7 +288,7 @@ pub(crate) fn mount_inline(
         slot,
         rows = ctx.rows,
         cols = ctx.cols,
-        anchor_line = anchor.line,
+        anchor = ?anchor.mode,
         "osc-webview: inline webview mounted"
     );
 }
@@ -420,6 +424,32 @@ pub(crate) fn inline_local_dip(
 
 const FALLBACK_CELL_W_PHYS: f32 = 8.0;
 const FALLBACK_CELL_H_PHYS: f32 = 16.0;
+
+/// Despawns the `FixedScreen` inline children of a terminal when it leaves the
+/// alternate screen. The teardown lands before the next `PostUpdate`
+/// projection (the engine triggers `TerminalModeChanged` before the frame
+/// trigger, and despawn commands flush at the `Update`->`PostUpdate` boundary),
+/// so no stale rectangle is painted (spec section 4.6, Kitty issue #2901).
+fn despawn_fixed_screen_on_alt_exit(
+    event: On<TerminalModeChanged>,
+    mut commands: Commands,
+    children: Query<&Children>,
+    placements: Query<&InlinePlacement>,
+) {
+    if !event.removed.iter().any(|m| m == ALT_SCREEN_MODE) {
+        return;
+    }
+    let Ok(kids) = children.get(event.entity) else {
+        return;
+    };
+    for child in kids.iter() {
+        if let Ok(placement) = placements.get(child)
+            && matches!(placement.anchor, AnchorMode::FixedScreen { .. })
+        {
+            commands.entity(child).despawn();
+        }
+    }
+}
 
 /// The live inline-webview children of a terminal surface.
 fn live_inline_children<'a>(
@@ -563,13 +593,15 @@ const ALT_SCREEN_MODE: &str = "alt-screen";
 /// children, every frame, starting from the all-sentinel default (spec §5).
 ///
 /// Per-child projection rules, in order:
-/// 1. Alt-screen: while the grid is on the alternate screen, every slot stays
-///    sentinel (the placement re-projects on return to the primary screen).
-/// 2. Seq-hold: a placement is skipped until the grid's `last_seq` reaches the
+/// 1. Seq-hold: a placement is skipped until the grid's `last_seq` reaches the
 ///    mount-stamped `frame_seq` (wrap-aware compare).
-/// 3. `viewport_row = anchor_line - (history_base + history_size -
-///    display_offset)`; rects fully above/below the viewport or anchored at or
-///    past the right edge are culled; a partially-above rect keeps its
+/// 2. Screen-mode gating: a `Scrollback` placement projects only on the primary
+///    screen (hidden while on the alternate screen); a `FixedScreen` placement
+///    projects only on the alternate screen.
+/// 3. `Scrollback`: `viewport_row = line - (history_base + history_size -
+///    display_offset)`. `FixedScreen`: `viewport_row = row` (already
+///    viewport-relative). Rects fully above/below the viewport or anchored at
+///    or past the right edge are culled; a partially-above rect keeps its
 ///    negative row (the shader clips).
 ///
 /// The component is (re)inserted for every terminal that has inline children
@@ -602,18 +634,29 @@ fn project_inline_overlays(
                     continue;
                 };
                 has_inline_child = true;
-                if on_alt_screen {
-                    continue;
-                }
                 if (grid.last_seq.wrapping_sub(placement.frame_seq) as i32) < 0 {
                     continue;
                 }
-                let viewport_row = placement.anchor_line as i64
-                    - (grid.history_base as i64 + i64::from(grid.history_size)
-                        - i64::from(grid.display_offset));
+                let (viewport_row, anchor_col) = match placement.anchor {
+                    AnchorMode::Scrollback { line, col } => {
+                        if on_alt_screen {
+                            continue;
+                        }
+                        let row = line as i64
+                            - (grid.history_base as i64 + i64::from(grid.history_size)
+                                - i64::from(grid.display_offset));
+                        (row, col)
+                    }
+                    AnchorMode::FixedScreen { row, col } => {
+                        if !on_alt_screen {
+                            continue;
+                        }
+                        (i64::from(row), col)
+                    }
+                };
                 if viewport_row + i64::from(placement.rows) <= 0
                     || viewport_row >= i64::from(grid.rows)
-                    || u32::from(placement.anchor_col) >= u32::from(grid.cols)
+                    || u32::from(anchor_col) >= u32::from(grid.cols)
                 {
                     continue;
                 }
@@ -623,7 +666,7 @@ fn project_inline_overlays(
                 }
                 overlays.rects[slot] = IVec4::new(
                     viewport_row as i32,
-                    i32::from(placement.anchor_col),
+                    i32::from(anchor_col),
                     i32::from(placement.rows),
                     i32::from(placement.cols),
                 );
@@ -683,8 +726,7 @@ mod tests {
 
     fn test_anchor() -> InlineAnchor {
         InlineAnchor {
-            line: 42,
-            col: 3,
+            mode: AnchorMode::Scrollback { line: 42, col: 3 },
             frame_seq: 7,
         }
     }
@@ -818,8 +860,7 @@ mod tests {
         assert_eq!(
             app.world().get::<InlinePlacement>(child),
             Some(&InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: 7
@@ -861,18 +902,53 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_mount_same_view_is_rejected() {
+    fn duplicate_mount_updates_placement_in_place() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_dyn(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", Some(test_anchor()));
-        mount(&mut app, terminal, "dash", Some(test_anchor()));
+        let before = inline_children_of(&app, terminal);
+        assert_eq!(before.len(), 1, "first mount spawns one child");
+        let entity = before[0];
+        let slot_before = app.world().get::<InlineWebview>(entity).unwrap().slot;
 
+        // Re-mount the same handle with a different anchor.
+        app.world_mut().trigger(OscWebviewRequest {
+            entity: terminal,
+            verb: OscWebviewVerb::MountInline {
+                view_id: "dash".into(),
+                rows: 12,
+                cols: 50,
+                instance_id: None,
+            },
+            anchor: Some(InlineAnchor {
+                mode: AnchorMode::Scrollback { line: 99, col: 7 },
+                frame_seq: 9,
+            }),
+        });
+        app.world_mut().flush();
+
+        let after = inline_children_of(&app, terminal);
+        assert_eq!(after.len(), 1, "re-mount must NOT spawn a second child");
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
-            1,
-            "a duplicate (terminal, view_id) mount must be dropped"
+            after[0], entity,
+            "re-mount must reuse the same entity (no reload)"
+        );
+        assert_eq!(
+            app.world().get::<InlinePlacement>(entity),
+            Some(&InlinePlacement {
+                anchor: AnchorMode::Scrollback { line: 99, col: 7 },
+                rows: 12,
+                cols: 50,
+                frame_seq: 9,
+            }),
+            "re-mount updates the placement in place"
+        );
+        assert_eq!(
+            app.world().get::<InlineWebview>(entity).unwrap().slot,
+            slot_before,
+            "re-mount preserves the overlay slot"
         );
     }
 
@@ -1197,8 +1273,7 @@ mod tests {
             terminal,
             0,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: 7,
@@ -1236,8 +1311,7 @@ mod tests {
 
     fn formula_placement() -> InlinePlacement {
         InlinePlacement {
-            anchor_line: 30,
-            anchor_col: 2,
+            anchor: AnchorMode::Scrollback { line: 30, col: 2 },
             rows: 4,
             cols: 10,
             frame_seq: 0,
@@ -1298,22 +1372,19 @@ mod tests {
             })
             .id();
         let above = InlinePlacement {
-            anchor_line: 10,
-            anchor_col: 0,
+            anchor: AnchorMode::Scrollback { line: 10, col: 0 },
             rows: 10,
             cols: 10,
             frame_seq: 0,
         };
         let below = InlinePlacement {
-            anchor_line: 100,
-            anchor_col: 0,
+            anchor: AnchorMode::Scrollback { line: 100, col: 0 },
             rows: 10,
             cols: 10,
             frame_seq: 0,
         };
         let col_out = InlinePlacement {
-            anchor_line: 35,
-            anchor_col: 80,
+            anchor: AnchorMode::Scrollback { line: 35, col: 80 },
             rows: 10,
             cols: 10,
             frame_seq: 0,
@@ -1335,8 +1406,7 @@ mod tests {
             terminal,
             0,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 79,
+                anchor: AnchorMode::Scrollback { line: 42, col: 79 },
                 rows: 10,
                 cols: 10,
                 frame_seq: 7,
@@ -1366,8 +1436,7 @@ mod tests {
             terminal,
             0,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: 7,
@@ -1391,6 +1460,56 @@ mod tests {
     }
 
     #[test]
+    fn fixed_screen_projects_to_its_row_on_alt_screen() {
+        let mut app = make_test_app();
+        let terminal = app
+            .world_mut()
+            .spawn(TerminalGrid {
+                modes: vec![ALT_SCREEN_MODE.to_string()],
+                ..projection_grid(7)
+            })
+            .id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::FixedScreen { row: 5, col: 2 },
+                rows: 4,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+
+        project(&mut app);
+        assert_eq!(
+            overlays_of(&app, terminal).rects[0],
+            IVec4::new(5, 2, 4, 10),
+            "a FixedScreen placement projects to its own viewport row on the alt screen"
+        );
+    }
+
+    #[test]
+    fn fixed_screen_is_hidden_on_primary_screen() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::FixedScreen { row: 5, col: 2 },
+                rows: 4,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+
+        project(&mut app);
+        assert_all_sentinel(overlays_of(&app, terminal));
+    }
+
+    #[test]
     fn texture_handle_lands_in_the_childs_slot() {
         let mut app = make_test_app();
         let terminal = app.world_mut().spawn(projection_grid(7)).id();
@@ -1399,8 +1518,7 @@ mod tests {
             terminal,
             2,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: 7,
@@ -1426,8 +1544,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = app.world_mut().spawn(projection_grid(7)).id();
         let placement = InlinePlacement {
-            anchor_line: 42,
-            anchor_col: 3,
+            anchor: AnchorMode::Scrollback { line: 42, col: 3 },
             rows: 10,
             cols: 40,
             frame_seq: 7,
@@ -1480,8 +1597,7 @@ mod tests {
             terminal,
             0,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: u32::MAX - 1,
@@ -1937,5 +2053,71 @@ mod tests {
         // Without a Browsers NonSend resource the full resolution path runs
         // and the forwarding is skipped — the system must not panic.
         app.update();
+    }
+
+    #[test]
+    fn alt_screen_exit_despawns_only_fixed_screen_children() {
+        use ozma_tty_engine::TerminalModeChanged;
+
+        let mut app = make_test_app();
+        app.add_observer(despawn_fixed_screen_on_alt_exit);
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::FixedScreen { row: 1, col: 0 },
+                rows: 4,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            1,
+            InlinePlacement {
+                anchor: AnchorMode::Scrollback { line: 42, col: 0 },
+                rows: 4,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+        let fixed_entity = inline_children_of(&app, terminal)
+            .into_iter()
+            .find(|e| {
+                matches!(
+                    app.world().get::<InlinePlacement>(*e).unwrap().anchor,
+                    AnchorMode::FixedScreen { .. }
+                )
+            })
+            .unwrap();
+
+        app.world_mut().trigger(TerminalModeChanged {
+            entity: terminal,
+            added: vec![],
+            removed: vec![ALT_SCREEN_MODE.to_string()],
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let remaining = inline_children_of(&app, terminal);
+        assert_eq!(
+            remaining.len(),
+            1,
+            "the FixedScreen child must be despawned"
+        );
+        assert!(
+            !remaining.contains(&fixed_entity),
+            "the despawned child must be the FixedScreen one"
+        );
+        assert!(matches!(
+            app.world()
+                .get::<InlinePlacement>(remaining[0])
+                .unwrap()
+                .anchor,
+            AnchorMode::Scrollback { .. }
+        ));
     }
 }
