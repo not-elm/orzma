@@ -52,15 +52,33 @@ mod tests {
 
     #[test]
     fn serializes_alt_char_to_wire_shape() {
-        let c = KeyChord { mods: KeyModifiers::ALT, code: KeyCode::Char('H') };
-        assert_eq!(serde_json::to_value(c).unwrap(), json!({"mods": ["alt"], "key": "h"}));
+        let c = KeyChord {
+            mods: KeyModifiers::ALT,
+            code: KeyCode::Char('H'),
+        };
+        assert_eq!(
+            serde_json::to_value(c).unwrap(),
+            json!({"mods": ["alt"], "key": "h"})
+        );
     }
 
     #[test]
     fn serializes_ctrl_tab_and_fkey() {
-        let tab = KeyChord { mods: KeyModifiers::CONTROL, code: KeyCode::Tab };
-        assert_eq!(serde_json::to_value(tab).unwrap(), json!({"mods": ["ctrl"], "key": "tab"}));
-        let f5 = KeyChord { mods: KeyModifiers::NONE, code: KeyCode::F(5) };
-        assert_eq!(serde_json::to_value(f5).unwrap(), json!({"mods": [], "key": "f5"}));
+        let tab = KeyChord {
+            mods: KeyModifiers::CONTROL,
+            code: KeyCode::Tab,
+        };
+        assert_eq!(
+            serde_json::to_value(tab).unwrap(),
+            json!({"mods": ["ctrl"], "key": "tab"})
+        );
+        let f5 = KeyChord {
+            mods: KeyModifiers::NONE,
+            code: KeyCode::F(5),
+        };
+        assert_eq!(
+            serde_json::to_value(f5).unwrap(),
+            json!({"mods": [], "key": "f5"})
+        );
     }
 }

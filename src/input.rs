@@ -533,9 +533,7 @@ fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
 /// Option+h → "˙"), which would otherwise prevent Alt escape sequences
 /// from reaching the PTY correctly.
 fn bevy_to_terminal_key(key: &Key, key_code: KeyCode, alt: bool) -> Option<TerminalKey> {
-    if alt
-        && let Some(c) = base_char_from_key_code(key_code)
-    {
+    if alt && let Some(c) = base_char_from_key_code(key_code) {
         return Some(TerminalKey::Text(c.to_string()));
     }
     Some(match key {
@@ -564,13 +562,42 @@ fn bevy_to_terminal_key(key: &Key, key_code: KeyCode, alt: bool) -> Option<Termi
 fn base_char_from_key_code(code: KeyCode) -> Option<char> {
     use KeyCode::*;
     Some(match code {
-        KeyA => 'a', KeyB => 'b', KeyC => 'c', KeyD => 'd', KeyE => 'e', KeyF => 'f',
-        KeyG => 'g', KeyH => 'h', KeyI => 'i', KeyJ => 'j', KeyK => 'k', KeyL => 'l',
-        KeyM => 'm', KeyN => 'n', KeyO => 'o', KeyP => 'p', KeyQ => 'q', KeyR => 'r',
-        KeyS => 's', KeyT => 't', KeyU => 'u', KeyV => 'v', KeyW => 'w', KeyX => 'x',
-        KeyY => 'y', KeyZ => 'z',
-        Digit0 => '0', Digit1 => '1', Digit2 => '2', Digit3 => '3', Digit4 => '4',
-        Digit5 => '5', Digit6 => '6', Digit7 => '7', Digit8 => '8', Digit9 => '9',
+        KeyA => 'a',
+        KeyB => 'b',
+        KeyC => 'c',
+        KeyD => 'd',
+        KeyE => 'e',
+        KeyF => 'f',
+        KeyG => 'g',
+        KeyH => 'h',
+        KeyI => 'i',
+        KeyJ => 'j',
+        KeyK => 'k',
+        KeyL => 'l',
+        KeyM => 'm',
+        KeyN => 'n',
+        KeyO => 'o',
+        KeyP => 'p',
+        KeyQ => 'q',
+        KeyR => 'r',
+        KeyS => 's',
+        KeyT => 't',
+        KeyU => 'u',
+        KeyV => 'v',
+        KeyW => 'w',
+        KeyX => 'x',
+        KeyY => 'y',
+        KeyZ => 'z',
+        Digit0 => '0',
+        Digit1 => '1',
+        Digit2 => '2',
+        Digit3 => '3',
+        Digit4 => '4',
+        Digit5 => '5',
+        Digit6 => '6',
+        Digit7 => '7',
+        Digit8 => '8',
+        Digit9 => '9',
         _ => return None,
     })
 }
@@ -635,7 +662,12 @@ fn fill_cef_keyboard_filter(
                     (
                         e,
                         c.code,
-                        ModifiersState { alt: c.alt, ctrl: c.ctrl, shift: c.shift, logo: c.logo },
+                        ModifiersState {
+                            alt: c.alt,
+                            ctrl: c.ctrl,
+                            shift: c.shift,
+                            logo: c.logo,
+                        },
                     )
                 })
                 .collect()
@@ -1913,16 +1945,25 @@ mod tests {
         app.init_resource::<CefKeyboardFilter>();
         let surface = install_active_terminal_surface(&mut app);
         let child = spawn_focused_inline_child(&mut app, surface);
-        app.world_mut().entity_mut(child).insert(PassthroughKeys(vec![NormalizedChord {
-            code: KeyCode::KeyH,
+        app.world_mut()
+            .entity_mut(child)
+            .insert(PassthroughKeys(vec![NormalizedChord {
+                code: KeyCode::KeyH,
+                alt: true,
+                ctrl: false,
+                shift: false,
+                logo: false,
+            }]));
+        app.world_mut()
+            .run_system_once(fill_cef_keyboard_filter)
+            .unwrap();
+        let filter = app.world().resource::<CefKeyboardFilter>();
+        let alt = ModifiersState {
             alt: true,
             ctrl: false,
             shift: false,
             logo: false,
-        }]));
-        app.world_mut().run_system_once(fill_cef_keyboard_filter).unwrap();
-        let filter = app.world().resource::<CefKeyboardFilter>();
-        let alt = ModifiersState { alt: true, ctrl: false, shift: false, logo: false };
+        };
         assert!(filter.contains(child, KeyCode::KeyH, alt));
         assert!(!filter.contains(child, KeyCode::KeyH, ModifiersState::default()));
     }
@@ -1934,7 +1975,9 @@ mod tests {
         let (mut app, _win) = make_app(true);
         app.init_resource::<CefKeyboardFilter>();
         app.insert_resource(FocusedWebview(None));
-        app.world_mut().run_system_once(fill_cef_keyboard_filter).unwrap();
+        app.world_mut()
+            .run_system_once(fill_cef_keyboard_filter)
+            .unwrap();
         let filter = app.world().resource::<CefKeyboardFilter>();
         assert!(!filter.contains(
             Entity::from_raw_u32(1).unwrap(),
@@ -1965,13 +2008,15 @@ mod tests {
         app.add_observer(capture_key_input);
         let surface = install_active_terminal_surface(&mut app);
         let child = spawn_focused_inline_child(&mut app, surface);
-        app.world_mut().entity_mut(child).insert(PassthroughKeys(vec![NormalizedChord {
-            code: KeyCode::KeyH,
-            alt: true,
-            ctrl: false,
-            shift: false,
-            logo: false,
-        }]));
+        app.world_mut()
+            .entity_mut(child)
+            .insert(PassthroughKeys(vec![NormalizedChord {
+                code: KeyCode::KeyH,
+                alt: true,
+                ctrl: false,
+                shift: false,
+                logo: false,
+            }]));
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::AltLeft);
@@ -1995,13 +2040,15 @@ mod tests {
         app.add_observer(capture_key_input);
         let surface = install_active_terminal_surface(&mut app);
         let child = spawn_focused_inline_child(&mut app, surface);
-        app.world_mut().entity_mut(child).insert(PassthroughKeys(vec![NormalizedChord {
-            code: KeyCode::KeyH,
-            alt: true,
-            ctrl: false,
-            shift: false,
-            logo: false,
-        }]));
+        app.world_mut()
+            .entity_mut(child)
+            .insert(PassthroughKeys(vec![NormalizedChord {
+                code: KeyCode::KeyH,
+                alt: true,
+                ctrl: false,
+                shift: false,
+                logo: false,
+            }]));
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::AltLeft);
@@ -2025,13 +2072,15 @@ mod tests {
         app.add_observer(capture_key_input);
         let surface = install_active_terminal_surface(&mut app);
         let child = spawn_focused_inline_child(&mut app, surface);
-        app.world_mut().entity_mut(child).insert(PassthroughKeys(vec![NormalizedChord {
-            code: KeyCode::KeyH,
-            alt: false,
-            ctrl: false,
-            shift: false,
-            logo: true,
-        }]));
+        app.world_mut()
+            .entity_mut(child)
+            .insert(PassthroughKeys(vec![NormalizedChord {
+                code: KeyCode::KeyH,
+                alt: false,
+                ctrl: false,
+                shift: false,
+                logo: true,
+            }]));
         {
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
             keys.press(KeyCode::SuperLeft);

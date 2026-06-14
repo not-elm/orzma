@@ -145,7 +145,9 @@ mod tests {
         };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        WebviewWidget::new("v").focused(true).render(area, &mut buf, &mut state);
+        WebviewWidget::new("v")
+            .focused(true)
+            .render(area, &mut buf, &mut state);
         assert_eq!(state.focused_for_test(), Some("v"));
     }
 

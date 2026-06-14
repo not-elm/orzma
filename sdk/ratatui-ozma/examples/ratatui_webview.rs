@@ -36,10 +36,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let view = ozma.register(
         Webview::inline(html)
             .passthrough([
-                KeyChord { mods: KeyModifiers::ALT, code: KeyCode::Char('h') },
-                KeyChord { mods: KeyModifiers::ALT, code: KeyCode::Char('l') },
+                KeyChord {
+                    mods: KeyModifiers::ALT,
+                    code: KeyCode::Char('h'),
+                },
+                KeyChord {
+                    mods: KeyModifiers::ALT,
+                    code: KeyCode::Char('l'),
+                },
             ])
-            .on("ping", |(arg,): (String,)| Ok::<_, RpcError>(format!("pong:{arg}"))),
+            .on("ping", |(arg,): (String,)| {
+                Ok::<_, RpcError>(format!("pong:{arg}"))
+            }),
     )?;
 
     enable_raw_mode()?;
@@ -70,7 +78,8 @@ fn run(
     let mut last = Instant::now();
     loop {
         terminal.draw(|f| {
-            let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(f.area());
+            let rows =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(f.area());
             f.render_widget(
                 Paragraph::new("Alt+l focus webview · Alt+h leave · q quit (when not focused)"),
                 rows[0],

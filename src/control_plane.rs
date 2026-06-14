@@ -652,7 +652,13 @@ fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
             _ => {}
         }
     }
-    Some(NormalizedChord { code, alt, ctrl, shift, logo })
+    Some(NormalizedChord {
+        code,
+        alt,
+        ctrl,
+        shift,
+        logo,
+    })
 }
 
 /// Upper bound on a single inline HTML document (4 MiB).
@@ -1424,9 +1430,7 @@ mod focus_tests {
     #[test]
     fn sync_preserves_app_declared_focus_from_control_plane() {
         use crate::webview_render::sync_focused_webview;
-        use ozmux_multiplexer::{
-            AttachedWorkspace, MultiplexerCommands, Side, SplitOrientation,
-        };
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, Side, SplitOrientation};
 
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
@@ -1569,11 +1573,37 @@ mod normalize_tests {
 
     #[test]
     fn normalize_chord_maps_keys_and_mods() {
-        let n = normalize_chord(&HostKeyChord { mods: vec!["alt".into()], key: "h".into() }).unwrap();
+        let n = normalize_chord(&HostKeyChord {
+            mods: vec!["alt".into()],
+            key: "h".into(),
+        })
+        .unwrap();
         assert_eq!(n.code, KeyCode::KeyH);
         assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
-        assert_eq!(normalize_chord(&HostKeyChord { mods: vec![], key: "f5".into() }).unwrap().code, KeyCode::F5);
-        assert_eq!(normalize_chord(&HostKeyChord { mods: vec![], key: "tab".into() }).unwrap().code, KeyCode::Tab);
-        assert!(normalize_chord(&HostKeyChord { mods: vec![], key: "nope".into() }).is_none());
+        assert_eq!(
+            normalize_chord(&HostKeyChord {
+                mods: vec![],
+                key: "f5".into()
+            })
+            .unwrap()
+            .code,
+            KeyCode::F5
+        );
+        assert_eq!(
+            normalize_chord(&HostKeyChord {
+                mods: vec![],
+                key: "tab".into()
+            })
+            .unwrap()
+            .code,
+            KeyCode::Tab
+        );
+        assert!(
+            normalize_chord(&HostKeyChord {
+                mods: vec![],
+                key: "nope".into()
+            })
+            .is_none()
+        );
     }
 }
