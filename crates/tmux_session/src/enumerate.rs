@@ -69,6 +69,14 @@ fn parse_window_id(field: &str) -> Option<WindowId> {
     Some(WindowId(field.strip_prefix('@')?.parse().ok()?))
 }
 
+/// Builds a `refresh-client -C <cols>,<rows>` control-mode command telling
+/// tmux this client's cell size. The bare `W,H` form is accepted by all tmux
+/// versions; the `WxH` form is only required for the `@id:WxH` per-window
+/// variant, which Phase 2b does not use.
+pub fn refresh_client_command(cols: u16, rows: u16) -> String {
+    format!("refresh-client -C {cols},{rows}")
+}
+
 /// Builds the `list-windows` command ozmux sends on attach to enumerate the
 /// session's existing windows.
 ///
@@ -143,5 +151,10 @@ mod tests {
         assert!(cmd.starts_with("list-windows -F \""));
         assert!(cmd.ends_with('"'));
         assert!(cmd.contains(LIST_WINDOWS_FORMAT));
+    }
+
+    #[test]
+    fn refresh_client_command_uses_comma_size_form() {
+        assert_eq!(refresh_client_command(80, 24), "refresh-client -C 80,24");
     }
 }
