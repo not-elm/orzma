@@ -21,7 +21,7 @@ use bevy_cef::prelude::{
     FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
 use bevy_cef_core::prelude::Browsers;
-use ozma_tty_engine::{AnchorMode, InlineAnchor};
+use ozma_tty_engine::{AnchorMode, InlineAnchor, TerminalModeChanged};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
@@ -100,6 +100,7 @@ impl Plugin for OzmuxInlineWebviewPlugin {
                     .before(prepare_assets::<PreparedUiMaterial<TerminalUiMaterial>>),
             );
         }
+        app.add_observer(despawn_fixed_screen_on_alt_exit);
     }
 }
 
@@ -423,6 +424,32 @@ pub(crate) fn inline_local_dip(
 
 const FALLBACK_CELL_W_PHYS: f32 = 8.0;
 const FALLBACK_CELL_H_PHYS: f32 = 16.0;
+
+/// Despawns the `FixedScreen` inline children of a terminal when it leaves the
+/// alternate screen. The teardown lands before the next `PostUpdate`
+/// projection (the engine triggers `TerminalModeChanged` before the frame
+/// trigger, and despawn commands flush at the `Update`->`PostUpdate` boundary),
+/// so no stale rectangle is painted (spec section 4.6, Kitty issue #2901).
+fn despawn_fixed_screen_on_alt_exit(
+    event: On<TerminalModeChanged>,
+    mut commands: Commands,
+    children: Query<&Children>,
+    placements: Query<&InlinePlacement>,
+) {
+    if !event.removed.iter().any(|m| m == ALT_SCREEN_MODE) {
+        return;
+    }
+    let Ok(kids) = children.get(event.entity) else {
+        return;
+    };
+    for child in kids.iter() {
+        if let Ok(placement) = placements.get(child)
+            && matches!(placement.anchor, AnchorMode::FixedScreen { .. })
+        {
+            commands.entity(child).despawn();
+        }
+    }
+}
 
 /// The live inline-webview children of a terminal surface.
 fn live_inline_children<'a>(
@@ -2026,5 +2053,71 @@ mod tests {
         // Without a Browsers NonSend resource the full resolution path runs
         // and the forwarding is skipped — the system must not panic.
         app.update();
+    }
+
+    #[test]
+    fn alt_screen_exit_despawns_only_fixed_screen_children() {
+        use ozma_tty_engine::TerminalModeChanged;
+
+        let mut app = make_test_app();
+        app.add_observer(despawn_fixed_screen_on_alt_exit);
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::FixedScreen { row: 1, col: 0 },
+                rows: 4,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            1,
+            InlinePlacement {
+                anchor: AnchorMode::Scrollback { line: 42, col: 0 },
+                rows: 4,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+        let fixed_entity = inline_children_of(&app, terminal)
+            .into_iter()
+            .find(|e| {
+                matches!(
+                    app.world().get::<InlinePlacement>(*e).unwrap().anchor,
+                    AnchorMode::FixedScreen { .. }
+                )
+            })
+            .unwrap();
+
+        app.world_mut().trigger(TerminalModeChanged {
+            entity: terminal,
+            added: vec![],
+            removed: vec![ALT_SCREEN_MODE.to_string()],
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let remaining = inline_children_of(&app, terminal);
+        assert_eq!(
+            remaining.len(),
+            1,
+            "the FixedScreen child must be despawned"
+        );
+        assert!(
+            !remaining.contains(&fixed_entity),
+            "the despawned child must be the FixedScreen one"
+        );
+        assert!(matches!(
+            app.world()
+                .get::<InlinePlacement>(remaining[0])
+                .unwrap()
+                .anchor,
+            AnchorMode::Scrollback { .. }
+        ));
     }
 }
