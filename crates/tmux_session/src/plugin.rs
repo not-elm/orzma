@@ -5,6 +5,7 @@ use crate::connection::TmuxConnection;
 use crate::enumerate::{EnumerationState, list_windows_command};
 use crate::event_pump::{advance_state, apply_events, drain_transport};
 use crate::model::ProjectionModel;
+use crate::output::{PaneOutput, collect_pane_outputs};
 use crate::reconcile::{TmuxProjection, reconcile_projection};
 use crate::state::ConnectionState;
 use bevy::prelude::*;
@@ -15,6 +16,12 @@ use tmux_control::TransportEvent;
 /// system. Phase 1b does not auto-connect.
 pub struct TmuxSessionPlugin;
 
+/// Ordering label for the tmux drain + reconcile chain. The binary's render
+/// systems run `.after(TmuxProjectionSet)` so a freshly-projected pane is
+/// attached and its output routed in the same frame the projection spawns it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TmuxProjectionSet;
+
 impl Plugin for TmuxSessionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ConnectionState>()
@@ -22,13 +29,15 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<TmuxProjection>()
             .init_resource::<EnumerationState>()
             .insert_non_send_resource(TmuxConnection::default())
+            .add_message::<PaneOutput>()
             .add_systems(
                 Update,
                 (
                     drain_tmux_events,
                     reconcile_projection.run_if(resource_exists_and_changed::<ProjectionModel>),
                 )
-                    .chain(),
+                    .chain()
+                    .in_set(TmuxProjectionSet),
             );
     }
 }
@@ -47,6 +56,7 @@ fn drain_tmux_events(
     mut model: ResMut<ProjectionModel>,
     mut enumeration: ResMut<EnumerationState>,
     mut connection: NonSendMut<TmuxConnection>,
+    mut pane_output: MessageWriter<PaneOutput>,
 ) {
     let events = match connection.client() {
         Some(client) => drain_transport(client.events()),
@@ -54,6 +64,9 @@ fn drain_tmux_events(
     };
     if events.is_empty() {
         return;
+    }
+    for output in collect_pane_outputs(&events) {
+        pane_output.write(output);
     }
     if advance_state(state.bypass_change_detection(), &events) {
         state.set_changed();
