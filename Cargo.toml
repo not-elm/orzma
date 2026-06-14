@@ -22,7 +22,7 @@ debug = []
 ab_glyph = "0.2"
 arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
-bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "headless-gpu", features = ["debug"] }
+bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "passthrough", features = ["debug"] }
 bevy_cef_core = { workspace = true }
 ozma_tty_renderer = { path = "crates/ozma_tty_renderer" }
 ozma_tty_engine = { path = "crates/ozma_tty_engine" }
@@ -80,13 +80,8 @@ toml = "0.8"
 dirs = "5"
 unicode-width = "0.2"
 open = "5"
-bevy_cef_core = { git = "https://github.com/not-elm/bevy_cef", branch = "headless-gpu" }
+bevy_cef_core = { git = "https://github.com/not-elm/bevy_cef", branch = "passthrough" }
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"
 type_complexity = "allow"
-
-# NOTE: dev-only local patch for the passthrough work; do not rely on this path in CI.
-[patch."https://github.com/not-elm/bevy_cef"]
-bevy_cef = { path = "/Users/taiga/workspace/bevy_cef/wt/passthrough" }
-bevy_cef_core = { path = "/Users/taiga/workspace/bevy_cef/wt/passthrough/crates/bevy_cef_core" }
