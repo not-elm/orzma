@@ -586,6 +586,10 @@ fn is_safe_entry(entry: &str) -> bool {
             .all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
+/// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
+/// for unrecognized key names. Note that `"backtab"` maps to [`KeyCode::Tab`]
+/// (the same as `"tab"`): the shift distinction is carried in the modifier bits,
+/// so a passthrough `BackTab` and `Tab` are indistinguishable at the host.
 fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
     let code = match chord.key.as_str() {
         "tab" | "backtab" => KeyCode::Tab,

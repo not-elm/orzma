@@ -39,6 +39,12 @@ impl<'a, W> WebviewWidget<'a, W> {
 
     /// Marks the widget focused, a hint for drawing a focus frame/title around
     /// the webview (the page content itself is composited by the host).
+    ///
+    /// Focusing a webview on the same frame it is first mounted may race the
+    /// mount on the host (the focus op travels the control socket while the
+    /// mount OSC travels the terminal output), so the focus op can be silently
+    /// dropped; focus a webview on a frame after its first mount, or re-assert
+    /// focus if needed.
     pub fn focused(mut self, focused: bool) -> Self {
         self.focused = focused;
         self

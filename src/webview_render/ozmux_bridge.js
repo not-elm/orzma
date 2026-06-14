@@ -72,31 +72,5 @@
     },
   };
 
-  // NOTE: only Alt-modified keys are intercepted, so IME composition keys
-  // (bare keys, keyCode 229) are never swallowed.
-  var handle = location.hostname;
-  var navMap = { h: 'left', j: 'down', k: 'up', l: 'right' };
-  var keymap = { mods: ['alt'], keys: navMap };
-  function matchNav(e) {
-    if (!keymap.mods.every(function (m) {
-      return m === 'alt' ? e.altKey : m === 'ctrl' ? e.ctrlKey : m === 'shift' ? e.shiftKey : m === 'meta' ? e.metaKey : false;
-    })) return null;
-    var k = (e.key || '').toLowerCase();
-    return Object.prototype.hasOwnProperty.call(keymap.keys, k) ? keymap.keys[k] : null;
-  }
-  window.addEventListener('keydown', function (e) {
-    var dir = matchNav(e);
-    if (dir) {
-      e.preventDefault();
-      e.stopPropagation();
-      api.call('__ozma.nav', [handle, dir]);
-    }
-  }, true);
-  window.addEventListener('focus', function () { api.call('__ozma.focus', [handle, true]); });
-  window.addEventListener('blur', function () { api.call('__ozma.focus', [handle, false]); });
-  api.on('__ozma.keys', function (set) {
-    if (set && set.keys) keymap = { mods: set.mods || ['alt'], keys: set.keys };
-  });
-
   Object.defineProperty(window, 'ozmux', { value: Object.freeze(api), configurable: false, writable: false });
 })();

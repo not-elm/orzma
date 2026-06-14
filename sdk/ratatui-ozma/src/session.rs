@@ -26,21 +26,10 @@ pub(crate) struct Placement {
 #[derive(Debug, Default)]
 pub struct FramePlacements {
     placements: Vec<Placement>,
-    natives: Vec<(String, Rect)>,
     focused: Option<String>,
 }
 
 impl FramePlacements {
-    /// Records a native widget's rect this frame (for spatial focus resolution).
-    pub fn record_native(&mut self, id: String, area: Rect) {
-        self.natives.push((id, area));
-    }
-
-    /// Returns the native widget rects recorded this frame.
-    pub fn native_rects(&self) -> &[(String, Rect)] {
-        &self.natives
-    }
-
     pub(crate) fn record(&mut self, handle: String, area: Rect) {
         self.placements.push(Placement { handle, area });
     }
@@ -151,7 +140,6 @@ impl Ozma {
     /// Returns the per-frame placement collector, cleared, for `render_stateful_widget`.
     pub fn frame(&mut self) -> &mut FramePlacements {
         self.frame.placements.clear();
-        self.frame.natives.clear();
         self.frame.focused = None;
         &mut self.frame
     }
@@ -323,32 +311,6 @@ fn dispatch_call(writer: &SharedWriter, handlers: &HandlerRegistry, call: Incomi
 mod tests {
     use super::*;
     use ratatui::layout::Rect;
-
-    #[test]
-    fn record_native_collects_native_rects() {
-        let mut frame = FramePlacements::default();
-        frame.record_native(
-            "editor".into(),
-            Rect {
-                x: 1,
-                y: 2,
-                width: 3,
-                height: 4,
-            },
-        );
-        let natives = frame.native_rects();
-        assert_eq!(natives.len(), 1);
-        assert_eq!(natives[0].0, "editor");
-        assert_eq!(
-            natives[0].1,
-            Rect {
-                x: 1,
-                y: 2,
-                width: 3,
-                height: 4
-            }
-        );
-    }
 
     fn rect(x: u16, y: u16, w: u16, h: u16) -> Rect {
         Rect {
