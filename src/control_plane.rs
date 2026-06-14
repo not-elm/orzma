@@ -430,6 +430,7 @@ fn apply_control_events(
                     }
                 }
             }
+            ControlEvent::SetFocus { .. } => {}
         }
     }
 }
