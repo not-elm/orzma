@@ -99,6 +99,11 @@ pub(crate) fn list_windows_command() -> String {
     format!("list-windows -F \"{LIST_WINDOWS_FORMAT}\"")
 }
 
+/// Builds `select-window -t @<id>` to switch the client's active window.
+pub fn select_window_command(id: WindowId) -> String {
+    format!("select-window -t @{}", id.0)
+}
+
 /// Tracks the in-flight `list-windows` enumeration command so its reply can
 /// be correlated by [`CommandId`] and seeded into the projection.
 #[derive(Resource, Default)]
@@ -187,5 +192,10 @@ mod tests {
         assert_eq!(rows[0].index, 3);
         assert_eq!(rows[0].name, "my-win");
         assert!(rows[0].active);
+    }
+
+    #[test]
+    fn select_window_command_targets_at_id() {
+        assert_eq!(select_window_command(WindowId(4)), "select-window -t @4");
     }
 }
