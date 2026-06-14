@@ -7,7 +7,7 @@ use bevy::prelude::*;
 mod bundle;
 pub mod bundled;
 pub mod glyph;
-mod grid;
+pub mod grid;
 pub mod material;
 pub mod schema;
 
@@ -19,6 +19,7 @@ pub use crate::glyph::font::{
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;
     pub use crate::bundle::TerminalRenderBundle;
+    pub use crate::grid::TerminalGridPlugin;
     pub use crate::material::{OVERLAY_SLOTS, PaneDim, TerminalOverlays};
     pub use crate::schema::*;
 }

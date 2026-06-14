@@ -4649,6 +4649,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tmux_control",
+ "tmux_control_parser",
  "tracing",
  "unicode-width",
 ]

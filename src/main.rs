@@ -41,6 +41,7 @@ use ozmux_extension_host::DynAssetRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
 use tmux_boot::TmuxBootPlugin;
+use tmux_render::OzmuxTmuxRenderPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::tmux_dialog::TmuxDialogPlugin;
 use ui::{
@@ -81,6 +82,7 @@ fn main() {
         ))
         .add_plugins(TabInteractionPlugin)
         .add_plugins(TmuxDialogPlugin)
+        .add_plugins(OzmuxTmuxRenderPlugin)
         .add_plugins((
             MouseWheelInputPlugin,
             MouseButtonsInputPlugin,

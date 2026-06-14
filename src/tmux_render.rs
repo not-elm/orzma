@@ -86,3 +86,80 @@ fn route_tmux_output(
         handle.flush_emit(&mut commands, entity);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ozma_tty_renderer::prelude::TerminalGridPlugin;
+    use ozma_tty_renderer::schema::TerminalGrid;
+    use ozmux_tmux::PaneOutput;
+    use tmux_control_parser::{CellDims, PaneId};
+
+    fn dims() -> CellDims {
+        CellDims {
+            width: 20,
+            height: 5,
+            xoff: 0,
+            yoff: 0,
+        }
+    }
+
+    #[test]
+    fn output_routed_into_pane_grid_renders_text() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.init_resource::<TmuxProjection>();
+        app.add_message::<PaneOutput>();
+
+        // A stand-in WorkspaceUiRoot so `attach`'s `ui_root.single()` resolves
+        // (kept separate from the pane so the pane is not self-parented).
+        app.world_mut().spawn((Node::default(), WorkspaceUiRoot));
+
+        // A projected pane entity + its index mapping.
+        let pane_id = PaneId(1);
+        let pane_entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: pane_id,
+                dims: dims(),
+            })
+            .id();
+        app.world_mut()
+            .resource_mut::<TmuxProjection>()
+            .panes
+            .insert(pane_id, pane_entity);
+
+        app.add_systems(
+            Update,
+            (attach_tmux_pane_terminal, route_tmux_output).chain(),
+        );
+
+        // Frame 1: attach the handle (no output yet).
+        app.update();
+        assert!(
+            app.world().get::<TerminalHandle>(pane_entity).is_some(),
+            "handle attached on first frame",
+        );
+
+        // Frame 2: deliver output and route it.
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"hi".to_vec(),
+            });
+        app.update();
+
+        let grid = app
+            .world()
+            .get::<TerminalGrid>(pane_entity)
+            .expect("pane has a TerminalGrid");
+        let row0: String = grid.cells[0].iter().map(|c| c.text.as_str()).collect();
+        assert!(
+            row0.starts_with("hi"),
+            "rendered grid row 0 should start with 'hi', got {row0:?}",
+        );
+    }
+}
