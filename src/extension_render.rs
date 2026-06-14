@@ -9,8 +9,8 @@ use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use ozmux_extension_host::DynAssetRegistry;
-use ozmux_extension_host::dyn_scheme::custom_dyn_scheme;
+use ozmux_webview_host::DynAssetRegistry;
+use ozmux_webview_host::dyn_scheme::custom_dyn_scheme;
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 use serde_json::Value;
 

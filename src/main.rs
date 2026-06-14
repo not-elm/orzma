@@ -33,7 +33,7 @@ use input::ime::ImePlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
-use ozmux_extension_host::DynAssetRegistry;
+use ozmux_webview_host::DynAssetRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
