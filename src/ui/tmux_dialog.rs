@@ -2,7 +2,6 @@
 
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
-use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::component::Component;
 use bevy::ecs::query::With;
 use bevy::ecs::schedule::IntoScheduleConfigs;
