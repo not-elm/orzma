@@ -121,6 +121,7 @@ pub(crate) fn dispatch_focused_key(
     configs: Res<OzmuxConfigsResource>,
     copy_modes: Query<(), With<CopyModeState>>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    passthrough_q: Query<&PassthroughKeys>,
 ) {
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
@@ -222,6 +223,27 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
+        // NOTE: hoisted ABOVE the global shortcut lookup so a focused webview's
+        // declared passthrough chord wins over a matching ozmux shortcut. The chord
+        // goes to the PTY (the app reads it via crossterm) and is suppressed from CEF
+        // by `fill_cef_keyboard_filter`.
+        if let Some(child) = focused_inline
+            && passthrough_matches(child, &passthrough_q, ev.key_code, &mods)
+        {
+            if !ev.repeat
+                && let Some(tk) = bevy_to_terminal_key(&ev.logical_key, ev.key_code, mods.alt)
+            {
+                forward_to_active_terminal(
+                    &mut commands,
+                    &mux,
+                    workspace,
+                    tk,
+                    shortcut_mods_to_terminal_mods(&mods),
+                );
+            }
+            continue;
+        }
+
         if let Some(input_key) = bevy_to_configs_key(&ev.logical_key) {
             let chord = KeyChord {
                 key: input_key,
@@ -281,6 +303,29 @@ fn is_modifier_only_key(key: &Key) -> bool {
             | Key::Fn
             | Key::Symbol
     )
+}
+
+/// True when the focused webview `child` declared a passthrough chord matching
+/// `key_code` + `mods`. The chord's `logo` modifier corresponds to `mods.meta`
+/// (the Super/Command key).
+fn passthrough_matches(
+    child: Entity,
+    passthrough_q: &Query<&PassthroughKeys>,
+    key_code: KeyCode,
+    mods: &Modifiers,
+) -> bool {
+    passthrough_q
+        .get(child)
+        .map(|p| {
+            p.0.iter().any(|c| {
+                c.code == key_code
+                    && c.alt == mods.alt
+                    && c.ctrl == mods.ctrl
+                    && c.shift == mods.shift
+                    && c.logo == mods.meta
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
@@ -1896,5 +1941,109 @@ mod tests {
             KeyCode::KeyH,
             ModifiersState::default()
         ));
+    }
+
+    fn press_code(app: &mut App, window: Entity, logical_key: Bk, key_code: KeyCode) {
+        let ev = KeyboardInput {
+            key_code,
+            logical_key,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window,
+        };
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+            .write(ev);
+    }
+
+    #[test]
+    fn passthrough_chord_forwards_to_pty() {
+        use crate::control_plane::NormalizedChord;
+        let (mut app, window) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let surface = install_active_terminal_surface(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+        app.world_mut().entity_mut(child).insert(PassthroughKeys(vec![NormalizedChord {
+            code: KeyCode::KeyH,
+            alt: true,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        }]));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::AltLeft);
+        }
+        press_code(&mut app, window, Bk::Character("h".into()), KeyCode::KeyH);
+        app.update();
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "passthrough chord Alt+H must forward exactly one TerminalKeyInput; captured: {:?}",
+            captured,
+        );
+    }
+
+    #[test]
+    fn non_passthrough_chord_not_forwarded() {
+        use crate::control_plane::NormalizedChord;
+        let (mut app, window) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let surface = install_active_terminal_surface(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+        app.world_mut().entity_mut(child).insert(PassthroughKeys(vec![NormalizedChord {
+            code: KeyCode::KeyH,
+            alt: true,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        }]));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::AltLeft);
+        }
+        press_code(&mut app, window, Bk::Character("x".into()), KeyCode::KeyX);
+        app.update();
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            0,
+            "a non-passthrough chord must not forward to the PTY while the inline webview is focused; captured: {:?}",
+            captured,
+        );
+    }
+
+    #[test]
+    fn passthrough_wins_over_shortcut() {
+        use crate::control_plane::NormalizedChord;
+        let (mut app, window) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let surface = install_active_terminal_surface(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+        app.world_mut().entity_mut(child).insert(PassthroughKeys(vec![NormalizedChord {
+            code: KeyCode::KeyH,
+            alt: false,
+            ctrl: false,
+            shift: false,
+            logo: true,
+        }]));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press_code(&mut app, window, Bk::Character("h".into()), KeyCode::KeyH);
+        app.update();
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "passthrough chord Cmd+H must reach PTY before the shortcut lookup consumes it; captured: {:?}",
+            captured,
+        );
     }
 }
