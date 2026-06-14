@@ -10,9 +10,9 @@ use bevy::prelude::*;
 use bevy_cef::prelude::HostEmitEvent;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
-use ozmux_extension_host::DynAssetRegistry;
-use ozmux_extension_host::host::RuntimeRoot;
 use ozmux_multiplexer::SurfaceMarker;
+use ozmux_webview_host::DynAssetRegistry;
+use ozmux_webview_host::host::RuntimeRoot;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -677,7 +677,7 @@ mod apply_tests {
 
     #[test]
     fn apply_register_inline_populates_dyn_asset_registry_with_html_bytes() {
-        use ozmux_extension_host::DynAsset;
+        use ozmux_webview_host::DynAsset;
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let dyn_assets = DynAssetRegistry::default();

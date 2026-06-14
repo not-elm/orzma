@@ -30,7 +30,7 @@ pub enum AssetOutcome {
 /// rejected unless every component is a normal path segment — `..`, `.`, an
 /// absolute path, or a non-UTF-8 / malformed percent escape all yield
 /// [`AssetOutcome::Forbidden`]. This is the trust boundary that keeps a mounted
-/// page from reading files outside its extension directory.
+/// page from reading files outside its webview directory.
 pub fn serve_static_asset(root: &Path, raw_path: &str) -> AssetOutcome {
     let Some(decoded) = percent_decode(raw_path) else {
         return AssetOutcome::Forbidden;
@@ -93,7 +93,7 @@ fn percent_decode(s: &str) -> Option<String> {
 
 /// True when `p` is a non-empty relative path made only of normal components
 /// (no `..`, no `.`, no leading `/`, no Windows prefix).
-// TODO: lexical check only — a symlink inside the extension dir is still followed by std::fs::read; add a canonicalize + prefix check if extension-dir contents ever become untrusted (Phase 1 trusts them).
+// TODO: lexical check only — a symlink inside the webview dir is still followed by std::fs::read; add a canonicalize + prefix check if webview-dir contents ever become untrusted (Phase 1 trusts them).
 pub fn is_safe_rel_path(p: &Path) -> bool {
     !p.as_os_str().is_empty()
         && p.components()
@@ -101,7 +101,7 @@ pub fn is_safe_rel_path(p: &Path) -> bool {
 }
 
 /// Maps a file extension to a bare MIME type for the asset set a Phase 1
-/// extension ships. Unknown extensions fall back to `application/octet-stream`.
+/// webview ships. Unknown extensions fall back to `application/octet-stream`.
 fn mime_for_path(path: &Path) -> &'static str {
     let ext = path
         .extension()

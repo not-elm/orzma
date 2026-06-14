@@ -515,7 +515,7 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
 /// Resolves the active surface entity for `workspace` and triggers a
 /// `TerminalKeyInput` on it. Silently no-ops when the workspace has no
 /// active pane/surface yet, or when the target entity has no
-/// `TerminalHandle` (e.g. an extension surface) — the `ozma_tty_engine`
+/// `TerminalHandle` (e.g. a webview surface) — the `ozma_tty_engine`
 /// observer handles that case by also no-op'ing.
 fn forward_to_active_terminal(
     commands: &mut Commands,

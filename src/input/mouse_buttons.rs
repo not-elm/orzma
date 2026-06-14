@@ -491,10 +491,10 @@ fn dispatch_mouse_buttons(
             continue;
         };
 
-        // Click-to-focus runs for EVERY pane kind (terminal, extension)
+        // Click-to-focus runs for EVERY pane kind (terminal, webview)
         // and MUST happen before the terminal-handle lookup below: that lookup
-        // `continue`s past panes with no `TerminalHandle` (extension
-        // webviews), so focusing only afterwards would never switch to a webview
+        // `continue`s past panes with no `TerminalHandle` (webview
+        // panes), so focusing only afterwards would never switch to a webview
         // pane — keystrokes would keep routing to the previously-active terminal.
         if matches!(ev.state, ButtonState::Pressed)
             && let Ok(attached_workspace) = attached_workspace.single()
@@ -1683,7 +1683,7 @@ mod tests {
 
     #[test]
     fn click_focuses_pane_whose_host_has_no_terminal_handle() {
-        // Regression: clicking an extension pane — a Surface entity
+        // Regression: clicking a webview pane — a Surface entity
         // with NO `TerminalHandle` — must still move focus.
         // dispatch_mouse_buttons previously `continue`d at the terminal-handle
         // lookup *before* `try_click_to_focus` ran, so focus stayed on the
