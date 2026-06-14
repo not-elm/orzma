@@ -164,7 +164,7 @@ impl TerminalHandle {
 
     /// Constructs a PTY-less handle.
     ///
-    /// Same VT bridge as [`TerminalBundle::spawn`] minus the PTY, child
+    /// Same VT bridge as `TerminalBundle::spawn` minus the PTY, child
     /// process, and reader thread. Used for terminals whose bytes arrive from
     /// an external source (e.g. tmux `%output`).
     pub fn detached(cols: u16, rows: u16, gate: Arc<AtomicBool>) -> Self {
