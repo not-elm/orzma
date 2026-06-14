@@ -29,11 +29,19 @@ pub(crate) struct TmuxPatch {
     pub program: Option<String>,
     /// Optional `[tmux].socket_name` override.
     pub socket_name: Option<String>,
+    /// Deprecated and ignored: tmux now always auto-connects at startup (the
+    /// session picker replaced the toggle). Accepted only so existing configs
+    /// carrying `auto_connect = …` still parse under `deny_unknown_fields`
+    /// rather than failing to load. Remove after one release.
+    #[serde(default)]
+    pub auto_connect: Option<bool>,
 }
 
 impl TmuxPatch {
     /// Applies this patch over `base`, keeping `base`'s value where unset.
     pub fn apply_to(self, base: TmuxConfig) -> TmuxConfig {
+        // NOTE: `auto_connect` is intentionally read-and-discarded (deprecated).
+        let _ = self.auto_connect;
         TmuxConfig {
             program: self.program.unwrap_or(base.program),
             socket_name: self.socket_name.or(base.socket_name),
@@ -57,10 +65,19 @@ mod tests {
         let patched = TmuxPatch {
             program: Some("/opt/tmux".to_string()),
             socket_name: None,
+            auto_connect: None,
         }
         .apply_to(TmuxConfig::default());
         assert_eq!(patched.program, "/opt/tmux");
         assert_eq!(patched.socket_name, None);
+    }
+
+    #[test]
+    fn deprecated_auto_connect_is_accepted_and_ignored() {
+        // A config carrying the removed `auto_connect` field must still parse
+        // (back-compat) and have no effect on the resolved config.
+        let patch: TmuxPatch = toml::from_str("auto_connect = true").unwrap();
+        assert_eq!(patch.apply_to(TmuxConfig::default()), TmuxConfig::default());
     }
 
     #[test]

@@ -80,8 +80,7 @@ fn attach_tmux_pane_terminal(
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
 ) {
     for (entity, pane) in panes.iter() {
-        let cols = pane.dims.width.max(1) as u16;
-        let rows = pane.dims.height.max(1) as u16;
+        let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
         let handle = TerminalHandle::detached(cols, rows, Arc::new(AtomicBool::new(false)));
         let material = materials.add(TerminalUiMaterial::default());
         commands.entity(entity).insert((
@@ -120,9 +119,20 @@ fn route_tmux_output(
         };
         handle.advance(&data);
         handle.flush_emit(&mut commands, entity);
-        // TODO: Phase 3 — forward handle.take_replies() (DSR/DA answers) back
-        // to tmux as pane input; in Phase 2a they are intentionally dropped.
+        // TODO: Phase 3 — forward these DSR/DA answers to tmux as pane input.
+        // For now drain-and-drop: `detached` uses an unbounded reply channel,
+        // so a program that probes capabilities (DSR/DA) every prompt would
+        // otherwise grow it without bound for the pane's lifetime.
+        let _ = handle.take_replies();
     }
+}
+
+/// Converts tmux cell dims (`u32`) to an alacritty grid size, clamping into
+/// `1..=u16::MAX` so a pathological width/height cannot truncate to 0 (a 0-col
+/// `Term::resize` would panic).
+fn grid_dims(width: u32, height: u32) -> (u16, u16) {
+    let clamp = |v: u32| v.clamp(1, u16::MAX as u32) as u16;
+    (clamp(width), clamp(height))
 }
 
 fn pane_rect(
@@ -163,12 +173,20 @@ fn layout_tmux_panes(
         let d = pane.dims;
         let (left, top, width, height) =
             pane_rect(d.xoff, d.yoff, d.width, d.height, cell_w, cell_h);
-        node.left = Val::Px(left);
-        node.top = Val::Px(top);
-        node.width = Val::Px(width);
-        node.height = Val::Px(height);
-        let cols = pane.dims.width.max(1) as u16;
-        let rows = pane.dims.height.max(1) as u16;
+        // NOTE: only write the Node fields when they actually change — writing
+        // through `Mut<Node>` every frame would mark the component changed and
+        // force a full UI relayout pass each tick even when nothing moved.
+        if node.left != Val::Px(left)
+            || node.top != Val::Px(top)
+            || node.width != Val::Px(width)
+            || node.height != Val::Px(height)
+        {
+            node.left = Val::Px(left);
+            node.top = Val::Px(top);
+            node.width = Val::Px(width);
+            node.height = Val::Px(height);
+        }
+        let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
         let (cur_cols, cur_rows, _) = handle.read_geometry();
         if (cur_cols, cur_rows) != (cols, rows) {
             handle.resize_grid_only(cols, rows);
@@ -208,10 +226,15 @@ fn sync_client_size(
     if (cols, rows) == (last.cols, last.rows) {
         return;
     }
-    last.cols = cols;
-    last.rows = rows;
-    if let Err(e) = client.handle().send(&refresh_client_command(cols, rows)) {
-        tracing::warn!(?e, cols, rows, "refresh-client send failed");
+    // NOTE: only record the size as sent AFTER a successful send — otherwise a
+    // transient send failure would poison the dedupe and permanently suppress
+    // re-sending this size, leaving tmux stuck at the stale client dimensions.
+    match client.handle().send(&refresh_client_command(cols, rows)) {
+        Ok(_) => {
+            last.cols = cols;
+            last.rows = rows;
+        }
+        Err(e) => tracing::warn!(?e, cols, rows, "refresh-client send failed"),
     }
 }
 
