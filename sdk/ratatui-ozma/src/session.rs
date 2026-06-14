@@ -72,6 +72,7 @@ impl FramePlacements {
 #[derive(Debug, Default)]
 pub(crate) struct FlushState {
     last: HashMap<String, (u16, u16, u16, u16)>,
+    last_focused: Option<String>,
 }
 
 type HandlerRegistry = Arc<Mutex<HashMap<String, Arc<HashMap<String, BoxedHandler>>>>>;
@@ -160,7 +161,9 @@ impl Ozma {
         let placements = std::mem::take(&mut self.frame.placements);
         let result = flush_placements(terminal.backend_mut(), &mut self.flush_state, &placements);
         self.frame.placements = placements;
-        result
+        result?;
+        let mut w = self.writer.lock()?;
+        flush_focus(&mut *w, &mut self.flush_state.last_focused, &self.frame.focused)
     }
 
     /// Clears the app-owned focus, blurring any focused webview back to the app.
@@ -217,6 +220,27 @@ pub(crate) fn flush_placements(
     }
     out.flush()?;
     state.last = current;
+    Ok(())
+}
+
+/// Emits the control-plane focus op (`ClientMsg::Focus`) when the focused handle
+/// changed from the last flush. `Some(h)` focuses handle `h`; `None` blurs. No
+/// write when unchanged (diff-driven, like geometry in `flush_placements`).
+pub(crate) fn flush_focus(
+    out: &mut impl Write,
+    last_focused: &mut Option<String>,
+    focused: &Option<String>,
+) -> OzmaResult<()> {
+    if last_focused == focused {
+        return Ok(());
+    }
+    let line = serde_json::to_string(&ClientMsg::Focus {
+        handle: focused.clone(),
+        instance: None,
+    })?;
+    writeln!(out, "{line}")?;
+    out.flush()?;
+    *last_focused = focused.clone();
     Ok(())
 }
 
@@ -412,6 +436,36 @@ mod tests {
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &placements).unwrap();
         assert!(String::from_utf8(buf).unwrap().is_empty());
+    }
+
+    #[test]
+    fn flush_focus_emits_on_change_and_skips_unchanged() {
+        let mut last = None;
+        let mut buf = Vec::new();
+        flush_focus(&mut buf, &mut last, &Some("v".to_string())).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert_eq!(v["handle"], "v");
+
+        let mut buf2 = Vec::new();
+        flush_focus(&mut buf2, &mut last, &Some("v".to_string())).unwrap();
+        assert!(
+            String::from_utf8(buf2).unwrap().is_empty(),
+            "unchanged focus emits nothing"
+        );
+    }
+
+    #[test]
+    fn flush_focus_emits_blur_on_none() {
+        let mut last = Some("v".to_string());
+        let mut buf = Vec::new();
+        flush_focus(&mut buf, &mut last, &None).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert_eq!(v["handle"], serde_json::Value::Null);
+        assert_eq!(last, None);
     }
 
     #[test]
