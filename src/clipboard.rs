@@ -12,7 +12,7 @@ use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::system::{Query, ResMut};
-use bevy_terminal::{PtyHandle, TerminalHandle};
+use ozma_tty_engine::{PtyHandle, TerminalHandle};
 
 /// Resource wrapping a lazily-initialized `arboard::Clipboard`.
 ///

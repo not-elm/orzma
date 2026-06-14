@@ -12,7 +12,7 @@
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
 use bevy::text::{CosmicFontSystem, Font};
-use bevy_terminal_renderer::{FontFace, TerminalFontInitSet, TerminalFonts, bundled};
+use ozma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFonts, bundled};
 use ozmux_configs::font::FontConfig;
 use ozmux_configs::path::{SystemEnv, expand_user_path};
 use std::path::Path;
@@ -92,7 +92,7 @@ fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -
 /// `FontFallbackIter::other_i` last-resort loop sees it.
 fn register_cjk_fallback_with_cosmic(mut font_system: ResMut<CosmicFontSystem>) {
     let source = cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
-        bevy_terminal_renderer::bundled::FALLBACK_REGULAR,
+        ozma_tty_renderer::bundled::FALLBACK_REGULAR,
     )
         as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>);
     font_system.db_mut().load_font_source(source);
@@ -160,10 +160,10 @@ fn bridge_font_config(
         bold_bytes,
         italic_bytes,
         bold_italic_bytes,
-        bevy_terminal_renderer::bundled::FALLBACK_REGULAR.to_vec(),
-        bevy_terminal_renderer::bundled::FALLBACK_BOLD.to_vec(),
-        bevy_terminal_renderer::bundled::FALLBACK_ITALIC.to_vec(),
-        bevy_terminal_renderer::bundled::FALLBACK_BOLD_ITALIC.to_vec(),
+        ozma_tty_renderer::bundled::FALLBACK_REGULAR.to_vec(),
+        ozma_tty_renderer::bundled::FALLBACK_BOLD.to_vec(),
+        ozma_tty_renderer::bundled::FALLBACK_ITALIC.to_vec(),
+        ozma_tty_renderer::bundled::FALLBACK_BOLD_ITALIC.to_vec(),
     )
     .expect("validated bytes must parse");
     *terminal_fonts = new_fonts;
@@ -205,8 +205,8 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
-    use bevy_terminal_renderer::TerminalFontPlugin;
-    use bevy_terminal_renderer::bundled;
+    use ozma_tty_renderer::TerminalFontPlugin;
+    use ozma_tty_renderer::bundled;
     use std::io::Write;
 
     /// RAII guard for a process-environment variable. Constructing it via

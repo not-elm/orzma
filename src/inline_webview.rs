@@ -21,11 +21,11 @@ use bevy_cef::prelude::{
     FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
 use bevy_cef_core::prelude::Browsers;
-use bevy_terminal::InlineAnchor;
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
-use bevy_terminal_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
-use bevy_terminal_renderer::schema::TerminalGrid;
+use ozma_tty_engine::InlineAnchor;
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
+use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
+use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_multiplexer::SurfaceMarker;
 
 /// Marks an inline webview entity and records its identity: the mounted
@@ -120,9 +120,9 @@ pub(crate) struct InlineMountContext<'a> {
     pub(crate) view_id: &'a str,
     /// The client-assigned instance id (`None` = implicit default instance).
     pub(crate) instance_id: Option<&'a str>,
-    /// Rect height in terminal cells (validated 1..=200 by `bevy_terminal`).
+    /// Rect height in terminal cells (validated 1..=200 by `ozma_tty_engine`).
     pub(crate) rows: u16,
-    /// Rect width in terminal cells (validated 1..=400 by `bevy_terminal`).
+    /// Rect width in terminal cells (validated 1..=400 by `ozma_tty_engine`).
     pub(crate) cols: u16,
     /// The VT-stamped anchor; `None` is a policy rejection (gate 1).
     pub(crate) anchor: Option<InlineAnchor>,
@@ -555,7 +555,7 @@ fn forward_inline_mouse_moves(
     }
 }
 
-/// The wire mode string `bevy_terminal`'s `mode_diff` emits for
+/// The wire mode string `ozma_tty_engine`'s `mode_diff` emits for
 /// `TermMode::ALT_SCREEN`.
 const ALT_SCREEN_MODE: &str = "alt-screen";
 
@@ -642,8 +642,8 @@ mod tests {
     use crate::osc_webview::on_osc_webview_request;
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
-    use bevy_terminal::{OscWebviewRequest, OscWebviewVerb};
-    use bevy_terminal_renderer::CellMetrics;
+    use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
+    use ozma_tty_renderer::CellMetrics;
     use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 
     fn make_test_app() -> App {

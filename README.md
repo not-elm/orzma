@@ -26,7 +26,7 @@ cargo run               # or: make run
 ## Layout
 
 - `src/` — the `ozmux-gui` Bevy binary
-- `crates/` — `bevy_terminal`, `bevy_terminal_renderer`, `extension_host`, `multiplexer`, `configs`
+- `crates/` — `ozma_tty_engine`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
 - `sdk/typescript` — `@ozmux/sdk` (the `./inline` OSC mount-sequence helper)
 - `host/` — `@ozmux/host`, the single Node host runtime (bundled to `assets/host.mjs`)
 

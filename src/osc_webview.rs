@@ -7,7 +7,7 @@ use crate::inline_webview::{
     InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline,
 };
 use bevy::prelude::*;
-use bevy_terminal::{OscWebviewRequest, OscWebviewVerb};
+use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
 use ozmux_multiplexer::{MultiplexerCommands, SurfaceOf};
 use std::collections::HashSet;
 use std::sync::Arc;
