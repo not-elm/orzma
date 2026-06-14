@@ -13,5 +13,8 @@ bevy = { workspace = true }
 crossbeam-channel = "0.5"
 tracing = { workspace = true }
 
+[dev-dependencies]
+tmux_control_parser = { path = "../tmux_control_parser" }
+
 [lints]
 workspace = true
