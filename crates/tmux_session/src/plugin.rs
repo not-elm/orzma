@@ -22,7 +22,14 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<TmuxProjection>()
             .init_resource::<EnumerationState>()
             .insert_non_send_resource(TmuxConnection::default())
-            .add_systems(Update, (drain_tmux_events, reconcile_projection).chain());
+            .add_systems(
+                Update,
+                (
+                    drain_tmux_events,
+                    reconcile_projection.run_if(resource_exists_and_changed::<ProjectionModel>),
+                )
+                    .chain(),
+            );
     }
 }
 

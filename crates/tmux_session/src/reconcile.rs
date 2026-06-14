@@ -19,15 +19,13 @@ pub struct TmuxProjection {
 }
 
 /// Spawns/updates/despawns `TmuxWindow`/`TmuxPane` entities so they match the
-/// current [`ProjectionModel`]. Runs only when the model changed.
+/// current [`ProjectionModel`]. Gated by `resource_exists_and_changed` at
+/// registration, so it only runs when the model changed.
 pub(crate) fn reconcile_projection(
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
     model: Res<ProjectionModel>,
 ) {
-    if !model.is_changed() {
-        return;
-    }
     reconcile_windows(&mut commands, &mut index, &model);
     reconcile_session(&mut commands, &mut index, &model);
 }
@@ -135,7 +133,10 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<ProjectionModel>();
         app.init_resource::<TmuxProjection>();
-        app.add_systems(Update, reconcile_projection);
+        app.add_systems(
+            Update,
+            reconcile_projection.run_if(resource_exists_and_changed::<ProjectionModel>),
+        );
         app
     }
 
