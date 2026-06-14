@@ -21,6 +21,7 @@ pub mod path;
 mod raw;
 pub mod shortcuts;
 pub mod theme;
+pub mod tmux;
 
 /// Fully-resolved ozmux configuration.
 #[derive(Clone, Debug, Default)]
@@ -37,6 +38,8 @@ pub struct OzmuxConfigs {
     pub inactive_pane: InactivePaneConfig,
     /// OSC-driven webview configuration.
     pub osc_webview: OscWebviewConfig,
+    /// tmux backend configuration.
+    pub tmux: tmux::TmuxConfig,
 }
 
 impl OzmuxConfigs {

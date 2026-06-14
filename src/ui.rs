@@ -33,6 +33,7 @@ pub mod tab_bar;
 pub(crate) mod tab_input;
 pub(crate) mod tab_label;
 pub mod terminal;
+pub(crate) mod tmux_dialog;
 pub mod workspace;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
