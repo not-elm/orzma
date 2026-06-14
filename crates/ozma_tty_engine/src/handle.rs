@@ -2280,6 +2280,49 @@ mod tests {
     }
 
     #[test]
+    fn same_chunk_alt_enter_then_mount_stamps_fixed_screen() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b[?1049h\x1b]5379;mount-inline;v;3;5\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx
+            .try_recv()
+            .expect("mount frame when alt-enter and OSC share a chunk")
+        else {
+            panic!("expected mount with anchor");
+        };
+        assert!(
+            matches!(anchor.mode, AnchorMode::FixedScreen { .. }),
+            "alt-enter and mount in the same chunk must observe the post-switch \
+             state and stamp FixedScreen, got {:?}",
+            anchor.mode
+        );
+    }
+
+    #[test]
+    fn alt_screen_mount_not_gated_by_saturation() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b[?1049h");
+        h.saturated = true;
+        h.advance(b"\x1b]5379;mount-inline;v;3;5\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx
+            .try_recv()
+            .expect("alt-screen mount accepted despite saturation")
+        else {
+            panic!("expected mount with anchor on saturated alt screen");
+        };
+        assert!(
+            matches!(anchor.mode, AnchorMode::FixedScreen { .. }),
+            "alt-screen mount must not be gated by saturation, got {:?}",
+            anchor.mode
+        );
+    }
+
+    #[test]
     fn mount_inside_synchronized_update_samples_flushed_state() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         let mut payload = b"\x1b[?2026h\r\n\r\n".to_vec();
