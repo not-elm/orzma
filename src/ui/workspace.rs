@@ -170,7 +170,7 @@ mod tests {
     use bevy::window::{PrimaryWindow, WindowResolution};
     use ozma_tty_renderer::material::TerminalUiMaterial;
     use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
-    use ozmux_multiplexer::{MultiplexerPlugin, WorkspaceMarker};
+    use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, WorkspaceMarker};
 
     fn build_app() -> App {
         let mut app = App::new();
@@ -354,7 +354,15 @@ mod tests {
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
             .add_plugins(OzmuxActionPlugin)
-            .add_plugins(OzmuxUiPlugin);
+            .add_plugins(OzmuxUiPlugin)
+            // NOTE: production no longer seeds a workspace at boot (tmux owns the
+            // window now — see `bootstrap.rs`), but these tests exercise the
+            // legacy multiplexer UI, which still requires an attached workspace.
+            // Seed one here, replacing the seed that `OzmuxBootstrapPlugin` used
+            // to provide.
+            .add_systems(Startup, |mut mux: MultiplexerCommands| {
+                let _ = mux.spawn_attached_workspace();
+            });
         app.world_mut().spawn((
             Window {
                 resolution: WindowResolution::new(800, 600),

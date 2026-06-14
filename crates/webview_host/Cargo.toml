@@ -1,5 +1,5 @@
 [package]
-name = "ozmux_extension_host"
+name = "ozmux_webview_host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,13 +9,10 @@ publish.workspace = true
 
 [features]
 # Pulls the bevy_cef_core path-dep + the ozmux-dyn:// scheme handler.
-# Off by default so the core builds/tests with std + crossbeam only.
+# Off by default so the core builds/tests with std only.
 cef = ["dep:bevy_cef_core"]
 
 [dependencies]
-# Bridges the host lifecycle thread's events to the (future) ECS drain.
-crossbeam-channel = "0.5"
-thiserror = { workspace = true }
 bevy = { workspace = true }
 bevy_cef_core = { workspace = true, optional = true }
 

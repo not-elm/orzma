@@ -597,8 +597,6 @@ pub enum ShortcutAction {
     NewWorkspace,
     /// Add a new terminal surface to the active pane.
     NewTerminalSurface,
-    /// Add a new extension surface to the active pane.
-    NewExtensionSurface,
     /// Rename the active workspace.
     RenameWorkspace,
     /// Rename the active surface.

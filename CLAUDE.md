@@ -11,15 +11,15 @@ ozmux is a terminal multiplexer that runs as a single native GUI application. It
 The workspace root package is the one and only binary; library crates live under `crates/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
 
 - `ozmux-gui` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.18 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "ozmux") plus `cef_plugin(&asset_endpoint)` (from `bevy_cef`), then the ozmux plugins:
-  - `TerminalHandlePlugin` (from `ozma_tty_engine`), `TerminalRendererPlugin` (from `ozma_tty_renderer`), `MultiplexerPlugin` (from `ozmux_multiplexer`), `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxLayoutLogPlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxExtensionRenderPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`;
+  - `TerminalHandlePlugin` (from `ozma_tty_engine`), `TerminalRendererPlugin` (from `ozma_tty_renderer`), `MultiplexerPlugin` (from `ozmux_multiplexer`), `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxLayoutLogPlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxWebviewRenderPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`;
   - the input plugins `MouseWheelInputPlugin`, `MouseButtonsInputPlugin`, `HyperlinkInputPlugin`, `ImePlugin`, `ImeOverlayPlugin`, and `OzmuxShortcutActionPlugin`;
-  - `OzmuxOscWebviewPlugin` (OSC 5379 `mount-inline` / `unmount-inline` of dynamically-registered webviews), `OzmuxInlineWebviewPlugin`, `OzmuxControlPlanePlugin` (the control-socket listener that mints Tier 1 dynamic webview handles), and `ExtensionManagerPlugin` — the last spawns the single Node host process for the host-RPC plumbing, booting it with an empty API set (the plumbing is kept but dormant; per-webview API registration is not yet wired).
+  - `OzmuxOscWebviewPlugin` (OSC 5379 `mount-inline` / `unmount-inline` of dynamically-registered webviews), `OzmuxInlineWebviewPlugin`, and `OzmuxControlPlanePlugin` (the control-socket listener that mints Tier 1 dynamic webview handles).
 
-  The root `Cargo.toml` depends on `bevy_cef` (path dep, `features = ["debug"]`) and on `ozmux_extension_host` with the `cef` feature enabled. A root `[features] debug` flag enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
+  The root `Cargo.toml` depends on `bevy_cef` (path dep, `features = ["debug"]`) and on `ozmux_webview_host` with the `cef` feature enabled. A root `[features] debug` flag enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
 
 - `crates/ozma_tty_engine` (`ozma_tty_engine`) — Bevy-native terminal: PTY ownership and `alacritty_terminal` VT emulation, emitting coalesced `FrameSnapshot` / `FrameDelta` against the `ozma_tty_renderer` schema. Exposes `TerminalHandlePlugin`.
 - `crates/ozma_tty_renderer` (`ozma_tty_renderer`) — GPU terminal renderer plus the grid schema shared with `ozma_tty_engine`. `TerminalRendererPlugin` wires the grid, material, and glyph sub-plugins (`TerminalGridPlugin`, `TerminalMaterialPlugin`, `TerminalGlyphPlugin`) and hyperlink-hover state; `schema` holds the cell/grid types both crates render against.
-- `crates/extension_host` (`ozmux_extension_host`) — Tokio-free host integration for ozmux: spawns the single Node host process and speaks NDJSON RPC over its Unix socket (the host-RPC plumbing, currently dormant), and (behind the `cef` feature) serves dynamically-registered Tier 1 webview assets from disk/memory through a `bevy_cef` `ozmux-dyn://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std + crossbeam only. Exposes `HostProcess`, `HostRpcClient`, `DynAssetRegistry`, and `RuntimeRoot`.
+- `crates/webview_host` (`ozmux_webview_host`) — Tokio-free webview host integration for ozmux: a per-handle `RuntimeRoot` runtime directory tree (the 0700 socket dir the control plane mints), and (behind the `cef` feature) serving dynamically-registered Tier 1 webview assets from disk/memory through a `bevy_cef` `ozmux-dyn://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std only. Exposes `DynAsset`, `DynAssetRegistry`, `custom_dyn_scheme`, and `RuntimeRoot`.
 - `crates/multiplexer` (`ozmux_multiplexer`) — ECS-native multiplexer. Session, Pane, and Surface are Bevy entities related by `ChildOf`; there are no typed IDs (every reference is a Bevy `Entity`, each carrying a `Name`). All mutations route through the `MultiplexerCommands` `SystemParam`; the only observers handle dangling `Entity` references when a child is despawned. Exposes `MultiplexerPlugin`.
 - `crates/configs` (`ozmux_configs`) — config loader. Reads `~/.config/ozmux/config.toml` (or `$OZMUX_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
 
@@ -27,19 +27,18 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 
 ### TypeScript workspace (`pnpm-workspace.yaml`)
 
-`packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace packages are `host` and `sdk/*`:
+`packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace packages are `sdk/*`:
 
 - `sdk/typescript` (`@ozmux/sdk`) — exposes the `./inline` entry (`mountInline` / `unmountInline`, the OSC 5379 sequence builders); tests via `vitest`.
-- `host/` (`@ozmux/host`) — the bundled single Node host runtime (esbuild → `assets/host.mjs`): a generic NDJSON RPC server over one Unix socket. Currently dormant — it boots with an empty API map, so every `window.<ns>.<method>` call replies `unknown method` until per-webview API registration is wired.
 
 ### How the pieces connect at runtime
 
 1. `ozmux-gui` boots a single Bevy `App`. `OzmuxBootstrapPlugin` seeds the initial session / pane / surface; `ozma_tty_engine` spawns the PTY and runs VT emulation, emitting frame snapshots/deltas that `ozma_tty_renderer` draws on the GPU. Layout, input, copy-mode, IME, and shortcuts are all plugins in the same world.
-2. `ExtensionManagerPlugin` spawns one Node host process (`node host.mjs`, the bundled `@ozmux/host` runtime) for the dormant host-RPC plumbing. A program registers webview content over the control socket (Tier 1) to mint an opaque handle, then writes an OSC 5379 `mount-inline;<handle>` sequence to mount it as an in-process `bevy_cef` inline webview (assets served from disk/memory via `ozmux-dyn://`, one origin per handle). The page talks back to the registering program through `window.ozmux.call/on` routed over the control socket. The `window.<ns>.<method>` host-API bridge to the Node host is kept intact but dormant. The host runs as a `node` process relying on native TypeScript type-stripping (Node ≥ 23.6).
+2. A program registers webview content over the control socket (Tier 1, `OzmuxControlPlanePlugin`) to mint an opaque handle, then writes an OSC 5379 `mount-inline;<handle>` sequence to mount it as an in-process `bevy_cef` inline webview (assets served from disk/memory via `ozmux-dyn://`, one origin per handle). The page talks back to the registering program through `window.ozmux.call/on` routed over the control socket.
 
 ### `src/` module map
 
-`src/main.rs` plus: `bootstrap`, `clipboard`, `configs`, `extension_render`, `font`, `input`, `multiplexer`, `system_set`, `theme`, `ui`.
+`src/main.rs` plus: `bootstrap`, `clipboard`, `configs`, `webview_render`, `font`, `input`, `multiplexer`, `system_set`, `theme`, `ui`.
 
 ## Commands
 
@@ -65,9 +64,8 @@ Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 | Run all vitest suites   | `pnpm -r test`                                         |
 | Typecheck every package | `pnpm check-types`                                     |
 | Lint (biome)            | `pnpm lint` / `pnpm lint:fix` / `pnpm lint:ci`         |
-| Build the Node host bundle | `pnpm build` (esbuild → `assets/host.mjs`; rebuild before `cargo build` — the bundle is embedded via `include_str!`) |
 
-Biome (`biome.json`) scans `host/**` and `sdk/**` — it is the JS/TS lint+format tool for this repo.
+Biome (`biome.json`) scans `sdk/**` — it is the JS/TS lint+format tool for this repo.
 
 ## Other notable paths
 
