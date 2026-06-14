@@ -19,7 +19,7 @@ use crate::action::workspace::{
 };
 use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
 use crate::configs::OzmuxConfigsResource;
-use crate::inline_webview::{InlineWebview, focused_inline_of};
+use crate::inline_webview::{InlineWebview, PassthroughKeys, focused_inline_of};
 use crate::input::ime::{ImeState, read_ime_events};
 use crate::system_set::OzmuxSystems;
 use crate::ui::copy_mode::{
@@ -28,7 +28,7 @@ use crate::ui::copy_mode::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use bevy_cef::prelude::FocusedWebview;
+use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
     Direction as ConfigDirection, KeyChord, Modifiers, ShortcutAction, SplitDirection,
@@ -82,23 +82,25 @@ pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(
-            Update,
-            (
-                InputPhase::Hover,
-                InputPhase::Dispatch,
-                InputPhase::FocusedKey,
+        app.init_resource::<CefKeyboardFilter>()
+            .configure_sets(
+                Update,
+                (
+                    InputPhase::Hover,
+                    InputPhase::Dispatch,
+                    InputPhase::FocusedKey,
+                )
+                    .chain()
+                    .in_set(OzmuxSystems::Input),
             )
-                .chain()
-                .in_set(OzmuxSystems::Input),
-        )
-        .add_systems(
-            Update,
-            dispatch_focused_key
-                .run_if(not(is_ime_composing))
-                .in_set(InputPhase::FocusedKey)
-                .after(read_ime_events),
-        );
+            .add_systems(
+                Update,
+                dispatch_focused_key
+                    .run_if(not(is_ime_composing))
+                    .in_set(InputPhase::FocusedKey)
+                    .after(read_ime_events),
+            )
+            .add_systems(Update, fill_cef_keyboard_filter.before(KeyboardDeliverSet));
     }
 }
 
@@ -567,6 +569,34 @@ fn forward_to_active_terminal(
 
 fn is_ime_composing(ime_state: Res<ImeState>) -> bool {
     ime_state.is_composing()
+}
+
+/// Mirrors the focused webview's declared passthrough chords into bevy_cef's
+/// `CefKeyboardFilter` so those keys are suppressed from CEF delivery (the host
+/// forwards them to the PTY instead; see `dispatch_focused_key`). Runs before
+/// `KeyboardDeliverSet` each frame; an unfocused or non-webview focus clears it.
+fn fill_cef_keyboard_filter(
+    mut filter: ResMut<CefKeyboardFilter>,
+    focused_webview: Option<Res<FocusedWebview>>,
+    passthrough_q: Query<&PassthroughKeys>,
+) {
+    let entries: Vec<(Entity, KeyCode, ModifiersState)> = focused_webview
+        .and_then(|f| f.0)
+        .and_then(|e| passthrough_q.get(e).ok().map(|p| (e, p.0.clone())))
+        .map(|(e, chords)| {
+            chords
+                .iter()
+                .map(|c| {
+                    (
+                        e,
+                        c.code,
+                        ModifiersState { alt: c.alt, ctrl: c.ctrl, shift: c.shift, logo: c.logo },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    filter.set(entries);
 }
 
 #[cfg(test)]
@@ -1827,5 +1857,44 @@ mod tests {
     fn alt_digit_recovers_from_key_code() {
         let tk = bevy_to_terminal_key(&Bk::Character("¡".into()), KeyCode::Digit1, true);
         assert!(matches!(tk, Some(TerminalKey::Text(ref s)) if s == "1"));
+    }
+
+    #[test]
+    fn fill_cef_keyboard_filter_marks_focused_passthrough() {
+        use crate::control_plane::NormalizedChord;
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy_cef::prelude::{CefKeyboardFilter, ModifiersState};
+        let (mut app, _win) = make_app(true);
+        app.init_resource::<CefKeyboardFilter>();
+        let surface = install_active_terminal_surface(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+        app.world_mut().entity_mut(child).insert(PassthroughKeys(vec![NormalizedChord {
+            code: KeyCode::KeyH,
+            alt: true,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        }]));
+        app.world_mut().run_system_once(fill_cef_keyboard_filter).unwrap();
+        let filter = app.world().resource::<CefKeyboardFilter>();
+        let alt = ModifiersState { alt: true, ctrl: false, shift: false, logo: false };
+        assert!(filter.contains(child, KeyCode::KeyH, alt));
+        assert!(!filter.contains(child, KeyCode::KeyH, ModifiersState::default()));
+    }
+
+    #[test]
+    fn fill_cef_keyboard_filter_clears_when_unfocused() {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy_cef::prelude::{CefKeyboardFilter, ModifiersState};
+        let (mut app, _win) = make_app(true);
+        app.init_resource::<CefKeyboardFilter>();
+        app.insert_resource(FocusedWebview(None));
+        app.world_mut().run_system_once(fill_cef_keyboard_filter).unwrap();
+        let filter = app.world().resource::<CefKeyboardFilter>();
+        assert!(!filter.contains(
+            Entity::from_raw_u32(1).unwrap(),
+            KeyCode::KeyH,
+            ModifiersState::default()
+        ));
     }
 }
