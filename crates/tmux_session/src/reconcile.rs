@@ -1,7 +1,7 @@
 //! Reconciles the [`ProjectionModel`] into ECS entities, maintaining the
 //! tmux-id → entity index.
 
-use crate::components::{TmuxPane, TmuxWindow};
+use crate::components::{TmuxPane, TmuxSession, TmuxWindow};
 use crate::model::ProjectionModel;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -14,6 +14,8 @@ pub struct TmuxProjection {
     pub windows: HashMap<WindowId, Entity>,
     /// Pane id → entity.
     pub panes: HashMap<PaneId, Entity>,
+    /// The session entity, if a session id is known.
+    pub session: Option<Entity>,
 }
 
 /// Spawns/updates/despawns `TmuxWindow`/`TmuxPane` entities so they match the
@@ -27,6 +29,7 @@ pub(crate) fn reconcile_projection(
         return;
     }
     reconcile_windows(&mut commands, &mut index, &model);
+    reconcile_session(&mut commands, &mut index, &model);
 }
 
 fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model: &ProjectionModel) {
@@ -96,11 +99,28 @@ fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model:
     }
 }
 
+fn reconcile_session(commands: &mut Commands, index: &mut TmuxProjection, model: &ProjectionModel) {
+    match (model.session, index.session) {
+        (Some(id), Some(entity)) => {
+            commands.entity(entity).insert(TmuxSession { id });
+        }
+        (Some(id), None) => {
+            let entity = commands.spawn(TmuxSession { id }).id();
+            index.session = Some(entity);
+        }
+        (None, Some(entity)) => {
+            commands.entity(entity).despawn();
+            index.session = None;
+        }
+        (None, None) => {}
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{PaneModel, WindowModel};
-    use tmux_control_parser::CellDims;
+    use tmux_control_parser::{CellDims, SessionId};
 
     fn dims() -> CellDims {
         CellDims {
@@ -163,5 +183,31 @@ mod tests {
         let index = app.world().resource::<TmuxProjection>();
         assert!(index.windows.is_empty());
         assert!(index.panes.is_empty());
+    }
+
+    #[test]
+    fn spawns_session_entity_from_model_session() {
+        let mut app = app();
+        app.world_mut().resource_mut::<ProjectionModel>().session = Some(SessionId(7));
+        app.update();
+        let entity = app
+            .world()
+            .resource::<TmuxProjection>()
+            .session
+            .expect("session entity spawned");
+        assert_eq!(
+            app.world().get::<TmuxSession>(entity).unwrap().id,
+            SessionId(7)
+        );
+    }
+
+    #[test]
+    fn despawns_session_entity_when_session_cleared() {
+        let mut app = app();
+        app.world_mut().resource_mut::<ProjectionModel>().session = Some(SessionId(7));
+        app.update();
+        app.world_mut().resource_mut::<ProjectionModel>().session = None;
+        app.update();
+        assert!(app.world().resource::<TmuxProjection>().session.is_none());
     }
 }
