@@ -3,12 +3,12 @@
 
 use crate::connection::TmuxConnection;
 use crate::enumerate::{EnumerationState, list_windows_command};
-use crate::event_pump::{advance_state, drain_transport, route_to_model, seed_from_reply};
+use crate::event_pump::{advance_state, apply_events, drain_transport};
 use crate::model::ProjectionModel;
 use crate::reconcile::{TmuxProjection, reconcile_projection};
 use crate::state::ConnectionState;
 use bevy::prelude::*;
-use tmux_control::{ClientEvent, TransportEvent};
+use tmux_control::TransportEvent;
 
 /// Wires the tmux integration into the Bevy app: connection state, the
 /// projection model + index, the per-frame drain system, and the reconcile
@@ -27,9 +27,10 @@ impl Plugin for TmuxSessionPlugin {
 }
 
 /// Drains the live connection's transport events each frame: advances
-/// `ConnectionState`, sends the `list-windows` enumeration once on attach and
-/// seeds the `ProjectionModel` from its reply, routes notifications into the
-/// model, and reclaims the dead client on `Closed`.
+/// `ConnectionState`, sends the `list-windows` enumeration once on attach, and
+/// applies the batch (notifications + the enumeration reply, in stream order)
+/// to the `ProjectionModel`. On `Closed` it reclaims the dead client and tears
+/// the projection down so its entities do not linger.
 ///
 /// State and model are mutated through `bypass_change_detection` and marked
 /// changed only on real change, so an output flood does not force a reconcile
@@ -58,31 +59,16 @@ fn drain_tmux_events(
             }
         }
     }
-    let mut model_changed = route_to_model(model.bypass_change_detection(), &events);
-    if let Some(pending) = enumeration.pending {
-        for event in &events {
-            if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
-                && *id == pending
-            {
-                enumeration.pending = None;
-                if *ok {
-                    model_changed |= seed_from_reply(model.bypass_change_detection(), output);
-                } else {
-                    tracing::warn!("list-windows enumeration command failed");
-                }
-                break;
-            }
-        }
-    }
-    if model_changed {
-        model.set_changed();
-    }
     if events
         .iter()
         .any(|event| matches!(event, TransportEvent::Closed { .. }))
     {
         connection.take();
         enumeration.pending = None;
+        *model.bypass_change_detection() = ProjectionModel::default();
+        model.set_changed();
+    } else if apply_events(model.bypass_change_detection(), &mut enumeration.pending, &events) {
+        model.set_changed();
     }
 }
 

@@ -5,7 +5,7 @@ use crate::enumerate::parse_window_rows;
 use crate::model::ProjectionModel;
 use crate::state::{ConnectionState, next_state};
 use crossbeam_channel::Receiver;
-use tmux_control::{ClientEvent, TransportEvent};
+use tmux_control::{ClientEvent, CommandId, TransportEvent};
 
 /// Upper bound on events drained per frame, so a pane flooding `%output`
 /// cannot stall the schedule with unbounded parse/apply work in one tick;
@@ -43,14 +43,38 @@ pub(crate) fn advance_state(state: &mut ConnectionState, events: &[TransportEven
     changed
 }
 
-/// Routes notification events into the projection model, returning `true`
-/// if any event mutated tracked state (so callers can skip change
-/// propagation when only untracked events — e.g. pane output — arrived).
-pub(crate) fn route_to_model(model: &mut ProjectionModel, events: &[TransportEvent]) -> bool {
+/// Applies a drained batch to the model in stream order: each notification
+/// via [`ProjectionModel::apply_event`], and the enumeration reply (the
+/// `CommandComplete` whose id matches `pending`) via [`seed_from_reply`].
+///
+/// Processing in order is load-bearing: a notification that follows the
+/// `list-windows` reply in the stream is applied AFTER the seed, so the
+/// wholesale window replacement in `seed_from_rows` cannot clobber fresher
+/// same-batch state. Returns `true` if the model changed; clears `pending`
+/// once the matching reply is consumed. Untracked events (e.g. pane output)
+/// leave the model unchanged so callers can skip change propagation.
+pub(crate) fn apply_events(
+    model: &mut ProjectionModel,
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> bool {
     let mut changed = false;
     for event in events {
-        if let TransportEvent::Protocol(ClientEvent::Notification(notification)) = event {
-            changed |= model.apply_event(notification);
+        match event {
+            TransportEvent::Protocol(ClientEvent::Notification(notification)) => {
+                changed |= model.apply_event(notification);
+            }
+            TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. })
+                if *pending == Some(*id) =>
+            {
+                *pending = None;
+                if *ok {
+                    changed |= seed_from_reply(model, output);
+                } else {
+                    tracing::warn!("list-windows enumeration command failed");
+                }
+            }
+            _ => {}
         }
     }
     changed
@@ -90,7 +114,7 @@ fn log_transport_event(event: &TransportEvent) {
 mod tests {
     use super::*;
     use crossbeam_channel::unbounded;
-    use tmux_control::ControlEvent;
+    use tmux_control::{CommandId, ControlEvent};
     use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
     fn window_add(id: u32) -> TransportEvent {
@@ -110,7 +134,7 @@ mod tests {
     }
 
     #[test]
-    fn route_to_model_applies_notifications() {
+    fn apply_events_applies_notifications() {
         let (tx, rx) = unbounded();
         tx.send(window_add(1)).unwrap();
         tx.send(TransportEvent::Protocol(ClientEvent::Notification(
@@ -124,10 +148,46 @@ mod tests {
         .unwrap();
         let drained = drain_transport(&rx);
         let mut model = ProjectionModel::default();
-        assert!(route_to_model(&mut model, &drained));
+        let mut pending = None;
+        assert!(apply_events(&mut model, &mut pending, &drained));
         assert_eq!(model.windows.len(), 1);
         assert_eq!(model.windows[0].panes.len(), 1);
         assert_eq!(model.windows[0].panes[0].id, PaneId(4));
+    }
+
+    #[test]
+    fn apply_events_seeds_reply_then_applies_later_notification() {
+        // The reply seeds window @1; a WindowAdd @9 that follows it in the
+        // stream must survive (the seed's window replacement must not clobber
+        // a notification ordered after the reply).
+        let reply = TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(1),
+            number: 0,
+            ok: true,
+            output: vec!["1\t@1\tabcd,80x24,0,0,5\tx\tmain".to_string()],
+        });
+        let events = vec![reply, window_add(9)];
+        let mut model = ProjectionModel::default();
+        let mut pending = Some(CommandId(1));
+        assert!(apply_events(&mut model, &mut pending, &events));
+        assert_eq!(pending, None);
+        let ids: Vec<_> = model.windows.iter().map(|w| w.id).collect();
+        assert_eq!(ids, vec![WindowId(1), WindowId(9)]);
+    }
+
+    #[test]
+    fn apply_events_ignores_unmatched_command_reply() {
+        let reply = TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(2),
+            number: 0,
+            ok: true,
+            output: vec!["1\t@1\tabcd,80x24,0,0,5\tx\tmain".to_string()],
+        });
+        let mut model = ProjectionModel::default();
+        let mut pending = Some(CommandId(1));
+        assert!(!apply_events(&mut model, &mut pending, &[reply]));
+        assert_eq!(pending, Some(CommandId(1)));
+        assert!(model.windows.is_empty());
     }
 
     #[test]
@@ -160,7 +220,8 @@ mod tests {
         .unwrap();
         let drained = drain_transport(&rx);
         let mut model = ProjectionModel::default();
-        assert!(!route_to_model(&mut model, &drained));
+        let mut pending = None;
+        assert!(!apply_events(&mut model, &mut pending, &drained));
         assert!(model.windows.is_empty());
     }
 }
