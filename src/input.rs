@@ -245,7 +245,7 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        if let Some(tk) = bevy_to_terminal_key(&ev.logical_key) {
+        if let Some(tk) = bevy_to_terminal_key(&ev.logical_key, ev.key_code, mods.alt) {
             forward_to_active_terminal(
                 &mut commands,
                 &mux,
@@ -479,7 +479,18 @@ fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
 /// `ozma_tty_engine` codec accepts. Returns `None` for keys the terminal
 /// does not consume (F-keys, modifier-only keys, etc. — those keys are
 /// silently dropped).
-fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
+///
+/// When `alt` is `true`, the base ASCII character is recovered from
+/// `key_code` instead of using the composed `logical_key`. On macOS,
+/// Alt/Option composes the logical key into a special glyph (e.g.
+/// Option+h → "˙"), which would otherwise prevent Alt escape sequences
+/// from reaching the PTY correctly.
+fn bevy_to_terminal_key(key: &Key, key_code: KeyCode, alt: bool) -> Option<TerminalKey> {
+    if alt
+        && let Some(c) = base_char_from_key_code(key_code)
+    {
+        return Some(TerminalKey::Text(c.to_string()));
+    }
     Some(match key {
         Key::Character(s) => TerminalKey::Text(s.to_string()),
         Key::Space => TerminalKey::Text(" ".into()),
@@ -496,6 +507,23 @@ fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
         Key::End => TerminalKey::End,
         Key::PageUp => TerminalKey::PageUp,
         Key::PageDown => TerminalKey::PageDown,
+        _ => return None,
+    })
+}
+
+/// Returns the US-layout base character a physical `key_code` produces, used to
+/// recover the unmodified key when a composing modifier (Alt/Option) mangled the
+/// logical key. Letters and digits only; `None` for everything else.
+fn base_char_from_key_code(code: KeyCode) -> Option<char> {
+    use KeyCode::*;
+    Some(match code {
+        KeyA => 'a', KeyB => 'b', KeyC => 'c', KeyD => 'd', KeyE => 'e', KeyF => 'f',
+        KeyG => 'g', KeyH => 'h', KeyI => 'i', KeyJ => 'j', KeyK => 'k', KeyL => 'l',
+        KeyM => 'm', KeyN => 'n', KeyO => 'o', KeyP => 'p', KeyQ => 'q', KeyR => 'r',
+        KeyS => 's', KeyT => 't', KeyU => 'u', KeyV => 'v', KeyW => 'w', KeyX => 'x',
+        KeyY => 'y', KeyZ => 'z',
+        Digit0 => '0', Digit1 => '1', Digit2 => '2', Digit3 => '3', Digit4 => '4',
+        Digit5 => '5', Digit6 => '6', Digit7 => '7', Digit8 => '8', Digit9 => '9',
         _ => return None,
     })
 }
@@ -1781,5 +1809,23 @@ mod tests {
             Some(child),
             "Cmd+C must not clear inline focus"
         );
+    }
+
+    #[test]
+    fn alt_recovers_base_letter_from_key_code() {
+        let tk = bevy_to_terminal_key(&Bk::Character("˙".into()), KeyCode::KeyH, true);
+        assert!(matches!(tk, Some(TerminalKey::Text(ref s)) if s == "h"));
+    }
+
+    #[test]
+    fn non_alt_uses_logical_key() {
+        let tk = bevy_to_terminal_key(&Bk::Character("h".into()), KeyCode::KeyH, false);
+        assert!(matches!(tk, Some(TerminalKey::Text(ref s)) if s == "h"));
+    }
+
+    #[test]
+    fn alt_digit_recovers_from_key_code() {
+        let tk = bevy_to_terminal_key(&Bk::Character("¡".into()), KeyCode::Digit1, true);
+        assert!(matches!(tk, Some(TerminalKey::Text(ref s)) if s == "1"));
     }
 }
