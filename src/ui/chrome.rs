@@ -95,7 +95,7 @@ fn build_pane_chrome(
 /// so the parked surface falls out of Bevy's UI walker). Fires on
 /// `Changed<ActiveSurface>` — which covers both a surface switch and the
 /// initial `ActiveSurface` set at pane creation. Decorates each surface (its
-/// `Node` + kind-marker + material attach point) on first slotting.
+/// `Node` + `TerminalSurfaceMarker` + material attach point) on first slotting.
 ///
 /// At most one surface per pane carries `Slotted`; the previously-slotted one
 /// is found by scanning `Slotted` surfaces whose `SurfaceOf` is this pane.
