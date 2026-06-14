@@ -9,4 +9,5 @@ mod plugin;
 mod state;
 
 pub use connection::TmuxConnection;
+pub use plugin::TmuxSessionPlugin;
 pub use state::ConnectionState;
