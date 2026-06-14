@@ -703,11 +703,20 @@ mod tests {
         assert_eq!(server.list_sessions().expect("list (no server)"), vec![]);
 
         let client = server.new_session().expect("spawn tmux -CC new-session");
+        let name = format!("ozmux-ls-sess-{}", std::process::id());
+        client
+            .handle()
+            .send(&format!("rename-session {name}"))
+            .expect("rename-session");
         std::thread::sleep(Duration::from_millis(500));
 
         let sessions = server.list_sessions().expect("list");
-        assert!(!sessions.is_empty(), "expected at least one session");
-        assert!(sessions[0].windows >= 1);
+        let found = sessions
+            .iter()
+            .find(|s| s.name == name)
+            .expect("created session listed by name");
+        assert!(found.attached, "the -CC client is attached");
+        assert!(found.windows >= 1);
 
         let _ = client.handle().send("kill-server");
         drop(client);
