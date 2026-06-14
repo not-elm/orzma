@@ -17,12 +17,12 @@ pub struct TmuxSessionPlugin;
 
 impl Plugin for TmuxSessionPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ConnectionState>();
-        app.init_resource::<ProjectionModel>();
-        app.init_resource::<TmuxProjection>();
-        app.init_resource::<EnumerationState>();
-        app.insert_non_send_resource(TmuxConnection::default());
-        app.add_systems(Update, (drain_tmux_events, reconcile_projection).chain());
+        app.init_resource::<ConnectionState>()
+            .init_resource::<ProjectionModel>()
+            .init_resource::<TmuxProjection>()
+            .init_resource::<EnumerationState>()
+            .insert_non_send_resource(TmuxConnection::default())
+            .add_systems(Update, (drain_tmux_events, reconcile_projection).chain());
     }
 }
 
