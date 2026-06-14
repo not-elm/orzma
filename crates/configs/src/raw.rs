@@ -191,12 +191,10 @@ enabled = false
         let toml_str = r#"
 [tmux]
 program = "/usr/local/bin/tmux"
-auto_connect = true
 "#;
         let raw: RawConfigs = toml::from_str(toml_str).unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(merged.tmux.program, "/usr/local/bin/tmux");
-        assert!(merged.tmux.auto_connect);
         assert_eq!(merged.tmux.socket_name, None);
     }
 

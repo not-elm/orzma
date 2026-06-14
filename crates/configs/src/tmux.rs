@@ -10,8 +10,6 @@ pub struct TmuxConfig {
     /// Optional named server socket (`tmux -L <name>`); `None` targets the
     /// default server, which is what a normal CLI `tmux` uses.
     pub socket_name: Option<String>,
-    /// Whether to connect to tmux automatically at startup.
-    pub auto_connect: bool,
 }
 
 impl Default for TmuxConfig {
@@ -19,7 +17,6 @@ impl Default for TmuxConfig {
         Self {
             program: "tmux".to_string(),
             socket_name: None,
-            auto_connect: false,
         }
     }
 }
@@ -32,8 +29,6 @@ pub(crate) struct TmuxPatch {
     pub program: Option<String>,
     /// Optional `[tmux].socket_name` override.
     pub socket_name: Option<String>,
-    /// Optional `[tmux].auto_connect` override.
-    pub auto_connect: Option<bool>,
 }
 
 impl TmuxPatch {
@@ -42,7 +37,6 @@ impl TmuxPatch {
         TmuxConfig {
             program: self.program.unwrap_or(base.program),
             socket_name: self.socket_name.or(base.socket_name),
-            auto_connect: self.auto_connect.unwrap_or(base.auto_connect),
         }
     }
 }
@@ -52,11 +46,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_targets_path_tmux_default_socket_no_autoconnect() {
+    fn default_targets_path_tmux_default_socket() {
         let c = TmuxConfig::default();
         assert_eq!(c.program, "tmux");
         assert_eq!(c.socket_name, None);
-        assert!(!c.auto_connect);
     }
 
     #[test]
@@ -64,12 +57,10 @@ mod tests {
         let patched = TmuxPatch {
             program: Some("/opt/tmux".to_string()),
             socket_name: None,
-            auto_connect: Some(true),
         }
         .apply_to(TmuxConfig::default());
         assert_eq!(patched.program, "/opt/tmux");
         assert_eq!(patched.socket_name, None);
-        assert!(patched.auto_connect);
     }
 
     #[test]

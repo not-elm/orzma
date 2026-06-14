@@ -21,9 +21,6 @@ fn auto_connect_tmux(
     configs: Res<OzmuxConfigsResource>,
 ) {
     let cfg = &configs.tmux;
-    if !cfg.auto_connect {
-        return;
-    }
     let mut server = TmuxServer::new().program(&cfg.program);
     if let Some(name) = &cfg.socket_name {
         server = server.socket_name(name);
@@ -56,14 +53,16 @@ mod tests {
     use ozmux_tmux::TmuxSessionPlugin;
 
     #[test]
-    fn stays_idle_when_auto_connect_disabled() {
+    #[ignore = "requires a real tmux binary and a controlling PTY"]
+    fn boot_attempts_connection_and_leaves_idle_state() {
         let mut app = App::new();
         app.add_plugins((TmuxSessionPlugin, TmuxBootPlugin));
         app.insert_resource(OzmuxConfigsResource::default());
         app.update();
-        assert_eq!(
+        assert_ne!(
             *app.world().resource::<ConnectionState>(),
-            ConnectionState::Idle
+            ConnectionState::Idle,
+            "boot always attempts a connection, so it must leave Idle",
         );
     }
 }

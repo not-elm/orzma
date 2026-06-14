@@ -13,7 +13,7 @@ use tmux_control::TransportEvent;
 
 /// Wires the tmux integration into the Bevy app: connection state, the
 /// projection model + index, the per-frame drain system, and the reconcile
-/// system. Phase 1b does not auto-connect.
+/// system.
 pub struct TmuxSessionPlugin;
 
 /// Ordering label for the tmux drain + reconcile chain. The binary's render
