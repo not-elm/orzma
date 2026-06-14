@@ -2,12 +2,17 @@
 //! fixed set of ozmux GUI chords. Replaces the legacy `dispatch_focused_key`
 //! path for the tmux backend.
 
+use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::tmux_picker::SessionPicker;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozmux_tmux::{KeyMods, TmuxConnection, bevy_key_to_tmux_name, send_keys_command};
+use bevy_cef::prelude::FocusedWebview;
+use ozmux_tmux::{
+    KeyMods, ProjectionModel, TmuxConnection, bevy_key_to_tmux_name, send_bytes_command,
+    send_keys_command,
+};
 
 /// Registers the tmux keyboard-forwarding system.
 pub struct OzmuxTmuxInputPlugin;
@@ -27,16 +32,22 @@ impl Plugin for OzmuxTmuxInputPlugin {
 enum GuiChord {
     OpenPicker,
     Quit,
+    Paste,
     Other,
 }
+
+const PASTE_CHUNK_BYTES: usize = 256;
 
 fn forward_keys_to_tmux(
     mut picker: ResMut<SessionPicker>,
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
+    mut clipboard: ResMut<Clipboard>,
+    mut focused_webview: ResMut<FocusedWebview>,
     connection: NonSend<TmuxConnection>,
     keys: Res<ButtonInput<KeyCode>>,
     ime: Res<crate::input::ime::ImeState>,
+    model: Res<ProjectionModel>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // NOTE: while the picker is open it owns the keyboard; forwarding would
@@ -64,6 +75,26 @@ fn forward_keys_to_tmux(
         super_: keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight),
     };
 
+    // When an inline webview holds focus it owns the keyboard (bevy_cef routes
+    // keystrokes to it); forwarding to tmux too would double-send. Ctrl+Shift+Esc
+    // releases focus back to the terminal. NOTE: in the current tmux backend the
+    // webview-focus machinery is old-multiplexer-driven, so FocusedWebview is
+    // usually None here; this handler is correct for when it is set.
+    if focused_webview.0.is_some() {
+        for ev in events.read() {
+            if ev.state == ButtonState::Pressed
+                && ev.key_code == KeyCode::Escape
+                && mods.ctrl
+                && mods.shift
+            {
+                focused_webview.0 = None;
+                break;
+            }
+        }
+        events.clear();
+        return;
+    }
+
     let mut names: Vec<String> = Vec::new();
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
@@ -74,6 +105,29 @@ fn forward_keys_to_tmux(
                 GuiChord::OpenPicker => picker.open = true,
                 GuiChord::Quit => {
                     exit.write(AppExit::Success);
+                }
+                GuiChord::Paste => {
+                    let Some(text) = clipboard.read() else {
+                        continue;
+                    };
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let Some(pane) = model.active_pane else {
+                        continue;
+                    };
+                    let Some(client) = connection.client() else {
+                        continue;
+                    };
+                    let bytes = build_paste_bytes(&text, false);
+                    let target = format!("%{}", pane.0);
+                    for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
+                        let cmd = send_bytes_command(&target, chunk);
+                        if let Err(e) = client.handle().send(&cmd) {
+                            tracing::warn!(?e, pane = pane.0, "paste send failed");
+                            break;
+                        }
+                    }
                 }
                 GuiChord::Other => {}
             }
@@ -110,6 +164,9 @@ fn gui_chord(key_code: &KeyCode, mods: KeyMods) -> Option<GuiChord> {
     if !mods.shift && *key_code == KeyCode::KeyQ {
         return Some(GuiChord::Quit);
     }
+    if !mods.shift && *key_code == KeyCode::KeyV {
+        return Some(GuiChord::Paste);
+    }
     Some(GuiChord::Other)
 }
 
@@ -139,6 +196,18 @@ mod tests {
         assert!(matches!(
             gui_chord(&KeyCode::KeyQ, m(false, true)),
             Some(GuiChord::Quit)
+        ));
+    }
+
+    #[test]
+    fn cmd_v_is_paste() {
+        assert!(matches!(
+            gui_chord(&KeyCode::KeyV, m(false, true)),
+            Some(GuiChord::Paste)
+        ));
+        assert!(matches!(
+            gui_chord(&KeyCode::KeyV, m(true, true)),
+            Some(GuiChord::Other)
         ));
     }
 
