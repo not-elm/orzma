@@ -15,6 +15,7 @@ mod osc_webview;
 mod system_set;
 mod theme;
 mod tmux_boot;
+mod tmux_render;
 mod ui;
 
 use crate::action::OzmuxActionPlugin;
