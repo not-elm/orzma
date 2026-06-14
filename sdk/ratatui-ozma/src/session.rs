@@ -85,11 +85,13 @@ impl Ozma {
     /// Registers a webview, blocking until the control plane mints its handle.
     pub fn register(&self, webview: Webview) -> Result<WebviewHandle, OzmaError> {
         let (tx, rx) = bounded(1);
-        self.pending.lock()?.push_back(tx);
-
         let line = serde_json::to_string(&ClientMsg::Register(webview.kind))?;
         {
             let mut w = self.writer.lock()?;
+            // NOTE: push the pending sender while holding the writer lock so the
+            // FIFO order matches the on-wire order — register replies are untagged,
+            // so concurrent registrants would otherwise mismatch their handles.
+            self.pending.lock()?.push_back(tx);
             writeln!(w, "{line}")?;
             w.flush()?;
         }
@@ -176,19 +178,19 @@ fn spawn_reader(
                 if let Ok(call) = serde_json::from_str::<IncomingCall>(trimmed) {
                     dispatch_call(&writer, &handlers, call);
                 }
-            } else if let Ok(reply) = serde_json::from_str::<RegisterReply>(trimmed) {
-                if let Some(tx) = pending.lock().ok().and_then(|mut q| q.pop_front()) {
-                    let outcome = if reply.ok {
-                        reply
-                            .handle
-                            .ok_or_else(|| OzmaError::Register { reason: "missing handle".into() })
-                    } else {
-                        Err(OzmaError::Register {
-                            reason: reply.error.unwrap_or_else(|| "unknown".into()),
-                        })
-                    };
-                    let _ = tx.send(outcome);
-                }
+            } else if let Ok(reply) = serde_json::from_str::<RegisterReply>(trimmed)
+                && let Some(tx) = pending.lock().ok().and_then(|mut q| q.pop_front())
+            {
+                let outcome = if reply.ok {
+                    reply
+                        .handle
+                        .ok_or_else(|| OzmaError::Register { reason: "missing handle".into() })
+                } else {
+                    Err(OzmaError::Register {
+                        reason: reply.error.unwrap_or_else(|| "unknown".into()),
+                    })
+                };
+                let _ = tx.send(outcome);
             }
         }
     });
@@ -210,11 +212,11 @@ fn dispatch_call(writer: &SharedWriter, handlers: &HandlerRegistry, call: Incomi
         req_id: call.req_id,
         result,
     };
-    if let Ok(line) = serde_json::to_string(&msg) {
-        if let Ok(mut w) = writer.lock() {
-            let _ = writeln!(w, "{line}");
-            let _ = w.flush();
-        }
+    if let Ok(line) = serde_json::to_string(&msg)
+        && let Ok(mut w) = writer.lock()
+    {
+        let _ = writeln!(w, "{line}");
+        let _ = w.flush();
     }
 }
 
