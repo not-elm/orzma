@@ -180,7 +180,6 @@ fn sync_focused_webview(
     }
 }
 
-
 /// Inbound (new-model host API): a `window.<ns>.<method>` call arrives as a
 /// `Receive<OzmuxFrame>` with `kind:"host.call"`. The trusted caller is
 /// `frame.webview` (bound per-webview by `bevy_cef`, never the JS payload); its
@@ -944,5 +943,4 @@ mod tests {
             1
         );
     }
-
 }
