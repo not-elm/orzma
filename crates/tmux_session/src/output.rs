@@ -16,8 +16,8 @@ pub struct PaneOutput {
     pub data: Vec<u8>,
 }
 
-/// Extracts a [`PaneOutput`] for every `%output` notification in a drained
-/// transport batch, preserving stream order.
+/// Extracts a [`PaneOutput`] for every `%output` or `%extended-output`
+/// notification in a drained transport batch, preserving stream order.
 pub(crate) fn collect_pane_outputs(events: &[TransportEvent]) -> Vec<PaneOutput> {
     events
         .iter()
@@ -25,6 +25,14 @@ pub(crate) fn collect_pane_outputs(events: &[TransportEvent]) -> Vec<PaneOutput>
             TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::Output {
                 pane,
                 data,
+            })) => Some(PaneOutput {
+                pane: *pane,
+                data: data.clone(),
+            }),
+            TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::ExtendedOutput {
+                pane,
+                data,
+                ..
             })) => Some(PaneOutput {
                 pane: *pane,
                 data: data.clone(),
@@ -49,6 +57,11 @@ mod tests {
                 pane: PaneId(1),
                 data: vec![b'a'],
             })),
+            TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::ExtendedOutput {
+                pane: PaneId(3),
+                age: 50,
+                data: vec![b'x', b'y'],
+            })),
             TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::Output {
                 pane: PaneId(2),
                 data: vec![b'b', b'c'],
@@ -61,6 +74,10 @@ mod tests {
                 PaneOutput {
                     pane: PaneId(1),
                     data: vec![b'a'],
+                },
+                PaneOutput {
+                    pane: PaneId(3),
+                    data: vec![b'x', b'y'],
                 },
                 PaneOutput {
                     pane: PaneId(2),
