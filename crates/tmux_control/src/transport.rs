@@ -691,4 +691,25 @@ mod tests {
 
         let _ = client.handle().send("kill-session");
     }
+
+    #[test]
+    #[ignore = "requires a real tmux binary"]
+    fn real_tmux_list_sessions() {
+        use std::time::Duration;
+
+        let socket = format!("ozmux-ls-{}", std::process::id());
+        let server = TmuxServer::new().socket_name(&socket);
+
+        assert_eq!(server.list_sessions().expect("list (no server)"), vec![]);
+
+        let client = server.new_session().expect("spawn tmux -CC new-session");
+        std::thread::sleep(Duration::from_millis(500));
+
+        let sessions = server.list_sessions().expect("list");
+        assert!(!sessions.is_empty(), "expected at least one session");
+        assert!(sessions[0].windows >= 1);
+
+        let _ = client.handle().send("kill-server");
+        drop(client);
+    }
 }
