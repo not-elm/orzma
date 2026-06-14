@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 pub(crate) const ENV_OZMUX_CONFIG: &str = "OZMUX_CONFIG";
 pub(crate) const ENV_XDG_CONFIG_HOME: &str = "XDG_CONFIG_HOME";
 const CONFIG_REL_PATH: &str = "ozmux/config.toml";
-const EXTENSIONS_REL_PATH: &str = "ozmux/extensions";
 const HOME_CONFIG_DIR: &str = ".config";
 
 /// Abstraction over environment lookups used to resolve user-specified
@@ -54,22 +53,6 @@ pub(crate) fn resolve_config_path(env: &dyn Env) -> OzmuxConfigsResult<PathBuf> 
     }
     if let Some(home) = env.home_dir() {
         return Ok(home.join(HOME_CONFIG_DIR).join(CONFIG_REL_PATH));
-    }
-    Err(OzmuxConfigsError::HomeDirNotFound)
-}
-
-/// Returns the directory that ozmux scans for user-installed extensions.
-///
-/// Precedence: `$XDG_CONFIG_HOME/ozmux/extensions` →
-/// `<home_dir>/.config/ozmux/extensions`. Returns `HomeDirNotFound` only
-/// when both lookups fail. `$OZMUX_CONFIG` is intentionally not consulted
-/// because it points to a config file, not a directory.
-pub fn extensions_dir(env: &dyn Env) -> OzmuxConfigsResult<PathBuf> {
-    if let Some(xdg) = env.var(ENV_XDG_CONFIG_HOME) {
-        return Ok(PathBuf::from(xdg).join(EXTENSIONS_REL_PATH));
-    }
-    if let Some(home) = env.home_dir() {
-        return Ok(home.join(HOME_CONFIG_DIR).join(EXTENSIONS_REL_PATH));
     }
     Err(OzmuxConfigsError::HomeDirNotFound)
 }
@@ -192,55 +175,6 @@ mod tests {
         };
         let err = resolve_config_path(&env).unwrap_err();
         assert!(matches!(err, OzmuxConfigsError::HomeDirNotFound));
-    }
-
-    #[test]
-    fn extensions_dir_uses_xdg_when_set() {
-        let env = FakeEnv {
-            vars: HashMap::from([("XDG_CONFIG_HOME".into(), "/tmp/foo".into())]),
-            home: Some(PathBuf::from("/home/u")),
-        };
-        assert_eq!(
-            extensions_dir(&env).unwrap(),
-            PathBuf::from("/tmp/foo/ozmux/extensions")
-        );
-    }
-
-    #[test]
-    fn extensions_dir_falls_back_to_home_config() {
-        let env = FakeEnv {
-            vars: HashMap::new(),
-            home: Some(PathBuf::from("/home/u")),
-        };
-        assert_eq!(
-            extensions_dir(&env).unwrap(),
-            PathBuf::from("/home/u/.config/ozmux/extensions")
-        );
-    }
-
-    #[test]
-    fn extensions_dir_ignores_ozmux_config_var() {
-        let env = FakeEnv {
-            vars: HashMap::from([("OZMUX_CONFIG".into(), "/tmp/x.toml".into())]),
-            home: Some(PathBuf::from("/home/u")),
-        };
-        assert_eq!(
-            extensions_dir(&env).unwrap(),
-            PathBuf::from("/home/u/.config/ozmux/extensions"),
-            "OZMUX_CONFIG points to a file, not a directory, and must not affect extensions_dir"
-        );
-    }
-
-    #[test]
-    fn extensions_dir_errors_when_no_xdg_and_no_home() {
-        let env = FakeEnv {
-            vars: HashMap::new(),
-            home: None,
-        };
-        assert!(matches!(
-            extensions_dir(&env).unwrap_err(),
-            OzmuxConfigsError::HomeDirNotFound
-        ));
     }
 
     #[test]
