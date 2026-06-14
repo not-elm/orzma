@@ -559,13 +559,15 @@ const ALT_SCREEN_MODE: &str = "alt-screen";
 /// children, every frame, starting from the all-sentinel default (spec §5).
 ///
 /// Per-child projection rules, in order:
-/// 1. Alt-screen: while the grid is on the alternate screen, every slot stays
-///    sentinel (the placement re-projects on return to the primary screen).
-/// 2. Seq-hold: a placement is skipped until the grid's `last_seq` reaches the
+/// 1. Seq-hold: a placement is skipped until the grid's `last_seq` reaches the
 ///    mount-stamped `frame_seq` (wrap-aware compare).
-/// 3. `viewport_row = anchor_line - (history_base + history_size -
-///    display_offset)`; rects fully above/below the viewport or anchored at or
-///    past the right edge are culled; a partially-above rect keeps its
+/// 2. Screen-mode gating: a `Scrollback` placement projects only on the primary
+///    screen (hidden while on the alternate screen); a `FixedScreen` placement
+///    projects only on the alternate screen.
+/// 3. `Scrollback`: `viewport_row = line - (history_base + history_size -
+///    display_offset)`. `FixedScreen`: `viewport_row = row` (already
+///    viewport-relative). Rects fully above/below the viewport or anchored at
+///    or past the right edge are culled; a partially-above rect keeps its
 ///    negative row (the shader clips).
 ///
 /// The component is (re)inserted for every terminal that has inline children
@@ -598,20 +600,25 @@ fn project_inline_overlays(
                     continue;
                 };
                 has_inline_child = true;
-                if on_alt_screen {
-                    continue;
-                }
                 if (grid.last_seq.wrapping_sub(placement.frame_seq) as i32) < 0 {
                     continue;
                 }
                 let (viewport_row, anchor_col) = match placement.anchor {
                     AnchorMode::Scrollback { line, col } => {
+                        if on_alt_screen {
+                            continue;
+                        }
                         let row = line as i64
                             - (grid.history_base as i64 + i64::from(grid.history_size)
                                 - i64::from(grid.display_offset));
                         (row, col)
                     }
-                    AnchorMode::FixedScreen { .. } => continue,
+                    AnchorMode::FixedScreen { row, col } => {
+                        if !on_alt_screen {
+                            continue;
+                        }
+                        (i64::from(row), col)
+                    }
                 };
                 if viewport_row + i64::from(placement.rows) <= 0
                     || viewport_row >= i64::from(grid.rows)
@@ -1381,6 +1388,56 @@ mod tests {
             IVec4::new(2, 3, 10, 40),
             "returning to the primary screen must re-project the placement"
         );
+    }
+
+    #[test]
+    fn fixed_screen_projects_to_its_row_on_alt_screen() {
+        let mut app = make_test_app();
+        let terminal = app
+            .world_mut()
+            .spawn(TerminalGrid {
+                modes: vec![ALT_SCREEN_MODE.to_string()],
+                ..projection_grid(7)
+            })
+            .id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::FixedScreen { row: 5, col: 2 },
+                rows: 4,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+
+        project(&mut app);
+        assert_eq!(
+            overlays_of(&app, terminal).rects[0],
+            IVec4::new(5, 2, 4, 10),
+            "a FixedScreen placement projects to its own viewport row on the alt screen"
+        );
+    }
+
+    #[test]
+    fn fixed_screen_is_hidden_on_primary_screen() {
+        let mut app = make_test_app();
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        spawn_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::FixedScreen { row: 5, col: 2 },
+                rows: 4,
+                cols: 10,
+                frame_seq: 7,
+            },
+        );
+
+        project(&mut app);
+        assert_all_sentinel(overlays_of(&app, terminal));
     }
 
     #[test]
