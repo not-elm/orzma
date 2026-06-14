@@ -1,8 +1,7 @@
 //! Native ozmux control plane: a local Unix-socket listener that accepts
 //! authenticated dynamic webview registrations (Tier 1) from local programs,
 //! mints opaque handles into the `DynamicRegistry`, and tears them down on
-//! disconnect or surface despawn. Mirrors the Tokio-free thread model of
-//! `ozmux_extension_host::rpc_client`.
+//! disconnect or surface despawn. Uses a Tokio-free reader/writer thread model.
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{RegisterKind, ServerMsg};
@@ -11,9 +10,9 @@ use bevy::prelude::*;
 use bevy_cef::prelude::HostEmitEvent;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
-use ozmux_extension_host::DynAssetRegistry;
-use ozmux_extension_host::host::RuntimeRoot;
 use ozmux_multiplexer::SurfaceMarker;
+use ozmux_webview_host::DynAssetRegistry;
+use ozmux_webview_host::host::RuntimeRoot;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -111,8 +110,8 @@ impl DynamicRegistry {
 }
 
 /// In-flight `globalReqId → (webview, pageReqId, connection_id)` correlation for
-/// the back-channel, plus the Rust-minted id counter. Mirrors `HostRpc` but
-/// routes to a control-plane connection rather than the single host.
+/// the back-channel, plus the Rust-minted id counter. Routes each `window.ozmux`
+/// call to the control-plane connection that registered the webview.
 #[derive(Resource, Default)]
 pub(crate) struct OzmuxRpc {
     inflight: HashMap<String, (Entity, String, u64)>,
@@ -678,7 +677,7 @@ mod apply_tests {
 
     #[test]
     fn apply_register_inline_populates_dyn_asset_registry_with_html_bytes() {
-        use ozmux_extension_host::DynAsset;
+        use ozmux_webview_host::DynAsset;
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let dyn_assets = DynAssetRegistry::default();

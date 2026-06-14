@@ -5,8 +5,6 @@ mod bootstrap;
 mod clipboard;
 mod configs;
 mod control_plane;
-mod extension_manager;
-mod extension_render;
 mod font;
 mod inline_webview;
 mod input;
@@ -17,17 +15,17 @@ mod theme;
 mod tmux_picker;
 mod tmux_render;
 mod ui;
+mod webview_render;
 
 use crate::action::OzmuxActionPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::control_plane::OzmuxControlPlanePlugin;
-use crate::extension_manager::ExtensionManagerPlugin;
-use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
 use crate::input::mouse_wheel::MouseWheelInputPlugin;
 use crate::osc_webview::OzmuxOscWebviewPlugin;
+use crate::webview_render::{OzmuxWebviewRenderPlugin, cef_plugin};
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
@@ -37,9 +35,9 @@ use input::ime::ImePlugin;
 use multiplexer::log::OzmuxLayoutLogPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
-use ozmux_extension_host::DynAssetRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
+use ozmux_webview_host::DynAssetRegistry;
 use tmux_picker::OzmuxTmuxPickerPlugin;
 use tmux_render::OzmuxTmuxRenderPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
@@ -75,7 +73,7 @@ fn main() {
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
-            OzmuxExtensionRenderPlugin,
+            OzmuxWebviewRenderPlugin,
             CopyModePlugin,
             ClipboardActionPlugin,
             CopyModeIndicatorPlugin,
@@ -91,7 +89,6 @@ fn main() {
             ImeOverlayPlugin,
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
-            ExtensionManagerPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),
             OzmuxActionPlugin,
         ))
