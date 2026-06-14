@@ -21,23 +21,26 @@ pub enum TransportEvent {
     },
 }
 
-/// Builder for launching `tmux -CC`; the `-CC` flag is always injected.
-pub struct TmuxBuilder {
-    program: String,
-    socket_name: Option<String>,
-    socket_path: Option<String>,
-    subcommand: Vec<String>,
+/// Which tmux server socket to talk to.
+#[derive(Clone)]
+enum Socket {
+    Default,
+    Name(String), // -L
+    Path(String), // -S
 }
 
-impl TmuxBuilder {
-    /// Returns a builder defaulting to the `tmux` binary on `PATH`.
+/// A reusable handle to a tmux server on a given socket (config only; holds no
+/// connection or threads). Lists sessions and opens control connections.
+#[derive(Clone)]
+pub struct TmuxServer {
+    program: String,
+    socket: Socket,
+}
+
+impl TmuxServer {
+    /// Returns a server targeting the default socket via the `tmux` binary on `PATH`.
     pub fn new() -> Self {
-        Self {
-            program: "tmux".to_string(),
-            socket_name: None,
-            socket_path: None,
-            subcommand: Vec::new(),
-        }
+        Self { program: "tmux".to_string(), socket: Socket::Default }
     }
 
     /// Overrides the tmux binary path.
@@ -46,57 +49,47 @@ impl TmuxBuilder {
         self
     }
 
-    /// Sets the server socket name (`-L`).
+    /// Targets the named server socket (`-L`). Overrides any prior socket choice.
     pub fn socket_name(mut self, name: &str) -> Self {
-        self.socket_name = Some(name.to_string());
+        self.socket = Socket::Name(name.to_string());
         self
     }
 
-    /// Sets the server socket path (`-S`).
+    /// Targets the server socket path (`-S`). Overrides any prior socket choice.
     pub fn socket_path(mut self, path: &str) -> Self {
-        self.socket_path = Some(path.to_string());
+        self.socket = Socket::Path(path.to_string());
         self
     }
 
-    /// Launches `tmux -CC new-session`.
-    pub fn new_session(mut self) -> TmuxResult<TmuxClient> {
-        self.subcommand = vec!["new-session".to_string()];
-        self.spawn()
+    /// Opens a control connection by attaching to `name`
+    /// (`tmux -CC attach-session -t name`).
+    pub fn attach(&self, name: &str) -> TmuxResult<TmuxClient> {
+        self.spawn(&["attach-session", "-t", name])
     }
 
-    /// Launches `tmux -CC attach-session -t <name>`.
-    pub fn attach(mut self, name: &str) -> TmuxResult<TmuxClient> {
-        self.subcommand = vec![
-            "attach-session".to_string(),
-            "-t".to_string(),
-            name.to_string(),
-        ];
-        self.spawn()
+    /// Opens a control connection on a fresh session (`tmux -CC new-session`).
+    pub fn new_session(&self) -> TmuxResult<TmuxClient> {
+        self.spawn(&["new-session"])
     }
 
-    fn build_argv(&self) -> Vec<String> {
-        let mut argv = Vec::new();
-        if let Some(name) = &self.socket_name {
-            argv.push("-L".to_string());
-            argv.push(name.clone());
+    fn socket_args(&self) -> Vec<String> {
+        match &self.socket {
+            Socket::Default => Vec::new(),
+            Socket::Name(name) => vec!["-L".to_string(), name.clone()],
+            Socket::Path(path) => vec!["-S".to_string(), path.clone()],
         }
-        if let Some(path) = &self.socket_path {
-            argv.push("-S".to_string());
-            argv.push(path.clone());
-        }
+    }
+
+    fn connect_argv(&self, subcommand: &[&str]) -> Vec<String> {
+        let mut argv = self.socket_args();
         argv.push("-CC".to_string());
-        argv.extend(self.subcommand.iter().cloned());
+        argv.extend(subcommand.iter().map(|s| s.to_string()));
         argv
     }
 
-    fn spawn(self) -> TmuxResult<TmuxClient> {
+    fn spawn(&self, subcommand: &[&str]) -> TmuxResult<TmuxClient> {
         let pair = native_pty_system()
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
             .map_err(spawn_err)?;
 
         // NOTE: disable PTY echo before tmux starts. Otherwise our command
@@ -109,7 +102,7 @@ impl TmuxBuilder {
         }
 
         let mut cmd = CommandBuilder::new(&self.program);
-        for arg in self.build_argv() {
+        for arg in self.connect_argv(subcommand) {
             cmd.arg(arg);
         }
         let child = pair.slave.spawn_command(cmd).map_err(spawn_err)?;
@@ -137,7 +130,7 @@ impl TmuxBuilder {
     }
 }
 
-impl Default for TmuxBuilder {
+impl Default for TmuxServer {
     fn default() -> Self {
         Self::new()
     }
@@ -359,33 +352,34 @@ mod tests {
     }
 
     #[test]
-    fn build_argv_new_session() {
-        let mut b = TmuxBuilder::new();
-        b.subcommand = vec!["new-session".to_string()];
-        assert_eq!(b.build_argv(), argv(&["-CC", "new-session"]));
+    fn connect_argv_new_session() {
+        assert_eq!(
+            TmuxServer::new().connect_argv(&["new-session"]),
+            argv(&["-CC", "new-session"])
+        );
     }
 
     #[test]
-    fn build_argv_attach() {
-        let mut b = TmuxBuilder::new();
-        b.subcommand = vec!["attach-session".into(), "-t".into(), "work".into()];
+    fn connect_argv_attach() {
         assert_eq!(
-            b.build_argv(),
+            TmuxServer::new().connect_argv(&["attach-session", "-t", "work"]),
             argv(&["-CC", "attach-session", "-t", "work"])
         );
     }
 
     #[test]
-    fn build_argv_socket_name() {
-        let b = TmuxBuilder::new().socket_name("foo");
-        assert_eq!(b.build_argv(), argv(&["-L", "foo", "-CC"]));
+    fn connect_argv_socket_name() {
+        assert_eq!(
+            TmuxServer::new().socket_name("foo").connect_argv(&["new-session"]),
+            argv(&["-L", "foo", "-CC", "new-session"])
+        );
     }
 
     #[test]
-    fn build_argv_default_program_and_cc() {
-        let b = TmuxBuilder::new();
-        assert_eq!(b.program, "tmux");
-        assert_eq!(b.build_argv(), argv(&["-CC"]));
+    fn connect_argv_default_program_and_cc() {
+        let server = TmuxServer::new();
+        assert_eq!(server.program, "tmux");
+        assert_eq!(server.connect_argv(&[]), argv(&["-CC"]));
     }
 
     #[test]
@@ -541,10 +535,8 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let socket = format!("ozmux-test-{}", std::process::id());
-        let client = TmuxBuilder::new()
-            .socket_name(&socket)
-            .new_session()
-            .expect("spawn tmux -CC new-session");
+        let server = TmuxServer::new().socket_name(&socket);
+        let client = server.new_session().expect("spawn tmux -CC new-session");
 
         let id = client.handle().send("list-panes").expect("send list-panes");
 

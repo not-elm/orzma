@@ -4,7 +4,7 @@
 pub use crate::error::{TmuxError, TmuxResult};
 pub use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
 pub use crate::session::SessionInfo;
-pub use crate::transport::{TmuxBuilder, TmuxClient, TmuxHandle, TransportEvent};
+pub use crate::transport::{TmuxClient, TmuxHandle, TmuxServer, TransportEvent};
 pub use tmux_control_parser::ControlEvent;
 pub use tmux_control_parser::SessionId;
 
