@@ -13,21 +13,32 @@
 //! +-------------+-------------+
 //! ```
 //!
+//! Navigation scheme is chosen by `FOCUS_NAV` (default `arrows`):
+//! - `arrows` — bare Arrow keys move focus (most reliable across terminals).
+//! - `alt` — `Alt+h/j/k/l` (the SDK's real default; needs the terminal to
+//!   deliver the Alt modifier, which ozmux does not yet do for PTY keys — see
+//!   the bottom debug line for what actually arrives).
+//! - `ctrl` — `Ctrl+h/j/k/l`.
+//!
+//! The chosen scheme is pushed to the webviews via `__ozma.keys`, so the page
+//! glue intercepts the same chord. The bottom debug line shows the raw key event
+//! the app receives while a NATIVE panel is focused (a focused webview gets the
+//! keys instead, so the debug line stays put — itself part of the verification).
+//!
 //! What to verify:
-//! - Initial focus is the NW native panel (its border is highlighted).
-//! - `Alt+h/j/k/l` moves focus spatially across the grid (the highlight and the
-//!   bottom `FOCUS →` readout follow the pressed direction's neighbour).
+//! - Initial focus is the NW native panel (highlighted border).
+//! - The nav chord moves focus spatially across the grid; the highlight and the
+//!   `FOCUS →` readout follow the pressed direction's neighbour.
 //! - Moving onto a webview tints its background and lets you TYPE into its input
-//!   (proving bare keys reach the focused webview natively).
-//! - `Alt+h/j/k/l` while a webview is focused escapes back out to a sibling
-//!   (proving the page glue forwards the nav chord to the app).
-//! - `q` quits — but only while a NATIVE panel is focused (a focused webview
-//!   swallows `q` as page input, which is itself part of the verification).
+//!   (bare keys reach the focused webview natively).
+//! - The nav chord while a webview is focused escapes back out (the page glue
+//!   forwards it to the app).
+//! - `q` quits — but only while a NATIVE panel is focused.
 
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, KeyCode};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -35,13 +46,24 @@ use ratatui::crossterm::terminal::{
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui_ozma::{FocusManager, Ozma, Webview, WebviewHandle, WebviewWidget, focusable};
+use ratatui_ozma::{
+    Direction, FocusManager, Ozma, Webview, WebviewHandle, WebviewWidget, focusable,
+};
 use std::io::stdout;
 use std::time::Duration;
 
 const CELL_IDS: [&str; 4] = ["nw", "ne", "sw", "se"];
 
+/// Which key scheme drives focus movement.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum NavScheme {
+    Arrows,
+    Alt,
+    Ctrl,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let scheme = nav_scheme();
     let mut ozma = Ozma::connect()?;
     let mut focus = FocusManager::new();
 
@@ -72,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-        run(&mut terminal, &mut ozma, &mut focus, &ne, &sw)
+        run(&mut terminal, &mut ozma, &mut focus, &ne, &sw, scheme)
     })();
 
     // Always restore the terminal; ignore teardown errors so the real outcome in
@@ -88,34 +110,40 @@ fn run(
     focus: &mut FocusManager,
     ne: &WebviewHandle,
     sw: &WebviewHandle,
+    scheme: NavScheme,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_focus = String::new();
+    let mut last_key = String::from("(none yet)");
     loop {
         // Apply focus moves the page glue forwarded while a webview was focused.
         for sync in focus.drain() {
             sync.apply(ozma)?;
         }
 
-        // Push the current focus state to the webviews so the focused one tints
-        // its background (a reliable signal independent of OSR DOM focus events).
+        // On focus change, push the focus tint AND the chosen nav keymap to the
+        // webviews so the page glue intercepts the same chord this example uses.
         let current = focused_id(focus);
         if current != last_focus {
+            let keymap = keymap_payload(scheme);
             let _ = ne.emit("focus", &(current == "ne"));
             let _ = sw.emit("focus", &(current == "sw"));
+            let _ = ne.emit("__ozma.keys", &keymap);
+            let _ = sw.emit("__ozma.keys", &keymap);
             last_focus = current.clone();
         }
 
-        terminal.draw(|f| draw(f, ozma, focus, ne, sw, &current))?;
+        terminal.draw(|f| draw(f, ozma, focus, ne, sw, &current, scheme, &last_key))?;
         ozma.flush(terminal)?;
 
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(k) = event::read()?
         {
+            last_key = describe_key(&k);
             if k.code == KeyCode::Char('q') && focus.focused_is_native() {
                 return Ok(());
             }
             if focus.focused_is_native()
-                && let Some(dir) = FocusManager::nav_key(&k)
+                && let Some(dir) = match_nav(scheme, &k)
             {
                 focus.navigate(dir).apply(ozma)?;
             }
@@ -123,6 +151,10 @@ fn run(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a self-contained example draw fn"
+)]
 fn draw(
     f: &mut Frame,
     ozma: &mut Ozma,
@@ -130,15 +162,21 @@ fn draw(
     ne: &WebviewHandle,
     sw: &WebviewHandle,
     current: &str,
+    scheme: NavScheme,
+    last_key: &str,
 ) {
     let outer = Layout::vertical([
         Constraint::Length(1),
         Constraint::Min(0),
         Constraint::Length(1),
+        Constraint::Length(1),
     ])
     .split(f.area());
     f.render_widget(
-        Paragraph::new("Alt+h/j/k/l: move focus   |   type into a focused webview   |   q: quit (on a native panel)"),
+        Paragraph::new(format!(
+            "{}: move focus   |   type into a focused webview   |   q: quit (on a native panel)",
+            scheme_chord(scheme)
+        )),
         outer[0],
     );
 
@@ -186,6 +224,15 @@ fn draw(
             .style(Style::default().fg(Color::Yellow)),
         outer[2],
     );
+    f.render_widget(
+        Paragraph::new(format!(
+            "scheme={}   last native key: {}   (set FOCUS_NAV=arrows|alt|ctrl)",
+            scheme_name(scheme),
+            last_key
+        ))
+        .style(Style::default().fg(Color::DarkGray)),
+        outer[3],
+    );
 }
 
 /// The id of the currently-focused cell, or an empty string when none is.
@@ -207,6 +254,81 @@ fn focus_label(id: &str) -> &'static str {
     }
 }
 
+fn nav_scheme() -> NavScheme {
+    match std::env::var("FOCUS_NAV").ok().as_deref() {
+        Some("alt") => NavScheme::Alt,
+        Some("ctrl") => NavScheme::Ctrl,
+        _ => NavScheme::Arrows,
+    }
+}
+
+fn scheme_name(scheme: NavScheme) -> &'static str {
+    match scheme {
+        NavScheme::Arrows => "arrows",
+        NavScheme::Alt => "alt",
+        NavScheme::Ctrl => "ctrl",
+    }
+}
+
+fn scheme_chord(scheme: NavScheme) -> &'static str {
+    match scheme {
+        NavScheme::Arrows => "Arrow keys",
+        NavScheme::Alt => "Alt+h/j/k/l",
+        NavScheme::Ctrl => "Ctrl+h/j/k/l",
+    }
+}
+
+/// The raw key event, for the debug line.
+fn describe_key(k: &KeyEvent) -> String {
+    format!("{:?} mods={:?}", k.code, k.modifiers)
+}
+
+/// Interprets a native-side key event into a focus [`Direction`] per `scheme`.
+fn match_nav(scheme: NavScheme, k: &KeyEvent) -> Option<Direction> {
+    let from_char = |c: char| match c.to_ascii_lowercase() {
+        'h' => Some(Direction::Left),
+        'j' => Some(Direction::Down),
+        'k' => Some(Direction::Up),
+        'l' => Some(Direction::Right),
+        _ => None,
+    };
+    match scheme {
+        NavScheme::Arrows => match k.code {
+            KeyCode::Left => Some(Direction::Left),
+            KeyCode::Down => Some(Direction::Down),
+            KeyCode::Up => Some(Direction::Up),
+            KeyCode::Right => Some(Direction::Right),
+            _ => None,
+        },
+        NavScheme::Alt => match k.code {
+            KeyCode::Char(c) if k.modifiers.contains(KeyModifiers::ALT) => from_char(c),
+            _ => None,
+        },
+        NavScheme::Ctrl => match k.code {
+            KeyCode::Char(c) if k.modifiers.contains(KeyModifiers::CONTROL) => from_char(c),
+            _ => None,
+        },
+    }
+}
+
+/// The `__ozma.keys` payload that makes the page glue intercept `scheme`'s chord.
+fn keymap_payload(scheme: NavScheme) -> serde_json::Value {
+    match scheme {
+        NavScheme::Arrows => serde_json::json!({
+            "mods": [],
+            "keys": {"arrowleft": "left", "arrowdown": "down", "arrowup": "up", "arrowright": "right"}
+        }),
+        NavScheme::Alt => serde_json::json!({
+            "mods": ["alt"],
+            "keys": {"h": "left", "j": "down", "k": "up", "l": "right"}
+        }),
+        NavScheme::Ctrl => serde_json::json!({
+            "mods": ["ctrl"],
+            "keys": {"h": "left", "j": "down", "k": "up", "l": "right"}
+        }),
+    }
+}
+
 /// A bordered block whose border + title light up yellow when focused.
 fn focus_block(title: &str, focused: bool) -> Block<'static> {
     let block = Block::bordered().title(title.to_owned());
@@ -224,7 +346,7 @@ fn render_native(f: &mut Frame, area: Rect, title: &str, focused: bool) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     let hint = if focused {
-        "focused — Alt+h/j/k/l to move, q to quit"
+        "focused — move with the nav chord, q to quit"
     } else {
         "native panel"
     };
@@ -241,7 +363,7 @@ color:{accent};font:14px sans-serif;display:flex;flex-direction:column;gap:8px;p
 <div>type here — bare keys reach the focused webview:</div>\
 <input id='in' placeholder='...' style='font:14px monospace;padding:6px;background:#1b1e2b;\
 color:#e7e7ef;border:1px solid {accent};border-radius:4px'>\
-<div style='opacity:.7'>Alt+h/j/k/l leaves this webview</div>\
+<div style='opacity:.7'>the nav chord leaves this webview</div>\
 <script>\
 var i=document.getElementById('in');\
 function setF(f){{document.body.style.background=f?'#16241a':'#10121a';if(f){{i.focus();}}}}\
