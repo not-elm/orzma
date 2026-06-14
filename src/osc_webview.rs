@@ -97,8 +97,14 @@ pub(crate) fn on_osc_webview_request(
                 instance_id.as_deref(),
             );
         }
-        // The non-inline tab-mount verbs belonged to the removed extension
-        // surface path; accept and drop them.
-        OscWebviewVerb::Mount { .. } | OscWebviewVerb::Unmount { .. } => {}
+        // The non-inline tab-mount verbs are still parsed by the VT layer but no
+        // longer act on anything (their tab-surface path was removed). Log the
+        // drop so a program still emitting them isn't met with total silence.
+        OscWebviewVerb::Mount { .. } | OscWebviewVerb::Unmount { .. } => {
+            tracing::debug!(
+                verb = ?req.verb,
+                "osc-webview: non-inline mount/unmount verb is no longer supported, dropping"
+            );
+        }
     }
 }

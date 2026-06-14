@@ -102,7 +102,7 @@ pub fn cef_plugin(dyn_registry: DynAssetRegistry) -> CefPlugin {
 
 /// CEF command-line switches for the embedded webview. The `debug` feature adds
 /// `remote-debugging-port` — a local Chromium DevTools (CDP) endpoint on
-/// `127.0.0.1:9222` for inspecting the extension webview — and is off by default
+/// `127.0.0.1:9222` for inspecting the embedded webview — and is off by default
 /// so that endpoint is never exposed in normal builds. `CommandLineConfig::default()`
 /// already carries the macOS `use-mock-keychain` switch in either case.
 fn cef_command_line_config() -> CommandLineConfig {
@@ -143,7 +143,7 @@ impl Plugin for OzmuxExtensionRenderPlugin {
 ///
 /// bevy_cef only updates `FocusedWebview` when a *webview* node is clicked
 /// (`set_focus_on_press`), so moving focus to a terminal pane (a non-webview)
-/// leaves the extension webview focused: its DOM text area keeps the caret and
+/// leaves the webview focused: its DOM text area keeps the caret and
 /// `send_key_event` keeps routing keystrokes to it. Driving `FocusedWebview`
 /// from the active pane fixes both — keyboard follows the focused pane, and CEF
 /// blurs the webview on focus-leave (`bevy_cef`'s `apply_webview_focus` releases
@@ -155,8 +155,8 @@ impl Plugin for OzmuxExtensionRenderPlugin {
 /// single focus source). Without this arm the per-frame sync would map the
 /// active terminal surface to `None` and clobber an inline click one frame
 /// after `dispatch_mouse_buttons` set it. Every other case — a different pane
-/// or surface becoming active, the inline child despawning, a tab-type
-/// webview surface — keeps the drive-from-active-pane behavior above.
+/// or surface becoming active, or the inline child despawning — keeps the
+/// drive-from-active-pane behavior above.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     mux: MultiplexerCommands,
@@ -386,6 +386,13 @@ fn log_webview_load_error(load: On<LoadError>) {
 
 /// Drops any in-flight host RPC calls originating from a surface/webview that is
 /// being despawned, so their replies are not routed back to a dead entity.
+// NOTE: keyed on `SurfaceMarker` removal, which only tab surfaces carry. While
+// the host RPC is dormant this prunes nothing (no webview can populate
+// `inflight` — every `host.call` is denied by the empty `GrantedNamespaces`).
+// When per-webview API registration is wired, the webviews that make `host.call`
+// will be inline children (no `SurfaceMarker`), so this observer MUST then also
+// prune on their despawn (e.g. `On<Remove, WebviewSource>`) or inflight entries
+// leak and late replies route to a dead entity.
 fn drop_inflight_host_calls_on_webview_despawn(
     ev: On<Remove, SurfaceMarker>,
     mut host_rpc: ResMut<HostRpc>,

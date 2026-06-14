@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
 
-/// A per-extension runtime directory tree (`<base>/<pid>/<name>/{sock,bin}/`), removed on drop.
+/// A per-handle runtime directory tree (`<base>/<pid>/<name>/{sock,bin}/`), removed on drop.
 pub struct RuntimeRoot {
     root: PathBuf,
     sock_dir: PathBuf,
@@ -36,7 +36,7 @@ impl RuntimeRoot {
             return Self::new_in(parent, pid, name);
         }
         // NOTE: the shared fallback parent is created with the process umask (so
-        // it is world-listable, like the legacy /tmp/ozmux); only the per-extension
+        // it is world-listable, like the legacy /tmp/ozmux); only the per-handle
         // subdir below is 0700, which is what protects the sockets.
         let fallback = Path::new("/tmp/ozmux-ext");
         std::fs::create_dir_all(fallback)?;
@@ -44,11 +44,11 @@ impl RuntimeRoot {
             return Self::new_in(fallback, pid, name);
         }
         Err(std::io::Error::other(format!(
-            "extension '{name}' socket path exceeds {SUN_PATH_MAX} bytes"
+            "'{name}' socket path exceeds {SUN_PATH_MAX} bytes"
         )))
     }
 
-    /// The socket path for an extension of the given `name` under this root.
+    /// The socket path for the given `name` under this root.
     pub fn socket_path(&self, name: &str) -> PathBuf {
         self.sock_dir.join(format!("{name}.sock"))
     }
@@ -63,7 +63,7 @@ impl RuntimeRoot {
         &self.sock_dir
     }
 
-    /// The directory holding extension command shims.
+    /// The directory holding command shims.
     pub fn bin_dir(&self) -> &Path {
         &self.bin_dir
     }
@@ -82,7 +82,7 @@ impl RuntimeRoot {
             }
             // NOTE: the intermediate `<parent>/<pid>` dir is created by
             // `create_dir_all` at the process umask (0755, world-listable);
-            // chmod it 0700 too so extension names under it do not leak in /tmp.
+            // chmod it 0700 too so handle names under it do not leak in /tmp.
             if let Some(pid_dir) = root.parent() {
                 std::fs::set_permissions(pid_dir, std::fs::Permissions::from_mode(0o700))?;
             }
@@ -106,9 +106,9 @@ const PROBE_INTERVAL: Duration = Duration::from_millis(20);
 /// A lifecycle transition emitted by the host thread.
 #[derive(Debug)]
 pub enum LifecycleEvent {
-    /// The extension bound its socket and answered a readiness round-trip.
+    /// The host bound its socket and answered a readiness round-trip.
     Ready,
-    /// The extension process exited.
+    /// The host process exited.
     Exited {
         /// Exit code, if known.
         status: Option<i32>,
@@ -124,13 +124,13 @@ pub enum LifecycleEvent {
 #[derive(Debug, thiserror::Error)]
 pub enum HostError {
     /// Spawning the child process failed.
-    #[error("failed to spawn extension process: {0}")]
+    #[error("failed to spawn host process: {0}")]
     Spawn(#[source] std::io::Error),
     /// The runtime root / socket path could not be created.
-    #[error("failed to create extension runtime root: {0}")]
+    #[error("failed to create host runtime root: {0}")]
     Runtime(#[source] std::io::Error),
-    /// `wait_ready` timed out or the extension failed to start.
-    #[error("extension did not become ready")]
+    /// `wait_ready` timed out or the host failed to start.
+    #[error("host did not become ready")]
     NotReady,
 }
 
