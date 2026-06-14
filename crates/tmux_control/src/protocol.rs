@@ -1,9 +1,9 @@
 //! Sans-IO protocol core: turns tmux byte chunks into [`ClientEvent`]s and
 //! encodes outgoing commands.
 
+use crate::error::{TmuxError, TmuxResult};
 use std::collections::VecDeque;
 use tmux_control_parser::{BlockAssembler, ControlEvent, Frame};
-use crate::error::{TmuxError, TmuxResult};
 
 /// Library-assigned handle for an in-flight command (not tmux's command number).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -101,8 +101,6 @@ impl ProtocolClient {
     ///
     /// Used to undo a [`send`](Self::send) registration when the subsequent
     /// transport write fails.
-    // NOTE: dead in the non-test lib build until Layer 2's TmuxHandle::send consumes it (Task 4); #[expect] is impractical since the test build uses it.
-    #[allow(dead_code)]
     pub(crate) fn rollback_last_pending(&mut self, id: CommandId) {
         if self.pending.back() == Some(&id) {
             self.pending.pop_back();
@@ -122,7 +120,12 @@ impl ProtocolClient {
                     .pending
                     .pop_front()
                     .ok_or(TmuxError::UnsolicitedReply { number })?;
-                Ok(Some(ClientEvent::CommandComplete { id, number, ok, output: body }))
+                Ok(Some(ClientEvent::CommandComplete {
+                    id,
+                    number,
+                    ok,
+                    output: body,
+                }))
             }
             Some(Frame::Notification(event)) => Ok(Some(ClientEvent::Notification(event))),
             None => Ok(None),
@@ -192,7 +195,9 @@ mod tests {
         let events = c.feed(b"%window-add @1\n").unwrap();
         assert_eq!(
             events,
-            vec![ClientEvent::Notification(ControlEvent::WindowAdd { window: WindowId(1) })]
+            vec![ClientEvent::Notification(ControlEvent::WindowAdd {
+                window: WindowId(1)
+            })]
         );
     }
 
@@ -203,8 +208,12 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ClientEvent::Notification(ControlEvent::WindowAdd { window: WindowId(1) }),
-                ClientEvent::Notification(ControlEvent::WindowClose { window: WindowId(1) }),
+                ClientEvent::Notification(ControlEvent::WindowAdd {
+                    window: WindowId(1)
+                }),
+                ClientEvent::Notification(ControlEvent::WindowClose {
+                    window: WindowId(1)
+                }),
             ]
         );
     }
@@ -216,7 +225,9 @@ mod tests {
         let events = c.feed(b"@7\n").unwrap();
         assert_eq!(
             events,
-            vec![ClientEvent::Notification(ControlEvent::WindowAdd { window: WindowId(7) })]
+            vec![ClientEvent::Notification(ControlEvent::WindowAdd {
+                window: WindowId(7)
+            })]
         );
     }
 
@@ -255,7 +266,9 @@ mod tests {
         let events = c.feed(b"%window-add @2\r\n").unwrap();
         assert_eq!(
             events,
-            vec![ClientEvent::Notification(ControlEvent::WindowAdd { window: WindowId(2) })]
+            vec![ClientEvent::Notification(ControlEvent::WindowAdd {
+                window: WindowId(2)
+            })]
         );
     }
 
@@ -265,7 +278,9 @@ mod tests {
         let events = c.feed(b"\n\r\n%window-add @3\n\n").unwrap();
         assert_eq!(
             events,
-            vec![ClientEvent::Notification(ControlEvent::WindowAdd { window: WindowId(3) })]
+            vec![ClientEvent::Notification(ControlEvent::WindowAdd {
+                window: WindowId(3)
+            })]
         );
     }
 
@@ -292,7 +307,9 @@ mod tests {
         let mut c = ProtocolClient::new();
         let id = c.send("bogus").unwrap();
         let _ = c.take_outgoing();
-        let events = c.feed(b"%begin 1 9 0\nunknown command\n%error 1 9 0\n").unwrap();
+        let events = c
+            .feed(b"%begin 1 9 0\nunknown command\n%error 1 9 0\n")
+            .unwrap();
         assert_eq!(
             events,
             vec![ClientEvent::CommandComplete {
@@ -312,7 +329,12 @@ mod tests {
         let events = c.feed(b"%begin 1 2 0\n%end 1 2 0\n").unwrap();
         assert_eq!(
             events,
-            vec![ClientEvent::CommandComplete { id, number: 2, ok: true, output: vec![] }]
+            vec![ClientEvent::CommandComplete {
+                id,
+                number: 2,
+                ok: true,
+                output: vec![]
+            }]
         );
     }
 
@@ -328,8 +350,18 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ClientEvent::CommandComplete { id: a, number: 1, ok: true, output: vec!["A".into()] },
-                ClientEvent::CommandComplete { id: b, number: 2, ok: true, output: vec!["B".into()] },
+                ClientEvent::CommandComplete {
+                    id: a,
+                    number: 1,
+                    ok: true,
+                    output: vec!["A".into()]
+                },
+                ClientEvent::CommandComplete {
+                    id: b,
+                    number: 2,
+                    ok: true,
+                    output: vec!["B".into()]
+                },
             ]
         );
     }
@@ -346,9 +378,21 @@ mod tests {
         assert_eq!(
             events,
             vec![
-                ClientEvent::CommandComplete { id: a, number: 1, ok: true, output: vec!["A".into()] },
-                ClientEvent::Notification(ControlEvent::WindowAdd { window: WindowId(9) }),
-                ClientEvent::CommandComplete { id: b, number: 2, ok: true, output: vec!["B".into()] },
+                ClientEvent::CommandComplete {
+                    id: a,
+                    number: 1,
+                    ok: true,
+                    output: vec!["A".into()]
+                },
+                ClientEvent::Notification(ControlEvent::WindowAdd {
+                    window: WindowId(9)
+                }),
+                ClientEvent::CommandComplete {
+                    id: b,
+                    number: 2,
+                    ok: true,
+                    output: vec!["B".into()]
+                },
             ]
         );
     }
@@ -368,7 +412,12 @@ mod tests {
         let events = c.feed(b"%begin 1 42 0\n%end 1 42 0\n").unwrap();
         assert_eq!(
             events,
-            vec![ClientEvent::CommandComplete { id, number: 42, ok: true, output: vec![] }]
+            vec![ClientEvent::CommandComplete {
+                id,
+                number: 42,
+                ok: true,
+                output: vec![]
+            }]
         );
     }
 
@@ -379,7 +428,12 @@ mod tests {
         let events = c.feed(b"%begin 1 1 1\n%end 1 1 1\n").unwrap();
         assert_eq!(
             events,
-            vec![ClientEvent::CommandComplete { id, number: 1, ok: true, output: vec![] }]
+            vec![ClientEvent::CommandComplete {
+                id,
+                number: 1,
+                ok: true,
+                output: vec![]
+            }]
         );
     }
 
@@ -400,7 +454,12 @@ mod tests {
     fn exit_notification_passthrough() {
         let mut c = ProtocolClient::new();
         let events = c.feed(b"%exit\n").unwrap();
-        assert_eq!(events, vec![ClientEvent::Notification(ControlEvent::Exit { reason: None })]);
+        assert_eq!(
+            events,
+            vec![ClientEvent::Notification(ControlEvent::Exit {
+                reason: None
+            })]
+        );
     }
 
     #[test]

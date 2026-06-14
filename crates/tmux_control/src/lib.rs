@@ -3,6 +3,7 @@
 
 pub use crate::error::{TmuxError, TmuxResult};
 pub use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
+pub use crate::transport::{TmuxBuilder, TmuxHandle, TransportEvent};
 pub use tmux_control_parser::ControlEvent;
 
 mod error;
