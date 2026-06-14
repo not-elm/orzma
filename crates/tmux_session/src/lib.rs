@@ -1,7 +1,8 @@
 //! ozmux ⇄ tmux control-mode integration: owns a `tmux -CC` connection,
-//! drains its transport events into the Bevy world, and tracks the
-//! connection lifecycle. Phase 0 wires the plumbing and logs events; it
-//! does not project entities or auto-connect.
+//! drains its transport events into the Bevy world, tracks the connection
+//! lifecycle, and projects tmux session/window/pane state as ECS entities
+//! (`TmuxSession`/`TmuxWindow`/`TmuxPane`) reconciled from a `ProjectionModel`
+//! maintained by the control-event reducer. Rendering is not done here.
 
 mod components;
 mod connect;
