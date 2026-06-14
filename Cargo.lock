@@ -661,7 +661,6 @@ dependencies = [
 [[package]]
 name = "bevy_cef"
 version = "0.11.0-dev"
-source = "git+https://github.com/not-elm/bevy_cef?branch=headless-gpu#e6c7b44820d3c68d75eb057ebe3439d2644ae1b7"
 dependencies = [
  "async-channel",
  "bevy",
@@ -677,7 +676,6 @@ dependencies = [
 [[package]]
 name = "bevy_cef_core"
 version = "0.11.0-dev"
-source = "git+https://github.com/not-elm/bevy_cef?branch=headless-gpu#e6c7b44820d3c68d75eb057ebe3439d2644ae1b7"
 dependencies = [
  "async-channel",
  "bevy",
