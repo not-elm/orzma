@@ -50,7 +50,9 @@ pub(crate) fn resolve_focused_terminal_readonly(
 pub(crate) enum InputPhase {
     Hover,
     Dispatch,
-    // TODO: phase-3b — tmux keyboard-forwarding system runs in this slot.
+    /// Keyboard shortcut dispatch and tmux key forwarding
+    /// (`forward_keys_to_tmux`) run in this slot, after `Dispatch` has applied
+    /// any IME events so the forwarder sees fresh `ImeState`.
     FocusedKey,
 }
 

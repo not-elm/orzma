@@ -228,8 +228,8 @@ mod tests {
 
     #[test]
     fn two_new_workspace_events_same_frame_keep_marker_invariant() {
-        // §6.2: queue two triggers in ONE system run (mirroring
-        // execute_action's keyboard loop), flush once. Bevy applies the
+        // §6.2: queue two triggers in ONE system run (deferred commands
+        // flush once at the end of the system). Bevy applies the
         // first observer's marker move before the second observer runs, so
         // exactly one AttachedWorkspace survives and TWO new workspaces exist.
         let (mut app, bootstrap) = setup_app();

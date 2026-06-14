@@ -6,6 +6,7 @@ use crate::tmux_picker::SessionPicker;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use ozmux_tmux::{KeyMods, TmuxConnection, bevy_key_to_tmux_name, send_keys_command};
 
 /// Registers the tmux keyboard-forwarding system.
@@ -13,7 +14,10 @@ pub struct OzmuxTmuxInputPlugin;
 
 impl Plugin for OzmuxTmuxInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, forward_keys_to_tmux);
+        app.add_systems(
+            Update,
+            forward_keys_to_tmux.in_set(crate::input::InputPhase::FocusedKey),
+        );
     }
 }
 
@@ -30,10 +34,23 @@ fn forward_keys_to_tmux(
     mut events: MessageReader<KeyboardInput>,
     connection: NonSend<TmuxConnection>,
     keys: Res<ButtonInput<KeyCode>>,
+    ime: Res<crate::input::ime::ImeState>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // NOTE: while the picker is open it owns the keyboard; forwarding would
     // leak picker-navigation keys to the active tmux pane. Drain (don't replay).
     if picker.open {
+        events.clear();
+        return;
+    }
+    // NOTE: drain (don't replay) while composing — forwarding preedit
+    // navigation keys would both garble IME composition and double-send.
+    if ime.is_composing() {
+        events.clear();
+        return;
+    }
+    let focused = windows.single().map(|w| w.focused).unwrap_or(false);
+    if !focused {
         events.clear();
         return;
     }

@@ -301,7 +301,7 @@ pub struct Shortcuts {
 /// TOML reads the `[shortcuts.bindings]` table; the `kebab-case` serde
 /// rename maps each `close-pane = "Cmd+Shift+D"` line to the matching
 /// field. `#[serde(default)]` at struct level seeds missing fields from
-/// `Bindings::default()` (the 20 defaults). `deny_unknown_fields` rejects
+/// `Bindings::default()` (the 14 defaults). `deny_unknown_fields` rejects
 /// typos and unimplemented-action keys at load time.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
@@ -348,6 +348,40 @@ pub struct Bindings {
     /// Releases keyboard focus from a focused inline webview back to the terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub release_inline_focus: Option<KeyChord>,
+    /// Deprecated and ignored: this binding was removed when surface/copy
+    /// actions were dropped for the tmux backend. Accepted so existing
+    /// configs carrying it still parse under `deny_unknown_fields`. Remove
+    /// after one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub close_surface: Option<KeyChord>,
+    /// Deprecated and ignored: surface creation no longer exists under the
+    /// tmux backend. Accepted so existing configs carrying it still parse
+    /// under `deny_unknown_fields`. Remove after one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub new_terminal_surface: Option<KeyChord>,
+    /// Deprecated and ignored: surface focus cycling was dropped with the
+    /// surface model for the tmux backend. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub focus_surface_prev: Option<KeyChord>,
+    /// Deprecated and ignored: surface focus cycling was dropped with the
+    /// surface model for the tmux backend. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub focus_surface_next: Option<KeyChord>,
+    /// Deprecated and ignored: copy mode is now owned by tmux, so this entry
+    /// no longer maps to an ozmux action. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub enter_copy_mode: Option<KeyChord>,
+    /// Deprecated and ignored: the copy action moved to tmux's own copy mode.
+    /// Accepted so existing configs carrying it still parse under
+    /// `deny_unknown_fields`. Remove after one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub copy: Option<KeyChord>,
 }
 
 fn parse_default_chord(s: &str) -> KeyChord {
@@ -371,6 +405,12 @@ impl Default for Bindings {
             focus_workspace_next: Some(parse_default_chord("Cmd+Shift+]")),
             paste: Some(parse_default_chord("Cmd+V")),
             release_inline_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
+            close_surface: None,
+            new_terminal_surface: None,
+            focus_surface_prev: None,
+            focus_surface_next: None,
+            enter_copy_mode: None,
+            copy: None,
         }
     }
 }
@@ -470,7 +510,7 @@ impl Bindings {
         .into_iter()
     }
 
-    /// KeyChord -> Action reverse lookup. Linear scan of 20 entries.
+    /// KeyChord -> Action reverse lookup. Linear scan of 14 entries.
     /// Hot path; cheap given the fixed size. HashMap caching deferred per spec.
     pub fn lookup(&self, chord: &KeyChord) -> Option<ShortcutAction> {
         self.iter().find_map(|(_, bound, action)| {
@@ -920,5 +960,26 @@ mod tests {
         let b = Bindings::default();
         let chord = parse_key_chord("Cmd+V").unwrap();
         assert!(matches!(b.lookup(&chord), Some(ShortcutAction::Paste)));
+    }
+
+    #[test]
+    fn deprecated_surface_copy_bindings_are_accepted_and_ignored() {
+        // Configs carrying the removed surface/copy-mode binding keys must
+        // still parse (back-compat) and not appear in the active binding set.
+        let toml = "\
+[bindings]
+close-surface = \"Cmd+Shift+F\"
+new-terminal-surface = \"Cmd+Shift+T\"
+focus-surface-prev = \"Cmd+Shift+G\"
+focus-surface-next = \"Cmd+Shift+B\"
+enter-copy-mode = \"Cmd+U\"
+copy = \"Cmd+C\"
+";
+        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated keys must still parse");
+        assert_eq!(
+            parsed.bindings.iter().count(),
+            14,
+            "ignored keys must not enter the active set"
+        );
     }
 }
