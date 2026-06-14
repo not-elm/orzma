@@ -6,7 +6,9 @@
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{RegisterKind, ServerMsg};
 use crate::inline_webview::InlineWebview;
+use crate::osc_webview::NonInteractive;
 use bevy::prelude::*;
+use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
@@ -328,9 +330,12 @@ fn apply_control_events(
     mut commands: Commands,
     mut registry: ResMut<DynamicRegistry>,
     mut rpc: ResMut<OzmuxRpc>,
+    mut focused: Option<ResMut<FocusedWebview>>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<DynAssetRegistryRes>,
     inline: Query<(Entity, &InlineWebview)>,
+    child_of: Query<&ChildOf>,
+    non_interactive: Query<(), With<NonInteractive>>,
 ) {
     let Some(events) = events else {
         return;
@@ -430,7 +435,48 @@ fn apply_control_events(
                     }
                 }
             }
-            ControlEvent::SetFocus { .. } => {}
+            ControlEvent::SetFocus {
+                connection_id,
+                owner_surface,
+                handle,
+                instance,
+            } => {
+                let Some(focused) = focused.as_mut() else {
+                    continue;
+                };
+                match handle {
+                    Some(h) => {
+                        let owned = registry
+                            .get(&h)
+                            .is_some_and(|v| v.connection_id == connection_id);
+                        if !owned {
+                            tracing::debug!(handle = %h, "focus op for unowned handle, dropping");
+                            continue;
+                        }
+                        let target = inline.iter().find(|(entity, view)| {
+                            view.view_id == h
+                                && view.instance_id.as_deref() == instance.as_deref()
+                                && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
+                                && !non_interactive.contains(*entity)
+                        });
+                        match target {
+                            Some((entity, _)) => focused.0 = Some(entity),
+                            None => tracing::debug!(
+                                handle = %h,
+                                "focus op for unmounted/non-interactive view, dropping"
+                            ),
+                        }
+                    }
+                    None => {
+                        let owned_current = focused.0.is_some_and(|e| {
+                            child_of.get(e).map(|c| c.parent()) == Ok(owner_surface)
+                        });
+                        if owned_current {
+                            focused.0 = None;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -1020,6 +1066,121 @@ mod apply_tests {
 
         let caps = app.world().resource::<Caps>();
         assert_eq!(caps.0, vec![(mounted, "ozmux.event".to_string())]);
+    }
+}
+
+#[cfg(test)]
+mod focus_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy_cef::prelude::FocusedWebview;
+    use crossbeam_channel::unbounded;
+
+    #[test]
+    fn set_focus_points_focused_webview_at_the_owned_inline_child() {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
+            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmuxRpc>()
+            .init_resource::<FocusedWebview>()
+            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+
+        let surface = app
+            .world_mut()
+            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
+                mux.create_workspace(Some("t".into())).surface
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "h1".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 1,
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                InlineWebview {
+                    view_id: "h1".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+
+        let (tx, rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(rx));
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface,
+            handle: Some("h1".into()),
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut().run_system_once(apply_control_events).unwrap();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "SetFocus must point FocusedWebview at the owned inline child"
+        );
+
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface,
+            handle: None,
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut().run_system_once(apply_control_events).unwrap();
+        assert_eq!(app.world().resource::<FocusedWebview>().0, None);
+    }
+
+    #[test]
+    fn set_focus_rejects_unowned_handle() {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
+            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmuxRpc>()
+            .init_resource::<FocusedWebview>()
+            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        let surface = app
+            .world_mut()
+            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
+                mux.create_workspace(Some("t".into())).surface
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "h1".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 99,
+            },
+        );
+        let (tx, rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(rx));
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface,
+            handle: Some("h1".into()),
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut().run_system_once(apply_control_events).unwrap();
+        assert_eq!(app.world().resource::<FocusedWebview>().0, None);
     }
 }
 
