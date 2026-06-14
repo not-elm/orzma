@@ -13,7 +13,9 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::layout::{Constraint, Layout};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui_ozma::{FocusManager, Ozma, RpcError, Webview, WebviewHandle, WebviewWidget, focusable};
+use ratatui_ozma::{
+    FocusManager, Ozma, RpcError, Webview, WebviewHandle, WebviewWidget, focusable,
+};
 use std::io::stdout;
 use std::time::{Duration, Instant};
 
@@ -51,7 +53,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
         let mut n: u64 = 0;
         let mut last = Instant::now();
-        run(&mut terminal, &mut ozma, &view, &mut focus, &mut n, &mut last)
+        run(
+            &mut terminal,
+            &mut ozma,
+            &view,
+            &mut focus,
+            &mut n,
+            &mut last,
+        )
     })();
 
     let _ = disable_raw_mode();

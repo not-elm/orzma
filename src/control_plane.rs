@@ -1125,7 +1125,9 @@ mod focus_tests {
             instance: None,
         })
         .unwrap();
-        app.world_mut().run_system_once(apply_control_events).unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
 
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
@@ -1140,7 +1142,9 @@ mod focus_tests {
             instance: None,
         })
         .unwrap();
-        app.world_mut().run_system_once(apply_control_events).unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
         assert_eq!(app.world().resource::<FocusedWebview>().0, None);
     }
 
@@ -1192,7 +1196,9 @@ mod focus_tests {
             instance: None,
         })
         .unwrap();
-        app.world_mut().run_system_once(apply_control_events).unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             None,
@@ -1261,7 +1267,9 @@ mod focus_tests {
             instance: None,
         })
         .unwrap();
-        app.world_mut().run_system_once(apply_control_events).unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             Some(child_a),
@@ -1277,7 +1285,9 @@ mod focus_tests {
             instance: None,
         })
         .unwrap();
-        app.world_mut().run_system_once(apply_control_events).unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             Some(child_a),
@@ -1292,7 +1302,9 @@ mod focus_tests {
             instance: None,
         })
         .unwrap();
-        app.world_mut().run_system_once(apply_control_events).unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             None,

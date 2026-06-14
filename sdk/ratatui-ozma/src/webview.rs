@@ -205,8 +205,14 @@ mod tests {
         let wv = Webview::inline("x").on_reserved("__ozma.nav", |(d,): (String,)| {
             Ok::<_, crate::error::RpcError>(format!("nav:{d}"))
         });
-        let h = wv.handlers.get("__ozma.nav").expect("reserved handler present");
-        assert_eq!(h(vec![serde_json::json!("right")]).unwrap(), serde_json::json!("nav:right"));
+        let h = wv
+            .handlers
+            .get("__ozma.nav")
+            .expect("reserved handler present");
+        assert_eq!(
+            h(vec![serde_json::json!("right")]).unwrap(),
+            serde_json::json!("nav:right")
+        );
     }
 
     #[test]

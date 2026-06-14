@@ -118,10 +118,17 @@ mod tests {
 
     #[test]
     fn focused_widget_constructs() {
-        let area = Rect { x: 0, y: 0, width: 4, height: 1 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
-        WebviewWidget::new("v").focused(true).render(area, &mut buf, &mut state);
+        WebviewWidget::new("v")
+            .focused(true)
+            .render(area, &mut buf, &mut state);
         assert_eq!(state.placements_for_test().len(), 1);
     }
 }

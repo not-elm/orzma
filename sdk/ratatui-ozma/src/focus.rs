@@ -369,15 +369,32 @@ mod tests {
     }
 
     fn rect(x: u16, y: u16, w: u16, h: u16) -> Rect {
-        Rect { x, y, width: w, height: h }
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     #[test]
     fn nav_key_maps_alt_hjkl() {
-        assert_eq!(FocusManager::nav_key(&key('h', KeyModifiers::ALT)), Some(Direction::Left));
-        assert_eq!(FocusManager::nav_key(&key('j', KeyModifiers::ALT)), Some(Direction::Down));
-        assert_eq!(FocusManager::nav_key(&key('k', KeyModifiers::ALT)), Some(Direction::Up));
-        assert_eq!(FocusManager::nav_key(&key('l', KeyModifiers::ALT)), Some(Direction::Right));
+        assert_eq!(
+            FocusManager::nav_key(&key('h', KeyModifiers::ALT)),
+            Some(Direction::Left)
+        );
+        assert_eq!(
+            FocusManager::nav_key(&key('j', KeyModifiers::ALT)),
+            Some(Direction::Down)
+        );
+        assert_eq!(
+            FocusManager::nav_key(&key('k', KeyModifiers::ALT)),
+            Some(Direction::Up)
+        );
+        assert_eq!(
+            FocusManager::nav_key(&key('l', KeyModifiers::ALT)),
+            Some(Direction::Right)
+        );
     }
 
     #[test]
@@ -475,8 +492,15 @@ mod tests {
     fn focusable_installs_reserved_handlers_that_feed_the_channel() {
         let fm = FocusManager::new();
         let view = focusable(Webview::inline("x"), fm.signal_sender());
-        let nav = view.handlers_for_test().get("__ozma.nav").expect("nav handler");
-        nav(vec![serde_json::json!("view-x"), serde_json::json!("right")]).unwrap();
+        let nav = view
+            .handlers_for_test()
+            .get("__ozma.nav")
+            .expect("nav handler");
+        nav(vec![
+            serde_json::json!("view-x"),
+            serde_json::json!("right"),
+        ])
+        .unwrap();
         match fm.rx_for_test().try_recv().unwrap() {
             Signal::Nav(h, d) => {
                 assert_eq!(h, "view-x");

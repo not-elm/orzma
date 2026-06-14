@@ -84,9 +84,18 @@ mod tests {
 
     #[test]
     fn bridge_includes_focus_glue() {
-        assert!(OZMUX_BRIDGE_JS.contains("__ozma.nav"), "nav forwarding present");
-        assert!(OZMUX_BRIDGE_JS.contains("__ozma.focus"), "focus report present");
-        assert!(OZMUX_BRIDGE_JS.contains("__ozma.keys"), "keymap receipt present");
+        assert!(
+            OZMUX_BRIDGE_JS.contains("__ozma.nav"),
+            "nav forwarding present"
+        );
+        assert!(
+            OZMUX_BRIDGE_JS.contains("__ozma.focus"),
+            "focus report present"
+        );
+        assert!(
+            OZMUX_BRIDGE_JS.contains("__ozma.keys"),
+            "keymap receipt present"
+        );
         assert!(
             OZMUX_BRIDGE_JS.contains("location.hostname"),
             "glue must tag signals with its own handle (origin hostname)"
