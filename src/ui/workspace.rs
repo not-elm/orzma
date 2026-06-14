@@ -6,7 +6,7 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::system_set::OzmuxSystems;
 use crate::ui::terminal::resolve_pane_workspace;
-use crate::ui::{PaneDimOverlay, TerminalSurfaceMarker, WorkspaceUiRoot};
+use crate::ui::{TerminalSurfaceMarker, WorkspaceUiRoot};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
 use ozma_tty_renderer::material::{PaneDim, TerminalUiMaterial};
@@ -19,16 +19,15 @@ pub struct OzmuxWorkspaceUiPlugin;
 impl Plugin for OzmuxWorkspaceUiPlugin {
     fn build(&self, app: &mut App) {
         order_surface_pipeline(app);
-        app.add_systems(Update, sync_pane_dim.after(OzmuxSystems::Input))
-            .add_systems(
-                Update,
-                sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
-            )
-            .add_systems(
-                Update,
-                sync_terminal_dim_on_mount.after(OzmuxSystems::SetupSurface),
-            )
-            .add_systems(PostUpdate, sync_active_workspace.before(UiSystems::Prepare));
+        app.add_systems(
+            Update,
+            sync_terminal_dim_on_focus.after(OzmuxSystems::Input),
+        )
+        .add_systems(
+            Update,
+            sync_terminal_dim_on_mount.after(OzmuxSystems::SetupSurface),
+        )
+        .add_systems(PostUpdate, sync_active_workspace.before(UiSystems::Prepare));
     }
 }
 
@@ -75,35 +74,6 @@ fn sync_active_workspace(
 
     for (workspace_entity, tree) in workspaces.iter() {
         commands.entity(tree.0).insert(ChildOf(workspace_entity));
-    }
-}
-
-/// Flips each pane's dim veil when its workspace's `ActivePane` changes
-/// (focus moves between panes). For every workspace whose `ActivePane`
-/// changed, sets each `PaneDimOverlay` belonging to that workspace to
-/// `Hidden` iff its pane is the new active pane, else `Visible`. Pane→
-/// workspace is resolved via `OwningWorkspace`; using `MultiplexerCommands`
-/// here would conflict on its `&mut ActivePane`.
-fn sync_pane_dim(
-    mut overlays: Query<(&PaneDimOverlay, &mut Visibility)>,
-    changed_workspaces: Query<(Entity, &ActivePane), Changed<ActivePane>>,
-    panes: Query<&OwningWorkspace, With<PaneMarker>>,
-) {
-    for (workspace, active) in changed_workspaces.iter() {
-        for (overlay, mut visibility) in overlays.iter_mut() {
-            let Ok(owning) = panes.get(overlay.pane) else {
-                continue;
-            };
-            if owning.0 != workspace {
-                continue;
-            }
-            let want = if overlay.pane == active.0 {
-                Visibility::Hidden
-            } else {
-                Visibility::Visible
-            };
-            visibility.set_if_neq(want);
-        }
     }
 }
 
@@ -399,7 +369,7 @@ mod tests {
     fn in_pane_surface_switch_slots_new_surface() {
         use crate::ui::Slotted;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind};
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
@@ -424,9 +394,7 @@ mod tests {
         // must slot the new surface (Node + Slotted) into the pane.
         let added = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
             .unwrap();
         app.world_mut().flush();
         app.world_mut()
@@ -451,7 +419,7 @@ mod tests {
     fn inactive_surface_within_active_workspace_parks_under_workspace_entity() {
         use crate::ui::Slotted;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind};
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
@@ -481,9 +449,7 @@ mod tests {
 
         let second_surface = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
             .unwrap();
         app.world_mut().flush();
 

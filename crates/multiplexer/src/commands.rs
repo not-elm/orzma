@@ -6,8 +6,8 @@
 
 use crate::components::{
     ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, OwningWorkspace, PaneMarker, SplitNode,
-    SurfaceKind, SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions,
-    WorkspaceMarker, WorkspaceUiSubtree,
+    SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
+    WorkspaceUiSubtree,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
@@ -116,11 +116,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 
         let surface = self
             .commands
-            .spawn((
-                SurfaceMarker,
-                SurfaceKind::Terminal,
-                Name::new(format!("surface: {name}#0")),
-            ))
+            .spawn((SurfaceMarker, Name::new(format!("surface: {name}#0"))))
             .id();
 
         let mut pane_node = crate::layout::pane_frame_node();
@@ -215,22 +211,20 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(())
     }
 
-    /// Split the target pane and seed the new pane with one surface of the
-    /// caller-chosen `kind`. Delegates to `split_pane_inner` (which inserts a
-    /// `Split` node into the target's layout slot, reparents the target and the
-    /// new pane under it, and promotes the new pane to `ActivePane`) and
-    /// attaches the surface; on error the freshly-spawned surface is despawned
-    /// to leave no orphan.
+    /// Split the target pane and seed the new pane with one Terminal surface.
+    /// Delegates to `split_pane_inner` (which inserts a `Split` node into the
+    /// target's layout slot, reparents the target and the new pane under it, and
+    /// promotes the new pane to `ActivePane`) and attaches the surface; on error
+    /// the freshly-spawned surface is despawned to leave no orphan.
     pub fn split_pane_with_surface(
         &mut self,
         target_pane: Entity,
         side: Side,
         orientation: SplitOrientation,
-        kind: SurfaceKind,
     ) -> MultiplexerResult<SplitOutcome> {
         let surface = self
             .commands
-            .spawn((SurfaceMarker, kind, Name::new("surface: split")))
+            .spawn((SurfaceMarker, Name::new("surface: split")))
             .id();
         match self.split_pane_inner(target_pane, side, orientation) {
             Ok((new_pane, _)) => {
@@ -263,7 +257,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         side: Side,
         orientation: SplitOrientation,
     ) -> MultiplexerResult<Entity> {
-        self.split_pane_with_surface(target_pane, side, orientation, SurfaceKind::Terminal)
+        self.split_pane_with_surface(target_pane, side, orientation)
             .map(|o| o.pane)
     }
 
@@ -354,12 +348,12 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
         Ok(SwapOutcome::Swapped { other_pane })
     }
 
-    /// Spawn a new Surface as a child of `pane`. Does NOT change
+    /// Spawn a new Terminal Surface as a child of `pane`. Does NOT change
     /// `ActiveSurface` — call `set_active_surface` separately if needed.
-    pub fn add_surface(&mut self, pane: Entity, kind: SurfaceKind) -> Entity {
+    pub fn add_surface(&mut self, pane: Entity) -> Entity {
         let surface = self
             .commands
-            .spawn((SurfaceMarker, kind, Name::new("surface")))
+            .spawn((SurfaceMarker, Name::new("surface")))
             .id();
         self.commands
             .entity(surface)
@@ -628,9 +622,7 @@ mod tests {
 
         let added = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(outcome.pane))
             .unwrap();
         app.world_mut().flush();
         app.update();
@@ -668,9 +660,7 @@ mod tests {
             .unwrap();
         let second = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(outcome.pane))
             .unwrap();
         app.world_mut().flush();
         // NOTE: both settle ticks must run before the no-op mutation below, or
@@ -881,12 +871,7 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let other_surface = world
-            .spawn((
-                SurfaceMarker,
-                SurfaceKind::Terminal,
-                Name::new("other"),
-                ChildOf(outcome.pane),
-            ))
+            .spawn((SurfaceMarker, Name::new("other"), ChildOf(outcome.pane)))
             .id();
 
         world
@@ -1111,9 +1096,7 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let new_surface = world
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(outcome.pane))
             .unwrap();
         world.flush();
 
@@ -1158,9 +1141,7 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let second_surface = world
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(outcome.pane))
             .unwrap();
         world.flush();
 
@@ -1203,63 +1184,6 @@ mod tests {
             matches!(result, Err(MultiplexerError::CannotRemoveLastSurface(_))),
             "expected CannotRemoveLastSurface, got {result:?}",
         );
-    }
-
-    #[test]
-    fn split_pane_with_surface_seeds_extension_surface() {
-        use std::path::PathBuf;
-        let mut world = World::new();
-        world.init_resource::<WorkspaceNameCounter>();
-        let outcome = world
-            .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
-            .unwrap();
-
-        let split = world
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane_with_surface(
-                    outcome.pane,
-                    Side::After,
-                    SplitOrientation::Vertical,
-                    SurfaceKind::Extension {
-                        entry: PathBuf::from("/x/memo"),
-                    },
-                )
-                .unwrap()
-            })
-            .unwrap();
-        world.flush();
-
-        assert!(world.get::<PaneMarker>(split.pane).is_some());
-        let root = world
-            .get::<WorkspaceUiSubtree>(outcome.workspace)
-            .unwrap()
-            .0;
-        let split_node = world.get::<Children>(root).unwrap().iter().next().unwrap();
-        assert!(
-            world.get::<SplitNode>(split_node).is_some(),
-            "root's single child is a Split"
-        );
-        let split_kids: Vec<Entity> = world.get::<Children>(split_node).unwrap().iter().collect();
-        assert!(
-            split_kids.contains(&split.pane),
-            "new pane is under the Split in the entity tree"
-        );
-        assert_eq!(
-            world.get::<ActivePane>(outcome.workspace).map(|a| a.0),
-            Some(split.pane)
-        );
-        assert_eq!(
-            world.get::<ChildOf>(split.surface).map(|c| c.parent()),
-            Some(split.pane)
-        );
-        assert_eq!(
-            world.get::<ActiveSurface>(split.pane).map(|a| a.0),
-            Some(split.surface)
-        );
-        assert!(matches!(
-            world.get::<SurfaceKind>(split.surface),
-            Some(SurfaceKind::Extension { .. })
-        ));
     }
 
     #[test]
@@ -1335,9 +1259,7 @@ mod tests {
             .unwrap();
         world.flush();
         let s2 = world
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(outcome.pane))
             .unwrap();
         world.flush();
         assert_eq!(world.get::<SurfaceOf>(s2).map(|o| o.0), Some(outcome.pane));
@@ -1362,7 +1284,7 @@ mod tests {
             .unwrap();
         let second_surface = world
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                let s = mux.add_surface(outcome.pane, SurfaceKind::Terminal);
+                let s = mux.add_surface(outcome.pane);
                 mux.set_active_surface(outcome.pane, s).unwrap();
                 s
             })
@@ -1397,9 +1319,7 @@ mod tests {
             .unwrap();
         world.flush();
         let parked = world
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(outcome.pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(outcome.pane))
             .unwrap();
         world.flush();
         world.entity_mut(parked).insert(ChildOf(outcome.workspace));

@@ -6,10 +6,10 @@
 //! rebuilds independently via
 //! `status_bar_sync::rebuild_status_bar_on_workspace_set_change` when the
 //! workspace list or `AttachedWorkspace` marker changes. The multiplexer
-//! Surface entity *is* its render host: it carries its own `Node` + a
-//! kind-marker — the active surface (`Slotted`) under its pane's surface slot,
-//! inactive surfaces under the owning Workspace entity (a non-Node
-//! walker-skipped park).
+//! Surface entity *is* its render host: it carries its own `Node` +
+//! `TerminalSurfaceMarker` — the active surface (`Slotted`) under its pane's
+//! surface slot, inactive surfaces under the owning Workspace entity (a
+//! non-Node walker-skipped park).
 
 use crate::ui::chrome::OzmuxChromePlugin;
 use crate::ui::root::OzmuxUiRootPlugin;
@@ -34,7 +34,6 @@ pub(crate) mod tab_input;
 pub(crate) mod tab_label;
 pub mod terminal;
 pub(crate) mod tmux_dialog;
-pub(crate) mod web_title;
 pub mod workspace;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
@@ -63,18 +62,11 @@ pub struct WorkspaceUiRoot;
 #[derive(Component)]
 pub struct Slotted;
 
-/// Marks a Surface entity whose `kind` is `Terminal`. `finish_terminal_setup`
-/// queries for `With<TerminalSurfaceMarker>` to find surfaces that need a
-/// `TerminalBundle` + `TerminalRenderBundle` attached.
+/// Marks a terminal Surface entity. `finish_terminal_setup` queries for
+/// `With<TerminalSurfaceMarker>` to find surfaces that need a `TerminalBundle`
+/// + `TerminalRenderBundle` attached.
 #[derive(Component)]
 pub struct TerminalSurfaceMarker;
-
-/// Marks a Surface entity whose `kind` is `Extension`.
-/// `finish_extension_setup` queries for `With<ExtensionSurfaceMarker>` to
-/// find surfaces that need a `bevy_cef` webview (`WebviewSource` +
-/// `MaterialNode<WebviewUiMaterial>`) attached.
-#[derive(Component)]
-pub(crate) struct ExtensionSurfaceMarker;
 
 /// On a tab-bar Node: marks it clickable and records which Surface (in which
 /// Pane) selecting it activates. Read by `drive_tab_clicks` / `tab_hover_cursor`.
@@ -95,16 +87,6 @@ pub struct TerminalSpawnFailed;
 #[derive(Component)]
 pub struct PaneFrame;
 
-/// Marks the per-pane dim veil — a translucent overlay node, last child of
-/// the pane frame, drawn over both terminal and webview content when the
-/// pane is NOT its workspace's active pane. `pane` is the multiplexer Pane
-/// entity this veil belongs to; `sync_pane_dim` reads it to toggle
-/// `Visibility` on focus changes.
-#[derive(Component)]
-pub(crate) struct PaneDimOverlay {
-    pub(crate) pane: Entity,
-}
-
 /// Resolved `$HOME` at startup (`None` if unset). Read by `refresh_pane_tabs`
 /// to home-abbreviate terminal tab paths; the value matches the terminal
 /// spawner's `$HOME` fallback so the tab agrees with where the shell started.
@@ -122,7 +104,6 @@ impl Plugin for OzmuxUiPlugin {
                 OzmuxWorkspaceUiPlugin,
                 OzmuxChromePlugin,
                 OzmuxTerminalUiPlugin,
-                web_title::WebTitlePlugin,
             ))
             .add_systems(
                 Update,
@@ -251,7 +232,7 @@ mod tests {
 
     #[test]
     fn surface_entity_persists_across_surface_switch() {
-        use ozmux_multiplexer::{SurfaceKind, SurfaceMarker};
+        use ozmux_multiplexer::SurfaceMarker;
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
@@ -283,9 +264,7 @@ mod tests {
                 .unwrap();
             let new_surface = app
                 .world_mut()
-                .run_system_once(move |mut mux: MultiplexerCommands| {
-                    mux.add_surface(pane, SurfaceKind::Terminal)
-                })
+                .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
                 .unwrap();
             app.world_mut().flush();
             app.world_mut()
@@ -479,7 +458,7 @@ mod tests {
     #[test]
     fn inactive_surface_persists_across_focus_switch() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, WorkspaceMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -504,9 +483,7 @@ mod tests {
 
         let second_surface = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
             .unwrap();
         app.world_mut().flush();
 
@@ -646,12 +623,6 @@ mod tests {
                 )
                 .unwrap();
 
-        {
-            let world = app.world_mut();
-            let overlay_count = world.query::<&PaneDimOverlay>().iter(world).count();
-            assert_eq!(overlay_count, 0, "terminal panes get no veil overlay");
-        }
-
         let dims = terminal_host_pane_dims(app.world_mut());
         assert_eq!(dims.len(), 2, "two terminal hosts after split");
         for (pane, dim) in dims {
@@ -664,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn lone_terminal_pane_is_full_bright_and_unveiled() {
+    fn lone_terminal_pane_is_full_bright() {
         use ozma_tty_renderer::material::PaneDim;
 
         let (mut app, _guard) = make_test_app();
@@ -674,12 +645,6 @@ mod tests {
         mount_terminal_hosts(&mut app);
 
         let world = app.world_mut();
-        let overlay_count = world.query::<&PaneDimOverlay>().iter(world).count();
-        assert_eq!(
-            overlay_count, 0,
-            "terminal panes must not get a veil overlay"
-        );
-
         let dims: Vec<f32> = world
             .query_filtered::<&PaneDim, With<TerminalSurfaceMarker>>()
             .iter(world)
@@ -690,65 +655,13 @@ mod tests {
     }
 
     #[test]
-    fn extension_pane_keeps_pickable_ignore_veil() {
-        use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, WorkspaceMarker};
-
-        let (mut app, _guard) = make_test_app();
-        for _ in 0..3 {
-            app.update();
-        }
-
-        let pane =
-            app.world_mut()
-                .run_system_once(
-                    |mux: MultiplexerCommands,
-                     workspaces: Query<
-                        Entity,
-                        (With<WorkspaceMarker>, With<AttachedWorkspace>),
-                    >| {
-                        let workspace = workspaces.iter().next().unwrap();
-                        mux.workspaces_active_pane(workspace).unwrap()
-                    },
-                )
-                .unwrap();
-        app.world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                let ext = mux.add_surface(
-                    pane,
-                    SurfaceKind::Extension {
-                        entry: "/tmp".into(),
-                    },
-                );
-                mux.set_active_surface(pane, ext).unwrap();
-            })
-            .unwrap();
-        // The surface switch fires `sync_pane_veil` on `Changed<ActiveSurface>`.
-        for _ in 0..2 {
-            app.update();
-        }
-
-        let world = app.world_mut();
-        let overlay = world
-            .query_filtered::<Entity, With<PaneDimOverlay>>()
-            .iter(world)
-            .next()
-            .expect("extension pane must have a veil overlay");
-        let pickable = world
-            .get::<Pickable>(overlay)
-            .expect("veil must carry Pickable");
-        assert!(!pickable.should_block_lower, "veil must not block lower");
-        assert!(!pickable.is_hoverable, "veil must not be hoverable");
-    }
-
-    #[test]
     fn disabled_config_dims_nothing() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{MultiplexerCommands, Side, SplitOrientation, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         // Override to disabled BEFORE hosts mount, so the first PaneDim
-        // assignment and the veil decision both see enabled = false.
+        // assignment sees enabled = false.
         let custom = ozmux_configs::OzmuxConfigs {
             inactive_pane: ozmux_configs::inactive_pane::InactivePaneConfig {
                 enabled: false,
@@ -780,11 +693,6 @@ mod tests {
         mount_terminal_hosts(&mut app);
 
         let world = app.world_mut();
-        let overlay_count = world.query::<&PaneDimOverlay>().iter(world).count();
-        assert_eq!(
-            overlay_count, 0,
-            "no veil overlays when dimming is disabled"
-        );
         let dims = terminal_host_pane_dims(world);
         assert_eq!(dims.len(), 2, "two terminal hosts after split");
         assert!(

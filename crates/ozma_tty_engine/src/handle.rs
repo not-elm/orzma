@@ -15,7 +15,7 @@ use crate::vt::frame_builder::{
     viewport_row_to_line,
 };
 use crate::vt::hyperlink::HyperlinkInterner;
-use crate::vt::listener::{ControlFrame, InlineAnchor, OscWebviewVerb, TermListener};
+use crate::vt::listener::{AnchorMode, ControlFrame, InlineAnchor, OscWebviewVerb, TermListener};
 use crate::vt::mode_diff::diff_mode;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::{Dimensions, Scroll};
@@ -917,21 +917,28 @@ impl TerminalHandle {
         // (spec §3).
         self.run_history_maintenance();
         let anchor = if matches!(verb, OscWebviewVerb::MountInline { .. }) {
-            if self.term.mode().contains(TermMode::ALT_SCREEN) {
-                tracing::debug!("mount-inline rejected: alternate screen active");
-                return;
-            }
-            if self.saturated {
-                tracing::debug!("mount-inline rejected: scrollback saturated");
-                return;
-            }
             let cursor = self.term.grid().cursor.point;
+            let col = cursor.column.0 as u16;
+            let mode = if self.term.mode().contains(TermMode::ALT_SCREEN) {
+                AnchorMode::FixedScreen {
+                    row: cursor.line.0.max(0) as u16,
+                    col,
+                }
+            } else {
+                if self.saturated {
+                    tracing::debug!("mount-inline rejected: scrollback saturated");
+                    return;
+                }
+                AnchorMode::Scrollback {
+                    line: self.history_base
+                        + self.term.history_size() as u64
+                        + cursor.line.0.max(0) as u64,
+                    col,
+                }
+            };
             self.force_next_emit = true;
             Some(InlineAnchor {
-                line: self.history_base
-                    + self.term.history_size() as u64
-                    + cursor.line.0.max(0) as u64,
-                col: cursor.column.0 as u16,
+                mode,
                 frame_seq: self.frame_seq,
             })
         } else {
@@ -1945,11 +1952,14 @@ mod tests {
         };
         assert!(matches!(verb, OscWebviewVerb::MountInline { .. }));
         let anchor = anchor.expect("MountInline carries an anchor");
+        let AnchorMode::Scrollback { line, col } = anchor.mode else {
+            panic!("expected scrollback anchor, got {:?}", anchor.mode);
+        };
         assert_eq!(
-            anchor.line, 0,
+            line, 0,
             "anchor = cursor at the OSC byte, before the newlines"
         );
-        assert_eq!(anchor.col, 0);
+        assert_eq!(col, 0);
     }
 
     #[test]
@@ -1962,7 +1972,10 @@ mod tests {
         let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
             panic!("expected OscWebview");
         };
-        assert_eq!(anchor.expect("anchor").line, 2);
+        assert_eq!(
+            anchor.expect("anchor").mode,
+            AnchorMode::Scrollback { line: 2, col: 0 }
+        );
     }
 
     #[test]
@@ -1991,7 +2004,10 @@ mod tests {
         let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
             panic!("expected OscWebview");
         };
-        assert_eq!(anchor.expect("anchor").line, 0);
+        let AnchorMode::Scrollback { line, .. } = anchor.expect("anchor").mode else {
+            panic!("expected scrollback anchor");
+        };
+        assert_eq!(line, 0);
     }
 
     #[test]
@@ -2005,8 +2021,13 @@ mod tests {
         let second = rx.try_recv().expect("second frame");
         let get = |f: ControlFrame| match f {
             ControlFrame::OscWebview {
-                anchor: Some(a), ..
-            } => a.line,
+                anchor:
+                    Some(InlineAnchor {
+                        mode: AnchorMode::Scrollback { line, .. },
+                        ..
+                    }),
+                ..
+            } => line,
             other => panic!("unexpected {other:?}"),
         };
         assert_eq!(get(first), 0);
@@ -2072,7 +2093,10 @@ mod tests {
         // read_geometry is the viewport row, which equals the live-grid
         // row because display_offset is 0 at the live tail.
         let (_, _, cursor) = h.read_geometry();
-        assert_eq!(anchor.line, hist + cursor.y as u64);
+        let AnchorMode::Scrollback { line, .. } = anchor.mode else {
+            panic!("expected scrollback anchor");
+        };
+        assert_eq!(line, hist + cursor.y as u64);
     }
 
     #[test]
@@ -2140,8 +2164,11 @@ mod tests {
         else {
             panic!("expected mount frame");
         };
-        assert_eq!(a.col, 2, "cursor column after printing 'ab' is 2");
-        assert_eq!(a.line, 0);
+        let AnchorMode::Scrollback { line, col } = a.mode else {
+            panic!("expected scrollback anchor");
+        };
+        assert_eq!(col, 2, "cursor column after printing 'ab' is 2");
+        assert_eq!(line, 0);
     }
 
     #[test]
@@ -2198,26 +2225,101 @@ mod tests {
     }
 
     #[test]
-    fn alt_screen_mount_rejected() {
+    fn mount_inline_on_alt_screen_stamps_fixed_screen_anchor() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b[?1049h");
+        h.advance(b"\r\n\r\n");
+        h.advance(b"\x1b]5379;mount-inline;v;3;5\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount frame on alt screen")
+        else {
+            panic!("expected mount with anchor on alt screen");
+        };
+        assert_eq!(
+            anchor.mode,
+            AnchorMode::FixedScreen { row: 2, col: 0 },
+            "alt-screen mount stamps a viewport-relative FixedScreen anchor"
+        );
+    }
+
+    #[test]
+    fn alt_screen_mount_then_primary_uses_scrollback() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount frame on alt screen")
+        else {
+            panic!("expected mount with anchor on alt screen");
+        };
         assert!(
-            rx.try_recv().is_err(),
-            "mount-inline rejected on alt screen"
+            matches!(anchor.mode, AnchorMode::FixedScreen { .. }),
+            "alt-screen mount stamps FixedScreen, got {:?}",
+            anchor.mode
         );
         h.advance(b"\x1b[?1049l");
         h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
-        let frame = rx
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx
             .try_recv()
-            .expect("accepted again after returning to primary");
-        assert!(matches!(
-            frame,
-            ControlFrame::OscWebview {
-                verb: OscWebviewVerb::MountInline { .. },
-                anchor: Some(_)
-            }
-        ));
+            .expect("accepted again after returning to primary")
+        else {
+            panic!("expected mount with anchor on primary screen");
+        };
+        assert!(
+            matches!(anchor.mode, AnchorMode::Scrollback { .. }),
+            "primary-screen mount stamps Scrollback, got {:?}",
+            anchor.mode
+        );
+    }
+
+    #[test]
+    fn same_chunk_alt_enter_then_mount_stamps_fixed_screen() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b[?1049h\x1b]5379;mount-inline;v;3;5\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx
+            .try_recv()
+            .expect("mount frame when alt-enter and OSC share a chunk")
+        else {
+            panic!("expected mount with anchor");
+        };
+        assert!(
+            matches!(anchor.mode, AnchorMode::FixedScreen { .. }),
+            "alt-enter and mount in the same chunk must observe the post-switch \
+             state and stamp FixedScreen, got {:?}",
+            anchor.mode
+        );
+    }
+
+    #[test]
+    fn alt_screen_mount_not_gated_by_saturation() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b[?1049h");
+        h.saturated = true;
+        h.advance(b"\x1b]5379;mount-inline;v;3;5\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx
+            .try_recv()
+            .expect("alt-screen mount accepted despite saturation")
+        else {
+            panic!("expected mount with anchor on saturated alt screen");
+        };
+        assert!(
+            matches!(anchor.mode, AnchorMode::FixedScreen { .. }),
+            "alt-screen mount must not be gated by saturation, got {:?}",
+            anchor.mode
+        );
     }
 
     #[test]
@@ -2233,8 +2335,11 @@ mod tests {
         else {
             panic!("expected mount with anchor");
         };
+        let AnchorMode::Scrollback { line, .. } = anchor.mode else {
+            panic!("expected scrollback anchor");
+        };
         assert_eq!(
-            anchor.line, 2,
+            line, 2,
             "stop_sync must flush the BSU buffer before sampling"
         );
     }
@@ -2339,7 +2444,7 @@ mod tests {
     fn drain_forwards_mount_inline_anchor_to_request() {
         use crate::events::OscWebviewRequest;
         use crate::title::TerminalTitle;
-        use crate::vt::listener::{ControlFrame, InlineAnchor, OscWebviewVerb};
+        use crate::vt::listener::{AnchorMode, ControlFrame, InlineAnchor, OscWebviewVerb};
         use bevy::ecs::system::RunSystemOnce;
         use bevy::prelude::*;
 
@@ -2378,8 +2483,7 @@ mod tests {
                     instance_id: None,
                 },
                 anchor: Some(InlineAnchor {
-                    line: 42,
-                    col: 7,
+                    mode: AnchorMode::Scrollback { line: 42, col: 7 },
                     frame_seq: 9,
                 }),
             })
@@ -2417,8 +2521,7 @@ mod tests {
         assert_eq!(
             req.anchor,
             Some(InlineAnchor {
-                line: 42,
-                col: 7,
+                mode: AnchorMode::Scrollback { line: 42, col: 7 },
                 frame_seq: 9
             }),
             "anchor must cross the drain boundary unchanged"
