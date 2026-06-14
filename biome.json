@@ -4,7 +4,6 @@
     "includes": [
       "host/**",
       "sdk/**",
-      "extensions/**",
       "!**/node_modules",
       "!**/dist",
       "!**/target",

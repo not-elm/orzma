@@ -4672,13 +4672,8 @@ dependencies = [
  "bevy",
  "bevy_cef_core",
  "crossbeam-channel",
- "ozmux_multiplexer",
- "portable-pty",
- "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.18",
- "toml",
 ]
 
 [[package]]

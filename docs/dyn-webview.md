@@ -143,7 +143,7 @@ cargo run --example dyn_webview_client
 The user runs this to verify the feature end-to-end:
 
 ```sh
-# Terminal 1: launch ozmux (debug feature enables bundled extensions + CEF DevTools)
+# Terminal 1: launch ozmux (the debug feature enables the CEF DevTools endpoint)
 cargo run --features debug
 
 # Inside an ozmux pane:
@@ -159,7 +159,7 @@ is killed (`Ctrl-C` → socket disconnect → automatic registration teardown).
 The following are explicitly out of scope for Phase A and are deferred:
 
 - **localhost URL mounts** — `kind:"url"` with an `http://localhost/…` source.
-- **Host-API escalation** — dynamic extensions that call `window.<ns>.<method>`
+- **Host-API escalation** — dynamic webviews that call `window.<ns>.<method>`
   APIs; Phase A webviews are display-only (no `window.ozmux` bridge).
 - **Untrusted raw-OSC tier** — a lower-trust path that bypasses the socket
   entirely, using PTY escape codes alone; deferred pending a separate threat

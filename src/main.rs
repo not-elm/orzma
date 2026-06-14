@@ -36,7 +36,6 @@ use multiplexer::log::OzmuxLayoutLogPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_extension_host::DynAssetRegistry;
-use ozmux_extension_host::host::AssetSourceRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
@@ -45,7 +44,6 @@ use ui::{
 };
 
 fn main() {
-    let registry = AssetSourceRegistry::default();
     let dyn_registry = DynAssetRegistry::default();
     App::new()
         .add_plugins((
@@ -57,7 +55,7 @@ fn main() {
                 }),
                 ..default()
             }),
-            cef_plugin(registry.clone(), dyn_registry.clone()),
+            cef_plugin(dyn_registry.clone()),
         ))
         .add_plugins((
             TerminalHandlePlugin,
@@ -83,7 +81,7 @@ fn main() {
             ImeOverlayPlugin,
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
-            ExtensionManagerPlugin::new(registry),
+            ExtensionManagerPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),
             OzmuxActionPlugin,
         ))

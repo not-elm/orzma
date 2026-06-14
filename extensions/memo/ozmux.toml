@@ -1,7 +1,0 @@
-api = ["api.ts"]
-
-[[views]]
-id = "memo.main"
-entry = "index.html"
-capabilities = ["fs"]
-interactive = true
