@@ -1,0 +1,17 @@
+[package]
+name = "tmux_control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+tmux_control_parser = { path = "../tmux_control_parser/" }
+thiserror = { workspace = true }
+crossbeam-channel = "0.5"
+portable-pty = { workspace = true }
+
+[lints]
+workspace = true
