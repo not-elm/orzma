@@ -8,4 +8,5 @@ mod event_pump;
 mod plugin;
 mod state;
 
+pub use connection::TmuxConnection;
 pub use state::ConnectionState;
