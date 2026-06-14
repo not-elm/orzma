@@ -250,7 +250,7 @@ mod tests {
 
     #[test]
     fn surface_entity_persists_across_surface_switch() {
-        use ozmux_multiplexer::{SurfaceKind, SurfaceMarker};
+        use ozmux_multiplexer::SurfaceMarker;
         let (mut app, _guard) = make_test_app();
         app.update();
         app.update();
@@ -282,9 +282,7 @@ mod tests {
                 .unwrap();
             let new_surface = app
                 .world_mut()
-                .run_system_once(move |mut mux: MultiplexerCommands| {
-                    mux.add_surface(pane, SurfaceKind::Terminal)
-                })
+                .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
                 .unwrap();
             app.world_mut().flush();
             app.world_mut()
@@ -478,7 +476,7 @@ mod tests {
     #[test]
     fn inactive_surface_persists_across_focus_switch() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, SurfaceKind, WorkspaceMarker};
+        use ozmux_multiplexer::{MultiplexerCommands, WorkspaceMarker};
 
         let (mut app, _guard) = make_test_app();
         app.update();
@@ -503,9 +501,7 @@ mod tests {
 
         let second_surface = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
             .unwrap();
         app.world_mut().flush();
 
@@ -713,8 +709,9 @@ mod tests {
                 .unwrap();
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                let ext = mux.add_surface(
-                    pane,
+                let ext = mux.add_surface(pane);
+                mux.insert_on(
+                    ext,
                     SurfaceKind::Extension {
                         entry: "/tmp".into(),
                     },

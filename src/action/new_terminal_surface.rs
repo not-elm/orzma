@@ -1,7 +1,7 @@
 //! New-terminal-surface shortcut action: adds a Terminal Surface to the
 //! active pane and focuses it when a `NewTerminalSurfaceActionEvent` fires.
 use bevy::prelude::*;
-use ozmux_multiplexer::{Cwd, MultiplexerCommands, SurfaceKind};
+use ozmux_multiplexer::{Cwd, MultiplexerCommands};
 
 /// Registers the `apply_new_terminal_surface` observer.
 pub struct NewTerminalSurfaceActionPlugin;
@@ -36,7 +36,7 @@ fn apply_new_terminal_surface(
     let seed = mux
         .panes_active_surface(active_pane)
         .and_then(|s| cwds.get(s).ok().cloned());
-    let new_surface = mux.add_surface(active_pane, SurfaceKind::Terminal);
+    let new_surface = mux.add_surface(active_pane);
     if let Some(cwd) = seed {
         commands.entity(new_surface).insert(cwd);
     }

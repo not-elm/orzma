@@ -61,9 +61,7 @@ fn apply_focus_surface(trigger: On<FocusSurfaceActionEvent>, mut mux: Multiplexe
 mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
-    use ozmux_multiplexer::{
-        ActivePane, ActiveSurface, MultiplexerCommands, MultiplexerPlugin, SurfaceKind,
-    };
+    use ozmux_multiplexer::{ActivePane, ActiveSurface, MultiplexerCommands, MultiplexerPlugin};
 
     fn setup_app() -> App {
         let mut app = App::new();
@@ -92,7 +90,7 @@ mod tests {
         // Add a second surface so we have something to cycle to.
         app.world_mut()
             .run_system_once(move |mut mux: MultiplexerCommands| {
-                let a = mux.add_surface(active_pane, SurfaceKind::Terminal);
+                let a = mux.add_surface(active_pane);
                 mux.set_active_surface(active_pane, a).unwrap();
             })
             .unwrap();

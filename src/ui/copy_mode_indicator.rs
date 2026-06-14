@@ -482,9 +482,7 @@ mod tests {
     #[test]
     fn inactive_host_parent_is_walker_skipped_workspace_entity() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{
-            AttachedWorkspace, MultiplexerCommands, SurfaceKind, WorkspaceMarker,
-        };
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 
         let (mut app, _guard) = make_ui_test_app();
         app.update();
@@ -513,9 +511,7 @@ mod tests {
 
         let second_surface = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
             .unwrap();
         app.world_mut().flush();
 

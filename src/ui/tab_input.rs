@@ -89,7 +89,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use ozmux_multiplexer::{
         ActivePane, ActiveSurface, AttachedWorkspace, MultiplexerCommands, MultiplexerPlugin, Side,
-        SplitOrientation, SurfaceKind,
+        SplitOrientation,
     };
 
     /// Builds an app running `drive_tab_clicks`, with one attached workspace whose
@@ -115,9 +115,7 @@ mod tests {
         // the active one.
         let second = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
             .unwrap();
         app.world_mut().flush();
 

@@ -399,7 +399,7 @@ mod tests {
     fn in_pane_surface_switch_slots_new_surface() {
         use crate::ui::Slotted;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind};
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
@@ -424,9 +424,7 @@ mod tests {
         // must slot the new surface (Node + Slotted) into the pane.
         let added = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
             .unwrap();
         app.world_mut().flush();
         app.world_mut()
@@ -451,7 +449,7 @@ mod tests {
     fn inactive_surface_within_active_workspace_parks_under_workspace_entity() {
         use crate::ui::Slotted;
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceKind};
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands};
 
         let (mut app, _guard) = make_test_app_v2();
         app.update();
@@ -481,9 +479,7 @@ mod tests {
 
         let second_surface = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
+            .run_system_once(move |mut mux: MultiplexerCommands| mux.add_surface(pane))
             .unwrap();
         app.world_mut().flush();
 
