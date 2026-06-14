@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn too_few_fields_errors() {
-        let out = b"$0\t1\t0\t1\n"; // only 4 fields (no name)
+        let out = b"$0\t1\t0\t1\n";
         assert!(matches!(
             SessionInfo::parse_list(out),
             Err(TmuxError::MalformedSessionList { .. })
@@ -174,8 +174,6 @@ mod tests {
 
     #[test]
     fn escaped_tab_in_name_kept_verbatim() {
-        // tmux escapes a real tab in a name to the literal `\t` (backslash + t);
-        // name-last + splitn keep it intact, no column shift.
         let out = b"$2\t1\t0\t1\tx\\ty\n";
         assert_eq!(SessionInfo::parse_list(out).unwrap()[0].name, "x\\ty");
     }
