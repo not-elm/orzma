@@ -9,12 +9,10 @@ publish.workspace = true
 
 [dependencies]
 tmux_control = { path = "../tmux_control" }
+tmux_control_parser = { path = "../tmux_control_parser" }
 bevy = { workspace = true }
 crossbeam-channel = "0.5"
 tracing = { workspace = true }
-
-[dev-dependencies]
-tmux_control_parser = { path = "../tmux_control_parser" }
 
 [lints]
 workspace = true
