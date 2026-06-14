@@ -66,6 +66,9 @@ pub struct WindowModel {
 pub struct ProjectionModel {
     /// The attached session id, once known.
     pub session: Option<SessionId>,
+    /// The attached session's name, from `%session-changed`. `None` until the
+    /// first such notification.
+    pub session_name: Option<String>,
     /// Windows in insertion order.
     pub windows: Vec<WindowModel>,
     /// The currently active pane, once known.
@@ -97,8 +100,9 @@ impl ProjectionModel {
     /// full reconcile pass for no structural change.
     pub fn apply_event(&mut self, event: &ControlEvent) -> bool {
         match event {
-            ControlEvent::SessionChanged { session, .. } => {
+            ControlEvent::SessionChanged { session, name } => {
                 self.session = Some(*session);
+                self.session_name = Some(name.clone());
                 true
             }
             ControlEvent::WindowAdd { window } => {
@@ -226,6 +230,21 @@ mod tests {
             name: "main".to_string(),
         });
         assert_eq!(m.session, Some(SessionId(3)));
+    }
+
+    #[test]
+    fn session_changed_sets_session_name() {
+        let mut m = ProjectionModel::default();
+        m.apply_event(&ControlEvent::SessionChanged {
+            session: SessionId(3),
+            name: "main".to_string(),
+        });
+        assert_eq!(m.session_name.as_deref(), Some("main"));
+        m.apply_event(&ControlEvent::SessionChanged {
+            session: SessionId(3),
+            name: "renamed".to_string(),
+        });
+        assert_eq!(m.session_name.as_deref(), Some("renamed"));
     }
 
     #[test]
