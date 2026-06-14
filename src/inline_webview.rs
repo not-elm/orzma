@@ -5,7 +5,7 @@
 //! `OzmuxInlineWebviewPlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
-use crate::control_plane::{DynSource, DynamicRegistry, WebviewOwner};
+use crate::control_plane::{DynSource, DynamicRegistry, NormalizedChord, WebviewOwner};
 use crate::input::InputPhase;
 use crate::input::mouse_buttons::resolve_pane_at_phys;
 use crate::osc_webview::NonInteractive;
@@ -27,6 +27,12 @@ use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_multiplexer::SurfaceMarker;
+
+/// The normalized passthrough chords for a mounted inline webview, copied from
+/// its registration. Read by the focused-key filter-fill and PTY-forward
+/// systems (Phase 4) off the focused child entity.
+#[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct PassthroughKeys(pub(crate) Vec<NormalizedChord>);
 
 /// Marks an inline webview entity and records its identity: the mounted
 /// `view_id` and the overlay texture `slot` (0..`OVERLAY_SLOTS`) it occupies
@@ -150,6 +156,10 @@ pub(crate) struct ResolvedWebviewMount {
     /// `(connection_id, handle)` of the registering program, used to stamp
     /// `WebviewOwner` for `window.ozmux` back-channel routing.
     pub(crate) owner: Option<(u64, String)>,
+    /// The normalized passthrough chords copied from the registration, stamped
+    /// as a `PassthroughKeys` component so the focused-key systems read them off
+    /// the webview entity without a registry lookup (design spec §C).
+    pub(crate) passthrough: Vec<NormalizedChord>,
 }
 
 /// Resolves a `mount-inline` `<handle>` against the `DynamicRegistry` (Tier 1).
@@ -175,6 +185,7 @@ pub(crate) fn resolve_mount(
         url: Some(format!("ozmux-dyn://{id}/{entry}")),
         interactive: view.interactive,
         owner: Some((view.connection_id, id.to_string())),
+        passthrough: view.passthrough.clone(),
     })
 }
 
@@ -280,6 +291,10 @@ pub(crate) fn mount_inline(
             handle,
         });
     }
+    params
+        .commands
+        .entity(webview)
+        .insert(PassthroughKeys(resolved.passthrough.clone()));
     tracing::debug!(
         view_id = %ctx.view_id,
         terminal = ?ctx.terminal_surface,
@@ -707,6 +722,7 @@ mod tests {
                 interactive,
                 owner_surface,
                 connection_id: 1,
+                passthrough: vec![],
             },
         );
     }
@@ -1884,6 +1900,7 @@ mod tests {
                 interactive: true,
                 owner_surface,
                 connection_id: 1,
+                passthrough: vec![],
             },
         );
     }
@@ -1927,6 +1944,7 @@ mod tests {
                 interactive: false,
                 owner_surface: owner,
                 connection_id: 1,
+                passthrough: vec![],
             },
         );
 
@@ -1954,6 +1972,7 @@ mod tests {
                 interactive: true,
                 owner_surface: owner,
                 connection_id: 1,
+                passthrough: vec![],
             },
         );
         let r = resolve_mount("INLINEH", owner, &dynamic).expect("inline resolves");
@@ -1974,6 +1993,7 @@ mod tests {
                 interactive: true,
                 owner_surface: terminal,
                 connection_id: 42,
+                passthrough: vec![],
             },
         );
 

@@ -4,7 +4,7 @@
 //! disconnect or surface despawn. Uses a Tokio-free reader/writer thread model.
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
-use crate::control_plane::protocol::{RegisterKind, ServerMsg};
+use crate::control_plane::protocol::{HostKeyChord, RegisterKind, ServerMsg};
 use crate::inline_webview::InlineWebview;
 use crate::osc_webview::NonInteractive;
 use bevy::prelude::*;
@@ -21,6 +21,23 @@ use std::sync::{Arc, RwLock};
 
 mod listener;
 mod protocol;
+
+/// A passthrough chord normalized to host input types: a bevy `KeyCode` plus
+/// modifier booleans. Used to suppress CEF double-delivery and to match keys
+/// for PTY forwarding (design spec §E type normalization).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NormalizedChord {
+    /// The base key as a bevy `KeyCode`.
+    pub(crate) code: KeyCode,
+    /// Alt modifier active.
+    pub(crate) alt: bool,
+    /// Ctrl modifier active.
+    pub(crate) ctrl: bool,
+    /// Shift modifier active.
+    pub(crate) shift: bool,
+    /// The Super/Command/Meta modifier (bevy calls it Super/logo).
+    pub(crate) logo: bool,
+}
 
 /// Where a dynamic view's content lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +66,10 @@ pub(crate) struct DynamicView {
     pub(crate) owner_surface: Entity,
     /// The control-plane connection that registered it.
     pub(crate) connection_id: u64,
+    /// The normalized passthrough chords for this view, derived from the
+    /// `register` wire payload. Copied onto the mounted webview entity as
+    /// `PassthroughKeys` so Phase-4 systems can read them off the focused child.
+    pub(crate) passthrough: Vec<NormalizedChord>,
 }
 
 /// Stamped on a Tier 1 inline webview entity at mount: the control-plane
@@ -518,6 +539,7 @@ fn build_view(
             root,
             entry,
             interactive,
+            passthrough,
         } => {
             let root_path = PathBuf::from(&root);
             if !root_path.is_absolute() || !root_path.is_dir() {
@@ -532,9 +554,14 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
+                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
             })
         }
-        RegisterKind::Inline { html, interactive } => {
+        RegisterKind::Inline {
+            html,
+            interactive,
+            passthrough,
+        } => {
             if html.len() > MAX_INLINE_HTML {
                 return Err("html_too_large");
             }
@@ -544,6 +571,7 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
+                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
             })
         }
     }
@@ -556,6 +584,75 @@ fn is_safe_entry(entry: &str) -> bool {
     !p.as_os_str().is_empty()
         && p.components()
             .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
+    let code = match chord.key.as_str() {
+        "tab" | "backtab" => KeyCode::Tab,
+        "f1" => KeyCode::F1,
+        "f2" => KeyCode::F2,
+        "f3" => KeyCode::F3,
+        "f4" => KeyCode::F4,
+        "f5" => KeyCode::F5,
+        "f6" => KeyCode::F6,
+        "f7" => KeyCode::F7,
+        "f8" => KeyCode::F8,
+        "f9" => KeyCode::F9,
+        "f10" => KeyCode::F10,
+        "f11" => KeyCode::F11,
+        "f12" => KeyCode::F12,
+        "0" => KeyCode::Digit0,
+        "1" => KeyCode::Digit1,
+        "2" => KeyCode::Digit2,
+        "3" => KeyCode::Digit3,
+        "4" => KeyCode::Digit4,
+        "5" => KeyCode::Digit5,
+        "6" => KeyCode::Digit6,
+        "7" => KeyCode::Digit7,
+        "8" => KeyCode::Digit8,
+        "9" => KeyCode::Digit9,
+        "a" => KeyCode::KeyA,
+        "b" => KeyCode::KeyB,
+        "c" => KeyCode::KeyC,
+        "d" => KeyCode::KeyD,
+        "e" => KeyCode::KeyE,
+        "f" => KeyCode::KeyF,
+        "g" => KeyCode::KeyG,
+        "h" => KeyCode::KeyH,
+        "i" => KeyCode::KeyI,
+        "j" => KeyCode::KeyJ,
+        "k" => KeyCode::KeyK,
+        "l" => KeyCode::KeyL,
+        "m" => KeyCode::KeyM,
+        "n" => KeyCode::KeyN,
+        "o" => KeyCode::KeyO,
+        "p" => KeyCode::KeyP,
+        "q" => KeyCode::KeyQ,
+        "r" => KeyCode::KeyR,
+        "s" => KeyCode::KeyS,
+        "t" => KeyCode::KeyT,
+        "u" => KeyCode::KeyU,
+        "v" => KeyCode::KeyV,
+        "w" => KeyCode::KeyW,
+        "x" => KeyCode::KeyX,
+        "y" => KeyCode::KeyY,
+        "z" => KeyCode::KeyZ,
+        _ => return None,
+    };
+    let mut alt = false;
+    let mut ctrl = false;
+    let mut shift = false;
+    let mut logo = false;
+    for m in &chord.mods {
+        match m.as_str() {
+            "alt" => alt = true,
+            "ctrl" => ctrl = true,
+            "shift" => shift = true,
+            "meta" => logo = true,
+            _ => {}
+        }
+    }
+    Some(NormalizedChord { code, alt, ctrl, shift, logo })
 }
 
 /// Upper bound on a single inline HTML document (4 MiB).
@@ -622,6 +719,7 @@ mod registry_tests {
                 interactive: true,
                 owner_surface: surface(1),
                 connection_id: 7,
+                passthrough: vec![],
             },
         );
         assert_eq!(reg.get("h1").map(|v| v.interactive), Some(true));
@@ -668,6 +766,7 @@ mod registry_tests {
             interactive: true,
             owner_surface: owner,
             connection_id: conn,
+            passthrough: vec![],
         }
     }
 }
@@ -698,6 +797,7 @@ mod apply_tests {
                     root: dir.path().to_string_lossy().into_owned(),
                     entry: "index.html".into(),
                     interactive: true,
+                    passthrough: vec![],
                 },
                 reply: reply_tx,
             })
@@ -742,6 +842,7 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
+                    passthrough: vec![],
                 },
                 reply: reply_tx,
             })
@@ -778,6 +879,7 @@ mod apply_tests {
                     root: "/nonexistent/abs/xyz".into(),
                     entry: "index.html".into(),
                     interactive: true,
+                    passthrough: vec![],
                 },
                 reply: reply_tx,
             })
@@ -803,6 +905,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
+                passthrough: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -846,6 +949,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 1,
+                passthrough: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -878,6 +982,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 9,
+                passthrough: vec![],
             },
         );
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
@@ -1018,6 +1123,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
+                passthrough: vec![],
             },
         );
         let mounted = app
@@ -1102,6 +1208,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 1,
+                passthrough: vec![],
             },
         );
         let child = app
@@ -1172,6 +1279,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 99,
+                passthrough: vec![],
             },
         );
         // Spawn a VALID interactive inline child that WOULD be focused if the
@@ -1241,6 +1349,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface_a,
                 connection_id: 1,
+                passthrough: vec![],
             },
         );
         // Spawn the matching interactive inline child on surface_a.
@@ -1354,5 +1463,21 @@ mod back_channel_state_tests {
         rpc.drain_webview(Entity::from_bits(1));
         assert!(rpc.take_for_connection(&a, 5).is_none());
         assert!(rpc.take_for_connection(&b, 5).is_some());
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::*;
+    use crate::control_plane::protocol::HostKeyChord;
+
+    #[test]
+    fn normalize_chord_maps_keys_and_mods() {
+        let n = normalize_chord(&HostKeyChord { mods: vec!["alt".into()], key: "h".into() }).unwrap();
+        assert_eq!(n.code, KeyCode::KeyH);
+        assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
+        assert_eq!(normalize_chord(&HostKeyChord { mods: vec![], key: "f5".into() }).unwrap().code, KeyCode::F5);
+        assert_eq!(normalize_chord(&HostKeyChord { mods: vec![], key: "tab".into() }).unwrap().code, KeyCode::Tab);
+        assert!(normalize_chord(&HostKeyChord { mods: vec![], key: "nope".into() }).is_none());
     }
 }

@@ -59,6 +59,15 @@ pub(crate) enum ClientMsg {
     },
 }
 
+/// A passthrough chord as received on the register wire (host side).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct HostKeyChord {
+    /// Modifier names: any of `alt`, `ctrl`, `shift`, `meta`.
+    pub(crate) mods: Vec<String>,
+    /// The base key: a lowercase char (`h`, `5`), or `tab`/`backtab`/`f1`..`f12`.
+    pub(crate) key: String,
+}
+
 /// The content source a `register` declares.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -72,6 +81,9 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
+        /// Chords the host passes through to PTY instead of consuming in CEF.
+        #[serde(default)]
+        passthrough: Vec<HostKeyChord>,
     },
     /// Serve a single dynamic HTML document supplied inline.
     Inline {
@@ -80,6 +92,9 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
+        /// Chords the host passes through to PTY instead of consuming in CEF.
+        #[serde(default)]
+        passthrough: Vec<HostKeyChord>,
     },
 }
 
@@ -147,6 +162,7 @@ mod tests {
                 root: "/abs".into(),
                 entry: "index.html".into(),
                 interactive: true,
+                passthrough: vec![],
             })
         );
     }
@@ -162,6 +178,7 @@ mod tests {
             ClientMsg::Register(RegisterKind::Inline {
                 html: "<h1>x</h1>".into(),
                 interactive: false,
+                passthrough: vec![],
             })
         );
     }
@@ -247,6 +264,22 @@ mod tests {
                 instance: None,
             }
         );
+    }
+
+    #[test]
+    fn parses_register_with_passthrough() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"op":"register","kind":"inline","html":"x","passthrough":[{"mods":["alt"],"key":"h"}]}"#,
+        )
+        .unwrap();
+        match m {
+            ClientMsg::Register(RegisterKind::Inline { passthrough, .. }) => {
+                assert_eq!(passthrough.len(), 1);
+                assert_eq!(passthrough[0].key, "h");
+                assert_eq!(passthrough[0].mods, vec!["alt".to_string()]);
+            }
+            _ => panic!("expected inline register"),
+        }
     }
 
     #[test]
