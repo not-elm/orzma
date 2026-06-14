@@ -21,7 +21,7 @@ use bevy::prelude::Entity;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use bevy_terminal::{TerminalKey, TerminalModifiers};
+use ozma_tty_engine::{TerminalKey, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
@@ -277,7 +277,7 @@ pub(crate) fn ime_policy_system(
 /// the page; see spec §7).
 ///
 /// Modifiers are forced to `TerminalModifiers::default()` on commit:
-/// `crates/bevy_terminal/src/input_codec.rs::encode_key` converts
+/// `crates/ozma_tty_engine/src/input_codec.rs::encode_key` converts
 /// `Text("a")` to control byte `0x01` when `ctrl` is held, which would
 /// silently corrupt a single-ASCII-letter IME commit (e.g., the
 /// macOS Character Viewer emoji path).
@@ -360,7 +360,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::window::{Ime, Window, WindowResolution};
-    use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+    use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
     use ozmux_multiplexer::MultiplexerCommands;
     use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker};
     use std::sync::{Arc, Mutex};

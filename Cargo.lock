@@ -1592,23 +1592,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bevy_terminal"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "bevy",
- "crossbeam-channel",
- "gethostname",
- "ozma_tty_renderer",
- "percent-encoding",
- "portable-pty",
- "tracing",
- "unicode-width",
- "vte",
-]
-
-[[package]]
 name = "bevy_text"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4609,6 +4592,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozma_tty_engine"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "bevy",
+ "crossbeam-channel",
+ "gethostname",
+ "ozma_tty_renderer",
+ "percent-encoding",
+ "portable-pty",
+ "tracing",
+ "unicode-width",
+ "vte",
+]
+
+[[package]]
 name = "ozma_tty_renderer"
 version = "0.1.0"
 dependencies = [
@@ -4633,13 +4633,13 @@ dependencies = [
  "bevy",
  "bevy_cef",
  "bevy_cef_core",
- "bevy_terminal",
  "cosmic-text",
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
  "libc",
  "open",
+ "ozma_tty_engine",
  "ozma_tty_renderer",
  "ozmux_configs",
  "ozmux_extension_host",

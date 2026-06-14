@@ -9,7 +9,7 @@
 
 use bevy::ecs::observer::On;
 use bevy::prelude::*;
-use bevy_terminal::{SpawnOptions, TerminalBundle, TerminalHandlePlugin};
+use ozma_tty_engine::{SpawnOptions, TerminalBundle, TerminalHandlePlugin};
 use ozma_tty_renderer::prelude::FrameSnapshot;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;

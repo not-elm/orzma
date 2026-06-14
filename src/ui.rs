@@ -957,7 +957,7 @@ mod tests {
 
     #[test]
     fn osc7_current_dir_updates_tab() {
-        use bevy_terminal::TerminalCurrentDir;
+        use ozma_tty_engine::TerminalCurrentDir;
         use ozmux_multiplexer::SurfaceMarker;
 
         let (mut app, _guard) = make_test_app();

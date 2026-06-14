@@ -64,7 +64,7 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 // this comment rather than enforced.
 fn attach_indicator_to_surface_host(
     mut commands: Commands,
-    hosts: Query<Entity, Added<bevy_terminal::TerminalHandle>>,
+    hosts: Query<Entity, Added<ozma_tty_engine::TerminalHandle>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     for host in hosts.iter() {
@@ -104,7 +104,7 @@ fn attach_indicator_to_surface_host(
 // CopyModeState. Hiding on exit is the `On<Remove, CopyModeState>`
 // observer's job (Task 7), not this poll.
 fn refresh_indicator(
-    hosts: Query<(&bevy_terminal::TerminalHandle, &Children), With<CopyModeState>>,
+    hosts: Query<(&ozma_tty_engine::TerminalHandle, &Children), With<CopyModeState>>,
     mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<CopyModeIndicator>>,
 ) {
     for (handle, children) in hosts.iter() {
@@ -159,7 +159,7 @@ mod tests {
     use super::*;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
-    use bevy_terminal::{SpawnOptions, TerminalBundle};
+    use ozma_tty_engine::{SpawnOptions, TerminalBundle};
 
     #[test]
     fn format_indicator_matches_tmux_default() {
@@ -239,7 +239,7 @@ mod tests {
         assert_eq!(indicator_count, 1, "exactly one chip after 10 ticks");
     }
 
-    use bevy_terminal::{Coalescer, TerminalHandle};
+    use ozma_tty_engine::{Coalescer, TerminalHandle};
 
     #[test]
     fn refresh_shows_when_copy_mode_state_inserted() {

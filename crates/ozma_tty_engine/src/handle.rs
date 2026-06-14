@@ -528,7 +528,7 @@ impl TerminalHandle {
     /// Returns the current value of the `pending_user_input` flag set by
     /// `write`. Exposed so cross-crate integration tests can confirm that a
     /// PTY write took place without needing to read from the PTY master.
-    /// Production code paths inside `bevy_terminal` mutate this field
+    /// Production code paths inside `ozma_tty_engine` mutate this field
     /// directly.
     pub fn pending_user_input(&self) -> bool {
         self.pending_user_input

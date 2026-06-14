@@ -1,7 +1,7 @@
 //! Bevy plugin that drives mouse-button selection. Reads
 //! `MouseButtonInput` and `CursorMoved` events, hit-tests against
 //! surface hosts, builds `ButtonEvent`s, dispatches them through
-//! `bevy_terminal::ButtonAction::route`, and applies the result.
+//! `ozma_tty_engine::ButtonAction::route`, and applies the result.
 //!
 //! State is owned by the `MouseSelectionState` resource — see spec
 //! §6.
@@ -22,7 +22,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType, Side};
+use ozma_tty_engine::{ButtonAction, CellCoord, Column, Line, Point, SelectionType, Side};
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use std::time::Instant;
 
@@ -283,7 +283,7 @@ pub(crate) fn autoscroll_period_ms(
 /// Only fires for `DragPhase::Active` drags — an `Armed` drag legitimately
 /// has no `Term::selection` because the selection has not been
 /// materialized yet, and the absence is not a wipe signal.
-fn should_drop_stale_drag(drag: &ActiveDrag, handle: &bevy_terminal::TerminalHandle) -> bool {
+fn should_drop_stale_drag(drag: &ActiveDrag, handle: &ozma_tty_engine::TerminalHandle) -> bool {
     drag.is_active() && handle.selection_type().is_none()
 }
 
@@ -301,9 +301,9 @@ fn run_autoscroll_tick(
     cell_w_phys: f32,
     configs: &ozmux_configs::mouse::MouseConfig,
     handles: &mut Query<(
-        &mut bevy_terminal::TerminalHandle,
-        &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
+        &mut ozma_tty_engine::TerminalHandle,
+        &mut ozma_tty_engine::PtyHandle,
+        &mut ozma_tty_engine::Coalescer,
     )>,
     copy_modes: &Query<(), With<CopyModeState>>,
 ) {
@@ -425,9 +425,9 @@ fn dispatch_mouse_buttons(
     mut buttons_msg: MessageReader<MouseButtonInput>,
     mut cursor_msg: MessageReader<CursorMoved>,
     mut handles: Query<(
-        &mut bevy_terminal::TerminalHandle,
-        &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
+        &mut ozma_tty_engine::TerminalHandle,
+        &mut ozma_tty_engine::PtyHandle,
+        &mut ozma_tty_engine::Coalescer,
     )>,
     mut inline_route: InlineRouteParams,
     keys: Res<ButtonInput<KeyCode>>,
@@ -465,13 +465,13 @@ fn dispatch_mouse_buttons(
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
 
     let mods = current_modifiers(&keys);
-    let proto_mods = bevy_terminal::ProtocolModifiers {
+    let proto_mods = ozma_tty_engine::ProtocolModifiers {
         shift: mods.shift,
         ctrl: mods.ctrl,
         alt: mods.alt,
         meta: mods.meta,
     };
-    let cfg = bevy_terminal::ButtonConfig {
+    let cfg = ozma_tty_engine::ButtonConfig {
         max_protocol_events_per_frame: configs.mouse.max_protocol_events_per_frame,
     };
 
@@ -482,9 +482,9 @@ fn dispatch_mouse_buttons(
 
     for ev in buttons_msg.read() {
         let bevy_button = match ev.button {
-            MouseButton::Left => bevy_terminal::MouseButtonKind::Left,
-            MouseButton::Middle => bevy_terminal::MouseButtonKind::Middle,
-            MouseButton::Right => bevy_terminal::MouseButtonKind::Right,
+            MouseButton::Left => ozma_tty_engine::MouseButtonKind::Left,
+            MouseButton::Middle => ozma_tty_engine::MouseButtonKind::Middle,
+            MouseButton::Right => ozma_tty_engine::MouseButtonKind::Right,
             _ => continue,
         };
         let Some((entity, local)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
@@ -507,7 +507,7 @@ fn dispatch_mouse_buttons(
         // preservation arm sees a non-active parent and clobbers the focus
         // one frame later) and BEFORE the click-count / selection pipeline
         // below (a consumed press must not arm a drag or bump the count).
-        if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left)
+        if matches!(bevy_button, ozma_tty_engine::MouseButtonKind::Left)
             && route_inline_left_click(
                 &mut state,
                 &mut inline_route,
@@ -532,15 +532,15 @@ fn dispatch_mouse_buttons(
             Err(_) => continue,
         };
         let (col, row, side) = cell_at_local(local, cell_w_phys, cell_h_phys, cols, rows);
-        let cell = bevy_terminal::CellCoord { col, row };
+        let cell = ozma_tty_engine::CellCoord { col, row };
 
         let kind = match ev.state {
-            ButtonState::Pressed => bevy_terminal::ButtonEventKind::Press,
-            ButtonState::Released => bevy_terminal::ButtonEventKind::Release,
+            ButtonState::Pressed => ozma_tty_engine::ButtonEventKind::Press,
+            ButtonState::Released => ozma_tty_engine::ButtonEventKind::Release,
         };
 
-        let click_count = if matches!(kind, bevy_terminal::ButtonEventKind::Press)
-            && matches!(bevy_button, bevy_terminal::MouseButtonKind::Left)
+        let click_count = if matches!(kind, ozma_tty_engine::ButtonEventKind::Press)
+            && matches!(bevy_button, ozma_tty_engine::MouseButtonKind::Left)
         {
             next_click_count(
                 &mut state,
@@ -559,7 +559,7 @@ fn dispatch_mouse_buttons(
         //       Release also skips so the PTY does not see a release
         //       without a matching press. The existing try_click_to_focus
         //       call above is preserved so the pane still focuses.
-        if matches!(bevy_button, bevy_terminal::MouseButtonKind::Left) {
+        if matches!(bevy_button, ozma_tty_engine::MouseButtonKind::Left) {
             let modifier_held = link_modifier_held(&mods);
             if modifier_held && let Ok(grid) = grids.get(entity) {
                 if let Some(uri) = should_open_at(
@@ -573,7 +573,7 @@ fn dispatch_mouse_buttons(
                     try_open_uri(uri.as_str());
                     continue;
                 }
-                if matches!(kind, bevy_terminal::ButtonEventKind::Release)
+                if matches!(kind, ozma_tty_engine::ButtonEventKind::Release)
                     && grid
                         .hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
                         .is_some()
@@ -583,7 +583,7 @@ fn dispatch_mouse_buttons(
             }
         }
 
-        let evt = bevy_terminal::ButtonEvent {
+        let evt = ozma_tty_engine::ButtonEvent {
             kind,
             button: bevy_button,
             cell,
@@ -594,7 +594,7 @@ fn dispatch_mouse_buttons(
             Ok((h, _, _)) => h.current_modes(),
             Err(_) => continue,
         };
-        let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
+        let action = ozma_tty_engine::ButtonAction::route(modes, evt, proto_mods, &cfg);
 
         apply_action(
             &mut state,
@@ -629,14 +629,14 @@ fn dispatch_mouse_buttons(
                 Ok((h, _, _)) => h.current_modes(),
                 Err(_) => return,
             };
-            let evt = bevy_terminal::ButtonEvent {
-                kind: bevy_terminal::ButtonEventKind::Drag,
-                button: bevy_terminal::MouseButtonKind::Left,
+            let evt = ozma_tty_engine::ButtonEvent {
+                kind: ozma_tty_engine::ButtonEventKind::Drag,
+                button: ozma_tty_engine::MouseButtonKind::Left,
                 cell,
                 side,
                 click_count: 1,
             };
-            let action = bevy_terminal::ButtonAction::route(modes, evt, proto_mods, &cfg);
+            let action = ozma_tty_engine::ButtonAction::route(modes, evt, proto_mods, &cfg);
             apply_action(
                 &mut state,
                 evt.kind,
@@ -851,17 +851,17 @@ fn to_viewport_point(cell: CellCoord) -> Point {
 /// Dispatches the router's `ButtonAction` against the focused entity's
 /// `TerminalHandle`. In copy mode, `vi_goto` is issued before any
 /// selection mutation so the vi cursor tracks the moving end of the
-/// selection (see `bevy_terminal::TerminalHandle::vi_goto` docs).
+/// selection (see `ozma_tty_engine::TerminalHandle::vi_goto` docs).
 fn apply_action(
     state: &mut MouseSelectionState,
-    event_kind: bevy_terminal::ButtonEventKind,
-    event_button: bevy_terminal::MouseButtonKind,
-    action: bevy_terminal::ButtonAction,
+    event_kind: ozma_tty_engine::ButtonEventKind,
+    event_button: ozma_tty_engine::MouseButtonKind,
+    action: ozma_tty_engine::ButtonAction,
     entity: Entity,
     handles: &mut Query<(
-        &mut bevy_terminal::TerminalHandle,
-        &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
+        &mut ozma_tty_engine::TerminalHandle,
+        &mut ozma_tty_engine::PtyHandle,
+        &mut ozma_tty_engine::Coalescer,
     )>,
     copy_modes: &Query<(), With<CopyModeState>>,
 ) {
@@ -876,8 +876,8 @@ fn apply_action(
     if matches!(
         (event_kind, event_button),
         (
-            bevy_terminal::ButtonEventKind::Release,
-            bevy_terminal::MouseButtonKind::Left,
+            ozma_tty_engine::ButtonEventKind::Release,
+            ozma_tty_engine::MouseButtonKind::Left,
         ),
     ) {
         state.drag = None;
@@ -1223,7 +1223,7 @@ mod tests {
 
     #[test]
     fn dispatch_translates_left_press_to_arm_drag() {
-        use bevy_terminal::{
+        use ozma_tty_engine::{
             ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind,
             ProtocolModifiers, Side, TermMode,
         };
@@ -1231,7 +1231,7 @@ mod tests {
         let evt = ButtonEvent {
             kind: ButtonEventKind::Press,
             button: MouseButtonKind::Left,
-            cell: bevy_terminal::CellCoord { col: 5, row: 5 },
+            cell: ozma_tty_engine::CellCoord { col: 5, row: 5 },
             side: Side::Left,
             click_count: 1,
         };
@@ -1248,7 +1248,7 @@ mod tests {
 
     #[test]
     fn should_drop_stale_drag_returns_false_for_armed_drag() {
-        let opts = bevy_terminal::SpawnOptions {
+        let opts = ozma_tty_engine::SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
@@ -1256,7 +1256,7 @@ mod tests {
             env: Vec::new(),
             osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
-        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let bundle = ozma_tty_engine::TerminalBundle::spawn(opts).unwrap();
         // Fresh bundle has no selection. An Armed drag should NOT be
         // considered stale (the absence of selection is expected
         // pre-materialization).
@@ -1265,8 +1265,8 @@ mod tests {
             anchor_cell: CellCoord { col: 1, row: 1 },
             last_drag_cell: None,
             phase: DragPhase::Armed {
-                ty: bevy_terminal::SelectionType::Simple,
-                anchor_side: bevy_terminal::Side::Left,
+                ty: ozma_tty_engine::SelectionType::Simple,
+                anchor_side: ozma_tty_engine::Side::Left,
             },
         };
         assert!(!super::should_drop_stale_drag(&armed, &bundle.handle));
@@ -1274,7 +1274,7 @@ mod tests {
 
     #[test]
     fn should_drop_stale_drag_returns_true_for_active_drag_with_no_selection() {
-        let opts = bevy_terminal::SpawnOptions {
+        let opts = ozma_tty_engine::SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
@@ -1282,7 +1282,7 @@ mod tests {
             env: Vec::new(),
             osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
-        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let bundle = ozma_tty_engine::TerminalBundle::spawn(opts).unwrap();
         // Active drag + no Term::selection = alacritty wiped it out
         // from under us (alt-screen swap, screen reset).
         let active = ActiveDrag {
@@ -1302,7 +1302,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.init_resource::<MouseSelectionState>();
 
-        let opts = bevy_terminal::SpawnOptions {
+        let opts = ozma_tty_engine::SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
@@ -1310,24 +1310,26 @@ mod tests {
             env: Vec::new(),
             osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
-        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let bundle = ozma_tty_engine::TerminalBundle::spawn(opts).unwrap();
         let entity = app.world_mut().spawn(bundle).id();
 
         // Seed a prior selection so ArmDrag's selection_clear is observable.
         app.world_mut()
             .run_system_once(
                 move |mut handles: Query<(
-                    &mut bevy_terminal::TerminalHandle,
-                    &mut bevy_terminal::Coalescer,
+                    &mut ozma_tty_engine::TerminalHandle,
+                    &mut ozma_tty_engine::Coalescer,
                 )>| {
                     let (mut handle, mut coalescer) = handles.get_mut(entity).unwrap();
-                    let anchor =
-                        bevy_terminal::Point::new(bevy_terminal::Line(2), bevy_terminal::Column(3));
+                    let anchor = ozma_tty_engine::Point::new(
+                        ozma_tty_engine::Line(2),
+                        ozma_tty_engine::Column(3),
+                    );
                     handle.selection_start_at(
                         &mut coalescer,
                         anchor,
-                        bevy_terminal::Side::Left,
-                        bevy_terminal::SelectionType::Simple,
+                        ozma_tty_engine::Side::Left,
+                        ozma_tty_engine::SelectionType::Simple,
                     );
                     assert!(
                         handle.selection_type().is_some(),
@@ -1341,19 +1343,19 @@ mod tests {
             .run_system_once(
                 move |mut state: ResMut<MouseSelectionState>,
                       mut handles: Query<(
-                    &mut bevy_terminal::TerminalHandle,
-                    &mut bevy_terminal::PtyHandle,
-                    &mut bevy_terminal::Coalescer,
+                    &mut ozma_tty_engine::TerminalHandle,
+                    &mut ozma_tty_engine::PtyHandle,
+                    &mut ozma_tty_engine::Coalescer,
                 )>,
                       copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
                         &mut state,
-                        bevy_terminal::ButtonEventKind::Press,
-                        bevy_terminal::MouseButtonKind::Left,
-                        bevy_terminal::ButtonAction::ArmDrag {
-                            ty: bevy_terminal::SelectionType::Simple,
+                        ozma_tty_engine::ButtonEventKind::Press,
+                        ozma_tty_engine::MouseButtonKind::Left,
+                        ozma_tty_engine::ButtonAction::ArmDrag {
+                            ty: ozma_tty_engine::SelectionType::Simple,
                             cell: CellCoord { col: 5, row: 7 },
-                            side: bevy_terminal::Side::Right,
+                            side: ozma_tty_engine::Side::Right,
                         },
                         entity,
                         &mut handles,
@@ -1369,8 +1371,8 @@ mod tests {
         assert_eq!(drag.anchor_cell, CellCoord { col: 5, row: 7 });
         match &drag.phase {
             DragPhase::Armed { ty, anchor_side } => {
-                assert!(matches!(ty, bevy_terminal::SelectionType::Simple));
-                assert!(matches!(anchor_side, bevy_terminal::Side::Right));
+                assert!(matches!(ty, ozma_tty_engine::SelectionType::Simple));
+                assert!(matches!(anchor_side, ozma_tty_engine::Side::Right));
             }
             DragPhase::Active => panic!("expected Armed phase, got Active"),
         }
@@ -1378,7 +1380,7 @@ mod tests {
         // ArmDrag also clears the prior selection on the focused pane.
         let handle = app
             .world()
-            .get::<bevy_terminal::TerminalHandle>(entity)
+            .get::<ozma_tty_engine::TerminalHandle>(entity)
             .unwrap();
         assert!(
             handle.selection_type().is_none(),
@@ -1394,7 +1396,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.init_resource::<MouseSelectionState>();
 
-        let opts = bevy_terminal::SpawnOptions {
+        let opts = ozma_tty_engine::SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
@@ -1402,7 +1404,7 @@ mod tests {
             env: Vec::new(),
             osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
-        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let bundle = ozma_tty_engine::TerminalBundle::spawn(opts).unwrap();
         let entity = app.world_mut().spawn(bundle).id();
 
         // Pre-arm a drag at (5, 7) of type Simple.
@@ -1413,8 +1415,8 @@ mod tests {
                 anchor_cell: CellCoord { col: 5, row: 7 },
                 last_drag_cell: None,
                 phase: DragPhase::Armed {
-                    ty: bevy_terminal::SelectionType::Simple,
-                    anchor_side: bevy_terminal::Side::Left,
+                    ty: ozma_tty_engine::SelectionType::Simple,
+                    anchor_side: ozma_tty_engine::Side::Left,
                 },
             });
         }
@@ -1424,18 +1426,18 @@ mod tests {
             .run_system_once(
                 move |mut state: ResMut<MouseSelectionState>,
                       mut handles: Query<(
-                    &mut bevy_terminal::TerminalHandle,
-                    &mut bevy_terminal::PtyHandle,
-                    &mut bevy_terminal::Coalescer,
+                    &mut ozma_tty_engine::TerminalHandle,
+                    &mut ozma_tty_engine::PtyHandle,
+                    &mut ozma_tty_engine::Coalescer,
                 )>,
                       copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
                         &mut state,
-                        bevy_terminal::ButtonEventKind::Drag,
-                        bevy_terminal::MouseButtonKind::Left,
-                        bevy_terminal::ButtonAction::UpdateLocalSelection {
+                        ozma_tty_engine::ButtonEventKind::Drag,
+                        ozma_tty_engine::MouseButtonKind::Left,
+                        ozma_tty_engine::ButtonAction::UpdateLocalSelection {
                             cell: CellCoord { col: 8, row: 7 },
-                            side: bevy_terminal::Side::Right,
+                            side: ozma_tty_engine::Side::Right,
                         },
                         entity,
                         &mut handles,
@@ -1568,7 +1570,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.init_resource::<MouseSelectionState>();
 
-        let opts = bevy_terminal::SpawnOptions {
+        let opts = ozma_tty_engine::SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
@@ -1576,7 +1578,7 @@ mod tests {
             env: Vec::new(),
             osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
-        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let bundle = ozma_tty_engine::TerminalBundle::spawn(opts).unwrap();
         let entity = app.world_mut().spawn(bundle).id();
 
         // Pre-arm the drag (simulating the Shift+click → ArmDrag press).
@@ -1587,8 +1589,8 @@ mod tests {
                 anchor_cell: CellCoord { col: 1, row: 1 },
                 last_drag_cell: None,
                 phase: DragPhase::Armed {
-                    ty: bevy_terminal::SelectionType::Simple,
-                    anchor_side: bevy_terminal::Side::Left,
+                    ty: ozma_tty_engine::SelectionType::Simple,
+                    anchor_side: ozma_tty_engine::Side::Left,
                 },
             });
         }
@@ -1598,16 +1600,16 @@ mod tests {
             .run_system_once(
                 move |mut state: ResMut<MouseSelectionState>,
                       mut handles: Query<(
-                    &mut bevy_terminal::TerminalHandle,
-                    &mut bevy_terminal::PtyHandle,
-                    &mut bevy_terminal::Coalescer,
+                    &mut ozma_tty_engine::TerminalHandle,
+                    &mut ozma_tty_engine::PtyHandle,
+                    &mut ozma_tty_engine::Coalescer,
                 )>,
                       copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>| {
                     super::apply_action(
                         &mut state,
-                        bevy_terminal::ButtonEventKind::Release,
-                        bevy_terminal::MouseButtonKind::Left,
-                        bevy_terminal::ButtonAction::WriteToPty(b"\x1b[<0;1;1m".to_vec()),
+                        ozma_tty_engine::ButtonEventKind::Release,
+                        ozma_tty_engine::MouseButtonKind::Left,
+                        ozma_tty_engine::ButtonAction::WriteToPty(b"\x1b[<0;1;1m".to_vec()),
                         entity,
                         &mut handles,
                         &copy_modes,
@@ -1645,8 +1647,8 @@ mod tests {
                 anchor_cell: CellCoord { col: 5, row: 5 },
                 last_drag_cell: None,
                 phase: DragPhase::Armed {
-                    ty: bevy_terminal::SelectionType::Simple,
-                    anchor_side: bevy_terminal::Side::Left,
+                    ty: ozma_tty_engine::SelectionType::Simple,
+                    anchor_side: ozma_tty_engine::Side::Left,
                 },
             });
         }
@@ -1658,9 +1660,9 @@ mod tests {
             .run_system_once(
                 |mut state: ResMut<MouseSelectionState>,
                  handles: Query<(
-                    &mut bevy_terminal::TerminalHandle,
-                    &mut bevy_terminal::PtyHandle,
-                    &mut bevy_terminal::Coalescer,
+                    &mut ozma_tty_engine::TerminalHandle,
+                    &mut ozma_tty_engine::PtyHandle,
+                    &mut ozma_tty_engine::Coalescer,
                 )>| {
                     if let Some(drag) = state.drag.as_ref()
                         && handles.get(drag.entity).is_err()
@@ -1851,7 +1853,7 @@ mod tests {
             .entity_mut(workspace)
             .insert(AttachedWorkspace);
 
-        let opts = bevy_terminal::SpawnOptions {
+        let opts = ozma_tty_engine::SpawnOptions {
             cols: 80,
             rows: 24,
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
@@ -1859,7 +1861,7 @@ mod tests {
             env: Vec::new(),
             osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
-        let bundle = bevy_terminal::TerminalBundle::spawn(opts).unwrap();
+        let bundle = ozma_tty_engine::TerminalBundle::spawn(opts).unwrap();
         let mut overlays = TerminalOverlays::default();
         overlays.rects[0] = IVec4::new(2, 3, 10, 40);
         app.world_mut().entity_mut(surface).insert((

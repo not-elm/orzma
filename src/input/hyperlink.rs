@@ -64,14 +64,14 @@ pub(crate) fn should_open_at(
     grid: &ozma_tty_renderer::schema::TerminalGrid,
     row: u16,
     col: u16,
-    button: bevy_terminal::MouseButtonKind,
-    kind: bevy_terminal::ButtonEventKind,
+    button: ozma_tty_engine::MouseButtonKind,
+    kind: ozma_tty_engine::ButtonEventKind,
     modifier_held: bool,
 ) -> Option<ozma_tty_renderer::schema::HyperlinkUri> {
-    if !modifier_held || button != bevy_terminal::MouseButtonKind::Left {
+    if !modifier_held || button != ozma_tty_engine::MouseButtonKind::Left {
         return None;
     }
-    if !matches!(kind, bevy_terminal::ButtonEventKind::Press) {
+    if !matches!(kind, ozma_tty_engine::ButtonEventKind::Press) {
         return None;
     }
     grid.hyperlink_at(row, col).map(|(_id, uri)| uri.clone())
@@ -255,7 +255,7 @@ mod tests {
     }
 
     use bevy::prelude::Color;
-    use bevy_terminal::{ButtonEventKind, MouseButtonKind};
+    use ozma_tty_engine::{ButtonEventKind, MouseButtonKind};
     use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
 
     #[test]

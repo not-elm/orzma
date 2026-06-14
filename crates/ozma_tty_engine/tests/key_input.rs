@@ -6,7 +6,7 @@
 
 use bevy::ecs::observer::On;
 use bevy::prelude::*;
-use bevy_terminal::{
+use ozma_tty_engine::{
     SpawnOptions, TerminalBundle, TerminalHandlePlugin, TerminalKey, TerminalKeyInput,
     TerminalModifiers,
 };

@@ -4,7 +4,7 @@
 //! `LabelCtx` carries the per-rebuild inputs.
 
 use crate::ui::web_title::WebTitle;
-use bevy_terminal::sanitize_title;
+use ozma_tty_engine::sanitize_title;
 use ozmux_multiplexer::{Cwd, SurfaceKind};
 use std::path::{Path, PathBuf};
 

@@ -6,7 +6,7 @@ use crate::inline_webview::{
     InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline,
 };
 use bevy::prelude::*;
-use bevy_terminal::{OscWebviewRequest, OscWebviewVerb};
+use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
 use ozmux_extension_host::ViewRegistry;
 use ozmux_multiplexer::{
     ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind, SurfaceOf,

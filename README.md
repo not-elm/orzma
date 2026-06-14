@@ -25,7 +25,7 @@ cargo run               # or: make run
 ## Layout
 
 - `src/` — the `ozmux-gui` Bevy binary
-- `crates/` — `bevy_terminal`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
+- `crates/` — `ozma_tty_engine`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
 - `sdk/typescript` — `@ozmux/sdk` (consumed by extensions)
 - `extensions/memo` — the `@memo` Node extension
 

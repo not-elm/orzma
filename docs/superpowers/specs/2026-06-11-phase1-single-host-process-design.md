@@ -210,7 +210,7 @@ Approach A の心臓部。**既存の `JsEmitEventPlugin` / `HostEmitEvent` / `P
 - host method の throw がエラーフレームになる。
 
 **統合(E2E)**
-- 同梱 `memo` 拡張で host プロセスを起動 → OSC mount → webview が `window.fs.read` を呼び期待バイト列を取得 → 未許可 namespace は reject。既存の `bevy_terminal/tests` / `extension_render` ハーネスを再利用。
+- 同梱 `memo` 拡張で host プロセスを起動 → OSC mount → webview が `window.fs.read` を呼び期待バイト列を取得 → 未許可 namespace は reject。既存の `ozma_tty_engine/tests` / `extension_render` ハーネスを再利用。
 
 **既知の注意:** 既存の IME テスト failure + 並列 teardown SIGSEGV があるため、グリーン確認は `--test-threads=1` + 該当 `--skip` を用いる。
 

@@ -1,7 +1,7 @@
 //! Bevy system that translates mouse-wheel input into either an inline
 //! webview page scroll, host scrollback adjustments, or PTY-bound mouse /
 //! arrow-key bytes via the pure router in
-//! `bevy_terminal::wheel::WheelAction::route`.
+//! `ozma_tty_engine::wheel::WheelAction::route`.
 //!
 //! Inline-webview fork (spec §7): when a `FocusedWebview` holds an inline
 //! child of the active surface AND the pointer currently sits over THAT
@@ -42,7 +42,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use bevy_terminal::{
+use ozma_tty_engine::{
     CellCoord, Coalescer, PtyHandle, TerminalHandle, WheelAction, WheelConfig, WheelModifiers,
 };
 use ozma_tty_renderer::TerminalCellMetricsResource;
