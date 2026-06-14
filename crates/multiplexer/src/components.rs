@@ -125,18 +125,6 @@ pub struct PaneDimensions {
     pub rows: u16,
 }
 
-/// The SDK-side surface id (handler-registration key) for an extension
-/// surface. Stamped by the control bridge so the handlers bridge can address
-/// `{surface_id, frame}` envelopes to the right handler set.
-#[derive(Component, Debug, Clone)]
-pub struct ExtensionSurfaceId(pub String);
-
-/// The name of the extension that owns an extension surface. Stamped by the
-/// control bridge from the split request so the renderer can resolve the
-/// webview URL host and the handlers socket per extension.
-#[derive(Component, Debug, Clone)]
-pub struct OwningExtension(pub String);
-
 /// The current working directory of a surface. For terminal surfaces this is
 /// kept live by OSC 7; other kinds carry their creation-time value. Absence
 /// means "unknown" — the terminal spawner falls back to `$HOME`.
