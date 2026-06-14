@@ -1,14 +1,14 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! ratatui widget + RPC handler for embedding an ozmux inline webview.
+//!
+//! Run inside an ozmux pane: [`Ozma::connect`] dials `$OZMUX_SOCK`, [`Webview`]
+//! registers content (minting a handle), [`WebviewWidget`] renders it as a
+//! ratatui widget, and [`Ozma::flush`] emits the mount OSC after each draw.
+#![warn(missing_docs)]
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+mod error;
+mod handler;
+mod osc;
+mod protocol;
+mod session;
+mod webview;
+mod widget;
