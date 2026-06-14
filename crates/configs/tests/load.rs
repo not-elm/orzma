@@ -33,8 +33,8 @@ async fn empty_file_yields_defaults() {
         defaults.shortcuts.bindings.iter().count()
     );
     assert!(
-        configs.shortcuts.bindings.close_pane.is_some(),
-        "close-pane must have a default binding"
+        configs.shortcuts.bindings.paste.is_some(),
+        "paste must have a default binding"
     );
 }
 

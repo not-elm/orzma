@@ -1,6 +1,5 @@
 //! ozmux Bevy GUI entry point.
 
-mod action;
 mod bootstrap;
 mod clipboard;
 mod configs;
@@ -18,7 +17,6 @@ mod tmux_render;
 mod ui;
 mod webview_render;
 
-use crate::action::OzmuxActionPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
@@ -95,7 +93,6 @@ fn main() {
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),
-            OzmuxActionPlugin,
         ))
         .run();
 }

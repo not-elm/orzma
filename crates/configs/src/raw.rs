@@ -95,8 +95,10 @@ close-pane = "Cmd+Shift+W"
         let close = merged.shortcuts.bindings.close_pane.as_ref().unwrap();
         assert_eq!(close.key, crate::shortcuts::Key::Char('w'));
         assert!(close.modifiers.meta && close.modifiers.shift);
-        let focus_left = merged.shortcuts.bindings.focus_pane_left.as_ref().unwrap();
-        assert_eq!(focus_left.key, crate::shortcuts::Key::Char('h'));
+        assert!(
+            merged.shortcuts.bindings.focus_pane_left.is_none(),
+            "unspecified deprecated bindings stay None",
+        );
     }
 
     #[test]
@@ -209,7 +211,7 @@ program = "/usr/local/bin/tmux"
     fn validate_detects_chord_conflict() {
         let toml_str = r#"
 [shortcuts.bindings]
-close-pane = "Cmd+J"
+release-inline-focus = "Cmd+V"
 "#;
         let raw: RawConfigs = toml::from_str(toml_str).unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
@@ -217,8 +219,8 @@ close-pane = "Cmd+J"
         match err {
             OzmuxConfigsError::DuplicateChords(dupes) => {
                 assert_eq!(dupes.len(), 1);
-                assert!(dupes[0].actions.contains(&"close-pane"));
-                assert!(dupes[0].actions.contains(&"focus-pane-down"));
+                assert!(dupes[0].actions.contains(&"paste"));
+                assert!(dupes[0].actions.contains(&"release-inline-focus"));
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
         }
