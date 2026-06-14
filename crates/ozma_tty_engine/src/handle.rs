@@ -26,7 +26,7 @@ use alacritty_terminal::vte::ansi::{Color as AColor, Rgb};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Commands;
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use ozma_tty_renderer::prelude::{Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -114,7 +114,6 @@ pub struct TerminalHandle {
 
 impl TerminalHandle {
     /// Constructs a fresh handle from the matched dims + channel set.
-    /// Called only from `TerminalBundle::spawn`.
     pub(crate) fn new(
         cols: u16,
         rows: u16,
@@ -161,6 +160,31 @@ impl TerminalHandle {
             osc_webview_parser: Parser::new(),
             osc_webview: OscWebviewCapture::new(gate),
         }
+    }
+
+    /// Constructs a PTY-less handle.
+    ///
+    /// Same VT bridge as [`TerminalBundle::spawn`] minus the PTY, child
+    /// process, and reader thread. Used for terminals whose bytes arrive from
+    /// an external source (e.g. tmux `%output`).
+    pub fn detached(cols: u16, rows: u16, gate: Arc<AtomicBool>) -> Self {
+        let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
+        let (control_tx, control_rx) = unbounded::<ControlFrame>();
+        let listener = TermListener {
+            reply_tx,
+            control_tx: control_tx.clone(),
+        };
+        Self::new(cols, rows, listener, reply_rx, control_rx, control_tx, gate)
+    }
+
+    /// Drains and returns any pending alacritty `PtyWrite` reply bytes
+    /// (DSR / DA answers). A detached handle has no PTY to write them to;
+    /// the caller forwards them to the external program (tmux input) or
+    /// discards them.
+    pub fn take_replies(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        self.drain_replies_into(&mut buf);
+        buf
     }
 
     /// Feeds a chunk of PTY bytes through the vte parsers into `Term`.
@@ -2535,6 +2559,30 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "8-bit C1 OSC introducer must not reach the capture (spec section 2: 7-bit ESC ] only)"
+        );
+    }
+
+    #[test]
+    fn detached_handle_advances_without_pty() {
+        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        h.advance(b"hi");
+        let (cols, rows, _cursor) = h.read_geometry();
+        assert_eq!((cols, rows), (20, 5));
+        assert!(h.take_replies().is_empty());
+    }
+
+    #[test]
+    fn take_replies_returns_alacritty_reply_bytes() {
+        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        h.advance(b"\x1b[5n");
+        let replies = h.take_replies();
+        assert!(
+            !replies.is_empty(),
+            "DSR query should elicit a device-status reply"
+        );
+        assert!(
+            h.take_replies().is_empty(),
+            "replies are drained, not re-read"
         );
     }
 }
