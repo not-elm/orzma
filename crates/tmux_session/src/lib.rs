@@ -6,8 +6,10 @@
 mod connection;
 mod event_pump;
 mod plugin;
+mod select;
 mod state;
 
 pub use connection::TmuxConnection;
 pub use plugin::TmuxSessionPlugin;
+pub use select::{AttachTarget, select_attach_target};
 pub use state::ConnectionState;
