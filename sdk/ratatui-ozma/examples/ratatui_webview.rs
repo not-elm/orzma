@@ -1,7 +1,9 @@
 //! Run inside an ozmux pane: `cargo run -p ratatui-ozma --example ratatui_webview`.
 //!
-//! Renders a webview widget in the alternate screen, replies to `ping`, and
-//! emits a `tick` event every second. Press `q` to quit.
+//! Renders a webview widget and a native status panel side-by-side in the
+//! alternate screen. Replies to `ping`, emits a `tick` event every second, and
+//! demonstrates a `FocusManager` ring: use `Alt+h/l` to move focus between the
+//! webview and the status panel, and press `q` to quit.
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode};
@@ -11,7 +13,7 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::layout::{Constraint, Layout};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui_ozma::{Ozma, RpcError, Webview, WebviewHandle, WebviewWidget};
+use ratatui_ozma::{FocusManager, Ozma, RpcError, Webview, WebviewHandle, WebviewWidget, focusable};
 use std::io::stdout;
 use std::time::{Duration, Instant};
 
@@ -25,14 +27,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "window.ozmux.on('tick',n=>tick.textContent='tick #'+n);",
         "</script></body>"
     );
-    let view = ozma.register(Webview::inline(html).on("ping", |(arg,): (String,)| {
-        Ok::<_, RpcError>(format!("pong:{arg}"))
-    }))?;
+
+    let mut focus = FocusManager::new();
+    let view = ozma.register(focusable(
+        Webview::inline(html).on("ping", |(arg,): (String,)| {
+            Ok::<_, RpcError>(format!("pong:{arg}"))
+        }),
+        focus.signal_sender(),
+    ))?;
+
+    focus.add_webview_at("web", view.clone(), ratatui::layout::Rect::default());
+    focus.add_native_at("status", ratatui::layout::Rect::default());
 
     enable_raw_mode()?;
     if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
-        // EnterAlternateScreen failed after raw mode was enabled — undo it so the
-        // shell isn't left in raw mode.
+        // NOTE: EnterAlternateScreen failed after raw mode was enabled — undo it so
+        // the shell isn't left in raw mode.
         let _ = disable_raw_mode();
         return Err(e.into());
     }
@@ -41,11 +51,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
         let mut n: u64 = 0;
         let mut last = Instant::now();
-        run(&mut terminal, &mut ozma, &view, &mut n, &mut last)
+        run(&mut terminal, &mut ozma, &view, &mut focus, &mut n, &mut last)
     })();
 
-    // Always restore the terminal; ignore teardown errors so the real outcome in
-    // `result` surfaces rather than a cleanup error masking it.
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen);
     result
@@ -55,21 +63,38 @@ fn run(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     ozma: &mut Ozma,
     view: &WebviewHandle,
+    focus: &mut FocusManager,
     n: &mut u64,
     last: &mut Instant,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
+        for sync in focus.drain() {
+            sync.apply(ozma)?;
+        }
+
         terminal.draw(|f| {
             let rows =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(f.area());
-            f.render_widget(Paragraph::new("press q to quit"), rows[0]);
+            f.render_widget(Paragraph::new("Alt+h/l to move focus, q to quit"), rows[0]);
             let cols =
                 Layout::horizontal([Constraint::Percentage(60), Constraint::Min(0)]).split(rows[1]);
+            focus.set_rect("web", cols[0]);
+            focus.set_rect("status", cols[1]);
+            let web_focused = focus.is_focused("web");
+            let status_focused = focus.is_focused("status");
             f.render_stateful_widget(
-                WebviewWidget::new(view.id()).fallback(Block::bordered().title("loading…")),
+                WebviewWidget::new(view.id())
+                    .focused(web_focused)
+                    .fallback(Block::bordered().title("loading…")),
                 cols[0],
                 ozma.frame(),
             );
+            let style = if status_focused {
+                ratatui::style::Style::default().fg(ratatui::style::Color::Yellow)
+            } else {
+                ratatui::style::Style::default()
+            };
+            f.render_widget(Paragraph::new("status panel").style(style), cols[1]);
         })?;
         ozma.flush(terminal)?;
 
@@ -78,11 +103,18 @@ fn run(
             let _ = view.emit("tick", n);
             *last = Instant::now();
         }
+
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(k) = event::read()?
-            && k.code == KeyCode::Char('q')
         {
-            return Ok(());
+            if k.code == KeyCode::Char('q') {
+                return Ok(());
+            }
+            if focus.focused_is_native()
+                && let Some(dir) = FocusManager::nav_key(&k)
+            {
+                focus.navigate(dir).apply(ozma)?;
+            }
         }
     }
 }
