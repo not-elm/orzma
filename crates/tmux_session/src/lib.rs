@@ -31,3 +31,4 @@ pub use plugin::{TmuxProjectionSet, TmuxSessionPlugin};
 pub use reconcile::TmuxProjection;
 pub use select::{AttachTarget, select_attach_target};
 pub use state::ConnectionState;
+pub use tmux_control_parser::WindowId;

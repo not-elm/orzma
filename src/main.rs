@@ -44,6 +44,7 @@ use tmux_picker::OzmuxTmuxPickerPlugin;
 use tmux_render::OzmuxTmuxRenderPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::tmux_dialog::TmuxDialogPlugin;
+use ui::tmux_window_bar::OzmuxTmuxWindowBarPlugin;
 use ui::{
     OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
     tab_input::TabInteractionPlugin,
@@ -84,6 +85,7 @@ fn main() {
         .add_plugins(TmuxDialogPlugin)
         .add_plugins(OzmuxTmuxRenderPlugin)
         .add_plugins(OzmuxTmuxInputPlugin)
+        .add_plugins(OzmuxTmuxWindowBarPlugin)
         .add_plugins((
             MouseWheelInputPlugin,
             MouseButtonsInputPlugin,

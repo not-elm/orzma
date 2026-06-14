@@ -34,7 +34,7 @@ pub(crate) mod tab_input;
 pub(crate) mod tab_label;
 pub mod terminal;
 pub(crate) mod tmux_dialog;
-mod tmux_window_bar;
+pub(crate) mod tmux_window_bar;
 pub mod workspace;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
@@ -108,7 +108,8 @@ impl Plugin for OzmuxUiPlugin {
             ))
             .add_systems(
                 Update,
-                status_bar_sync::rebuild_status_bar_on_workspace_set_change,
+                status_bar_sync::rebuild_status_bar_on_workspace_set_change
+                    .run_if(not(status_bar_sync::tmux_projection_present)),
             );
     }
 }
