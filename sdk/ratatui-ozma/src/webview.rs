@@ -1,6 +1,6 @@
 //! Webview builder and registered handle.
 
-use crate::error::OzmaError;
+use crate::error::OzmaResult;
 use crate::handler::{BoxedHandler, make_handler};
 use crate::protocol::{ClientMsg, RegisterKind};
 use serde::Serialize;
@@ -86,7 +86,7 @@ impl WebviewHandle {
     /// Pushes an event to the currently-mounted page(s) of this handle.
     ///
     /// Mount-scoped: a no-op (still `Ok`) when nothing is mounted.
-    pub fn emit<T: Serialize>(&self, event: &str, payload: &T) -> Result<(), OzmaError> {
+    pub fn emit<T: Serialize>(&self, event: &str, payload: &T) -> OzmaResult<()> {
         let msg = ClientMsg::Emit {
             handle: self.id.clone(),
             event: event.to_owned(),

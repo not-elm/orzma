@@ -13,7 +13,7 @@ mod session;
 mod webview;
 mod widget;
 
-pub use error::{OzmaError, RpcError};
+pub use error::{OzmaError, OzmaResult, RpcError};
 pub use session::Ozma;
 pub use webview::{Webview, WebviewHandle};
 pub use widget::{Blank, WebviewWidget};

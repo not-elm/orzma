@@ -1,8 +1,8 @@
 //! The Ozma session: socket connection, reader thread, flush.
 
-use crate::error::OzmaError;
+use crate::error::{OzmaError, OzmaResult};
 use crate::handler::BoxedHandler;
-use crate::osc::{clamp_dims, cursor_to, mount_inline, unmount_inline};
+use crate::osc::{clamp_dims, cursor_to, mount_inline, unmount_inline, valid_handle};
 use crate::protocol::{ClientMsg, IncomingCall, RegisterReply};
 use crate::webview::{SharedWriter, Webview, WebviewHandle};
 use crossbeam_channel::{Sender, bounded};
@@ -46,12 +46,18 @@ pub(crate) struct FlushState {
 }
 
 type HandlerRegistry = Arc<Mutex<HashMap<String, Arc<HashMap<String, BoxedHandler>>>>>;
-type PendingRegisters = Arc<Mutex<VecDeque<Sender<Result<String, OzmaError>>>>>;
+type PendingRegisters = Arc<Mutex<VecDeque<PendingRegister>>>;
+
+/// One in-flight `register` awaiting its untagged reply: the oneshot to wake the
+/// caller, plus the handlers to install once the control plane mints the handle.
+struct PendingRegister {
+    reply: Sender<OzmaResult<String>>,
+    handlers: Arc<HashMap<String, BoxedHandler>>,
+}
 
 /// An ozmux session: owns the control-socket connection and reader thread.
 pub struct Ozma {
     writer: SharedWriter,
-    handlers: HandlerRegistry,
     pending: PendingRegisters,
     frame: FramePlacements,
     flush_state: FlushState,
@@ -60,7 +66,7 @@ pub struct Ozma {
 impl Ozma {
     /// Connects to `$OZMUX_SOCK`, performs the `hello` handshake, and spawns the
     /// background reader thread.
-    pub fn connect() -> Result<Self, OzmaError> {
+    pub fn connect() -> OzmaResult<Self> {
         let sock = std::env::var("OZMUX_SOCK").map_err(|_| OzmaError::NotInPane("OZMUX_SOCK"))?;
         let token =
             std::env::var("OZMUX_TOKEN").map_err(|_| OzmaError::NotInPane("OZMUX_TOKEN"))?;
@@ -80,7 +86,6 @@ impl Ozma {
 
         Ok(Self {
             writer,
-            handlers,
             pending,
             frame: FramePlacements::default(),
             flush_state: FlushState::default(),
@@ -88,23 +93,28 @@ impl Ozma {
     }
 
     /// Registers a webview, blocking until the control plane mints its handle.
-    pub fn register(&self, webview: Webview) -> Result<WebviewHandle, OzmaError> {
+    pub fn register(&self, webview: Webview) -> OzmaResult<WebviewHandle> {
+        let Webview { kind, handlers } = webview;
         let (tx, rx) = bounded(1);
-        let line = serde_json::to_string(&ClientMsg::Register(webview.kind))?;
+        let line = serde_json::to_string(&ClientMsg::Register(kind))?;
         {
             let mut w = self.writer.lock()?;
-            // NOTE: push the pending sender while holding the writer lock so the
+            // NOTE: push the pending entry while holding the writer lock so the
             // FIFO order matches the on-wire order — register replies are untagged,
             // so concurrent registrants would otherwise mismatch their handles.
-            self.pending.lock()?.push_back(tx);
-            writeln!(w, "{line}")?;
-            w.flush()?;
+            self.pending.lock()?.push_back(PendingRegister {
+                reply: tx,
+                handlers: Arc::new(handlers),
+            });
+            if let Err(e) = writeln!(w, "{line}").and_then(|()| w.flush()) {
+                // The register never went out, so no reply will arrive for this
+                // entry; drop it so it can't consume a later registrant's reply.
+                self.pending.lock()?.pop_back();
+                return Err(e.into());
+            }
         }
 
         let handle = rx.recv().map_err(|_| OzmaError::Disconnected)??;
-        self.handlers
-            .lock()?
-            .insert(handle.clone(), Arc::new(webview.handlers));
         Ok(WebviewHandle::new(handle, self.writer.clone()))
     }
 
@@ -115,10 +125,7 @@ impl Ozma {
     }
 
     /// Emits mount/unmount OSC for this frame's placements, after `terminal.draw()`.
-    pub fn flush<B: Backend + Write>(
-        &mut self,
-        terminal: &mut Terminal<B>,
-    ) -> Result<(), OzmaError> {
+    pub fn flush<B: Backend + Write>(&mut self, terminal: &mut Terminal<B>) -> OzmaResult<()> {
         let placements = std::mem::take(&mut self.frame.placements);
         let result = flush_placements(terminal.backend_mut(), &mut self.flush_state, &placements);
         self.frame.placements = placements;
@@ -132,10 +139,14 @@ pub(crate) fn flush_placements(
     out: &mut impl Write,
     state: &mut FlushState,
     placements: &[Placement],
-) -> Result<(), OzmaError> {
+) -> OzmaResult<()> {
     let mut current: HashMap<String, (u16, u16, u16, u16)> = HashMap::new();
     for p in placements {
-        if p.area.width == 0 || p.area.height == 0 {
+        // Skip degenerate rects and invalid handles so a single bad placement
+        // can't abort the whole flush (which would also desync flush state for
+        // every later placement). An invalid handle never came from a minted
+        // WebviewHandle, so it can never mount.
+        if p.area.width == 0 || p.area.height == 0 || !valid_handle(&p.handle) {
             continue;
         }
         let (rows, cols) = clamp_dims(p.area.height, p.area.width);
@@ -184,19 +195,37 @@ fn spawn_reader(
                     dispatch_call(&writer, &handlers, call);
                 }
             } else if let Ok(reply) = serde_json::from_str::<RegisterReply>(trimmed)
-                && let Some(tx) = pending.lock().ok().and_then(|mut q| q.pop_front())
+                && let Some(reg) = pending.lock().ok().and_then(|mut q| q.pop_front())
             {
                 let outcome = if reply.ok {
-                    reply.handle.ok_or_else(|| OzmaError::Register {
-                        reason: "missing handle".into(),
-                    })
+                    match reply.handle {
+                        // Install handlers under the minted handle on this thread,
+                        // before the next line is read, so a `call` pipelined right
+                        // after the reply finds its handlers rather than racing the
+                        // registrant's main thread.
+                        Some(h) => {
+                            if let Ok(mut map) = handlers.lock() {
+                                map.insert(h.clone(), reg.handlers);
+                            }
+                            Ok(h)
+                        }
+                        None => Err(OzmaError::Register {
+                            reason: "missing handle".into(),
+                        }),
+                    }
                 } else {
                     Err(OzmaError::Register {
                         reason: reply.error.unwrap_or_else(|| "unknown".into()),
                     })
                 };
-                let _ = tx.send(outcome);
+                let _ = reg.reply.send(outcome);
             }
+        }
+        // The socket closed: drop every pending sender so any in-flight
+        // register() waiter returns OzmaError::Disconnected instead of blocking
+        // forever on a reply that will never arrive.
+        if let Ok(mut q) = pending.lock() {
+            q.clear();
         }
     });
 }
@@ -209,7 +238,13 @@ fn dispatch_call(writer: &SharedWriter, handlers: &HandlerRegistry, call: Incomi
         .and_then(|methods| methods.get(&call.method).cloned());
 
     let result = match handler {
-        Some(h) => h(call.args).map_err(|e| e.message().to_owned()),
+        // A user handler runs on this reader thread; isolate panics so one bad
+        // handler can't unwind the thread and silence all future RPC + register
+        // replies. A panicked handler reports as a rejected call.
+        Some(h) => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h(call.args))) {
+            Ok(r) => r.map_err(|e| e.message().to_owned()),
+            Err(_) => Err("handler panicked".to_owned()),
+        },
         None => Err("unknown_method".to_owned()),
     };
 

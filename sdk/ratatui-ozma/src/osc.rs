@@ -1,6 +1,6 @@
 //! OSC 5379 and CUP escape-sequence builders.
 
-use crate::error::OzmaError;
+use crate::error::{OzmaError, OzmaResult};
 
 /// Max inline-webview rows accepted by the VT layer (`1..=MAX_ROWS`).
 pub(crate) const MAX_ROWS: u16 = 200;
@@ -9,7 +9,7 @@ pub(crate) const MAX_COLS: u16 = 400;
 
 /// Returns the `mount-inline` OSC 5379 sequence, or an error if the handle
 /// charset is invalid or the dimensions are out of range.
-pub(crate) fn mount_inline(handle: &str, rows: u16, cols: u16) -> Result<String, OzmaError> {
+pub(crate) fn mount_inline(handle: &str, rows: u16, cols: u16) -> OzmaResult<String> {
     validate_handle(handle)?;
     if !(1..=MAX_ROWS).contains(&rows) || !(1..=MAX_COLS).contains(&cols) {
         return Err(OzmaError::Register {
@@ -36,12 +36,16 @@ pub(crate) fn clamp_dims(rows: u16, cols: u16) -> (u16, u16) {
     (rows.clamp(1, MAX_ROWS), cols.clamp(1, MAX_COLS))
 }
 
-fn validate_handle(handle: &str) -> Result<(), OzmaError> {
-    let ok = (1..=128).contains(&handle.len())
+/// Returns whether a view handle matches the `^[A-Za-z0-9._-]{1,128}$` charset.
+pub(crate) fn valid_handle(handle: &str) -> bool {
+    (1..=128).contains(&handle.len())
         && handle
             .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'));
-    if ok {
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+fn validate_handle(handle: &str) -> OzmaResult<()> {
+    if valid_handle(handle) {
         Ok(())
     } else {
         Err(OzmaError::Register {

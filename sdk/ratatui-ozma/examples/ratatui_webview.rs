@@ -30,15 +30,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }))?;
 
     enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen)?;
-    let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+    if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
+        // EnterAlternateScreen failed after raw mode was enabled — undo it so the
+        // shell isn't left in raw mode.
+        let _ = disable_raw_mode();
+        return Err(e.into());
+    }
 
-    let mut n: u64 = 0;
-    let mut last = Instant::now();
-    let result = run(&mut terminal, &mut ozma, &view, &mut n, &mut last);
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+        let mut n: u64 = 0;
+        let mut last = Instant::now();
+        run(&mut terminal, &mut ozma, &view, &mut n, &mut last)
+    })();
 
-    disable_raw_mode()?;
-    execute!(stdout(), LeaveAlternateScreen)?;
+    // Always restore the terminal; ignore teardown errors so the real outcome in
+    // `result` surfaces rather than a cleanup error masking it.
+    let _ = disable_raw_mode();
+    let _ = execute!(stdout(), LeaveAlternateScreen);
     result
 }
 

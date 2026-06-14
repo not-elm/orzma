@@ -67,6 +67,41 @@ impl FakeServer {
         }
     }
 
+    /// Binds a socket, accepts one client, then closes the connection upon
+    /// receiving the first `register` WITHOUT replying — exercises the
+    /// reader-thread disconnect / pending-drain path.
+    pub fn start_dropping() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("control.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let (_recv_tx, received) = mpsc::channel::<Value>();
+        let (to_client, _client_rx) = mpsc::channel::<Value>();
+
+        thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if let Ok(v) = serde_json::from_str::<Value>(line.trim())
+                    && v["op"] == "register"
+                {
+                    break;
+                }
+            }
+        });
+
+        Self {
+            sock_path,
+            received,
+            to_client,
+            _dir: dir,
+        }
+    }
+
     /// Pushes a raw JSON line to the connected client.
     pub fn send(&self, v: Value) {
         self.to_client.send(v).unwrap();

@@ -2,6 +2,9 @@
 
 use std::sync::PoisonError;
 
+/// A `Result` whose error is [`OzmaError`].
+pub type OzmaResult<T> = Result<T, OzmaError>;
+
 /// An error from the ratatui-ozma SDK.
 #[derive(Debug, thiserror::Error)]
 pub enum OzmaError {
