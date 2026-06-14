@@ -259,9 +259,13 @@ fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Ve
     if no_server {
         Ok(Vec::new())
     } else {
-        Err(TmuxError::Spawn(std::io::Error::other(
-            stderr.trim().to_string(),
-        )))
+        let message = stderr.trim();
+        let message = if message.is_empty() {
+            "tmux list-sessions failed"
+        } else {
+            message
+        };
+        Err(TmuxError::Spawn(std::io::Error::other(message.to_string())))
     }
 }
 
@@ -655,6 +659,15 @@ mod tests {
     fn classify_real_error_is_err() {
         let stderr = b"error connecting to /tmp/tmux-501/foo (Operation not permitted)\n";
         assert!(classify_list_result(false, b"", stderr).is_err());
+    }
+
+    #[test]
+    fn classify_blank_stderr_still_has_message() {
+        let err = classify_list_result(false, b"", b"").unwrap_err();
+        let TmuxError::Spawn(io) = err else {
+            panic!("expected Spawn");
+        };
+        assert!(!io.to_string().is_empty());
     }
 
     #[test]

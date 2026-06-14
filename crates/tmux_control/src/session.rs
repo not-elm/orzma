@@ -29,7 +29,10 @@ impl SessionInfo {
     /// Parses the tab-separated `list-sessions -F` output (one session per line).
     pub fn parse_list(output: &[u8]) -> TmuxResult<Vec<SessionInfo>> {
         let mut sessions = Vec::new();
-        for line in output.split(|&b| b == b'\n') {
+        for mut line in output.split(|&b| b == b'\n') {
+            if let [rest @ .., b'\r'] = line {
+                line = rest;
+            }
             if line.is_empty() {
                 continue;
             }
@@ -128,6 +131,12 @@ mod tests {
         let with = SessionInfo::parse_list(b"$0\t1\t0\t1\tx\n").unwrap();
         let without = SessionInfo::parse_list(b"$0\t1\t0\t1\tx").unwrap();
         assert_eq!(with, without);
+    }
+
+    #[test]
+    fn crlf_trailing_cr_stripped_from_name() {
+        let out = b"$0\t1\t0\t1\tmain\r\n";
+        assert_eq!(SessionInfo::parse_list(out).unwrap()[0].name, "main");
     }
 
     #[test]
