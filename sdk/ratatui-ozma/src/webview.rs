@@ -85,10 +85,16 @@ impl Webview {
 }
 
 /// A registered webview handle: emit events to the page, read its id.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WebviewHandle {
     id: String,
     writer: SharedWriter,
+}
+
+impl PartialEq for WebviewHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
 }
 
 impl WebviewHandle {

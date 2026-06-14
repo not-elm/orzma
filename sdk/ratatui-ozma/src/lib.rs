@@ -6,6 +6,7 @@
 #![warn(missing_docs)]
 
 mod error;
+mod focus;
 mod handler;
 mod osc;
 mod protocol;
@@ -14,6 +15,7 @@ mod webview;
 mod widget;
 
 pub use error::{OzmaError, OzmaResult, RpcError};
+pub use focus::{Direction, FocusManager, FocusSync};
 pub use session::Ozma;
 pub use webview::{Webview, WebviewHandle};
 pub use widget::{Blank, WebviewWidget};
