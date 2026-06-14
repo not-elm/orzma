@@ -27,6 +27,7 @@ pub(crate) struct Placement {
 pub struct FramePlacements {
     placements: Vec<Placement>,
     natives: Vec<(String, Rect)>,
+    focused: Option<String>,
 }
 
 impl FramePlacements {
@@ -44,9 +45,26 @@ impl FramePlacements {
         self.placements.push(Placement { handle, area });
     }
 
+    /// Marks `handle` focused for this frame. Last writer wins; a debug build
+    /// trips an assertion if more than one widget claims focus in a single frame
+    /// (the app must focus at most one webview at a time).
+    pub(crate) fn set_focused(&mut self, handle: String) {
+        debug_assert!(
+            self.focused.is_none(),
+            "multiple webviews marked focused in one frame (last wins): had {:?}, now {handle:?}",
+            self.focused
+        );
+        self.focused = Some(handle);
+    }
+
     #[cfg(test)]
     pub(crate) fn placements_for_test(&self) -> &[Placement] {
         &self.placements
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focused_for_test(&self) -> Option<&str> {
+        self.focused.as_deref()
     }
 }
 
@@ -133,6 +151,7 @@ impl Ozma {
     pub fn frame(&mut self) -> &mut FramePlacements {
         self.frame.placements.clear();
         self.frame.natives.clear();
+        self.frame.focused = None;
         &mut self.frame
     }
 

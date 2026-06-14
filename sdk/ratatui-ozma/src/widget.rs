@@ -60,6 +60,9 @@ impl<W: Widget> StatefulWidget for WebviewWidget<'_, W> {
         Clear.render(area, buf);
         self.fallback.render(area, buf);
         state.record(self.handle.to_owned(), area);
+        if self.focused {
+            state.set_focused(self.handle.to_owned());
+        }
     }
 }
 
@@ -130,5 +133,33 @@ mod tests {
             .focused(true)
             .render(area, &mut buf, &mut state);
         assert_eq!(state.placements_for_test().len(), 1);
+    }
+
+    #[test]
+    fn focused_render_records_focused_handle() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+        WebviewWidget::new("v").focused(true).render(area, &mut buf, &mut state);
+        assert_eq!(state.focused_for_test(), Some("v"));
+    }
+
+    #[test]
+    fn unfocused_render_records_no_focus() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+        WebviewWidget::new("v").render(area, &mut buf, &mut state);
+        assert_eq!(state.focused_for_test(), None);
     }
 }
