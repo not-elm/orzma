@@ -13,4 +13,5 @@ mod session;
 mod webview;
 mod widget;
 
+pub use session::Ozma;
 pub use webview::{Webview, WebviewHandle};
