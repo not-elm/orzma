@@ -383,15 +383,10 @@ Replace removed-feature comment wording. Do NOT touch genuine "file extension" /
 
 - [ ] **Step 1: Root `Cargo.toml` feature comment**
 
-In `Cargo.toml`, change line 17 from:
+In `Cargo.toml`, the comment currently wraps as `… for inspecting the embedded` / `extension webview. Off by default …`. Drop the word `extension` (the prior line already says "embedded") so it reads:
 
 ```toml
-# extension webview. Off by default so the endpoint is not exposed in normal
-```
-
-to:
-
-```toml
+# Chromium DevTools/CDP endpoint on 127.0.0.1:9222) for inspecting the
 # embedded webview. Off by default so the endpoint is not exposed in normal
 ```
 
@@ -449,7 +444,7 @@ In `src/clipboard.rs`, line 203: `/// selection or a missing `TerminalHandle` (e
 Apply these exact replacements:
 
 - Line 494: `// Click-to-focus runs for EVERY pane kind (terminal, extension)` → `// Click-to-focus runs for EVERY pane kind (terminal, webview)`
-- Line 496: `// `continue`s past panes with no `TerminalHandle` (extension` → `// `continue`s past panes with no `TerminalHandle` (webview`
+- Lines 496–497: the parenthetical `(extension` / `webviews)` wraps across two lines. Change BOTH words so it reads `(webview` / `panes)` — i.e. `(extension` → `(webview` on line 496 and `webviews),` → `panes),` on line 497. (Result: "(webview panes)".)
 - Line 1686: `// Regression: clicking an extension pane — a Surface entity` → `// Regression: clicking a webview pane — a Surface entity`
 
 - [ ] **Step 8: Verify build, tests, fmt, clippy**
