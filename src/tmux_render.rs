@@ -84,6 +84,8 @@ fn route_tmux_output(
         };
         handle.advance(&data);
         handle.flush_emit(&mut commands, entity);
+        // TODO: Phase 3 — forward handle.take_replies() (DSR/DA answers) back
+        // to tmux as pane input; in Phase 2a they are intentionally dropped.
     }
 }
 

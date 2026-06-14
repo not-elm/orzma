@@ -7,7 +7,7 @@ use bevy::prelude::*;
 mod bundle;
 pub mod bundled;
 pub mod glyph;
-pub mod grid;
+mod grid;
 pub mod material;
 pub mod schema;
 
