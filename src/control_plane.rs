@@ -1170,8 +1170,21 @@ mod focus_tests {
                 connection_id: 99,
             },
         );
+        // Spawn a VALID interactive inline child that WOULD be focused if the
+        // ownership check passed. This ensures the guard is the sole gate:
+        // deleting the `connection_id` check would let focus be granted and
+        // this assertion would FAIL.
+        app.world_mut().spawn((
+            ChildOf(surface),
+            InlineWebview {
+                view_id: "h1".into(),
+                instance_id: None,
+                slot: 0,
+            },
+        ));
         let (tx, rx) = unbounded::<ControlEvent>();
         app.insert_resource(ControlEvents(rx));
+        // connection_id 1 ≠ owner 99 — ownership guard must reject this.
         tx.send(ControlEvent::SetFocus {
             connection_id: 1,
             owner_surface: surface,
@@ -1180,7 +1193,111 @@ mod focus_tests {
         })
         .unwrap();
         app.world_mut().run_system_once(apply_control_events).unwrap();
-        assert_eq!(app.world().resource::<FocusedWebview>().0, None);
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "focus must be denied when connection_id does not match the registered owner"
+        );
+    }
+
+    #[test]
+    fn blur_does_not_clobber_another_surfaces_focus() {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
+            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmuxRpc>()
+            .init_resource::<FocusedWebview>()
+            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+
+        let surface_a = app
+            .world_mut()
+            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
+                mux.create_workspace(Some("a".into())).surface
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        let surface_b = app
+            .world_mut()
+            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
+                mux.create_workspace(Some("b".into())).surface
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        // Register "ha" owned by connection 1 / surface_a.
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "ha".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>a</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface_a,
+                connection_id: 1,
+            },
+        );
+        // Spawn the matching interactive inline child on surface_a.
+        let child_a = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface_a),
+                InlineWebview {
+                    view_id: "ha".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+
+        let (tx, rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(rx));
+
+        // Focus the surface_a child via the owning connection.
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface_a,
+            handle: Some("ha".into()),
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut().run_system_once(apply_control_events).unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child_a),
+            "focus must land on the surface_a child after the SetFocus from connection 1"
+        );
+
+        // Blur from a DIFFERENT surface (surface_b / connection 2) must NOT
+        // clear the focus that belongs to surface_a.
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 2,
+            owner_surface: surface_b,
+            handle: None,
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut().run_system_once(apply_control_events).unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child_a),
+            "blur from surface_b must not clobber surface_a's active focus"
+        );
+
+        // Blur from the OWNING side (surface_a / connection 1) must clear it.
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface_a,
+            handle: None,
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut().run_system_once(apply_control_events).unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "blur from the owning surface must clear focus"
+        );
     }
 }
 
