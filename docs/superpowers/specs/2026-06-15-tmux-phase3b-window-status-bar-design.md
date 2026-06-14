@@ -31,14 +31,16 @@ machinery is gone.
    active window highlighted. **No** clock, host, or per-window flag glyphs
    (`-`/`Z`/`#`) — only the active highlight. Clicking a window entry switches
    to it.
-4. **Layout reservation: rely on tmux's own status-line reservation (method
-   B).** tmux's `status` option is left **on** (its default). tmux reserves the
-   status row in its layout math, so the panes it reports occupy `H-1` rows;
-   ozmux renders its own status bar in that bottom row. ozmux does **not**
-   subtract a row in `sync_client_size`. ⚠️ This depends on `tmux -CC`
-   actually reserving the status row in the layout it reports — a **verify-live
-   unknown** (see Risks). Method A (status off + `sync_client_size` sends
-   `rows-1`) is the documented fallback if the reservation does not happen.
+4. **Layout reservation: ozmux reserves the row (method A).** `tmux -CC` does
+   **not** reserve a status row for control clients — verified live against
+   `tmux 3.6b -CC`: `refresh-client -C 80,24` reports panes at the full
+   `80x24` regardless of the `status` option. So ozmux owns the reservation:
+   it reserves the bottom cell row in its Bevy layout for the status bar and
+   makes `sync_client_size` send `rows-1` (one fewer row than the window holds)
+   so tmux lays out panes into the area above the bar. The tmux `status`
+   option is irrelevant in `-CC` and is left untouched. (Method B — relying on
+   tmux to reserve the row — was the original choice but is non-viable; the
+   live probe is decisive.)
 5. **Switching is command-echo.** A window-entry click sends
    `select-window -t @<id>`; ozmux does not mutate the projection directly —
    the resulting tmux notification flips the active window and the bar
@@ -54,24 +56,29 @@ machinery is gone.
 - `crates/tmux_session/src/model.rs` — `WindowModel { id: WindowId, active:
   bool, name: String, panes: Vec<PaneModel> }` and `ProjectionModel { session:
   Option<SessionId>, windows: Vec<WindowModel>, active_pane: Option<PaneId> }`.
-  **Neither carries a window index, and `session` is a `SessionId` (a number),
-  not the session name.** Both must be added (§Architecture).
+  **`WindowModel` carries no window index** (added in §Architecture). `session`
+  is a `SessionId` (a number), not the session name — but the session **name**
+  is already available: `ProjectionModel::apply_event` (model.rs ~97-100)
+  already matches `ControlEvent::SessionChanged { session, name }` on the
+  `%session-changed` notification tmux emits at attach, and currently
+  **discards `name`**. Capturing it there yields `session_name` with no new
+  command, pending slot, reducer, or retry — and it auto-updates on live
+  rename (§Architecture).
 - `crates/tmux_session/src/enumerate.rs` — `LIST_WINDOWS_FORMAT =
   "#{window_active}\t#{window_id}\t#{window_layout}\t#{window_visible_layout}\t#{window_name}"`
   (no `#{window_index}`); `WindowRow { id, active, name, layout }`;
   `parse_window_rows`. This is where the index field is added. The module also
   hosts the typed command builders (`list_windows_command`,
   `refresh_client_command`, `client_name_command`); the new
-  `select_window_command` / `session_name_command` builders join it.
+  `select_window_command` builder joins it.
 - `crates/tmux_session/src/components.rs` — `TmuxSession { id }`,
   `TmuxWindow { id, active, name }`, `TmuxPane { id, … }`. `TmuxWindow` gains
   `index`.
 - `crates/tmux_session/src/plugin.rs` — `drain_tmux_events` sends
   `client_name_command()` on the Attached transition and now **retries** it
-  while unresolved (3a fix). The session-name query follows the **same
-  pattern** (attach send + retry + `take_*` reducer). `connection.set_client_name`
-  caches the client name on `TmuxConnection`; a `session_name` slot is added
-  alongside it (or on `ProjectionModel`).
+  while unresolved (3a fix). The session name does **not** need this machinery
+  — it comes from the `%session-changed` notification (above), captured in the
+  existing `apply_event` arm. No new command/pending/retry is added.
 - `crates/tmux_session/src/reconcile.rs` — syncs `TmuxWindow`/`TmuxPane`
   entities (parented by `ChildOf`) to `ProjectionModel`. It carries the new
   `index` onto `TmuxWindow`.
@@ -79,34 +86,53 @@ machinery is gone.
   container under `WorkspaceUiRoot` (`src/ui`); `layout_tmux_panes` positions
   panes from `TmuxPane.dims` × cell metrics; `sync_client_size` sends
   `refresh-client -C <cols>,<rows>` computed from the primary window's physical
-  size (full height — **unchanged** under method B). The status bar mounts as
-  another child of `WorkspaceUiRoot`, pinned to the bottom.
+  size — changed under method A to reserve one row for the bar (send `rows-1`).
+  The status bar mounts under `UiRoot` (the Column parent of `WorkspaceUiRoot`),
+  **not** inside `WorkspaceUiRoot` (see §Status bar UI).
 - `src/action.rs` + `src/action/{split_pane,focus_pane,swap_pane,close_pane,
   workspace}.rs` — the pane/window action handlers, all built on
-  `ozmux_multiplexer` (`MultiplexerCommands`). Verified that the only non-test
-  triggers of these `*ActionEvent`s were the deleted-in-3a `dispatch_focused_key`
-  and the test-only `NewWorkspaceActionEvent` at `src/ui/workspace.rs:591`.
-  Under forward-only they have **zero** production triggers → deleted.
+  `ozmux_multiplexer` (`MultiplexerCommands`). `dispatch_focused_key` was
+  already deleted in 3a (only a doc-comment reference remains in
+  `tmux_input.rs`). The remaining `*ActionEvent` triggers are **all test-only**:
+  `NewWorkspaceActionEvent`/`FocusWorkspaceActionEvent` in
+  `src/action/workspace.rs` tests and `src/ui.rs:815`, and
+  `SplitPaneActionEvent` in a `mouse_buttons.rs` test (~:1171). Under
+  forward-only they have **zero** production triggers → deleted (along with
+  those test triggers).
 - `crates/configs/src/shortcuts.rs` — `Bindings` (under `#[serde(rename_all =
   "kebab-case", default, deny_unknown_fields)]`) still carries `close_pane`,
   `focus_pane_*`, `split_pane_*`, `swap_pane_*`, `new_workspace`,
   `focus_workspace_*` and the 6 already-deprecated surface keys. The pane/window
   keys join the deprecated (accept-and-ignore) set; `Bindings::iter()`,
-  `lookup()`, `Default`, and conflict-validation drop them.
+  `lookup()`, `Default`, and conflict-validation drop them. ⚠️ `iter().count()`
+  is asserted in `crates/configs/tests/load.rs` (3 sites) and
+  `validate_no_conflicts` has a **live** caller at `crates/configs/src/raw.rs:63`
+  — both must be updated, not orphaned, if `iter()` empties out (§Cleanup).
+- The shortcut-support enums `Direction` / `SplitDirection` / `SwapOffset` /
+  `WorkspaceOffset` exist in **two** crates: `crates/configs/src/shortcuts.rs`
+  (deletable here) **and** `ozmux_multiplexer` (`SwapOffset`, `PaneDirection`,
+  …, still used internally — kept until Phase 5). Delete only the `shortcuts.rs`
+  copies.
+- `src/ui/status_bar.rs` + `src/ui/status_bar_sync.rs` — an **existing**
+  status bar (`StatusBarRoot`, old-mux workspace chips) that mounts under
+  `UiRoot` (a `FlexDirection::Column` node, `src/ui/root.rs` ~43-50) and
+  rebuilds on `WorkspaceMarker`/`AttachedWorkspace` change. Dormant in tmux
+  mode (renders empty) but still occupies a `UiRoot` row — the new tmux window
+  bar **reuses/replaces** it rather than adding a second bar (§Architecture).
 - `src/ui/tab_input.rs` + `src/ui/workspace.rs` — the **old-mux** top-tab chrome.
-  Dormant in tmux mode (the tmux reconcile never populates old-mux workspaces).
-  Left in place for Phase 5 removal unless it renders a visible empty strip.
+  Dormant in tmux mode. Left in place for Phase 5 removal unless it renders a
+  visible empty strip.
 
 ## Architecture
 
 ```
-attach ──▶ display-message '#{session_name}'  (send + retry, like client_name)
+attach ──▶ %session-changed $id <name>  ──▶ apply_event captures name
               ──▶ ProjectionModel.session_name : Option<String>
        ──▶ list-windows -F (… #{window_index})
               ──▶ WindowRow{index,…} ──▶ WindowModel{index,name,active,…}
               ──▶ reconcile ──▶ TmuxWindow{ index, name, active }  (ChildOf session)
 
-status-bar rebuild (on projection change)
+status-bar rebuild (on projection change), mounted under UiRoot (Column)
    reads session_name + TmuxWindow{index,name,active}
    renders:  [<session_name>]   <i>:<name>   <i>:<name>*   …      (active highlighted)
 
@@ -122,75 +148,88 @@ click a window entry ──▶ select_window_command(id) ──▶ connection.ha
   field-count and the doc comment). `WindowModel` gains `index: u32`
   (reducer `seed_from_rows` / `apply_event` carry it). `TmuxWindow` gains
   `index: u32` (reconcile sets it).
-- Session name: `ProjectionModel` gains `session_name: Option<String>`. A new
-  pure reducer `take_session_name(pending, events)` mirrors `take_client_name`
-  (`crates/tmux_session/src/event_pump.rs`). `EnumerationState` gains
-  `session_name_pending: Option<CommandId>`. `drain_tmux_events` sends
-  `session_name_command()` on attach and **retries** while
-  `session_name.is_none() && pending.is_none()` (identical structure to the 3a
-  client-name retry). Builder `session_name_command() -> "display-message -p
-  '#{session_name}'"` (`pub(crate)`, positional form — same family as
-  `client_name_command`, NOT `-F`).
+- Session name: `ProjectionModel` gains `session_name: Option<String>`,
+  populated by capturing the `name` field in the **existing**
+  `ControlEvent::SessionChanged { session, name }` arm of
+  `ProjectionModel::apply_event` (model.rs ~97-100), which currently sets only
+  `session` and discards `name`. No new command, `EnumerationState` slot,
+  reducer, or retry loop — and it tracks live `%session-changed` renames for
+  free. (Verify `tmux_control_parser`'s `SessionChanged` exposes `name`; it does
+  per the existing match arm.)
 - Builder `select_window_command(id: WindowId) -> String` →
   `select-window -t @<id>` (`pub`, exported for the binary's click system;
   reuse the existing arg-quoting helper). The `@<id>` target is structurally
   safe (numeric) like the `%<pane>` form in reply routing.
 
-### Status bar UI (`src/ui/tmux_status_bar.rs`, new)
+### Status bar UI
 
-- `StatusBar` marker on a Bevy UI node: child of `WorkspaceUiRoot`, full width,
-  height = one cell row (`TerminalCellMetricsResource` line height), pinned to
-  the bottom (`position_type: Absolute`, `bottom: 0`, or last flex child —
-  whichever matches the existing root layout). Background from the ozmux theme
-  (`src/theme`); the look is ozmux-themed, the *structure* mirrors tmux.
+The new window bar **reuses/replaces** the existing `StatusBarRoot` bar
+(`src/ui/status_bar.rs` / `status_bar_sync.rs`) rather than adding a parallel
+subsystem — there must be exactly **one** bar row. Concretely: the bar node
+mounts under **`UiRoot`** (the `FlexDirection::Column` node in
+`src/ui/root.rs`, where the existing bar already lives — **not**
+`WorkspaceUiRoot`, whose `Absolute` 100%-height pane children would occlude it),
+as a fixed-height (one cell row, `TerminalCellMetricsResource` line height),
+full-width Column child after `WorkspaceUiRoot`. The old-mux rebuild
+(`status_bar_sync`) is either retargeted to the tmux projection or gated off in
+tmux mode so it does not also render.
+
 - A rebuild system, gated `run_if(resource_exists_and_changed::<ProjectionModel>)`
-  (or change-detected on `TmuxWindow`/session-name), despawns and rebuilds the
+  (or change-detected on `TmuxWindow`/`session_name`), despawns and rebuilds the
   bar's children: a left `[<session_name>]` text node (empty/elided until
-  `session_name` resolves), then one `WindowEntry` button per window in
-  `index` order, labelled by a pure `window_label(index, name) -> String`
-  (`"<index>:<name>"`). The active window's entry uses a highlight
-  (font weight + background) consistent with the active-pane treatment.
+  `session_name` resolves), then one `WindowEntry` button per window in `index`
+  order, labelled by a pure `window_label(index, name) -> String`
+  (`"<index>:<name>"`). The active window's entry uses a highlight (font weight +
+  background) consistent with the active-pane treatment.
 - A click system (in `InputPhase::Dispatch`, like `drive_tab_clicks`, so the
-  switch is visible the same frame): on a `WindowEntry`
-  `Interaction::Pressed`, send `select_window_command(entry.window_id)` via
+  switch is visible the same frame): on a `WindowEntry` `Interaction::Pressed`,
+  send `select_window_command(entry.window_id)` via
   `connection.client().handle()`, warn on send error. No direct projection
   mutation (command-echo). A hover-cursor system (pointer over entries) mirrors
   `tab_hover_cursor`.
-- `OzmuxTmuxStatusBarPlugin` registers the spawn, rebuild, click, and hover
-  systems and is added in `src/main.rs` near the other tmux plugins.
+- The plugin registering the spawn/rebuild/click/hover systems is added in
+  `src/main.rs` near the other tmux plugins. (Whether this is a new
+  `OzmuxTmuxStatusBarPlugin` or an extension of the existing status-bar plugin
+  is a plan-level decision; the constraint is one bar under `UiRoot`.)
 
-### Layout reservation (method B)
+### Layout reservation (method A)
 
-tmux `status` stays on (default). tmux reserves the status row in its layout, so
-the pane layout it reports sums to `H-1` rows; ozmux's `layout_tmux_panes`
-positions those panes from the top, leaving the bottom cell row free, where the
-`StatusBar` node is drawn. `sync_client_size` is **unchanged** (sends the full
-height; tmux does the `-1`). No tmux option is mutated by ozmux.
-
-- **Fallback (method A), if the verify-live check shows tmux -CC does not
-  reserve the row:** set the session `status off` on attach, and change
-  `sync_client_size` to compute `rows` from `physical_height - line_height`
-  (reserve one row) so the panes fit above the bar. This is a localized change
-  behind the same `StatusBar` node; the plan keeps the bar's pixel reservation
-  independent of which method is active.
+`tmux -CC` does not reserve a status row (verified — §Decisions 4), so ozmux
+owns the reservation. The bar node occupies the bottom cell row of `UiRoot`;
+`WorkspaceUiRoot` (which holds the tmux panes) gets the remaining area.
+`sync_client_size` (`src/tmux_render.rs`) changes to compute `rows` from
+`physical_height - line_height` (one row reserved for the bar) so tmux lays out
+panes into the area above the bar, matching the pixels `WorkspaceUiRoot`
+actually occupies. ozmux does **not** mutate the tmux `status` option (it is
+cosmetically irrelevant in `-CC`). Keep the existing `cols`/`rows` clamping and
+the send-dedupe in `sync_client_size`; only the row count changes.
 
 ### Cleanup (deletions)
 
 - Delete `src/action/{split_pane,focus_pane,swap_pane,close_pane}.rs` and the
   workspace New/Focus action handlers in `src/action/workspace.rs`; remove their
   sub-plugin registrations from `src/action.rs` (and drop now-empty plugins).
-  Delete the `ShortcutAction` variants `SplitPane`/`FocusPane`/`SwapPane`/
-  `ClosePane`/`NewWorkspace`/`FocusWorkspace` and their supporting enums
-  (`Direction`/`SplitDirection`/`SwapOffset`/`WorkspaceOffset`) **iff** they have
-  no remaining referent.
+  Also remove the **test-only** triggers that reference these events
+  (`NewWorkspaceActionEvent`/`FocusWorkspaceActionEvent` in
+  `src/action/workspace.rs` tests and `src/ui.rs:815`, `SplitPaneActionEvent` in
+  the `mouse_buttons.rs` test) so nothing dangles. Delete the `ShortcutAction`
+  variants `SplitPane`/`FocusPane`/`SwapPane`/`ClosePane`/`NewWorkspace`/
+  `FocusWorkspace` and the **`shortcuts.rs` copies** of
+  `Direction`/`SplitDirection`/`SwapOffset`/`WorkspaceOffset` **iff** no referent
+  remains. Do **not** touch the identically-named `ozmux_multiplexer` enums
+  (still used internally; removed in Phase 5).
 - In `crates/configs/src/shortcuts.rs`: move `close_pane`, `focus_pane_*`,
   `split_pane_*`, `swap_pane_*`, `new_workspace`, `focus_workspace_*` into the
   deprecated **accept-and-ignore** set (`#[serde(default, skip_serializing,
   deserialize_with = "deser_chord_or_unbind")]`, set to `None` in `Default`,
   excluded from `iter()`), exactly like the 3a surface keys; add a back-compat
-  test. After this, `Bindings::iter()`/`lookup()` may be empty or near-empty —
-  if **no** active binding remains, delete the now-dead `lookup`/conflict
-  machinery too (and its callers) rather than leave dead code.
+  test. After this, `Bindings::iter()`/`lookup()` empties out — handle the live
+  consumers, do not orphan them: `validate_no_conflicts` is called at
+  `crates/configs/src/raw.rs:63` (keep it callable — a no-op over an empty set is
+  fine — or remove the call), and `iter().count()` is asserted in
+  `crates/configs/tests/load.rs` (3 sites) which must be updated to the new
+  count. If `lookup()` then has no caller (3a moved keyboard dispatch to
+  `tmux_input.rs`'s own `GuiChord`), delete it rather than leave dead code.
 - The old-mux top-tab chrome (`src/ui/workspace.rs`, `src/ui/tab_input.rs`) is
   **not** deleted in 3b (Phase 5 removes the old multiplexer). If it renders a
   visible empty strip in tmux mode, hide its root node; otherwise leave it.
@@ -203,9 +242,9 @@ crate keeps "workspace"/"surface" until Phase 5.
 ## Testing
 
 - **Pure units (`ozmux_tmux`):** `parse_window_rows` with the new
-  `#{window_index}` field (and a malformed/short row); `select_window_command`
-  / `session_name_command` builders; `take_session_name` (matching id, failed
-  reply, empty/whitespace output — mirrors the `take_client_name` tests).
+  `#{window_index}` field (and a malformed/short row); the
+  `select_window_command` builder; `apply_event` on a `%session-changed` event
+  sets `ProjectionModel.session_name` (and a later rename updates it).
 - **Pure unit (binary):** `window_label(index, name)` formatting (incl. an empty
   name, a name needing no escaping).
 - **Bevy headless (binary):** seed a `ProjectionModel` (session_name + two
@@ -222,22 +261,22 @@ crate keeps "workspace"/"surface" until Phase 5.
   `select-window -t @<id>` → observe the active window flip in the projection.
   Mirrors the existing `real_tmux_*` gated pattern.
 - **Layout (manual / gated):** confirm panes occupy the area above the bar and
-  the bar is fully visible (method B reservation). This is the verify-live gate.
+  the bar is fully visible (method A: `sync_client_size` sends `rows-1`). This
+  is the verify-live gate.
 
 ## Risks / unknowns (verify-live)
 
-- **tmux -CC status reservation (method B):** whether `tmux -CC` with `status
-  on` reports a pane layout that excludes the status row. If it does not, panes
-  overlap the bar and we switch to method A (status off + `rows-1` in
-  `sync_client_size`). Confirm by manual GUI check / the gated layout test
-  before relying on it.
-- **session_name via `display-message` in -CC:** same class as the
-  already-proven `client_name` query; low risk. Session rename mid-session
-  updates only on the next attach/retry (acceptable; live rename tracking
-  deferred).
-- **Empty/near-empty `Bindings`:** confirm removing the dead binding machinery
-  doesn't break the `/configs/shortcuts` HTTP wire shape or the daemon binding
-  count consumer (if any) — grep before deleting `lookup`.
+- **Layout (method A):** confirm that sending `rows-1` makes panes occupy the
+  area above the bar with no overlap and no off-by-one (the bar's pixel height
+  must equal exactly the reserved cell row). Manual GUI check + the gated layout
+  test. (The underlying tmux behavior — no status-row reservation in `-CC` — is
+  already verified, so this is just ozmux's own row math.)
+- **session_name from `%session-changed`:** confirmed tmux emits it on attach;
+  low risk. If a future tmux omits it on some attach path, the bar shows an
+  empty `[]` until the next notification — acceptable.
+- **Empty `Bindings`:** confirm removing the dead binding machinery doesn't
+  break the `/configs/shortcuts` HTTP wire shape; keep `validate_no_conflicts`
+  callable for `raw.rs:63` and update the `load.rs` count assertions (§Cleanup).
 
 ## Deferred scope (later phases)
 
