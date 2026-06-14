@@ -104,6 +104,18 @@ fn drain_tmux_events(
             model.set_changed();
         }
     }
+    // NOTE: runs after the Closed branch took the connection, so `client()` is
+    // None there and this is a no-op — safe to re-arm only while still attached.
+    if matches!(*state, ConnectionState::Attached)
+        && connection.client_name().is_none()
+        && enumeration.client_name_pending.is_none()
+        && let Some(client) = connection.client()
+    {
+        match client.handle().send(&client_name_command()) {
+            Ok(id) => enumeration.client_name_pending = Some(id),
+            Err(error) => tracing::warn!(?error, "failed to re-send client-name query"),
+        }
+    }
 }
 
 #[cfg(test)]
