@@ -1,5 +1,5 @@
 [package]
-name = "ozmux_extension_host"
+name = "ozmux_webview_host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

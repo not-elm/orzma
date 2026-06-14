@@ -14,9 +14,9 @@ pub struct RuntimeRoot {
 
 impl RuntimeRoot {
     /// Resolves a runtime root under `parent/<pid>/<name>/`, falling back to
-    /// `/tmp/ozmux-ext` when the socket path would overflow the `sun_path` limit.
+    /// `/tmp/ozmux-webview` when the socket path would overflow the `sun_path` limit.
     pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> std::io::Result<Self> {
-        // NOTE: measure the LONGEST socket filename a command extension uses
+        // NOTE: measure the LONGEST socket filename a webview uses
         // (`<name>.handlers.sock`) so the sun_path fit check is not optimistic;
         // `socket_path` produces the shorter `<name>.sock`.
         let needed = |base: &Path| -> usize {
@@ -33,7 +33,7 @@ impl RuntimeRoot {
         // NOTE: the shared fallback parent is created with the process umask (so
         // it is world-listable, like the legacy /tmp/ozmux); only the per-handle
         // subdir below is 0700, which is what protects the sockets.
-        let fallback = Path::new("/tmp/ozmux-ext");
+        let fallback = Path::new("/tmp/ozmux-webview");
         std::fs::create_dir_all(fallback)?;
         if needed(fallback) <= SUN_PATH_MAX {
             return Self::new_in(fallback, pid, name);
@@ -53,7 +53,7 @@ impl RuntimeRoot {
         &self.root
     }
 
-    /// The directory holding extension sockets.
+    /// The directory holding webview sockets.
     pub fn sock_dir(&self) -> &Path {
         &self.sock_dir
     }
@@ -127,7 +127,7 @@ mod tests {
         let mode = std::fs::metadata(pid_dir).unwrap().permissions().mode() & 0o777;
         assert_eq!(
             mode, 0o700,
-            "the intermediate <pid> dir must be 0700 so extension names do not leak"
+            "the intermediate <pid> dir must be 0700 so webview names do not leak"
         );
     }
 
@@ -154,12 +154,12 @@ mod tests {
             assert_ne!(
                 a.root(),
                 b.root(),
-                "same-PID extensions must not share a root"
+                "same-PID webviews must not share a root"
             );
         } // b dropped here
         assert!(
             a_sock.exists(),
-            "dropping one extension must not remove another's sockets"
+            "dropping one webview must not remove another's sockets"
         );
     }
 

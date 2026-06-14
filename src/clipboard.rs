@@ -200,7 +200,7 @@ impl Plugin for ClipboardActionPlugin {
 
 /// Observer for `CopyToClipboardActionEvent`. Writes the target terminal's
 /// current selection to the system clipboard; no-ops on an empty
-/// selection or a missing `TerminalHandle` (e.g. an extension surface).
+/// selection or a missing `TerminalHandle` (e.g. a webview surface).
 fn on_copy_to_clipboard(
     ev: On<CopyToClipboardActionEvent>,
     mut clipboard: ResMut<Clipboard>,

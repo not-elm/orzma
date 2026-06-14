@@ -4787,8 +4787,8 @@ dependencies = [
  "ozma_tty_engine",
  "ozma_tty_renderer",
  "ozmux_configs",
- "ozmux_extension_host",
  "ozmux_multiplexer",
+ "ozmux_webview_host",
  "serde",
  "serde_json",
  "tempfile",
@@ -4811,21 +4811,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "ozmux_extension_host"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_cef_core",
- "tempfile",
-]
-
-[[package]]
 name = "ozmux_multiplexer"
 version = "0.1.0"
 dependencies = [
  "bevy",
  "thiserror 2.0.18",
  "tracing",
+]
+
+[[package]]
+name = "ozmux_webview_host"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_cef_core",
+ "tempfile",
 ]
 
 [[package]]

@@ -11,15 +11,15 @@ ozmux is a terminal multiplexer that runs as a single native GUI application. It
 The workspace root package is the one and only binary; library crates live under `crates/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
 
 - `ozmux-gui` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.18 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "ozmux") plus `cef_plugin(&asset_endpoint)` (from `bevy_cef`), then the ozmux plugins:
-  - `TerminalHandlePlugin` (from `ozma_tty_engine`), `TerminalRendererPlugin` (from `ozma_tty_renderer`), `MultiplexerPlugin` (from `ozmux_multiplexer`), `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxLayoutLogPlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxExtensionRenderPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`;
+  - `TerminalHandlePlugin` (from `ozma_tty_engine`), `TerminalRendererPlugin` (from `ozma_tty_renderer`), `MultiplexerPlugin` (from `ozmux_multiplexer`), `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxLayoutLogPlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxWebviewRenderPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`;
   - the input plugins `MouseWheelInputPlugin`, `MouseButtonsInputPlugin`, `HyperlinkInputPlugin`, `ImePlugin`, `ImeOverlayPlugin`, and `OzmuxShortcutActionPlugin`;
   - `OzmuxOscWebviewPlugin` (OSC 5379 `mount-inline` / `unmount-inline` of dynamically-registered webviews), `OzmuxInlineWebviewPlugin`, and `OzmuxControlPlanePlugin` (the control-socket listener that mints Tier 1 dynamic webview handles).
 
-  The root `Cargo.toml` depends on `bevy_cef` (path dep, `features = ["debug"]`) and on `ozmux_extension_host` with the `cef` feature enabled. A root `[features] debug` flag enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
+  The root `Cargo.toml` depends on `bevy_cef` (path dep, `features = ["debug"]`) and on `ozmux_webview_host` with the `cef` feature enabled. A root `[features] debug` flag enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
 
 - `crates/ozma_tty_engine` (`ozma_tty_engine`) — Bevy-native terminal: PTY ownership and `alacritty_terminal` VT emulation, emitting coalesced `FrameSnapshot` / `FrameDelta` against the `ozma_tty_renderer` schema. Exposes `TerminalHandlePlugin`.
 - `crates/ozma_tty_renderer` (`ozma_tty_renderer`) — GPU terminal renderer plus the grid schema shared with `ozma_tty_engine`. `TerminalRendererPlugin` wires the grid, material, and glyph sub-plugins (`TerminalGridPlugin`, `TerminalMaterialPlugin`, `TerminalGlyphPlugin`) and hyperlink-hover state; `schema` holds the cell/grid types both crates render against.
-- `crates/extension_host` (`ozmux_extension_host`) — Tokio-free webview host integration for ozmux: a per-handle `RuntimeRoot` runtime directory tree (the 0700 socket dir the control plane mints), and (behind the `cef` feature) serving dynamically-registered Tier 1 webview assets from disk/memory through a `bevy_cef` `ozmux-dyn://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std only. Exposes `DynAsset`, `DynAssetRegistry`, `custom_dyn_scheme`, and `RuntimeRoot`.
+- `crates/webview_host` (`ozmux_webview_host`) — Tokio-free webview host integration for ozmux: a per-handle `RuntimeRoot` runtime directory tree (the 0700 socket dir the control plane mints), and (behind the `cef` feature) serving dynamically-registered Tier 1 webview assets from disk/memory through a `bevy_cef` `ozmux-dyn://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std only. Exposes `DynAsset`, `DynAssetRegistry`, `custom_dyn_scheme`, and `RuntimeRoot`.
 - `crates/multiplexer` (`ozmux_multiplexer`) — ECS-native multiplexer. Session, Pane, and Surface are Bevy entities related by `ChildOf`; there are no typed IDs (every reference is a Bevy `Entity`, each carrying a `Name`). All mutations route through the `MultiplexerCommands` `SystemParam`; the only observers handle dangling `Entity` references when a child is despawned. Exposes `MultiplexerPlugin`.
 - `crates/configs` (`ozmux_configs`) — config loader. Reads `~/.config/ozmux/config.toml` (or `$OZMUX_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
 
@@ -38,7 +38,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 
 ### `src/` module map
 
-`src/main.rs` plus: `bootstrap`, `clipboard`, `configs`, `extension_render`, `font`, `input`, `multiplexer`, `system_set`, `theme`, `ui`.
+`src/main.rs` plus: `bootstrap`, `clipboard`, `configs`, `webview_render`, `font`, `input`, `multiplexer`, `system_set`, `theme`, `ui`.
 
 ## Commands
 
