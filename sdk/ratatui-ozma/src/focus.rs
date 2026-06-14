@@ -3,7 +3,7 @@
 
 use crate::error::OzmaResult;
 use crate::session::Ozma;
-use crate::webview::{Webview, WebviewHandle};
+use crate::webview::WebviewHandle;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
@@ -111,6 +111,72 @@ impl Default for FocusManager {
     }
 }
 
+/// Orthogonal-displacement weight in the directional cost (smart-TV LRUD tuning).
+const ORTHOGONAL_WEIGHT: f32 = 0.4;
+
+/// Resolves the nearest focus candidate in the pushed `dir` from `from`.
+///
+/// Filters to candidates strictly beyond `from`'s far edge in `dir` (half-plane),
+/// then minimizes `primary_gap + ORTHOGONAL_WEIGHT * orthogonal_displacement`.
+/// Ties resolve to the lowest candidate index for determinism. Returns the
+/// winning candidate's index, or `None` when the half-plane is empty.
+fn resolve_spatial(candidates: &[(usize, Rect)], from: Rect, dir: Direction) -> Option<usize> {
+    let f = Edges::of(from);
+    let mut sorted: Vec<(usize, Rect)> = candidates.to_vec();
+    sorted.sort_by_key(|(i, _)| *i);
+    let mut best: Option<(usize, f32)> = None;
+    for (idx, rect) in &sorted {
+        let c = Edges::of(*rect);
+        let cost = match dir {
+            Direction::Right if c.left >= f.right => {
+                (c.left - f.right) + ORTHOGONAL_WEIGHT * (c.cy - f.cy).abs()
+            }
+            Direction::Left if c.right <= f.left => {
+                (f.left - c.right) + ORTHOGONAL_WEIGHT * (c.cy - f.cy).abs()
+            }
+            Direction::Down if c.top >= f.bottom => {
+                (c.top - f.bottom) + ORTHOGONAL_WEIGHT * (c.cx - f.cx).abs()
+            }
+            Direction::Up if c.bottom <= f.top => {
+                (f.top - c.bottom) + ORTHOGONAL_WEIGHT * (c.cx - f.cx).abs()
+            }
+            _ => continue,
+        };
+        match best {
+            Some((_, best_cost)) if cost >= best_cost => {}
+            _ => best = Some((*idx, cost)),
+        }
+    }
+    best.map(|(idx, _)| idx)
+}
+
+/// Edge coordinates of a rect as floats (centers included), for cost math.
+struct Edges {
+    left: f32,
+    right: f32,
+    top: f32,
+    bottom: f32,
+    cx: f32,
+    cy: f32,
+}
+
+impl Edges {
+    fn of(r: Rect) -> Self {
+        let left = r.x as f32;
+        let top = r.y as f32;
+        let right = left + r.width as f32;
+        let bottom = top + r.height as f32;
+        Self {
+            left,
+            right,
+            top,
+            bottom,
+            cx: left + r.width as f32 / 2.0,
+            cy: top + r.height as f32 / 2.0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +184,10 @@ mod tests {
 
     fn key(c: char, mods: KeyModifiers) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), mods)
+    }
+
+    fn rect(x: u16, y: u16, w: u16, h: u16) -> Rect {
+        Rect { x, y, width: w, height: h }
     }
 
     #[test]
@@ -132,5 +202,25 @@ mod tests {
     fn nav_key_ignores_bare_hjkl() {
         assert_eq!(FocusManager::nav_key(&key('h', KeyModifiers::NONE)), None);
         assert_eq!(FocusManager::nav_key(&key('x', KeyModifiers::ALT)), None);
+    }
+
+    #[test]
+    fn resolve_picks_neighbor_in_pushed_direction() {
+        let from = rect(0, 0, 10, 5);
+        let right = rect(12, 0, 10, 5);
+        let down = rect(0, 6, 10, 5);
+        let cands = vec![(1usize, right), (2usize, down)];
+        assert_eq!(resolve_spatial(&cands, from, Direction::Right), Some(1));
+        assert_eq!(resolve_spatial(&cands, from, Direction::Down), Some(2));
+    }
+
+    #[test]
+    fn resolve_filters_out_half_plane_and_breaks_ties_by_index() {
+        let from = rect(10, 10, 10, 5);
+        let a = rect(22, 10, 4, 5);
+        let b = rect(22, 10, 4, 5);
+        let cands = vec![(5usize, a), (3usize, b)];
+        assert_eq!(resolve_spatial(&cands, from, Direction::Right), Some(3));
+        assert_eq!(resolve_spatial(&cands, from, Direction::Left), None);
     }
 }
