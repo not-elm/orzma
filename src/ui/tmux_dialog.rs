@@ -20,8 +20,8 @@ pub(crate) struct TmuxDialogPlugin;
 
 impl Plugin for TmuxDialogPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_tmux_dialog);
-        app.add_systems(PostUpdate, sync_tmux_dialog);
+        app.add_systems(Startup, spawn_tmux_dialog)
+            .add_systems(PostUpdate, sync_tmux_dialog);
     }
 }
 
