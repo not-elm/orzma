@@ -18,12 +18,12 @@ pub(crate) fn build_dynamic_preload(
     pane: Entity,
     surface: Entity,
 ) -> PreloadScripts {
-    let ctx_js = context_preload_js_role(workspace, pane, surface, "dynamic", "");
+    let ctx_js = context_preload_js_role(workspace, pane, surface, "dynamic");
     PreloadScripts::from([ctx_js, OZMUX_BRIDGE_JS.to_string()])
 }
 
 /// Builds the per-webview context PreloadScript assigning `window.__ozmuxContext`
-/// with the given `role` and `extension_name`.
+/// with the given `role`.
 ///
 /// NOTE: the JS keys "sessionId"/"windowId" keep their legacy names on purpose — a
 /// browser-side wire contract the SDK surface client reads; renaming them breaks the SDK.
@@ -32,16 +32,14 @@ fn context_preload_js_role(
     pane: Entity,
     surface: Entity,
     role: &str,
-    extension_name: &str,
 ) -> String {
     let workspace_id = workspace.to_bits().to_string();
     format!(
-        "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:{r:?},extensionName:{n:?}}};",
+        "window.__ozmuxContext={{sessionId:{s:?},windowId:{s:?},paneId:{p:?},surfaceId:{a:?},role:{r:?}}};",
         s = workspace_id,
         p = pane.to_bits().to_string(),
         a = surface.to_bits().to_string(),
         r = role,
-        n = extension_name,
     )
 }
 
@@ -68,7 +66,7 @@ mod tests {
             .unwrap();
         world.world_mut().flush();
 
-        let js = context_preload_js_role(workspace, pane, surface, "dynamic", "");
+        let js = context_preload_js_role(workspace, pane, surface, "dynamic");
         let s = workspace.to_bits().to_string();
         assert!(js.starts_with("window.__ozmuxContext="));
         assert!(js.ends_with("};"));
