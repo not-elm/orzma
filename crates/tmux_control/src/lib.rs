@@ -2,6 +2,7 @@
 //! I/O-owning transport that drives a real tmux process.
 
 pub use crate::error::{TmuxError, TmuxResult};
+pub use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
 pub use tmux_control_parser::ControlEvent;
 
 mod error;
