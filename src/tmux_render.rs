@@ -8,7 +8,7 @@ use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
-use ozmux_tmux::{PaneOutput, TmuxPane, TmuxProjection, TmuxProjectionSet};
+use ozmux_tmux::{PaneOutput, TmuxPane, TmuxProjection, TmuxProjectionSet, TmuxWindow};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -20,26 +20,49 @@ impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (attach_tmux_pane_terminal, route_tmux_output)
+            (
+                attach_tmux_window_container,
+                attach_tmux_pane_terminal,
+                route_tmux_output,
+                sync_active_window,
+            )
                 .chain()
                 .after(TmuxProjectionSet),
         );
     }
 }
 
-/// Attaches a detached `TerminalHandle`, a `TerminalRenderBundle`, and a
-/// full-window absolute `Node` (under `WorkspaceUiRoot`) to each `TmuxPane`
-/// that lacks a `TerminalHandle`. Runs every frame but targets each pane
-/// exactly once. The grid is sized from the pane's projected `dims`.
-fn attach_tmux_pane_terminal(
+fn attach_tmux_window_container(
     mut commands: Commands,
-    mut materials: ResMut<Assets<TerminalUiMaterial>>,
-    panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
+    windows: Query<Entity, (With<TmuxWindow>, Without<Node>)>,
     ui_root: Query<Entity, With<WorkspaceUiRoot>>,
 ) {
     let Ok(root) = ui_root.single() else {
         return;
     };
+    for window in windows.iter() {
+        commands.entity(window).insert((
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            ChildOf(root),
+        ));
+    }
+}
+
+/// Attaches a detached `TerminalHandle`, a `TerminalRenderBundle`, and a
+/// full-window absolute `Node` to each `TmuxPane` that lacks a
+/// `TerminalHandle`. Runs every frame but targets each pane exactly once.
+/// The grid is sized from the pane's projected `dims`. `ChildOf` is NOT set
+/// here — `reconcile` already establishes the correct `ChildOf(window)` parent.
+fn attach_tmux_pane_terminal(
+    mut commands: Commands,
+    mut materials: ResMut<Assets<TerminalUiMaterial>>,
+    panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
+) {
     for (entity, pane) in panes.iter() {
         let cols = pane.dims.width.max(1) as u16;
         let rows = pane.dims.height.max(1) as u16;
@@ -54,7 +77,6 @@ fn attach_tmux_pane_terminal(
                 height: Val::Percent(100.0),
                 ..default()
             },
-            ChildOf(root),
         ));
     }
 }
@@ -89,6 +111,19 @@ fn route_tmux_output(
     }
 }
 
+fn sync_active_window(mut windows: Query<(&TmuxWindow, &mut Node)>) {
+    for (w, mut node) in windows.iter_mut() {
+        let want = if w.active {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if node.display != want {
+            node.display = want;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,10 +149,6 @@ mod tests {
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.init_resource::<TmuxProjection>();
         app.add_message::<PaneOutput>();
-
-        // A stand-in WorkspaceUiRoot so `attach`'s `ui_root.single()` resolves
-        // (kept separate from the pane so the pane is not self-parented).
-        app.world_mut().spawn((Node::default(), WorkspaceUiRoot));
 
         // A projected pane entity + its index mapping.
         let pane_id = PaneId(1);
