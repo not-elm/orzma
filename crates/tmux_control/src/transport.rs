@@ -3,6 +3,7 @@
 
 use crate::error::{TmuxError, TmuxResult};
 use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
+use crate::session::{LIST_FORMAT, SessionInfo};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
@@ -21,22 +22,28 @@ pub enum TransportEvent {
     },
 }
 
-/// Builder for launching `tmux -CC`; the `-CC` flag is always injected.
-pub struct TmuxBuilder {
-    program: String,
-    socket_name: Option<String>,
-    socket_path: Option<String>,
-    subcommand: Vec<String>,
+/// Which tmux server socket to talk to.
+#[derive(Clone)]
+enum Socket {
+    Default,
+    Name(String),
+    Path(String),
 }
 
-impl TmuxBuilder {
-    /// Returns a builder defaulting to the `tmux` binary on `PATH`.
+/// A reusable handle to a tmux server on a given socket (config only; holds no
+/// connection or threads). Lists sessions and opens control connections.
+#[derive(Clone)]
+pub struct TmuxServer {
+    program: String,
+    socket: Socket,
+}
+
+impl TmuxServer {
+    /// Returns a server targeting the default socket via the `tmux` binary on `PATH`.
     pub fn new() -> Self {
         Self {
             program: "tmux".to_string(),
-            socket_name: None,
-            socket_path: None,
-            subcommand: Vec::new(),
+            socket: Socket::Default,
         }
     }
 
@@ -46,50 +53,67 @@ impl TmuxBuilder {
         self
     }
 
-    /// Sets the server socket name (`-L`).
+    /// Targets the named server socket (`-L`). Overrides any prior socket choice.
     pub fn socket_name(mut self, name: &str) -> Self {
-        self.socket_name = Some(name.to_string());
+        self.socket = Socket::Name(name.to_string());
         self
     }
 
-    /// Sets the server socket path (`-S`).
+    /// Targets the server socket path (`-S`). Overrides any prior socket choice.
     pub fn socket_path(mut self, path: &str) -> Self {
-        self.socket_path = Some(path.to_string());
+        self.socket = Socket::Path(path.to_string());
         self
     }
 
-    /// Launches `tmux -CC new-session`.
-    pub fn new_session(mut self) -> TmuxResult<TmuxClient> {
-        self.subcommand = vec!["new-session".to_string()];
-        self.spawn()
+    /// Opens a control connection by attaching to `name`
+    /// (`tmux -CC attach-session -t name`).
+    pub fn attach(&self, name: &str) -> TmuxResult<TmuxClient> {
+        self.spawn(&["attach-session", "-t", name])
     }
 
-    /// Launches `tmux -CC attach-session -t <name>`.
-    pub fn attach(mut self, name: &str) -> TmuxResult<TmuxClient> {
-        self.subcommand = vec![
-            "attach-session".to_string(),
-            "-t".to_string(),
-            name.to_string(),
-        ];
-        self.spawn()
+    /// Opens a control connection on a fresh session (`tmux -CC new-session`).
+    pub fn new_session(&self) -> TmuxResult<TmuxClient> {
+        self.spawn(&["new-session"])
     }
 
-    fn build_argv(&self) -> Vec<String> {
-        let mut argv = Vec::new();
-        if let Some(name) = &self.socket_name {
-            argv.push("-L".to_string());
-            argv.push(name.clone());
-        }
-        if let Some(path) = &self.socket_path {
-            argv.push("-S".to_string());
-            argv.push(path.clone());
-        }
-        argv.push("-CC".to_string());
-        argv.extend(self.subcommand.iter().cloned());
+    /// Lists attachable sessions (`tmux [..] list-sessions -F ..`, plain pipe, no
+    /// control mode). Returns `Ok(vec![])` when no server is running.
+    pub fn list_sessions(&self) -> TmuxResult<Vec<SessionInfo>> {
+        let output = std::process::Command::new(&self.program)
+            .args(self.list_sessions_argv())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(TmuxError::Spawn)?;
+        classify_list_result(output.status.success(), &output.stdout, &output.stderr)
+    }
+
+    /// The argv (after the program) for the list-sessions query, for callers that
+    /// own their own I/O (e.g. running it off the Bevy main thread) and then call
+    /// [`SessionInfo::parse_list`].
+    pub fn list_sessions_argv(&self) -> Vec<String> {
+        let mut argv = self.socket_args();
+        argv.push("list-sessions".to_string());
+        argv.push("-F".to_string());
+        argv.push(LIST_FORMAT.to_string());
         argv
     }
 
-    fn spawn(self) -> TmuxResult<TmuxClient> {
+    fn socket_args(&self) -> Vec<String> {
+        match &self.socket {
+            Socket::Default => Vec::new(),
+            Socket::Name(name) => vec!["-L".to_string(), name.clone()],
+            Socket::Path(path) => vec!["-S".to_string(), path.clone()],
+        }
+    }
+
+    fn connect_argv(&self, subcommand: &[&str]) -> Vec<String> {
+        let mut argv = self.socket_args();
+        argv.push("-CC".to_string());
+        argv.extend(subcommand.iter().map(|s| s.to_string()));
+        argv
+    }
+
+    fn spawn(&self, subcommand: &[&str]) -> TmuxResult<TmuxClient> {
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: 24,
@@ -109,7 +133,7 @@ impl TmuxBuilder {
         }
 
         let mut cmd = CommandBuilder::new(&self.program);
-        for arg in self.build_argv() {
+        for arg in self.connect_argv(subcommand) {
             cmd.arg(arg);
         }
         let child = pair.slave.spawn_command(cmd).map_err(spawn_err)?;
@@ -137,7 +161,7 @@ impl TmuxBuilder {
     }
 }
 
-impl Default for TmuxBuilder {
+impl Default for TmuxServer {
     fn default() -> Self {
         Self::new()
     }
@@ -223,6 +247,28 @@ fn spawn_err(e: impl std::fmt::Display) -> TmuxError {
     TmuxError::Spawn(std::io::Error::other(e.to_string()))
 }
 
+fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Vec<SessionInfo>> {
+    if ok {
+        return SessionInfo::parse_list(stdout);
+    }
+    let stderr = String::from_utf8_lossy(stderr);
+    let no_server = stdout.is_empty()
+        && (stderr.contains("no server running")
+            || (stderr.contains("error connecting")
+                && stderr.contains("No such file or directory")));
+    if no_server {
+        Ok(Vec::new())
+    } else {
+        let message = stderr.trim();
+        let message = if message.is_empty() {
+            "tmux list-sessions failed"
+        } else {
+            message
+        };
+        Err(TmuxError::Spawn(std::io::Error::other(message.to_string())))
+    }
+}
+
 #[cfg(unix)]
 fn disable_pty_echo(fd: std::os::unix::io::RawFd) {
     // SAFETY: `fd` is the live PTY master fd owned by the `MasterPty` kept in
@@ -288,6 +334,7 @@ fn pump<R: Read>(
 mod tests {
     use super::*;
     use crate::ControlEvent;
+    use crate::SessionId;
     use std::collections::VecDeque;
     use tmux_control_parser::WindowId;
 
@@ -359,33 +406,46 @@ mod tests {
     }
 
     #[test]
-    fn build_argv_new_session() {
-        let mut b = TmuxBuilder::new();
-        b.subcommand = vec!["new-session".to_string()];
-        assert_eq!(b.build_argv(), argv(&["-CC", "new-session"]));
+    fn connect_argv_new_session() {
+        assert_eq!(
+            TmuxServer::new().connect_argv(&["new-session"]),
+            argv(&["-CC", "new-session"])
+        );
     }
 
     #[test]
-    fn build_argv_attach() {
-        let mut b = TmuxBuilder::new();
-        b.subcommand = vec!["attach-session".into(), "-t".into(), "work".into()];
+    fn connect_argv_attach() {
         assert_eq!(
-            b.build_argv(),
+            TmuxServer::new().connect_argv(&["attach-session", "-t", "work"]),
             argv(&["-CC", "attach-session", "-t", "work"])
         );
     }
 
     #[test]
-    fn build_argv_socket_name() {
-        let b = TmuxBuilder::new().socket_name("foo");
-        assert_eq!(b.build_argv(), argv(&["-L", "foo", "-CC"]));
+    fn connect_argv_socket_name() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_name("foo")
+                .connect_argv(&["new-session"]),
+            argv(&["-L", "foo", "-CC", "new-session"])
+        );
     }
 
     #[test]
-    fn build_argv_default_program_and_cc() {
-        let b = TmuxBuilder::new();
-        assert_eq!(b.program, "tmux");
-        assert_eq!(b.build_argv(), argv(&["-CC"]));
+    fn connect_argv_socket_path() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_path("/tmp/foo")
+                .connect_argv(&["new-session"]),
+            argv(&["-S", "/tmp/foo", "-CC", "new-session"])
+        );
+    }
+
+    #[test]
+    fn connect_argv_default_program_and_cc() {
+        let server = TmuxServer::new();
+        assert_eq!(server.program, "tmux");
+        assert_eq!(server.connect_argv(&[]), argv(&["-CC"]));
     }
 
     #[test]
@@ -536,15 +596,88 @@ mod tests {
     }
 
     #[test]
+    fn list_sessions_argv_default() {
+        assert_eq!(
+            TmuxServer::new().list_sessions_argv(),
+            argv(&["list-sessions", "-F", LIST_FORMAT])
+        );
+    }
+
+    #[test]
+    fn list_sessions_argv_socket_name() {
+        assert_eq!(
+            TmuxServer::new().socket_name("foo").list_sessions_argv(),
+            argv(&["-L", "foo", "list-sessions", "-F", LIST_FORMAT])
+        );
+    }
+
+    #[test]
+    fn list_sessions_argv_socket_path() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_path("/tmp/foo")
+                .list_sessions_argv(),
+            argv(&["-S", "/tmp/foo", "list-sessions", "-F", LIST_FORMAT])
+        );
+    }
+
+    #[test]
+    fn list_format_uses_real_tab_and_name_last() {
+        assert!(LIST_FORMAT.as_bytes().contains(&b'\t'));
+        assert!(!LIST_FORMAT.contains("\\t"));
+        assert!(LIST_FORMAT.ends_with("#{session_name}"));
+    }
+
+    #[test]
+    fn classify_ok_parses_stdout() {
+        let out = b"$0\t1\t0\t1\tmain\n";
+        assert_eq!(
+            classify_list_result(true, out, b"").unwrap(),
+            vec![SessionInfo {
+                id: SessionId(0),
+                name: "main".to_string(),
+                windows: 1,
+                attached: false,
+                created: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn classify_no_server_running_is_empty() {
+        let stderr = b"no server running on /tmp/tmux-501/foo\n";
+        assert_eq!(classify_list_result(false, b"", stderr).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn classify_socket_missing_is_empty() {
+        let stderr = b"error connecting to /tmp/tmux-501/foo (No such file or directory)\n";
+        assert_eq!(classify_list_result(false, b"", stderr).unwrap(), vec![]);
+    }
+
+    #[test]
+    fn classify_real_error_is_err() {
+        let stderr = b"error connecting to /tmp/tmux-501/foo (Operation not permitted)\n";
+        assert!(classify_list_result(false, b"", stderr).is_err());
+    }
+
+    #[test]
+    fn classify_blank_stderr_still_has_message() {
+        let err = classify_list_result(false, b"", b"").unwrap_err();
+        let TmuxError::Spawn(io) = err else {
+            panic!("expected Spawn");
+        };
+        assert!(!io.to_string().is_empty());
+    }
+
+    #[test]
     #[ignore = "requires a real tmux binary and a controlling PTY"]
     fn real_tmux_roundtrip() {
         use std::time::{Duration, Instant};
 
         let socket = format!("ozmux-test-{}", std::process::id());
-        let client = TmuxBuilder::new()
-            .socket_name(&socket)
-            .new_session()
-            .expect("spawn tmux -CC new-session");
+        let server = TmuxServer::new().socket_name(&socket);
+        let client = server.new_session().expect("spawn tmux -CC new-session");
 
         let id = client.handle().send("list-panes").expect("send list-panes");
 
@@ -570,5 +703,35 @@ mod tests {
         assert!(observed, "did not observe CommandComplete for list-panes");
 
         let _ = client.handle().send("kill-session");
+    }
+
+    #[test]
+    #[ignore = "requires a real tmux binary"]
+    fn real_tmux_list_sessions() {
+        use std::time::Duration;
+
+        let socket = format!("ozmux-ls-{}", std::process::id());
+        let server = TmuxServer::new().socket_name(&socket);
+
+        assert_eq!(server.list_sessions().expect("list (no server)"), vec![]);
+
+        let client = server.new_session().expect("spawn tmux -CC new-session");
+        let name = format!("ozmux-ls-sess-{}", std::process::id());
+        client
+            .handle()
+            .send(&format!("rename-session {name}"))
+            .expect("rename-session");
+        std::thread::sleep(Duration::from_millis(500));
+
+        let sessions = server.list_sessions().expect("list");
+        let found = sessions
+            .iter()
+            .find(|s| s.name == name)
+            .expect("created session listed by name");
+        assert!(found.attached, "the -CC client is attached");
+        assert!(found.windows >= 1);
+
+        let _ = client.handle().send("kill-server");
+        drop(client);
     }
 }
