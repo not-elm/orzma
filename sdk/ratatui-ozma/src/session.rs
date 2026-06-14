@@ -32,6 +32,11 @@ impl FramePlacements {
     pub(crate) fn record(&mut self, handle: String, area: Rect) {
         self.placements.push(Placement { handle, area });
     }
+
+    #[cfg(test)]
+    pub(crate) fn placements_for_test(&self) -> &[Placement] {
+        &self.placements
+    }
 }
 
 /// Last-emitted geometry per handle, for diff-driven flush.

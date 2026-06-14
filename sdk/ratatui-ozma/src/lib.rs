@@ -15,3 +15,4 @@ mod widget;
 
 pub use session::Ozma;
 pub use webview::{Webview, WebviewHandle};
+pub use widget::{Blank, WebviewWidget};
