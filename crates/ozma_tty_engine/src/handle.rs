@@ -187,6 +187,20 @@ impl TerminalHandle {
         buf
     }
 
+    /// Stages damage from the current `Term` state and emits a frame
+    /// immediately, with no coalescer.
+    ///
+    /// The PTY path coalesces via `Coalescer`; tmux panes (whose `%output`
+    /// tmux has already batched) call this once per pane per frame after
+    /// `advance`. Handles the first-emit bootstrap (a blank Initial snapshot
+    /// on a fresh pane).
+    pub fn flush_emit(&mut self, commands: &mut Commands, entity: Entity) {
+        let mut scratch = std::mem::take(&mut self.scratch_dirty);
+        self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
+        self.scratch_dirty = scratch;
+        self.emit(commands, entity);
+    }
+
     /// Feeds a chunk of PTY bytes through the vte parsers into `Term`.
     ///
     /// The webview sibling parser LEADS via `advance_until_terminated`:
@@ -672,15 +686,9 @@ impl TerminalHandle {
     }
 
     /// Emit a frame for the damage stashed on `self.pending_damage`.
-    /// Disarms the coalescer.
-    pub(crate) fn emit(
-        &mut self,
-        commands: &mut Commands,
-        entity: Entity,
-        coalescer: &mut Coalescer,
-    ) {
+    pub(crate) fn emit(&mut self, commands: &mut Commands, entity: Entity) {
         let Some(mut dirty) = self.pending_damage.take() else {
-            self.abort_emit_with_no_damage(coalescer);
+            self.abort_emit_with_no_damage();
             return;
         };
 
@@ -706,7 +714,7 @@ impl TerminalHandle {
                 curr_selection,
             )
         {
-            self.finalize_emit(coalescer);
+            self.finalize_emit();
             return;
         }
 
@@ -723,14 +731,13 @@ impl TerminalHandle {
         self.prev_cursor = Some(curr_cursor);
         self.prev_vi_cursor = curr_vi_cursor;
         self.prev_selection = curr_selection;
-        self.finalize_emit(coalescer);
+        self.finalize_emit();
     }
 
     /// Cleanup path taken when `emit` is invoked with no staged
-    /// damage. Disarms the coalescer and discards any captured
-    /// window-open mode so the next chunk re-captures fresh.
-    fn abort_emit_with_no_damage(&mut self, coalescer: &mut Coalescer) {
-        coalescer.disarm();
+    /// damage. Discards any captured window-open mode so the next
+    /// chunk re-captures fresh.
+    fn abort_emit_with_no_damage(&mut self) {
         self.window_open_mode = None;
     }
 
@@ -917,12 +924,10 @@ impl TerminalHandle {
         }
     }
 
-    /// Resets alacritty's per-cycle damage tracker and disarms the
-    /// coalescer. Called at the end of every emit (both the noop-skip
-    /// and the normal-end path).
-    fn finalize_emit(&mut self, coalescer: &mut Coalescer) {
+    /// Resets alacritty's per-cycle damage tracker. Called at the end
+    /// of every emit (both the noop-skip and the normal-end path).
+    fn finalize_emit(&mut self) {
         self.term.reset_damage();
-        coalescer.disarm();
     }
 
     /// Stamps the anchor / applies state gates for a buffered OSC 5379 verb
@@ -2395,11 +2400,10 @@ mod tests {
 
         let mut world = World::new();
         let entity = world.spawn_empty().id();
-        let mut coalescer = Coalescer::default();
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            h.emit(&mut commands, entity, &mut coalescer);
+            h.emit(&mut commands, entity);
         }
         queue.apply(&mut world);
 
@@ -2414,7 +2418,7 @@ mod tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            h.emit(&mut commands, entity, &mut coalescer);
+            h.emit(&mut commands, entity);
         }
         queue.apply(&mut world);
         assert_eq!(
@@ -2435,11 +2439,10 @@ mod tests {
         h.pending_damage = None;
         let mut world = World::new();
         let entity = world.spawn_empty().id();
-        let mut coalescer = Coalescer::default();
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            h.emit(&mut commands, entity, &mut coalescer);
+            h.emit(&mut commands, entity);
         }
         queue.apply(&mut world);
 
@@ -2584,6 +2587,48 @@ mod tests {
             h.take_replies().is_empty(),
             "replies are drained, not re-read"
         );
+    }
+
+    #[test]
+    fn flush_emit_triggers_snapshot_for_detached_handle() {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::prelude::*;
+        use ozma_tty_renderer::schema::FrameSnapshot;
+
+        #[derive(Resource, Default)]
+        struct Hits {
+            count: u32,
+            cols: u16,
+            rows: u16,
+        }
+
+        let mut app = App::new();
+        app.init_resource::<Hits>();
+        app.add_observer(|snap: On<FrameSnapshot>, mut hits: ResMut<Hits>| {
+            hits.count += 1;
+            hits.cols = snap.cols;
+            hits.rows = snap.rows;
+        });
+        app.world_mut().spawn(TerminalHandle::detached(
+            20,
+            5,
+            Arc::new(AtomicBool::new(false)),
+        ));
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
+                    for (entity, mut handle) in &mut q {
+                        handle.advance(b"hello");
+                        handle.flush_emit(&mut commands, entity);
+                    }
+                },
+            )
+            .unwrap();
+        app.update();
+
+        let hits = app.world().resource::<Hits>();
+        assert_eq!(hits.count, 1, "exactly one snapshot emitted");
+        assert_eq!((hits.cols, hits.rows), (20, 5));
     }
 }
 
