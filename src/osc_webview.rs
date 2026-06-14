@@ -9,7 +9,6 @@ use crate::inline_webview::{
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
 use ozmux_multiplexer::{MultiplexerCommands, SurfaceOf};
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -22,13 +21,6 @@ pub(crate) struct OscWebviewGate(pub(crate) Arc<AtomicBool>);
 /// forwarded to the embedded page).
 #[derive(Component, Debug, Default)]
 pub(crate) struct NonInteractive;
-
-/// The host-API namespaces a webview is permitted to call (the per-webview
-/// capability grant the dormant host-RPC bridge reads). It is the in-ECS trust
-/// record, never derived from webview-supplied data. Currently always empty:
-/// the per-webview API registration that would populate it is not yet wired.
-#[derive(Component, Debug, Clone, Default)]
-pub(crate) struct GrantedNamespaces(pub(crate) HashSet<String>);
 
 /// Wires the OSC-webview mount/unmount observer and the config-driven gate.
 pub(crate) struct OzmuxOscWebviewPlugin;

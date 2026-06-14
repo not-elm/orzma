@@ -3,14 +3,12 @@
 A terminal multiplexer built as a single
 [Bevy](https://bevyengine.org/) application (`ozmux-gui`). Terminal emulation,
 GPU rendering, layout, input, and in-process CEF webview rendering all run in
-one ECS world. A single Node host process is spawned for the (dormant) host-RPC
-plumbing.
+one ECS world.
 
 ## Prerequisites
 
 - Rust 1.95 (pinned by `rust-toolchain.toml`)
-- Node ≥ 23.6 (the host runs as a single `node` process relying on native
-  TypeScript type-stripping; dev/CI use Node 24) + `pnpm@10.30.2`
+- Node + `pnpm@10.30.2` (for the `@ozmux/sdk` TypeScript package; dev/CI use Node 24)
 - The Chromium Embedded Framework, installed once:
   ```bash
   make setup-cef
@@ -28,7 +26,6 @@ cargo run               # or: make run
 - `src/` — the `ozmux-gui` Bevy binary
 - `crates/` — `ozma_tty_engine`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
 - `sdk/typescript` — `@ozmux/sdk` (the `./inline` OSC mount-sequence helper)
-- `host/` — `@ozmux/host`, the single Node host runtime (bundled to `assets/host.mjs`)
 
 ## Inline webviews
 

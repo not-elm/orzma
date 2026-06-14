@@ -5,7 +5,7 @@
 //! and its disconnect are emitted as `ControlEvent`s. A bounded reply channel
 //! per request carries the minted handle back from the ECS apply system; the
 //! reply is relayed through the per-connection writer thread so all writes go
-//! through a single owner. Mirrors `rpc_client.rs`.
+//! through a single owner.
 
 use crate::control_plane::ConnectionWriters;
 use crate::control_plane::TokenRegistry;
