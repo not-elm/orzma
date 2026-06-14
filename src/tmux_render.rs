@@ -36,7 +36,7 @@ impl Plugin for OzmuxTmuxRenderPlugin {
             (
                 attach_tmux_window_container,
                 attach_tmux_pane_terminal,
-                route_tmux_output,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
                 sync_active_window,
                 layout_tmux_panes,
             )
@@ -329,7 +329,11 @@ mod tests {
 
         app.add_systems(
             Update,
-            (attach_tmux_pane_terminal, route_tmux_output).chain(),
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
         );
 
         // Frame 1: attach the handle (no output yet).

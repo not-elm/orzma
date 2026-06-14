@@ -40,7 +40,7 @@ impl TmuxConnection {
     }
 
     /// Caches the control client name returned by the `display-message` query.
-    pub fn set_client_name(&mut self, name: String) {
+    pub(crate) fn set_client_name(&mut self, name: String) {
         self.client_name = Some(name);
     }
 }

@@ -16,7 +16,9 @@ impl Plugin for OzmuxTmuxInputPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            forward_keys_to_tmux.in_set(crate::input::InputPhase::FocusedKey),
+            forward_keys_to_tmux
+                .in_set(crate::input::InputPhase::FocusedKey)
+                .run_if(on_message::<KeyboardInput>),
         );
     }
 }

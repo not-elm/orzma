@@ -79,7 +79,7 @@ pub fn refresh_client_command(cols: u16, rows: u16) -> String {
 
 /// Builds `display-message -p '#{client_name}'` — prints the control
 /// client's name as a one-line command reply (correlated like `list-windows`).
-pub fn client_name_command() -> String {
+pub(crate) fn client_name_command() -> String {
     "display-message -p '#{client_name}'".to_string()
 }
 

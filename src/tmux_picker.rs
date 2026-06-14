@@ -20,7 +20,10 @@ impl Plugin for OzmuxTmuxPickerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SessionPicker>()
             .add_systems(Startup, (list_sessions_into_picker, spawn_picker_ui))
-            .add_systems(Update, handle_picker_input)
+            .add_systems(
+                Update,
+                handle_picker_input.after(crate::input::InputPhase::FocusedKey),
+            )
             .add_systems(
                 PostUpdate,
                 sync_picker_ui.run_if(resource_exists_and_changed::<SessionPicker>),
@@ -164,6 +167,7 @@ fn handle_picker_input(
     configs: Res<OzmuxConfigsResource>,
 ) {
     if !picker.open {
+        keys.clear();
         return;
     }
     let entry_count = picker.sessions.len() + 1;

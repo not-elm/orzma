@@ -6,6 +6,7 @@
 //! input plugin is a thin adapter.
 
 use bevy::input::keyboard::Key;
+use std::fmt::Write;
 
 /// Active keyboard modifiers for a key event.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -91,7 +92,7 @@ pub fn send_keys_command(client: &str, names: &[String]) -> String {
 pub fn send_bytes_command(pane: &str, bytes: &[u8]) -> String {
     let mut cmd = format!("send-keys -H -t {}", quote(pane));
     for b in bytes {
-        cmd.push_str(&format!(" {b:02x}"));
+        let _ = write!(cmd, " {b:02x}");
     }
     cmd
 }
