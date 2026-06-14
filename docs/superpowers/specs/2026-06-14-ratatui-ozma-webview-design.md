@@ -85,15 +85,15 @@ Webview              // builder: content + handlers, pre-registration
  ├─ inline(html: impl Into<String>) -> Webview
  ├─ dir(root: impl AsRef<Path>, entry: impl Into<String>) -> Webview
  ├─ interactive(bool) -> Webview           // control-plane focus/input flag (default true); fixed at register, not changeable per-frame
- ├─ fallback(impl Widget) -> Webview       // under-layer painted into cells
  └─ on(method, handler) -> Webview         // RPC handler, serde-typed
 
 WebviewHandle        // cheap Clone (Arc to write-half + handle id), returned by register
  ├─ emit(event, &payload) -> Result<()>    // push to window.ozmux.on(event, …)
  └─ id() -> &str
 
-WebviewWidget<'a>    // the StatefulWidget rendered each frame
- └─ new(&WebviewHandle) -> WebviewWidget   // optionally .fallback(...) per-frame
+WebviewWidget<'a, W = Blank>    // the StatefulWidget rendered each frame (State = FramePlacements)
+ ├─ new(handle_id: &str) -> WebviewWidget<'_, Blank>
+ └─ fallback(impl Widget) -> WebviewWidget   // under-layer painted into the cells (non-macOS / pre-paint)
 ```
 
 - `Ozma` owns the single `UnixStream`. Dropping it closes the socket; the control
