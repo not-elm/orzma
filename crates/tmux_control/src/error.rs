@@ -23,6 +23,12 @@ pub enum TmuxError {
     /// A command string contained an embedded newline.
     #[error("command contains an embedded newline")]
     InvalidCommand,
+    /// A `list-sessions` output line could not be parsed.
+    #[error("malformed list-sessions line: {line}")]
+    MalformedSessionList {
+        /// The offending line, verbatim.
+        line: String,
+    },
     /// Spawning the tmux process failed.
     // NOTE: `Io` carries `#[from]`, so `?` on an io::Error yields `Io`, not
     // `Spawn`. Construct `Spawn(e)` explicitly via `map_err` at spawn sites.
