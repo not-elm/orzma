@@ -131,6 +131,7 @@ pub(crate) struct InlineMountContext<'a> {
 pub(crate) struct InlineWebviewParams<'w, 's> {
     commands: Commands<'w, 's>,
     images: ResMut<'w, Assets<Image>>,
+    placements: Query<'w, 's, &'static mut InlinePlacement>,
     children: Query<'w, 's, &'static Children>,
     views: Query<'w, 's, &'static InlineWebview>,
     metrics: Option<Res<'w, TerminalCellMetricsResource>>,
@@ -203,22 +204,28 @@ pub(crate) fn mount_inline(
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline without anchor, dropping");
         return;
     };
+    let live = live_inline_children(&params.children, &params.views, ctx.terminal_surface);
+    if let Some((existing, _)) = live
+        .iter()
+        .find(|(_, v)| v.view_id == ctx.view_id && v.instance_id.as_deref() == ctx.instance_id)
+    {
+        let next = InlinePlacement {
+            anchor: anchor.mode,
+            rows: ctx.rows,
+            cols: ctx.cols,
+            frame_seq: anchor.frame_seq,
+        };
+        if let Ok(mut placement) = params.placements.get_mut(*existing) {
+            // NOTE: set_if_neq elides a no-op re-emit so an unchanged frame
+            // triggers neither a projection move nor a CEF surface resize.
+            placement.set_if_neq(next);
+        }
+        return;
+    }
     let Some(resolved) = resolve_mount(ctx.view_id, ctx.terminal_surface, dynamic) else {
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline for unregistered or unowned id, dropping");
         return;
     };
-    let live = live_inline_children(&params.children, &params.views, ctx.terminal_surface);
-    if live
-        .iter()
-        .any(|(_, v)| v.view_id == ctx.view_id && v.instance_id.as_deref() == ctx.instance_id)
-    {
-        tracing::debug!(
-            view_id = %ctx.view_id,
-            instance_id = ?ctx.instance_id,
-            "osc-webview: duplicate inline mount on this terminal, dropping"
-        );
-        return;
-    }
     let Some(slot) = smallest_free_slot(&live) else {
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: all inline overlay slots occupied, dropping");
         return;
@@ -868,18 +875,53 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_mount_same_view_is_rejected() {
+    fn duplicate_mount_updates_placement_in_place() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         register_dyn(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", Some(test_anchor()));
-        mount(&mut app, terminal, "dash", Some(test_anchor()));
+        let before = inline_children_of(&app, terminal);
+        assert_eq!(before.len(), 1, "first mount spawns one child");
+        let entity = before[0];
+        let slot_before = app.world().get::<InlineWebview>(entity).unwrap().slot;
 
+        // Re-mount the same handle with a different anchor.
+        app.world_mut().trigger(OscWebviewRequest {
+            entity: terminal,
+            verb: OscWebviewVerb::MountInline {
+                view_id: "dash".into(),
+                rows: 12,
+                cols: 50,
+                instance_id: None,
+            },
+            anchor: Some(InlineAnchor {
+                mode: AnchorMode::Scrollback { line: 99, col: 7 },
+                frame_seq: 9,
+            }),
+        });
+        app.world_mut().flush();
+
+        let after = inline_children_of(&app, terminal);
+        assert_eq!(after.len(), 1, "re-mount must NOT spawn a second child");
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
-            1,
-            "a duplicate (terminal, view_id) mount must be dropped"
+            after[0], entity,
+            "re-mount must reuse the same entity (no reload)"
+        );
+        assert_eq!(
+            app.world().get::<InlinePlacement>(entity),
+            Some(&InlinePlacement {
+                anchor: AnchorMode::Scrollback { line: 99, col: 7 },
+                rows: 12,
+                cols: 50,
+                frame_seq: 9,
+            }),
+            "re-mount updates the placement in place"
+        );
+        assert_eq!(
+            app.world().get::<InlineWebview>(entity).unwrap().slot,
+            slot_before,
+            "re-mount preserves the overlay slot"
         );
     }
 
