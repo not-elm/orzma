@@ -20,6 +20,6 @@ pub use connection::TmuxConnection;
 pub use enumerate::{LIST_WINDOWS_FORMAT, WindowRow, parse_window_rows};
 pub use model::{PaneModel, ProjectionModel, WindowModel, pane_leaves};
 pub use plugin::TmuxSessionPlugin;
-pub use reconcile::{TmuxProjection, reconcile_projection};
+pub use reconcile::TmuxProjection;
 pub use select::{AttachTarget, select_attach_target};
 pub use state::ConnectionState;

@@ -18,7 +18,7 @@ pub struct TmuxProjection {
 
 /// Spawns/updates/despawns `TmuxWindow`/`TmuxPane` entities so they match the
 /// current [`ProjectionModel`]. Runs only when the model changed.
-pub fn reconcile_projection(
+pub(crate) fn reconcile_projection(
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
     model: Res<ProjectionModel>,

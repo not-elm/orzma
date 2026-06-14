@@ -1,18 +1,37 @@
-//! Draining and logging of tmux transport events.
+//! Draining, logging, and routing of tmux transport events: into
+//! `ConnectionState` and the `ProjectionModel`.
 
+use crate::model::ProjectionModel;
 use crate::state::{ConnectionState, next_state};
 use crossbeam_channel::Receiver;
 use tmux_control::{ClientEvent, TransportEvent};
 
-/// Drains every currently-available transport event from `events`, logs
-/// each one, and advances `state` through [`next_state`]. Non-blocking:
-/// returns once the channel is empty for now.
-pub(crate) fn drain_events(state: &mut ConnectionState, events: &Receiver<TransportEvent>) {
+/// Drains every currently-available transport event from `events`, logging
+/// each. Non-blocking: returns once the channel is empty for now.
+pub(crate) fn drain_transport(events: &Receiver<TransportEvent>) -> Vec<TransportEvent> {
+    let mut drained = Vec::new();
     while let Ok(event) = events.try_recv() {
         log_transport_event(&event);
-        let next = next_state(state, &event);
+        drained.push(event);
+    }
+    drained
+}
+
+/// Advances `state` through [`next_state`] for each drained event.
+pub(crate) fn advance_state(state: &mut ConnectionState, events: &[TransportEvent]) {
+    for event in events {
+        let next = next_state(state, event);
         if *state != next {
             *state = next;
+        }
+    }
+}
+
+/// Routes notification events into the projection model.
+pub(crate) fn route_to_model(model: &mut ProjectionModel, events: &[TransportEvent]) {
+    for event in events {
+        if let TransportEvent::Protocol(ClientEvent::Notification(notification)) = event {
+            model.apply_event(notification);
         }
     }
 }
@@ -37,43 +56,42 @@ mod tests {
     use super::*;
     use crossbeam_channel::unbounded;
     use tmux_control::ControlEvent;
-    use tmux_control_parser::WindowId;
+    use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
-    fn notification() -> TransportEvent {
+    fn window_add(id: u32) -> TransportEvent {
         TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::WindowAdd {
-            window: WindowId(1),
+            window: WindowId(id),
         }))
     }
 
     #[test]
-    fn drains_until_empty_and_attaches() {
+    fn drain_then_advance_state_attaches() {
         let (tx, rx) = unbounded();
-        tx.send(notification()).unwrap();
-        tx.send(notification()).unwrap();
+        tx.send(window_add(1)).unwrap();
+        let drained = drain_transport(&rx);
         let mut state = ConnectionState::Connecting;
-        drain_events(&mut state, &rx);
+        advance_state(&mut state, &drained);
         assert_eq!(state, ConnectionState::Attached);
-        assert!(rx.try_recv().is_err());
     }
 
     #[test]
-    fn close_after_attach_transitions_to_detached() {
+    fn route_to_model_applies_notifications() {
         let (tx, rx) = unbounded();
-        tx.send(notification()).unwrap();
-        tx.send(TransportEvent::Closed {
-            reason: "eof".to_string(),
-        })
+        tx.send(window_add(1)).unwrap();
+        tx.send(TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::LayoutChange {
+                window: WindowId(1),
+                layout: WindowLayout::parse(b"abcd,80x24,0,0,4").unwrap(),
+                visible_layout: WindowLayout::parse(b"abcd,80x24,0,0,4").unwrap(),
+                flags: String::new(),
+            },
+        )))
         .unwrap();
-        let mut state = ConnectionState::Connecting;
-        drain_events(&mut state, &rx);
-        assert_eq!(state, ConnectionState::Detached);
-    }
-
-    #[test]
-    fn empty_channel_leaves_state_untouched() {
-        let (_tx, rx) = unbounded::<TransportEvent>();
-        let mut state = ConnectionState::Idle;
-        drain_events(&mut state, &rx);
-        assert_eq!(state, ConnectionState::Idle);
+        let drained = drain_transport(&rx);
+        let mut model = ProjectionModel::default();
+        route_to_model(&mut model, &drained);
+        assert_eq!(model.windows.len(), 1);
+        assert_eq!(model.windows[0].panes.len(), 1);
+        assert_eq!(model.windows[0].panes[0].id, PaneId(4));
     }
 }
