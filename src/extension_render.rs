@@ -66,10 +66,7 @@ impl Plugin for OzmuxExtensionRenderPlugin {
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
             .add_observer(log_webview_load_error)
-            .add_systems(
-                Update,
-                sync_focused_webview.after(OzmuxSystems::Input),
-            );
+            .add_systems(Update, sync_focused_webview.after(OzmuxSystems::Input));
     }
 }
 
