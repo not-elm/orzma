@@ -140,6 +140,12 @@ impl FocusManager {
         self.focused.is_some_and(|i| self.items[i].id == id)
     }
 
+    /// Returns the id of the currently-focused item, or `None` when nothing is
+    /// focused.
+    pub fn focused_id(&self) -> Option<&str> {
+        self.focused.map(|i| self.items[i].id.as_str())
+    }
+
     /// Whether the focused item is a native widget (or nothing is focused).
     pub fn focused_is_native(&self) -> bool {
         match self.focused {
@@ -427,6 +433,17 @@ mod tests {
         let mut fm = FocusManager::new();
         fm.add_native_at("only", rect(0, 0, 10, 5));
         assert_eq!(fm.navigate(Direction::Right), FocusSync::Unchanged);
+    }
+
+    #[test]
+    fn focused_id_tracks_the_focused_item() {
+        let mut fm = FocusManager::new();
+        assert_eq!(fm.focused_id(), None);
+        fm.add_native_at("a", rect(0, 0, 10, 5));
+        fm.add_native_at("b", rect(12, 0, 10, 5));
+        assert_eq!(fm.focused_id(), Some("a"));
+        fm.navigate(Direction::Right);
+        assert_eq!(fm.focused_id(), Some("b"));
     }
 
     #[test]

@@ -52,8 +52,6 @@ use ratatui_ozma::{
 use std::io::stdout;
 use std::time::Duration;
 
-const CELL_IDS: [&str; 4] = ["nw", "ne", "sw", "se"];
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (keymap, scheme_label) = nav_keymap();
     let mut ozma = Ozma::connect()?;
@@ -113,7 +111,7 @@ fn run(
     keymap: &NavKeymap,
     scheme_label: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut last_focus = String::new();
+    let mut last_focus: Option<String> = None;
     let mut last_key = String::from("(none yet)");
     loop {
         // Apply focus moves the page glue forwarded while a webview was focused.
@@ -123,16 +121,28 @@ fn run(
 
         // On focus change, push the focus tint AND the chosen nav keymap to the
         // webviews so the page glue intercepts the same chord this example uses.
-        let current = focused_id(focus);
+        // Own the id so it doesn't borrow `focus` across the `&mut focus` draw.
+        let current = focus.focused_id().map(str::to_owned);
         if current != last_focus {
-            let _ = ne.set_page_focus(current == "ne");
-            let _ = sw.set_page_focus(current == "sw");
+            let _ = ne.set_page_focus(current.as_deref() == Some("ne"));
+            let _ = sw.set_page_focus(current.as_deref() == Some("sw"));
             let _ = ne.set_nav_keys(keymap);
             let _ = sw.set_nav_keys(keymap);
             last_focus = current.clone();
         }
 
-        terminal.draw(|f| draw(f, ozma, focus, ne, sw, &current, scheme_label, &last_key))?;
+        terminal.draw(|f| {
+            draw(
+                f,
+                ozma,
+                focus,
+                ne,
+                sw,
+                current.as_deref(),
+                scheme_label,
+                &last_key,
+            )
+        })?;
         ozma.flush(terminal)?;
 
         if event::poll(Duration::from_millis(50))?
@@ -161,7 +171,7 @@ fn draw(
     focus: &mut FocusManager,
     ne: &WebviewHandle,
     sw: &WebviewHandle,
-    current: &str,
+    focused: Option<&str>,
     scheme_label: &str,
     last_key: &str,
 ) {
@@ -219,7 +229,7 @@ fn draw(
     );
 
     f.render_widget(
-        Paragraph::new(format!("FOCUS → {}", focus_label(current)))
+        Paragraph::new(format!("FOCUS → {}", focus_label(focused)))
             .style(Style::default().fg(Color::Yellow)),
         outer[2],
     );
@@ -232,21 +242,12 @@ fn draw(
     );
 }
 
-/// The id of the currently-focused cell, or an empty string when none is.
-fn focused_id(focus: &FocusManager) -> String {
-    CELL_IDS
-        .into_iter()
-        .find(|id| focus.is_focused(id))
-        .unwrap_or("")
-        .to_owned()
-}
-
-fn focus_label(id: &str) -> &'static str {
+fn focus_label(id: Option<&str>) -> &'static str {
     match id {
-        "nw" => "NW (native)",
-        "ne" => "NE (webview)",
-        "sw" => "SW (webview)",
-        "se" => "SE (native)",
+        Some("nw") => "NW (native)",
+        Some("ne") => "NE (webview)",
+        Some("sw") => "SW (webview)",
+        Some("se") => "SE (native)",
         _ => "(none)",
     }
 }
