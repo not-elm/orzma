@@ -6,7 +6,7 @@
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use crate::control_plane::{DynSource, DynamicRegistry, WebviewOwner};
-use crate::extension_render::preload::{build_dynamic_preload, build_preload, webview_url};
+use crate::extension_render::preload::build_dynamic_preload;
 use crate::input::InputPhase;
 use crate::input::mouse_buttons::resolve_pane_at_phys;
 use crate::osc_webview::{GrantedNamespaces, NonInteractive};
@@ -21,12 +21,11 @@ use bevy_cef::prelude::{
     FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
 use bevy_cef_core::prelude::Browsers;
-use bevy_terminal::InlineAnchor;
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
-use bevy_terminal_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
-use bevy_terminal_renderer::schema::TerminalGrid;
-use ozmux_extension_host::ViewRegistry;
+use ozma_tty_engine::InlineAnchor;
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
+use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
+use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_multiplexer::SurfaceMarker;
 
 /// Marks an inline webview entity and records its identity: the mounted
@@ -121,9 +120,9 @@ pub(crate) struct InlineMountContext<'a> {
     pub(crate) view_id: &'a str,
     /// The client-assigned instance id (`None` = implicit default instance).
     pub(crate) instance_id: Option<&'a str>,
-    /// Rect height in terminal cells (validated 1..=200 by `bevy_terminal`).
+    /// Rect height in terminal cells (validated 1..=200 by `ozma_tty_engine`).
     pub(crate) rows: u16,
-    /// Rect width in terminal cells (validated 1..=400 by `bevy_terminal`).
+    /// Rect width in terminal cells (validated 1..=400 by `ozma_tty_engine`).
     pub(crate) cols: u16,
     /// The VT-stamped anchor; `None` is a policy rejection (gate 1).
     pub(crate) anchor: Option<InlineAnchor>,
@@ -141,49 +140,30 @@ pub(crate) struct InlineWebviewParams<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
 
-/// The resolved content + trust facts for a `mount-inline;<id>`: a URL
-/// (`ozmux-ext://` static or `ozmux-dyn://` dynamic), the input policy, the
-/// granted capabilities, and whether the host bridge preload is injected.
+/// The resolved content + trust facts for a `mount-inline;<handle>`: the
+/// `ozmux-dyn://<handle>/…` URL, the input policy, and the registering
+/// program's `(connection_id, handle)` for back-channel routing.
 pub(crate) struct ResolvedWebviewMount {
     /// The URL to load (`WebviewSource::Url`). `None` signals a policy rejection.
     pub(crate) url: Option<String>,
     /// Whether the page receives pointer/keyboard input.
     pub(crate) interactive: bool,
-    /// Host-API namespaces granted (empty for Tier 1 dynamic).
-    pub(crate) capabilities: Vec<String>,
-    /// Whether to inject the `window.<ns>` host bridge preload.
-    pub(crate) host_bridge: bool,
-    /// The owning extension name for the preload context (`""` for dynamic).
-    pub(crate) extension_name: String,
-    /// For Tier 1 dynamic mounts: `(connection_id, handle)` of the registering
-    /// program, used to stamp `WebviewOwner` for back-channel routing. `None` for
-    /// Tier 2 (static extension) mounts.
+    /// `(connection_id, handle)` of the registering program, used to stamp
+    /// `WebviewOwner` for `window.ozmux` back-channel routing.
     pub(crate) owner: Option<(u64, String)>,
 }
 
-/// Resolves a `mount-inline` `<id>` to its content + trust facts: the static
-/// `ViewRegistry` (Tier 2) takes precedence, then the `DynamicRegistry`
-/// (Tier 1). Dynamic handles (both Dir and Inline) resolve to an
-/// `ozmux-dyn://<handle>/…` URL so each gets its own per-handle origin. A
-/// dynamic handle resolves ONLY when `requesting_surface` is its
-/// `owner_surface` — the scoping gate that stops one surface from mounting
-/// another's handle. Returns `None` for an unregistered or unowned id.
+/// Resolves a `mount-inline` `<handle>` against the `DynamicRegistry` (Tier 1).
+/// Dynamic handles (both Dir and Inline) resolve to an `ozmux-dyn://<handle>/…`
+/// URL so each gets its own per-handle origin. A handle resolves ONLY when
+/// `requesting_surface` is its `owner_surface` — the scoping gate that stops one
+/// surface from mounting another's handle. Returns `None` for an unregistered or
+/// unowned handle.
 pub(crate) fn resolve_mount(
     id: &str,
     requesting_surface: Entity,
-    views: &ViewRegistry,
     dynamic: &DynamicRegistry,
 ) -> Option<ResolvedWebviewMount> {
-    if let Some(view) = views.get(id) {
-        return Some(ResolvedWebviewMount {
-            url: Some(webview_url(&view.owning_ext, &view.entry)),
-            interactive: view.interactive,
-            capabilities: view.capabilities.clone(),
-            host_bridge: true,
-            extension_name: view.owning_ext.clone(),
-            owner: None,
-        });
-    }
     let view = dynamic.get(id)?;
     if view.owner_surface != requesting_surface {
         return None;
@@ -195,9 +175,6 @@ pub(crate) fn resolve_mount(
     Some(ResolvedWebviewMount {
         url: Some(format!("ozmux-dyn://{id}/{entry}")),
         interactive: view.interactive,
-        capabilities: Vec::new(),
-        host_bridge: false,
-        extension_name: String::new(),
         owner: Some((view.connection_id, id.to_string())),
     })
 }
@@ -222,7 +199,6 @@ pub(crate) fn resolve_mount(
 /// `sync_inline_webview_size` corrects it once real metrics arrive.
 pub(crate) fn mount_inline(
     params: &mut InlineWebviewParams,
-    registry: &ViewRegistry,
     dynamic: &DynamicRegistry,
     ctx: InlineMountContext<'_>,
 ) {
@@ -230,7 +206,7 @@ pub(crate) fn mount_inline(
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline without anchor, dropping");
         return;
     };
-    let Some(resolved) = resolve_mount(ctx.view_id, ctx.terminal_surface, registry, dynamic) else {
+    let Some(resolved) = resolve_mount(ctx.view_id, ctx.terminal_surface, dynamic) else {
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline for unregistered or unowned id, dropping");
         return;
     };
@@ -264,19 +240,9 @@ pub(crate) fn mount_inline(
         return;
     };
     let source = WebviewSource::new(url);
-    let granted = GrantedNamespaces(resolved.capabilities.iter().cloned().collect());
+    let granted = GrantedNamespaces::default();
     let webview = params.commands.spawn_empty().id();
-    let preload = if resolved.host_bridge {
-        build_preload(
-            ctx.workspace,
-            ctx.pane,
-            webview,
-            &resolved.extension_name,
-            &granted,
-        )
-    } else {
-        build_dynamic_preload(ctx.workspace, ctx.pane, webview)
-    };
+    let preload = build_dynamic_preload(ctx.workspace, ctx.pane, webview);
     // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
     // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
     // input paths and display-size allocators key on `With<WebviewSource>`
@@ -589,7 +555,7 @@ fn forward_inline_mouse_moves(
     }
 }
 
-/// The wire mode string `bevy_terminal`'s `mode_diff` emits for
+/// The wire mode string `ozma_tty_engine`'s `mode_diff` emits for
 /// `TermMode::ALT_SCREEN`.
 const ALT_SCREEN_MODE: &str = "alt-screen";
 
@@ -676,30 +642,30 @@ mod tests {
     use crate::osc_webview::on_osc_webview_request;
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
-    use bevy_terminal::{OscWebviewRequest, OscWebviewVerb};
-    use bevy_terminal_renderer::CellMetrics;
-    use ozmux_extension_host::RegisteredView;
+    use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
+    use ozma_tty_renderer::CellMetrics;
     use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 
     fn make_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin)
-            .init_resource::<ViewRegistry>()
             .init_resource::<DynamicRegistry>()
             .init_resource::<Assets<Image>>()
             .add_observer(on_osc_webview_request);
         app
     }
 
-    fn register_view(app: &mut App, view_id: &str, interactive: bool, caps: &[&str]) {
-        app.world_mut().resource_mut::<ViewRegistry>().register(
+    fn register_dyn(app: &mut App, view_id: &str, owner_surface: Entity, interactive: bool) {
+        use crate::control_plane::DynamicView;
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
             view_id.into(),
-            RegisteredView {
-                entry: "ui/dash.html".into(),
-                owning_ext: "memo".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
                 interactive,
-                capabilities: caps.iter().map(|s| (*s).to_string()).collect(),
+                owner_surface,
+                connection_id: 1,
             },
         );
     }
@@ -827,8 +793,8 @@ mod tests {
     #[test]
     fn mount_spawns_child_with_inline_components() {
         let mut app = make_test_app();
-        register_view(&mut app, "dash", true, &["fs"]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", Some(test_anchor()));
 
@@ -864,7 +830,7 @@ mod tests {
             .get::<WebviewSource>(child)
             .expect("inline webview must carry WebviewSource")
         {
-            WebviewSource::Url(url) => assert_eq!(url, "ozmux-ext://memo/ui/dash.html"),
+            WebviewSource::Url(url) => assert_eq!(url, "ozmux-dyn://dash/index.html"),
             other => panic!("unexpected WebviewSource: {other:?}"),
         }
         assert!(
@@ -875,7 +841,10 @@ mod tests {
             .world()
             .get::<GrantedNamespaces>(child)
             .expect("inline webview must carry GrantedNamespaces");
-        assert!(granted.0.contains("fs"));
+        assert!(
+            granted.0.is_empty(),
+            "a dynamic inline webview carries an empty (dormant) capability grant"
+        );
         assert!(
             app.world().get::<PreloadScripts>(child).is_some(),
             "inline webview must carry the shared preload scripts"
@@ -894,8 +863,8 @@ mod tests {
     #[test]
     fn duplicate_mount_same_view_is_rejected() {
         let mut app = make_test_app();
-        register_view(&mut app, "dash", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", Some(test_anchor()));
         mount(&mut app, terminal, "dash", Some(test_anchor()));
@@ -910,10 +879,10 @@ mod tests {
     #[test]
     fn slots_fill_in_order_and_a_fifth_mount_is_rejected() {
         let mut app = make_test_app();
-        for id in ["a", "b", "c", "d", "e"] {
-            register_view(&mut app, id, true, &[]);
-        }
         let terminal = spawn_terminal(&mut app);
+        for id in ["a", "b", "c", "d", "e"] {
+            register_dyn(&mut app, id, terminal, true);
+        }
 
         for id in ["a", "b", "c", "d"] {
             mount(&mut app, terminal, id, Some(test_anchor()));
@@ -935,10 +904,10 @@ mod tests {
     #[test]
     fn unmount_frees_the_slot_for_the_next_mount() {
         let mut app = make_test_app();
-        for id in ["a", "b", "c"] {
-            register_view(&mut app, id, true, &[]);
-        }
         let terminal = spawn_terminal(&mut app);
+        for id in ["a", "b", "c"] {
+            register_dyn(&mut app, id, terminal, true);
+        }
 
         mount(&mut app, terminal, "a", Some(test_anchor()));
         mount(&mut app, terminal, "b", Some(test_anchor()));
@@ -961,10 +930,10 @@ mod tests {
     #[test]
     fn unmount_all_despawns_every_inline_child() {
         let mut app = make_test_app();
-        for id in ["a", "b"] {
-            register_view(&mut app, id, true, &[]);
-        }
         let terminal = spawn_terminal(&mut app);
+        for id in ["a", "b"] {
+            register_dyn(&mut app, id, terminal, true);
+        }
         mount(&mut app, terminal, "a", Some(test_anchor()));
         mount(&mut app, terminal, "b", Some(test_anchor()));
         let children = inline_children_of(&app, terminal);
@@ -987,8 +956,8 @@ mod tests {
     #[test]
     fn non_interactive_view_is_stamped_non_interactive() {
         let mut app = make_test_app();
-        register_view(&mut app, "hud", false, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "hud", terminal, false);
 
         mount(&mut app, terminal, "hud", Some(test_anchor()));
 
@@ -1003,8 +972,8 @@ mod tests {
     #[test]
     fn mount_without_anchor_is_dropped() {
         let mut app = make_test_app();
-        register_view(&mut app, "dash", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", None);
 
@@ -1030,8 +999,8 @@ mod tests {
     #[test]
     fn two_instances_of_same_view_both_mount_in_separate_slots() {
         let mut app = make_test_app();
-        register_view(&mut app, "memo", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "memo", terminal, true);
 
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
@@ -1048,8 +1017,8 @@ mod tests {
     #[test]
     fn duplicate_view_instance_tuple_is_rejected() {
         let mut app = make_test_app();
-        register_view(&mut app, "memo", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "memo", terminal, true);
 
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
@@ -1064,8 +1033,8 @@ mod tests {
     #[test]
     fn default_instance_and_named_instance_coexist() {
         let mut app = make_test_app();
-        register_view(&mut app, "memo", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "memo", terminal, true);
 
         mount(&mut app, terminal, "memo", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
@@ -1082,8 +1051,8 @@ mod tests {
     #[test]
     fn unmount_one_instance_leaves_the_other() {
         let mut app = make_test_app();
-        register_view(&mut app, "memo", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "memo", terminal, true);
 
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
@@ -1102,9 +1071,9 @@ mod tests {
     #[test]
     fn unmount_view_scope_despawns_every_instance_of_that_view() {
         let mut app = make_test_app();
-        register_view(&mut app, "memo", true, &[]);
-        register_view(&mut app, "other", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "memo", terminal, true);
+        register_dyn(&mut app, "other", terminal, true);
 
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
@@ -1123,8 +1092,8 @@ mod tests {
     #[test]
     fn slot_cap_counts_all_instances_together() {
         let mut app = make_test_app();
-        register_view(&mut app, "memo", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "memo", terminal, true);
 
         for inst in ["a", "b", "c", "d"] {
             mount_instance(&mut app, terminal, "memo", inst, Some(test_anchor()));
@@ -1485,8 +1454,8 @@ mod tests {
     #[test]
     fn stale_overlays_clear_after_unmount_all() {
         let mut app = make_test_app();
-        register_view(&mut app, "dash", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "dash", terminal, true);
         app.world_mut()
             .entity_mut(terminal)
             .insert(projection_grid(7));
@@ -1537,8 +1506,8 @@ mod tests {
     #[test]
     fn size_sync_updates_webview_size_when_metrics_change() {
         let mut app = make_test_app();
-        register_view(&mut app, "dash", true, &[]);
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "dash", terminal, true);
         mount(&mut app, terminal, "dash", Some(test_anchor()));
         let child = inline_children_of(&app, terminal)[0];
         assert_eq!(
@@ -1583,13 +1552,13 @@ mod tests {
     #[test]
     fn size_sync_is_quiescent_when_nothing_changed() {
         let mut app = make_test_app();
-        register_view(&mut app, "dash", true, &[]);
         app.init_resource::<SizeChangeProbe>();
         app.add_systems(
             Update,
             (sync_inline_webview_size, probe_webview_size_changed).chain(),
         );
         let terminal = spawn_terminal(&mut app);
+        register_dyn(&mut app, "dash", terminal, true);
         mount(&mut app, terminal, "dash", Some(test_anchor()));
 
         app.update();
@@ -1839,20 +1808,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_mount_prefers_static_then_dynamic_and_enforces_owner_surface() {
+    fn resolve_mount_enforces_owner_surface() {
         use crate::control_plane::{DynSource, DynamicRegistry, DynamicView};
         let owner = Entity::from_bits(1);
         let other = Entity::from_bits(2);
-        let mut views = ViewRegistry::default();
-        views.register(
-            "static.view".into(),
-            RegisteredView {
-                entry: "dash.html".into(),
-                owning_ext: "memo".into(),
-                interactive: true,
-                capabilities: vec!["fs".into()],
-            },
-        );
         let mut dynamic = DynamicRegistry::default();
         dynamic.insert(
             "DYNHANDLE".into(),
@@ -1865,24 +1824,21 @@ mod tests {
             },
         );
 
-        let s = resolve_mount("static.view", other, &views, &dynamic).expect("static resolves");
-        assert_eq!(s.url.as_deref(), Some("ozmux-ext://memo/dash.html"));
-        assert!(s.host_bridge, "static (Tier 2) keeps the host bridge");
-
-        let d = resolve_mount("DYNHANDLE", owner, &views, &dynamic).expect("dynamic resolves");
+        let d = resolve_mount("DYNHANDLE", owner, &dynamic).expect("dynamic resolves");
         assert_eq!(d.url.as_deref(), Some("ozmux-dyn://DYNHANDLE/index.html"));
-        assert!(!d.host_bridge, "dynamic (Tier 1) has no host bridge");
-        assert!(d.capabilities.is_empty());
+        assert!(!d.interactive);
 
-        assert!(resolve_mount("DYNHANDLE", other, &views, &dynamic).is_none());
-        assert!(resolve_mount("ghost", owner, &views, &dynamic).is_none());
+        assert!(
+            resolve_mount("DYNHANDLE", other, &dynamic).is_none(),
+            "a handle resolves only from its owner surface"
+        );
+        assert!(resolve_mount("ghost", owner, &dynamic).is_none());
     }
 
     #[test]
     fn resolve_mount_dynamic_inline_yields_ozmux_dyn_url_via_index_html() {
         use crate::control_plane::{DynSource, DynamicRegistry, DynamicView};
         let owner = Entity::from_bits(1);
-        let views = ViewRegistry::default();
         let mut dynamic = DynamicRegistry::default();
         dynamic.insert(
             "INLINEH".into(),
@@ -1894,10 +1850,9 @@ mod tests {
                 connection_id: 1,
             },
         );
-        let r = resolve_mount("INLINEH", owner, &views, &dynamic).expect("inline resolves");
+        let r = resolve_mount("INLINEH", owner, &dynamic).expect("inline resolves");
         assert_eq!(r.url.as_deref(), Some("ozmux-dyn://INLINEH/index.html"));
-        assert!(!r.host_bridge);
-        assert!(r.capabilities.is_empty());
+        assert!(r.owner.is_some());
     }
 
     #[test]

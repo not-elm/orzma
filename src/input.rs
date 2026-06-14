@@ -29,7 +29,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
-use bevy_terminal::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
     Direction as ConfigDirection, KeyChord, Modifiers, ShortcutAction, SplitDirection,
     SurfaceOffset as ConfigSurfaceOffset, SwapOffset as ConfigSwapOffset, WorkspaceOffset,
@@ -107,9 +107,9 @@ pub(crate) fn dispatch_focused_key(
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
     mut handles: Query<(
-        &mut bevy_terminal::TerminalHandle,
-        &mut bevy_terminal::PtyHandle,
-        &mut bevy_terminal::Coalescer,
+        &mut ozma_tty_engine::TerminalHandle,
+        &mut ozma_tty_engine::PtyHandle,
+        &mut ozma_tty_engine::Coalescer,
     )>,
     mut focused_webview: Option<ResMut<FocusedWebview>>,
     mux: MultiplexerCommands,
@@ -476,7 +476,7 @@ fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
 }
 
 /// Translates a Bevy logical key into the `TerminalKey` variant the
-/// `bevy_terminal` codec accepts. Returns `None` for keys the terminal
+/// `ozma_tty_engine` codec accepts. Returns `None` for keys the terminal
 /// does not consume (F-keys, modifier-only keys, etc. — those keys are
 /// silently dropped).
 fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
@@ -515,7 +515,7 @@ fn shortcut_mods_to_terminal_mods(m: &Modifiers) -> TerminalModifiers {
 /// Resolves the active surface entity for `workspace` and triggers a
 /// `TerminalKeyInput` on it. Silently no-ops when the workspace has no
 /// active pane/surface yet, or when the target entity has no
-/// `TerminalHandle` (e.g. an extension surface) — the `bevy_terminal`
+/// `TerminalHandle` (e.g. an extension surface) — the `ozma_tty_engine`
 /// observer handles that case by also no-op'ing.
 fn forward_to_active_terminal(
     commands: &mut Commands,
@@ -606,7 +606,7 @@ mod tests {
     }
 
     use bevy::ecs::observer::On;
-    use bevy_terminal::TerminalKeyInput;
+    use ozma_tty_engine::TerminalKeyInput;
     use std::sync::{Arc, Mutex};
 
     #[derive(Resource, Default, Clone)]
@@ -635,7 +635,7 @@ mod tests {
 
     /// Resolves the active pane's Surface entity in the only window of the test
     /// app, returning its Entity id. The surface carries NO `TerminalHandle`,
-    /// so the `bevy_terminal` observer no-ops on the missing component — the
+    /// so the `ozma_tty_engine` observer no-ops on the missing component — the
     /// test capture observer still records the trigger regardless of observer
     /// order. The Surface entity *is* its own host, so no registry mapping is
     /// needed.
@@ -661,7 +661,7 @@ mod tests {
     /// the paste-gate integration tests that need to observe
     /// `pending_user_input` flipping after the gate runs.
     fn install_active_terminal_surface_with_handle(app: &mut App) -> Entity {
-        let opts = bevy_terminal::SpawnOptions {
+        let opts = ozma_tty_engine::SpawnOptions {
             cols: 10,
             rows: 5,
             shell: "/bin/sh".into(),
@@ -669,7 +669,7 @@ mod tests {
             env: Vec::new(),
             osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
-        let bundle = bevy_terminal::TerminalBundle::spawn(opts).expect("spawn /bin/sh");
+        let bundle = ozma_tty_engine::TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let surface = install_active_terminal_surface(app);
         app.world_mut().entity_mut(surface).insert(bundle);
         surface
@@ -699,8 +699,8 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 move |mut q: Query<(
-                    &mut bevy_terminal::TerminalHandle,
-                    &mut bevy_terminal::Coalescer,
+                    &mut ozma_tty_engine::TerminalHandle,
+                    &mut ozma_tty_engine::Coalescer,
                 )>| {
                     let (mut handle, mut coalescer) = q.get_mut(surface).unwrap();
                     for _ in 0..30 {
@@ -718,7 +718,7 @@ mod tests {
 
     fn is_at_bottom(app: &App, surface: Entity) -> bool {
         app.world()
-            .get::<bevy_terminal::TerminalHandle>(surface)
+            .get::<ozma_tty_engine::TerminalHandle>(surface)
             .unwrap()
             .is_at_bottom()
     }
@@ -960,7 +960,7 @@ mod tests {
             "single 'h' must produce exactly one TerminalKeyInput"
         );
         assert!(
-            matches!(&captured[0].key, bevy_terminal::TerminalKey::Text(s) if s == "h"),
+            matches!(&captured[0].key, ozma_tty_engine::TerminalKey::Text(s) if s == "h"),
             "captured key was {:?}",
             captured[0].key
         );
@@ -978,7 +978,10 @@ mod tests {
 
         let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
         assert_eq!(captured.len(), 1);
-        assert!(matches!(captured[0].key, bevy_terminal::TerminalKey::Enter));
+        assert!(matches!(
+            captured[0].key,
+            ozma_tty_engine::TerminalKey::Enter
+        ));
     }
 
     #[test]
@@ -1051,7 +1054,7 @@ mod tests {
             captured,
         );
         assert!(
-            matches!(&captured[0].key, bevy_terminal::TerminalKey::Text(s) if s == "a"),
+            matches!(&captured[0].key, ozma_tty_engine::TerminalKey::Text(s) if s == "a"),
             "captured key was {:?}, expected Text(\"a\")",
             captured[0].key,
         );
@@ -1106,13 +1109,13 @@ mod tests {
         {
             let mut handle = app
                 .world_mut()
-                .get_mut::<bevy_terminal::TerminalHandle>(surface_entity)
+                .get_mut::<ozma_tty_engine::TerminalHandle>(surface_entity)
                 .unwrap();
             handle.advance(b"\x1b[?2004h");
         }
         assert!(
             !app.world()
-                .get::<bevy_terminal::TerminalHandle>(surface_entity)
+                .get::<ozma_tty_engine::TerminalHandle>(surface_entity)
                 .unwrap()
                 .pending_user_input(),
             "precondition: no pending input before paste",
@@ -1127,7 +1130,7 @@ mod tests {
 
         assert!(
             app.world()
-                .get::<bevy_terminal::TerminalHandle>(surface_entity)
+                .get::<ozma_tty_engine::TerminalHandle>(surface_entity)
                 .unwrap()
                 .pending_user_input(),
             "after Cmd+V with bracketed paste on and seeded clipboard, handle.write must have been called (flipping pending_user_input to true)",
@@ -1145,7 +1148,7 @@ mod tests {
             .insert(crate::ui::copy_mode::CopyModeState);
         assert!(
             !app.world()
-                .get::<bevy_terminal::TerminalHandle>(surface_entity)
+                .get::<ozma_tty_engine::TerminalHandle>(surface_entity)
                 .unwrap()
                 .pending_user_input()
         );
@@ -1159,7 +1162,7 @@ mod tests {
 
         assert!(
             !app.world()
-                .get::<bevy_terminal::TerminalHandle>(surface_entity)
+                .get::<ozma_tty_engine::TerminalHandle>(surface_entity)
                 .unwrap()
                 .pending_user_input(),
             "copy-mode gate must consume Cmd+V before the paste gate; no write should occur",
@@ -1196,7 +1199,7 @@ mod tests {
         assert!(
             captured.iter().any(|ev| matches!(
                 &ev.key,
-                bevy_terminal::TerminalKey::Text(s) if s == "a"
+                ozma_tty_engine::TerminalKey::Text(s) if s == "a"
             )),
             "after Cmd+V, the next plain 'a' must forward to the terminal; captured: {:?}",
             captured,
@@ -1262,7 +1265,7 @@ mod tests {
         assert!(
             captured.iter().any(|ev| matches!(
                 &ev.key,
-                bevy_terminal::TerminalKey::Text(s) if s == "a"
+                ozma_tty_engine::TerminalKey::Text(s) if s == "a"
             )),
             "plain 'a' must forward to the terminal; captured: {:?}",
             captured,
@@ -1293,7 +1296,7 @@ mod tests {
         assert!(
             captured.iter().any(|ev| matches!(
                 &ev.key,
-                bevy_terminal::TerminalKey::Text(s) if s == "j"
+                ozma_tty_engine::TerminalKey::Text(s) if s == "j"
             )),
             "repeat=true 'j' must still forward to the terminal; captured: {:?}",
             captured,

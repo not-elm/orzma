@@ -6,8 +6,6 @@
 #[cfg(feature = "cef")]
 use crate::asset::{AssetOutcome, serve_static_asset};
 #[cfg(feature = "cef")]
-use crate::scheme::{bare_mime, status_text};
-#[cfg(feature = "cef")]
 use bevy_cef_core::prelude::{
     CefCustomScheme, CefSchemeBody, CefSchemeHandler, CefSchemeOptions, CefSchemeRequest,
     CefSchemeResponse,
@@ -27,8 +25,7 @@ pub enum DynAsset {
 
 /// A shared, interior-mutable map of dynamic `handle → DynAsset` for
 /// Tier 1 dynamic webview registrations. The CEF scheme handler is constructed
-/// at `CefPlugin::build()` and reads handles registered after its construction,
-/// mirroring `AssetSourceRegistry`.
+/// at `CefPlugin::build()` and reads handles registered after its construction.
 #[derive(Clone, Default)]
 pub struct DynAssetRegistry(Arc<RwLock<HashMap<String, DynAsset>>>);
 
@@ -102,6 +99,35 @@ fn resolve_request<'a>(registry: &DynAssetRegistry, url: &'a str) -> Result<Reso
         // registration for multi-file content.
         DynAsset::Inline(html) if path == "index.html" => Ok(ResolvedDyn::Inline(html)),
         DynAsset::Inline(_) => Err(404),
+    }
+}
+
+/// Returns the bare media type (drops any `;`-delimited parameters) for CEF's
+/// `mime_type` field, flooring an empty/blank input to `application/octet-stream`.
+/// CEF expects a bare type (e.g. `text/html`); a full `Content-Type` value with
+/// parameters (`text/html; charset=utf-8`) is not recognized, so Chromium fails
+/// to classify the document and renders blank. An empty `mime_type` triggers the
+/// same blank render, so it is floored to `application/octet-stream` (matching
+/// the SDK file handler's default) rather than passed through empty.
+#[cfg(feature = "cef")]
+fn bare_mime(content_type: &str) -> String {
+    let bare = content_type.split(';').next().unwrap_or("").trim();
+    if bare.is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        bare.to_string()
+    }
+}
+
+/// A minimal text `CefSchemeResponse` for error statuses (bevy_cef provides only
+/// `not_found()` / `bytes()`).
+#[cfg(feature = "cef")]
+fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
+    CefSchemeResponse {
+        status,
+        mime_type: "text/plain".into(),
+        headers: Vec::new(),
+        body: CefSchemeBody::Bytes(msg.as_bytes().to_vec()),
     }
 }
 
@@ -299,5 +325,24 @@ mod tests {
             resolve_request(&reg, "ozmux-dyn://h1/index.html").err(),
             Some(404)
         );
+    }
+
+    #[cfg(feature = "cef")]
+    #[test]
+    fn bare_mime_strips_charset_parameter() {
+        assert_eq!(bare_mime("text/html; charset=utf-8"), "text/html");
+        assert_eq!(
+            bare_mime("text/javascript; charset=utf-8"),
+            "text/javascript"
+        );
+        assert_eq!(bare_mime("application/wasm"), "application/wasm");
+    }
+
+    #[cfg(feature = "cef")]
+    #[test]
+    fn bare_mime_floors_empty_to_octet_stream() {
+        assert_eq!(bare_mime(""), "application/octet-stream");
+        assert_eq!(bare_mime("   "), "application/octet-stream");
+        assert_eq!(bare_mime("; charset=utf-8"), "application/octet-stream");
     }
 }

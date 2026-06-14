@@ -11,12 +11,12 @@ use crate::system_set::OzmuxSystems;
 use crate::ui::{TerminalSpawnFailed, TerminalSurfaceMarker};
 use bevy::prelude::*;
 use bevy::ui::UiSystems;
-use bevy_terminal::{
+use ozma_tty_engine::{
     Coalescer, PtyHandle, SpawnOptions, TerminalBundle, TerminalCurrentDir, TerminalHandle,
 };
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
-use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
+use ozma_tty_renderer::prelude::{TerminalGrid, TerminalRenderBundle};
 use ozmux_multiplexer::{Cwd, OwningWorkspace, PaneMarker, SurfaceOf};
 
 pub struct OzmuxTerminalUiPlugin;
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn current_dir_event_writes_cwd_on_surface() {
         use bevy::prelude::*;
-        use bevy_terminal::TerminalCurrentDir;
+        use ozma_tty_engine::TerminalCurrentDir;
         use ozmux_multiplexer::Cwd;
 
         let mut app = App::new();

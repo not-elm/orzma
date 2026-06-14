@@ -1,6 +1,6 @@
 # Inline webviews
 
-ozmux can render a registered extension view **inline in the terminal text
+ozmux can render a registered webview **inline in the terminal text
 flow** — like the Kitty image protocol, but the surface is a live CEF webview.
 The view is composited inside the terminal's own fragment shader, so it scrolls
 with the surrounding text, clips at the viewport edges, and sits under the
@@ -9,12 +9,11 @@ rides the IOSurface accelerated-paint pipeline).
 
 ## Enabling it
 
-- Inline webviews ride the same OSC 5379 gate as tab-style webviews:
-  `osc_webview.enabled` in `~/.config/ozmux/config.toml` (default **on**).
-- The bundled `extensions/` directory is **dev-only** — it is discovered only
-  under the `debug` cargo feature. Run with `cargo run --features debug` to use
-  the bundled `memo` sample; a shipped binary discovers only user-installed
-  extensions.
+- Inline webviews ride the OSC 5379 gate: `osc_webview.enabled` in
+  `~/.config/ozmux/config.toml` (default **on**).
+- The mounted `<handle>` must first be registered over the control plane (see
+  [`dyn-webview.md`](dyn-webview.md)); a program registers content, receives an
+  opaque handle, then mounts it with the OSC sequence below.
 
 ## Protocol — OSC 5379
 
@@ -27,8 +26,8 @@ mount-inline:    ESC ] 5379 ; mount-inline ; <view_id> ; <rows> ; <cols> [ ; <in
 unmount-inline:  ESC ] 5379 ; unmount-inline [ ; <view_id> [ ; <instance_id> ] ] ESC \
 ```
 
-- `<view_id>` — a view declared in an extension's `ozmux.toml`; must match
-  `^[A-Za-z0-9._-]{1,128}$`.
+- `<view_id>` — an opaque handle minted by the control-plane registration that
+  owns the writing surface; must match `^[A-Za-z0-9._-]{1,128}$`.
 - `<rows>` / `<cols>` — the rect size in **terminal cells**; integers
   `1..=200` and `1..=400`. The CEF page is laid out at exactly that cell
   rectangle (× DPR); content is not scaled, so the page reflows to fit (no
@@ -74,7 +73,7 @@ Caveats (the rect is anchored to an absolute scrollback line, not reflowed):
 ## SDK helper
 
 `@ozmux/sdk/inline` builds the sequences (with validation and the newline
-reservation) so extension tooling doesn't hand-roll escape codes:
+reservation) so tooling doesn't hand-roll escape codes:
 
 ```ts
 import { mountInline, unmountInline } from '@ozmux/sdk/inline';
@@ -94,14 +93,14 @@ process.stdout.write(unmountInline());                    // every inline webvie
 string (one atomic `write`). It throws `RangeError` on an invalid view id or
 out-of-range geometry rather than emitting a sequence the terminal would drop.
 
-The bundled sample is `extensions/memo/mount.ts` — run it inside an ozmux
-terminal (`cargo run --features debug`) with `node extensions/memo/mount.ts`
-(or `pnpm --filter memo mount`).
+For a runnable end-to-end client (register over the control plane → mount →
+`window.ozmux` back-channel) see `examples/dyn_webview_client.rs`:
+`cargo run --example dyn_webview_client` inside an ozmux terminal.
 
 ## Focus and input
 
 An inline webview starts render-only. Interaction follows a click-to-focus
-model (this matches the `interactive = true` flag in the view's `ozmux.toml`;
+model (this matches the `interactive` flag in the control-plane registration;
 a non-interactive view never takes focus or input):
 
 - **Click** inside the rect focuses the page (a focus ring appears); the click

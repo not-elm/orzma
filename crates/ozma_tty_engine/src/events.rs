@@ -5,7 +5,7 @@
 //! and observed by `TerminalHandlePlugin` (`TerminalKeyInput`).
 //!
 //! Frame events (`FrameSnapshot`, `FrameDelta`) come from
-//! `bevy_terminal_renderer::schema` and are emitted via
+//! `ozma_tty_renderer::schema` and are emitted via
 //! `commands.trigger(FrameSnapshot { entity, .. })` — the
 //! `#[event_target] entity` field routes the trigger to the
 //! correct observer.

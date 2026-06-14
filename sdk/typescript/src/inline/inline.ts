@@ -36,11 +36,12 @@ function assertDim(name: string, value: number, max: number): void {
  * reserve its vertical space, as a single string for one atomic `write()`.
  *
  * The webview is anchored at the cursor position when this is written, so the
- * caller positions the cursor first (e.g. print a heading). `view_id` must be
- * registered in an extension's `ozmux.toml`; `rows`/`cols` are validated to
- * 1..=200 / 1..=400 (out-of-range throws `RangeError` rather than emitting a
- * sequence the terminal would silently drop). An optional `instanceId` is
- * appended as a 5th field to address a specific instance of the view.
+ * caller positions the cursor first (e.g. print a heading). `view_id` is a
+ * handle registered over the control plane (a dynamic registration owned by the
+ * writing surface); `rows`/`cols` are validated to 1..=200 / 1..=400
+ * (out-of-range throws `RangeError` rather than emitting a sequence the terminal
+ * would silently drop). An optional `instanceId` is appended as a 5th field to
+ * address a specific instance of the view.
  */
 export function mountInline(viewId: string, geometry: InlineGeometry): string {
   assertId('view id', viewId);

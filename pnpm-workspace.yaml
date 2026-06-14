@@ -1,7 +1,6 @@
 packages:
   - host
   - sdk/*
-  - extensions/*
 
 catalog:
   '@types/node': ^24.12.2

@@ -140,8 +140,8 @@ mod tests {
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
-    use bevy_terminal_renderer::material::TerminalUiMaterial;
-    use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
+    use ozma_tty_renderer::material::TerminalUiMaterial;
+    use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
     use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin};
 
     /// Collects the rendered text of every tab (the `Text` child of each
@@ -566,7 +566,7 @@ mod tests {
     /// `sync_terminal_dim` has assigned a `PaneDim`. The surface *is* its own
     /// host, so the owning pane is resolved via `SurfaceOf`.
     fn terminal_host_pane_dims(world: &mut World) -> Vec<(Entity, f32)> {
-        use bevy_terminal_renderer::material::PaneDim;
+        use ozma_tty_renderer::material::PaneDim;
         use ozmux_multiplexer::SurfaceOf;
         world
             .query_filtered::<(&SurfaceOf, &PaneDim), With<TerminalSurfaceMarker>>()
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn lone_terminal_pane_is_full_bright_and_unveiled() {
-        use bevy_terminal_renderer::material::PaneDim;
+        use ozma_tty_renderer::material::PaneDim;
 
         let (mut app, _guard) = make_test_app();
         for _ in 0..4 {
@@ -957,7 +957,7 @@ mod tests {
 
     #[test]
     fn osc7_current_dir_updates_tab() {
-        use bevy_terminal::TerminalCurrentDir;
+        use ozma_tty_engine::TerminalCurrentDir;
         use ozmux_multiplexer::SurfaceMarker;
 
         let (mut app, _guard) = make_test_app();

@@ -28,8 +28,8 @@ pub enum FineModifier {
 
 /// Fully-resolved `[mouse]` config block. Consumed by the Bevy
 /// mouse-wheel and mouse-button input systems; the wheel-relevant
-/// subset is mapped to `bevy_terminal::WheelConfig`, and the
-/// button-relevant subset to `bevy_terminal::ButtonConfig`.
+/// subset is mapped to `ozma_tty_engine::WheelConfig`, and the
+/// button-relevant subset to `ozma_tty_engine::ButtonConfig`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct MouseConfig {
     /// Lines scrolled per notch in the scrollback / alt-screen paths.
