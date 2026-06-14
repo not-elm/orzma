@@ -150,6 +150,12 @@ impl Ozma {
         let result = flush_placements(terminal.backend_mut(), &mut self.flush_state, &placements);
         self.frame.placements = placements;
         result?;
+        // NOTE: only take the writer lock (shared with the reader thread and
+        // every WebviewHandle::emit) when focus actually changed; flush runs
+        // every render frame and the unchanged path must not contend the lock.
+        if self.flush_state.last_focused == self.frame.focused {
+            return Ok(());
+        }
         let mut w = self.writer.lock()?;
         flush_focus(
             &mut *w,

@@ -654,10 +654,9 @@ fn fill_cef_keyboard_filter(
 ) {
     let entries: Vec<(Entity, KeyCode, ModifiersState)> = focused_webview
         .and_then(|f| f.0)
-        .and_then(|e| passthrough_q.get(e).ok().map(|p| (e, p.0.clone())))
-        .map(|(e, chords)| {
-            chords
-                .iter()
+        .and_then(|e| passthrough_q.get(e).ok().map(|p| (e, p)))
+        .map(|(e, p)| {
+            p.0.iter()
                 .map(|c| {
                     (
                         e,
