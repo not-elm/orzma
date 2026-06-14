@@ -9,6 +9,7 @@ use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::mouse::MousePatch;
 use crate::osc_webview::OscWebviewPatch;
 use crate::shortcuts::Shortcuts;
+use crate::tmux::TmuxPatch;
 use crate::theme::ThemePatch;
 use serde::Deserialize;
 
@@ -23,6 +24,7 @@ pub(crate) struct RawConfigs {
     pub(crate) mouse: Option<MousePatch>,
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
     pub(crate) osc_webview: Option<OscWebviewPatch>,
+    pub(crate) tmux: Option<TmuxPatch>,
 }
 
 impl RawConfigs {
@@ -48,6 +50,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.osc_webview {
             base.osc_webview = patch.apply_to(base.osc_webview);
+        }
+        if let Some(patch) = self.tmux {
+            base.tmux = patch.apply_to(base.tmux);
         }
         base
     }
@@ -179,6 +184,27 @@ enabled = false
             defaulted.osc_webview.enabled,
             "empty TOML must keep the default-on gate"
         );
+    }
+
+    #[test]
+    fn tmux_section_merges_from_toml() {
+        let toml_str = r#"
+[tmux]
+program = "/usr/local/bin/tmux"
+auto_connect = true
+"#;
+        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.tmux.program, "/usr/local/bin/tmux");
+        assert!(merged.tmux.auto_connect);
+        assert_eq!(merged.tmux.socket_name, None);
+    }
+
+    #[test]
+    fn missing_tmux_section_uses_defaults() {
+        let raw: RawConfigs = toml::from_str("").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.tmux, crate::tmux::TmuxConfig::default());
     }
 
     #[test]

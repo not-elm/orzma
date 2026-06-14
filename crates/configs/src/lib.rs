@@ -38,6 +38,8 @@ pub struct OzmuxConfigs {
     pub inactive_pane: InactivePaneConfig,
     /// OSC-driven webview configuration.
     pub osc_webview: OscWebviewConfig,
+    /// tmux backend configuration.
+    pub tmux: tmux::TmuxConfig,
 }
 
 impl OzmuxConfigs {
