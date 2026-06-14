@@ -32,6 +32,14 @@ pub(crate) enum ClientMsg {
         /// The event payload.
         payload: Value,
     },
+    /// Sets (or clears) the app-owned focus target. `handle: None` blurs any
+    /// focused webview back to the app (native widget).
+    Focus {
+        /// The webview handle to focus, or `None` to blur.
+        handle: Option<String>,
+        /// The mount instance id, or `None` for the default instance.
+        instance: Option<String>,
+    },
 }
 
 /// The content variants of a `register` request.
@@ -175,5 +183,30 @@ mod tests {
         assert_eq!(c.handle, "h");
         assert_eq!(c.method, "ping");
         assert_eq!(c.args, vec![serde_json::json!("x")]);
+    }
+
+    #[test]
+    fn focus_serializes_with_handle() {
+        let line = serde_json::to_string(&ClientMsg::Focus {
+            handle: Some("h1".into()),
+            instance: None,
+        })
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert_eq!(v["handle"], "h1");
+        assert_eq!(v["instance"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn blur_serializes_with_null_handle() {
+        let line = serde_json::to_string(&ClientMsg::Focus {
+            handle: None,
+            instance: None,
+        })
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert_eq!(v["handle"], serde_json::Value::Null);
     }
 }
