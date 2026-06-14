@@ -917,23 +917,28 @@ impl TerminalHandle {
         // (spec §3).
         self.run_history_maintenance();
         let anchor = if matches!(verb, OscWebviewVerb::MountInline { .. }) {
-            if self.term.mode().contains(TermMode::ALT_SCREEN) {
-                tracing::debug!("mount-inline rejected: alternate screen active");
-                return;
-            }
-            if self.saturated {
-                tracing::debug!("mount-inline rejected: scrollback saturated");
-                return;
-            }
             let cursor = self.term.grid().cursor.point;
-            self.force_next_emit = true;
-            Some(InlineAnchor {
-                mode: AnchorMode::Scrollback {
+            let col = cursor.column.0 as u16;
+            let mode = if self.term.mode().contains(TermMode::ALT_SCREEN) {
+                AnchorMode::FixedScreen {
+                    row: cursor.line.0.max(0) as u16,
+                    col,
+                }
+            } else {
+                if self.saturated {
+                    tracing::debug!("mount-inline rejected: scrollback saturated");
+                    return;
+                }
+                AnchorMode::Scrollback {
                     line: self.history_base
                         + self.term.history_size() as u64
                         + cursor.line.0.max(0) as u64,
-                    col: cursor.column.0 as u16,
-                },
+                    col,
+                }
+            };
+            self.force_next_emit = true;
+            Some(InlineAnchor {
+                mode,
                 frame_seq: self.frame_seq,
             })
         } else {
@@ -2220,26 +2225,58 @@ mod tests {
     }
 
     #[test]
-    fn alt_screen_mount_rejected() {
+    fn mount_inline_on_alt_screen_stamps_fixed_screen_anchor() {
+        let (mut h, rx) = handle_with_gate_on(20, 5);
+        h.advance(b"\x1b[?1049h");
+        h.advance(b"\r\n\r\n");
+        h.advance(b"\x1b]5379;mount-inline;v;3;5\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount frame on alt screen")
+        else {
+            panic!("expected mount with anchor on alt screen");
+        };
+        assert_eq!(
+            anchor.mode,
+            AnchorMode::FixedScreen { row: 2, col: 0 },
+            "alt-screen mount stamps a viewport-relative FixedScreen anchor"
+        );
+    }
+
+    #[test]
+    fn alt_screen_mount_then_primary_uses_scrollback() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx.try_recv().expect("mount frame on alt screen")
+        else {
+            panic!("expected mount with anchor on alt screen");
+        };
         assert!(
-            rx.try_recv().is_err(),
-            "mount-inline rejected on alt screen"
+            matches!(anchor.mode, AnchorMode::FixedScreen { .. }),
+            "alt-screen mount stamps FixedScreen, got {:?}",
+            anchor.mode
         );
         h.advance(b"\x1b[?1049l");
         h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
-        let frame = rx
+        let ControlFrame::OscWebview {
+            anchor: Some(anchor),
+            ..
+        } = rx
             .try_recv()
-            .expect("accepted again after returning to primary");
-        assert!(matches!(
-            frame,
-            ControlFrame::OscWebview {
-                verb: OscWebviewVerb::MountInline { .. },
-                anchor: Some(_)
-            }
-        ));
+            .expect("accepted again after returning to primary")
+        else {
+            panic!("expected mount with anchor on primary screen");
+        };
+        assert!(
+            matches!(anchor.mode, AnchorMode::Scrollback { .. }),
+            "primary-screen mount stamps Scrollback, got {:?}",
+            anchor.mode
+        );
     }
 
     #[test]
