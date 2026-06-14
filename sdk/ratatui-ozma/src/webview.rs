@@ -98,6 +98,28 @@ impl WebviewHandle {
         w.flush()?;
         Ok(())
     }
+
+    /// Requests host focus on this webview (default instance).
+    ///
+    /// The host sets `FocusedWebview` to this handle's mounted inline webview;
+    /// keystrokes then reach the page natively until the app blurs or moves
+    /// focus.
+    pub fn focus(&self) -> OzmaResult<()> {
+        self.send_focus(Some(self.id.clone()), None)
+    }
+
+    /// Requests host focus on a named mount instance of this webview.
+    pub fn focus_instance(&self, instance: &str) -> OzmaResult<()> {
+        self.send_focus(Some(self.id.clone()), Some(instance.to_owned()))
+    }
+
+    fn send_focus(&self, handle: Option<String>, instance: Option<String>) -> OzmaResult<()> {
+        let line = serde_json::to_string(&ClientMsg::Focus { handle, instance })?;
+        let mut w = self.writer.lock()?;
+        writeln!(w, "{line}")?;
+        w.flush()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -139,5 +161,20 @@ mod tests {
         let wv = Webview::inline("x").on("ping", |(n,): (String,)| Ok(format!("pong:{n}")));
         let h = wv.handlers.get("ping").expect("handler present");
         assert_eq!(h(vec![json!("hi")]).unwrap(), json!("pong:hi"));
+    }
+
+    #[test]
+    fn focus_writes_focus_op_line() {
+        use std::io::{BufRead, BufReader};
+        use std::os::unix::net::UnixStream;
+        let (a, b) = UnixStream::pair().unwrap();
+        let writer = std::sync::Arc::new(std::sync::Mutex::new(a));
+        let handle = WebviewHandle::new("view-1".to_owned(), writer);
+        handle.focus().unwrap();
+        let mut line = String::new();
+        BufReader::new(b).read_line(&mut line).unwrap();
+        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert_eq!(v["handle"], "view-1");
     }
 }
