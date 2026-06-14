@@ -38,15 +38,18 @@ fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model:
         .flat_map(|w| w.panes.iter().map(|p| p.id))
         .collect();
 
-    index.windows.retain(|id, entity| {
-        let keep = live_windows.contains(id);
+    // NOTE: panes must be despawned before their parent windows; despawning a
+    // window entity would cascade to its ChildOf children, causing a
+    // double-despawn of any pane entity still tracked in the index.
+    index.panes.retain(|id, entity| {
+        let keep = live_panes.contains(id);
         if !keep {
             commands.entity(*entity).despawn();
         }
         keep
     });
-    index.panes.retain(|id, entity| {
-        let keep = live_panes.contains(id);
+    index.windows.retain(|id, entity| {
+        let keep = live_windows.contains(id);
         if !keep {
             commands.entity(*entity).despawn();
         }
@@ -75,20 +78,27 @@ fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model:
         }
     }
     for window in &model.windows {
+        let window_entity = index.windows[&window.id];
         for pane in &window.panes {
             match index.panes.get(&pane.id) {
                 Some(entity) => {
-                    commands.entity(*entity).insert(TmuxPane {
-                        id: pane.id,
-                        dims: pane.dims,
-                    });
+                    commands.entity(*entity).insert((
+                        TmuxPane {
+                            id: pane.id,
+                            dims: pane.dims,
+                        },
+                        ChildOf(window_entity),
+                    ));
                 }
                 None => {
                     let entity = commands
-                        .spawn(TmuxPane {
-                            id: pane.id,
-                            dims: pane.dims,
-                        })
+                        .spawn((
+                            TmuxPane {
+                                id: pane.id,
+                                dims: pane.dims,
+                            },
+                            ChildOf(window_entity),
+                        ))
                         .id();
                     index.panes.insert(pane.id, entity);
                 }
@@ -210,5 +220,28 @@ mod tests {
         app.world_mut().resource_mut::<ProjectionModel>().session = None;
         app.update();
         assert!(app.world().resource::<TmuxProjection>().session.is_none());
+    }
+
+    #[test]
+    fn pane_is_child_of_its_window() {
+        let mut app = app();
+        app.world_mut().resource_mut::<ProjectionModel>().windows = vec![WindowModel {
+            id: WindowId(1),
+            active: true,
+            name: "main".to_string(),
+            panes: vec![PaneModel {
+                id: PaneId(9),
+                dims: dims(),
+            }],
+        }];
+        app.update();
+        let index = app.world().resource::<TmuxProjection>();
+        let window_entity = index.windows[&WindowId(1)];
+        let pane_entity = index.panes[&PaneId(9)];
+        let child_of = app
+            .world()
+            .get::<ChildOf>(pane_entity)
+            .expect("pane has ChildOf");
+        assert_eq!(child_of.parent(), window_entity);
     }
 }
