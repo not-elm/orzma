@@ -490,48 +490,15 @@ impl Bindings {
     }
 }
 
-/// All shortcut actions supported by ozmux v0.
+/// Shortcut actions reachable under forward-only key routing. tmux owns the
+/// pane/window operations now, so only the two ozmux-local actions remain.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ShortcutAction {
-    /// Close the active workspace.
-    CloseWorkspace,
-    /// Jump to a workspace by index.
-    FocusWorkspaceNumber {
-        /// Target workspace index (0–9 in practice).
-        index: u8,
-    },
-    /// Rename the active workspace.
-    RenameWorkspace,
-    /// Show the workspace list.
-    ListWorkspaces,
-    /// Resize the active pane in a direction.
-    ResizePane {
-        /// Resize direction.
-        direction: Direction,
-    },
-    /// Toggle zoom/maximize on the active pane.
-    ZoomPane,
-    /// Break the active pane into a new workspace.
-    BreakPaneToWorkspace,
     /// Paste the system clipboard into the active terminal.
     Paste,
     /// Releases keyboard focus from a focused inline webview back to the terminal.
     ReleaseInlineFocus,
-}
-
-/// Layout direction shared by `FocusPane` and `ResizePane`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Direction {
-    /// Up.
-    Up,
-    /// Down.
-    Down,
-    /// Left.
-    Left,
-    /// Right.
-    Right,
 }
 
 #[cfg(test)]

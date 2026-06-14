@@ -40,7 +40,8 @@ pub mod workspace;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
 /// never despawned. Hosts `WorkspaceUiRoot` (the attachment point for the
-/// active workspace) and `StatusBarRoot` as direct children.
+/// active workspace), the tmux window status bar (`WindowBarRoot`), and —
+/// in non-tmux mode — the legacy `StatusBarRoot`, as direct children.
 #[derive(Component)]
 pub struct UiRoot;
 
