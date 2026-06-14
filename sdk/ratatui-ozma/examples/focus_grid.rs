@@ -38,7 +38,7 @@
 use ratatui::Frame;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -47,23 +47,15 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Paragraph};
 use ratatui_ozma::{
-    Direction, FocusManager, Ozma, Webview, WebviewHandle, WebviewWidget, focusable,
+    FocusManager, NavKeymap, Ozma, Webview, WebviewHandle, WebviewWidget, focusable,
 };
 use std::io::stdout;
 use std::time::Duration;
 
 const CELL_IDS: [&str; 4] = ["nw", "ne", "sw", "se"];
 
-/// Which key scheme drives focus movement.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum NavScheme {
-    Arrows,
-    Alt,
-    Ctrl,
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let scheme = nav_scheme();
+    let (keymap, scheme_label) = nav_keymap();
     let mut ozma = Ozma::connect()?;
     let mut focus = FocusManager::new();
 
@@ -94,7 +86,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
-        run(&mut terminal, &mut ozma, &mut focus, &ne, &sw, scheme)
+        run(
+            &mut terminal,
+            &mut ozma,
+            &mut focus,
+            &ne,
+            &sw,
+            &keymap,
+            scheme_label,
+        )
     })();
 
     // Always restore the terminal; ignore teardown errors so the real outcome in
@@ -110,7 +110,8 @@ fn run(
     focus: &mut FocusManager,
     ne: &WebviewHandle,
     sw: &WebviewHandle,
-    scheme: NavScheme,
+    keymap: &NavKeymap,
+    scheme_label: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_focus = String::new();
     let mut last_key = String::from("(none yet)");
@@ -124,15 +125,14 @@ fn run(
         // webviews so the page glue intercepts the same chord this example uses.
         let current = focused_id(focus);
         if current != last_focus {
-            let keymap = keymap_payload(scheme);
-            let _ = ne.emit("focus", &(current == "ne"));
-            let _ = sw.emit("focus", &(current == "sw"));
-            let _ = ne.emit("__ozma.keys", &keymap);
-            let _ = sw.emit("__ozma.keys", &keymap);
+            let _ = ne.set_page_focus(current == "ne");
+            let _ = sw.set_page_focus(current == "sw");
+            let _ = ne.set_nav_keys(keymap);
+            let _ = sw.set_nav_keys(keymap);
             last_focus = current.clone();
         }
 
-        terminal.draw(|f| draw(f, ozma, focus, ne, sw, &current, scheme, &last_key))?;
+        terminal.draw(|f| draw(f, ozma, focus, ne, sw, &current, scheme_label, &last_key))?;
         ozma.flush(terminal)?;
 
         if event::poll(Duration::from_millis(50))?
@@ -143,7 +143,7 @@ fn run(
                 return Ok(());
             }
             if focus.focused_is_native()
-                && let Some(dir) = match_nav(scheme, &k)
+                && let Some(dir) = keymap.match_key(&k)
             {
                 focus.navigate(dir).apply(ozma)?;
             }
@@ -162,7 +162,7 @@ fn draw(
     ne: &WebviewHandle,
     sw: &WebviewHandle,
     current: &str,
-    scheme: NavScheme,
+    scheme_label: &str,
     last_key: &str,
 ) {
     let outer = Layout::vertical([
@@ -174,8 +174,7 @@ fn draw(
     .split(f.area());
     f.render_widget(
         Paragraph::new(format!(
-            "{}: move focus   |   type into a focused webview   |   q: quit (on a native panel)",
-            scheme_chord(scheme)
+            "{scheme_label}: move focus   |   type into a focused webview   |   q: quit (on a native panel)"
         )),
         outer[0],
     );
@@ -226,9 +225,7 @@ fn draw(
     );
     f.render_widget(
         Paragraph::new(format!(
-            "scheme={}   last native key: {}   (set FOCUS_NAV=arrows|alt|ctrl)",
-            scheme_name(scheme),
-            last_key
+            "scheme={scheme_label}   last native key: {last_key}   (set FOCUS_NAV=arrows|alt|ctrl)"
         ))
         .style(Style::default().fg(Color::DarkGray)),
         outer[3],
@@ -254,79 +251,21 @@ fn focus_label(id: &str) -> &'static str {
     }
 }
 
-fn nav_scheme() -> NavScheme {
+/// Selects the nav keymap from `FOCUS_NAV` (default `arrows`), with a label.
+///
+/// The same [`NavKeymap`] drives native matching (`match_key`) and the page glue
+/// (`set_nav_keys`), so the two can't drift.
+fn nav_keymap() -> (NavKeymap, &'static str) {
     match std::env::var("FOCUS_NAV").ok().as_deref() {
-        Some("alt") => NavScheme::Alt,
-        Some("ctrl") => NavScheme::Ctrl,
-        _ => NavScheme::Arrows,
-    }
-}
-
-fn scheme_name(scheme: NavScheme) -> &'static str {
-    match scheme {
-        NavScheme::Arrows => "arrows",
-        NavScheme::Alt => "alt",
-        NavScheme::Ctrl => "ctrl",
-    }
-}
-
-fn scheme_chord(scheme: NavScheme) -> &'static str {
-    match scheme {
-        NavScheme::Arrows => "Arrow keys",
-        NavScheme::Alt => "Alt+h/j/k/l",
-        NavScheme::Ctrl => "Ctrl+h/j/k/l",
+        Some("alt") => (NavKeymap::alt_hjkl(), "alt"),
+        Some("ctrl") => (NavKeymap::ctrl_hjkl(), "ctrl"),
+        _ => (NavKeymap::arrows(), "arrows"),
     }
 }
 
 /// The raw key event, for the debug line.
 fn describe_key(k: &KeyEvent) -> String {
     format!("{:?} mods={:?}", k.code, k.modifiers)
-}
-
-/// Interprets a native-side key event into a focus [`Direction`] per `scheme`.
-fn match_nav(scheme: NavScheme, k: &KeyEvent) -> Option<Direction> {
-    let from_char = |c: char| match c.to_ascii_lowercase() {
-        'h' => Some(Direction::Left),
-        'j' => Some(Direction::Down),
-        'k' => Some(Direction::Up),
-        'l' => Some(Direction::Right),
-        _ => None,
-    };
-    match scheme {
-        NavScheme::Arrows => match k.code {
-            KeyCode::Left => Some(Direction::Left),
-            KeyCode::Down => Some(Direction::Down),
-            KeyCode::Up => Some(Direction::Up),
-            KeyCode::Right => Some(Direction::Right),
-            _ => None,
-        },
-        NavScheme::Alt => match k.code {
-            KeyCode::Char(c) if k.modifiers.contains(KeyModifiers::ALT) => from_char(c),
-            _ => None,
-        },
-        NavScheme::Ctrl => match k.code {
-            KeyCode::Char(c) if k.modifiers.contains(KeyModifiers::CONTROL) => from_char(c),
-            _ => None,
-        },
-    }
-}
-
-/// The `__ozma.keys` payload that makes the page glue intercept `scheme`'s chord.
-fn keymap_payload(scheme: NavScheme) -> serde_json::Value {
-    match scheme {
-        NavScheme::Arrows => serde_json::json!({
-            "mods": [],
-            "keys": {"arrowleft": "left", "arrowdown": "down", "arrowup": "up", "arrowright": "right"}
-        }),
-        NavScheme::Alt => serde_json::json!({
-            "mods": ["alt"],
-            "keys": {"h": "left", "j": "down", "k": "up", "l": "right"}
-        }),
-        NavScheme::Ctrl => serde_json::json!({
-            "mods": ["ctrl"],
-            "keys": {"h": "left", "j": "down", "k": "up", "l": "right"}
-        }),
-    }
 }
 
 /// A bordered block whose border + title light up yellow when focused.
@@ -368,7 +307,7 @@ color:#e7e7ef;border:1px solid {accent};border-radius:4px'>\
 var i=document.getElementById('in');\
 function setF(f){{document.body.style.background=f?'#16241a':'#10121a';if(f){{i.focus();}}}}\
 i.focus();\
-window.ozmux.on('focus',setF);\
+window.ozmux.on('__ozma.focus-state',setF);\
 window.addEventListener('focus',function(){{i.focus();}});\
 </script></body>"
     )

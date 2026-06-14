@@ -5,11 +5,15 @@ use crate::error::OzmaResult;
 use crate::session::Ozma;
 use crate::webview::{Webview, WebviewHandle};
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::Rect;
+use serde::Serialize;
 
 /// A spatial navigation direction (vim `h/j/k/l`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Serializes to its lowercase name (`"left"`/`"down"`/`"up"`/`"right"`), the
+/// form the page glue's keymap expects (see [`crate::NavKeymap`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Direction {
     /// Left (`h`).
     Left,
@@ -89,20 +93,6 @@ impl FocusManager {
             focused: None,
             tx,
             rx,
-        }
-    }
-
-    /// Maps a reserved nav chord to a [`Direction`] (default `Alt+h/j/k/l`).
-    pub fn nav_key(key: &KeyEvent) -> Option<Direction> {
-        if !key.modifiers.contains(KeyModifiers::ALT) {
-            return None;
-        }
-        match key.code {
-            KeyCode::Char('h') => Some(Direction::Left),
-            KeyCode::Char('j') => Some(Direction::Down),
-            KeyCode::Char('k') => Some(Direction::Up),
-            KeyCode::Char('l') => Some(Direction::Right),
-            _ => None,
         }
     }
 
@@ -362,11 +352,6 @@ pub fn focusable(view: Webview, tx: Sender<Signal>) -> Webview {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    fn key(c: char, mods: KeyModifiers) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), mods)
-    }
 
     fn rect(x: u16, y: u16, w: u16, h: u16) -> Rect {
         Rect {
@@ -378,29 +363,11 @@ mod tests {
     }
 
     #[test]
-    fn nav_key_maps_alt_hjkl() {
-        assert_eq!(
-            FocusManager::nav_key(&key('h', KeyModifiers::ALT)),
-            Some(Direction::Left)
-        );
-        assert_eq!(
-            FocusManager::nav_key(&key('j', KeyModifiers::ALT)),
-            Some(Direction::Down)
-        );
-        assert_eq!(
-            FocusManager::nav_key(&key('k', KeyModifiers::ALT)),
-            Some(Direction::Up)
-        );
-        assert_eq!(
-            FocusManager::nav_key(&key('l', KeyModifiers::ALT)),
-            Some(Direction::Right)
-        );
-    }
-
-    #[test]
-    fn nav_key_ignores_bare_hjkl() {
-        assert_eq!(FocusManager::nav_key(&key('h', KeyModifiers::NONE)), None);
-        assert_eq!(FocusManager::nav_key(&key('x', KeyModifiers::ALT)), None);
+    fn direction_serializes_lowercase() {
+        assert_eq!(serde_json::to_value(Direction::Left).unwrap(), "left");
+        assert_eq!(serde_json::to_value(Direction::Down).unwrap(), "down");
+        assert_eq!(serde_json::to_value(Direction::Up).unwrap(), "up");
+        assert_eq!(serde_json::to_value(Direction::Right).unwrap(), "right");
     }
 
     #[test]

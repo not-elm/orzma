@@ -2,6 +2,7 @@
 
 use crate::error::OzmaResult;
 use crate::handler::{BoxedHandler, make_handler};
+use crate::keymap::NavKeymap;
 use crate::protocol::{ClientMsg, RegisterKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -130,6 +131,25 @@ impl WebviewHandle {
         Ok(())
     }
 
+    /// Pushes the navigation keymap to this handle's page glue.
+    ///
+    /// Wraps [`emit`](Self::emit) of the reserved `__ozma.keys` event so the
+    /// glue intercepts the same chord the app matches natively. Push it once the
+    /// page is mounted (e.g. when focus first reaches the webview).
+    pub fn set_nav_keys(&self, keymap: &NavKeymap) -> OzmaResult<()> {
+        self.emit("__ozma.keys", keymap)
+    }
+
+    /// Tells the page whether the app currently considers it focused.
+    ///
+    /// Wraps [`emit`](Self::emit) of the reserved `__ozma.focus-state` event;
+    /// the page observes it with `window.ozmux.on('__ozma.focus-state', cb)`
+    /// (e.g. to focus an input or draw a ring). This app→page notification is
+    /// distinct from the page→app `__ozma.focus` report the glue sends.
+    pub fn set_page_focus(&self, focused: bool) -> OzmaResult<()> {
+        self.emit("__ozma.focus-state", &focused)
+    }
+
     /// Requests host focus on this webview (default instance).
     ///
     /// The host sets `FocusedWebview` to this handle's mounted inline webview;
@@ -228,5 +248,39 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(v["op"], "focus");
         assert_eq!(v["handle"], "view-1");
+    }
+
+    fn pair_handle() -> (WebviewHandle, std::os::unix::net::UnixStream) {
+        use std::os::unix::net::UnixStream;
+        let (a, b) = UnixStream::pair().unwrap();
+        let writer = std::sync::Arc::new(std::sync::Mutex::new(a));
+        (WebviewHandle::new("v".to_owned(), writer), b)
+    }
+
+    fn read_line_value(stream: std::os::unix::net::UnixStream) -> serde_json::Value {
+        use std::io::{BufRead, BufReader};
+        let mut line = String::new();
+        BufReader::new(stream).read_line(&mut line).unwrap();
+        serde_json::from_str(line.trim()).unwrap()
+    }
+
+    #[test]
+    fn set_nav_keys_emits_ozma_keys_event() {
+        let (handle, peer) = pair_handle();
+        handle.set_nav_keys(&crate::NavKeymap::arrows()).unwrap();
+        let v = read_line_value(peer);
+        assert_eq!(v["op"], "emit");
+        assert_eq!(v["event"], "__ozma.keys");
+        assert_eq!(v["payload"]["keys"]["arrowleft"], "left");
+    }
+
+    #[test]
+    fn set_page_focus_emits_focus_state_event() {
+        let (handle, peer) = pair_handle();
+        handle.set_page_focus(true).unwrap();
+        let v = read_line_value(peer);
+        assert_eq!(v["op"], "emit");
+        assert_eq!(v["event"], "__ozma.focus-state");
+        assert_eq!(v["payload"], true);
     }
 }
