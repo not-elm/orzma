@@ -1420,6 +1420,102 @@ mod focus_tests {
             "blur from the owning surface must clear focus"
         );
     }
+
+    #[test]
+    fn sync_preserves_app_declared_focus_from_control_plane() {
+        use crate::webview_render::sync_focused_webview;
+        use ozmux_multiplexer::{
+            AttachedWorkspace, MultiplexerCommands, Side, SplitOrientation,
+        };
+
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
+            .init_resource::<FocusedWebview>()
+            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmuxRpc>()
+            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()))
+            .add_systems(Update, sync_focused_webview);
+
+        let (workspace, pane, surface) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane, o.surface)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
+
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "h1".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 1,
+                passthrough: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                InlineWebview {
+                    view_id: "h1".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+
+        let (tx, rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(rx));
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface,
+            handle: Some("h1".into()),
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "SetFocus must point FocusedWebview at the owned inline child"
+        );
+
+        // The regression: the per-frame sync must NOT clobber app-declared focus
+        // while the owning surface is active — the preserve arm covers it the
+        // same way it covers click-granted inline focus.
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "app-declared inline focus must survive the per-frame sync_focused_webview"
+        );
+
+        // Promoting a different pane makes the owner surface inactive, so the
+        // preserve arm no longer holds and app-declared focus correctly clears.
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split_pane")
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "app-declared focus must clear once a different pane/surface becomes active"
+        );
+    }
 }
 
 #[cfg(test)]
