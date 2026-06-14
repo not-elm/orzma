@@ -385,8 +385,8 @@ mod tests {
     use bevy::image::ImagePlugin;
     use bevy::render::storage::ShaderStorageBuffer;
     use bevy::window::{PrimaryWindow, WindowResolution};
-    use bevy_terminal_renderer::material::TerminalUiMaterial;
-    use bevy_terminal_renderer::{CellMetrics, TerminalCellMetricsResource};
+    use ozma_tty_renderer::material::TerminalUiMaterial;
+    use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
     use ozmux_multiplexer::MultiplexerPlugin;
 
     fn make_ui_test_app() -> (App, std::sync::MutexGuard<'static, ()>) {

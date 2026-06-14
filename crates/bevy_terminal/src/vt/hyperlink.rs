@@ -1,13 +1,13 @@
 //! OSC 8 hyperlink interning.
 //!
 //! Maps alacritty `(id, uri)` pairs to monotonic `HyperlinkId` wire
-//! ids. The wire id type comes from `bevy_terminal_renderer::schema`.
+//! ids. The wire id type comes from `ozma_tty_renderer::schema`.
 //!
 //! Keying by `(alac_id, uri)` matches xterm.js' `OscLinkService`
 //! convention: OSC 8 lets two unrelated links share the same explicit
 //! id, so keying by alacritty id alone would collide them.
 
-use bevy_terminal_renderer::prelude::{HyperlinkId, HyperlinkUri};
+use ozma_tty_renderer::prelude::{HyperlinkId, HyperlinkUri};
 
 /// Alacritty-side hyperlink identifier (OSC 8 `id=` parameter or
 /// auto-generated `"N_alacritty"`). Not transported on the wire —

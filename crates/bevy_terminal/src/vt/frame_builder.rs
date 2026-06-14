@@ -15,7 +15,7 @@ use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
 use bevy::ecs::entity::Entity;
 use bevy::prelude::Color;
-use bevy_terminal_renderer::prelude::{
+use ozma_tty_renderer::prelude::{
     Cursor, CursorShape, DirtyRow, FrameDelta, FrameSnapshot, Hyperlink, HyperlinkId, HyperlinkUri,
     Row, Run, SelectionKind, SelectionRange, SnapshotReason, ViCursor, ViewportPoint,
 };
@@ -169,7 +169,7 @@ pub(crate) fn extract_cursor<T>(term: &Term<T>) -> Cursor {
 /// coordinates via the current `display_offset`. When the resulting
 /// viewport row falls above the visible area, `in_scrollback` is
 /// set and `row` is clamped to `-1` per the schema convention at
-/// `crates/bevy_terminal_renderer/src/schema/cursor.rs:12`.
+/// `crates/ozma_tty_renderer/src/schema/cursor.rs:12`.
 pub(crate) fn extract_vi_cursor<T>(term: &Term<T>) -> Option<ViCursor> {
     if !term.mode().contains(TermMode::VI) {
         return None;

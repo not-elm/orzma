@@ -10,7 +10,7 @@ use bevy_terminal::{
     SpawnOptions, TerminalBundle, TerminalHandlePlugin, TerminalKey, TerminalKeyInput,
     TerminalModifiers,
 };
-use bevy_terminal_renderer::prelude::{FrameDelta, FrameSnapshot};
+use ozma_tty_renderer::prelude::{FrameDelta, FrameSnapshot};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 

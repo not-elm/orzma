@@ -24,7 +24,7 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
 bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "headless-gpu", features = ["debug"] }
 bevy_cef_core = { workspace = true }
-bevy_terminal_renderer = { path = "crates/bevy_terminal_renderer" }
+ozma_tty_renderer = { path = "crates/ozma_tty_renderer" }
 bevy_terminal = { path = "crates/bevy_terminal" }
 cosmic-text = "0.16"
 crossbeam-channel = "0.5"

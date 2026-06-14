@@ -23,7 +23,7 @@ use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 use bevy_terminal::{ButtonAction, CellCoord, Column, Line, Point, SelectionType, Side};
-use bevy_terminal_renderer::prelude::TerminalOverlays;
+use ozma_tty_renderer::prelude::TerminalOverlays;
 use std::time::Instant;
 
 /// Per-frame state for the mouse-selection system.
@@ -436,10 +436,10 @@ fn dispatch_mouse_buttons(
         (Entity, &ComputedNode, &UiGlobalTransform),
         (With<ozmux_multiplexer::SurfaceMarker>, With<Slotted>),
     >,
-    grids: Query<&bevy_terminal_renderer::schema::TerminalGrid>,
+    grids: Query<&ozma_tty_renderer::schema::TerminalGrid>,
     copy_modes: Query<(), With<CopyModeState>>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
-    metrics: Res<bevy_terminal_renderer::TerminalCellMetricsResource>,
+    metrics: Res<ozma_tty_renderer::TerminalCellMetricsResource>,
     time: Res<Time<Real>>,
     attached_workspace: Query<
         Entity,
@@ -1701,8 +1701,8 @@ mod tests {
         app.init_resource::<MouseSelectionState>();
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(ozmux_configs::OzmuxConfigs::default()));
-        app.insert_resource(bevy_terminal_renderer::TerminalCellMetricsResource {
-            metrics: bevy_terminal_renderer::CellMetrics {
+        app.insert_resource(ozma_tty_renderer::TerminalCellMetricsResource {
+            metrics: ozma_tty_renderer::CellMetrics {
                 advance_phys: 8.0,
                 line_height_phys: 16.0,
                 ascent_phys: 12.0,
@@ -1823,8 +1823,8 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.insert_resource(ButtonInput::<KeyCode>::default());
         app.insert_resource(OzmuxConfigsResource(ozmux_configs::OzmuxConfigs::default()));
-        app.insert_resource(bevy_terminal_renderer::TerminalCellMetricsResource {
-            metrics: bevy_terminal_renderer::CellMetrics {
+        app.insert_resource(ozma_tty_renderer::TerminalCellMetricsResource {
+            metrics: ozma_tty_renderer::CellMetrics {
                 advance_phys: 8.0,
                 line_height_phys: 16.0,
                 ascent_phys: 12.0,

@@ -1,6 +1,6 @@
 //! Bevy-native terminal: PTY ownership, alacritty VT emulation, and
 //! coalesced `FrameSnapshot` / `FrameDelta` emission against the
-//! `bevy_terminal_renderer` schema.
+//! `ozma_tty_renderer` schema.
 
 mod bundle;
 mod buttons;

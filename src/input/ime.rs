@@ -22,8 +22,8 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_terminal::{TerminalKey, TerminalModifiers};
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalOverlays};
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
@@ -586,7 +586,7 @@ mod tests {
 
     #[test]
     fn ime_stays_enabled_for_focused_webview() {
-        use bevy_terminal_renderer::CellMetrics;
+        use ozma_tty_renderer::CellMetrics;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -669,8 +669,8 @@ mod tests {
     #[test]
     fn ime_position_anchors_at_inline_rect_origin_for_focused_inline() {
         use bevy::ui::{ComputedNode, UiGlobalTransform};
-        use bevy_terminal_renderer::CellMetrics;
-        use bevy_terminal_renderer::prelude::{TerminalGrid, TerminalOverlays};
+        use ozma_tty_renderer::CellMetrics;
+        use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
         use ozmux_multiplexer::AttachedWorkspace;
 
         let mut app = App::new();

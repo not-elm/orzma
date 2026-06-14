@@ -22,10 +22,10 @@ use bevy_cef::prelude::{
 };
 use bevy_cef_core::prelude::Browsers;
 use bevy_terminal::InlineAnchor;
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
-use bevy_terminal_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
-use bevy_terminal_renderer::schema::TerminalGrid;
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
+use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
+use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_extension_host::ViewRegistry;
 use ozmux_multiplexer::SurfaceMarker;
 
@@ -677,7 +677,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
     use bevy_terminal::{OscWebviewRequest, OscWebviewVerb};
-    use bevy_terminal_renderer::CellMetrics;
+    use ozma_tty_renderer::CellMetrics;
     use ozmux_extension_host::RegisteredView;
     use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 

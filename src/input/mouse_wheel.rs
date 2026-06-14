@@ -45,8 +45,8 @@ use bevy_cef_core::prelude::Browsers;
 use bevy_terminal::{
     CellCoord, Coalescer, PtyHandle, TerminalHandle, WheelAction, WheelConfig, WheelModifiers,
 };
-use bevy_terminal_renderer::TerminalCellMetricsResource;
-use bevy_terminal_renderer::prelude::TerminalOverlays;
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_configs::mouse::FineModifier;
 
 use crate::configs::OzmuxConfigsResource;
@@ -405,7 +405,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::math::DVec2;
     use bevy::window::WindowResolution;
-    use bevy_terminal_renderer::prelude::TerminalOverlays;
+    use ozma_tty_renderer::prelude::TerminalOverlays;
     use ozmux_multiplexer::SurfaceMarker;
 
     #[test]

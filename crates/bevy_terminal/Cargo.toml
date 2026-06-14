@@ -9,7 +9,7 @@ publish.workspace = true
 
 [dependencies]
 bevy = { workspace = true }
-bevy_terminal_renderer = { path = "../bevy_terminal_renderer" }
+ozma_tty_renderer = { path = "../ozma_tty_renderer" }
 alacritty_terminal = "0.26"
 vte = "0.15"
 portable-pty = { workspace = true }

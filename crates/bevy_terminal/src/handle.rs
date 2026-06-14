@@ -26,10 +26,8 @@ use alacritty_terminal::vte::ansi::{Color as AColor, Rgb};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Commands;
-use bevy_terminal_renderer::prelude::{
-    Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor,
-};
 use crossbeam_channel::{Receiver, Sender};
+use ozma_tty_renderer::prelude::{Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
