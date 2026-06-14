@@ -13,7 +13,7 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     PaneOutput, TmuxConnection, TmuxPane, TmuxProjection, TmuxProjectionSet, TmuxWindow,
-    refresh_client_command,
+    refresh_client_command, send_bytes_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -94,14 +94,18 @@ fn attach_tmux_pane_terminal(
     }
 }
 
+const REPLY_CHUNK_BYTES: usize = 256;
+
 /// Routes tmux `%output` into each pane's handle. Groups a frame's
 /// `PaneOutput` messages by pane, advances all of a pane's bytes, then emits
-/// once per pane (immediate emit, coalesced per pane).
+/// once per pane (immediate emit, coalesced per pane). Drained terminal replies
+/// (DSR/DA answers) are forwarded back to the owning pane via `send-keys -H`.
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
     mut handles: Query<&mut TerminalHandle>,
     index: Res<TmuxProjection>,
+    connection: NonSend<TmuxConnection>,
 ) {
     let mut by_pane: HashMap<_, Vec<u8>> = HashMap::new();
     for msg in reader.read() {
@@ -119,11 +123,21 @@ fn route_tmux_output(
         };
         handle.advance(&data);
         handle.flush_emit(&mut commands, entity);
-        // TODO: Phase 3 — forward these DSR/DA answers to tmux as pane input.
-        // For now drain-and-drop: `detached` uses an unbounded reply channel,
-        // so a program that probes capabilities (DSR/DA) every prompt would
-        // otherwise grow it without bound for the pane's lifetime.
-        let _ = handle.take_replies();
+        let replies = handle.take_replies();
+        if replies.is_empty() {
+            continue;
+        }
+        let Some(client) = connection.client() else {
+            continue;
+        };
+        let target = format!("%{}", pane.0);
+        for chunk in replies.chunks(REPLY_CHUNK_BYTES) {
+            let cmd = send_bytes_command(&target, chunk);
+            if let Err(e) = client.handle().send(&cmd) {
+                tracing::warn!(?e, pane = pane.0, "reply forward send failed");
+                break;
+            }
+        }
     }
 }
 
@@ -297,6 +311,7 @@ mod tests {
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.init_resource::<TmuxProjection>();
         app.add_message::<PaneOutput>();
+        app.insert_non_send_resource(TmuxConnection::default());
 
         // A projected pane entity + its index mapping.
         let pane_id = PaneId(1);
