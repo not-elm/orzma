@@ -37,6 +37,7 @@ use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_extension_host::DynAssetRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
+use ozmux_tmux::TmuxSessionPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
     OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
@@ -61,6 +62,7 @@ fn main() {
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             MultiplexerPlugin,
+            TmuxSessionPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxLayoutLogPlugin,
