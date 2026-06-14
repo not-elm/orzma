@@ -21,6 +21,7 @@ pub mod path;
 mod raw;
 pub mod shortcuts;
 pub mod theme;
+pub mod tmux;
 
 /// Fully-resolved ozmux configuration.
 #[derive(Clone, Debug, Default)]
