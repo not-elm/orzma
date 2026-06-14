@@ -3,9 +3,11 @@
 //! entry clickable to `select-window`.
 
 use crate::font::TerminalUiFont;
+use crate::input::InputPhase;
 use crate::theme;
 use crate::ui::UiRoot;
 use crate::ui::palette;
+use crate::ui::tmux_window_bar_input::{switch_window_on_click, window_entry_hover_cursor};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
 use ozma_tty_renderer::TerminalCellMetricsResource;
@@ -18,26 +20,17 @@ use ozmux_tmux::{ProjectionModel, WindowId};
 struct WindowBarRoot;
 
 /// On a window-list entry button: records the tmux window the entry selects.
-/// Read by the window-bar click handler (phase-3b T6) to issue `select-window`.
+/// Read by the window-bar click handler (`switch_window_on_click`) to issue
+/// `select-window`.
 #[derive(Component)]
 pub(crate) struct WindowEntry {
     /// tmux display index (`#{window_index}`), shown in the entry label.
     #[cfg_attr(
         not(test),
-        expect(
-            dead_code,
-            reason = "read by the window-bar click handler in phase-3b T6"
-        )
+        expect(dead_code, reason = "stored for future use; only .window is read now")
     )]
     pub(crate) index: u32,
     /// tmux window id (`@N`) the entry activates when clicked.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the window-bar click handler in phase-3b T6"
-        )
-    )]
     pub(crate) window: WindowId,
 }
 
@@ -49,7 +42,7 @@ pub(crate) struct WindowEntryActive(
         not(test),
         expect(
             dead_code,
-            reason = "read by the window-bar click handler in phase-3b T6"
+            reason = "stored for future active-window styling; not yet read in production"
         )
     )]
     pub(crate) bool,
@@ -69,6 +62,13 @@ impl Plugin for OzmuxTmuxWindowBarPlugin {
         app.add_systems(
             Update,
             rebuild_window_bar.run_if(resource_exists_and_changed::<ProjectionModel>),
+        );
+        app.add_systems(
+            Update,
+            (
+                switch_window_on_click.in_set(InputPhase::Dispatch),
+                window_entry_hover_cursor.after(InputPhase::Hover),
+            ),
         );
     }
 }
@@ -209,6 +209,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(OzmuxTmuxWindowBarPlugin);
         app.insert_resource(metrics_fixture());
+        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.world_mut().spawn((Node::default(), UiRoot));
 
         let model = ProjectionModel {
