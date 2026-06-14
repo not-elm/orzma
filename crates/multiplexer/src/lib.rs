@@ -20,8 +20,8 @@ pub mod swap;
 pub use commands::{MultiplexerCommands, SplitOutcome, WorkspaceCreated, WorkspaceNameCounter};
 pub use components::{
     ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, Cwd, ExtensionSurfaceId,
-    OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker, SplitNode, SurfaceKind,
-    SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
+    OwningExtension, OwningWorkspace, PaneDimensions, PaneMarker, SplitNode, SurfaceMarker,
+    SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
     WorkspaceUiSubtree,
 };
 pub use direction::{CycleDirection, PaneDirection, pane_in_direction};

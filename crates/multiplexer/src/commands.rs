@@ -6,8 +6,8 @@
 
 use crate::components::{
     ActivePane, ActiveSurface, AttachedWorkspace, CopyMode, OwningWorkspace, PaneMarker, SplitNode,
-    SurfaceKind, SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions,
-    WorkspaceMarker, WorkspaceUiSubtree,
+    SurfaceMarker, SurfaceOf, Surfaces, WorkspaceCreatedAt, WorkspaceDimensions, WorkspaceMarker,
+    WorkspaceUiSubtree,
 };
 use crate::direction::PaneDirection;
 use crate::error::{MultiplexerError, MultiplexerResult};
@@ -116,11 +116,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
 
         let surface = self
             .commands
-            .spawn((
-                SurfaceMarker,
-                SurfaceKind::Terminal,
-                Name::new(format!("surface: {name}#0")),
-            ))
+            .spawn((SurfaceMarker, Name::new(format!("surface: {name}#0"))))
             .id();
 
         let mut pane_node = crate::layout::pane_frame_node();
@@ -228,11 +224,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     ) -> MultiplexerResult<SplitOutcome> {
         let surface = self
             .commands
-            .spawn((
-                SurfaceMarker,
-                SurfaceKind::Terminal,
-                Name::new("surface: split"),
-            ))
+            .spawn((SurfaceMarker, Name::new("surface: split")))
             .id();
         match self.split_pane_inner(target_pane, side, orientation) {
             Ok((new_pane, _)) => {
@@ -361,7 +353,7 @@ impl<'w, 's> MultiplexerCommands<'w, 's> {
     pub fn add_surface(&mut self, pane: Entity) -> Entity {
         let surface = self
             .commands
-            .spawn((SurfaceMarker, SurfaceKind::Terminal, Name::new("surface")))
+            .spawn((SurfaceMarker, Name::new("surface")))
             .id();
         self.commands
             .entity(surface)
@@ -879,12 +871,7 @@ mod tests {
             .run_system_once(|mut mux: MultiplexerCommands| mux.create_workspace(None))
             .unwrap();
         let other_surface = world
-            .spawn((
-                SurfaceMarker,
-                SurfaceKind::Terminal,
-                Name::new("other"),
-                ChildOf(outcome.pane),
-            ))
+            .spawn((SurfaceMarker, Name::new("other"), ChildOf(outcome.pane)))
             .id();
 
         world

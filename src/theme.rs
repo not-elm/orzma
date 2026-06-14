@@ -26,10 +26,8 @@ pub const MUTED: Color = Color::srgb(0.376, 0.408, 0.471);
 /// indicator on the active tab).
 pub const ACCENT: Color = Color::srgb(0.302, 0.561, 0.851);
 
-/// `SurfaceKind::Terminal` placeholder background.
+/// Terminal surface placeholder background.
 pub const SURFACE_TERMINAL: Color = Color::srgb(0.094, 0.094, 0.110);
-/// `SurfaceKind::Extension` placeholder background.
-pub const SURFACE_EXTENSION: Color = Color::srgb(0.094, 0.180, 0.110);
 
 /// Pane border thickness.
 pub const PANE_BORDER_PX: f32 = 1.0;

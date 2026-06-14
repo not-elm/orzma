@@ -2,24 +2,19 @@
 //! `build_pane_chrome` spawns each pane's tab bar + surface slot exactly once
 //! on `Added<PaneMarker>`; `slot_active_surface` slots/parks surfaces on
 //! `Changed<ActiveSurface>` (via the `Slotted` marker); `refresh_pane_tabs`
-//! rebuilds only the affected pane's tab labels on surface / `Cwd` /
-//! `WebTitle` changes; `sync_pane_veil` maintains the per-pane dim overlay for
-//! non-terminal active surfaces.
+//! rebuilds only the affected pane's tab labels on surface / `Cwd` changes.
 
-use crate::configs::OzmuxConfigsResource;
 use crate::font::TerminalUiFont;
 use crate::system_set::OzmuxSystems;
 use crate::theme;
 use crate::ui::surface::decorate_surface;
 use crate::ui::tab_bar::{TabEntry, build_tab};
 use crate::ui::tab_label::{LabelCtx, tab_label};
-use crate::ui::web_title::WebTitle;
-use crate::ui::{HomeDir, PaneDimOverlay, PaneFrame, Slotted, palette};
+use crate::ui::{HomeDir, PaneFrame, Slotted, palette};
 use bevy::prelude::*;
-use bevy::ui::{PositionType, UiRect, Val};
+use bevy::ui::{UiRect, Val};
 use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, Cwd, OwningWorkspace, PaneMarker, SurfaceKind, SurfaceMarker,
-    SurfaceOf, Surfaces,
+    ActiveSurface, Cwd, OwningWorkspace, PaneMarker, SurfaceMarker, SurfaceOf, Surfaces,
 };
 use std::collections::HashSet;
 
@@ -31,8 +26,7 @@ impl Plugin for OzmuxChromePlugin {
         app.add_systems(Update, build_pane_chrome.in_set(OzmuxSystems::BuildChrome))
             .add_systems(
                 Update,
-                (slot_active_surface, sync_pane_veil, refresh_pane_tabs)
-                    .after(OzmuxSystems::BuildChrome),
+                (slot_active_surface, refresh_pane_tabs).after(OzmuxSystems::BuildChrome),
             );
     }
 }
@@ -112,7 +106,6 @@ fn slot_active_surface(
         Changed<ActiveSurface>,
     >,
     slotted: Query<(Entity, &SurfaceOf), With<Slotted>>,
-    kinds: Query<&SurfaceKind, With<SurfaceMarker>>,
 ) {
     for (pane, active, owning, chrome) in switched_panes.iter() {
         let new_surface = active.0;
@@ -124,9 +117,7 @@ fn slot_active_surface(
                     .insert(ChildOf(owning.0));
             }
         }
-        if let Ok(kind) = kinds.get(new_surface) {
-            decorate_surface(&mut commands, new_surface, kind);
-        }
+        decorate_surface(&mut commands, new_surface);
         commands
             .entity(new_surface)
             .insert((ChildOf(chrome.surface_slot), Slotted));
@@ -135,19 +126,18 @@ fn slot_active_surface(
 
 /// Rebuilds a single pane's tab labels when its surface set changes
 /// (`Added`/removed `SurfaceMarker` in the pane), its active surface switches,
-/// or a slotted surface reports a new `Cwd` (OSC 7) / `WebTitle` (page nav).
-/// Despawns the pane's existing tabs and re-spawns one per owned surface — the
-/// tab-bar row Node itself (in `PaneChrome.tab_bar`) is reused. Scopes work to
-/// the affected panes; no full rebuild.
+/// or a slotted surface reports a new `Cwd` (OSC 7). Despawns the pane's
+/// existing tabs and re-spawns one per owned surface — the tab-bar row Node
+/// itself (in `PaneChrome.tab_bar`) is reused. Scopes work to the affected
+/// panes; no full rebuild.
 fn refresh_pane_tabs(
     mut commands: Commands,
     panes: Query<(Entity, &ActiveSurface, &Surfaces, &PaneChrome), With<PaneMarker>>,
     changed_active: Query<Entity, (With<PaneMarker>, Changed<ActiveSurface>)>,
     added_surfaces: Query<&SurfaceOf, Added<SurfaceMarker>>,
     changed_cwd: Query<&SurfaceOf, (With<SurfaceMarker>, Changed<Cwd>)>,
-    changed_title: Query<&SurfaceOf, (With<SurfaceMarker>, Changed<WebTitle>)>,
     children: Query<&Children>,
-    surface_data: Query<(&SurfaceKind, Option<&Cwd>, Option<&WebTitle>), With<SurfaceMarker>>,
+    surface_data: Query<Option<&Cwd>, With<SurfaceMarker>>,
     ui_font: Option<Res<TerminalUiFont>>,
     home_dir: Option<Res<HomeDir>>,
 ) {
@@ -156,7 +146,6 @@ fn refresh_pane_tabs(
         added_surfaces
             .iter()
             .chain(changed_cwd.iter())
-            .chain(changed_title.iter())
             .map(|owner| owner.0),
     );
     if dirty.is_empty() {
@@ -179,18 +168,12 @@ fn refresh_pane_tabs(
             }
         }
         for surface in surfaces.iter() {
-            let Ok((kind, cwd, web_title)) = surface_data.get(surface) else {
+            let Ok(cwd) = surface_data.get(surface) else {
                 continue;
             };
             let entry = TabEntry {
                 entity: surface,
-                name: tab_label(
-                    kind,
-                    cwd,
-                    web_title,
-                    label_ctx.home.as_deref(),
-                    label_ctx.max_chars,
-                ),
+                name: tab_label(cwd, label_ctx.home.as_deref(), label_ctx.max_chars),
                 is_active: surface == active,
             };
             // NOTE: `is_active_pane` is always true in a single-workspace view;
@@ -204,75 +187,6 @@ fn refresh_pane_tabs(
                 true,
                 &ui_font_handle,
             );
-        }
-    }
-}
-
-/// Adds or removes the per-pane dim veil (`PaneDimOverlay`) on
-/// `Changed<ActiveSurface>`. A terminal active surface is dimmed at the
-/// renderer (`PaneDim` uniform), so it gets NO veil — double-dimming would
-/// over-darken its content; non-terminal (webview / extension) active surfaces
-/// get a translucent veil node, hidden when the pane is its workspace's active
-/// pane. The veil is config-gated (`inactive_pane.enabled`).
-fn sync_pane_veil(
-    mut commands: Commands,
-    switched_panes: Query<
-        (Entity, &ActiveSurface, &OwningWorkspace),
-        (With<PaneMarker>, Changed<ActiveSurface>),
-    >,
-    existing_veils: Query<(Entity, &PaneDimOverlay)>,
-    active_panes: Query<&ActivePane>,
-    kinds: Query<&SurfaceKind, With<SurfaceMarker>>,
-    configs: Option<Res<OzmuxConfigsResource>>,
-) {
-    let veil: Option<Color> = match configs.as_deref() {
-        Some(cfg) if cfg.inactive_pane.enabled => {
-            let (r, g, b) = cfg.inactive_pane.rgb();
-            Some(Color::srgb_u8(r, g, b).with_alpha(cfg.inactive_pane.opacity))
-        }
-        _ => None,
-    };
-
-    for (pane, active, owning) in switched_panes.iter() {
-        let active_is_terminal = matches!(kinds.get(active.0), Ok(SurfaceKind::Terminal));
-        let existing = existing_veils
-            .iter()
-            .find(|(_, overlay)| overlay.pane == pane)
-            .map(|(e, _)| e);
-
-        let want_veil = veil.filter(|_| !active_is_terminal);
-        match (want_veil, existing) {
-            (Some(veil_color), None) => {
-                let is_active = active_panes
-                    .get(owning.0)
-                    .map(|a| a.0 == pane)
-                    .unwrap_or(true);
-                let visibility = if is_active {
-                    Visibility::Hidden
-                } else {
-                    Visibility::Visible
-                };
-                commands.spawn((
-                    Name::new(format!("PaneDim({pane:?})")),
-                    Node {
-                        position_type: PositionType::Absolute,
-                        top: Val::Px(0.0),
-                        left: Val::Px(0.0),
-                        width: Val::Percent(100.0),
-                        height: Val::Percent(100.0),
-                        ..default()
-                    },
-                    BackgroundColor(veil_color),
-                    visibility,
-                    Pickable::IGNORE,
-                    PaneDimOverlay { pane },
-                    ChildOf(pane),
-                ));
-            }
-            (None, Some(veil_entity)) => {
-                commands.entity(veil_entity).despawn();
-            }
-            _ => {}
         }
     }
 }
