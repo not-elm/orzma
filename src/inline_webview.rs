@@ -9,7 +9,7 @@ use crate::control_plane::{DynSource, DynamicRegistry, WebviewOwner};
 use crate::extension_render::preload::build_dynamic_preload;
 use crate::input::InputPhase;
 use crate::input::mouse_buttons::resolve_pane_at_phys;
-use crate::osc_webview::{GrantedNamespaces, NonInteractive};
+use crate::osc_webview::NonInteractive;
 use crate::ui::Slotted;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -245,7 +245,6 @@ pub(crate) fn mount_inline(
         return;
     };
     let source = WebviewSource::new(url);
-    let granted = GrantedNamespaces::default();
     let webview = params.commands.spawn_empty().id();
     let preload = build_dynamic_preload(ctx.workspace, ctx.pane, webview);
     // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
@@ -270,7 +269,6 @@ pub(crate) fn mount_inline(
             cols: ctx.cols,
             frame_seq: anchor.frame_seq,
         },
-        granted,
         preload,
     ));
     if !resolved.interactive {
@@ -877,14 +875,6 @@ mod tests {
         assert!(
             app.world().get::<WebviewTextureTarget>(child).is_some(),
             "inline webview must carry a headless WebviewTextureTarget"
-        );
-        let granted = app
-            .world()
-            .get::<GrantedNamespaces>(child)
-            .expect("inline webview must carry GrantedNamespaces");
-        assert!(
-            granted.0.is_empty(),
-            "a dynamic inline webview carries an empty (dormant) capability grant"
         );
         assert!(
             app.world().get::<PreloadScripts>(child).is_some(),

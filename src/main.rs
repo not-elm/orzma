@@ -5,7 +5,6 @@ mod bootstrap;
 mod clipboard;
 mod configs;
 mod control_plane;
-mod extension_manager;
 mod extension_render;
 mod font;
 mod inline_webview;
@@ -19,7 +18,6 @@ mod ui;
 use crate::action::OzmuxActionPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::control_plane::OzmuxControlPlanePlugin;
-use crate::extension_manager::ExtensionManagerPlugin;
 use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
@@ -81,7 +79,6 @@ fn main() {
             ImeOverlayPlugin,
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
-            ExtensionManagerPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),
             OzmuxActionPlugin,
         ))

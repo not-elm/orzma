@@ -1,12 +1,7 @@
-//! Tokio-free host runtime: a per-handle runtime root and the host process
-//! spawn + lifecycle.
+//! Tokio-free host runtime: a per-handle runtime root used to mint the 0700
+//! socket directory tree for the webview control plane.
 
-use crossbeam_channel::Sender;
 use std::path::{Path, PathBuf};
-use std::process::Child;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
 
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
 
@@ -99,117 +94,6 @@ impl Drop for RuntimeRoot {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
     }
-}
-
-const PROBE_INTERVAL: Duration = Duration::from_millis(20);
-
-/// A lifecycle transition emitted by the host thread.
-#[derive(Debug)]
-pub enum LifecycleEvent {
-    /// The host bound its socket and answered a readiness round-trip.
-    Ready,
-    /// The host process exited.
-    Exited {
-        /// Exit code, if known.
-        status: Option<i32>,
-    },
-    /// The process never became ready within the timeout.
-    SpawnFailed {
-        /// Human-readable reason.
-        error: String,
-    },
-}
-
-/// A failure to start the host.
-#[derive(Debug, thiserror::Error)]
-pub enum HostError {
-    /// Spawning the child process failed.
-    #[error("failed to spawn host process: {0}")]
-    Spawn(#[source] std::io::Error),
-    /// The runtime root / socket path could not be created.
-    #[error("failed to create host runtime root: {0}")]
-    Runtime(#[source] std::io::Error),
-    /// `wait_ready` timed out or the host failed to start.
-    #[error("host did not become ready")]
-    NotReady,
-}
-
-/// Convenience alias for fallible host operations.
-pub type HostResult<T = ()> = Result<T, HostError>;
-
-pub(crate) fn run_lifecycle(
-    ready_timeout: Duration,
-    is_ready: impl Fn() -> bool,
-    on_ready: impl FnOnce(),
-    child: Arc<std::sync::Mutex<Option<Child>>>,
-    shutdown: Arc<AtomicBool>,
-    tx: Sender<LifecycleEvent>,
-) {
-    // NOTE: readiness is verified via a real protocol round-trip (any well-formed
-    // response), not merely a successful connect — this closes the
-    // "listener-up ≠ app-ready" gap where a process could accept connections
-    // before its handler is registered.
-    let deadline = Instant::now() + ready_timeout;
-    let ready = loop {
-        if is_ready() {
-            break true;
-        }
-        if Instant::now() >= deadline {
-            break false;
-        }
-        std::thread::sleep(PROBE_INTERVAL);
-    };
-
-    if !ready {
-        // NOTE: we take the child out of the mutex before killing so Drop's
-        // lock().take() returns None and does not deadlock waiting for a lock
-        // held across a blocking wait().
-        let taken = child.lock().unwrap().take();
-        if let Some(mut c) = taken {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
-        let _ = tx.send(LifecycleEvent::SpawnFailed {
-            error: "readiness timeout".into(),
-        });
-        return;
-    }
-
-    on_ready();
-    let _ = tx.send(LifecycleEvent::Ready);
-
-    // NOTE: poll try_wait() rather than blocking in wait() so that Drop can
-    // acquire the mutex, kill the child, and have the poll loop detect exit.
-    // A blocking wait() after take() would prevent Drop from killing the child
-    // and cause t.join() to hang until the extension exits on its own.
-    let status = loop {
-        let taken = { child.lock().unwrap().take() };
-        match taken {
-            Some(mut c) => match c.try_wait() {
-                Ok(Some(s)) => break s.code(),
-                Ok(None) => {
-                    // NOTE: if Drop set `shutdown` while we held the child out of
-                    // the mutex, Drop's take() saw None and skipped the kill, so
-                    // we MUST kill it here — otherwise Drop's join() hangs
-                    // forever (the child never exits and we would loop putting it
-                    // back). Drop signals before its take(), so this load
-                    // observes it within one PROBE_INTERVAL.
-                    if shutdown.load(Ordering::SeqCst) {
-                        let _ = c.kill();
-                        break c.wait().ok().and_then(|s| s.code());
-                    }
-                    *child.lock().unwrap() = Some(c);
-                }
-                Err(_) => break None,
-            },
-            None => break None,
-        }
-        // TODO: replace this busy-poll with an event/condvar so a long-lived
-        // extension does not wake this thread every PROBE_INTERVAL (the
-        // shutdown flag already makes Drop-kill exit within one interval).
-        std::thread::sleep(PROBE_INTERVAL);
-    };
-    let _ = tx.send(LifecycleEvent::Exited { status });
 }
 
 #[cfg(test)]
