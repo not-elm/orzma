@@ -5,7 +5,9 @@
 use crate::ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use ozma_tty_engine::TerminalHandle;
+use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozmux_tmux::{PaneOutput, TmuxPane, TmuxProjection, TmuxProjectionSet, TmuxWindow};
@@ -25,6 +27,7 @@ impl Plugin for OzmuxTmuxRenderPlugin {
                 attach_tmux_pane_terminal,
                 route_tmux_output,
                 sync_active_window,
+                layout_tmux_panes,
             )
                 .chain()
                 .after(TmuxProjectionSet),
@@ -54,10 +57,11 @@ fn attach_tmux_window_container(
 }
 
 /// Attaches a detached `TerminalHandle`, a `TerminalRenderBundle`, and a
-/// full-window absolute `Node` to each `TmuxPane` that lacks a
+/// placeholder absolute `Node` to each `TmuxPane` that lacks a
 /// `TerminalHandle`. Runs every frame but targets each pane exactly once.
 /// The grid is sized from the pane's projected `dims`. `ChildOf` is NOT set
 /// here — `reconcile` already establishes the correct `ChildOf(window)` parent.
+/// `layout_tmux_panes` sets the real rect every frame.
 fn attach_tmux_pane_terminal(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -73,8 +77,6 @@ fn attach_tmux_pane_terminal(
             TerminalRenderBundle::new(material),
             Node {
                 position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
                 ..default()
             },
         ));
@@ -111,6 +113,50 @@ fn route_tmux_output(
     }
 }
 
+fn pane_rect(
+    xoff: i32,
+    yoff: i32,
+    width: u32,
+    height: u32,
+    cell_w: f32,
+    cell_h: f32,
+) -> (f32, f32, f32, f32) {
+    (
+        xoff as f32 * cell_w,
+        yoff as f32 * cell_h,
+        width as f32 * cell_w,
+        height as f32 * cell_h,
+    )
+}
+
+fn layout_tmux_panes(
+    mut panes: Query<(&TmuxPane, &mut Node, &mut TerminalHandle)>,
+    metrics: Res<TerminalCellMetricsResource>,
+    window: Query<&Window, With<PrimaryWindow>>,
+) {
+    let Ok(window) = window.single() else {
+        return;
+    };
+    let dpr = window.scale_factor().max(0.5);
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
+    for (pane, mut node, mut handle) in panes.iter_mut() {
+        let d = pane.dims;
+        let (left, top, width, height) =
+            pane_rect(d.xoff, d.yoff, d.width, d.height, cell_w, cell_h);
+        node.left = Val::Px(left);
+        node.top = Val::Px(top);
+        node.width = Val::Px(width);
+        node.height = Val::Px(height);
+        let cols = pane.dims.width.max(1) as u16;
+        let rows = pane.dims.height.max(1) as u16;
+        let (cur_cols, cur_rows, _) = handle.read_geometry();
+        if (cur_cols, cur_rows) != (cols, rows) {
+            handle.resize_grid_only(cols, rows);
+        }
+    }
+}
+
 fn sync_active_window(mut windows: Query<(&TmuxWindow, &mut Node)>) {
     for (w, mut node) in windows.iter_mut() {
         let want = if w.active {
@@ -131,6 +177,20 @@ mod tests {
     use ozma_tty_renderer::schema::TerminalGrid;
     use ozmux_tmux::PaneOutput;
     use tmux_control_parser::{CellDims, PaneId};
+
+    #[test]
+    fn pane_rect_scales_cell_dims_to_pixels() {
+        let dims = CellDims {
+            width: 10,
+            height: 4,
+            xoff: 2,
+            yoff: 1,
+        };
+        assert_eq!(
+            pane_rect(dims.xoff, dims.yoff, dims.width, dims.height, 8.0, 16.0),
+            (16.0, 16.0, 80.0, 64.0),
+        );
+    }
 
     fn dims() -> CellDims {
         CellDims {
