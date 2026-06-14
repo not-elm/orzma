@@ -2,8 +2,8 @@
 //! event-drain + reconcile systems.
 
 use crate::connection::TmuxConnection;
-use crate::enumerate::{EnumerationState, list_windows_command};
-use crate::event_pump::{advance_state, apply_events, drain_transport};
+use crate::enumerate::{EnumerationState, client_name_command, list_windows_command};
+use crate::event_pump::{advance_state, apply_events, drain_transport, take_client_name};
 use crate::model::ProjectionModel;
 use crate::output::{PaneOutput, collect_pane_outputs};
 use crate::reconcile::{TmuxProjection, reconcile_projection};
@@ -77,6 +77,10 @@ fn drain_tmux_events(
                 Ok(id) => enumeration.pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to send list-windows enumeration"),
             }
+            match client.handle().send(&client_name_command()) {
+                Ok(id) => enumeration.client_name_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send client-name query"),
+            }
         }
     }
     if events
@@ -85,14 +89,20 @@ fn drain_tmux_events(
     {
         connection.take();
         enumeration.pending = None;
+        enumeration.client_name_pending = None;
         *model.bypass_change_detection() = ProjectionModel::default();
         model.set_changed();
-    } else if apply_events(
-        model.bypass_change_detection(),
-        &mut enumeration.pending,
-        &events,
-    ) {
-        model.set_changed();
+    } else {
+        if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
+            connection.set_client_name(name);
+        }
+        if apply_events(
+            model.bypass_change_detection(),
+            &mut enumeration.pending,
+            &events,
+        ) {
+            model.set_changed();
+        }
     }
 }
 

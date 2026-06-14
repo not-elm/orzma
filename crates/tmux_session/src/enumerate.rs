@@ -77,6 +77,12 @@ pub fn refresh_client_command(cols: u16, rows: u16) -> String {
     format!("refresh-client -C {cols},{rows}")
 }
 
+/// Builds `display-message -p '#{client_name}'` — prints the control
+/// client's name as a one-line command reply (correlated like `list-windows`).
+pub fn client_name_command() -> String {
+    "display-message -p '#{client_name}'".to_string()
+}
+
 /// Builds the `list-windows` command ozmux sends on attach to enumerate the
 /// session's existing windows.
 ///
@@ -93,6 +99,8 @@ pub(crate) fn list_windows_command() -> String {
 pub(crate) struct EnumerationState {
     /// The id of the in-flight `list-windows` command, if any.
     pub(crate) pending: Option<CommandId>,
+    /// The id of the in-flight `display-message` client-name query, if any.
+    pub(crate) client_name_pending: Option<CommandId>,
 }
 
 #[cfg(test)]
@@ -156,5 +164,10 @@ mod tests {
     #[test]
     fn refresh_client_command_uses_comma_size_form() {
         assert_eq!(refresh_client_command(80, 24), "refresh-client -C 80,24");
+    }
+
+    #[test]
+    fn client_name_command_has_expected_format() {
+        assert_eq!(client_name_command(), "display-message -p '#{client_name}'");
     }
 }

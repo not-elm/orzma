@@ -95,6 +95,37 @@ pub(crate) fn seed_from_reply(model: &mut ProjectionModel, output: &[String]) ->
     }
 }
 
+/// Returns the client name from a `CommandComplete` whose id matches
+/// `pending` (first non-empty trimmed output line), and clears `pending`.
+///
+/// Iterates `events` and looks for `CommandComplete { ok: true, .. }` whose
+/// id equals `*pending`. On a match the first non-empty trimmed output line is
+/// returned and `*pending` is set to `None`. Returns `None` when no matching
+/// event exists in the batch or the output is blank.
+pub(crate) fn take_client_name(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<String> {
+    for event in events {
+        if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
+            && *pending == Some(*id)
+        {
+            *pending = None;
+            if *ok {
+                return output
+                    .iter()
+                    .map(|line| line.trim())
+                    .find(|line| !line.is_empty())
+                    .map(str::to_owned);
+            } else {
+                tracing::warn!("client-name query command failed");
+                return None;
+            }
+        }
+    }
+    None
+}
+
 /// Emits a `tracing` line describing a single transport event.
 fn log_transport_event(event: &TransportEvent) {
     match event {
@@ -209,6 +240,50 @@ mod tests {
         let mut model = ProjectionModel::default();
         assert!(!seed_from_reply(&mut model, &output));
         assert!(model.windows.is_empty());
+    }
+
+    #[test]
+    fn take_client_name_extracts_from_matching_reply() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(7),
+            number: 0,
+            ok: true,
+            output: vec!["main-client".to_string()],
+        })];
+        let mut pending = Some(CommandId(7));
+        assert_eq!(
+            take_client_name(&mut pending, &events),
+            Some("main-client".to_string())
+        );
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn take_client_name_unmatched_id_returns_none_and_keeps_pending() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(8),
+            number: 0,
+            ok: true,
+            output: vec!["main-client".to_string()],
+        })];
+        let mut pending = Some(CommandId(7));
+        assert_eq!(take_client_name(&mut pending, &events), None);
+        assert_eq!(pending, Some(CommandId(7)));
+    }
+
+    #[test]
+    fn take_client_name_trims_whitespace_from_output() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(3),
+            number: 0,
+            ok: true,
+            output: vec!["  /dev/ttys001  ".to_string()],
+        })];
+        let mut pending = Some(CommandId(3));
+        assert_eq!(
+            take_client_name(&mut pending, &events),
+            Some("/dev/ttys001".to_string())
+        );
     }
 
     #[test]
