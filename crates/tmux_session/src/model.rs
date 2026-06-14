@@ -1,6 +1,8 @@
 //! The plain-data projection model and the pure reducer that maintains it.
 
-use tmux_control_parser::{Cell, CellDims, PaneId, WindowLayout};
+use crate::enumerate::WindowRow;
+use bevy::prelude::Resource;
+use tmux_control_parser::{Cell, CellDims, ControlEvent, PaneId, SessionId, WindowId, WindowLayout};
 
 /// A projected pane: its tmux id and cell geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,9 +41,108 @@ fn collect_leaves(cell: &Cell, out: &mut Vec<PaneModel>) {
     }
 }
 
+/// A projected window: id, active flag, name, and its panes (layout order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowModel {
+    /// tmux window id (`@N`).
+    pub id: WindowId,
+    /// Whether this is the session's active window.
+    pub active: bool,
+    /// Window name.
+    pub name: String,
+    /// Panes in layout order.
+    pub panes: Vec<PaneModel>,
+}
+
+/// The desired projection: the session and its windows, plus the active pane.
+///
+/// Mutated by the pure reducer ([`ProjectionModel::seed_from_rows`] /
+/// [`ProjectionModel::apply_event`]); the ECS reconcile syncs entities to it.
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectionModel {
+    /// The attached session id, once known.
+    pub session: Option<SessionId>,
+    /// Windows in insertion order.
+    pub windows: Vec<WindowModel>,
+    /// The currently active pane, once known.
+    pub active_pane: Option<PaneId>,
+}
+
+impl ProjectionModel {
+    /// Replaces the window set from a parsed `list-windows` reply.
+    pub fn seed_from_rows(&mut self, rows: &[WindowRow]) {
+        self.windows = rows
+            .iter()
+            .map(|row| WindowModel {
+                id: row.id,
+                active: row.active,
+                name: row.name.clone(),
+                panes: pane_leaves(&row.layout),
+            })
+            .collect();
+    }
+
+    /// Applies one control-mode notification to the model.
+    pub fn apply_event(&mut self, event: &ControlEvent) {
+        match event {
+            ControlEvent::SessionChanged { session, .. } => {
+                self.session = Some(*session);
+            }
+            ControlEvent::WindowAdd { window } => {
+                self.ensure_window(*window);
+            }
+            ControlEvent::WindowClose { window } => {
+                self.windows.retain(|w| w.id != *window);
+            }
+            ControlEvent::WindowRenamed { window, name } => {
+                if let Some(w) = self.window_mut(*window) {
+                    w.name = name.clone();
+                }
+            }
+            ControlEvent::LayoutChange { window, layout, .. } => {
+                self.set_layout(*window, layout);
+            }
+            ControlEvent::WindowPaneChanged { window, pane } => {
+                self.active_pane = Some(*pane);
+                self.set_active_window(*window);
+            }
+            _ => {}
+        }
+    }
+
+    fn ensure_window(&mut self, id: WindowId) -> &mut WindowModel {
+        if let Some(idx) = self.windows.iter().position(|w| w.id == id) {
+            return &mut self.windows[idx];
+        }
+        self.windows.push(WindowModel {
+            id,
+            active: false,
+            name: String::new(),
+            panes: Vec::new(),
+        });
+        self.windows.last_mut().expect("just pushed")
+    }
+
+    fn window_mut(&mut self, id: WindowId) -> Option<&mut WindowModel> {
+        self.windows.iter_mut().find(|w| w.id == id)
+    }
+
+    fn set_layout(&mut self, id: WindowId, layout: &WindowLayout) {
+        let panes = pane_leaves(layout);
+        self.ensure_window(id).panes = panes;
+    }
+
+    fn set_active_window(&mut self, id: WindowId) {
+        for w in &mut self.windows {
+            w.active = w.id == id;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tmux_control_parser::{ControlEvent, PaneId, SessionId, WindowId, WindowLayout};
 
     fn dims(width: u32, height: u32, xoff: i32, yoff: i32) -> CellDims {
         CellDims {
@@ -73,5 +174,71 @@ mod tests {
         assert_eq!(panes[1].id, PaneId(2));
         assert_eq!(panes[0].dims, dims(40, 24, 0, 0));
         assert_eq!(panes[1].dims, dims(39, 24, 41, 0));
+    }
+
+    fn layout(spec: &[u8]) -> WindowLayout {
+        WindowLayout::parse(spec).unwrap()
+    }
+
+    #[test]
+    fn session_changed_sets_session() {
+        let mut m = ProjectionModel::default();
+        m.apply_event(&ControlEvent::SessionChanged {
+            session: SessionId(3),
+            name: "main".to_string(),
+        });
+        assert_eq!(m.session, Some(SessionId(3)));
+    }
+
+    #[test]
+    fn window_add_then_close() {
+        let mut m = ProjectionModel::default();
+        m.apply_event(&ControlEvent::WindowAdd { window: WindowId(1) });
+        assert_eq!(m.windows.len(), 1);
+        assert_eq!(m.windows[0].id, WindowId(1));
+        m.apply_event(&ControlEvent::WindowClose { window: WindowId(1) });
+        assert!(m.windows.is_empty());
+    }
+
+    #[test]
+    fn layout_change_sets_panes_and_creates_window() {
+        let mut m = ProjectionModel::default();
+        m.apply_event(&ControlEvent::LayoutChange {
+            window: WindowId(7),
+            layout: layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}"),
+            visible_layout: layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}"),
+            flags: String::new(),
+        });
+        assert_eq!(m.windows.len(), 1);
+        assert_eq!(m.windows[0].panes.len(), 2);
+        assert_eq!(m.windows[0].panes[0].id, PaneId(1));
+    }
+
+    #[test]
+    fn window_pane_changed_sets_active_pane_and_window() {
+        let mut m = ProjectionModel::default();
+        m.apply_event(&ControlEvent::WindowAdd { window: WindowId(1) });
+        m.apply_event(&ControlEvent::WindowAdd { window: WindowId(2) });
+        m.apply_event(&ControlEvent::WindowPaneChanged {
+            window: WindowId(2),
+            pane: PaneId(5),
+        });
+        assert_eq!(m.active_pane, Some(PaneId(5)));
+        assert!(!m.windows[0].active);
+        assert!(m.windows[1].active);
+    }
+
+    #[test]
+    fn seed_from_rows_builds_windows_with_panes() {
+        use crate::enumerate::parse_window_rows;
+        let rows = parse_window_rows(&[
+            "1\t@1\tabcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}\tx\tmain".to_string(),
+        ])
+        .unwrap();
+        let mut m = ProjectionModel::default();
+        m.seed_from_rows(&rows);
+        assert_eq!(m.windows.len(), 1);
+        assert_eq!(m.windows[0].panes.len(), 2);
+        assert!(m.windows[0].active);
     }
 }
