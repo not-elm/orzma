@@ -1,28 +1,23 @@
-//! CEF integration for extension surfaces: the `ozmux-ext://` asset scheme, the
-//! webview spawn-once system that attaches a `bevy_cef` webview to each Extension
-//! Surface host, and the `window.<ns>.<method>` host-API bridge injected per
-//! surface (capability-gated `host.call` frames forwarded to the single Node host
-//! via `HostRpc`, with replies routed back on the `ozmux` channel).
+//! CEF host-RPC plumbing (currently dormant) plus the `window.ozmux` Tier 1
+//! back-channel: registers the `ozmux-dyn://` dynamic asset scheme, keeps
+//! `bevy_cef`'s `FocusedWebview` in step with the active pane, and routes the
+//! `host.call` / `ozmux.call` frames the page bridges emit. The `window.<ns>`
+//! host-API path (`on_host_call_frame` → single Node host via `HostRpc`) is kept
+//! intact but dormant: nothing grants namespaces yet, so every call is denied
+//! until per-webview API registration is wired.
 
-use self::preload::{build_preload, webview_url};
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
 use crate::inline_webview::{InlineWebview, focused_inline_of};
 use crate::osc_webview::GrantedNamespaces;
 use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
-use crate::ui::ExtensionSurfaceMarker;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
 use ozmux_extension_host::DynAssetRegistry;
 use ozmux_extension_host::HostRpcClient;
 use ozmux_extension_host::dyn_scheme::custom_dyn_scheme;
-use ozmux_extension_host::host::AssetSourceRegistry;
-use ozmux_extension_host::scheme::custom_scheme;
-use ozmux_multiplexer::{
-    AttachedWorkspace, MultiplexerCommands, OwningExtension, SurfaceKind, SurfaceMarker,
-    WorkspaceMarker,
-};
+use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, SurfaceMarker, WorkspaceMarker};
 use serde_json::Value;
 
 pub(crate) mod preload;
@@ -86,12 +81,6 @@ impl HostRpc {
     }
 }
 
-/// Marks an extension-surface host whose webview could not be mounted because
-/// its surface has no `OwningExtension`. Excluding marked hosts from the
-/// `finish_extension_setup` query makes its diagnostic fire once, not every frame.
-#[derive(Component)]
-struct WebviewMountUnresolved;
-
 /// The `kind` discriminator that routes a `Receive<OzmuxFrame>` to the new-model
 /// host-API path (`on_host_call_frame`). The page side emits the matching literal
 /// in `host_bridge.js`.
@@ -101,11 +90,11 @@ const HOST_CALL_KIND: &str = "host.call";
 /// back-channel (`on_ozmux_call_frame`). The page side emits it in `ozmux_bridge.js`.
 const OZMUX_CALL_KIND: &str = "ozmux.call";
 
-/// Builds the `CefPlugin` with the `ozmux-ext://` (static, Tier 2) and
-/// `ozmux-dyn://` (dynamic, Tier 1) schemes bound to their shared registries.
-pub fn cef_plugin(ext_registry: AssetSourceRegistry, dyn_registry: DynAssetRegistry) -> CefPlugin {
+/// Builds the `CefPlugin` with the `ozmux-dyn://` (dynamic, Tier 1) scheme bound
+/// to its shared `DynAssetRegistry`.
+pub fn cef_plugin(dyn_registry: DynAssetRegistry) -> CefPlugin {
     CefPlugin {
-        custom_schemes: vec![custom_scheme(ext_registry), custom_dyn_scheme(dyn_registry)],
+        custom_schemes: vec![custom_dyn_scheme(dyn_registry)],
         command_line_config: cef_command_line_config(),
         ..Default::default()
     }
@@ -123,19 +112,10 @@ fn cef_command_line_config() -> CommandLineConfig {
     config
 }
 
-/// Wires the spawn-once system that attaches a `bevy_cef` webview to each
-/// Extension Surface host.
-///
-/// `finish_extension_setup` seeds each webview's INITIAL `WebviewSize` exactly
-/// once, at creation, from its laid-out pane (see that fn for why). ONGOING
-/// resize is intentionally NOT handled here: `bevy_cef`'s `UiWebviewPlugin`
-/// (pulled in by `CefPlugin`) already runs `update_webview_ui_size` in
-/// `PostUpdate` after `UiSystems::Layout`, keeping each UI webview's
-/// `WebviewSize` in step with its `ComputedNode` on every layout pass. The
-/// one-time seed and that per-frame sync do not conflict — the seed equals the
-/// first synced value, so `update_webview_ui_size`'s `set_if_neq` is a no-op.
-/// The terminal path needs its own resize only because it derives grid
-/// `cols`/`rows` from font metrics, which `bevy_cef` knows nothing about.
+/// Wires the host-RPC plumbing (dormant) and the `window.ozmux` Tier 1
+/// back-channel: the `host.call` / `ozmux.call` frame observers, the host-reply
+/// drain, the webview-load loggers, and the focus sync that keeps
+/// `bevy_cef`'s `FocusedWebview` in step with the active pane.
 pub struct OzmuxExtensionRenderPlugin;
 
 impl Plugin for OzmuxExtensionRenderPlugin {
@@ -152,7 +132,6 @@ impl Plugin for OzmuxExtensionRenderPlugin {
             .add_systems(
                 Update,
                 (
-                    finish_extension_setup.in_set(OzmuxSystems::SetupSurface),
                     drain_host_rpc_responses,
                     sync_focused_webview.after(OzmuxSystems::Input),
                 ),
@@ -201,118 +180,6 @@ fn sync_focused_webview(
     }
 }
 
-/// Attaches a `bevy_cef` webview to each Extension Surface host once its pane
-/// has a real laid-out size: a `WebviewSource` pointed at the memo extension, a
-/// `WebviewSize` seeded from the host's `ComputedNode`, and a
-/// `MaterialNode<WebviewUiMaterial>`. Runs every Update tick but skips a host
-/// until its `ComputedNode` reports a real (≥ 1 logical px) size, and only
-/// targets hosts that lack `WebviewSource`, so the per-entity insertion happens
-/// exactly once.
-///
-/// Seeding `WebviewSize` at insert time is load-bearing. `bevy_cef`'s
-/// `create_webview` reads `WebviewSize` when it builds the CEF browser, and the
-/// component defaults to 800×800. If the webview were inserted before layout,
-/// the browser would be created at 800×800 and then resized to the real pane
-/// size a frame later (when `update_webview_ui_size` syncs `WebviewSize` from
-/// `ComputedNode`). That mid-load `was_resized()` races CEF's offscreen
-/// renderer-widget init and wedges it (`blink.mojom.Widget` message rejections →
-/// no `LoadFinished`, no paint → a permanently white pane). By waiting for
-/// layout and creating the browser at the final size, the first
-/// `update_webview_ui_size` pass is a `set_if_neq` no-op, so no resize fires
-/// during the load.
-fn finish_extension_setup(
-    mut commands: Commands,
-    mut materials: ResMut<Assets<WebviewUiMaterial>>,
-    mux: MultiplexerCommands,
-    owners: Query<&OwningExtension>,
-    kinds: Query<&SurfaceKind>,
-    surfaces: Query<
-        (Entity, &ComputedNode),
-        (
-            With<ExtensionSurfaceMarker>,
-            Without<WebviewSource>,
-            Without<WebviewMountUnresolved>,
-        ),
-    >,
-    granted: Query<&GrantedNamespaces>,
-) {
-    for (surface, computed) in surfaces.iter() {
-        let Some(logical) = pane_logical_size(computed.size(), computed.inverse_scale_factor())
-        else {
-            continue;
-        };
-        let Some((workspace, pane)) = surface_multiplexer_chain(surface, &mux) else {
-            continue;
-        };
-        let Ok(owner) = owners.get(surface) else {
-            tracing::warn!(
-                ?surface,
-                "extension surface has no OwningExtension; webview cannot be mounted (terminal-kind split over control socket?)"
-            );
-            commands.entity(surface).insert(WebviewMountUnresolved);
-            continue;
-        };
-        let Ok(SurfaceKind::Extension { entry }) = kinds.get(surface) else {
-            continue;
-        };
-        let entry = entry.to_string_lossy();
-        let name = owner.0.as_str();
-        let url = webview_url(name, &entry);
-        tracing::debug!(?surface, ?logical, %url, "spawning extension webview");
-        let preload = match granted.get(surface) {
-            Ok(g) => build_preload(workspace, pane, surface, name, g),
-            Err(_) => {
-                // NOTE: every OSC-mounted Extension surface is stamped with
-                // GrantedNamespaces at mount; reaching setup without it means a
-                // non-OSC creation path skipped the stamp, so the webview would
-                // silently get zero capabilities — flag the invariant break.
-                tracing::warn!(
-                    ?surface,
-                    "extension surface has no GrantedNamespaces; injecting empty grant"
-                );
-                build_preload(
-                    workspace,
-                    pane,
-                    surface,
-                    name,
-                    &GrantedNamespaces::default(),
-                )
-            }
-        };
-        commands.entity(surface).insert((
-            WebviewSource::new(url),
-            WebviewSize(logical),
-            preload,
-            MaterialNode(materials.add(WebviewUiMaterial::default())),
-        ));
-    }
-}
-
-/// Resolves the `(workspace, pane)` multiplexer entities owning an extension
-/// Surface: surface → pane via `pane_of_surface`, pane → workspace via
-/// `workspace_of_pane`. Returns `None` until every link exists (e.g. before
-/// the surface is laid out into a pane).
-fn surface_multiplexer_chain(
-    surface: Entity,
-    mux: &MultiplexerCommands,
-) -> Option<(Entity, Entity)> {
-    let pane = mux.pane_of_surface(surface)?;
-    let workspace = mux.workspace_of_pane(pane)?;
-    Some((workspace, pane))
-}
-
-/// Converts a host pane's `ComputedNode` physical-pixel size to the logical
-/// (DIP) size `WebviewSize` expects, or `None` when the pane has no real area
-/// yet (pre-layout / sub-pixel). Mirrors `bevy_cef`'s `webview_size_from_computed`,
-/// duplicated here because that fn is `pub(crate)`.
-fn pane_logical_size(physical: Vec2, inverse_scale_factor: f32) -> Option<Vec2> {
-    let logical = physical * inverse_scale_factor;
-    if logical.x < 1.0 || logical.y < 1.0 {
-        None
-    } else {
-        Some(logical)
-    }
-}
 
 /// Inbound (new-model host API): a `window.<ns>.<method>` call arrives as a
 /// `Receive<OzmuxFrame>` with `kind:"host.call"`. The trusted caller is
@@ -532,53 +399,7 @@ fn drop_inflight_host_calls_on_webview_despawn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::asset::AssetPlugin;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::image::ImagePlugin;
-    use ozmux_multiplexer::MultiplexerPlugin;
-
-    fn make_test_app() -> App {
-        // NOTE: `bevy_cef`'s `UiWebviewPlugin` registers `WebviewUiMaterial`
-        // through `UiMaterialPlugin`, which pulls in the full render stack. For
-        // these headless tests we only need `Assets<WebviewUiMaterial>` to exist
-        // so the system's `ResMut<Assets<...>>` parameter resolves. The material
-        // is a plain `Asset` (no render-app init required), so `init_asset`
-        // suffices — mirrors `ui::terminal`'s `TerminalUiMaterial` test setup.
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(ImagePlugin::default())
-            .add_plugins(MultiplexerPlugin)
-            .init_asset::<WebviewUiMaterial>();
-        app
-    }
-
-    /// Spawns a workspace/pane/extension-surface chain and decorates the
-    /// Surface entity (which is its own host) with the extension marker plus
-    /// the caller's `extra` bundle, returning the surface/workspace/pane
-    /// handles so `finish_extension_setup` can resolve the per-webview
-    /// context. The surface is stamped with an extension kind (entry
-    /// "ui/app.html") and an owning extension of "memo".
-    fn spawn_extension_host(app: &mut App, extra: impl Bundle) -> (Entity, Entity, Entity) {
-        use std::path::PathBuf;
-        let (workspace, pane, surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.workspace, o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().entity_mut(surface).insert((
-            OwningExtension("memo".into()),
-            SurfaceKind::Extension {
-                entry: PathBuf::from("ui/app.html"),
-            },
-            ExtensionSurfaceMarker,
-            extra,
-        ));
-        app.world_mut().flush();
-        (surface, workspace, pane)
-    }
 
     #[test]
     fn focused_webview_follows_active_pane() {
@@ -630,7 +451,7 @@ mod tests {
         let _ = terminal_surface;
         app.world_mut()
             .entity_mut(ext_surface)
-            .insert(WebviewSource::new(webview_url("memo", "ui/app.html")));
+            .insert(WebviewSource::new("ozmux-dyn://memo/index.html"));
 
         let set_active = move |app: &mut App, pane: Entity| {
             app.world_mut()
@@ -655,125 +476,6 @@ mod tests {
             app.world().resource::<FocusedWebview>().0,
             None,
             "moving focus to the terminal pane must clear the focused webview",
-        );
-    }
-
-    fn laid_out_node(physical: Vec2) -> ComputedNode {
-        ComputedNode {
-            size: physical,
-            inverse_scale_factor: 1.0,
-            ..ComputedNode::DEFAULT
-        }
-    }
-
-    #[test]
-    fn skips_entities_without_extension_marker() {
-        let mut app = make_test_app();
-        app.add_systems(Update, finish_extension_setup);
-        let host = app
-            .world_mut()
-            .spawn(laid_out_node(Vec2::new(800.0, 600.0)))
-            .id();
-        app.update();
-        assert!(
-            app.world().get::<WebviewSource>(host).is_none(),
-            "entity without ExtensionSurfaceMarker must not receive a WebviewSource"
-        );
-    }
-
-    #[test]
-    fn warns_once_and_marks_host_when_surface_lacks_owning_extension() {
-        let mut app = make_test_app();
-        app.add_systems(Update, finish_extension_setup);
-
-        let surface = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_workspace(Some("t".into())).surface
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.world_mut().entity_mut(surface).insert((
-            ExtensionSurfaceMarker,
-            laid_out_node(Vec2::new(800.0, 600.0)),
-        ));
-
-        app.update();
-        assert!(
-            app.world().get::<WebviewSource>(surface).is_none(),
-            "a surface that lacks OwningExtension must not get a webview"
-        );
-        assert!(
-            app.world().get::<WebviewMountUnresolved>(surface).is_some(),
-            "the surface must be marked so the diagnostic fires once, not every frame"
-        );
-
-        // A second tick must not re-process the marked surface (still no webview).
-        app.update();
-        assert!(
-            app.world().get::<WebviewSource>(surface).is_none(),
-            "the marked surface must stay excluded from the query"
-        );
-    }
-
-    #[test]
-    fn defers_webview_until_pane_is_laid_out() {
-        let mut app = make_test_app();
-        app.add_systems(Update, finish_extension_setup);
-        let (host, ..) = spawn_extension_host(&mut app, ComputedNode::DEFAULT);
-        app.update();
-        assert!(
-            app.world().get::<WebviewSource>(host).is_none(),
-            "a zero-area (pre-layout) host must not receive a webview yet"
-        );
-
-        app.world_mut()
-            .entity_mut(host)
-            .insert(laid_out_node(Vec2::new(640.0, 480.0)));
-        app.update();
-        assert!(
-            app.world().get::<WebviewSource>(host).is_some(),
-            "once the pane has a real size, the webview must be attached"
-        );
-    }
-
-    #[test]
-    fn webview_inserted_exactly_once() {
-        let mut app = make_test_app();
-        app.add_systems(Update, finish_extension_setup);
-        let (host, ..) = spawn_extension_host(&mut app, laid_out_node(Vec2::new(800.0, 600.0)));
-        app.update();
-        let first = app
-            .world()
-            .get::<MaterialNode<WebviewUiMaterial>>(host)
-            .map(|m| m.id());
-        app.update();
-        let second = app
-            .world()
-            .get::<MaterialNode<WebviewUiMaterial>>(host)
-            .map(|m| m.id());
-        assert_eq!(
-            first, second,
-            "the second tick must not re-insert (and so not replace) the webview material"
-        );
-    }
-
-    #[test]
-    fn pane_logical_size_rejects_zero_and_subpixel() {
-        assert_eq!(pane_logical_size(Vec2::ZERO, 1.0), None);
-        assert_eq!(pane_logical_size(Vec2::new(0.0, 600.0), 1.0), None);
-        assert_eq!(pane_logical_size(Vec2::new(0.5, 0.5), 1.0), None);
-    }
-
-    #[test]
-    fn pane_logical_size_scales_physical_to_logical() {
-        assert_eq!(
-            pane_logical_size(Vec2::new(640.0, 480.0), 1.0),
-            Some(Vec2::new(640.0, 480.0))
-        );
-        assert_eq!(
-            pane_logical_size(Vec2::new(1600.0, 1200.0), 0.5),
-            Some(Vec2::new(800.0, 600.0))
         );
     }
 
@@ -827,7 +529,7 @@ mod tests {
             .entity_mut(workspace)
             .insert(AttachedWorkspace);
         app.world_mut().entity_mut(render_only_surface).insert((
-            WebviewSource::new(webview_url("memo", "ui/app.html")),
+            WebviewSource::new("ozmux-dyn://memo/index.html"),
             NonInteractive,
         ));
 
@@ -1178,38 +880,6 @@ mod tests {
     }
 
     #[test]
-    fn new_model_surface_gets_host_bridge_and_granted_list() {
-        let mut app = make_test_app();
-        app.add_systems(Update, finish_extension_setup);
-        let mut caps = std::collections::HashSet::new();
-        caps.insert("fs".to_string());
-        let (host, ..) = spawn_extension_host(
-            &mut app,
-            (
-                laid_out_node(Vec2::new(800.0, 600.0)),
-                GrantedNamespaces(caps),
-            ),
-        );
-        app.update();
-
-        let preload = app
-            .world()
-            .get::<PreloadScripts>(host)
-            .expect("new-model surface must carry the host bridge as a PreloadScript");
-        assert!(
-            preload.0.iter().any(|s| s == preload::HOST_BRIDGE_JS),
-            "the host-API bridge JS must be injected for a surface with GrantedNamespaces"
-        );
-        assert!(
-            preload
-                .0
-                .iter()
-                .any(|s| s.starts_with("window.__ozmuxGranted=") && s.contains("\"fs\"")),
-            "the granted-namespace list must be injected before the bridge"
-        );
-    }
-
-    #[test]
     fn pruning_drops_in_flight_calls_for_a_despawned_surface() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -1275,157 +945,4 @@ mod tests {
         );
     }
 
-    fn node_available() -> bool {
-        std::process::Command::new("sh")
-            .arg("-c")
-            .arg("command -v node")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    /// Standard-alphabet base64 of `bytes` (no deps; `base64` is only transitive).
-    /// Used to assert the `{__u8}` envelope the host returns for a binary value.
-    fn base64_standard(bytes: &[u8]) -> String {
-        const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = String::new();
-        for chunk in bytes.chunks(3) {
-            let b0 = chunk[0];
-            let b1 = *chunk.get(1).unwrap_or(&0);
-            let b2 = *chunk.get(2).unwrap_or(&0);
-            out.push(T[(b0 >> 2) as usize] as char);
-            out.push(T[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize] as char);
-            out.push(if chunk.len() > 1 {
-                T[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] as char
-            } else {
-                '='
-            });
-            out.push(if chunk.len() > 2 {
-                T[(b2 & 0x3f) as usize] as char
-            } else {
-                '='
-            });
-        }
-        out
-    }
-
-    #[test]
-    fn e2e_memo_fs_read_round_trips_through_the_real_host_and_gates_capabilities() {
-        use ozmux_extension_host::host::{LifecycleEvent, RuntimeRoot};
-        use ozmux_extension_host::{
-            BuiltHostManifest, HostProcess, HostRpcClient, discover_extensions,
-        };
-        use std::time::{Duration, Instant};
-
-        if !node_available() {
-            eprintln!("skipping e2e: node not available");
-            return;
-        }
-
-        // 1. Discover the bundled memo and build the host descriptor JSON.
-        let extensions_root =
-            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("extensions");
-        let extensions = discover_extensions(&[extensions_root]);
-        assert!(
-            extensions.iter().any(|e| e.name == "memo"),
-            "bundled memo must be discovered via ozmux.toml"
-        );
-        let built = BuiltHostManifest::new(&extensions);
-        let descriptor_json = serde_json::to_string(&built.manifest).expect("manifest serializes");
-
-        // 2. Spawn the real Node host and wait for readiness.
-        let runtime =
-            RuntimeRoot::resolve_in(&std::env::temp_dir(), std::process::id(), "host-e2e")
-                .expect("runtime root");
-        let host = HostProcess::spawn(runtime, &descriptor_json, Duration::from_secs(20))
-            .expect("spawn host");
-        let ready_deadline = Instant::now() + Duration::from_secs(20);
-        loop {
-            match host.events().recv_timeout(Duration::from_millis(200)) {
-                Ok(LifecycleEvent::Ready) => break,
-                Ok(LifecycleEvent::SpawnFailed { error }) => panic!("host spawn failed: {error}"),
-                Ok(LifecycleEvent::Exited { status }) => panic!("host exited early: {status:?}"),
-                Err(e) if e.is_disconnected() => {
-                    panic!("lifecycle channel closed before Ready was sent")
-                }
-                Err(_) => assert!(Instant::now() < ready_deadline, "host never became ready"),
-            }
-        }
-        let client = HostRpcClient::connect(host.rpc_sock_path()).expect("rpc connect");
-
-        // 3. Headless app with the capability gate + reply drain + a real client.
-        let mut app = gate_app();
-        app.add_systems(Update, drain_host_rpc_responses);
-        app.world_mut().resource_mut::<HostRpc>().set_client(client);
-
-        // 4. A webview granted the "fs" namespace (the trust record on the entity).
-        let mut caps = std::collections::HashSet::new();
-        caps.insert("fs".to_string());
-        let webview = app.world_mut().spawn(GrantedNamespaces(caps)).id();
-
-        // 5. fs.read of a known temp file.
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("note.txt");
-        let content = b"hello from memo fs.read";
-        std::fs::write(&file, content).unwrap();
-
-        app.world_mut().trigger(Receive {
-            webview,
-            payload: OzmuxFrame(serde_json::json!({
-                "kind": "host.call", "reqId": "p0", "ns": "fs", "method": "read",
-                "args": [file.to_string_lossy()]
-            })),
-        });
-
-        // 6. Pump until the reply lands.
-        let reply_deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            app.update();
-            if !app.world().resource::<CapturedEmits>().0.is_empty() {
-                break;
-            }
-            assert!(
-                Instant::now() < reply_deadline,
-                "fs.read reply never returned"
-            );
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let cap = app.world().resource::<CapturedEmits>();
-        assert_eq!(cap.0.len(), 1, "exactly one reply");
-        let (target, payload) = &cap.0[0];
-        assert_eq!(*target, webview, "reply targets the originating webview");
-        let reply: serde_json::Value = serde_json::from_str(payload).unwrap();
-        assert_eq!(reply["reqId"], "p0", "page-local reqId restored");
-        assert_eq!(reply["ok"], true, "fs.read succeeded: {payload}");
-        assert_eq!(
-            reply["value"]["__u8"]
-                .as_str()
-                .expect("binary {__u8} envelope"),
-            base64_standard(content),
-            "fs.read returns the file's bytes as a base64 envelope"
-        );
-
-        // 7. Capability gate: an ungranted namespace is rejected, host not called.
-        app.world_mut().resource_mut::<CapturedEmits>().0.clear();
-        app.world_mut().trigger(Receive {
-            webview,
-            payload: OzmuxFrame(serde_json::json!({
-                "kind": "host.call", "reqId": "p1", "ns": "net", "method": "get", "args": []
-            })),
-        });
-        app.world_mut().flush();
-        let cap = app.world().resource::<CapturedEmits>();
-        assert_eq!(cap.0.len(), 1, "exactly one reject");
-        assert!(
-            cap.0[0].1.contains("capability_denied"),
-            "an ungranted namespace must be rejected, not forwarded"
-        );
-        assert!(
-            app.world().resource::<HostRpc>().inflight.is_empty(),
-            "a denied call must not be forwarded to the host"
-        );
-
-        app.world_mut().resource_mut::<HostRpc>().clear_client();
-        drop(host);
-    }
 }

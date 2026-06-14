@@ -1,12 +1,11 @@
-//! Tokio-free extension host: a per-extension runtime root, the shared asset
-//! registry, and the process spawn + lifecycle.
+//! Tokio-free host runtime: a per-handle runtime root and the host process
+//! spawn + lifecycle.
 
 use crossbeam_channel::Sender;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
@@ -99,25 +98,6 @@ impl RuntimeRoot {
 impl Drop for RuntimeRoot {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.root);
-    }
-}
-
-/// A shared, interior-mutable map of extension name → its on-disk asset root.
-/// Built before extensions launch (the CEF scheme handler is constructed at
-/// `CefPlugin::build()`) and populated as each extension is discovered, so the
-/// handler reads names registered after its own construction.
-#[derive(Clone, Default)]
-pub struct AssetSourceRegistry(Arc<RwLock<HashMap<String, PathBuf>>>);
-
-impl AssetSourceRegistry {
-    /// Returns (cloning) the asset root for `name`, if registered.
-    pub fn get(&self, name: &str) -> Option<PathBuf> {
-        self.0.read().unwrap().get(name).cloned()
-    }
-
-    /// Inserts/replaces the asset root for `name`.
-    pub fn insert(&self, name: impl Into<String>, root: PathBuf) {
-        self.0.write().unwrap().insert(name.into(), root);
     }
 }
 
@@ -235,14 +215,6 @@ pub(crate) fn run_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn asset_registry_stores_and_retrieves_path() {
-        let reg = AssetSourceRegistry::default();
-        reg.insert("memo", PathBuf::from("/abs/memo"));
-        assert_eq!(reg.get("memo"), Some(PathBuf::from("/abs/memo")));
-        assert_eq!(reg.get("ghost"), None);
-    }
 
     #[test]
     fn runtime_root_creates_sock_dir_0700_and_drops() {

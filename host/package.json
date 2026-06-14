@@ -9,9 +9,6 @@
     "test": "vitest run"
   },
   "packageManager": "pnpm@10.30.2",
-  "dependencies": {
-    "zod": "catalog:"
-  },
   "devDependencies": {
     "@types/node": "catalog:",
     "esbuild": "catalog:",

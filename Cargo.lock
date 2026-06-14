@@ -4672,13 +4672,8 @@ dependencies = [
  "bevy",
  "bevy_cef_core",
  "crossbeam-channel",
- "ozmux_multiplexer",
- "portable-pty",
- "serde",
- "serde_json",
  "tempfile",
  "thiserror 2.0.18",
- "toml",
 ]
 
 [[package]]
@@ -5944,6 +5939,13 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "tmux_control_parser"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+]
 
 [[package]]
 name = "tokio"

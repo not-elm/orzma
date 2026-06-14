@@ -1,5 +1,6 @@
-//! Observes `OscWebviewRequest` and mounts/unmounts a registered webview as a
-//! tab in the requesting terminal's pane, reusing the extension-surface path.
+//! Observes `OscWebviewRequest` and mounts/unmounts an inline dynamic webview
+//! at the requesting terminal's cursor (the `MountInline` / `UnmountInline`
+//! verbs); the non-inline tab verbs are accepted but no longer acted on.
 
 use crate::control_plane::DynamicRegistry;
 use crate::inline_webview::{
@@ -7,12 +8,8 @@ use crate::inline_webview::{
 };
 use bevy::prelude::*;
 use bevy_terminal::{OscWebviewRequest, OscWebviewVerb};
-use ozmux_extension_host::ViewRegistry;
-use ozmux_multiplexer::{
-    ExtensionSurfaceId, MultiplexerCommands, OwningExtension, SurfaceKind, SurfaceOf,
-};
+use ozmux_multiplexer::{MultiplexerCommands, SurfaceOf};
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -21,23 +18,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Resource, Clone)]
 pub(crate) struct OscWebviewGate(pub(crate) Arc<AtomicBool>);
 
-/// Marks a surface mounted by the OSC path, recording its view id and the
-/// origin terminal surface so unmount is deterministic.
-#[derive(Component, Debug, Clone)]
-pub(crate) struct OscMounted {
-    pub(crate) view_id: String,
-    pub(crate) terminal_surface: Entity,
-}
-
-/// Marks an OSC-mounted webview surface as render-only (no pointer or keyboard
-/// input forwarded to the embedded page).
+/// Marks an inline webview as render-only (no pointer or keyboard input
+/// forwarded to the embedded page).
 #[derive(Component, Debug, Default)]
 pub(crate) struct NonInteractive;
 
-/// The host-API namespaces an OSC-mounted webview is permitted to call, copied
-/// from its registered view's `capabilities` at mount time. The host-API bridge
-/// (Step 3) reads this as the per-surface capability grant; it is the in-ECS
-/// trust record, never derived from webview-supplied data.
+/// The host-API namespaces a webview is permitted to call (the per-webview
+/// capability grant the dormant host-RPC bridge reads). It is the in-ECS trust
+/// record, never derived from webview-supplied data. Currently always empty:
+/// the per-webview API registration that would populate it is not yet wired.
 #[derive(Component, Debug, Clone, Default)]
 pub(crate) struct GrantedNamespaces(pub(crate) HashSet<String>);
 
@@ -61,12 +50,10 @@ fn init_gate_from_config(
 
 pub(crate) fn on_osc_webview_request(
     ev: On<OscWebviewRequest>,
-    mut mux: MultiplexerCommands,
     mut inline: InlineWebviewParams,
-    registry: Res<ViewRegistry>,
+    mux: MultiplexerCommands,
     dynamic: Res<DynamicRegistry>,
     surface_of: Query<&SurfaceOf>,
-    mounted: Query<(Entity, &OscMounted, &SurfaceOf)>,
 ) {
     let req = ev.event();
     let terminal_surface = req.entity;
@@ -74,43 +61,6 @@ pub(crate) fn on_osc_webview_request(
         return;
     };
     match &req.verb {
-        OscWebviewVerb::Mount { view_id } => {
-            if let Some((existing, _, _)) = mounted
-                .iter()
-                .find(|(_, m, so)| m.view_id == *view_id && so.0 == pane)
-            {
-                let _ = mux.set_active_surface(pane, existing);
-                return;
-            }
-            let Some(view) = registry.get(view_id) else {
-                tracing::debug!(%view_id, "osc-webview: unregistered view, ignoring");
-                return;
-            };
-            let interactive = view.interactive;
-            let entry = PathBuf::from(&view.entry);
-            let owning = view.owning_ext.clone();
-            let capabilities = view.capabilities.clone();
-            let view_id = view_id.clone();
-            let surface = mux.add_surface(pane, SurfaceKind::Extension { entry });
-            mux.insert_on(surface, ExtensionSurfaceId(format!("osc:{view_id}")));
-            mux.insert_on(surface, OwningExtension(owning));
-            mux.insert_on(
-                surface,
-                OscMounted {
-                    view_id,
-                    terminal_surface,
-                },
-            );
-            mux.insert_on(
-                surface,
-                GrantedNamespaces(capabilities.into_iter().collect()),
-            );
-            if !interactive {
-                mux.insert_on(surface, NonInteractive);
-                mux.insert_on(surface, Pickable::IGNORE);
-            }
-            let _ = mux.set_active_surface(pane, surface);
-        }
         OscWebviewVerb::MountInline {
             view_id,
             rows,
@@ -123,7 +73,6 @@ pub(crate) fn on_osc_webview_request(
             };
             mount_inline(
                 &mut inline,
-                &registry,
                 &dynamic,
                 InlineMountContext {
                     terminal_surface,
@@ -148,389 +97,8 @@ pub(crate) fn on_osc_webview_request(
                 instance_id.as_deref(),
             );
         }
-        OscWebviewVerb::Unmount { view_id } => {
-            let target = mounted.iter().find(|(_, m, so)| {
-                so.0 == pane && view_id.as_ref().is_none_or(|v| m.view_id == *v)
-            });
-            if let Some((surface, m, _)) = target {
-                // NOTE: the origin terminal may already be despawned (its tab was
-                // closed while the webview tab was active). Only repoint to it when
-                // it is still a live surface; otherwise `close_surface` repoints to
-                // a surviving sibling, never leaving `ActiveSurface` dangling.
-                if surface_of.contains(m.terminal_surface) {
-                    let _ = mux.set_active_surface(pane, m.terminal_surface);
-                }
-                if let Err(e) = mux.close_surface(pane, surface) {
-                    tracing::warn!(?e, "osc-webview: unmount close_surface failed");
-                }
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use bevy::ecs::system::RunSystemOnce;
-    use ozmux_extension_host::RegisteredView;
-    use ozmux_multiplexer::{ActiveSurface, MultiplexerPlugin, Surfaces};
-
-    fn make_test_app() -> App {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin)
-            .init_resource::<ViewRegistry>()
-            .init_resource::<DynamicRegistry>()
-            .init_resource::<Assets<Image>>()
-            .add_observer(on_osc_webview_request);
-        app
-    }
-
-    fn register_view(app: &mut App, view_id: &str, interactive: bool) {
-        app.world_mut().resource_mut::<ViewRegistry>().register(
-            view_id.into(),
-            RegisteredView {
-                entry: "ui/dash.html".into(),
-                owning_ext: "memo".into(),
-                interactive,
-                capabilities: Vec::new(),
-            },
-        );
-    }
-
-    fn register_view_with_caps(app: &mut App, view_id: &str, interactive: bool, caps: &[&str]) {
-        app.world_mut().resource_mut::<ViewRegistry>().register(
-            view_id.into(),
-            RegisteredView {
-                entry: "ui/dash.html".into(),
-                owning_ext: "memo".into(),
-                interactive,
-                capabilities: caps.iter().map(|s| (*s).to_string()).collect(),
-            },
-        );
-    }
-
-    fn surface_count(app: &App, pane: Entity) -> usize {
-        app.world()
-            .get::<Surfaces>(pane)
-            .map(|s| s.iter().count())
-            .unwrap_or(0)
-    }
-
-    fn active_surface(app: &App, pane: Entity) -> Option<Entity> {
-        app.world().get::<ActiveSurface>(pane).map(|a| a.0)
-    }
-
-    #[test]
-    fn mount_adds_extension_surface_and_switches_active() {
-        let mut app = make_test_app();
-        register_view(&mut app, "dash", true);
-
-        let (pane, terminal_surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        // Trigger mount from the terminal surface.
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal_surface,
-            verb: OscWebviewVerb::Mount {
-                view_id: "dash".into(),
-            },
-            anchor: None,
-        });
-        app.world_mut().flush();
-
-        assert_eq!(
-            surface_count(&app, pane),
-            2,
-            "mount must add a second surface to the pane"
-        );
-
-        let active = active_surface(&app, pane).expect("pane must have an active surface");
-        assert_ne!(
-            active, terminal_surface,
-            "active surface must switch to the mounted webview"
-        );
-        assert!(
-            app.world().get::<OscMounted>(active).is_some(),
-            "the new active surface must carry OscMounted"
-        );
-        assert_eq!(
-            app.world()
-                .get::<OscMounted>(active)
-                .map(|m| m.view_id.as_str()),
-            Some("dash"),
-        );
-    }
-
-    #[test]
-    fn unmount_restores_terminal_surface_and_despawns_webview() {
-        let mut app = make_test_app();
-        register_view(&mut app, "dash", true);
-
-        let (pane, terminal_surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        // Mount first.
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal_surface,
-            verb: OscWebviewVerb::Mount {
-                view_id: "dash".into(),
-            },
-            anchor: None,
-        });
-        app.world_mut().flush();
-
-        let webview_surface = active_surface(&app, pane).expect("webview must be active");
-
-        // Now unmount with no specific view_id.
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal_surface,
-            verb: OscWebviewVerb::Unmount { view_id: None },
-            anchor: None,
-        });
-        app.world_mut().flush();
-        // NOTE: despawn is deferred; a flush + update applies it.
-        app.update();
-
-        assert_eq!(
-            active_surface(&app, pane),
-            Some(terminal_surface),
-            "unmount must restore the terminal surface as active"
-        );
-        assert!(
-            app.world().get_entity(webview_surface).is_err(),
-            "unmount must despawn the webview surface"
-        );
-        assert_eq!(
-            surface_count(&app, pane),
-            1,
-            "pane must return to a single surface after unmount"
-        );
-    }
-
-    #[test]
-    fn unmount_with_despawned_origin_falls_back_to_live_survivor() {
-        let mut app = make_test_app();
-        register_view(&mut app, "dash", true);
-
-        let (pane, origin) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        // A second live terminal so a survivor exists after the origin is closed.
-        let survivor = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.add_surface(pane, SurfaceKind::Terminal)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: origin,
-            verb: OscWebviewVerb::Mount {
-                view_id: "dash".into(),
-            },
-            anchor: None,
-        });
-        app.world_mut().flush();
-        let webview = active_surface(&app, pane).expect("webview active");
-
-        // The origin terminal tab is closed while the webview tab is showing.
-        app.world_mut().entity_mut(origin).despawn();
-        app.world_mut().flush();
-
-        // A surviving terminal in the same pane drives the unmount.
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: survivor,
-            verb: OscWebviewVerb::Unmount { view_id: None },
-            anchor: None,
-        });
-        app.world_mut().flush();
-        app.update();
-
-        assert!(
-            app.world().get_entity(webview).is_err(),
-            "unmount must despawn the webview surface"
-        );
-        assert_ne!(
-            active_surface(&app, pane),
-            Some(origin),
-            "must never repoint ActiveSurface to the despawned origin"
-        );
-        assert_eq!(
-            active_surface(&app, pane),
-            Some(survivor),
-            "active falls back to the live surviving surface"
-        );
-    }
-
-    #[test]
-    fn mount_non_interactive_stamps_pickable_ignore() {
-        let mut app = make_test_app();
-        register_view(&mut app, "hud", false);
-
-        let (_pane, terminal_surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal_surface,
-            verb: OscWebviewVerb::Mount {
-                view_id: "hud".into(),
-            },
-            anchor: None,
-        });
-        app.world_mut().flush();
-
-        let pane = _pane;
-        let active = active_surface(&app, pane).expect("active surface");
-        assert!(
-            app.world().get::<NonInteractive>(active).is_some(),
-            "non-interactive view must carry NonInteractive"
-        );
-        assert!(
-            app.world().get::<Pickable>(active).is_some(),
-            "non-interactive view must carry Pickable::IGNORE"
-        );
-    }
-
-    #[test]
-    fn mount_unregistered_view_is_ignored() {
-        let mut app = make_test_app();
-
-        let (pane, terminal_surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal_surface,
-            verb: OscWebviewVerb::Mount {
-                view_id: "ghost".into(),
-            },
-            anchor: None,
-        });
-        app.world_mut().flush();
-
-        assert_eq!(
-            surface_count(&app, pane),
-            1,
-            "unregistered view must not add a surface"
-        );
-        assert_eq!(
-            active_surface(&app, pane),
-            Some(terminal_surface),
-            "active surface must stay unchanged for unregistered view"
-        );
-    }
-
-    #[test]
-    fn duplicate_mount_reactivates_existing_surface() {
-        let mut app = make_test_app();
-        register_view(&mut app, "dash", true);
-
-        let (pane, terminal_surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        // First mount.
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal_surface,
-            verb: OscWebviewVerb::Mount {
-                view_id: "dash".into(),
-            },
-            anchor: None,
-        });
-        app.world_mut().flush();
-
-        assert_eq!(surface_count(&app, pane), 2);
-        let first_webview = active_surface(&app, pane).unwrap();
-
-        // Second mount of the same view_id — must reactivate, not spawn a new surface.
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal_surface,
-            verb: OscWebviewVerb::Mount {
-                view_id: "dash".into(),
-            },
-            anchor: None,
-        });
-        app.world_mut().flush();
-
-        assert_eq!(
-            surface_count(&app, pane),
-            2,
-            "duplicate mount must not spawn a second webview surface"
-        );
-        assert_eq!(
-            active_surface(&app, pane),
-            Some(first_webview),
-            "duplicate mount must reactivate the existing webview surface"
-        );
-    }
-
-    #[test]
-    fn mount_stamps_granted_namespaces_from_view_capabilities() {
-        let mut app = make_test_app();
-        register_view_with_caps(&mut app, "dash", true, &["fs"]);
-
-        let (pane, terminal_surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        app.world_mut().trigger(OscWebviewRequest {
-            entity: terminal_surface,
-            verb: OscWebviewVerb::Mount {
-                view_id: "dash".into(),
-            },
-            anchor: None,
-        });
-        app.world_mut().flush();
-
-        let active = active_surface(&app, pane).expect("active surface");
-        let granted = app
-            .world()
-            .get::<GrantedNamespaces>(active)
-            .expect("mount must stamp GrantedNamespaces");
-        assert!(
-            granted.0.contains("fs"),
-            "granted namespaces must contain the view's capability"
-        );
+        // The non-inline tab-mount verbs belonged to the removed extension
+        // surface path; accept and drop them.
+        OscWebviewVerb::Mount { .. } | OscWebviewVerb::Unmount { .. } => {}
     }
 }

@@ -1,20 +1,19 @@
 //! Shared preload-script builder for ozmux-managed webviews: the
-//! `window.__ozmuxContext` globals, the `window.__ozmuxGranted` capability
-//! grant, and the `window.<ns>.<method>` host-API bridge JS.
+//! `window.__ozmuxContext` globals, the `window.ozmux` Tier 1 back-channel, and
+//! the dormant `window.<ns>.<method>` host-API bridge (`window.__ozmuxGranted` +
+//! `host_bridge.js`) kept for the not-yet-wired per-webview API registration.
 
 use crate::osc_webview::GrantedNamespaces;
 use bevy::prelude::Entity;
 use bevy_cef::prelude::PreloadScripts;
 
-/// Builds the `ozmux-ext://<name>/<entry>` webview URL for an extension surface,
-/// where `entry` is the client's HTML path relative to the extension dir.
-pub(crate) fn webview_url(extension_name: &str, entry: &str) -> String {
-    format!("ozmux-ext://{extension_name}/{entry}")
-}
-
 /// JS defining the new-model `window.<ns>.<method>` host-API bridge over
 /// `cef.emit` / `cef.listen`, injected (with `window.__ozmuxGranted`) per
 /// webview as a `PreloadScripts` entry.
+// NOTE: dormant host-RPC plumbing — no caller until per-webview API registration
+// is wired. Tests still exercise build_preload, so #[expect] would misfire under
+// cfg(test); a plain allow suppresses the build-time dead_code instead.
+#[allow(dead_code)]
 pub(super) const HOST_BRIDGE_JS: &str = include_str!("host_bridge.js");
 
 /// JS defining the unified `window.ozmux` back-channel bridge (`.call` / `.on`),
@@ -24,6 +23,9 @@ pub(super) const OZMUX_BRIDGE_JS: &str = include_str!("ozmux_bridge.js");
 
 /// Builds the full preload script set for an ozmux-managed webview:
 /// context globals, the capability grant, and the host-API bridge.
+// NOTE: dormant — see HOST_BRIDGE_JS. No caller until per-webview API
+// registration is wired; plain allow because cfg(test) still uses it.
+#[allow(dead_code)]
 pub(crate) fn build_preload(
     workspace: Entity,
     pane: Entity,
@@ -62,6 +64,9 @@ pub(crate) fn build_dynamic_preload(
 ///
 /// NOTE: PreloadScripts are joined with `;` and eval'd as one unit, so this MUST
 /// be a complete statement; a syntax error here would break the bridge eval too.
+// NOTE: dormant — only `build_preload` (itself dormant) calls it; plain allow
+// because cfg(test) still uses it.
+#[allow(dead_code)]
 fn context_preload_js(
     workspace: Entity,
     pane: Entity,
