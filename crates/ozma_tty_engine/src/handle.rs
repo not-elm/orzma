@@ -278,6 +278,20 @@ impl TerminalHandle {
         Ok(())
     }
 
+    /// Resizes the alacritty grid only — no PTY, no echo to any backend.
+    ///
+    /// For tmux panes, tmux owns the pane size; this applies the size tmux
+    /// reported (`%layout-change`) to the local grid. Stages full damage so the
+    /// reflowed grid reaches the renderer even when no output is pending. Unlike
+    /// [`TerminalHandle::resize`], it must NOT touch a PTY or echo the size
+    /// anywhere (echoing back to tmux would loop).
+    pub fn resize_grid_only(&mut self, cols: u16, rows: u16) {
+        self.resize_grid(cols, rows);
+        let mut scratch = std::mem::take(&mut self.scratch_dirty);
+        self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
+        self.scratch_dirty = scratch;
+    }
+
     /// Scrolls the visible viewport by `delta` lines and arms an
     /// emit. Positive `delta` moves backward into scrollback history;
     /// negative moves forward toward the live tail. Alacritty clamps
@@ -2629,6 +2643,14 @@ mod tests {
         let hits = app.world().resource::<Hits>();
         assert_eq!(hits.count, 1, "exactly one snapshot emitted");
         assert_eq!((hits.cols, hits.rows), (20, 5));
+    }
+
+    #[test]
+    fn resize_grid_only_changes_geometry_without_pty() {
+        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        h.resize_grid_only(40, 10);
+        let (cols, rows, _) = h.read_geometry();
+        assert_eq!((cols, rows), (40, 10));
     }
 }
 
