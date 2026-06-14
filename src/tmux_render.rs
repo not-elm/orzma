@@ -217,6 +217,14 @@ fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
     (cols, rows)
 }
 
+fn rows_for_panes(total_rows: u16) -> u16 {
+    total_rows.saturating_sub(1).max(1)
+}
+
+/// Sends `refresh-client -C <cols>,<rows>` to tmux so it lays out panes for
+/// the current window size. One row is reserved for the ozmux window status
+/// bar via [`rows_for_panes`], since tmux `-CC` does not reserve a status row.
+/// Results are deduped via [`LastClientSize`].
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
     connection: NonSend<TmuxConnection>,
@@ -237,6 +245,7 @@ fn sync_client_size(
         cell_w,
         cell_h,
     );
+    let rows = rows_for_panes(rows);
     if (cols, rows) == (last.cols, last.rows) {
         return;
     }
@@ -271,6 +280,13 @@ mod tests {
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
     use tmux_control_parser::{CellDims, PaneId};
+
+    #[test]
+    fn rows_for_panes_reserves_one_row_for_the_bar() {
+        assert_eq!(rows_for_panes(24), 23);
+        assert_eq!(rows_for_panes(1), 1); // never zero
+        assert_eq!(rows_for_panes(2), 1);
+    }
 
     #[test]
     fn cells_for_divides_and_floors() {
