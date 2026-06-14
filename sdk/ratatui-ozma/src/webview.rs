@@ -2,6 +2,7 @@
 
 use crate::error::OzmaResult;
 use crate::handler::{BoxedHandler, make_handler};
+use crate::keychord::KeyChord;
 use crate::keymap::NavKeymap;
 use crate::protocol::{ClientMsg, RegisterKind};
 use serde::Serialize;
@@ -28,6 +29,7 @@ impl Webview {
             kind: RegisterKind::Inline {
                 html: html.into(),
                 interactive: true,
+                passthrough: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -40,6 +42,7 @@ impl Webview {
                 root: root.as_ref().display().to_string(),
                 entry: entry.into(),
                 interactive: true,
+                passthrough: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -50,6 +53,16 @@ impl Webview {
         match &mut self.kind {
             RegisterKind::Inline { interactive: i, .. } => *i = interactive,
             RegisterKind::Dir { interactive: i, .. } => *i = interactive,
+        }
+        self
+    }
+
+    /// Declares chords the page lets through to the app while focused (the host
+    /// forwards them to the PTY so the app reads them via `crossterm::event::read`).
+    pub fn passthrough(mut self, keys: impl IntoIterator<Item = KeyChord>) -> Self {
+        match &mut self.kind {
+            RegisterKind::Inline { passthrough, .. } => passthrough.extend(keys),
+            RegisterKind::Dir { passthrough, .. } => passthrough.extend(keys),
         }
         self
     }
@@ -182,7 +195,9 @@ mod tests {
     fn inline_builder_records_kind_and_default_interactive() {
         let wv = Webview::inline("<h1>hi</h1>");
         match &wv.kind {
-            RegisterKind::Inline { html, interactive } => {
+            RegisterKind::Inline {
+                html, interactive, ..
+            } => {
                 assert_eq!(html, "<h1>hi</h1>");
                 assert!(*interactive);
             }
@@ -198,6 +213,7 @@ mod tests {
                 root,
                 entry,
                 interactive,
+                ..
             } => {
                 assert_eq!(root, "/abs/ui");
                 assert_eq!(entry, "index.html");
@@ -272,6 +288,29 @@ mod tests {
         assert_eq!(v["op"], "emit");
         assert_eq!(v["event"], "__ozma.keys");
         assert_eq!(v["payload"]["keys"]["arrowleft"], "left");
+    }
+
+    #[test]
+    fn passthrough_rides_register_wire() {
+        use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+        let wv = Webview::inline("x").passthrough([KeyChord {
+            mods: KeyModifiers::ALT,
+            code: KeyCode::Char('h'),
+        }]);
+        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
+        assert_eq!(v["op"], "register");
+        assert_eq!(v["passthrough"][0]["key"], "h");
+        assert_eq!(v["passthrough"][0]["mods"][0], "alt");
+    }
+
+    #[test]
+    fn empty_passthrough_is_omitted_from_wire() {
+        let wv = Webview::inline("x");
+        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
+        assert!(
+            v.get("passthrough").is_none(),
+            "empty passthrough must be skipped"
+        );
     }
 
     #[test]

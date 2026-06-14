@@ -1,5 +1,6 @@
 //! Control-socket NDJSON wire types.
 
+use crate::keychord::KeyChord;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -52,6 +53,9 @@ pub(crate) enum RegisterKind {
         html: String,
         /// Whether the view accepts focus/input.
         interactive: bool,
+        /// Chords the page lets through to the app while focused.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        passthrough: Vec<KeyChord>,
     },
     /// A directory of assets served at `ozmux-dyn://<handle>/`.
     Dir {
@@ -61,6 +65,9 @@ pub(crate) enum RegisterKind {
         entry: String,
         /// Whether the view accepts focus/input.
         interactive: bool,
+        /// Chords the page lets through to the app while focused.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        passthrough: Vec<KeyChord>,
     },
 }
 
@@ -132,6 +139,7 @@ mod tests {
         let v = serde_json::to_value(ClientMsg::Register(RegisterKind::Inline {
             html: "<h1>hi</h1>".into(),
             interactive: true,
+            passthrough: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["op"], "register");
