@@ -26,8 +26,8 @@ pub enum TransportEvent {
 #[derive(Clone)]
 enum Socket {
     Default,
-    Name(String), // -L
-    Path(String), // -S
+    Name(String),
+    Path(String),
 }
 
 /// A reusable handle to a tmux server on a given socket (config only; holds no
@@ -41,7 +41,10 @@ pub struct TmuxServer {
 impl TmuxServer {
     /// Returns a server targeting the default socket via the `tmux` binary on `PATH`.
     pub fn new() -> Self {
-        Self { program: "tmux".to_string(), socket: Socket::Default }
+        Self {
+            program: "tmux".to_string(),
+            socket: Socket::Default,
+        }
     }
 
     /// Overrides the tmux binary path.
@@ -112,7 +115,12 @@ impl TmuxServer {
 
     fn spawn(&self, subcommand: &[&str]) -> TmuxResult<TmuxClient> {
         let pair = native_pty_system()
-            .openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .map_err(spawn_err)?;
 
         // NOTE: disable PTY echo before tmux starts. Otherwise our command
@@ -246,11 +254,14 @@ fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Ve
     let stderr = String::from_utf8_lossy(stderr);
     let no_server = stdout.is_empty()
         && (stderr.contains("no server running")
-            || (stderr.contains("error connecting") && stderr.contains("No such file or directory")));
+            || (stderr.contains("error connecting")
+                && stderr.contains("No such file or directory")));
     if no_server {
         Ok(Vec::new())
     } else {
-        Err(TmuxError::Spawn(std::io::Error::other(stderr.trim().to_string())))
+        Err(TmuxError::Spawn(std::io::Error::other(
+            stderr.trim().to_string(),
+        )))
     }
 }
 
@@ -409,8 +420,20 @@ mod tests {
     #[test]
     fn connect_argv_socket_name() {
         assert_eq!(
-            TmuxServer::new().socket_name("foo").connect_argv(&["new-session"]),
+            TmuxServer::new()
+                .socket_name("foo")
+                .connect_argv(&["new-session"]),
             argv(&["-L", "foo", "-CC", "new-session"])
+        );
+    }
+
+    #[test]
+    fn connect_argv_socket_path() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_path("/tmp/foo")
+                .connect_argv(&["new-session"]),
+            argv(&["-S", "/tmp/foo", "-CC", "new-session"])
         );
     }
 
@@ -581,6 +604,16 @@ mod tests {
         assert_eq!(
             TmuxServer::new().socket_name("foo").list_sessions_argv(),
             argv(&["-L", "foo", "list-sessions", "-F", LIST_FORMAT])
+        );
+    }
+
+    #[test]
+    fn list_sessions_argv_socket_path() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_path("/tmp/foo")
+                .list_sessions_argv(),
+            argv(&["-S", "/tmp/foo", "list-sessions", "-F", LIST_FORMAT])
         );
     }
 

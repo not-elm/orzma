@@ -41,13 +41,34 @@ impl SessionInfo {
 
 fn parse_line(line: &[u8]) -> TmuxResult<SessionInfo> {
     let mut fields = line.splitn(5, |&b| b == b'\t');
-    let id = fields.next().and_then(parse_session_id).ok_or_else(|| malformed(line))?;
-    let windows = fields.next().and_then(parse_u32).ok_or_else(|| malformed(line))?;
-    let attached = fields.next().and_then(parse_u32).ok_or_else(|| malformed(line))? > 0;
-    let created = fields.next().and_then(parse_u64).ok_or_else(|| malformed(line))?;
+    let id = fields
+        .next()
+        .and_then(parse_session_id)
+        .ok_or_else(|| malformed(line))?;
+    let windows = fields
+        .next()
+        .and_then(parse_u32)
+        .ok_or_else(|| malformed(line))?;
+    let attached = fields
+        .next()
+        .and_then(parse_u32)
+        .ok_or_else(|| malformed(line))?
+        > 0;
+    let created = fields
+        .next()
+        .and_then(parse_u64)
+        .ok_or_else(|| malformed(line))?;
     let name_bytes = fields.next().ok_or_else(|| malformed(line))?;
-    let name = str::from_utf8(name_bytes).map_err(|_| malformed(line))?.to_string();
-    Ok(SessionInfo { id, name, windows, attached, created })
+    let name = str::from_utf8(name_bytes)
+        .map_err(|_| malformed(line))?
+        .to_string();
+    Ok(SessionInfo {
+        id,
+        name,
+        windows,
+        attached,
+        created,
+    })
 }
 
 fn malformed(line: &[u8]) -> TmuxError {
@@ -112,7 +133,10 @@ mod tests {
     #[test]
     fn name_with_spaces() {
         let out = b"$5\t1\t0\t1\tmy work session\n";
-        assert_eq!(SessionInfo::parse_list(out).unwrap()[0].name, "my work session");
+        assert_eq!(
+            SessionInfo::parse_list(out).unwrap()[0].name,
+            "my work session"
+        );
     }
 
     #[test]
