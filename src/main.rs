@@ -14,7 +14,7 @@ mod multiplexer;
 mod osc_webview;
 mod system_set;
 mod theme;
-mod tmux_boot;
+mod tmux_picker;
 mod tmux_render;
 mod ui;
 
@@ -40,7 +40,7 @@ use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_extension_host::DynAssetRegistry;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
-use tmux_boot::TmuxBootPlugin;
+use tmux_picker::OzmuxTmuxPickerPlugin;
 use tmux_render::OzmuxTmuxRenderPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::tmux_dialog::TmuxDialogPlugin;
@@ -68,7 +68,7 @@ fn main() {
             TerminalRendererPlugin,
             MultiplexerPlugin,
             TmuxSessionPlugin,
-            TmuxBootPlugin,
+            OzmuxTmuxPickerPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxLayoutLogPlugin,
