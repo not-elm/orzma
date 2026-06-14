@@ -21,7 +21,7 @@ use bevy_cef::prelude::{
     FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
 use bevy_cef_core::prelude::Browsers;
-use ozma_tty_engine::InlineAnchor;
+use ozma_tty_engine::{AnchorMode, InlineAnchor};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
@@ -45,17 +45,14 @@ pub(crate) struct InlineWebview {
     pub(crate) slot: u8,
 }
 
-/// Where an inline webview sits in its terminal's scrollback: the anchor cell
-/// (absolute line = `history_base + history_size + cursor row` at the OSC byte
-/// position, plus the cursor column), the rect extent in cells, and the VT
-/// `frame_seq` the next grid emit carries (`project_inline_overlays` defers
-/// first projection until the grid catches up to it).
+/// Where an inline webview sits: its anchor mode (scrollback line vs fixed
+/// viewport cell), the rect extent in cells, and the VT `frame_seq` the next
+/// grid emit carries (`project_inline_overlays` defers first projection until
+/// the grid catches up).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InlinePlacement {
-    /// Absolute scrollback line of the rect's TOP row.
-    pub(crate) anchor_line: u64,
-    /// Column of the anchor cell.
-    pub(crate) anchor_col: u16,
+    /// Where the rect is anchored.
+    pub(crate) anchor: AnchorMode,
     /// Rect height in terminal cells.
     pub(crate) rows: u16,
     /// Rect width in terminal cells.
@@ -260,8 +257,7 @@ pub(crate) fn mount_inline(
             slot,
         },
         InlinePlacement {
-            anchor_line: anchor.line,
-            anchor_col: anchor.col,
+            anchor: anchor.mode,
             rows: ctx.rows,
             cols: ctx.cols,
             frame_seq: anchor.frame_seq,
@@ -284,7 +280,7 @@ pub(crate) fn mount_inline(
         slot,
         rows = ctx.rows,
         cols = ctx.cols,
-        anchor_line = anchor.line,
+        anchor = ?anchor.mode,
         "osc-webview: inline webview mounted"
     );
 }
@@ -608,12 +604,18 @@ fn project_inline_overlays(
                 if (grid.last_seq.wrapping_sub(placement.frame_seq) as i32) < 0 {
                     continue;
                 }
-                let viewport_row = placement.anchor_line as i64
-                    - (grid.history_base as i64 + i64::from(grid.history_size)
-                        - i64::from(grid.display_offset));
+                let (viewport_row, anchor_col) = match placement.anchor {
+                    AnchorMode::Scrollback { line, col } => {
+                        let row = line as i64
+                            - (grid.history_base as i64 + i64::from(grid.history_size)
+                                - i64::from(grid.display_offset));
+                        (row, col)
+                    }
+                    AnchorMode::FixedScreen { .. } => continue,
+                };
                 if viewport_row + i64::from(placement.rows) <= 0
                     || viewport_row >= i64::from(grid.rows)
-                    || u32::from(placement.anchor_col) >= u32::from(grid.cols)
+                    || u32::from(anchor_col) >= u32::from(grid.cols)
                 {
                     continue;
                 }
@@ -623,7 +625,7 @@ fn project_inline_overlays(
                 }
                 overlays.rects[slot] = IVec4::new(
                     viewport_row as i32,
-                    i32::from(placement.anchor_col),
+                    i32::from(anchor_col),
                     i32::from(placement.rows),
                     i32::from(placement.cols),
                 );
@@ -683,8 +685,7 @@ mod tests {
 
     fn test_anchor() -> InlineAnchor {
         InlineAnchor {
-            line: 42,
-            col: 3,
+            mode: AnchorMode::Scrollback { line: 42, col: 3 },
             frame_seq: 7,
         }
     }
@@ -818,8 +819,7 @@ mod tests {
         assert_eq!(
             app.world().get::<InlinePlacement>(child),
             Some(&InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: 7
@@ -1197,8 +1197,7 @@ mod tests {
             terminal,
             0,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: 7,
@@ -1236,8 +1235,7 @@ mod tests {
 
     fn formula_placement() -> InlinePlacement {
         InlinePlacement {
-            anchor_line: 30,
-            anchor_col: 2,
+            anchor: AnchorMode::Scrollback { line: 30, col: 2 },
             rows: 4,
             cols: 10,
             frame_seq: 0,
@@ -1298,22 +1296,19 @@ mod tests {
             })
             .id();
         let above = InlinePlacement {
-            anchor_line: 10,
-            anchor_col: 0,
+            anchor: AnchorMode::Scrollback { line: 10, col: 0 },
             rows: 10,
             cols: 10,
             frame_seq: 0,
         };
         let below = InlinePlacement {
-            anchor_line: 100,
-            anchor_col: 0,
+            anchor: AnchorMode::Scrollback { line: 100, col: 0 },
             rows: 10,
             cols: 10,
             frame_seq: 0,
         };
         let col_out = InlinePlacement {
-            anchor_line: 35,
-            anchor_col: 80,
+            anchor: AnchorMode::Scrollback { line: 35, col: 80 },
             rows: 10,
             cols: 10,
             frame_seq: 0,
@@ -1335,8 +1330,7 @@ mod tests {
             terminal,
             0,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 79,
+                anchor: AnchorMode::Scrollback { line: 42, col: 79 },
                 rows: 10,
                 cols: 10,
                 frame_seq: 7,
@@ -1366,8 +1360,7 @@ mod tests {
             terminal,
             0,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: 7,
@@ -1399,8 +1392,7 @@ mod tests {
             terminal,
             2,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: 7,
@@ -1426,8 +1418,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = app.world_mut().spawn(projection_grid(7)).id();
         let placement = InlinePlacement {
-            anchor_line: 42,
-            anchor_col: 3,
+            anchor: AnchorMode::Scrollback { line: 42, col: 3 },
             rows: 10,
             cols: 40,
             frame_seq: 7,
@@ -1480,8 +1471,7 @@ mod tests {
             terminal,
             0,
             InlinePlacement {
-                anchor_line: 42,
-                anchor_col: 3,
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
                 frame_seq: u32::MAX - 1,
