@@ -14,11 +14,6 @@ pub(crate) enum ClientMsg {
     },
     /// Register content; the reply mints a handle.
     Register(RegisterKind),
-    /// Tear down a previously-registered handle.
-    Unregister {
-        /// The handle to drop.
-        handle: String,
-    },
     /// Reply to an inbound `call`.
     Reply {
         /// Echoes the inbound `reqId` verbatim.
@@ -90,8 +85,8 @@ pub(crate) struct IncomingCall {
 }
 
 mod reply_result {
-    use serde::ser::SerializeMap;
     use serde::Serializer;
+    use serde::ser::SerializeMap;
     use serde_json::Value;
 
     pub(super) fn serialize<S>(result: &Result<Value, String>, s: S) -> Result<S::Ok, S::Error>
@@ -173,9 +168,10 @@ mod tests {
 
     #[test]
     fn call_deserializes() {
-        let c: IncomingCall =
-            serde_json::from_str(r#"{"op":"call","handle":"h","reqId":"3","method":"ping","args":["x"]}"#)
-                .unwrap();
+        let c: IncomingCall = serde_json::from_str(
+            r#"{"op":"call","handle":"h","reqId":"3","method":"ping","args":["x"]}"#,
+        )
+        .unwrap();
         assert_eq!(c.handle, "h");
         assert_eq!(c.method, "ping");
         assert_eq!(c.args, vec![serde_json::json!("x")]);

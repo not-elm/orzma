@@ -1,10 +1,10 @@
 //! Webview builder and registered handle.
 
 use crate::error::OzmaError;
-use crate::handler::{make_handler, BoxedHandler};
+use crate::handler::{BoxedHandler, make_handler};
 use crate::protocol::{ClientMsg, RegisterKind};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -121,7 +121,11 @@ mod tests {
     fn dir_builder_and_non_interactive() {
         let wv = Webview::dir("/abs/ui", "index.html").interactive(false);
         match &wv.kind {
-            RegisterKind::Dir { root, entry, interactive } => {
+            RegisterKind::Dir {
+                root,
+                entry,
+                interactive,
+            } => {
                 assert_eq!(root, "/abs/ui");
                 assert_eq!(entry, "index.html");
                 assert!(!*interactive);

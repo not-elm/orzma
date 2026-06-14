@@ -25,11 +25,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "window.ozmux.on('tick',n=>tick.textContent='tick #'+n);",
         "</script></body>"
     );
-    let view = ozma.register(
-        Webview::inline(html).on("ping", |(arg,): (String,)| {
-            Ok::<_, RpcError>(format!("pong:{arg}"))
-        }),
-    )?;
+    let view = ozma.register(Webview::inline(html).on("ping", |(arg,): (String,)| {
+        Ok::<_, RpcError>(format!("pong:{arg}"))
+    }))?;
 
     enable_raw_mode()?;
     execute!(stdout(), EnterAlternateScreen)?;
@@ -72,7 +70,8 @@ fn run(
             *last = Instant::now();
         }
         if event::poll(Duration::from_millis(50))?
-            && let Event::Key(k) = event::read()? && k.code == KeyCode::Char('q')
+            && let Event::Key(k) = event::read()?
+            && k.code == KeyCode::Char('q')
         {
             return Ok(());
         }

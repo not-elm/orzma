@@ -1,8 +1,8 @@
 //! RPC handler boxing and tuple-param dispatch.
 
 use crate::error::RpcError;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::sync::Arc;
 

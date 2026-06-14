@@ -2,10 +2,14 @@ mod support;
 
 use ratatui_ozma::{Ozma, Webview};
 use serde_json::json;
+use std::sync::Mutex;
 use support::FakeServer;
 
+static ENV_LOCK: Mutex<()> = Mutex::new(());
+
 fn with_env(sock: &std::path::Path, f: impl FnOnce()) {
-    // SAFETY: tests in this binary run serially within this fn; env is set/unset around f.
+    let _guard = ENV_LOCK.lock().unwrap();
+    // SAFETY: ENV_LOCK serializes all callers; no other test thread touches these vars.
     unsafe {
         std::env::set_var("OZMUX_SOCK", sock);
         std::env::set_var("OZMUX_TOKEN", "test-token");
@@ -23,9 +27,9 @@ fn call_is_dispatched_and_replied() {
     with_env(&server.sock_path.clone(), || {
         let ozma = Ozma::connect().unwrap();
         let _handle = ozma
-            .register(Webview::inline("<h1>x</h1>").on("ping", |(n,): (String,)| {
-                Ok(format!("pong:{n}"))
-            }))
+            .register(
+                Webview::inline("<h1>x</h1>").on("ping", |(n,): (String,)| Ok(format!("pong:{n}"))),
+            )
             .unwrap();
 
         server.send(json!({

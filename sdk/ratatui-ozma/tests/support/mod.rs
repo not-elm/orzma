@@ -1,5 +1,5 @@
 //! A fake ozmux control server for integration tests.
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixListener;
 use std::sync::mpsc::{self, Receiver, Sender};

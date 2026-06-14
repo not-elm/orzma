@@ -5,10 +5,10 @@ use crate::handler::BoxedHandler;
 use crate::osc::{clamp_dims, cursor_to, mount_inline, unmount_inline};
 use crate::protocol::{ClientMsg, IncomingCall, RegisterReply};
 use crate::webview::{SharedWriter, Webview, WebviewHandle};
-use crossbeam_channel::{bounded, Sender};
+use crossbeam_channel::{Sender, bounded};
+use ratatui::Terminal;
 use ratatui::backend::Backend;
 use ratatui::layout::Rect;
-use ratatui::Terminal;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
@@ -187,9 +187,9 @@ fn spawn_reader(
                 && let Some(tx) = pending.lock().ok().and_then(|mut q| q.pop_front())
             {
                 let outcome = if reply.ok {
-                    reply
-                        .handle
-                        .ok_or_else(|| OzmaError::Register { reason: "missing handle".into() })
+                    reply.handle.ok_or_else(|| OzmaError::Register {
+                        reason: "missing handle".into(),
+                    })
                 } else {
                     Err(OzmaError::Register {
                         reason: reply.error.unwrap_or_else(|| "unknown".into()),
@@ -231,13 +231,21 @@ mod tests {
     use ratatui::layout::Rect;
 
     fn rect(x: u16, y: u16, w: u16, h: u16) -> Rect {
-        Rect { x, y, width: w, height: h }
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        }
     }
 
     #[test]
     fn flush_emits_mount_then_skips_unchanged() {
         let mut state = FlushState::default();
-        let mut placements = vec![Placement { handle: "h1".into(), area: rect(2, 3, 48, 12) }];
+        let mut placements = vec![Placement {
+            handle: "h1".into(),
+            area: rect(2, 3, 48, 12),
+        }];
 
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &placements).unwrap();
@@ -247,29 +255,46 @@ mod tests {
 
         let mut buf2 = Vec::new();
         flush_placements(&mut buf2, &mut state, &placements).unwrap();
-        assert!(String::from_utf8(buf2).unwrap().is_empty(), "unchanged frame emits nothing");
+        assert!(
+            String::from_utf8(buf2).unwrap().is_empty(),
+            "unchanged frame emits nothing"
+        );
 
         placements[0].area = rect(2, 3, 50, 12);
         let mut buf3 = Vec::new();
         flush_placements(&mut buf3, &mut state, &placements).unwrap();
-        assert!(String::from_utf8(buf3).unwrap().contains("mount-inline;h1;12;50"));
+        assert!(
+            String::from_utf8(buf3)
+                .unwrap()
+                .contains("mount-inline;h1;12;50")
+        );
     }
 
     #[test]
     fn flush_unmounts_vanished_handle() {
         let mut state = FlushState::default();
-        let placements = vec![Placement { handle: "h1".into(), area: rect(0, 0, 10, 5) }];
+        let placements = vec![Placement {
+            handle: "h1".into(),
+            area: rect(0, 0, 10, 5),
+        }];
         flush_placements(&mut Vec::new(), &mut state, &placements).unwrap();
 
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &[]).unwrap();
-        assert!(String::from_utf8(buf).unwrap().contains("unmount-inline;h1"));
+        assert!(
+            String::from_utf8(buf)
+                .unwrap()
+                .contains("unmount-inline;h1")
+        );
     }
 
     #[test]
     fn flush_skips_degenerate_area() {
         let mut state = FlushState::default();
-        let placements = vec![Placement { handle: "h1".into(), area: rect(0, 0, 0, 5) }];
+        let placements = vec![Placement {
+            handle: "h1".into(),
+            area: rect(0, 0, 0, 5),
+        }];
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &placements).unwrap();
         assert!(String::from_utf8(buf).unwrap().is_empty());

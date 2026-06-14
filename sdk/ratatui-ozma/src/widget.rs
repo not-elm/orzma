@@ -18,7 +18,10 @@ pub struct WebviewWidget<'a, W = Blank> {
 impl<'a> WebviewWidget<'a, Blank> {
     /// Creates a widget for the given webview handle id.
     pub fn new(handle: &'a str) -> Self {
-        Self { handle, fallback: Blank }
+        Self {
+            handle,
+            fallback: Blank,
+        }
     }
 }
 
@@ -64,7 +67,12 @@ mod tests {
 
     #[test]
     fn records_placement_and_blanks_cells() {
-        let area = Rect { x: 1, y: 1, width: 6, height: 2 };
+        let area = Rect {
+            x: 1,
+            y: 1,
+            width: 6,
+            height: 2,
+        };
         let mut buf = Buffer::filled(Rect::new(0, 0, 10, 5), ratatui::buffer::Cell::new("Z"));
         let mut state = FramePlacements::default();
 
@@ -77,11 +85,18 @@ mod tests {
 
     #[test]
     fn fallback_is_painted() {
-        let area = Rect { x: 0, y: 0, width: 5, height: 1 };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 5,
+            height: 1,
+        };
         let mut buf = Buffer::empty(area);
         let mut state = FramePlacements::default();
 
-        WebviewWidget::new("v").fallback(Text::raw("hi")).render(area, &mut buf, &mut state);
+        WebviewWidget::new("v")
+            .fallback(Text::raw("hi"))
+            .render(area, &mut buf, &mut state);
 
         assert_eq!(buf[(0, 0)].symbol(), "h");
     }
