@@ -107,13 +107,14 @@ impl ProtocolClient {
         id
     }
 
-    /// Removes `id` from the back of the pending queue if it is still last.
+    /// Removes `id` from the pending queue.
     ///
     /// Used to undo a [`send`](Self::send) registration when the subsequent
-    /// transport write fails.
-    pub(crate) fn rollback_last_pending(&mut self, id: CommandId) {
-        if self.pending.back() == Some(&id) {
-            self.pending.pop_back();
+    /// transport write fails; with the transport's separate protocol/writer
+    /// locks, a concurrent `send` may have pushed after `id`, so remove by value.
+    pub(crate) fn rollback_pending(&mut self, id: CommandId) {
+        if let Some(pos) = self.pending.iter().rposition(|x| *x == id) {
+            self.pending.remove(pos);
         }
     }
 
@@ -202,7 +203,7 @@ mod tests {
         let mut c = ProtocolClient::new();
         let id = c.send("x").unwrap();
         let _ = c.take_outgoing();
-        c.rollback_last_pending(id);
+        c.rollback_pending(id);
         assert_eq!(c.pending_len(), 0);
     }
 

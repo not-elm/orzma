@@ -97,7 +97,7 @@ impl TmuxBuilder {
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| TmuxError::Spawn(std::io::Error::other(e.to_string())))?;
+            .map_err(spawn_err)?;
 
         // NOTE: disable PTY echo before tmux starts. Otherwise our command
         // writes are echoed back into the read stream during tmux's startup
@@ -112,32 +112,24 @@ impl TmuxBuilder {
         for arg in self.build_argv() {
             cmd.arg(arg);
         }
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| TmuxError::Spawn(std::io::Error::other(e.to_string())))?;
+        let child = pair.slave.spawn_command(cmd).map_err(spawn_err)?;
         drop(pair.slave);
 
-        let reader = pair
-            .master
-            .try_clone_reader()
-            .map_err(|e| TmuxError::Spawn(std::io::Error::other(e.to_string())))?;
-        let writer = pair
-            .master
-            .take_writer()
-            .map_err(|e| TmuxError::Spawn(std::io::Error::other(e.to_string())))?;
+        let reader = pair.master.try_clone_reader().map_err(spawn_err)?;
+        let writer = pair.master.take_writer().map_err(spawn_err)?;
 
         let mut protocol = ProtocolClient::new();
         protocol.register_pending();
-        let inner = Arc::new(Mutex::new(Inner { protocol, writer }));
+        let protocol = Arc::new(Mutex::new(protocol));
+        let writer = Arc::new(Mutex::new(writer));
 
         let (tx, rx) = unbounded();
-        let pump_inner = inner.clone();
-        let reader_thread = std::thread::spawn(move || pump(reader, pump_inner, tx));
+        let pump_protocol = protocol.clone();
+        let reader_thread = std::thread::spawn(move || pump(reader, pump_protocol, tx));
 
         Ok(TmuxClient {
             events: rx,
-            handle: TmuxHandle { inner },
+            handle: TmuxHandle { protocol, writer },
             child,
             _master: pair.master,
             reader_thread: Some(reader_thread),
@@ -153,11 +145,16 @@ impl Default for TmuxBuilder {
 
 /// Cloneable handle for sending commands to tmux.
 ///
-/// The protocol state and the writer live behind one mutex, shared with the
-/// reader thread, so a `send` registers and writes in a single critical section.
+/// The protocol state and the writer have independent mutexes. `send` takes the
+/// writer lock while still holding the protocol lock (so writes happen in
+/// registration order), then releases the protocol lock before the blocking
+/// write so the reader thread — which only needs the protocol lock — can keep
+/// draining the PTY. Holding one lock across the write would deadlock when the
+/// PTY buffer fills.
 #[derive(Clone)]
 pub struct TmuxHandle {
-    inner: Arc<Mutex<Inner>>,
+    protocol: Arc<Mutex<ProtocolClient>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
 }
 
 impl TmuxHandle {
@@ -166,17 +163,19 @@ impl TmuxHandle {
     /// On write failure the pending registration is rolled back so later
     /// replies stay correctly correlated.
     pub fn send(&self, command: &str) -> TmuxResult<CommandId> {
-        let mut inner = self.inner.lock().expect("tmux inner mutex poisoned");
-        let id = inner.protocol.send(command)?;
-        let bytes = inner.protocol.take_outgoing();
-        match inner
-            .writer
-            .write_all(&bytes)
-            .and_then(|()| inner.writer.flush())
-        {
+        let mut protocol = self.protocol.lock().expect("tmux protocol mutex poisoned");
+        let id = protocol.send(command)?;
+        let bytes = protocol.take_outgoing();
+        let mut writer = self.writer.lock().expect("tmux writer mutex poisoned");
+        drop(protocol);
+        match writer.write_all(&bytes).and_then(|()| writer.flush()) {
             Ok(()) => Ok(id),
             Err(e) => {
-                inner.protocol.rollback_last_pending(id);
+                drop(writer);
+                self.protocol
+                    .lock()
+                    .expect("tmux protocol mutex poisoned")
+                    .rollback_pending(id);
                 Err(TmuxError::Io(e))
             }
         }
@@ -220,26 +219,31 @@ impl Drop for TmuxClient {
     }
 }
 
-struct Inner {
-    protocol: ProtocolClient,
-    writer: Box<dyn Write + Send>,
+fn spawn_err(e: impl std::fmt::Display) -> TmuxError {
+    TmuxError::Spawn(std::io::Error::other(e.to_string()))
 }
 
 #[cfg(unix)]
 fn disable_pty_echo(fd: std::os::unix::io::RawFd) {
     // SAFETY: `fd` is the live PTY master fd owned by the `MasterPty` kept in
-    // `TmuxClient` for the duration of the call; tcgetattr/tcsetattr only read
-    // and write its termios. Failures are non-fatal (tmux sets raw mode itself).
+    // `TmuxClient` for the duration of the call; tcgetattr fully initializes the
+    // termios before any field is read. Failures are non-fatal (tmux sets raw
+    // mode itself).
     unsafe {
-        let mut termios: libc::termios = std::mem::zeroed();
-        if libc::tcgetattr(fd, &mut termios) == 0 {
+        let mut termios = std::mem::MaybeUninit::<libc::termios>::uninit();
+        if libc::tcgetattr(fd, termios.as_mut_ptr()) == 0 {
+            let mut termios = termios.assume_init();
             termios.c_lflag &= !(libc::ECHO | libc::ICANON);
             let _ = libc::tcsetattr(fd, libc::TCSANOW, &termios);
         }
     }
 }
 
-fn pump<R: Read>(mut reader: R, inner: Arc<Mutex<Inner>>, sender: Sender<TransportEvent>) {
+fn pump<R: Read>(
+    mut reader: R,
+    protocol: Arc<Mutex<ProtocolClient>>,
+    sender: Sender<TransportEvent>,
+) {
     let mut buf = [0u8; 4096];
     loop {
         match reader.read(&mut buf) {
@@ -251,8 +255,8 @@ fn pump<R: Read>(mut reader: R, inner: Arc<Mutex<Inner>>, sender: Sender<Transpo
             }
             Ok(n) => {
                 let result = {
-                    let mut guard = inner.lock().expect("tmux inner mutex poisoned");
-                    guard.protocol.feed(&buf[..n])
+                    let mut guard = protocol.lock().expect("tmux protocol mutex poisoned");
+                    guard.feed(&buf[..n])
                 };
                 match result {
                     Ok(events) => {
@@ -336,15 +340,13 @@ mod tests {
         }
     }
 
-    fn make_inner(writer: Box<dyn Write + Send>) -> (Arc<Mutex<Inner>>, TmuxHandle) {
-        let inner = Arc::new(Mutex::new(Inner {
-            protocol: ProtocolClient::new(),
-            writer,
-        }));
+    fn make_handle(writer: Box<dyn Write + Send>) -> (Arc<Mutex<ProtocolClient>>, TmuxHandle) {
+        let protocol = Arc::new(Mutex::new(ProtocolClient::new()));
         let handle = TmuxHandle {
-            inner: inner.clone(),
+            protocol: protocol.clone(),
+            writer: Arc::new(Mutex::new(writer)),
         };
-        (inner, handle)
+        (protocol, handle)
     }
 
     fn protocol_events(rx: &Receiver<TransportEvent>) -> Vec<ClientEvent> {
@@ -390,28 +392,28 @@ mod tests {
     fn send_writes_command_bytes() {
         let cap = CaptureWriter::default();
         let sink = cap.data.clone();
-        let (_inner, handle) = make_inner(Box::new(cap));
+        let (_protocol, handle) = make_handle(Box::new(cap));
         handle.send("list-panes").unwrap();
         assert_eq!(&*sink.lock().unwrap(), b"list-panes\n");
     }
 
     #[test]
     fn send_rollback_on_write_failure() {
-        let (inner, handle) = make_inner(Box::new(ErroringWriter));
+        let (protocol, handle) = make_handle(Box::new(ErroringWriter));
         let err = handle.send("x").unwrap_err();
         assert!(matches!(err, TmuxError::Io(_)));
-        assert_eq!(inner.lock().unwrap().protocol.pending_len(), 0);
+        assert_eq!(protocol.lock().unwrap().pending_len(), 0);
     }
 
     #[test]
     fn pump_emits_command_complete() {
-        let (inner, handle) = make_inner(Box::new(CaptureWriter::default()));
+        let (protocol, handle) = make_handle(Box::new(CaptureWriter::default()));
         let id = handle.send("list-panes").unwrap();
         let (tx, rx) = unbounded();
         let reader = ScriptedReader {
             chunks: vec![b"%begin 1 0 0\nout\n%end 1 0 0\n".to_vec()].into(),
         };
-        pump(reader, inner, tx);
+        pump(reader, protocol, tx);
         let events: Vec<_> = rx.try_iter().collect();
         assert!(matches!(
             &events[0],
@@ -425,13 +427,13 @@ mod tests {
 
     #[test]
     fn pump_emits_error_reply() {
-        let (inner, handle) = make_inner(Box::new(CaptureWriter::default()));
+        let (protocol, handle) = make_handle(Box::new(CaptureWriter::default()));
         let id = handle.send("bogus").unwrap();
         let (tx, rx) = unbounded();
         let reader = ScriptedReader {
             chunks: vec![b"%begin 1 0 0\nbad command\n%error 1 0 0\n".to_vec()].into(),
         };
-        pump(reader, inner, tx);
+        pump(reader, protocol, tx);
         assert_eq!(
             protocol_events(&rx),
             vec![ClientEvent::CommandComplete {
@@ -445,13 +447,13 @@ mod tests {
 
     #[test]
     fn pump_eof_emits_closed() {
-        let (inner, _h) = make_inner(Box::new(CaptureWriter::default()));
+        let (protocol, _h) = make_handle(Box::new(CaptureWriter::default()));
         let (tx, rx) = unbounded();
         pump(
             ScriptedReader {
                 chunks: VecDeque::new(),
             },
-            inner,
+            protocol,
             tx,
         );
         let events: Vec<_> = rx.try_iter().collect();
@@ -461,7 +463,7 @@ mod tests {
 
     #[test]
     fn pump_chunk_boundaries() {
-        let (inner, handle) = make_inner(Box::new(CaptureWriter::default()));
+        let (protocol, handle) = make_handle(Box::new(CaptureWriter::default()));
         let id = handle.send("x").unwrap();
         let (tx, rx) = unbounded();
         let reader = ScriptedReader {
@@ -473,7 +475,7 @@ mod tests {
             ]
             .into(),
         };
-        pump(reader, inner, tx);
+        pump(reader, protocol, tx);
         assert_eq!(
             protocol_events(&rx),
             vec![ClientEvent::CommandComplete {
@@ -487,12 +489,12 @@ mod tests {
 
     #[test]
     fn pump_notifications_in_order() {
-        let (inner, _h) = make_inner(Box::new(CaptureWriter::default()));
+        let (protocol, _h) = make_handle(Box::new(CaptureWriter::default()));
         let (tx, rx) = unbounded();
         let reader = ScriptedReader {
             chunks: vec![b"%window-add @1\n%window-close @1\n".to_vec()].into(),
         };
-        pump(reader, inner, tx);
+        pump(reader, protocol, tx);
         assert_eq!(
             protocol_events(&rx),
             vec![
@@ -514,9 +516,9 @@ mod tests {
                 Err(std::io::Error::other("io"))
             }
         }
-        let (inner, _h) = make_inner(Box::new(CaptureWriter::default()));
+        let (protocol, _h) = make_handle(Box::new(CaptureWriter::default()));
         let (tx, rx) = unbounded();
-        pump(BoomReader, inner, tx);
+        pump(BoomReader, protocol, tx);
         let events: Vec<_> = rx.try_iter().collect();
         assert!(matches!(events[0], TransportEvent::Closed { .. }));
     }
@@ -525,7 +527,7 @@ mod tests {
     fn handle_is_send_sync_and_clonable() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<TmuxHandle>();
-        let (_inner, handle) = make_inner(Box::new(CaptureWriter::default()));
+        let (_protocol, handle) = make_handle(Box::new(CaptureWriter::default()));
         let h2 = handle.clone();
         let t = std::thread::spawn(move || {
             let _ = h2.send("from-thread");
