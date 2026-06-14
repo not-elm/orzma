@@ -6,7 +6,7 @@
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use crate::control_plane::{DynSource, DynamicRegistry, WebviewOwner};
-use crate::extension_render::preload::build_dynamic_preload;
+use crate::webview_render::preload::build_dynamic_preload;
 use crate::input::InputPhase;
 use crate::input::mouse_buttons::resolve_pane_at_phys;
 use crate::osc_webview::NonInteractive;

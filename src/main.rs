@@ -5,7 +5,7 @@ mod bootstrap;
 mod clipboard;
 mod configs;
 mod control_plane;
-mod extension_render;
+mod webview_render;
 mod font;
 mod inline_webview;
 mod input;
@@ -18,7 +18,7 @@ mod ui;
 use crate::action::OzmuxActionPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::control_plane::OzmuxControlPlanePlugin;
-use crate::extension_render::{OzmuxExtensionRenderPlugin, cef_plugin};
+use crate::webview_render::{OzmuxWebviewRenderPlugin, cef_plugin};
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::input::mouse_buttons::MouseButtonsInputPlugin;
@@ -65,7 +65,7 @@ fn main() {
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
-            OzmuxExtensionRenderPlugin,
+            OzmuxWebviewRenderPlugin,
             CopyModePlugin,
             ClipboardActionPlugin,
             CopyModeIndicatorPlugin,

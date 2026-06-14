@@ -395,15 +395,21 @@ to:
 # embedded webview. Off by default so the endpoint is not exposed in normal
 ```
 
-- [ ] **Step 2: `crates/webview_host/src/host.rs` comments**
+- [ ] **Step 2: `crates/webview_host/src/host.rs` comments + the `/tmp/ozmux-ext` fallback path**
+
+The `/tmp/ozmux-ext` path is a fallback socket dir minted fresh per run and removed on `Drop` — no persistent-state compat concern — so rename it too.
 
 Apply these exact replacements:
 
-- Line 19: `// NOTE: measure the LONGEST socket filename a command extension uses` → `// NOTE: measure the LONGEST socket filename a webview uses`
-- Line 56: `    /// The directory holding extension sockets.` → `    /// The directory holding webview sockets.`
-- Line 130: `"the intermediate <pid> dir must be 0700 so extension names do not leak"` → `"the intermediate <pid> dir must be 0700 so webview names do not leak"`
-- Line 157: `"same-PID extensions must not share a root"` → `"same-PID webviews must not share a root"`
-- Line 162: `"dropping one extension must not remove another's sockets"` → `"dropping one webview must not remove another's sockets"`
+- Doc comment on `resolve_in`: change `/tmp/ozmux-ext` → `/tmp/ozmux-webview` (in `/// `/tmp/ozmux-ext` when the socket path would overflow…`).
+- The path literal: `let fallback = Path::new("/tmp/ozmux-ext");` → `let fallback = Path::new("/tmp/ozmux-webview");`
+- `// NOTE: measure the LONGEST socket filename a command extension uses` → `// NOTE: measure the LONGEST socket filename a webview uses`
+- `    /// The directory holding extension sockets.` → `    /// The directory holding webview sockets.`
+- `"the intermediate <pid> dir must be 0700 so extension names do not leak"` → `"the intermediate <pid> dir must be 0700 so webview names do not leak"`
+- `"same-PID extensions must not share a root"` → `"same-PID webviews must not share a root"`
+- `"dropping one extension must not remove another's sockets"` → `"dropping one webview must not remove another's sockets"`
+
+Do NOT change the `// NOTE: … like the legacy /tmp/ozmux` comment — that `/tmp/ozmux` names a different historical path, not the fallback being renamed.
 
 - [ ] **Step 3: `crates/webview_host/src/asset.rs` comments (keep file-extension wording)**
 
