@@ -82,6 +82,13 @@ impl Webview {
         self.handlers.insert(method.into(), make_handler(f));
         self
     }
+
+    #[cfg(test)]
+    pub(crate) fn handlers_for_test(
+        &self,
+    ) -> &std::collections::HashMap<String, crate::handler::BoxedHandler> {
+        &self.handlers
+    }
 }
 
 /// A registered webview handle: emit events to the page, read its id.
