@@ -4686,6 +4686,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozmux_tmux"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "crossbeam-channel",
+ "tmux_control",
+ "tracing",
+]
+
+[[package]]
 name = "parking"
 version = "2.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
