@@ -7,6 +7,7 @@ use crate::model::ProjectionModel;
 use crate::reconcile::{TmuxProjection, reconcile_projection};
 use crate::state::ConnectionState;
 use bevy::prelude::*;
+use tmux_control::TransportEvent;
 
 /// Wires the tmux integration into the Bevy app: connection state, the
 /// projection model + index, the per-frame drain system, and the reconcile
@@ -25,20 +26,35 @@ impl Plugin for TmuxSessionPlugin {
 
 /// Drains the live connection's transport events each frame, advancing
 /// `ConnectionState` and routing notifications into the `ProjectionModel`.
+///
+/// State and model are mutated through `bypass_change_detection` and marked
+/// changed only when something actually changed, so a pane flooding
+/// `%output` does not force a reconcile pass every frame. A `Closed` event
+/// reclaims the dead client so the connection slot is freed for reconnect.
 fn drain_tmux_events(
     mut state: ResMut<ConnectionState>,
     mut model: ResMut<ProjectionModel>,
-    connection: NonSend<TmuxConnection>,
+    mut connection: NonSendMut<TmuxConnection>,
 ) {
-    let Some(client) = connection.client() else {
-        return;
+    let events = match connection.client() {
+        Some(client) => drain_transport(client.events()),
+        None => return,
     };
-    let events = drain_transport(client.events());
     if events.is_empty() {
         return;
     }
-    advance_state(&mut state, &events);
-    route_to_model(&mut model, &events);
+    if advance_state(state.bypass_change_detection(), &events) {
+        state.set_changed();
+    }
+    if route_to_model(model.bypass_change_detection(), &events) {
+        model.set_changed();
+    }
+    if events
+        .iter()
+        .any(|event| matches!(event, TransportEvent::Closed { .. }))
+    {
+        connection.take();
+    }
 }
 
 #[cfg(test)]
@@ -54,11 +70,6 @@ mod tests {
             *app.world().resource::<ConnectionState>(),
             ConnectionState::Idle
         );
-        assert!(
-            app.world()
-                .resource::<ProjectionModel>()
-                .windows
-                .is_empty()
-        );
+        assert!(app.world().resource::<ProjectionModel>().windows.is_empty());
     }
 }

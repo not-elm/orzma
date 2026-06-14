@@ -12,9 +12,9 @@ mod inline_webview;
 mod input;
 mod multiplexer;
 mod osc_webview;
-mod tmux_boot;
 mod system_set;
 mod theme;
+mod tmux_boot;
 mod ui;
 
 use crate::action::OzmuxActionPlugin;

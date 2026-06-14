@@ -6,34 +6,53 @@ use crate::state::{ConnectionState, next_state};
 use crossbeam_channel::Receiver;
 use tmux_control::{ClientEvent, TransportEvent};
 
-/// Drains every currently-available transport event from `events`, logging
-/// each. Non-blocking: returns once the channel is empty for now.
+/// Upper bound on events drained per frame, so a pane flooding `%output`
+/// cannot stall the schedule with unbounded parse/apply work in one tick;
+/// any remainder stays queued and is drained on the next frame.
+const MAX_EVENTS_PER_FRAME: usize = 4096;
+
+/// Drains up to [`MAX_EVENTS_PER_FRAME`] currently-available transport events
+/// from `events`, logging each. Non-blocking: returns once the channel is
+/// empty or the per-frame cap is hit.
 pub(crate) fn drain_transport(events: &Receiver<TransportEvent>) -> Vec<TransportEvent> {
     let mut drained = Vec::new();
-    while let Ok(event) = events.try_recv() {
-        log_transport_event(&event);
-        drained.push(event);
+    while drained.len() < MAX_EVENTS_PER_FRAME {
+        match events.try_recv() {
+            Ok(event) => {
+                log_transport_event(&event);
+                drained.push(event);
+            }
+            Err(_) => break,
+        }
     }
     drained
 }
 
-/// Advances `state` through [`next_state`] for each drained event.
-pub(crate) fn advance_state(state: &mut ConnectionState, events: &[TransportEvent]) {
+/// Advances `state` through [`next_state`] for each event, returning `true`
+/// if the state actually changed.
+pub(crate) fn advance_state(state: &mut ConnectionState, events: &[TransportEvent]) -> bool {
+    let mut changed = false;
     for event in events {
         let next = next_state(state, event);
         if *state != next {
             *state = next;
+            changed = true;
         }
     }
+    changed
 }
 
-/// Routes notification events into the projection model.
-pub(crate) fn route_to_model(model: &mut ProjectionModel, events: &[TransportEvent]) {
+/// Routes notification events into the projection model, returning `true`
+/// if any event mutated tracked state (so callers can skip change
+/// propagation when only untracked events — e.g. pane output — arrived).
+pub(crate) fn route_to_model(model: &mut ProjectionModel, events: &[TransportEvent]) -> bool {
+    let mut changed = false;
     for event in events {
         if let TransportEvent::Protocol(ClientEvent::Notification(notification)) = event {
-            model.apply_event(notification);
+            changed |= model.apply_event(notification);
         }
     }
+    changed
 }
 
 /// Emits a `tracing` line describing a single transport event.
@@ -89,9 +108,25 @@ mod tests {
         .unwrap();
         let drained = drain_transport(&rx);
         let mut model = ProjectionModel::default();
-        route_to_model(&mut model, &drained);
+        assert!(route_to_model(&mut model, &drained));
         assert_eq!(model.windows.len(), 1);
         assert_eq!(model.windows[0].panes.len(), 1);
         assert_eq!(model.windows[0].panes[0].id, PaneId(4));
+    }
+
+    #[test]
+    fn output_only_batch_reports_no_model_change() {
+        let (tx, rx) = unbounded();
+        tx.send(TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::Output {
+                pane: PaneId(1),
+                data: vec![b'x'],
+            },
+        )))
+        .unwrap();
+        let drained = drain_transport(&rx);
+        let mut model = ProjectionModel::default();
+        assert!(!route_to_model(&mut model, &drained));
+        assert!(model.windows.is_empty());
     }
 }

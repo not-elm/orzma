@@ -9,8 +9,8 @@ use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::mouse::MousePatch;
 use crate::osc_webview::OscWebviewPatch;
 use crate::shortcuts::Shortcuts;
-use crate::tmux::TmuxPatch;
 use crate::theme::ThemePatch;
+use crate::tmux::TmuxPatch;
 use serde::Deserialize;
 
 /// Top-level TOML shape: every section is optional. `deny_unknown_fields`

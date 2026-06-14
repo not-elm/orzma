@@ -29,11 +29,7 @@ pub(crate) fn reconcile_projection(
     reconcile_windows(&mut commands, &mut index, &model);
 }
 
-fn reconcile_windows(
-    commands: &mut Commands,
-    index: &mut TmuxProjection,
-    model: &ProjectionModel,
-) {
+fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model: &ProjectionModel) {
     let live_windows: HashSet<WindowId> = model.windows.iter().map(|w| w.id).collect();
     let live_panes: HashSet<PaneId> = model
         .windows

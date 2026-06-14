@@ -2,6 +2,7 @@
 
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
+use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::component::Component;
 use bevy::ecs::query::With;
 use bevy::ecs::system::{Commands, Query, Res};
@@ -58,6 +59,9 @@ fn sync_tmux_dialog(
     mut text: Query<&mut Text, With<TmuxDialogText>>,
     state: Res<ConnectionState>,
 ) {
+    if !state.is_changed() {
+        return;
+    }
     let Ok(mut node) = backdrop.single_mut() else {
         return;
     };

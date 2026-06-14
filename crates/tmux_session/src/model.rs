@@ -2,7 +2,9 @@
 
 use crate::enumerate::WindowRow;
 use bevy::prelude::Resource;
-use tmux_control_parser::{Cell, CellDims, ControlEvent, PaneId, SessionId, WindowId, WindowLayout};
+use tmux_control_parser::{
+    Cell, CellDims, ControlEvent, PaneId, SessionId, WindowId, WindowLayout,
+};
 
 /// A projected pane: its tmux id and cell geometry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,33 +82,54 @@ impl ProjectionModel {
                 panes: pane_leaves(&row.layout),
             })
             .collect();
+        self.prune_active_pane();
     }
 
-    /// Applies one control-mode notification to the model.
-    pub fn apply_event(&mut self, event: &ControlEvent) {
+    /// Applies one control-mode notification to the model, returning `true`
+    /// if it touched tracked state.
+    ///
+    /// Events the projection does not track (e.g. `%output`) return `false`
+    /// so callers can skip change propagation — without this, a pane
+    /// flooding output would mark the model changed every frame and force a
+    /// full reconcile pass for no structural change.
+    pub fn apply_event(&mut self, event: &ControlEvent) -> bool {
         match event {
             ControlEvent::SessionChanged { session, .. } => {
                 self.session = Some(*session);
+                true
             }
             ControlEvent::WindowAdd { window } => {
                 self.ensure_window(*window);
+                true
             }
             ControlEvent::WindowClose { window } => {
+                let before = self.windows.len();
                 self.windows.retain(|w| w.id != *window);
-            }
-            ControlEvent::WindowRenamed { window, name } => {
-                if let Some(w) = self.window_mut(*window) {
-                    w.name = name.clone();
+                let removed = self.windows.len() != before;
+                if removed {
+                    self.prune_active_pane();
                 }
+                removed
             }
+            ControlEvent::WindowRenamed { window, name } => match self.window_mut(*window) {
+                Some(w) => {
+                    w.name = name.clone();
+                    true
+                }
+                None => false,
+            },
             ControlEvent::LayoutChange { window, layout, .. } => {
                 self.set_layout(*window, layout);
+                self.prune_active_pane();
+                true
             }
             ControlEvent::WindowPaneChanged { window, pane } => {
                 self.active_pane = Some(*pane);
+                self.ensure_window(*window);
                 self.set_active_window(*window);
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -135,6 +158,17 @@ impl ProjectionModel {
     fn set_active_window(&mut self, id: WindowId) {
         for w in &mut self.windows {
             w.active = w.id == id;
+        }
+    }
+
+    fn prune_active_pane(&mut self) {
+        if let Some(active) = self.active_pane
+            && !self
+                .windows
+                .iter()
+                .any(|w| w.panes.iter().any(|p| p.id == active))
+        {
+            self.active_pane = None;
         }
     }
 }
@@ -193,10 +227,14 @@ mod tests {
     #[test]
     fn window_add_then_close() {
         let mut m = ProjectionModel::default();
-        m.apply_event(&ControlEvent::WindowAdd { window: WindowId(1) });
+        m.apply_event(&ControlEvent::WindowAdd {
+            window: WindowId(1),
+        });
         assert_eq!(m.windows.len(), 1);
         assert_eq!(m.windows[0].id, WindowId(1));
-        m.apply_event(&ControlEvent::WindowClose { window: WindowId(1) });
+        m.apply_event(&ControlEvent::WindowClose {
+            window: WindowId(1),
+        });
         assert!(m.windows.is_empty());
     }
 
@@ -217,8 +255,12 @@ mod tests {
     #[test]
     fn window_pane_changed_sets_active_pane_and_window() {
         let mut m = ProjectionModel::default();
-        m.apply_event(&ControlEvent::WindowAdd { window: WindowId(1) });
-        m.apply_event(&ControlEvent::WindowAdd { window: WindowId(2) });
+        m.apply_event(&ControlEvent::WindowAdd {
+            window: WindowId(1),
+        });
+        m.apply_event(&ControlEvent::WindowAdd {
+            window: WindowId(2),
+        });
         m.apply_event(&ControlEvent::WindowPaneChanged {
             window: WindowId(2),
             pane: PaneId(5),
@@ -232,7 +274,7 @@ mod tests {
     fn seed_from_rows_builds_windows_with_panes() {
         use crate::enumerate::parse_window_rows;
         let rows = parse_window_rows(&[
-            "1\t@1\tabcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}\tx\tmain".to_string(),
+            "1\t@1\tabcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}\tx\tmain".to_string()
         ])
         .unwrap();
         let mut m = ProjectionModel::default();
@@ -240,5 +282,49 @@ mod tests {
         assert_eq!(m.windows.len(), 1);
         assert_eq!(m.windows[0].panes.len(), 2);
         assert!(m.windows[0].active);
+    }
+
+    #[test]
+    fn window_pane_changed_for_unknown_window_creates_and_activates_it() {
+        let mut m = ProjectionModel::default();
+        assert!(m.apply_event(&ControlEvent::WindowPaneChanged {
+            window: WindowId(9),
+            pane: PaneId(3),
+        }));
+        assert_eq!(m.windows.len(), 1);
+        assert_eq!(m.windows[0].id, WindowId(9));
+        assert!(m.windows[0].active);
+        assert_eq!(m.active_pane, Some(PaneId(3)));
+    }
+
+    #[test]
+    fn closing_the_window_holding_active_pane_clears_active_pane() {
+        let mut m = ProjectionModel::default();
+        m.apply_event(&ControlEvent::LayoutChange {
+            window: WindowId(1),
+            layout: layout(b"abcd,80x24,0,0,7"),
+            visible_layout: layout(b"abcd,80x24,0,0,7"),
+            flags: String::new(),
+        });
+        m.apply_event(&ControlEvent::WindowPaneChanged {
+            window: WindowId(1),
+            pane: PaneId(7),
+        });
+        assert_eq!(m.active_pane, Some(PaneId(7)));
+        m.apply_event(&ControlEvent::WindowClose {
+            window: WindowId(1),
+        });
+        assert!(m.windows.is_empty());
+        assert_eq!(m.active_pane, None);
+    }
+
+    #[test]
+    fn untracked_event_reports_no_change() {
+        let mut m = ProjectionModel::default();
+        assert!(!m.apply_event(&ControlEvent::Output {
+            pane: PaneId(1),
+            data: vec![b'x'],
+        }));
+        assert!(m.windows.is_empty());
     }
 }
