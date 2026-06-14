@@ -5,6 +5,12 @@ use crate::error::{TmuxError, TmuxResult};
 use std::collections::VecDeque;
 use tmux_control_parser::{BlockAssembler, ControlEvent, Frame};
 
+// NOTE: `tmux -CC` wraps its entire control stream in a DCS sequence —
+// `ESC P 1000 p` … `ESC \`. The introducer is glued to the first `%begin`, so
+// without stripping it that first line fails to parse and the stream desyncs.
+const DCS_INTRODUCER: &[u8] = b"\x1bP1000p";
+const DCS_TERMINATOR: &[u8] = b"\x1b\\";
+
 /// Library-assigned handle for an in-flight command (not tmux's command number).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CommandId(pub u64);
@@ -66,6 +72,8 @@ impl ProtocolClient {
     ///
     /// Splits on `\n` (stripping a trailing `\r`), buffers any incomplete tail,
     /// skips empty lines, and drives the assembler with each complete line.
+    /// Strips the `tmux -CC` DCS introducer from the first line and ignores a
+    /// bare DCS terminator line.
     pub fn feed(&mut self, bytes: &[u8]) -> TmuxResult<Vec<ClientEvent>> {
         self.line_buf.extend_from_slice(bytes);
         let mut events = Vec::new();
@@ -75,10 +83,11 @@ impl ProtocolClient {
             if line.last() == Some(&b'\r') {
                 line.pop();
             }
-            if line.is_empty() {
+            let content = line.strip_prefix(DCS_INTRODUCER).unwrap_or(line.as_slice());
+            if content.is_empty() || content == DCS_TERMINATOR {
                 continue;
             }
-            if let Some(event) = self.feed_line(&line)? {
+            if let Some(event) = self.feed_line(content)? {
                 events.push(event);
             }
         }
@@ -88,8 +97,8 @@ impl ProtocolClient {
     /// Pre-registers a pending command with no outgoing bytes.
     ///
     /// Used by the transport for tmux's launch subcommand (`new-session` /
-    /// `attach-session`), whose reply block (`number` 1) arrives before any
-    /// client `send`.
+    /// `attach-session`), whose reply block arrives before any client `send`.
+    /// tmux assigns it an arbitrary command number, so correlation is by FIFO.
     pub(crate) fn register_pending(&mut self) -> CommandId {
         let id = CommandId(self.next_id);
         self.next_id += 1;
@@ -281,6 +290,24 @@ mod tests {
             vec![ClientEvent::Notification(ControlEvent::WindowAdd {
                 window: WindowId(3)
             })]
+        );
+    }
+
+    #[test]
+    fn feed_strips_dcs_wrapper() {
+        // Mirrors a real `tmux -CC` startup: the DCS introducer is glued to the
+        // first %begin, and the terminator arrives as a bare line. CRLF endings.
+        let mut c = ProtocolClient::new();
+        let id = c.register_pending();
+        let events = c
+            .feed(b"\x1bP1000p%begin 1 318 0\r\n%end 1 318 0\r\n%window-add @0\r\n\x1b\\\r\n")
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![
+                ClientEvent::CommandComplete { id, number: 318, ok: true, output: vec![] },
+                ClientEvent::Notification(ControlEvent::WindowAdd { window: WindowId(0) }),
+            ]
         );
     }
 

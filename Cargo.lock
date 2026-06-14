@@ -5950,6 +5950,7 @@ name = "tmux_control"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",
+ "libc",
  "portable-pty",
  "thiserror 2.0.18",
  "tmux_control_parser",

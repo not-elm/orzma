@@ -13,5 +13,8 @@ thiserror = { workspace = true }
 crossbeam-channel = "0.5"
 portable-pty = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [lints]
 workspace = true

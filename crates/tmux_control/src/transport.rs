@@ -99,6 +99,15 @@ impl TmuxBuilder {
             })
             .map_err(|e| TmuxError::Spawn(std::io::Error::other(e.to_string())))?;
 
+        // NOTE: disable PTY echo before tmux starts. Otherwise our command
+        // writes are echoed back into the read stream during tmux's startup
+        // window (before tmux puts its tty in raw mode), and those echoed
+        // non-`%` lines corrupt the control-mode parse and close the stream.
+        #[cfg(unix)]
+        if let Some(fd) = pair.master.as_raw_fd() {
+            disable_pty_echo(fd);
+        }
+
         let mut cmd = CommandBuilder::new(&self.program);
         for arg in self.build_argv() {
             cmd.arg(arg);
@@ -212,6 +221,20 @@ impl Drop for TmuxClient {
         let _ = self.child.kill();
         if let Some(thread) = self.reader_thread.take() {
             let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(unix)]
+fn disable_pty_echo(fd: std::os::unix::io::RawFd) {
+    // SAFETY: `fd` is the live PTY master fd owned by the `MasterPty` kept in
+    // `TmuxClient` for the duration of the call; tcgetattr/tcsetattr only read
+    // and write its termios. Failures are non-fatal (tmux sets raw mode itself).
+    unsafe {
+        let mut termios: libc::termios = std::mem::zeroed();
+        if libc::tcgetattr(fd, &mut termios) == 0 {
+            termios.c_lflag &= !(libc::ECHO | libc::ICANON);
+            let _ = libc::tcsetattr(fd, libc::TCSANOW, &termios);
         }
     }
 }
