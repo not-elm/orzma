@@ -3,7 +3,6 @@
 use crate::error::OzmaResult;
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
-use crate::keymap::NavKeymap;
 use crate::protocol::{ClientMsg, RegisterKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -72,8 +71,8 @@ impl Webview {
     ///
     /// # Panics
     /// Panics if `method` starts with the reserved `__ozma.` prefix, which is
-    /// owned by the SDK's focus glue.
-    pub fn on<P, R, F>(self, method: impl Into<String>, f: F) -> Self
+    /// owned by the SDK.
+    pub fn on<P, R, F>(mut self, method: impl Into<String>, f: F) -> Self
     where
         P: DeserializeOwned,
         R: Serialize,
@@ -84,24 +83,8 @@ impl Webview {
             !method.starts_with("__ozma."),
             "method {method:?} uses the reserved __ozma. namespace"
         );
-        self.on_reserved(method, f)
-    }
-
-    pub(crate) fn on_reserved<P, R, F>(mut self, method: impl Into<String>, f: F) -> Self
-    where
-        P: DeserializeOwned,
-        R: Serialize,
-        F: Fn(P) -> Result<R, crate::error::RpcError> + Send + Sync + 'static,
-    {
-        self.handlers.insert(method.into(), make_handler(f));
+        self.handlers.insert(method, make_handler(f));
         self
-    }
-
-    #[cfg(test)]
-    pub(crate) fn handlers_for_test(
-        &self,
-    ) -> &std::collections::HashMap<String, crate::handler::BoxedHandler> {
-        &self.handlers
     }
 }
 
@@ -138,47 +121,6 @@ impl WebviewHandle {
             payload: serde_json::to_value(payload)?,
         };
         let line = serde_json::to_string(&msg)?;
-        let mut w = self.writer.lock()?;
-        writeln!(w, "{line}")?;
-        w.flush()?;
-        Ok(())
-    }
-
-    /// Pushes the navigation keymap to this handle's page glue.
-    ///
-    /// Wraps [`emit`](Self::emit) of the reserved `__ozma.keys` event so the
-    /// glue intercepts the same chord the app matches natively. Push it once the
-    /// page is mounted (e.g. when focus first reaches the webview).
-    pub fn set_nav_keys(&self, keymap: &NavKeymap) -> OzmaResult<()> {
-        self.emit("__ozma.keys", keymap)
-    }
-
-    /// Tells the page whether the app currently considers it focused.
-    ///
-    /// Wraps [`emit`](Self::emit) of the reserved `__ozma.focus-state` event;
-    /// the page observes it with `window.ozmux.on('__ozma.focus-state', cb)`
-    /// (e.g. to focus an input or draw a ring). This app→page notification is
-    /// distinct from the page→app `__ozma.focus` report the glue sends.
-    pub fn set_page_focus(&self, focused: bool) -> OzmaResult<()> {
-        self.emit("__ozma.focus-state", &focused)
-    }
-
-    /// Requests host focus on this webview (default instance).
-    ///
-    /// The host sets `FocusedWebview` to this handle's mounted inline webview;
-    /// keystrokes then reach the page natively until the app blurs or moves
-    /// focus.
-    pub fn focus(&self) -> OzmaResult<()> {
-        self.send_focus(Some(self.id.clone()), None)
-    }
-
-    /// Requests host focus on a named mount instance of this webview.
-    pub fn focus_instance(&self, instance: &str) -> OzmaResult<()> {
-        self.send_focus(Some(self.id.clone()), Some(instance.to_owned()))
-    }
-
-    fn send_focus(&self, handle: Option<String>, instance: Option<String>) -> OzmaResult<()> {
-        let line = serde_json::to_string(&ClientMsg::Focus { handle, instance })?;
         let mut w = self.writer.lock()?;
         writeln!(w, "{line}")?;
         w.flush()?;
@@ -237,60 +179,6 @@ mod tests {
     }
 
     #[test]
-    fn on_reserved_installs_handler_under_reserved_name() {
-        let wv = Webview::inline("x").on_reserved("__ozma.nav", |(d,): (String,)| {
-            Ok::<_, crate::error::RpcError>(format!("nav:{d}"))
-        });
-        let h = wv
-            .handlers
-            .get("__ozma.nav")
-            .expect("reserved handler present");
-        assert_eq!(
-            h(vec![serde_json::json!("right")]).unwrap(),
-            serde_json::json!("nav:right")
-        );
-    }
-
-    #[test]
-    fn focus_writes_focus_op_line() {
-        use std::io::{BufRead, BufReader};
-        use std::os::unix::net::UnixStream;
-        let (a, b) = UnixStream::pair().unwrap();
-        let writer = std::sync::Arc::new(std::sync::Mutex::new(a));
-        let handle = WebviewHandle::new("view-1".to_owned(), writer);
-        handle.focus().unwrap();
-        let mut line = String::new();
-        BufReader::new(b).read_line(&mut line).unwrap();
-        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-        assert_eq!(v["op"], "focus");
-        assert_eq!(v["handle"], "view-1");
-    }
-
-    fn pair_handle() -> (WebviewHandle, std::os::unix::net::UnixStream) {
-        use std::os::unix::net::UnixStream;
-        let (a, b) = UnixStream::pair().unwrap();
-        let writer = std::sync::Arc::new(std::sync::Mutex::new(a));
-        (WebviewHandle::new("v".to_owned(), writer), b)
-    }
-
-    fn read_line_value(stream: std::os::unix::net::UnixStream) -> serde_json::Value {
-        use std::io::{BufRead, BufReader};
-        let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line).unwrap();
-        serde_json::from_str(line.trim()).unwrap()
-    }
-
-    #[test]
-    fn set_nav_keys_emits_ozma_keys_event() {
-        let (handle, peer) = pair_handle();
-        handle.set_nav_keys(&crate::NavKeymap::arrows()).unwrap();
-        let v = read_line_value(peer);
-        assert_eq!(v["op"], "emit");
-        assert_eq!(v["event"], "__ozma.keys");
-        assert_eq!(v["payload"]["keys"]["arrowleft"], "left");
-    }
-
-    #[test]
     fn passthrough_rides_register_wire() {
         use ratatui::crossterm::event::{KeyCode, KeyModifiers};
         let wv = Webview::inline("x").passthrough([KeyChord {
@@ -311,15 +199,5 @@ mod tests {
             v.get("passthrough").is_none(),
             "empty passthrough must be skipped"
         );
-    }
-
-    #[test]
-    fn set_page_focus_emits_focus_state_event() {
-        let (handle, peer) = pair_handle();
-        handle.set_page_focus(true).unwrap();
-        let v = read_line_value(peer);
-        assert_eq!(v["op"], "emit");
-        assert_eq!(v["event"], "__ozma.focus-state");
-        assert_eq!(v["payload"], true);
     }
 }

@@ -163,29 +163,11 @@ impl Ozma {
         self.frame.placements = placements;
         result?;
         let mut w = self.writer.lock()?;
-        flush_focus(&mut *w, &mut self.flush_state.last_focused, &self.frame.focused)
-    }
-
-    /// Clears the app-owned focus, blurring any focused webview back to the app.
-    pub fn blur(&self) -> OzmaResult<()> {
-        let line = serde_json::to_string(&ClientMsg::Focus {
-            handle: None,
-            instance: None,
-        })?;
-        let mut w = self.writer.lock()?;
-        writeln!(w, "{line}")?;
-        w.flush()?;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn from_writer_for_test(writer: SharedWriter) -> Self {
-        Self {
-            writer,
-            pending: Arc::new(Mutex::new(VecDeque::new())),
-            frame: FramePlacements::default(),
-            flush_state: FlushState::default(),
-        }
+        flush_focus(
+            &mut *w,
+            &mut self.flush_state.last_focused,
+            &self.frame.focused,
+        )
     }
 }
 
@@ -466,19 +448,5 @@ mod tests {
         assert_eq!(v["op"], "focus");
         assert_eq!(v["handle"], serde_json::Value::Null);
         assert_eq!(last, None);
-    }
-
-    #[test]
-    fn blur_writes_focus_op_with_null_handle() {
-        use std::io::{BufRead, BufReader};
-        use std::os::unix::net::UnixStream;
-        let (a, b) = UnixStream::pair().unwrap();
-        let ozma = Ozma::from_writer_for_test(std::sync::Arc::new(std::sync::Mutex::new(a)));
-        ozma.blur().unwrap();
-        let mut line = String::new();
-        BufReader::new(b).read_line(&mut line).unwrap();
-        let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-        assert_eq!(v["op"], "focus");
-        assert_eq!(v["handle"], serde_json::Value::Null);
     }
 }
