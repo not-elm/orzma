@@ -101,6 +101,7 @@ impl ProtocolClient {
     ///
     /// Used to undo a [`send`](Self::send) registration when the subsequent
     /// transport write fails.
+    // NOTE: dead in the non-test lib build until Layer 2's TmuxHandle::send consumes it (Task 4); #[expect] is impractical since the test build uses it.
     #[allow(dead_code)]
     pub(crate) fn rollback_last_pending(&mut self, id: CommandId) {
         if self.pending.back() == Some(&id) {
@@ -109,7 +110,7 @@ impl ProtocolClient {
     }
 
     /// Number of commands awaiting a reply (test/diagnostic accessor).
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn pending_len(&self) -> usize {
         self.pending.len()
     }
@@ -453,7 +454,7 @@ mod tests {
 
     #[test]
     fn glued_end_does_not_close_block_known_limitation() {
-        // tmux #2215: a body line without a trailing newline can glue `%end` to
+        // NOTE: tmux #2215: a body line without a trailing newline can glue `%end` to
         // the last body line. The current BlockAssembler treats it as body and
         // the block stays open. This guards that documented behavior.
         let mut c = ProtocolClient::new();
