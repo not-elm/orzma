@@ -67,7 +67,11 @@ fn drain_tmux_events(
         enumeration.pending = None;
         *model.bypass_change_detection() = ProjectionModel::default();
         model.set_changed();
-    } else if apply_events(model.bypass_change_detection(), &mut enumeration.pending, &events) {
+    } else if apply_events(
+        model.bypass_change_detection(),
+        &mut enumeration.pending,
+        &events,
+    ) {
         model.set_changed();
     }
 }
@@ -86,11 +90,6 @@ mod tests {
             ConnectionState::Idle
         );
         assert!(app.world().resource::<ProjectionModel>().windows.is_empty());
-        assert!(
-            app.world()
-                .resource::<EnumerationState>()
-                .pending
-                .is_none()
-        );
+        assert!(app.world().resource::<EnumerationState>().pending.is_none());
     }
 }

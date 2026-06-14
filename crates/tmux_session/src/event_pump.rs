@@ -197,7 +197,10 @@ mod tests {
         assert!(seed_from_reply(&mut model, &output));
         assert_eq!(model.windows.len(), 1);
         assert_eq!(model.windows[0].id, WindowId(1));
-        assert_eq!(model.windows[0].panes.first().map(|p| p.id), Some(PaneId(5)));
+        assert_eq!(
+            model.windows[0].panes.first().map(|p| p.id),
+            Some(PaneId(5))
+        );
     }
 
     #[test]
