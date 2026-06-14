@@ -5,6 +5,8 @@ use bevy::color::Color;
 use bevy::ecs::change_detection::DetectChanges;
 use bevy::ecs::component::Component;
 use bevy::ecs::query::With;
+use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::ecs::system::{Commands, Query, Res};
 use bevy::prelude::default;
 use bevy::ui::widget::Text;
@@ -20,8 +22,10 @@ pub(crate) struct TmuxDialogPlugin;
 
 impl Plugin for TmuxDialogPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_tmux_dialog)
-            .add_systems(PostUpdate, sync_tmux_dialog);
+        app.add_systems(Startup, spawn_tmux_dialog).add_systems(
+            PostUpdate,
+            sync_tmux_dialog.run_if(resource_exists_and_changed::<ConnectionState>),
+        );
     }
 }
 
@@ -59,9 +63,6 @@ fn sync_tmux_dialog(
     mut text: Query<&mut Text, With<TmuxDialogText>>,
     state: Res<ConnectionState>,
 ) {
-    if !state.is_changed() {
-        return;
-    }
     let Ok(mut node) = backdrop.single_mut() else {
         return;
     };
