@@ -27,10 +27,10 @@ use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
-/// systems. Ordering: `ime_policy_system` runs before
-/// `read_ime_events`, both run before `dispatch_focused_key` (the
-/// `.after(read_ime_events)` constraint on `dispatch_focused_key` is
-/// added in `OzmuxShortcutPlugin`).
+/// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
+/// (chained); both run in `InputPhase::Dispatch`, ahead of
+/// `InputPhase::FocusedKey` where keyboard forwarding will run in
+/// phase-3b.
 pub struct ImePlugin;
 
 impl Plugin for ImePlugin {

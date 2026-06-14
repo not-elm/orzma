@@ -103,11 +103,11 @@ close-pane = "Cmd+Shift+W"
     fn user_unbind_with_empty_string_sets_field_to_none() {
         let toml_str = r#"
 [shortcuts.bindings]
-enter-copy-mode = ""
+close-pane = ""
 "#;
         let raw: RawConfigs = toml::from_str(toml_str).unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
-        assert!(merged.shortcuts.bindings.enter_copy_mode.is_none());
+        assert!(merged.shortcuts.bindings.close_pane.is_none());
     }
 
     #[test]

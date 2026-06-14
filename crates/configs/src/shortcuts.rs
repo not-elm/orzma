@@ -333,21 +333,6 @@ pub struct Bindings {
     /// Swap the active pane with the next sibling.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub swap_pane_next: Option<KeyChord>,
-    /// Close the active surface.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub close_surface: Option<KeyChord>,
-    /// Spawn a new terminal surface in the active pane.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub new_terminal_surface: Option<KeyChord>,
-    /// Cycle surface focus to the previous one.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_surface_prev: Option<KeyChord>,
-    /// Cycle surface focus to the next one.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_surface_next: Option<KeyChord>,
-    /// Enter tmux-style copy mode on the active terminal surface.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub enter_copy_mode: Option<KeyChord>,
     /// Create a new workspace.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub new_workspace: Option<KeyChord>,
@@ -357,9 +342,6 @@ pub struct Bindings {
     /// Cycle workspace focus to the next one.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub focus_workspace_next: Option<KeyChord>,
-    /// Copy the active terminal's selection to the system clipboard.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub copy: Option<KeyChord>,
     /// Paste the system clipboard into the active terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub paste: Option<KeyChord>,
@@ -384,15 +366,9 @@ impl Default for Bindings {
             split_pane_horizontal: Some(parse_default_chord("Cmd+O")),
             swap_pane_prev: Some(parse_default_chord("Cmd+B")),
             swap_pane_next: Some(parse_default_chord("Cmd+N")),
-            close_surface: Some(parse_default_chord("Cmd+Shift+F")),
-            new_terminal_surface: Some(parse_default_chord("Cmd+T")),
-            focus_surface_prev: Some(parse_default_chord("Cmd+[")),
-            focus_surface_next: Some(parse_default_chord("Cmd+]")),
-            enter_copy_mode: Some(parse_default_chord("Cmd+U")),
             new_workspace: Some(parse_default_chord("Cmd+R")),
             focus_workspace_prev: Some(parse_default_chord("Cmd+Shift+[")),
             focus_workspace_next: Some(parse_default_chord("Cmd+Shift+]")),
-            copy: Some(parse_default_chord("Cmd+C")),
             paste: Some(parse_default_chord("Cmd+V")),
             release_inline_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
         }
@@ -466,35 +442,6 @@ impl Bindings {
                 },
             ),
             (
-                "close-surface",
-                &self.close_surface,
-                ShortcutAction::CloseSurface,
-            ),
-            (
-                "new-terminal-surface",
-                &self.new_terminal_surface,
-                ShortcutAction::NewTerminalSurface,
-            ),
-            (
-                "focus-surface-prev",
-                &self.focus_surface_prev,
-                ShortcutAction::FocusSurface {
-                    offset: SurfaceOffset::Prev,
-                },
-            ),
-            (
-                "focus-surface-next",
-                &self.focus_surface_next,
-                ShortcutAction::FocusSurface {
-                    offset: SurfaceOffset::Next,
-                },
-            ),
-            (
-                "enter-copy-mode",
-                &self.enter_copy_mode,
-                ShortcutAction::EnterCopyMode,
-            ),
-            (
                 "new-workspace",
                 &self.new_workspace,
                 ShortcutAction::NewWorkspace,
@@ -513,7 +460,6 @@ impl Bindings {
                     offset: WorkspaceOffset::Next,
                 },
             ),
-            ("copy", &self.copy, ShortcutAction::Copy),
             ("paste", &self.paste, ShortcutAction::Paste),
             (
                 "release-inline-focus",
@@ -578,35 +524,17 @@ pub enum ShortcutAction {
         /// Target workspace index (0–9 in practice).
         index: u8,
     },
-    /// Move surface focus by offset.
-    FocusSurface {
-        /// Surface offset to apply.
-        offset: SurfaceOffset,
-    },
     /// Split the active pane.
     SplitPane {
         /// Split direction.
         direction: SplitDirection,
     },
-    /// Split the active pane and move the active surface into the new pane.
-    BreakSurfaceToPane {
-        /// Split direction.
-        direction: SplitDirection,
-    },
     /// Create a new workspace.
     NewWorkspace,
-    /// Add a new terminal surface to the active pane.
-    NewTerminalSurface,
     /// Rename the active workspace.
     RenameWorkspace,
-    /// Rename the active surface.
-    RenameSurface,
-    /// Close the active surface.
-    CloseSurface,
     /// Show the workspace list.
     ListWorkspaces,
-    /// Show the surface list for the active pane.
-    ListSurfaces,
     /// Resize the active pane in a direction.
     ResizePane {
         /// Resize direction.
@@ -621,10 +549,6 @@ pub enum ShortcutAction {
     },
     /// Break the active pane into a new workspace.
     BreakPaneToWorkspace,
-    /// Enter tmux-style copy mode on the active Terminal Surface.
-    EnterCopyMode,
-    /// Copy the active terminal's selection to the system clipboard.
-    Copy,
     /// Paste the system clipboard into the active terminal.
     Paste,
     /// Releases keyboard focus from a focused inline webview back to the terminal.
@@ -664,18 +588,6 @@ pub enum WorkspaceOffset {
     /// Previous workspace.
     Prev,
     /// Last-active workspace.
-    Last,
-}
-
-/// Surface offset selectors for `FocusSurface`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum SurfaceOffset {
-    /// Next surface in the active pane.
-    Next,
-    /// Previous surface in the active pane.
-    Prev,
-    /// Last-active surface in the active pane.
     Last,
 }
 
@@ -897,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn bindings_default_has_all_20_fields_some() {
+    fn bindings_default_has_all_14_fields_some() {
         let b = Bindings::default();
         assert!(b.close_pane.is_some());
         assert!(b.focus_pane_left.is_some());
@@ -908,15 +820,9 @@ mod tests {
         assert!(b.split_pane_horizontal.is_some());
         assert!(b.swap_pane_prev.is_some());
         assert!(b.swap_pane_next.is_some());
-        assert!(b.close_surface.is_some());
-        assert!(b.new_terminal_surface.is_some());
-        assert!(b.focus_surface_prev.is_some());
-        assert!(b.focus_surface_next.is_some());
-        assert!(b.enter_copy_mode.is_some());
         assert!(b.new_workspace.is_some());
         assert!(b.focus_workspace_prev.is_some());
         assert!(b.focus_workspace_next.is_some());
-        assert!(b.copy.is_some());
         assert!(b.paste.is_some());
         assert!(b.release_inline_focus.is_some());
     }
@@ -986,9 +892,9 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_20_entries() {
+    fn iter_yields_14_entries() {
         let b = Bindings::default();
-        assert_eq!(b.iter().count(), 20);
+        assert_eq!(b.iter().count(), 14);
     }
 
     #[test]
@@ -996,17 +902,8 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Any change to defaults updates this string.
-        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-surface":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-surface":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-workspace":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-workspace-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-workspace-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-workspace":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-workspace-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-workspace-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
         assert_eq!(json, expected);
-    }
-
-    #[test]
-    fn bindings_default_copy_is_cmd_c() {
-        let b = Bindings::default();
-        let chord = b.copy.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('c'));
-        assert!(chord.modifiers.meta);
-        assert!(!chord.modifiers.ctrl && !chord.modifiers.shift && !chord.modifiers.alt);
     }
 
     #[test]
@@ -1019,39 +916,9 @@ mod tests {
     }
 
     #[test]
-    fn lookup_default_cmd_c_returns_copy() {
-        let b = Bindings::default();
-        let chord = parse_key_chord("Cmd+C").unwrap();
-        assert!(matches!(b.lookup(&chord), Some(ShortcutAction::Copy)));
-    }
-
-    #[test]
     fn lookup_default_cmd_v_returns_paste() {
         let b = Bindings::default();
         let chord = parse_key_chord("Cmd+V").unwrap();
         assert!(matches!(b.lookup(&chord), Some(ShortcutAction::Paste)));
-    }
-
-    #[test]
-    fn copy_field_unbinds_on_empty_string() {
-        #[derive(serde::Deserialize)]
-        struct W {
-            #[serde(deserialize_with = "deser_chord_or_unbind")]
-            copy: Option<KeyChord>,
-        }
-        let parsed: W = serde_json::from_str(r#"{"copy":""}"#).unwrap();
-        assert!(parsed.copy.is_none());
-    }
-
-    #[test]
-    fn validate_no_conflicts_detects_copy_alias_onto_existing_chord() {
-        let b = Bindings {
-            copy: Some(parse_key_chord("Cmd+J").unwrap()),
-            ..Default::default()
-        };
-        let err = b.validate_no_conflicts().unwrap_err();
-        assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
-        assert!(err[0].actions.contains(&"copy"));
-        assert!(err[0].actions.contains(&"focus-pane-down"));
     }
 }

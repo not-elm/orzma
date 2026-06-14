@@ -1,7 +1,6 @@
 //! Workspace-lifecycle shortcut actions dispatched as `EntityEvent`s.
 //!
-//! `NewWorkspaceActionEvent` and `FocusWorkspaceActionEvent` are triggered by
-//! the keyboard dispatcher (`crate::input::execute_action`) and handled by
+//! `NewWorkspaceActionEvent` and `FocusWorkspaceActionEvent` are handled by
 //! the observers below. The observers re-query the live `AttachedWorkspace`
 //! marker rather than trusting the event's target, so two same-frame
 //! triggers preserve the single-holder invariant (Bevy flushes each
@@ -46,6 +45,11 @@ pub struct FocusWorkspaceActionEvent {
 
 /// Selector for `FocusWorkspaceActionEvent`, unifying `FocusWorkspace{offset}` and `FocusWorkspaceNumber{index}`. `Debug` is required because
 /// `FocusWorkspaceActionEvent` derives `Debug`.
+// TODO: remove this suppression once phase-3b wires up the tmux-command callers.
+#[expect(
+    dead_code,
+    reason = "callers removed in phase-3a; will be re-added in phase-3b"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusWorkspaceTarget {
     Next,

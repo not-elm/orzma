@@ -276,8 +276,7 @@ mod tests {
         let host = spawn_terminal_entity(&mut app);
         app.update();
 
-        // Enter copy mode then PageUp via direct handle mutation, mimicking
-        // what dispatch_key does.
+        // Enter copy mode then PageUp via direct handle mutation.
         {
             let mut entity = app.world_mut().entity_mut(host);
             let mut handle = entity
