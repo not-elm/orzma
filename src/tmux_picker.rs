@@ -29,10 +29,10 @@ impl Plugin for OzmuxTmuxPickerPlugin {
 }
 
 #[derive(Resource, Default)]
-struct SessionPicker {
+pub(crate) struct SessionPicker {
     sessions: Vec<SessionInfo>,
     selected: usize,
-    open: bool,
+    pub(crate) open: bool,
 }
 
 #[derive(Component)]
