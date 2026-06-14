@@ -47,6 +47,16 @@ pub(crate) enum ClientMsg {
         #[serde(default)]
         payload: Value,
     },
+    /// Sets (or clears, with `handle: None`) the app-owned focus target for
+    /// this connection's surface.
+    Focus {
+        /// The handle to focus, or `None` to blur.
+        #[serde(default)]
+        handle: Option<String>,
+        /// The mount instance id, or `None` for the default instance.
+        #[serde(default)]
+        instance: Option<String>,
+    },
 }
 
 /// The content source a `register` declares.
@@ -210,6 +220,31 @@ mod tests {
                 handle: "H".into(),
                 event: "tick".into(),
                 payload: serde_json::json!({"n":1})
+            }
+        );
+    }
+
+    #[test]
+    fn parses_focus_with_handle() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"op":"focus","handle":"h1","instance":null}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Focus {
+                handle: Some("h1".into()),
+                instance: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_blur_with_null_handle() {
+        let m: ClientMsg = serde_json::from_str(r#"{"op":"focus","handle":null}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Focus {
+                handle: None,
+                instance: None,
             }
         );
     }

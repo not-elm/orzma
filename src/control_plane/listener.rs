@@ -297,6 +297,7 @@ fn handle_client_msg(
                 payload,
             });
         }
+        ClientMsg::Focus { .. } => {}
     }
     ControlFlow::Continue(())
 }
