@@ -494,7 +494,7 @@ fn dispatch_mouse_buttons(
         // Click-to-focus runs for EVERY pane kind (terminal, webview)
         // and MUST happen before the terminal-handle lookup below: that lookup
         // `continue`s past panes with no `TerminalHandle` (webview
-        // webviews), so focusing only afterwards would never switch to a webview
+        // panes), so focusing only afterwards would never switch to a webview
         // pane — keystrokes would keep routing to the previously-active terminal.
         if matches!(ev.state, ButtonState::Pressed)
             && let Ok(attached_workspace) = attached_workspace.single()

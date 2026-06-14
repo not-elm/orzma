@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [features]
 # Dev-only diagnostics. Enables the CEF `remote-debugging-port` (a local
-# Chromium DevTools/CDP endpoint on 127.0.0.1:9222) for inspecting the embedded
+# Chromium DevTools/CDP endpoint on 127.0.0.1:9222) for inspecting the
 # embedded webview. Off by default so the endpoint is not exposed in normal
 # builds; enable with `cargo run --features debug`.
 debug = []
