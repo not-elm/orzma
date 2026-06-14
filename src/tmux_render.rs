@@ -174,7 +174,7 @@ fn layout_tmux_panes(
             handle.resize_grid_only(cols, rows);
             grid.cols = cols;
             grid.rows = rows;
-            handle.flush_emit(&mut commands, entity);
+            handle.emit_pending(&mut commands, entity);
         }
     }
 }
@@ -388,6 +388,115 @@ mod tests {
         assert!(
             app.world().resource::<SnapHits>().0 >= 1,
             "resize emitted a FrameSnapshot (#1)",
+        );
+    }
+
+    #[test]
+    fn resize_fires_fresh_snapshot_after_first_emit() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+        use ozma_tty_renderer::schema::FrameSnapshot;
+        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+
+        #[derive(Resource, Default)]
+        struct SnapHits(u32);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<SnapHits>();
+        app.add_observer(|_snap: On<FrameSnapshot>, mut hits: ResMut<SnapHits>| {
+            hits.0 += 1;
+        });
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 13.0,
+                descent_phys: 3.0,
+                underline_position_phys: -1.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        });
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+
+        let pane_id = PaneId(2);
+        let entity = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: pane_id,
+                    dims: CellDims {
+                        width: 20,
+                        height: 5,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                Node::default(),
+                TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
+                TerminalGrid::default(),
+            ))
+            .id();
+
+        app.add_systems(
+            Update,
+            (
+                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
+                    for (e, mut h) in q.iter_mut() {
+                        h.advance(b"x");
+                        h.flush_emit(&mut commands, e);
+                    }
+                },
+                layout_tmux_panes,
+            )
+                .chain(),
+        );
+
+        // Frame 1: emit once so first_emit flips to false (matching production state).
+        app.update();
+        let hits_after_first = app.world().resource::<SnapHits>().0;
+        assert!(
+            hits_after_first >= 1,
+            "first flush_emit must fire a FrameSnapshot (first_emit path)"
+        );
+
+        // Now change pane dims so layout_tmux_panes will resize.
+        app.world_mut()
+            .entity_mut(entity)
+            .get_mut::<TmuxPane>()
+            .unwrap()
+            .dims = CellDims {
+            width: 40,
+            height: 10,
+            xoff: 0,
+            yoff: 0,
+        };
+
+        // Frame 2: layout_tmux_panes sees the dim change, calls resize_grid_only +
+        // emit_pending — must fire a NEW FrameSnapshot even though first_emit is now false.
+        app.update();
+        let hits_after_resize = app.world().resource::<SnapHits>().0;
+
+        let grid = app
+            .world()
+            .get::<TerminalGrid>(entity)
+            .expect("pane has a TerminalGrid");
+        assert_eq!(
+            (grid.cols, grid.rows),
+            (40, 10),
+            "grid dims updated on second resize",
+        );
+        assert!(
+            hits_after_resize > hits_after_first,
+            "resize must fire a fresh FrameSnapshot when first_emit is already false \
+             (got {hits_after_resize} total, was {hits_after_first} before resize)",
         );
     }
 }

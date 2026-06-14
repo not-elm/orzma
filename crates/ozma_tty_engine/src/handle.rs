@@ -292,6 +292,17 @@ impl TerminalHandle {
         self.scratch_dirty = scratch;
     }
 
+    /// Emits the currently-staged `pending_damage` (e.g. from `resize_grid_only`)
+    /// without re-reading `Term::damage()`.
+    ///
+    /// Pairs with `resize_grid_only` to repaint a reflow immediately while
+    /// respecting the "one `Term::damage()` per `reset_damage()`" contract
+    /// (`flush_emit` would call `Term::damage()` a second time). No-op if nothing
+    /// is staged.
+    pub fn emit_pending(&mut self, commands: &mut Commands, entity: Entity) {
+        self.emit(commands, entity);
+    }
+
     /// Scrolls the visible viewport by `delta` lines and arms an
     /// emit. Positive `delta` moves backward into scrollback history;
     /// negative moves forward toward the live tail. Alacritty clamps
