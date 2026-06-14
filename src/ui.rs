@@ -22,6 +22,7 @@ pub(crate) mod chrome;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod ime_overlay;
+pub(crate) mod tmux_dialog;
 pub mod palette;
 pub mod root;
 pub mod status_bar;
