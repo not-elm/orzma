@@ -424,6 +424,26 @@ mod tests {
     }
 
     #[test]
+    fn pump_emits_error_reply() {
+        let (inner, handle) = make_inner(Box::new(CaptureWriter::default()));
+        let id = handle.send("bogus").unwrap();
+        let (tx, rx) = unbounded();
+        let reader = ScriptedReader {
+            chunks: vec![b"%begin 1 0 0\nbad command\n%error 1 0 0\n".to_vec()].into(),
+        };
+        pump(reader, inner, tx);
+        assert_eq!(
+            protocol_events(&rx),
+            vec![ClientEvent::CommandComplete {
+                id,
+                number: 0,
+                ok: false,
+                output: vec!["bad command".to_string()],
+            }]
+        );
+    }
+
+    #[test]
     fn pump_eof_emits_closed() {
         let (inner, _h) = make_inner(Box::new(CaptureWriter::default()));
         let (tx, rx) = unbounded();

@@ -71,9 +71,10 @@ impl ProtocolClient {
     /// Feeds a raw byte chunk; returns the events it produced (possibly empty).
     ///
     /// Splits on `\n` (stripping a trailing `\r`), buffers any incomplete tail,
-    /// skips empty lines, and drives the assembler with each complete line.
-    /// Strips the `tmux -CC` DCS introducer from the first line and ignores a
-    /// bare DCS terminator line.
+    /// treats a blank/whitespace-only line outside a block as a no-op (a blank
+    /// line inside a block is kept as body), and drives the assembler with each
+    /// complete line. Strips the `tmux -CC` DCS introducer from the first line
+    /// and ignores a bare DCS terminator line.
     pub fn feed(&mut self, bytes: &[u8]) -> TmuxResult<Vec<ClientEvent>> {
         self.line_buf.extend_from_slice(bytes);
         let mut events = Vec::new();
@@ -84,7 +85,7 @@ impl ProtocolClient {
                 line.pop();
             }
             let content = line.strip_prefix(DCS_INTRODUCER).unwrap_or(line.as_slice());
-            if content.is_empty() || content == DCS_TERMINATOR {
+            if content == DCS_TERMINATOR {
                 continue;
             }
             if let Some(event) = self.feed_line(content)? {
@@ -123,7 +124,14 @@ impl ProtocolClient {
     }
 
     fn feed_line(&mut self, line: &[u8]) -> TmuxResult<Option<ClientEvent>> {
-        match self.assembler.feed(line)? {
+        let frame = match self.assembler.feed(line) {
+            Ok(frame) => frame,
+            // A blank/whitespace-only line only errors outside a block; inside a
+            // block the assembler keeps it as body. Treat it as a no-op here.
+            Err(tmux_control_parser::TmuxError::Empty) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        match frame {
             Some(Frame::Reply { number, ok, body }) => {
                 let id = self
                     .pending
@@ -290,6 +298,37 @@ mod tests {
             vec![ClientEvent::Notification(ControlEvent::WindowAdd {
                 window: WindowId(3)
             })]
+        );
+    }
+
+    #[test]
+    fn feed_skips_whitespace_only_lines_outside_block() {
+        let mut c = ProtocolClient::new();
+        let events = c.feed(b"   \n\t\n%window-add @4\n").unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::Notification(ControlEvent::WindowAdd {
+                window: WindowId(4)
+            })]
+        );
+    }
+
+    #[test]
+    fn feed_preserves_blank_body_lines_inside_block() {
+        let mut c = ProtocolClient::new();
+        let id = c.send("capture").unwrap();
+        let _ = c.take_outgoing();
+        let events = c
+            .feed(b"%begin 1 1 0\nline1\n\nline3\n%end 1 1 0\n")
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::CommandComplete {
+                id,
+                number: 1,
+                ok: true,
+                output: vec!["line1".to_string(), String::new(), "line3".to_string()],
+            }]
         );
     }
 
