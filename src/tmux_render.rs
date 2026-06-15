@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::material::TerminalUiMaterial;
+use ozma_tty_renderer::material::{TerminalBgPadding, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
@@ -34,6 +34,9 @@ pub struct OzmuxTmuxRenderPlugin;
 impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>();
+        // Over-sized split-filling panes paint padding beyond their grid; match
+        // it to the terminal background so no band shows (see `layout_panes`).
+        app.insert_resource(TerminalBgPadding(theme::BACKGROUND.to_linear()));
         app.add_systems(
             Update,
             (
@@ -147,87 +150,128 @@ fn grid_dims(width: u32, height: u32) -> (u16, u16) {
     (clamp(width), clamp(height))
 }
 
-/// Computes packed pixel rects for every pane in a layout tree, collapsing
-/// tmux's reserved 1-cell inter-pane separators to `gap` pixels. Returns the
-/// per-pane rects keyed by tmux pane id, plus the root subtree's packed size.
-fn collapse(root: &Cell, cell_w: f32, cell_h: f32, gap: f32) -> (HashMap<PaneId, Rect>, Vec2) {
-    let mut out = HashMap::new();
-    let size = place(&mut out, root, Vec2::ZERO, cell_w, cell_h, gap);
-    (out, size)
+/// The axis a split distributes its children along.
+#[derive(Clone, Copy)]
+enum Axis {
+    Horizontal,
+    Vertical,
 }
 
-/// Places `cell` at `origin`, recording leaf rects into `out`, and returns the
-/// subtree's packed pixel size. Siblings advance by the returned packed size
-/// (not tmux container dims) so nested separators are never double-counted.
-/// The Floating arm diverges from packing: it ignores `origin` and positions
-/// each child at its absolute tmux `xoff`/`yoff` (popups float over the layout
-/// rather than packing).
-fn place(
-    out: &mut HashMap<PaneId, Rect>,
-    cell: &Cell,
-    origin: Vec2,
+/// Lays every pane in `root` into `rect` (logical px), filling it exactly. Each
+/// split distributes its rect among children in proportion to their tmux cell
+/// extent, separated by `gap`-px dividers, and children fill the cross axis —
+/// so sibling subtrees always align regardless of internal nesting (no
+/// reserved-separator height/width mismatch). Returns each pane's rect keyed by
+/// tmux pane id. A pane's rect is >= its cell content size; the small leftover
+/// renders as terminal-background padding inside the pane (see
+/// `TerminalBgPadding`).
+fn layout_panes(
+    root: &Cell,
+    rect: Rect,
     cell_w: f32,
     cell_h: f32,
     gap: f32,
-) -> Vec2 {
+) -> HashMap<PaneId, Rect> {
+    let mut out = HashMap::new();
+    place(&mut out, root, rect, cell_w, cell_h, gap);
+    out
+}
+
+/// Places `cell` into `rect`, recording leaf rects into `out`. The Floating arm
+/// diverges: popups are positioned at their absolute tmux `xoff`/`yoff` and
+/// sized to their cell content, floating over the layout rather than tiling.
+fn place(
+    out: &mut HashMap<PaneId, Rect>,
+    cell: &Cell,
+    rect: Rect,
+    cell_w: f32,
+    cell_h: f32,
+    gap: f32,
+) {
     match cell {
-        Cell::Leaf { dims, pane_id } => {
-            let size = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
+        Cell::Leaf { pane_id, .. } => {
             if let Some(id) = pane_id {
-                let min = origin.round();
-                let max = (origin + size).round();
-                out.insert(PaneId(*id), Rect::from_corners(min, max));
+                out.insert(PaneId(*id), rect);
             }
-            size
         }
         Cell::Split {
             dir: SplitDir::LeftRight,
             children,
             ..
-        } => {
-            let mut x = origin.x;
-            let mut max_h = 0.0_f32;
-            let last = children.len().saturating_sub(1);
-            for (i, child) in children.iter().enumerate() {
-                let csz = place(out, child, Vec2::new(x, origin.y), cell_w, cell_h, gap);
-                x += csz.x;
-                max_h = max_h.max(csz.y);
-                if i < last {
-                    x += gap;
-                }
-            }
-            Vec2::new(x - origin.x, max_h)
-        }
+        } => split_axis(out, children, rect, cell_w, cell_h, gap, Axis::Horizontal),
         Cell::Split {
             dir: SplitDir::TopBottom,
             children,
             ..
-        } => {
-            let mut y = origin.y;
-            let mut max_w = 0.0_f32;
-            let last = children.len().saturating_sub(1);
-            for (i, child) in children.iter().enumerate() {
-                let csz = place(out, child, Vec2::new(origin.x, y), cell_w, cell_h, gap);
-                y += csz.y;
-                max_w = max_w.max(csz.x);
-                if i < last {
-                    y += gap;
-                }
-            }
-            Vec2::new(max_w, y - origin.y)
-        }
+        } => split_axis(out, children, rect, cell_w, cell_h, gap, Axis::Vertical),
         Cell::Split {
             dir: SplitDir::Floating,
             children,
-            dims,
+            ..
         } => {
             for child in children {
                 let d = child.dims();
-                let popup_origin = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
-                place(out, child, popup_origin, cell_w, cell_h, gap);
+                let min = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
+                let max = min + Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
+                place(
+                    out,
+                    child,
+                    Rect::from_corners(min, max),
+                    cell_w,
+                    cell_h,
+                    gap,
+                );
             }
-            Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h)
         }
+    }
+}
+
+/// Distributes `rect` among `children` along `axis`, proportional to each
+/// child's tmux cell extent on that axis, with a `gap`-px divider between
+/// siblings. Children fill the cross axis. The last child absorbs rounding so
+/// the children exactly tile `rect` (no sub-pixel gap or overlap).
+fn split_axis(
+    out: &mut HashMap<PaneId, Rect>,
+    children: &[Cell],
+    rect: Rect,
+    cell_w: f32,
+    cell_h: f32,
+    gap: f32,
+    axis: Axis,
+) {
+    let n = children.len();
+    if n == 0 {
+        return;
+    }
+    let weight = |c: &Cell| match axis {
+        Axis::Horizontal => c.dims().width as f32,
+        Axis::Vertical => c.dims().height as f32,
+    };
+    let sum: f32 = children.iter().map(weight).sum::<f32>().max(1.0);
+    let (total, start, end) = match axis {
+        Axis::Horizontal => (rect.width(), rect.min.x, rect.max.x),
+        Axis::Vertical => (rect.height(), rect.min.y, rect.max.y),
+    };
+    let avail = (total - gap * (n - 1) as f32).max(0.0);
+    let mut pos = start;
+    for (i, child) in children.iter().enumerate() {
+        let extent = if i == n - 1 {
+            end - pos
+        } else {
+            (avail * weight(child) / sum).round()
+        };
+        let child_rect = match axis {
+            Axis::Horizontal => Rect::from_corners(
+                Vec2::new(pos, rect.min.y),
+                Vec2::new(pos + extent, rect.max.y),
+            ),
+            Axis::Vertical => Rect::from_corners(
+                Vec2::new(rect.min.x, pos),
+                Vec2::new(rect.max.x, pos + extent),
+            ),
+        };
+        place(out, child, child_rect, cell_w, cell_h, gap);
+        pos += extent + gap;
     }
 }
 
@@ -261,15 +305,19 @@ fn layout_tmux_panes(
     let area_w = cols as f32 * cell_w;
     let area_h = rows_for_panes(total_rows) as f32 * cell_h;
 
-    for (layout, mut container, children) in windows.iter_mut() {
-        let (rects, _) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX);
+    let root_rect = Rect::from_corners(Vec2::ZERO, Vec2::new(area_w, area_h));
 
-        // NOTE: size the grey container to the full pane area, NOT the packed
-        // bbox. Collapsing tmux's reserved separator cells to 1px leaves a
-        // reclaimed margin (~1 cell per seam) on the right/bottom; filling it
-        // with the container's divider-grey (iTerm2-style) reads as intentional
-        // chrome, whereas sizing to the bbox leaves a dark void below/right of
-        // the panes — a visible regression for top/bottom splits.
+    for (layout, mut container, children) in windows.iter_mut() {
+        let rects = layout_panes(
+            &layout.0.root,
+            root_rect,
+            cell_w,
+            cell_h,
+            theme::PANE_GAP_PX,
+        );
+
+        // The grey container fills the full pane area; panes tile it exactly, so
+        // the only grey that shows is the 1px divider between split children.
         if container.width != Val::Px(area_w) || container.height != Val::Px(area_h) {
             container.width = Val::Px(area_w);
             container.height = Val::Px(area_h);
@@ -677,8 +725,7 @@ mod tests {
             .get::<Node>(window_e)
             .expect("window container has a Node");
         // Container fills the full pane area (cols 100 × cell_w 8 = 800;
-        // rows-1 = 36 × cell_h 16 = 576), NOT the packed bbox (633×384), so the
-        // reclaimed margin below/right of the panes shows the container grey.
+        // rows-1 = 36 × cell_h 16 = 576). Panes tile it exactly.
         assert_eq!(
             container.width,
             Val::Px(800.0),
@@ -690,17 +737,23 @@ mod tests {
             "container fills pane-area height"
         );
 
+        // weights 40,39 over avail 799 → 405, last absorbs remainder; 1px
+        // divider at x=405..406; both panes fill the full 576 height.
         let p1 = app.world().get::<Node>(pane1).expect("pane1 has a Node");
         assert_eq!(p1.left, Val::Px(0.0), "pane1 left");
         assert_eq!(p1.top, Val::Px(0.0), "pane1 top");
-        assert_eq!(p1.width, Val::Px(320.0), "pane1 width");
-        assert_eq!(p1.height, Val::Px(384.0), "pane1 height");
+        assert_eq!(p1.width, Val::Px(405.0), "pane1 width");
+        assert_eq!(p1.height, Val::Px(576.0), "pane1 height");
 
         let p2 = app.world().get::<Node>(pane2).expect("pane2 has a Node");
-        assert_eq!(p2.left, Val::Px(321.0), "pane2 left (320 + 1px gap)");
+        assert_eq!(p2.left, Val::Px(406.0), "pane2 left (405 + 1px divider)");
         assert_eq!(p2.top, Val::Px(0.0), "pane2 top");
-        assert_eq!(p2.width, Val::Px(312.0), "pane2 width");
-        assert_eq!(p2.height, Val::Px(384.0), "pane2 height");
+        assert_eq!(p2.width, Val::Px(394.0), "pane2 width");
+        assert_eq!(
+            p2.height,
+            Val::Px(576.0),
+            "pane2 height (fills, aligned with pane1)"
+        );
     }
 
     #[test]
@@ -947,8 +1000,12 @@ mod tests {
         );
     }
 
+    fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
+        Rect::from_corners(Vec2::new(x0, y0), Vec2::new(x1, y1))
+    }
+
     #[test]
-    fn collapse_single_pane_fills_with_no_gap() {
+    fn layout_single_pane_fills_rect() {
         let root = Cell::Leaf {
             dims: CellDims {
                 width: 80,
@@ -958,16 +1015,12 @@ mod tests {
             },
             pane_id: Some(0),
         };
-        let (rects, size) = collapse(&root, 8.0, 16.0, 1.0);
-        assert_eq!(
-            rects[&PaneId(0)],
-            Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 384.0)),
-        );
-        assert_eq!(size, Vec2::new(640.0, 384.0));
+        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
+        assert_eq!(rects[&PaneId(0)], rect(0.0, 0.0, 640.0, 384.0));
     }
 
     #[test]
-    fn collapse_horizontal_split_is_one_px_gap() {
+    fn layout_horizontal_split_fills_with_1px_divider() {
         let root = Cell::Split {
             dims: CellDims {
                 width: 80,
@@ -997,20 +1050,15 @@ mod tests {
                 },
             ],
         };
-        let (rects, size) = collapse(&root, 8.0, 16.0, 1.0);
-        assert_eq!(
-            rects[&PaneId(1)],
-            Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0)),
-        );
-        assert_eq!(
-            rects[&PaneId(2)],
-            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(633.0, 384.0)),
-        );
-        assert_eq!(size, Vec2::new(633.0, 384.0));
+        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
+        // weights 40,39 over avail 639 → 324, last absorbs remainder (315);
+        // 1px divider at x=324..325; both panes fill the full height.
+        assert_eq!(rects[&PaneId(1)], rect(0.0, 0.0, 324.0, 384.0));
+        assert_eq!(rects[&PaneId(2)], rect(325.0, 0.0, 640.0, 384.0));
     }
 
     #[test]
-    fn collapse_nested_split_advances_by_packed_extent() {
+    fn layout_nested_split_columns_stay_aligned() {
         // LeftRight[ pane1(40x24), TopBottom[ pane2(39x12), pane3(39x11) ] ]
         let root = Cell::Split {
             dims: CellDims {
@@ -1061,23 +1109,17 @@ mod tests {
                 },
             ],
         };
-        let (rects, _size) = collapse(&root, 8.0, 16.0, 1.0);
-        assert_eq!(
-            rects[&PaneId(1)],
-            Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0)),
-        );
-        assert_eq!(
-            rects[&PaneId(2)],
-            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(633.0, 192.0)),
-        );
-        assert_eq!(
-            rects[&PaneId(3)],
-            Rect::from_corners(Vec2::new(321.0, 193.0), Vec2::new(633.0, 369.0)),
-        );
+        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
+        assert_eq!(rects[&PaneId(1)], rect(0.0, 0.0, 324.0, 384.0));
+        assert_eq!(rects[&PaneId(2)], rect(325.0, 0.0, 640.0, 200.0));
+        assert_eq!(rects[&PaneId(3)], rect(325.0, 201.0, 640.0, 384.0));
+        // The split column (panes 2+3) and the unsplit column (pane 1) both
+        // reach the bottom — no reserved-separator height mismatch.
+        assert_eq!(rects[&PaneId(1)].max.y, rects[&PaneId(3)].max.y);
     }
 
     #[test]
-    fn collapse_skips_leaf_without_pane_id() {
+    fn layout_skips_leaf_without_pane_id() {
         let root = Cell::Split {
             dims: CellDims {
                 width: 80,
@@ -1107,13 +1149,13 @@ mod tests {
                 },
             ],
         };
-        let (rects, _size) = collapse(&root, 8.0, 16.0, 1.0);
+        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
         assert_eq!(rects.len(), 1);
-        assert!(rects.contains_key(&PaneId(2)));
+        assert_eq!(rects[&PaneId(2)], rect(325.0, 0.0, 640.0, 384.0));
     }
 
     #[test]
-    fn collapse_floating_uses_literal_offsets() {
+    fn layout_floating_uses_literal_offsets() {
         let root = Cell::Split {
             dims: CellDims {
                 width: 80,
@@ -1132,11 +1174,7 @@ mod tests {
                 pane_id: Some(7),
             }],
         };
-        let (rects, size) = collapse(&root, 8.0, 16.0, 1.0);
-        assert_eq!(
-            rects[&PaneId(7)],
-            Rect::from_corners(Vec2::new(32.0, 32.0), Vec2::new(112.0, 112.0)),
-        );
-        assert_eq!(size, Vec2::new(640.0, 384.0));
+        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
+        assert_eq!(rects[&PaneId(7)], rect(32.0, 32.0, 112.0, 112.0));
     }
 }
