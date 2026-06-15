@@ -15,6 +15,9 @@ pub struct KeyBindings {
     root: HashMap<String, String>,
     prefix: HashMap<String, String>,
     prefix_keys: HashSet<String>,
+    copy_mode: HashMap<String, String>,
+    copy_mode_vi: HashMap<String, String>,
+    mode_keys: ModeKeys,
 }
 
 impl KeyBindings {
@@ -28,6 +31,12 @@ impl KeyBindings {
                 Table::Prefix => {
                     self.prefix.insert(binding.key, binding.command);
                 }
+                Table::CopyMode => {
+                    self.copy_mode.insert(binding.key, binding.command);
+                }
+                Table::CopyModeVi => {
+                    self.copy_mode_vi.insert(binding.key, binding.command);
+                }
             }
         }
     }
@@ -37,11 +46,29 @@ impl KeyBindings {
         self.prefix_keys = keys;
     }
 
+    /// Sets which copy-mode table is active (from the `mode-keys` option).
+    pub(crate) fn set_mode_keys(&mut self, mode_keys: ModeKeys) {
+        self.mode_keys = mode_keys;
+    }
+
+    /// Looks up `key` in the active copy-mode table (vi or emacs per `mode-keys`),
+    /// falling back to the table's `Any` binding. Returns the bound tmux command.
+    pub(crate) fn copy_command(&self, key: &str) -> Option<String> {
+        let table = match self.mode_keys {
+            ModeKeys::Vi => &self.copy_mode_vi,
+            ModeKeys::Emacs => &self.copy_mode,
+        };
+        table.get(key).or_else(|| table.get("Any")).cloned()
+    }
+
     /// Clears all tables (on disconnect, so a reconnect re-reads).
     pub(crate) fn clear(&mut self) {
         self.root.clear();
         self.prefix.clear();
         self.prefix_keys.clear();
+        self.copy_mode.clear();
+        self.copy_mode_vi.clear();
+        self.mode_keys = ModeKeys::default();
     }
 }
 
@@ -93,6 +120,18 @@ pub(crate) fn prefix_options_command() -> String {
 pub(crate) enum Table {
     Root,
     Prefix,
+    CopyMode,
+    CopyModeVi,
+}
+
+/// Which copy-mode key table is active, from tmux's `mode-keys` option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum ModeKeys {
+    /// `mode-keys vi` → the `copy-mode-vi` table.
+    Vi,
+    /// `mode-keys emacs` → the `copy-mode` table (tmux's default).
+    #[default]
+    Emacs,
 }
 
 /// One parsed tmux key binding.
@@ -143,6 +182,8 @@ fn parse_binding_line(line: &str) -> Option<KeyBinding> {
                 table = match name {
                     "root" => Some(Table::Root),
                     "prefix" => Some(Table::Prefix),
+                    "copy-mode" => Some(Table::CopyMode),
+                    "copy-mode-vi" => Some(Table::CopyModeVi),
                     _ => return None,
                 };
                 rest = after;
@@ -407,5 +448,59 @@ mod tests {
         );
         assert!(matches!(&actions[1], Forwarded::Run(c) if c == "split-window -h"));
         assert!(matches!(&actions[2], Forwarded::Keys(v) if v == &vec!["c".to_string()]));
+    }
+
+    #[test]
+    fn parses_copy_mode_vi_binding() {
+        let lines = vec!["bind-key -T copy-mode-vi j send-keys -X cursor-down".to_string()];
+        let got = parse_list_keys(&lines);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].table, Table::CopyModeVi);
+        assert_eq!(got[0].key, "j");
+        assert_eq!(got[0].command, "send-keys -X cursor-down");
+    }
+
+    #[test]
+    fn parses_copy_mode_emacs_binding() {
+        let lines = vec!["bind-key -T copy-mode C-n send-keys -X cursor-down".to_string()];
+        let got = parse_list_keys(&lines);
+        assert_eq!(got[0].table, Table::CopyMode);
+    }
+
+    #[test]
+    fn copy_table_selects_vi_or_emacs_by_mode_keys() {
+        let mut kb = KeyBindings::default();
+        kb.install(vec![
+            KeyBinding {
+                table: Table::CopyModeVi,
+                key: "j".into(),
+                command: "vi-down".into(),
+                repeat: false,
+            },
+            KeyBinding {
+                table: Table::CopyMode,
+                key: "j".into(),
+                command: "emacs-down".into(),
+                repeat: false,
+            },
+        ]);
+        kb.set_mode_keys(ModeKeys::Vi);
+        assert_eq!(kb.copy_command("j"), Some("vi-down".to_string()));
+        kb.set_mode_keys(ModeKeys::Emacs);
+        assert_eq!(kb.copy_command("j"), Some("emacs-down".to_string()));
+    }
+
+    #[test]
+    fn clear_drops_copy_tables_and_mode_keys() {
+        let mut kb = KeyBindings::default();
+        kb.install(vec![KeyBinding {
+            table: Table::CopyModeVi,
+            key: "j".into(),
+            command: "x".into(),
+            repeat: false,
+        }]);
+        kb.set_mode_keys(ModeKeys::Vi);
+        kb.clear();
+        assert_eq!(kb.copy_command("j"), None);
     }
 }
