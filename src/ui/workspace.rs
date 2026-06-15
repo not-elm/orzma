@@ -79,7 +79,7 @@ fn sync_active_workspace(
 
 /// Inactive-terminal brightness multiplier from config: `inactive_pane.dim`
 /// when dimming is enabled, else `1.0` (disabled or absent config = no dim).
-fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
+pub(crate) fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
     match configs {
         Some(cfg) if cfg.inactive_pane.enabled => cfg.inactive_pane.dim,
         _ => 1.0,

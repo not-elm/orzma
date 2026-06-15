@@ -62,6 +62,3 @@ pub const COPY_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
 pub const COPY_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
 
 pub const UI_FONT_SIZE: f32 = 12.0;
-
-/// Semi-transparent overlay drawn over inactive tmux panes to dim them.
-pub const PANE_DIM_OVERLAY: Color = Color::srgba(0.0, 0.0, 0.0, 0.35);

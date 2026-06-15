@@ -1,17 +1,16 @@
-//! Pane click-to-focus + dim: augments each tmux pane node with a `Button`
-//! (click target) and a `FocusPolicy::Pass` dim overlay, sends `select-pane`
-//! on click, and shows the overlay on every pane except the active one.
+//! Pane click-to-focus + dim: gives each tmux pane a `Button` click target
+//! with `FocusPolicy::Block`, sends `select-pane` on click, and dims every
+//! inactive pane at the renderer via `PaneDim` (a brightness multiplier the
+//! terminal shader applies) rather than an opaque overlay veil.
 
+use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::theme;
+use crate::ui::workspace::inactive_dim_factor;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
+use ozma_tty_renderer::material::PaneDim;
 use ozmux_tmux::{TmuxConnection, TmuxPane, TmuxProjectionSet, select_pane_command};
-
-/// Points a pane at its dim-overlay child entity (O(1) lookup in `sync_pane_dim`).
-#[derive(Component)]
-pub(crate) struct PaneDimOverlay(pub(crate) Entity);
 
 /// Registers pane click-to-focus and dim systems.
 pub struct OzmuxTmuxPaneFocusPlugin;
@@ -30,33 +29,19 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
 }
 
 /// Gives each rendered pane (one that has its `TerminalHandle` but no `Button`
-/// yet) a `Button` click target and a hidden `FocusPolicy::Pass` dim overlay
-/// child, recorded on the pane as `PaneDimOverlay`. The `Without<Button>` filter makes
-/// this run exactly once per pane.
+/// yet) a `Button` click target with an explicit `FocusPolicy::Block`. The
+/// `Without<Button>` filter makes this run exactly once per pane.
+///
+/// `FocusPolicy::Block` is provided explicitly because `Button`'s required
+/// `FocusPolicy::Block` is silently skipped when the pane already carries
+/// `FocusPolicy::Pass` (from `Node`'s required-component default). An explicit
+/// insert in the bundle replaces the existing component.
 fn augment_tmux_pane(
     mut commands: Commands,
     panes: Query<Entity, (With<TmuxPane>, With<TerminalHandle>, Without<Button>)>,
 ) {
     for pane in panes.iter() {
-        let overlay = commands
-            .spawn((
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: Val::Px(0.0),
-                    right: Val::Px(0.0),
-                    top: Val::Px(0.0),
-                    bottom: Val::Px(0.0),
-                    ..default()
-                },
-                BackgroundColor(theme::PANE_DIM_OVERLAY),
-                FocusPolicy::Pass,
-                Visibility::Hidden,
-                ChildOf(pane),
-            ))
-            .id();
-        commands
-            .entity(pane)
-            .insert((Button, PaneDimOverlay(overlay)));
+        commands.entity(pane).insert((Button, FocusPolicy::Block));
     }
 }
 
@@ -80,27 +65,23 @@ fn focus_pane_on_click(
     }
 }
 
-/// Shows each pane's dim overlay when the pane is not the active one, hides it
-/// on the active pane. When `ProjectionModel.active_pane` is `None`, hides ALL
-/// overlays (dim nothing). Gated on `ProjectionModel` change.
+/// Sets each pane entity's [`PaneDim`] brightness multiplier: `1.0` for the
+/// active pane, the configured dim factor for every other pane. When
+/// `ProjectionModel.active_pane` is `None`, all panes are set to `1.0` (dim
+/// nothing). Gated on `ProjectionModel` change; only inserts when the value
+/// actually changes to avoid redundant renderer updates.
 fn sync_pane_dim(
-    mut overlays: Query<&mut Visibility>,
-    panes: Query<(&TmuxPane, &PaneDimOverlay)>,
+    mut commands: Commands,
+    panes: Query<(Entity, &TmuxPane, Option<&PaneDim>)>,
     model: Res<ozmux_tmux::ProjectionModel>,
+    configs: Option<Res<OzmuxConfigsResource>>,
 ) {
-    for (pane, dim) in panes.iter() {
+    let dim_factor = inactive_dim_factor(configs.as_deref());
+    for (entity, pane, current) in panes.iter() {
         let active = model.active_pane == Some(pane.id) || model.active_pane.is_none();
-        let want = if active {
-            Visibility::Hidden
-        } else {
-            Visibility::Visible
-        };
-        // NOTE: the overlay may not be spawned yet on the frame a pane appears;
-        // a `get_mut` miss is a no-op, never a panic.
-        if let Ok(mut vis) = overlays.get_mut(dim.0)
-            && *vis != want
-        {
-            *vis = want;
+        let want = if active { 1.0 } else { dim_factor };
+        if current.map(|d| d.0) != Some(want) {
+            commands.entity(entity).insert(PaneDim(want));
         }
     }
 }
@@ -129,12 +110,13 @@ mod tests {
     }
 
     #[test]
-    fn sync_dims_inactive_and_clears_when_none() {
+    fn sync_sets_pane_dim_from_active_pane() {
         use ozmux_tmux::ProjectionModel;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
+        app.insert_resource(OzmuxConfigsResource::default());
         let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
         let p1 = app
             .world_mut()
@@ -156,36 +138,41 @@ mod tests {
                 h(),
             ))
             .id();
-        app.update(); // augment both panes (spawns overlays)
-
-        let overlay = |app: &App, pane| app.world().get::<PaneDimOverlay>(pane).unwrap().0;
-        let vis = |app: &App, e| app.world().get::<Visibility>(e).copied().unwrap();
+        let dim = |app: &App, e| app.world().get::<PaneDim>(e).map(|d| d.0);
 
         app.insert_resource(ProjectionModel {
             active_pane: Some(PaneId(1)),
             ..default()
         });
         app.update();
-        assert_eq!(vis(&app, overlay(&app, p1)), Visibility::Hidden);
-        assert_eq!(vis(&app, overlay(&app, p2)), Visibility::Visible);
+        assert_eq!(dim(&app, p1), Some(1.0), "active pane has PaneDim 1.0");
+        assert_eq!(dim(&app, p2), Some(0.5), "inactive pane has PaneDim 0.5");
 
         app.world_mut()
             .resource_mut::<ProjectionModel>()
             .active_pane = Some(PaneId(2));
         app.update();
-        assert_eq!(vis(&app, overlay(&app, p1)), Visibility::Visible);
-        assert_eq!(vis(&app, overlay(&app, p2)), Visibility::Hidden);
+        assert_eq!(dim(&app, p1), Some(0.5), "p1 now inactive");
+        assert_eq!(dim(&app, p2), Some(1.0), "p2 now active");
 
         app.world_mut()
             .resource_mut::<ProjectionModel>()
             .active_pane = None;
         app.update();
-        assert_eq!(vis(&app, overlay(&app, p1)), Visibility::Hidden);
-        assert_eq!(vis(&app, overlay(&app, p2)), Visibility::Hidden);
+        assert_eq!(
+            dim(&app, p1),
+            Some(1.0),
+            "no active pane: p1 is full-bright"
+        );
+        assert_eq!(
+            dim(&app, p2),
+            Some(1.0),
+            "no active pane: p2 is full-bright"
+        );
     }
 
     #[test]
-    fn augment_adds_button_and_hidden_overlay() {
+    fn augment_adds_button_and_focus_block_no_overlay() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
@@ -205,28 +192,24 @@ mod tests {
             app.world().get::<Button>(pane).is_some(),
             "pane gains a Button"
         );
-        let pane_dim = app
-            .world()
-            .get::<PaneDimOverlay>(pane)
-            .expect("PaneDimOverlay recorded");
-        let overlay = pane_dim.0;
         assert_eq!(
-            app.world().get::<Visibility>(overlay).copied(),
-            Some(Visibility::Hidden),
-            "overlay starts hidden",
+            app.world().get::<FocusPolicy>(pane).copied(),
+            Some(FocusPolicy::Block),
+            "pane gets FocusPolicy::Block to capture clicks",
         );
-        assert_eq!(
-            app.world().get::<FocusPolicy>(overlay).copied(),
-            Some(FocusPolicy::Pass),
-            "overlay passes clicks through to the pane",
-        );
-
-        app.update();
         let children = app
             .world()
             .get::<Children>(pane)
             .map(|c| c.len())
             .unwrap_or(0);
-        assert_eq!(children, 1, "augment runs exactly once per pane");
+        assert_eq!(children, 0, "no overlay child spawned");
+
+        app.update();
+        let children_after = app
+            .world()
+            .get::<Children>(pane)
+            .map(|c| c.len())
+            .unwrap_or(0);
+        assert_eq!(children_after, 0, "augment runs exactly once per pane");
     }
 }
