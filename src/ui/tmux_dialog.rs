@@ -72,6 +72,12 @@ fn sync_tmux_dialog(
                 label.0 = format!("tmux unavailable\n{reason}");
             }
         }
+        ConnectionState::Detached => {
+            node.display = Display::Flex;
+            if let Ok(mut label) = text.single_mut() {
+                label.0 = "Disconnected — press \u{2318}\u{21e7}P to choose a session".to_string();
+            }
+        }
         _ => node.display = Display::None,
     }
 }
@@ -82,7 +88,7 @@ mod tests {
     use bevy::app::App;
 
     #[test]
-    fn dialog_shows_only_on_error_state() {
+    fn dialog_shows_on_error_and_detached() {
         let mut app = App::new();
         app.init_resource::<ConnectionState>();
         app.add_plugins(TmuxDialogPlugin);
@@ -100,6 +106,10 @@ mod tests {
         app.insert_resource(ConnectionState::Error {
             reason: "tmux: command not found".to_string(),
         });
+        app.update();
+        assert_eq!(backdrop_display(&mut app), Display::Flex);
+
+        app.insert_resource(ConnectionState::Detached);
         app.update();
         assert_eq!(backdrop_display(&mut app), Display::Flex);
 

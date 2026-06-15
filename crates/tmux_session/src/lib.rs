@@ -24,7 +24,7 @@ pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
 pub use enumerate::{
     LIST_WINDOWS_FORMAT, WindowRow, parse_window_rows, refresh_client_command, select_pane_command,
-    select_window_command, set_environment_command,
+    select_window_command, set_environment_command, switch_client_command,
 };
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_pane_keys_command};
 pub use keybindings::{Forwarded, KeyBindings, plan_forward};
