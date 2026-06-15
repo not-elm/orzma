@@ -129,10 +129,10 @@ fn spawn_prompt_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>)
 }
 
 fn sync_prompt_ui(
-    prompt: Res<CopyPrompt>,
     mut bar: Query<&mut Node, With<PromptBar>>,
-    children_query: Query<&Children, With<PromptBar>>,
     mut texts: Query<&mut Text>,
+    prompt: Res<CopyPrompt>,
+    children_query: Query<&Children, With<PromptBar>>,
 ) {
     let Ok(mut node) = bar.single_mut() else {
         return;
