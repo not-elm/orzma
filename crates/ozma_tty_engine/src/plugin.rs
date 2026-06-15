@@ -87,16 +87,18 @@ fn check_deadline_flush(
             if handle.needs_bootstrap_emit() {
                 handle.force_bootstrap_damage();
                 par_commands.command_scope(|mut commands| {
-                    handle.emit(&mut commands, entity, &mut coalescer);
+                    handle.emit(&mut commands, entity);
                 });
+                coalescer.disarm();
                 return;
             }
             if let Some(deadline) = coalescer.next_deadline()
                 && now >= deadline
             {
                 par_commands.command_scope(|mut commands| {
-                    handle.emit(&mut commands, entity, &mut coalescer);
+                    handle.emit(&mut commands, entity);
                 });
+                coalescer.disarm();
             }
         });
 }
@@ -125,8 +127,9 @@ fn process_pty_chunks(
         let should_flush = handle.ingest_chunk(&chunk, coalescer);
         if should_flush {
             par_commands.command_scope(|mut commands| {
-                handle.emit(&mut commands, entity, coalescer);
+                handle.emit(&mut commands, entity);
             });
+            coalescer.disarm();
         } else {
             coalescer.arm_or_extend(Instant::now());
         }

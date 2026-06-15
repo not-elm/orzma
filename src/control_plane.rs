@@ -13,6 +13,7 @@ use bevy_cef::prelude::HostEmitEvent;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use ozmux_multiplexer::SurfaceMarker;
+use ozmux_tmux::TmuxPane;
 use ozmux_webview_host::DynAssetRegistry;
 use ozmux_webview_host::host::RuntimeRoot;
 use std::collections::HashMap;
@@ -246,6 +247,12 @@ impl TokenRegistry {
     pub(crate) fn insert(&self, token: impl Into<String>, surface: Entity) {
         self.0.write().unwrap().insert(token.into(), surface);
     }
+
+    /// Drops every binding that resolves to `surface`. Called when a tmux pane
+    /// despawns so a recycled `Entity` id cannot resolve a stale pane key.
+    pub(crate) fn remove_entity(&self, surface: Entity) {
+        self.0.write().unwrap().retain(|_, bound| *bound != surface);
+    }
 }
 
 /// A shared `connection_id → outbound-line sender` table. Each live control
@@ -350,8 +357,31 @@ impl Plugin for OzmuxControlPlanePlugin {
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(DynAssetRegistryRes(self.dyn_assets.clone()));
-        app.add_systems(Update, apply_control_events);
+        app.add_systems(Update, (apply_control_events, sync_tmux_pane_tokens));
         app.add_observer(purge_dynamic_on_surface_removed);
+    }
+}
+
+/// Mirrors each projected tmux pane into the [`TokenRegistry`] keyed by its
+/// tmux pane id (`%N`, matching `$TMUX_PANE`), so a program's `hello` resolves
+/// to the pane entity that owns it. tmux injects `$TMUX_PANE` into every pane it
+/// spawns — including user-created ones — which the legacy per-surface
+/// `$OZMUX_TOKEN` injection (terminal-surface spawn path) cannot reach under the
+/// tmux backend. Despawned panes are unbound first so a recycled `Entity` id
+/// cannot resolve a stale key.
+fn sync_tmux_pane_tokens(
+    handle: Option<Res<ControlPlaneHandle>>,
+    mut closed: RemovedComponents<TmuxPane>,
+    new_panes: Query<(Entity, &TmuxPane), Added<TmuxPane>>,
+) {
+    let Some(handle) = handle else {
+        return;
+    };
+    for entity in closed.read() {
+        handle.tokens.remove_entity(entity);
+    }
+    for (entity, pane) in new_panes.iter() {
+        handle.tokens.insert(format!("%{}", pane.id.0), entity);
     }
 }
 
@@ -763,6 +793,51 @@ mod token_tests {
         reg.insert("tok", Entity::from_bits(5));
         assert_eq!(reg.resolve("tok"), Some(Entity::from_bits(5)));
         assert_eq!(reg.resolve("nope"), None);
+    }
+
+    #[test]
+    fn remove_entity_drops_every_key_for_that_surface() {
+        let reg = TokenRegistry::default();
+        let surface = Entity::from_bits(7);
+        reg.insert("%1", surface);
+        reg.insert("tok", surface);
+        reg.insert("%2", Entity::from_bits(8));
+        reg.remove_entity(surface);
+        assert_eq!(reg.resolve("%1"), None);
+        assert_eq!(reg.resolve("tok"), None);
+        assert_eq!(reg.resolve("%2"), Some(Entity::from_bits(8)));
+    }
+
+    fn tmux_pane(id: u32) -> TmuxPane {
+        TmuxPane {
+            id: ozmux_tmux::PaneId(id),
+            dims: tmux_control_parser::CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn sync_binds_added_panes_and_unbinds_despawned_ones() {
+        let mut app = App::new();
+        let handle = ControlPlaneHandle {
+            sock_path: std::path::PathBuf::from("/tmp/test.sock"),
+            tokens: TokenRegistry::default(),
+        };
+        let tokens = handle.tokens.clone();
+        app.insert_resource(handle);
+        app.add_systems(Update, sync_tmux_pane_tokens);
+
+        let pane = app.world_mut().spawn(tmux_pane(5)).id();
+        app.update();
+        assert_eq!(tokens.resolve("%5"), Some(pane));
+
+        app.world_mut().entity_mut(pane).despawn();
+        app.update();
+        assert_eq!(tokens.resolve("%5"), None);
     }
 }
 

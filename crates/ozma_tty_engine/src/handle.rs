@@ -26,7 +26,7 @@ use alacritty_terminal::vte::ansi::{Color as AColor, Rgb};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Commands;
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, unbounded};
 use ozma_tty_renderer::prelude::{Cursor, CursorShape, SelectionRange, SnapshotReason, ViCursor};
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -114,7 +114,6 @@ pub struct TerminalHandle {
 
 impl TerminalHandle {
     /// Constructs a fresh handle from the matched dims + channel set.
-    /// Called only from `TerminalBundle::spawn`.
     pub(crate) fn new(
         cols: u16,
         rows: u16,
@@ -161,6 +160,45 @@ impl TerminalHandle {
             osc_webview_parser: Parser::new(),
             osc_webview: OscWebviewCapture::new(gate),
         }
+    }
+
+    /// Constructs a PTY-less handle.
+    ///
+    /// Same VT bridge as `TerminalBundle::spawn` minus the PTY, child
+    /// process, and reader thread. Used for terminals whose bytes arrive from
+    /// an external source (e.g. tmux `%output`).
+    pub fn detached(cols: u16, rows: u16, gate: Arc<AtomicBool>) -> Self {
+        let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
+        let (control_tx, control_rx) = unbounded::<ControlFrame>();
+        let listener = TermListener {
+            reply_tx,
+            control_tx: control_tx.clone(),
+        };
+        Self::new(cols, rows, listener, reply_rx, control_rx, control_tx, gate)
+    }
+
+    /// Drains and returns any pending alacritty `PtyWrite` reply bytes
+    /// (DSR / DA answers). A detached handle has no PTY to write them to;
+    /// the caller forwards them to the external program (tmux input) or
+    /// discards them.
+    pub fn take_replies(&self) -> Vec<u8> {
+        let mut buf = Vec::new();
+        self.drain_replies_into(&mut buf);
+        buf
+    }
+
+    /// Stages damage from the current `Term` state and emits a frame
+    /// immediately, with no coalescer.
+    ///
+    /// The PTY path coalesces via `Coalescer`; tmux panes (whose `%output`
+    /// tmux has already batched) call this once per pane per frame after
+    /// `advance`. Handles the first-emit bootstrap (a blank Initial snapshot
+    /// on a fresh pane).
+    pub fn flush_emit(&mut self, commands: &mut Commands, entity: Entity) {
+        let mut scratch = std::mem::take(&mut self.scratch_dirty);
+        self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
+        self.scratch_dirty = scratch;
+        self.emit(commands, entity);
     }
 
     /// Feeds a chunk of PTY bytes through the vte parsers into `Term`.
@@ -238,6 +276,31 @@ impl TerminalHandle {
         pty.resize(cols, rows)?;
         self.stage_full_damage_and_arm(coalescer);
         Ok(())
+    }
+
+    /// Resizes the alacritty grid only — no PTY, no echo to any backend.
+    ///
+    /// For tmux panes, tmux owns the pane size; this applies the size tmux
+    /// reported (`%layout-change`) to the local grid. Stages full damage so the
+    /// reflowed grid reaches the renderer even when no output is pending. Unlike
+    /// [`TerminalHandle::resize`], it must NOT touch a PTY or echo the size
+    /// anywhere (echoing back to tmux would loop).
+    pub fn resize_grid_only(&mut self, cols: u16, rows: u16) {
+        self.resize_grid(cols, rows);
+        let mut scratch = std::mem::take(&mut self.scratch_dirty);
+        self.pending_damage = Some(DirtyRows::collect(&mut self.term, &mut scratch));
+        self.scratch_dirty = scratch;
+    }
+
+    /// Emits the currently-staged `pending_damage` (e.g. from `resize_grid_only`)
+    /// without re-reading `Term::damage()`.
+    ///
+    /// Pairs with `resize_grid_only` to repaint a reflow immediately while
+    /// respecting the "one `Term::damage()` per `reset_damage()`" contract
+    /// (`flush_emit` would call `Term::damage()` a second time). No-op if nothing
+    /// is staged.
+    pub fn emit_pending(&mut self, commands: &mut Commands, entity: Entity) {
+        self.emit(commands, entity);
     }
 
     /// Scrolls the visible viewport by `delta` lines and arms an
@@ -648,15 +711,9 @@ impl TerminalHandle {
     }
 
     /// Emit a frame for the damage stashed on `self.pending_damage`.
-    /// Disarms the coalescer.
-    pub(crate) fn emit(
-        &mut self,
-        commands: &mut Commands,
-        entity: Entity,
-        coalescer: &mut Coalescer,
-    ) {
+    pub(crate) fn emit(&mut self, commands: &mut Commands, entity: Entity) {
         let Some(mut dirty) = self.pending_damage.take() else {
-            self.abort_emit_with_no_damage(coalescer);
+            self.abort_emit_with_no_damage();
             return;
         };
 
@@ -682,7 +739,7 @@ impl TerminalHandle {
                 curr_selection,
             )
         {
-            self.finalize_emit(coalescer);
+            self.finalize_emit();
             return;
         }
 
@@ -699,14 +756,13 @@ impl TerminalHandle {
         self.prev_cursor = Some(curr_cursor);
         self.prev_vi_cursor = curr_vi_cursor;
         self.prev_selection = curr_selection;
-        self.finalize_emit(coalescer);
+        self.finalize_emit();
     }
 
     /// Cleanup path taken when `emit` is invoked with no staged
-    /// damage. Disarms the coalescer and discards any captured
-    /// window-open mode so the next chunk re-captures fresh.
-    fn abort_emit_with_no_damage(&mut self, coalescer: &mut Coalescer) {
-        coalescer.disarm();
+    /// damage. Discards any captured window-open mode so the next
+    /// chunk re-captures fresh.
+    fn abort_emit_with_no_damage(&mut self) {
         self.window_open_mode = None;
     }
 
@@ -893,12 +949,10 @@ impl TerminalHandle {
         }
     }
 
-    /// Resets alacritty's per-cycle damage tracker and disarms the
-    /// coalescer. Called at the end of every emit (both the noop-skip
-    /// and the normal-end path).
-    fn finalize_emit(&mut self, coalescer: &mut Coalescer) {
+    /// Resets alacritty's per-cycle damage tracker. Called at the end
+    /// of every emit (both the noop-skip and the normal-end path).
+    fn finalize_emit(&mut self) {
         self.term.reset_damage();
-        coalescer.disarm();
     }
 
     /// Stamps the anchor / applies state gates for a buffered OSC 5379 verb
@@ -2371,11 +2425,10 @@ mod tests {
 
         let mut world = World::new();
         let entity = world.spawn_empty().id();
-        let mut coalescer = Coalescer::default();
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            h.emit(&mut commands, entity, &mut coalescer);
+            h.emit(&mut commands, entity);
         }
         queue.apply(&mut world);
 
@@ -2390,7 +2443,7 @@ mod tests {
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            h.emit(&mut commands, entity, &mut coalescer);
+            h.emit(&mut commands, entity);
         }
         queue.apply(&mut world);
         assert_eq!(
@@ -2411,11 +2464,10 @@ mod tests {
         h.pending_damage = None;
         let mut world = World::new();
         let entity = world.spawn_empty().id();
-        let mut coalescer = Coalescer::default();
         let mut queue = CommandQueue::default();
         {
             let mut commands = Commands::new(&mut queue, &world);
-            h.emit(&mut commands, entity, &mut coalescer);
+            h.emit(&mut commands, entity);
         }
         queue.apply(&mut world);
 
@@ -2536,6 +2588,80 @@ mod tests {
             rx.try_recv().is_err(),
             "8-bit C1 OSC introducer must not reach the capture (spec section 2: 7-bit ESC ] only)"
         );
+    }
+
+    #[test]
+    fn detached_handle_advances_without_pty() {
+        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        h.advance(b"hi");
+        let (cols, rows, _cursor) = h.read_geometry();
+        assert_eq!((cols, rows), (20, 5));
+        assert!(h.take_replies().is_empty());
+    }
+
+    #[test]
+    fn take_replies_returns_alacritty_reply_bytes() {
+        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        h.advance(b"\x1b[5n");
+        let replies = h.take_replies();
+        assert!(
+            !replies.is_empty(),
+            "DSR query should elicit a device-status reply"
+        );
+        assert!(
+            h.take_replies().is_empty(),
+            "replies are drained, not re-read"
+        );
+    }
+
+    #[test]
+    fn flush_emit_triggers_snapshot_for_detached_handle() {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::prelude::*;
+        use ozma_tty_renderer::schema::FrameSnapshot;
+
+        #[derive(Resource, Default)]
+        struct Hits {
+            count: u32,
+            cols: u16,
+            rows: u16,
+        }
+
+        let mut app = App::new();
+        app.init_resource::<Hits>();
+        app.add_observer(|snap: On<FrameSnapshot>, mut hits: ResMut<Hits>| {
+            hits.count += 1;
+            hits.cols = snap.cols;
+            hits.rows = snap.rows;
+        });
+        app.world_mut().spawn(TerminalHandle::detached(
+            20,
+            5,
+            Arc::new(AtomicBool::new(false)),
+        ));
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
+                    for (entity, mut handle) in &mut q {
+                        handle.advance(b"hello");
+                        handle.flush_emit(&mut commands, entity);
+                    }
+                },
+            )
+            .unwrap();
+        app.update();
+
+        let hits = app.world().resource::<Hits>();
+        assert_eq!(hits.count, 1, "exactly one snapshot emitted");
+        assert_eq!((hits.cols, hits.rows), (20, 5));
+    }
+
+    #[test]
+    fn resize_grid_only_changes_geometry_without_pty() {
+        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        h.resize_grid_only(40, 10);
+        let (cols, rows, _) = h.read_geometry();
+        assert_eq!((cols, rows), (40, 10));
     }
 }
 

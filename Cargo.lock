@@ -4788,10 +4788,13 @@ dependencies = [
  "ozma_tty_renderer",
  "ozmux_configs",
  "ozmux_multiplexer",
+ "ozmux_tmux",
  "ozmux_webview_host",
  "serde",
  "serde_json",
  "tempfile",
+ "tmux_control",
+ "tmux_control_parser",
  "tracing",
  "unicode-width 0.2.0",
  "url",
@@ -4817,6 +4820,17 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
+name = "ozmux_tmux"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "crossbeam-channel",
+ "tmux_control",
+ "tmux_control_parser",
  "tracing",
 ]
 
@@ -6175,6 +6189,7 @@ dependencies = [
  "portable-pty",
  "thiserror 2.0.18",
  "tmux_control_parser",
+ "tracing",
 ]
 
 [[package]]

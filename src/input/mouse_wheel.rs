@@ -23,9 +23,9 @@
 //!    stale.
 //! 3. Truncate the residual to an integer `notches` count; the
 //!    fractional remainder carries to the next frame.
-//! 4. Resolve the active workspace's focused pane → entity (mirrors
-//!    `dispatch_focused_key`). If copy mode is active, skip — the copy
-//!    mode handler owns input semantics there.
+//! 4. Resolve the active workspace's focused pane → entity via
+//!    `resolve_focused_terminal`. If copy mode is active, skip — the
+//!    copy mode handler owns input semantics there.
 //! 5. Resolve the cursor cell within the focused pane (or fall back
 //!    to `(1, 1)`).
 //! 6. Build `WheelModifiers` from `ButtonInput<KeyCode>` using the

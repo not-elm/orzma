@@ -105,11 +105,6 @@ impl Clipboard {
             }
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn is_available_for_test(&self) -> bool {
-        self.0.is_some()
-    }
 }
 
 /// Constructs the byte sequence that `TerminalHandle::write` should

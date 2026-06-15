@@ -1,2 +1,3 @@
 [shortcuts.bindings]
-close-pane = "Cmd+J"
+paste = "Cmd+V"
+release-inline-focus = "Cmd+V"

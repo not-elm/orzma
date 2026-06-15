@@ -267,6 +267,93 @@ Exceptions — these override the style rule:
 - Trait-method `impl`s whose signature is dictated by the trait.
 - `#[cfg(test)] mod tests { ... }` contents are exempt.
 
+## System optimization — gate with `run_if`, not in-body change checks
+
+A Bevy system that begins by checking a resource's change state and
+returning early — `if !res.is_changed() { return; }` (or
+`if !res.is_added() { return; }`) — must instead be gated at
+registration with a run condition. The early-return form still pays the
+cost of scheduling the system, acquiring its `SystemParam` data access,
+and running its body up to the guard every frame; a `run_if` condition
+skips the system entirely when the condition is false, and lets the
+scheduler reason about the dependency.
+
+Required:
+
+| Instead of (in-body) | Use (at registration) |
+| --- | --- |
+| `fn sys(res: Res<T>) { if !res.is_changed() { return; } ... }` | `sys.run_if(resource_exists_and_changed::<T>)` |
+| `fn sys(res: Res<T>) { if !res.is_added() { return; } ... }` | `sys.run_if(resource_added::<T>)` |
+
+- Prefer `resource_exists_and_changed::<T>` over bare
+  `resource_changed::<T>` unless the resource is guaranteed to exist for
+  the system's whole lifetime; the `_exists_` variant will not panic if
+  the resource is absent.
+- After moving the guard into a `run_if`, delete the in-body early
+  return — leaving both is redundant and misleads the reader about when
+  the system runs. Note the gating in the system's doc comment instead.
+- Keep any test that registers the same system in sync: add the matching
+  `run_if` so the test exercises the real scheduling behavior.
+
+Not covered by this rule (leave as-is):
+
+- Per-entity / per-component change detection inside a query loop
+  (`query.iter().any(|c| c.is_changed())`) — that is not a whole-system
+  gate and has no `run_if` equivalent.
+- Bodies that branch on change state to do *different* work (not an
+  all-or-nothing early return).
+
+## Change detection — let mutation drive it, don't force it manually
+
+Bevy emits a change notification automatically when you write through a
+`ResMut` / `Mut` (any `DerefMut`); readers gate on that via `run_if`
+(see the section above) or `Changed<T>` / `Added<T>` queries. A design
+that follows ordinary ECS data flow therefore never needs to *manually*
+announce that something changed. Manual notification breaks the contract
+that "changed" means "the value actually changed", so every downstream
+`run_if`/`Changed` consumer can no longer trust it.
+
+Forbidden:
+
+| Pattern | Why |
+| --- | --- |
+| `res.set_changed()` / `query_item.set_changed()` | Forces a notification the mutation itself should have produced |
+| `*res.bypass_change_detection() = …; res.set_changed();` | Suppresses the real change then re-emits it by hand — the honest form is one ordinary write through `&mut` |
+| `res.bypass_change_detection()` used to *hide* a genuine mutation from readers | Silently desyncs consumers gated on `Changed` / `run_if` |
+
+Root cause and fix: this dance almost always appears because the code
+writes through the mutable reference **unconditionally every frame** (so
+naive change detection would fire every frame) and then tries to undo
+that with `bypass_change_detection()` + a conditional `set_changed()`.
+The ECS-aligned fix is to mutate **conditionally** — compute the next
+value from an immutable read, compare, and write through the normal
+`&mut` only when it differs. Change detection then fires exactly on real
+changes, for free:
+
+```rust
+// Avoid: unconditional deref_mut, then hand-managed notification.
+let changed = step(state.bypass_change_detection(), &events);
+if changed { state.set_changed(); }
+
+// Prefer: write through ResMut only on a real change.
+let mut next = state.clone();
+if step(&mut next, &events) {
+    *state = next; // the single DerefMut — change fires here, only when it differs
+}
+```
+
+The same applies to components: don't assign an identical value every
+frame; guard the write with an equality check (the renderer's "only write
+the `Node` fields when they actually change" pattern is the model).
+
+Escape hatch (justify with a `// NOTE:`, and `#[expect]` where a lint
+applies): genuine interior mutation that change detection cannot observe
+— e.g. a component owning a handle/buffer whose *contents* are mutated in
+place (no `DerefMut` on the component) while a downstream system must
+still be told — or a documented workaround for a specific upstream Bevy
+bug. "It's simpler" or "I mutate it every frame anyway" is not a valid
+reason; mutate conditionally instead.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:
@@ -300,6 +387,8 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Visibility minimization (OPTIONAL axis) — `pub` items with no cross-crate caller may be demoted to `pub(crate)`; library crates may keep `pub` for intentional API surface. The "container already narrow" exception above still applies. `#![warn(unreachable_pub)]` can be enabled temporarily to audit this axis but is not on by default.
 - Item ordering — private (no-modifier) items declared after `pub` / exported ones (see "Item ordering — private items last")
 - Parameter ordering — mutable parameters declared before immutable ones in function signatures (see "Parameter ordering — mutable parameters first")
+- System optimization — whole-system resource change/added guards expressed as in-body early returns must be `run_if` run conditions instead (see "System optimization — gate with `run_if`, not in-body change checks")
+- Change detection — no manual `set_changed()` / `bypass_change_detection()`-then-`set_changed()` notification; mutate conditionally so normal `DerefMut` drives change detection (see "Change detection — let mutation drive it, don't force it manually")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 

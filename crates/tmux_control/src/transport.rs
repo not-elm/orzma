@@ -36,6 +36,7 @@ enum Socket {
 pub struct TmuxServer {
     program: String,
     socket: Socket,
+    env: Vec<(String, String)>,
 }
 
 impl TmuxServer {
@@ -44,12 +45,21 @@ impl TmuxServer {
         Self {
             program: "tmux".to_string(),
             socket: Socket::Default,
+            env: Vec::new(),
         }
     }
 
     /// Overrides the tmux binary path.
     pub fn program(mut self, path: &str) -> Self {
         self.program = path.to_string();
+        self
+    }
+
+    /// Adds an environment variable for the spawned `tmux -CC` process. The tmux
+    /// server inherits it, so every pane the server spawns (the initial one and
+    /// any created later) sees it. Used to propagate `$OZMUX_SOCK` into panes.
+    pub fn env(mut self, key: &str, value: &str) -> Self {
+        self.env.push((key.to_string(), value.to_string()));
         self
     }
 
@@ -71,9 +81,24 @@ impl TmuxServer {
         self.spawn(&["attach-session", "-t", name])
     }
 
-    /// Opens a control connection on a fresh session (`tmux -CC new-session`).
+    /// Opens a control connection on a fresh session (`tmux -CC new-session`),
+    /// passing each configured env var as `-e KEY=VALUE` so the new session's
+    /// environment carries it. Unlike the spawned process's own environment,
+    /// `-e` reaches panes even when `new-session` joins a server that was
+    /// already running (the common case on a machine with a live tmux server).
     pub fn new_session(&self) -> TmuxResult<TmuxClient> {
-        self.spawn(&["new-session"])
+        let subcommand = self.new_session_subcommand();
+        let refs: Vec<&str> = subcommand.iter().map(String::as_str).collect();
+        self.spawn(&refs)
+    }
+
+    fn new_session_subcommand(&self) -> Vec<String> {
+        let mut subcommand = vec!["new-session".to_string()];
+        for (key, value) in &self.env {
+            subcommand.push("-e".to_string());
+            subcommand.push(format!("{key}={value}"));
+        }
+        subcommand
     }
 
     /// Lists attachable sessions (`tmux [..] list-sessions -F ..`, plain pipe, no
@@ -135,6 +160,9 @@ impl TmuxServer {
         let mut cmd = CommandBuilder::new(&self.program);
         for arg in self.connect_argv(subcommand) {
             cmd.arg(arg);
+        }
+        for (key, value) in &self.env {
+            cmd.env(key, value);
         }
         let child = pair.slave.spawn_command(cmd).map_err(spawn_err)?;
         drop(pair.slave);
@@ -410,6 +438,37 @@ mod tests {
         assert_eq!(
             TmuxServer::new().connect_argv(&["new-session"]),
             argv(&["-CC", "new-session"])
+        );
+    }
+
+    #[test]
+    fn env_builder_accumulates_pairs() {
+        let server = TmuxServer::new()
+            .env("OZMUX_SOCK", "/tmp/ctl.sock")
+            .env("FOO", "bar");
+        assert_eq!(
+            server.env,
+            vec![
+                ("OZMUX_SOCK".to_string(), "/tmp/ctl.sock".to_string()),
+                ("FOO".to_string(), "bar".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn new_session_subcommand_emits_dash_e_per_env_pair() {
+        let server = TmuxServer::new().env("OZMUX_SOCK", "/tmp/ctl.sock");
+        assert_eq!(
+            server.new_session_subcommand(),
+            vec!["new-session", "-e", "OZMUX_SOCK=/tmp/ctl.sock"]
+        );
+    }
+
+    #[test]
+    fn new_session_subcommand_is_bare_without_env() {
+        assert_eq!(
+            TmuxServer::new().new_session_subcommand(),
+            vec!["new-session".to_string()]
         );
     }
 

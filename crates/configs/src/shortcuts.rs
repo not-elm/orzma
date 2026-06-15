@@ -299,73 +299,126 @@ pub struct Shortcuts {
 ///   - `None`        = explicitly unbound (via TOML `""`)
 ///
 /// TOML reads the `[shortcuts.bindings]` table; the `kebab-case` serde
-/// rename maps each `close-pane = "Cmd+Shift+D"` line to the matching
-/// field. `#[serde(default)]` at struct level seeds missing fields from
-/// `Bindings::default()` (the 20 defaults). `deny_unknown_fields` rejects
-/// typos and unimplemented-action keys at load time.
+/// rename maps each `paste = "Cmd+V"` line to the matching field.
+/// `#[serde(default)]` at struct level seeds missing fields from
+/// `Bindings::default()`. `deny_unknown_fields` rejects typos at load time;
+/// deprecated keys (the pane/window/surface set tmux now owns) are accepted
+/// and ignored.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct Bindings {
-    /// Close the active pane.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane lifecycle moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub close_pane: Option<KeyChord>,
-    /// Move pane focus left.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane focus moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub focus_pane_left: Option<KeyChord>,
-    /// Move pane focus down.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane focus moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub focus_pane_down: Option<KeyChord>,
-    /// Move pane focus up.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane focus moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub focus_pane_up: Option<KeyChord>,
-    /// Move pane focus right.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane focus moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub focus_pane_right: Option<KeyChord>,
-    /// Split the active pane vertically.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane splitting moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub split_pane_vertical: Option<KeyChord>,
-    /// Split the active pane horizontally.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane splitting moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub split_pane_horizontal: Option<KeyChord>,
-    /// Swap the active pane with the previous sibling.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane swapping moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub swap_pane_prev: Option<KeyChord>,
-    /// Swap the active pane with the next sibling.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: pane swapping moved to tmux, which owns this
+    /// binding now under forward-only key routing. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub swap_pane_next: Option<KeyChord>,
-    /// Close the active surface.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub close_surface: Option<KeyChord>,
-    /// Spawn a new terminal surface in the active pane.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub new_terminal_surface: Option<KeyChord>,
-    /// Cycle surface focus to the previous one.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_surface_prev: Option<KeyChord>,
-    /// Cycle surface focus to the next one.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub focus_surface_next: Option<KeyChord>,
-    /// Enter tmux-style copy mode on the active terminal surface.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub enter_copy_mode: Option<KeyChord>,
-    /// Create a new workspace.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: workspace lifecycle moved to tmux windows, which
+    /// own this binding now under forward-only key routing. Accepted so existing
+    /// configs carrying it still parse under `deny_unknown_fields`. Remove after
+    /// one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub new_workspace: Option<KeyChord>,
-    /// Cycle workspace focus to the previous one.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: workspace focus moved to tmux windows, which own
+    /// this binding now under forward-only key routing. Accepted so existing
+    /// configs carrying it still parse under `deny_unknown_fields`. Remove after
+    /// one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub focus_workspace_prev: Option<KeyChord>,
-    /// Cycle workspace focus to the next one.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    /// Deprecated and ignored: workspace focus moved to tmux windows, which own
+    /// this binding now under forward-only key routing. Accepted so existing
+    /// configs carrying it still parse under `deny_unknown_fields`. Remove after
+    /// one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub focus_workspace_next: Option<KeyChord>,
-    /// Copy the active terminal's selection to the system clipboard.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub copy: Option<KeyChord>,
     /// Paste the system clipboard into the active terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub paste: Option<KeyChord>,
     /// Releases keyboard focus from a focused inline webview back to the terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub release_inline_focus: Option<KeyChord>,
+    /// Deprecated and ignored: this binding was removed when surface/copy
+    /// actions were dropped for the tmux backend. Accepted so existing
+    /// configs carrying it still parse under `deny_unknown_fields`. Remove
+    /// after one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub close_surface: Option<KeyChord>,
+    /// Deprecated and ignored: surface creation no longer exists under the
+    /// tmux backend. Accepted so existing configs carrying it still parse
+    /// under `deny_unknown_fields`. Remove after one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub new_terminal_surface: Option<KeyChord>,
+    /// Deprecated and ignored: surface focus cycling was dropped with the
+    /// surface model for the tmux backend. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub focus_surface_prev: Option<KeyChord>,
+    /// Deprecated and ignored: surface focus cycling was dropped with the
+    /// surface model for the tmux backend. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub focus_surface_next: Option<KeyChord>,
+    /// Deprecated and ignored: copy mode is now owned by tmux, so this entry
+    /// no longer maps to an ozmux action. Accepted so existing configs
+    /// carrying it still parse under `deny_unknown_fields`. Remove after one
+    /// release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub enter_copy_mode: Option<KeyChord>,
+    /// Deprecated and ignored: the copy action moved to tmux's own copy mode.
+    /// Accepted so existing configs carrying it still parse under
+    /// `deny_unknown_fields`. Remove after one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    pub copy: Option<KeyChord>,
 }
 
 fn parse_default_chord(s: &str) -> KeyChord {
@@ -375,145 +428,39 @@ fn parse_default_chord(s: &str) -> KeyChord {
 impl Default for Bindings {
     fn default() -> Self {
         Bindings {
-            close_pane: Some(parse_default_chord("Cmd+Shift+D")),
-            focus_pane_left: Some(parse_default_chord("Cmd+H")),
-            focus_pane_down: Some(parse_default_chord("Cmd+J")),
-            focus_pane_up: Some(parse_default_chord("Cmd+K")),
-            focus_pane_right: Some(parse_default_chord("Cmd+L")),
-            split_pane_vertical: Some(parse_default_chord("Cmd+I")),
-            split_pane_horizontal: Some(parse_default_chord("Cmd+O")),
-            swap_pane_prev: Some(parse_default_chord("Cmd+B")),
-            swap_pane_next: Some(parse_default_chord("Cmd+N")),
-            close_surface: Some(parse_default_chord("Cmd+Shift+F")),
-            new_terminal_surface: Some(parse_default_chord("Cmd+T")),
-            focus_surface_prev: Some(parse_default_chord("Cmd+[")),
-            focus_surface_next: Some(parse_default_chord("Cmd+]")),
-            enter_copy_mode: Some(parse_default_chord("Cmd+U")),
-            new_workspace: Some(parse_default_chord("Cmd+R")),
-            focus_workspace_prev: Some(parse_default_chord("Cmd+Shift+[")),
-            focus_workspace_next: Some(parse_default_chord("Cmd+Shift+]")),
-            copy: Some(parse_default_chord("Cmd+C")),
+            close_pane: None,
+            focus_pane_left: None,
+            focus_pane_down: None,
+            focus_pane_up: None,
+            focus_pane_right: None,
+            split_pane_vertical: None,
+            split_pane_horizontal: None,
+            swap_pane_prev: None,
+            swap_pane_next: None,
+            new_workspace: None,
+            focus_workspace_prev: None,
+            focus_workspace_next: None,
             paste: Some(parse_default_chord("Cmd+V")),
             release_inline_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
+            close_surface: None,
+            new_terminal_surface: None,
+            focus_surface_prev: None,
+            focus_surface_next: None,
+            enter_copy_mode: None,
+            copy: None,
         }
     }
 }
 
 impl Bindings {
     /// Yields `(action_label, &Option<KeyChord>, Action)` for every
-    /// implemented Action. Single source of truth for `lookup()`,
-    /// `validate_no_conflicts()`, and external counters
+    /// implemented Action. Single source of truth for
+    /// `validate_no_conflicts()` and external counters
     /// (e.g., daemon bootstrap binding count).
     pub fn iter(
         &self,
     ) -> impl Iterator<Item = (&'static str, &Option<KeyChord>, ShortcutAction)> + '_ {
         [
-            ("close-pane", &self.close_pane, ShortcutAction::ClosePane),
-            (
-                "focus-pane-left",
-                &self.focus_pane_left,
-                ShortcutAction::FocusPane {
-                    direction: Direction::Left,
-                },
-            ),
-            (
-                "focus-pane-down",
-                &self.focus_pane_down,
-                ShortcutAction::FocusPane {
-                    direction: Direction::Down,
-                },
-            ),
-            (
-                "focus-pane-up",
-                &self.focus_pane_up,
-                ShortcutAction::FocusPane {
-                    direction: Direction::Up,
-                },
-            ),
-            (
-                "focus-pane-right",
-                &self.focus_pane_right,
-                ShortcutAction::FocusPane {
-                    direction: Direction::Right,
-                },
-            ),
-            (
-                "split-pane-vertical",
-                &self.split_pane_vertical,
-                ShortcutAction::SplitPane {
-                    direction: SplitDirection::Vertical,
-                },
-            ),
-            (
-                "split-pane-horizontal",
-                &self.split_pane_horizontal,
-                ShortcutAction::SplitPane {
-                    direction: SplitDirection::Horizontal,
-                },
-            ),
-            (
-                "swap-pane-prev",
-                &self.swap_pane_prev,
-                ShortcutAction::SwapPane {
-                    offset: SwapOffset::Prev,
-                },
-            ),
-            (
-                "swap-pane-next",
-                &self.swap_pane_next,
-                ShortcutAction::SwapPane {
-                    offset: SwapOffset::Next,
-                },
-            ),
-            (
-                "close-surface",
-                &self.close_surface,
-                ShortcutAction::CloseSurface,
-            ),
-            (
-                "new-terminal-surface",
-                &self.new_terminal_surface,
-                ShortcutAction::NewTerminalSurface,
-            ),
-            (
-                "focus-surface-prev",
-                &self.focus_surface_prev,
-                ShortcutAction::FocusSurface {
-                    offset: SurfaceOffset::Prev,
-                },
-            ),
-            (
-                "focus-surface-next",
-                &self.focus_surface_next,
-                ShortcutAction::FocusSurface {
-                    offset: SurfaceOffset::Next,
-                },
-            ),
-            (
-                "enter-copy-mode",
-                &self.enter_copy_mode,
-                ShortcutAction::EnterCopyMode,
-            ),
-            (
-                "new-workspace",
-                &self.new_workspace,
-                ShortcutAction::NewWorkspace,
-            ),
-            (
-                "focus-workspace-prev",
-                &self.focus_workspace_prev,
-                ShortcutAction::FocusWorkspace {
-                    offset: WorkspaceOffset::Prev,
-                },
-            ),
-            (
-                "focus-workspace-next",
-                &self.focus_workspace_next,
-                ShortcutAction::FocusWorkspace {
-                    offset: WorkspaceOffset::Next,
-                },
-            ),
-            ("copy", &self.copy, ShortcutAction::Copy),
             ("paste", &self.paste, ShortcutAction::Paste),
             (
                 "release-inline-focus",
@@ -522,18 +469,6 @@ impl Bindings {
             ),
         ]
         .into_iter()
-    }
-
-    /// KeyChord -> Action reverse lookup. Linear scan of 20 entries.
-    /// Hot path; cheap given the fixed size. HashMap caching deferred per spec.
-    pub fn lookup(&self, chord: &KeyChord) -> Option<ShortcutAction> {
-        self.iter().find_map(|(_, bound, action)| {
-            if bound.as_ref() == Some(chord) {
-                Some(action)
-            } else {
-                None
-            }
-        })
     }
 
     /// Detects chord collisions across fields. Returns a `Vec` sorted by chord
@@ -555,138 +490,15 @@ impl Bindings {
     }
 }
 
-/// All shortcut actions supported by ozmux v0.
+/// Shortcut actions reachable under forward-only key routing. tmux owns the
+/// pane/window operations now, so only the two ozmux-local actions remain.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ShortcutAction {
-    /// Close the active pane.
-    ClosePane,
-    /// Close the active workspace.
-    CloseWorkspace,
-    /// Move pane focus in a direction.
-    FocusPane {
-        /// Direction to move focus.
-        direction: Direction,
-    },
-    /// Move workspace focus by offset.
-    FocusWorkspace {
-        /// Workspace offset to apply.
-        offset: WorkspaceOffset,
-    },
-    /// Jump to a workspace by index.
-    FocusWorkspaceNumber {
-        /// Target workspace index (0–9 in practice).
-        index: u8,
-    },
-    /// Move surface focus by offset.
-    FocusSurface {
-        /// Surface offset to apply.
-        offset: SurfaceOffset,
-    },
-    /// Split the active pane.
-    SplitPane {
-        /// Split direction.
-        direction: SplitDirection,
-    },
-    /// Split the active pane and move the active surface into the new pane.
-    BreakSurfaceToPane {
-        /// Split direction.
-        direction: SplitDirection,
-    },
-    /// Create a new workspace.
-    NewWorkspace,
-    /// Add a new terminal surface to the active pane.
-    NewTerminalSurface,
-    /// Rename the active workspace.
-    RenameWorkspace,
-    /// Rename the active surface.
-    RenameSurface,
-    /// Close the active surface.
-    CloseSurface,
-    /// Show the workspace list.
-    ListWorkspaces,
-    /// Show the surface list for the active pane.
-    ListSurfaces,
-    /// Resize the active pane in a direction.
-    ResizePane {
-        /// Resize direction.
-        direction: Direction,
-    },
-    /// Toggle zoom/maximize on the active pane.
-    ZoomPane,
-    /// Swap the active pane with a sibling.
-    SwapPane {
-        /// Swap offset.
-        offset: SwapOffset,
-    },
-    /// Break the active pane into a new workspace.
-    BreakPaneToWorkspace,
-    /// Enter tmux-style copy mode on the active Terminal Surface.
-    EnterCopyMode,
-    /// Copy the active terminal's selection to the system clipboard.
-    Copy,
     /// Paste the system clipboard into the active terminal.
     Paste,
     /// Releases keyboard focus from a focused inline webview back to the terminal.
     ReleaseInlineFocus,
-}
-
-/// Layout direction shared by `FocusPane` and `ResizePane`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum Direction {
-    /// Up.
-    Up,
-    /// Down.
-    Down,
-    /// Left.
-    Left,
-    /// Right.
-    Right,
-}
-
-/// Split orientation for `SplitPane`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum SplitDirection {
-    /// New pane to the right of the current one.
-    Horizontal,
-    /// New pane below the current one.
-    Vertical,
-}
-
-/// Workspace offset selectors for `FocusWorkspace`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum WorkspaceOffset {
-    /// Next workspace.
-    Next,
-    /// Previous workspace.
-    Prev,
-    /// Last-active workspace.
-    Last,
-}
-
-/// Surface offset selectors for `FocusSurface`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum SurfaceOffset {
-    /// Next surface in the active pane.
-    Next,
-    /// Previous surface in the active pane.
-    Prev,
-    /// Last-active surface in the active pane.
-    Last,
-}
-
-/// Swap offset selectors for `SwapPane`.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
-pub enum SwapOffset {
-    /// Swap with the previous sibling.
-    Prev,
-    /// Swap with the next sibling.
-    Next,
 }
 
 #[cfg(test)]
@@ -897,74 +709,27 @@ mod tests {
     }
 
     #[test]
-    fn bindings_default_has_all_20_fields_some() {
+    fn bindings_default_has_active_fields_some() {
         let b = Bindings::default();
-        assert!(b.close_pane.is_some());
-        assert!(b.focus_pane_left.is_some());
-        assert!(b.focus_pane_down.is_some());
-        assert!(b.focus_pane_up.is_some());
-        assert!(b.focus_pane_right.is_some());
-        assert!(b.split_pane_vertical.is_some());
-        assert!(b.split_pane_horizontal.is_some());
-        assert!(b.swap_pane_prev.is_some());
-        assert!(b.swap_pane_next.is_some());
-        assert!(b.close_surface.is_some());
-        assert!(b.new_terminal_surface.is_some());
-        assert!(b.focus_surface_prev.is_some());
-        assert!(b.focus_surface_next.is_some());
-        assert!(b.enter_copy_mode.is_some());
-        assert!(b.new_workspace.is_some());
-        assert!(b.focus_workspace_prev.is_some());
-        assert!(b.focus_workspace_next.is_some());
-        assert!(b.copy.is_some());
         assert!(b.paste.is_some());
         assert!(b.release_inline_focus.is_some());
     }
 
     #[test]
-    fn bindings_default_focus_pane_left_is_cmd_h() {
+    fn bindings_default_deprecated_pane_window_fields_are_none() {
         let b = Bindings::default();
-        let chord = b.focus_pane_left.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('h'));
-        assert!(chord.modifiers.meta);
-        assert!(!chord.modifiers.shift);
-    }
-
-    #[test]
-    fn bindings_default_close_pane_is_cmd_shift_d() {
-        let b = Bindings::default();
-        let chord = b.close_pane.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('d'));
-        assert!(chord.modifiers.meta);
-        assert!(chord.modifiers.shift);
-    }
-
-    #[test]
-    fn lookup_default_cmd_j_returns_focus_pane_down() {
-        let b = Bindings::default();
-        let chord = parse_key_chord("Cmd+J").unwrap();
-        let action = b.lookup(&chord).expect("Cmd+J must resolve");
-        assert!(matches!(
-            action,
-            ShortcutAction::FocusPane {
-                direction: Direction::Down
-            }
-        ));
-    }
-
-    #[test]
-    fn lookup_unbound_chord_returns_none() {
-        let b = Bindings::default();
-        let chord = parse_key_chord("Cmd+Shift+Z").unwrap();
-        assert!(b.lookup(&chord).is_none());
-    }
-
-    #[test]
-    fn lookup_after_field_unbind_returns_none() {
-        let mut b = Bindings::default();
-        let chord = b.close_pane.clone().unwrap();
-        b.close_pane = None;
-        assert!(b.lookup(&chord).is_none());
+        assert!(b.close_pane.is_none());
+        assert!(b.focus_pane_left.is_none());
+        assert!(b.focus_pane_down.is_none());
+        assert!(b.focus_pane_up.is_none());
+        assert!(b.focus_pane_right.is_none());
+        assert!(b.split_pane_vertical.is_none());
+        assert!(b.split_pane_horizontal.is_none());
+        assert!(b.swap_pane_prev.is_none());
+        assert!(b.swap_pane_next.is_none());
+        assert!(b.new_workspace.is_none());
+        assert!(b.focus_workspace_prev.is_none());
+        assert!(b.focus_workspace_next.is_none());
     }
 
     #[test]
@@ -976,37 +741,29 @@ mod tests {
     #[test]
     fn validate_no_conflicts_detects_user_conflict() {
         let b = Bindings {
-            close_pane: Some(parse_key_chord("Cmd+J").unwrap()),
+            paste: Some(parse_key_chord("Ctrl+Shift+Escape").unwrap()),
             ..Default::default()
         };
         let err = b.validate_no_conflicts().unwrap_err();
         assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
-        assert!(err[0].actions.contains(&"close-pane"));
-        assert!(err[0].actions.contains(&"focus-pane-down"));
+        assert!(err[0].actions.contains(&"paste"));
+        assert!(err[0].actions.contains(&"release-inline-focus"));
     }
 
     #[test]
-    fn iter_yields_20_entries() {
+    fn iter_yields_2_entries() {
         let b = Bindings::default();
-        assert_eq!(b.iter().count(), 20);
+        assert_eq!(b.iter().count(), 2);
     }
 
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
-        // The kebab-case rename applies. Any change to defaults updates this string.
-        let expected = r#"{"bindings":{"close-pane":{"key":"d","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-pane-left":{"key":"h","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-down":{"key":"j","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-up":{"key":"k","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-pane-right":{"key":"l","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-vertical":{"key":"i","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"split-pane-horizontal":{"key":"o","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-prev":{"key":"b","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"swap-pane-next":{"key":"n","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"close-surface":{"key":"f","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"new-terminal-surface":{"key":"t","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-prev":{"key":"[","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-surface-next":{"key":"]","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"u","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"new-workspace":{"key":"r","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"focus-workspace-prev":{"key":"[","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"focus-workspace-next":{"key":"]","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"copy":{"key":"c","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        // The kebab-case rename applies. Deprecated fields carry
+        // `skip_serializing`, so only the active bindings appear here.
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
         assert_eq!(json, expected);
-    }
-
-    #[test]
-    fn bindings_default_copy_is_cmd_c() {
-        let b = Bindings::default();
-        let chord = b.copy.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('c'));
-        assert!(chord.modifiers.meta);
-        assert!(!chord.modifiers.ctrl && !chord.modifiers.shift && !chord.modifiers.alt);
     }
 
     #[test]
@@ -1019,39 +776,53 @@ mod tests {
     }
 
     #[test]
-    fn lookup_default_cmd_c_returns_copy() {
-        let b = Bindings::default();
-        let chord = parse_key_chord("Cmd+C").unwrap();
-        assert!(matches!(b.lookup(&chord), Some(ShortcutAction::Copy)));
-    }
-
-    #[test]
-    fn lookup_default_cmd_v_returns_paste() {
+    fn iter_binds_cmd_v_to_paste() {
         let b = Bindings::default();
         let chord = parse_key_chord("Cmd+V").unwrap();
-        assert!(matches!(b.lookup(&chord), Some(ShortcutAction::Paste)));
+        let action = b
+            .iter()
+            .find_map(|(_, bound, action)| (bound.as_ref() == Some(&chord)).then_some(action))
+            .expect("Cmd+V must resolve");
+        assert!(matches!(action, ShortcutAction::Paste));
     }
 
     #[test]
-    fn copy_field_unbinds_on_empty_string() {
-        #[derive(serde::Deserialize)]
-        struct W {
-            #[serde(deserialize_with = "deser_chord_or_unbind")]
-            copy: Option<KeyChord>,
-        }
-        let parsed: W = serde_json::from_str(r#"{"copy":""}"#).unwrap();
-        assert!(parsed.copy.is_none());
+    fn deprecated_surface_copy_bindings_are_accepted_and_ignored() {
+        // Configs carrying the removed surface/copy-mode binding keys must
+        // still parse (back-compat) and not appear in the active binding set.
+        let toml = "\
+[bindings]
+close-surface = \"Cmd+Shift+F\"
+new-terminal-surface = \"Cmd+Shift+T\"
+focus-surface-prev = \"Cmd+Shift+G\"
+focus-surface-next = \"Cmd+Shift+B\"
+enter-copy-mode = \"Cmd+U\"
+copy = \"Cmd+C\"
+";
+        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated keys must still parse");
+        assert_eq!(
+            parsed.bindings.iter().count(),
+            2,
+            "ignored keys must not enter the active set"
+        );
     }
 
     #[test]
-    fn validate_no_conflicts_detects_copy_alias_onto_existing_chord() {
-        let b = Bindings {
-            copy: Some(parse_key_chord("Cmd+J").unwrap()),
-            ..Default::default()
-        };
-        let err = b.validate_no_conflicts().unwrap_err();
-        assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
-        assert!(err[0].actions.contains(&"copy"));
-        assert!(err[0].actions.contains(&"focus-pane-down"));
+    fn deprecated_pane_window_bindings_are_accepted_and_ignored() {
+        let toml = "\
+[bindings]
+split-pane-vertical = \"Cmd+I\"
+focus-pane-left = \"Cmd+H\"
+new-workspace = \"Cmd+R\"
+swap-pane-next = \"Cmd+N\"
+";
+        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated keys must still parse");
+        assert!(
+            parsed.bindings.iter().all(|(label, _, _)| !matches!(
+                label,
+                "split-pane-vertical" | "focus-pane-left" | "new-workspace" | "swap-pane-next"
+            )),
+            "ignored keys must not enter the active set",
+        );
     }
 }

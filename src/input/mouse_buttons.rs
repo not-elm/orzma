@@ -1149,13 +1149,12 @@ mod tests {
     fn try_click_to_focus_mutates_active_pane_and_returns_true() {
         use bevy::ecs::system::RunSystemOnce;
         use ozmux_multiplexer::{
-            ActivePane, MultiplexerCommands, MultiplexerPlugin, SplitOrientation,
+            ActivePane, MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation,
         };
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(MultiplexerPlugin);
-        app.add_plugins(crate::action::split_pane::SplitPaneActionPlugin);
 
         let (workspace, original_pane, original_surface) = app
             .world_mut()
@@ -1166,20 +1165,18 @@ mod tests {
             .unwrap();
         app.world_mut().flush();
 
-        app.world_mut()
-            .run_system_once(move |mut commands: Commands| {
-                commands.trigger(crate::action::split_pane::SplitPaneActionEvent {
-                    workspace,
-                    orientation: SplitOrientation::Horizontal,
-                });
+        let new_pane = app
+            .world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                let new_pane = mux
+                    .split_pane(original_pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split must succeed");
+                mux.set_active_pane(workspace, new_pane)
+                    .expect("active pane after split");
+                new_pane
             })
             .unwrap();
         app.world_mut().flush();
-        let new_pane = app
-            .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| mux.workspaces_active_pane(workspace))
-            .unwrap()
-            .expect("active pane after split");
         assert_ne!(new_pane, original_pane, "split must promote fresh pane");
 
         // The Surface entity IS its own host: the click target is the surface

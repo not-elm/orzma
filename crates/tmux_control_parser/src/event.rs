@@ -198,12 +198,29 @@ impl ControlEvent {
             b"%paste-buffer-deleted" => Ok(ControlEvent::PasteBufferDeleted {
                 name: fields.name("paste-buffer-deleted")?,
             }),
-            b"%layout-change" => Ok(ControlEvent::LayoutChange {
-                window: fields.window("layout-change")?,
-                layout: fields.layout("layout-change", "layout")?,
-                visible_layout: fields.layout("layout-change", "visible_layout")?,
-                flags: text(fields.rest(), "flags")?,
-            }),
+            b"%layout-change" => {
+                let window = fields.window("layout-change")?;
+                let layout = fields.layout("layout-change", "layout")?;
+                // NOTE: visible_layout was added in tmux 3.2; older versions
+                // send only `%layout-change <window> <layout> <flags>`.
+                // Attempt to parse the next token as a layout; if it fails,
+                // treat the entire remainder as the flags string and fall back
+                // to cloning the main layout so the event stays valid.
+                let (visible_layout, flags) = match fields.layout("layout-change", "visible_layout")
+                {
+                    Ok(vl) => (vl, text(fields.rest(), "flags")?),
+                    Err(_) => (
+                        layout.clone(),
+                        text(fields.rest(), "flags").unwrap_or_default(),
+                    ),
+                };
+                Ok(ControlEvent::LayoutChange {
+                    window,
+                    layout,
+                    visible_layout,
+                    flags,
+                })
+            }
             b"%client-detached" => Ok(ControlEvent::ClientDetached {
                 client: fields.required_text("client-detached", "client")?,
             }),
@@ -610,6 +627,34 @@ mod tests {
                 flags: "*".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn layout_change_two_field_older_tmux() {
+        // tmux < 3.2 sends %layout-change without a visible_layout field.
+        // The parser must not fail; visible_layout falls back to layout.
+        let event = ev(b"%layout-change @1 b25f,80x24,0,0,2 *");
+        assert!(
+            matches!(
+                event,
+                ControlEvent::LayoutChange {
+                    window: WindowId(1),
+                    ..
+                }
+            ),
+            "should parse as LayoutChange for window @1"
+        );
+        if let ControlEvent::LayoutChange {
+            layout,
+            visible_layout,
+            ..
+        } = event
+        {
+            assert_eq!(
+                layout, visible_layout,
+                "visible_layout falls back to layout"
+            );
+        }
     }
 
     #[test]

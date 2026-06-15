@@ -8,7 +8,8 @@ pub type OzmaResult<T> = Result<T, OzmaError>;
 /// An error from the ratatui-ozma SDK.
 #[derive(Debug, thiserror::Error)]
 pub enum OzmaError {
-    /// `$OZMUX_SOCK` or `$OZMUX_TOKEN` was unset — not running inside an ozmux pane.
+    /// `$OZMUX_SOCK`, or both `$OZMUX_TOKEN` and `$TMUX_PANE`, were unset — not
+    /// running inside an ozmux pane.
     #[error("not inside an ozmux pane: {0} is unset")]
     NotInPane(&'static str),
 
