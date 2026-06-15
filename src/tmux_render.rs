@@ -12,8 +12,8 @@ use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
-    PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow, refresh_client_command,
-    send_bytes_command,
+    ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
+    refresh_client_command, send_bytes_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -262,13 +262,9 @@ fn sync_client_size(
     }
 }
 
-fn sync_active_window(mut windows: Query<(&TmuxWindow, &mut Node)>) {
-    for (w, mut node) in windows.iter_mut() {
-        let want = if w.active {
-            Display::Flex
-        } else {
-            Display::None
-        };
+fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<TmuxWindow>>) {
+    for (mut node, active) in windows.iter_mut() {
+        let want = if active { Display::Flex } else { Display::None };
         if node.display != want {
             node.display = want;
         }
