@@ -6,6 +6,7 @@ mod document;
 mod keymap;
 mod outline;
 mod protocol;
+mod ui;
 mod watcher;
 
 fn main() {
