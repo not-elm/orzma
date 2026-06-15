@@ -21,9 +21,10 @@ pub struct WindowEntry {
     pub window_name: String,
 }
 
-// NOTE: tab-separated; both free-text names are kept intact because tmux escapes
-// a raw tab in a name to the literal `\t`, so a fixed `splitn(6, b'\t')` never
-// loses a field. `window_name` is last as defence in depth.
+// NOTE: tab-separated. Only `window_name`, the LAST field, is protected by field
+// ordering — `splitn(6, b'\t')` keeps it intact even if a tab leaks in.
+// `session_name` sits in position 2 and has no such protection: it relies solely
+// on tmux escaping a raw tab in a name to the literal `\t` so the field count holds.
 pub(crate) const LIST_ALL_FORMAT: &str = "#{session_id}\t#{session_name}\t#{window_id}\t#{window_index}\t#{window_active}\t#{window_name}";
 
 impl WindowEntry {
@@ -114,8 +115,10 @@ mod tests {
         assert_eq!(got[0].session_id, SessionId(0));
         assert_eq!(got[0].session_name, "alpha");
         assert_eq!(got[0].window_id, WindowId(0));
+        assert_eq!(got[0].window_index, 0);
         assert!(got[0].window_active);
         assert_eq!(got[1].window_id, WindowId(1));
+        assert_eq!(got[1].window_index, 1);
         assert!(!got[1].window_active);
         assert_eq!(got[1].window_name, "editor");
     }
@@ -141,6 +144,27 @@ mod tests {
             WindowEntry::parse_list(out),
             Err(TmuxError::MalformedWindowList { .. })
         ));
+    }
+
+    #[test]
+    fn bad_session_id_errors() {
+        let no_dollar = b"x\ta\t@0\t0\t1\tw\n";
+        let non_numeric = b"$x\ta\t@0\t0\t1\tw\n";
+        assert!(matches!(
+            WindowEntry::parse_list(no_dollar),
+            Err(TmuxError::MalformedWindowList { .. })
+        ));
+        assert!(matches!(
+            WindowEntry::parse_list(non_numeric),
+            Err(TmuxError::MalformedWindowList { .. })
+        ));
+    }
+
+    #[test]
+    fn trailing_newline_optional() {
+        let with = WindowEntry::parse_list(b"$0\ta\t@0\t0\t1\tw\n").unwrap();
+        let without = WindowEntry::parse_list(b"$0\ta\t@0\t0\t1\tw").unwrap();
+        assert_eq!(with, without);
     }
 
     #[test]
