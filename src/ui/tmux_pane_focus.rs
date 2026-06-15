@@ -7,11 +7,11 @@ use crate::theme;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
-use ozmux_tmux::{TmuxConnection, TmuxPane, select_pane_command};
+use ozmux_tmux::{TmuxConnection, TmuxPane, TmuxProjectionSet, select_pane_command};
 
 /// Points a pane at its dim-overlay child entity (O(1) lookup in `sync_pane_dim`).
 #[derive(Component)]
-pub(crate) struct PaneDim(pub(crate) Entity);
+pub(crate) struct PaneDimOverlay(pub(crate) Entity);
 
 /// Registers pane click-to-focus and dim systems.
 pub struct OzmuxTmuxPaneFocusPlugin;
@@ -21,7 +21,7 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
         app.add_systems(
             Update,
             (
-                augment_tmux_pane,
+                augment_tmux_pane.after(TmuxProjectionSet),
                 focus_pane_on_click.in_set(InputPhase::Dispatch),
                 sync_pane_dim.run_if(resource_exists_and_changed::<ozmux_tmux::ProjectionModel>),
             ),
@@ -31,7 +31,7 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
 
 /// Gives each rendered pane (one that has its `TerminalHandle` but no `Button`
 /// yet) a `Button` click target and a hidden `FocusPolicy::Pass` dim overlay
-/// child, recorded on the pane as `PaneDim`. The `Without<Button>` filter makes
+/// child, recorded on the pane as `PaneDimOverlay`. The `Without<Button>` filter makes
 /// this run exactly once per pane.
 fn augment_tmux_pane(
     mut commands: Commands,
@@ -54,7 +54,9 @@ fn augment_tmux_pane(
                 ChildOf(pane),
             ))
             .id();
-        commands.entity(pane).insert((Button, PaneDim(overlay)));
+        commands
+            .entity(pane)
+            .insert((Button, PaneDimOverlay(overlay)));
     }
 }
 
@@ -83,7 +85,7 @@ fn focus_pane_on_click(
 /// overlays (dim nothing). Gated on `ProjectionModel` change.
 fn sync_pane_dim(
     mut overlays: Query<&mut Visibility>,
-    panes: Query<(&TmuxPane, &PaneDim)>,
+    panes: Query<(&TmuxPane, &PaneDimOverlay)>,
     model: Res<ozmux_tmux::ProjectionModel>,
 ) {
     for (pane, dim) in panes.iter() {
@@ -156,7 +158,7 @@ mod tests {
             .id();
         app.update(); // augment both panes (spawns overlays)
 
-        let overlay = |app: &App, pane| app.world().get::<PaneDim>(pane).unwrap().0;
+        let overlay = |app: &App, pane| app.world().get::<PaneDimOverlay>(pane).unwrap().0;
         let vis = |app: &App, e| app.world().get::<Visibility>(e).copied().unwrap();
 
         app.insert_resource(ProjectionModel {
@@ -203,7 +205,10 @@ mod tests {
             app.world().get::<Button>(pane).is_some(),
             "pane gains a Button"
         );
-        let pane_dim = app.world().get::<PaneDim>(pane).expect("PaneDim recorded");
+        let pane_dim = app
+            .world()
+            .get::<PaneDimOverlay>(pane)
+            .expect("PaneDimOverlay recorded");
         let overlay = pane_dim.0;
         assert_eq!(
             app.world().get::<Visibility>(overlay).copied(),
