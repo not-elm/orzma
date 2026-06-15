@@ -463,10 +463,10 @@ fn apply_control_events(
                 event,
                 payload,
             } => {
-                let owns = registry
-                    .get(&handle)
-                    .is_some_and(|v| v.connection_id == connection_id);
-                if !owns {
+                let deliver = registry.get(&handle).is_some_and(|v| {
+                    v.connection_id == connection_id && v.source.is_bridged()
+                });
+                if !deliver {
                     continue;
                 }
                 let frame = serde_json::json!({ "event": event, "payload": payload });
@@ -1168,6 +1168,59 @@ mod apply_tests {
             app.world().resource::<Caps>().0,
             vec![(webview, "ozmux".to_string())],
             "only the owning connection's reply settles the page"
+        );
+    }
+
+    #[test]
+    fn apply_emit_is_dropped_for_a_non_bridged_url_view() {
+        use bevy_cef::prelude::HostEmitEvent;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "disp".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://example.com".into(),
+                    bridge: false,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: Entity::from_bits(1),
+                connection_id: 5,
+                passthrough: vec![],
+            },
+        );
+        // A mounted inline child for that handle — it WOULD receive the emit if
+        // the fan-out were not bridge-gated.
+        app.world_mut().spawn(InlineWebview {
+            view_id: "disp".into(),
+            instance_id: None,
+            slot: 0,
+        });
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct Caps(Vec<Entity>);
+        app.insert_resource(Caps::default());
+        app.add_observer(|e: On<HostEmitEvent>, mut c: ResMut<Caps>| c.0.push(e.webview));
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Emit {
+                connection_id: 5,
+                handle: "disp".into(),
+                event: "tick".into(),
+                payload: serde_json::json!(1),
+            })
+            .unwrap();
+        app.update();
+
+        assert!(
+            app.world().resource::<Caps>().0.is_empty(),
+            "a non-bridged url view must receive no emit"
         );
     }
 
