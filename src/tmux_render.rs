@@ -14,7 +14,7 @@ use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
-    ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
+    ActivePane, ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
     TmuxWindowLayout, refresh_client_command,
 };
 use std::collections::HashMap;
@@ -42,6 +42,7 @@ impl Plugin for OzmuxTmuxRenderPlugin {
                 route_tmux_output.run_if(on_message::<PaneOutput>),
                 sync_active_window,
                 layout_tmux_panes,
+                sync_active_pane_outline,
             )
                 .chain()
                 .after(TmuxProjectionSet),
@@ -93,6 +94,7 @@ fn attach_tmux_pane_terminal(
                 position_type: PositionType::Absolute,
                 ..default()
             },
+            Outline::new(Val::Px(theme::PANE_BORDER_PX), Val::Px(0.0), Color::NONE),
         ));
     }
 }
@@ -351,6 +353,18 @@ fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<Tm
     }
 }
 
+/// Recolors each pane's `Outline`: the accent color on the pane carrying
+/// `ActivePane`, transparent otherwise. Recoloring (not insert/remove) avoids
+/// ECS table moves on every active-pane change.
+fn sync_active_pane_outline(mut panes: Query<(Has<ActivePane>, &mut Outline), With<TmuxPane>>) {
+    for (active, mut outline) in panes.iter_mut() {
+        let want = if active { theme::ACCENT } else { Color::NONE };
+        if outline.color != want {
+            outline.color = want;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +394,46 @@ mod tests {
             xoff: 0,
             yoff: 0,
         }
+    }
+
+    #[test]
+    fn active_pane_outline_is_accent_inactive_is_none() {
+        use bevy::prelude::*;
+        use ozmux_tmux::{ActivePane, TmuxPane};
+
+        let mut app = App::new();
+        app.add_systems(Update, sync_active_pane_outline);
+        let active = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: dims(),
+                },
+                ActivePane,
+                Outline::new(Val::Px(1.0), Val::Px(0.0), Color::NONE),
+            ))
+            .id();
+        let inactive = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(2),
+                    dims: dims(),
+                },
+                Outline::new(Val::Px(1.0), Val::Px(0.0), Color::NONE),
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Outline>(active).unwrap().color,
+            theme::ACCENT
+        );
+        assert_eq!(
+            app.world().get::<Outline>(inactive).unwrap().color,
+            Color::NONE
+        );
     }
 
     #[test]
