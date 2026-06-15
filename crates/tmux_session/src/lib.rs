@@ -12,6 +12,7 @@ mod events;
 mod event_pump;
 mod input;
 mod model;
+mod observers;
 mod output;
 mod plugin;
 mod reconcile;
@@ -29,7 +30,6 @@ pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_keys_co
 pub use model::{PaneModel, ProjectionModel, WindowModel, pane_leaves};
 pub use output::PaneOutput;
 pub use plugin::{TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
-pub use reconcile::TmuxProjection;
 pub use select::{AttachTarget, select_attach_target};
 pub use state::ConnectionState;
 pub use tmux_control_parser::{PaneId, WindowId};
