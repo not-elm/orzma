@@ -12,8 +12,8 @@ use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
-    PaneOutput, TmuxConnection, TmuxPane, TmuxProjection, TmuxProjectionSet, TmuxWindow,
-    refresh_client_command, send_bytes_command,
+    PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow, refresh_client_command,
+    send_bytes_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -104,7 +104,7 @@ fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
     mut handles: Query<&mut TerminalHandle>,
-    index: Res<TmuxProjection>,
+    panes: Query<(Entity, &TmuxPane)>,
     connection: NonSend<TmuxConnection>,
 ) {
     let mut by_pane: HashMap<_, Vec<u8>> = HashMap::new();
@@ -114,8 +114,9 @@ fn route_tmux_output(
             .or_default()
             .extend_from_slice(&msg.data);
     }
+    let entity_of: HashMap<_, _> = panes.iter().map(|(e, p)| (p.id, e)).collect();
     for (pane, data) in by_pane {
-        let Some(&entity) = index.panes.get(&pane) else {
+        let Some(&entity) = entity_of.get(&pane) else {
             continue;
         };
         let Ok(mut handle) = handles.get_mut(entity) else {
@@ -325,11 +326,9 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
-        app.init_resource::<TmuxProjection>();
         app.add_message::<PaneOutput>();
         app.insert_non_send_resource(TmuxConnection::default());
 
-        // A projected pane entity + its index mapping.
         let pane_id = PaneId(1);
         let pane_entity = app
             .world_mut()
@@ -338,10 +337,6 @@ mod tests {
                 dims: dims(),
             })
             .id();
-        app.world_mut()
-            .resource_mut::<TmuxProjection>()
-            .panes
-            .insert(pane_id, pane_entity);
 
         app.add_systems(
             Update,
