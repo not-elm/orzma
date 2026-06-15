@@ -2,11 +2,12 @@
 //! (click target) and a `FocusPolicy::Pass` dim overlay, sends `select-pane`
 //! on click, and shows the overlay on every pane except the active one.
 
+use crate::input::InputPhase;
 use crate::theme;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
-use ozmux_tmux::TmuxPane;
+use ozmux_tmux::{TmuxConnection, TmuxPane, select_pane_command};
 
 /// Points a pane at its dim-overlay child entity (O(1) lookup in `sync_pane_dim`).
 #[derive(Component)]
@@ -21,6 +22,7 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
             Update,
             (
                 augment_tmux_pane,
+                focus_pane_on_click.in_set(InputPhase::Dispatch),
                 sync_pane_dim.run_if(resource_exists_and_changed::<ozmux_tmux::ProjectionModel>),
             ),
         );
@@ -53,6 +55,26 @@ fn augment_tmux_pane(
             ))
             .id();
         commands.entity(pane).insert((Button, PaneDim(overlay)));
+    }
+}
+
+/// Sends `select-pane -t %<id>` when the user presses a pane. Runs in
+/// `InputPhase::Dispatch`. No-ops when no live tmux client is connected.
+fn focus_pane_on_click(
+    panes: Query<(&Interaction, &TmuxPane), Changed<Interaction>>,
+    connection: NonSend<TmuxConnection>,
+) {
+    let Some(client) = connection.client() else {
+        return;
+    };
+    for (interaction, pane) in panes.iter() {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        let cmd = select_pane_command(pane.id);
+        if let Err(e) = client.handle().send(&cmd) {
+            tracing::warn!(?e, pane = pane.id.0, "select-pane send failed");
+        }
     }
 }
 
@@ -99,11 +121,18 @@ mod tests {
     }
 
     #[test]
+    fn pane_press_maps_to_select_pane() {
+        use ozmux_tmux::select_pane_command;
+        assert_eq!(select_pane_command(PaneId(2)), "select-pane -t %2");
+    }
+
+    #[test]
     fn sync_dims_inactive_and_clears_when_none() {
         use ozmux_tmux::ProjectionModel;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
+        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
         let p1 = app
             .world_mut()
@@ -157,6 +186,7 @@ mod tests {
     fn augment_adds_button_and_hidden_overlay() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
+        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         let pane = app
             .world_mut()
             .spawn((
