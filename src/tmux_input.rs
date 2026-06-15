@@ -1,13 +1,17 @@
-//! Forwards focused keyboard input to the active tmux pane via
-//! `send-keys -t <pane>`, intercepting a fixed set of ozmux GUI chords. Replaces
-//! the legacy `dispatch_focused_key` path for the tmux backend.
+//! Forwards focused keyboard and mouse-wheel input to the active tmux pane.
+//! Keyboard forwarding intercepts a fixed set of ozmux GUI chords and copy-mode
+//! entry commands. Mouse-wheel forwarding drives tmux copy-mode scroll when
+//! the active pane is already in copy mode, and enters copy mode when the wheel
+//! binding triggers a copy-mode entry command.
 
 use crate::clipboard::{Clipboard, build_paste_bytes};
+use crate::input::InputPhase;
 use crate::tmux_picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
@@ -17,16 +21,21 @@ use ozmux_tmux::{
     send_bytes_command, send_pane_keys_command, show_buffer_command,
 };
 
-/// Registers the tmux keyboard-forwarding system.
+/// Registers the tmux keyboard-forwarding and mouse-wheel systems.
 pub struct OzmuxTmuxInputPlugin;
 
 impl Plugin for OzmuxTmuxInputPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            forward_keys_to_tmux
-                .in_set(crate::input::InputPhase::FocusedKey)
-                .run_if(on_message::<KeyboardInput>),
+            (
+                forward_keys_to_tmux
+                    .in_set(InputPhase::FocusedKey)
+                    .run_if(on_message::<KeyboardInput>),
+                forward_wheel_to_tmux
+                    .in_set(InputPhase::Dispatch)
+                    .run_if(on_message::<MouseWheel>),
+            ),
         );
     }
 }
@@ -296,11 +305,122 @@ fn forward_keys_to_tmux(
 /// True when a resolved tmux command enters copy mode (`copy-mode`, with any
 /// flags). ozmux intercepts these to insert `CopyModeState` alongside running
 /// the command on tmux.
-fn is_copy_mode_entry(command: &str) -> bool {
+pub(crate) fn is_copy_mode_entry(command: &str) -> bool {
     command
         .split_whitespace()
         .next()
         .is_some_and(|first| first == "copy-mode")
+}
+
+/// The tmux key name for one mouse-wheel notch in the given direction.
+fn wheel_key_name(up: bool) -> &'static str {
+    if up { "WheelUpPane" } else { "WheelDownPane" }
+}
+
+/// The fallback copy-mode scroll command used when the copy table does not bind
+/// the wheel key — ensures the wheel always scrolls while in copy mode.
+fn fallback_scroll_command(up: bool) -> String {
+    format!(
+        "send-keys -X {}",
+        if up { "scroll-up" } else { "scroll-down" }
+    )
+}
+
+/// Forwards mouse-wheel events to the active tmux pane.
+///
+/// When the active pane is in copy mode each notch relays the copy table's
+/// `WheelUpPane`/`WheelDownPane` binding (falling back to `scroll-up`/
+/// `scroll-down` when unbound). When the active pane is not in copy mode each
+/// notch dispatches against the root/prefix tables; if the resolved command
+/// enters copy mode, `CopyModeState` is inserted on the pane entity.
+fn forward_wheel_to_tmux(
+    mut commands: Commands,
+    mut wheel: MessageReader<MouseWheel>,
+    connection: NonSend<TmuxConnection>,
+    bindings: Res<KeyBindings>,
+    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
+    copy_modes: Query<(), With<CopyModeState>>,
+) {
+    let notches = collect_notches(&mut wheel);
+    if notches.is_empty() {
+        return;
+    }
+    let Some(single) = active_pane else {
+        return;
+    };
+    let (entity, pane) = *single;
+    let target = format!("%{}", pane.id.0);
+    let in_copy_mode = copy_modes.get(entity).is_ok();
+
+    let Some(client) = connection.client() else {
+        return;
+    };
+    let handle = client.handle();
+
+    for up in notches {
+        let key = wheel_key_name(up);
+        if in_copy_mode {
+            let cmd = match copy_mode_dispatch(&bindings, key) {
+                CopyAction::Relay(c) | CopyAction::Copy { command: c, .. } => c,
+                CopyAction::Exit(c) => {
+                    if let Err(e) = handle.send(&c) {
+                        tracing::warn!(?e, "copy-mode wheel relay send failed");
+                        break;
+                    }
+                    commands.entity(entity).remove::<CopyModeState>();
+                    continue;
+                }
+                CopyAction::Prompt { .. } | CopyAction::Ignore => fallback_scroll_command(up),
+            };
+            if let Err(e) = handle.send(&cmd) {
+                tracing::warn!(?e, "copy-mode wheel relay send failed");
+                break;
+            }
+        } else {
+            let mut prefix = false;
+            let actions = plan_forward(&mut prefix, &bindings, vec![key.to_string()]);
+            for action in actions {
+                let enters = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
+                let cmd = match action {
+                    Forwarded::Run(command) => command,
+                    Forwarded::Keys(names) => send_pane_keys_command(&target, &names),
+                };
+                if let Err(e) = handle.send(&cmd) {
+                    tracing::warn!(?e, "tmux wheel forward send failed");
+                    break;
+                }
+                if enters {
+                    commands.entity(entity).insert(CopyModeState);
+                }
+            }
+        }
+    }
+}
+
+/// Drains all `MouseWheel` messages for this frame into a list of per-notch
+/// up/down booleans. `Line` units contribute one bool per integer notch;
+/// `Pixel` units contribute a single notch in the dominant direction.
+fn collect_notches(wheel: &mut MessageReader<MouseWheel>) -> Vec<bool> {
+    let mut out = Vec::new();
+    for ev in wheel.read() {
+        match ev.unit {
+            MouseScrollUnit::Line => {
+                let count = ev.y.abs() as i32;
+                let up = ev.y > 0.0;
+                for _ in 0..count {
+                    out.push(up);
+                }
+            }
+            MouseScrollUnit::Pixel => {
+                if ev.y > 0.0 {
+                    out.push(true);
+                } else if ev.y < 0.0 {
+                    out.push(false);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Classifies a key event as a GUI chord (matched on physical `key_code` + the
@@ -325,7 +445,81 @@ fn gui_chord(key_code: &KeyCode, mods: KeyMods) -> Option<GuiChord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::input::mouse::MouseScrollUnit;
     use ozmux_tmux::PromptKind;
+
+    #[test]
+    fn wheel_key_name_up_is_wheel_up_pane() {
+        assert_eq!(wheel_key_name(true), "WheelUpPane");
+    }
+
+    #[test]
+    fn wheel_key_name_down_is_wheel_down_pane() {
+        assert_eq!(wheel_key_name(false), "WheelDownPane");
+    }
+
+    #[test]
+    fn fallback_scroll_command_up() {
+        assert_eq!(fallback_scroll_command(true), "send-keys -X scroll-up");
+    }
+
+    #[test]
+    fn fallback_scroll_command_down() {
+        assert_eq!(fallback_scroll_command(false), "send-keys -X scroll-down");
+    }
+
+    fn make_wheel_event(unit: MouseScrollUnit, y: f32) -> MouseWheel {
+        MouseWheel {
+            unit,
+            x: 0.0,
+            y,
+            window: Entity::PLACEHOLDER,
+        }
+    }
+
+    fn notches_from_events(evs: &[MouseWheel]) -> Vec<bool> {
+        let mut app = App::new();
+        app.add_message::<MouseWheel>();
+        for ev in evs {
+            app.world_mut()
+                .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
+                .write(*ev);
+        }
+        app.world_mut()
+            .run_system_once(|mut reader: MessageReader<MouseWheel>| collect_notches(&mut reader))
+            .unwrap()
+    }
+
+    #[test]
+    fn collect_notches_line_up_two_notches() {
+        let evs = [make_wheel_event(MouseScrollUnit::Line, 2.0)];
+        assert_eq!(notches_from_events(&evs), vec![true, true]);
+    }
+
+    #[test]
+    fn collect_notches_line_down_one_notch() {
+        let evs = [make_wheel_event(MouseScrollUnit::Line, -1.0)];
+        assert_eq!(notches_from_events(&evs), vec![false]);
+    }
+
+    #[test]
+    fn collect_notches_pixel_up_one_notch() {
+        let evs = [make_wheel_event(MouseScrollUnit::Pixel, 5.0)];
+        assert_eq!(notches_from_events(&evs), vec![true]);
+    }
+
+    #[test]
+    fn collect_notches_pixel_down_one_notch() {
+        let evs = [make_wheel_event(MouseScrollUnit::Pixel, -5.0)];
+        assert_eq!(notches_from_events(&evs), vec![false]);
+    }
+
+    #[test]
+    fn collect_notches_pixel_zero_no_notch() {
+        let evs = [make_wheel_event(MouseScrollUnit::Pixel, 0.0)];
+        assert_eq!(notches_from_events(&evs), Vec::<bool>::new());
+    }
 
     #[test]
     fn relay_outcome_sends_command_only() {
