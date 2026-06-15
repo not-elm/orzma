@@ -1178,14 +1178,21 @@ mod tests {
             CopyQueryKind::Buffer,
         );
 
+        // Poll until the clipboard holds the SELECTED content (a ROW-N line), not
+        // merely until it is non-empty — a stale pre-existing clipboard value (or
+        // a wrong-buffer bug) would otherwise short-circuit the loop. The last
+        // non-empty read is retained for the failure message either way.
         let clipboard_deadline = Instant::now() + Duration::from_secs(5);
         let mut clipboard_text: Option<String> = None;
         while Instant::now() < clipboard_deadline {
             app.update();
             if let Some(text) = app.world_mut().resource_mut::<Clipboard>().read() {
                 if !text.is_empty() {
+                    let matched = text.contains("ROW-");
                     clipboard_text = Some(text);
-                    break;
+                    if matched {
+                        break;
+                    }
                 }
             }
             std::thread::sleep(Duration::from_millis(80));
@@ -1239,9 +1246,11 @@ mod tests {
              selection_present=true in the CopyModeSnapshot"
         );
         assert!(
-            clipboard_text.is_some(),
-            "show-buffer routed as CopyQueryKind::Buffer must write non-empty \
-             text to the Clipboard resource within 5 s"
+            clipboard_text
+                .as_deref()
+                .is_some_and(|t| t.contains("ROW-")),
+            "show-buffer routed as CopyQueryKind::Buffer must write the SELECTED \
+             content (a ROW-N line) to the Clipboard resource within 5 s, got {clipboard_text:?}"
         );
         assert!(
             render_handle_gone,
