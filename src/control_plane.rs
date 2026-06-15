@@ -64,7 +64,10 @@ impl DynSource {
     /// back-channel. Only a display-only (`bridge: false`) `Url` source is
     /// unbridged; `Dir`/`Inline` are always bridged.
     pub(crate) fn is_bridged(&self) -> bool {
-        !matches!(self, DynSource::Url { bridge: false, .. })
+        match self {
+            DynSource::Dir(_) | DynSource::Inline(_) => true,
+            DynSource::Url { bridge, .. } => *bridge,
+        }
     }
 }
 
@@ -637,7 +640,7 @@ fn validate_url_source(url: &str) -> Result<String, &'static str> {
     if parsed.host_str().is_none_or(str::is_empty) {
         return Err("invalid_url");
     }
-    Ok(parsed.to_string())
+    Ok(parsed.into())
 }
 
 /// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
