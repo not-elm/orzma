@@ -5,7 +5,7 @@
 //! `send-keys -H`. All construction here is pure + unit-tested; the binary's
 //! input plugin is a thin adapter.
 
-use bevy::input::keyboard::Key;
+use bevy::input::keyboard::{Key, KeyCode};
 use std::fmt::Write;
 
 /// Active keyboard modifiers for a key event.
@@ -21,17 +21,27 @@ pub struct KeyMods {
     pub super_: bool,
 }
 
-/// Maps a Bevy logical key + modifiers to a tmux key-name string for
-/// `send-keys -K`, or `None` if the key has no tmux representation OR carries
-/// `Super` (which is GUI-only and must never be forwarded).
+/// Maps a Bevy logical key + physical key code + modifiers to a tmux key-name
+/// string for `send-keys -K`, or `None` if the key has no tmux representation OR
+/// carries `Super` (which is GUI-only and must never be forwarded).
 ///
 /// NOTE: `Shift` is folded into the glyph for `Key::Character` (so a shifted
 /// letter arrives already uppercased) — the `S-` prefix is only emitted for
 /// non-character named keys (e.g. `S-Up`). `Super` returns `None`: the caller
 /// intercepts GUI chords before this and drops any other `Super` key.
-pub fn bevy_key_to_tmux_name(key: &Key, mods: KeyMods) -> Option<String> {
+///
+/// NOTE: when `Alt` is held, the base key is taken from the physical `code`, not
+/// the logical glyph. macOS composes Option-modified keys (Option+p → "π"),
+/// which tmux cannot map to its `M-p` bindings (it types `<ffffffff>`); tmux
+/// `M-` bindings are defined on the base key, so `Alt` acts as Meta here.
+pub fn bevy_key_to_tmux_name(key: &Key, code: KeyCode, mods: KeyMods) -> Option<String> {
     if mods.super_ {
         return None;
+    }
+    if mods.alt
+        && let Some(base) = physical_base_char(code)
+    {
+        return Some(prefix(&mods, false, &base.to_string()));
     }
     let base = match key {
         Key::Character(s) => {
@@ -97,6 +107,50 @@ pub fn send_bytes_command(pane: &str, bytes: &[u8]) -> String {
     cmd
 }
 
+/// Returns the base character a letter/digit physical key produces, ignoring
+/// any layout composition (e.g. macOS Option). `None` for non-character keys.
+fn physical_base_char(code: KeyCode) -> Option<char> {
+    Some(match code {
+        KeyCode::KeyA => 'a',
+        KeyCode::KeyB => 'b',
+        KeyCode::KeyC => 'c',
+        KeyCode::KeyD => 'd',
+        KeyCode::KeyE => 'e',
+        KeyCode::KeyF => 'f',
+        KeyCode::KeyG => 'g',
+        KeyCode::KeyH => 'h',
+        KeyCode::KeyI => 'i',
+        KeyCode::KeyJ => 'j',
+        KeyCode::KeyK => 'k',
+        KeyCode::KeyL => 'l',
+        KeyCode::KeyM => 'm',
+        KeyCode::KeyN => 'n',
+        KeyCode::KeyO => 'o',
+        KeyCode::KeyP => 'p',
+        KeyCode::KeyQ => 'q',
+        KeyCode::KeyR => 'r',
+        KeyCode::KeyS => 's',
+        KeyCode::KeyT => 't',
+        KeyCode::KeyU => 'u',
+        KeyCode::KeyV => 'v',
+        KeyCode::KeyW => 'w',
+        KeyCode::KeyX => 'x',
+        KeyCode::KeyY => 'y',
+        KeyCode::KeyZ => 'z',
+        KeyCode::Digit0 => '0',
+        KeyCode::Digit1 => '1',
+        KeyCode::Digit2 => '2',
+        KeyCode::Digit3 => '3',
+        KeyCode::Digit4 => '4',
+        KeyCode::Digit5 => '5',
+        KeyCode::Digit6 => '6',
+        KeyCode::Digit7 => '7',
+        KeyCode::Digit8 => '8',
+        KeyCode::Digit9 => '9',
+        _ => return None,
+    })
+}
+
 /// Prefixes `C-`/`M-`/`S-` modifier tokens onto a tmux key name.
 fn prefix(mods: &KeyMods, shift: bool, base: &str) -> String {
     let mut out = String::new();
@@ -143,7 +197,11 @@ mod tests {
     #[test]
     fn plain_char_maps_to_itself() {
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Character("a".into()), m(false, false, false, false)),
+            bevy_key_to_tmux_name(
+                &Key::Character("a".into()),
+                KeyCode::KeyA,
+                m(false, false, false, false)
+            ),
             Some("a".to_string())
         );
     }
@@ -151,7 +209,11 @@ mod tests {
     #[test]
     fn ctrl_char_gets_c_prefix() {
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Character("c".into()), m(true, false, false, false)),
+            bevy_key_to_tmux_name(
+                &Key::Character("c".into()),
+                KeyCode::KeyC,
+                m(true, false, false, false)
+            ),
             Some("C-c".to_string())
         );
     }
@@ -159,35 +221,70 @@ mod tests {
     #[test]
     fn shift_is_not_prefixed_for_characters() {
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Character("A".into()), m(false, false, true, false)),
+            bevy_key_to_tmux_name(
+                &Key::Character("A".into()),
+                KeyCode::KeyA,
+                m(false, false, true, false)
+            ),
             Some("A".to_string())
+        );
+    }
+
+    #[test]
+    fn alt_letter_uses_physical_key_not_composed_glyph() {
+        // macOS Option+p yields logical "π"; tmux needs M-p (the base key) to
+        // match its `M-p` binding — otherwise it types <ffffffff>.
+        assert_eq!(
+            bevy_key_to_tmux_name(
+                &Key::Character("π".into()),
+                KeyCode::KeyP,
+                m(false, true, false, false)
+            ),
+            Some("M-p".to_string())
+        );
+        // Alt+i likewise resolves to the base key regardless of composition.
+        assert_eq!(
+            bevy_key_to_tmux_name(
+                &Key::Character("i".into()),
+                KeyCode::KeyI,
+                m(false, true, false, false)
+            ),
+            Some("M-i".to_string())
         );
     }
 
     #[test]
     fn named_keys_map_to_tmux_names() {
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Enter, m(false, false, false, false)),
+            bevy_key_to_tmux_name(&Key::Enter, KeyCode::Enter, m(false, false, false, false)),
             Some("Enter".into())
         );
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::ArrowUp, m(false, false, false, false)),
+            bevy_key_to_tmux_name(
+                &Key::ArrowUp,
+                KeyCode::ArrowUp,
+                m(false, false, false, false)
+            ),
             Some("Up".into())
         );
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Backspace, m(false, false, false, false)),
+            bevy_key_to_tmux_name(
+                &Key::Backspace,
+                KeyCode::Backspace,
+                m(false, false, false, false)
+            ),
             Some("BSpace".into())
         );
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::PageUp, m(false, false, false, false)),
+            bevy_key_to_tmux_name(&Key::PageUp, KeyCode::PageUp, m(false, false, false, false)),
             Some("PageUp".into())
         );
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Delete, m(false, false, false, false)),
+            bevy_key_to_tmux_name(&Key::Delete, KeyCode::Delete, m(false, false, false, false)),
             Some("DC".into())
         );
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::F5, m(false, false, false, false)),
+            bevy_key_to_tmux_name(&Key::F5, KeyCode::F5, m(false, false, false, false)),
             Some("F5".into())
         );
     }
@@ -195,11 +292,15 @@ mod tests {
     #[test]
     fn shift_prefixes_named_keys_only() {
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::ArrowUp, m(false, false, true, false)),
+            bevy_key_to_tmux_name(
+                &Key::ArrowUp,
+                KeyCode::ArrowUp,
+                m(false, false, true, false)
+            ),
             Some("S-Up".into())
         );
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Tab, m(false, false, true, false)),
+            bevy_key_to_tmux_name(&Key::Tab, KeyCode::Tab, m(false, false, true, false)),
             Some("BTab".into())
         );
     }
@@ -207,11 +308,15 @@ mod tests {
     #[test]
     fn alt_prefixes_m() {
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Character("a".into()), m(false, true, false, false)),
+            bevy_key_to_tmux_name(
+                &Key::Character("a".into()),
+                KeyCode::KeyA,
+                m(false, true, false, false)
+            ),
             Some("M-a".to_string())
         );
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::ArrowUp, m(true, true, false, false)),
+            bevy_key_to_tmux_name(&Key::ArrowUp, KeyCode::ArrowUp, m(true, true, false, false)),
             Some("C-M-Up".to_string())
         );
     }
@@ -219,11 +324,15 @@ mod tests {
     #[test]
     fn super_is_never_forwarded() {
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Character("p".into()), m(false, false, false, true)),
+            bevy_key_to_tmux_name(
+                &Key::Character("p".into()),
+                KeyCode::KeyP,
+                m(false, false, false, true)
+            ),
             None
         );
         assert_eq!(
-            bevy_key_to_tmux_name(&Key::Enter, m(false, false, false, true)),
+            bevy_key_to_tmux_name(&Key::Enter, KeyCode::Enter, m(false, false, false, true)),
             None
         );
     }

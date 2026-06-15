@@ -134,7 +134,7 @@ fn forward_keys_to_tmux(
             }
             continue;
         }
-        if let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, mods) {
+        if let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods) {
             names.push(name);
         }
     }
