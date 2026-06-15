@@ -1,7 +1,7 @@
 //! ECS components mirroring tmux session/window/pane identity + geometry.
 
 use bevy::prelude::Component;
-use tmux_control_parser::{CellDims, PaneId, SessionId, WindowId};
+use tmux_control_parser::{CellDims, PaneId, SessionId, WindowId, WindowLayout};
 
 /// The projected tmux session entity, carrying the session id and name.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -39,3 +39,8 @@ pub struct TmuxPane {
     /// Cell geometry from the window layout.
     pub dims: CellDims,
 }
+
+/// The window's full tmux layout tree, retained so the renderer can collapse
+/// tmux's reserved inter-pane separator cells into 1px dividers.
+#[derive(Component, Debug, Clone)]
+pub struct TmuxWindowLayout(pub WindowLayout);

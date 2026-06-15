@@ -1,11 +1,13 @@
 //! Observers that apply the global projection events to the ECS world, plus the
 //! tmux-id -> entity index they resolve through.
 
-use crate::components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow};
+use crate::components::{
+    ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout,
+};
 use crate::events::{
     PaneGeom, TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxConnectionReset,
     TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed,
-    TmuxWindowsRetained,
+    TmuxWindowsRetained, pane_geoms,
 };
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -115,8 +117,12 @@ fn on_layout_changed(
     active_panes: Query<Entity, With<ActivePane>>,
 ) {
     let window = ensure_window(&mut commands, &mut index, ev.window);
+    commands
+        .entity(window)
+        .insert(TmuxWindowLayout(ev.layout.clone()));
 
-    let live: HashSet<PaneId> = ev.panes.iter().map(|p| p.id).collect();
+    let panes = pane_geoms(&ev.layout);
+    let live: HashSet<PaneId> = panes.iter().map(|p| p.id).collect();
     let stale: Vec<PaneId> = index
         .panes
         .iter()
@@ -129,7 +135,7 @@ fn on_layout_changed(
         }
     }
 
-    for geom in &ev.panes {
+    for geom in &panes {
         upsert_pane(&mut commands, &mut index, window, ev.window, geom);
     }
 
@@ -277,7 +283,6 @@ fn set_marker<T: Component + Default>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::pane_geoms;
     use tmux_control_parser::{SessionId, WindowLayout};
 
     fn app() -> App {
@@ -301,7 +306,7 @@ mod tests {
         });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}")),
+            layout: layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}"),
         });
         app.update();
 
@@ -311,6 +316,29 @@ mod tests {
         let (pane_e, w) = index.panes[&PaneId(1)];
         assert_eq!(w, WindowId(1));
         assert_eq!(app.world().get::<TmuxPane>(pane_e).unwrap().id, PaneId(1));
+    }
+
+    #[test]
+    fn layout_change_attaches_window_layout_component() {
+        use crate::components::TmuxWindowLayout;
+        let mut app = app();
+        app.world_mut().trigger(TmuxWindowAdded {
+            window: WindowId(1),
+            index: 0,
+            name: "w".into(),
+        });
+        app.world_mut().trigger(TmuxLayoutChanged {
+            window: WindowId(1),
+            layout: layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}"),
+        });
+        app.update();
+
+        let index = app.world().resource::<TmuxProjection>();
+        let window_e = index.windows[&WindowId(1)];
+        assert!(
+            app.world().get::<TmuxWindowLayout>(window_e).is_some(),
+            "window carries its layout tree after %layout-change",
+        );
     }
 
     #[test]
@@ -328,7 +356,7 @@ mod tests {
 
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&layout(b"abcd,80x24,0,0,5")),
+            layout: layout(b"abcd,80x24,0,0,5"),
         });
         app.update();
 
@@ -348,7 +376,7 @@ mod tests {
         });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&layout(b"abcd,80x24,0,0,9")),
+            layout: layout(b"abcd,80x24,0,0,9"),
         });
         app.update();
         app.world_mut().trigger(TmuxWindowClosed {
@@ -433,7 +461,7 @@ mod tests {
         });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&layout(b"abcd,80x24,0,0,1")),
+            layout: layout(b"abcd,80x24,0,0,1"),
         });
         app.update();
         app.world_mut().trigger(TmuxConnectionReset);
