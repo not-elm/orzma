@@ -199,9 +199,9 @@ fn forward_keys_to_tmux(
         }
     }
 
-    // While in copy mode route each key through the copy table and relay
-    // verbatim, toggling CopyModeState on exit. This early-return also prevents
-    // re-inserting CopyModeState if the copy-mode entry binding is pressed again.
+    // NOTE: this branch must return before plan_forward — a copy-mode entry
+    // binding pressed while already in copy mode is relayed here (not
+    // re-intercepted), which would otherwise re-insert CopyModeState each press.
     let in_copy_mode = active_entity.is_some_and(|e| copy_modes.get(e).is_ok());
     if in_copy_mode {
         let Some(client) = connection.client() else {
