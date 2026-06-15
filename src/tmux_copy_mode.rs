@@ -1006,4 +1006,260 @@ mod tests {
         // sel_start_y=10: 10 - (100-0) = -90 → clamped to -1
         assert_eq!(sel.start.row, -1);
     }
+
+    #[test]
+    #[ignore = "requires a real tmux binary and a controlling PTY"]
+    fn copy_mode_integration_drives_real_tmux() {
+        use crate::clipboard::Clipboard;
+        use crate::tmux_render::OzmuxTmuxRenderPlugin;
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+        use ozma_tty_renderer::material::TerminalUiMaterial;
+        use ozma_tty_renderer::prelude::TerminalGridPlugin;
+        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+        use ozmux_tmux::{ConnectionState, TmuxSessionPlugin};
+        use std::time::{Duration, Instant};
+        use tmux_control::TmuxServer;
+        use tmux_control_parser::PaneId;
+
+        let socket = format!("ozmux-copymode-{}", std::process::id());
+        let server = TmuxServer::new().socket_name(&socket);
+        let client = server.new_session().expect("spawn tmux -CC new-session");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_plugins(TmuxSessionPlugin);
+
+        // Cell metrics for layout_tmux_panes (stub 8×16 font so pixel math works).
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 13.0,
+                descent_phys: 3.0,
+                underline_position_phys: -1.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        });
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+
+        // Minimal scaffold resources that OzmuxTmuxCopyModePlugin's drag system
+        // reads (the real app gets these from UI + input plugins).
+        drag_select_test_scaffold(&mut app);
+        app.insert_resource(Clipboard::new());
+
+        // OzmuxTmuxRenderPlugin registers attach_tmux_pane_terminal,
+        // route_tmux_output, and layout_tmux_panes after TmuxProjectionSet.
+        app.add_plugins(OzmuxTmuxRenderPlugin);
+        app.add_plugins(OzmuxTmuxCopyModePlugin);
+
+        app.world_mut()
+            .get_non_send_resource_mut::<ozmux_tmux::TmuxConnection>()
+            .expect("TmuxConnection inserted by TmuxSessionPlugin")
+            .set(client);
+
+        // --- Phase 1: wait for attach and a projected pane with a TerminalHandle.
+        let attach_deadline = Instant::now() + Duration::from_secs(5);
+        let mut pane_entity: Option<(bevy::ecs::entity::Entity, PaneId)> = None;
+        while Instant::now() < attach_deadline {
+            app.update();
+            if *app.world().resource::<ConnectionState>() == ConnectionState::Attached {
+                let mut q = app
+                    .world_mut()
+                    .query_filtered::<(bevy::ecs::entity::Entity, &ozmux_tmux::TmuxPane), With<TerminalHandle>>();
+                if let Some((e, p)) = q.iter(app.world()).next() {
+                    pane_entity = Some((e, p.id));
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let (pane_entity, pane_id) =
+            pane_entity.expect("a pane with a TerminalHandle must be projected within 5 s");
+        let target = format!("%{}", pane_id.0);
+
+        let handle = app
+            .world()
+            .get_non_send_resource::<ozmux_tmux::TmuxConnection>()
+            .unwrap()
+            .client()
+            .unwrap()
+            .handle();
+
+        // --- Phase 2: seed the pane with 40 numbered rows so there is scrollback.
+        // Use `printf` in a one-shot subshell; the pane's shell picks up after it.
+        handle
+            .send(&format!(
+                "send-keys -t {target} -l -- 'for i in $(seq 1 40); do printf ROW-$i; printf \"\\n\"; done'"
+            ))
+            .expect("send-keys printf");
+        handle
+            .send(&format!("send-keys -t {target} Enter"))
+            .expect("send-keys Enter");
+
+        // Pump until the pane has some content (best-effort 3 s).
+        let seed_deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < seed_deadline {
+            app.update();
+            std::thread::sleep(Duration::from_millis(80));
+        }
+
+        // --- Phase 3: enter copy mode.
+        handle
+            .send(&format!("copy-mode -t {target}"))
+            .expect("copy-mode");
+        // Insert CopyModeState so the OzmuxTmuxCopyModePlugin systems engage.
+        app.world_mut()
+            .entity_mut(pane_entity)
+            .insert(CopyModeState);
+
+        // --- Phase 4: scroll up so there is a non-zero scroll_position, then
+        // begin a selection, then move the cursor down a couple of rows.
+        let step_deadline = Instant::now() + Duration::from_millis(200);
+        while Instant::now() < step_deadline {
+            app.update();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        handle
+            .send(&format!("send-keys -X -t {target} -N 5 cursor-up"))
+            .expect("cursor-up");
+        handle
+            .send(&format!("send-keys -X -t {target} begin-selection"))
+            .expect("begin-selection");
+        handle
+            .send(&format!("send-keys -X -t {target} -N 2 cursor-down"))
+            .expect("cursor-down");
+
+        // Pump for up to 5 s so issue_copy_state and consume_copy_reply can
+        // complete at least one full state→capture round-trip.
+        let copy_deadline = Instant::now() + Duration::from_secs(5);
+        let mut got_snapshot = false;
+        while Instant::now() < copy_deadline {
+            app.update();
+            if app.world().get::<CopyModeSnapshot>(pane_entity).is_some() {
+                got_snapshot = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(80));
+        }
+
+        // Evaluate overlay assertions while still in copy mode.
+        let snapshot_ok = got_snapshot;
+        let vi_cursor_present = app
+            .world()
+            .get::<ozma_tty_renderer::schema::TerminalGrid>(pane_entity)
+            .map(|g| g.vi_cursor.is_some())
+            .unwrap_or(false);
+        let selection_present = app
+            .world()
+            .get::<CopyModeSnapshot>(pane_entity)
+            .map(|s| s.0.selection_present)
+            .unwrap_or(false);
+
+        // --- Phase 5: copy and bridge the buffer to the clipboard.
+        handle
+            .send(&format!("send-keys -X -t {target} copy-selection"))
+            .expect("copy-selection");
+        let show_id = handle
+            .send(&ozmux_tmux::show_buffer_command())
+            .expect("show-buffer");
+        // Register the show-buffer command so consume_copy_reply routes it as Buffer.
+        app.world_mut().resource_mut::<CopyModeQueries>().register(
+            show_id,
+            pane_id,
+            CopyQueryKind::Buffer,
+        );
+
+        let clipboard_deadline = Instant::now() + Duration::from_secs(5);
+        let mut clipboard_text: Option<String> = None;
+        while Instant::now() < clipboard_deadline {
+            app.update();
+            if let Some(text) = app.world_mut().resource_mut::<Clipboard>().read() {
+                if !text.is_empty() {
+                    clipboard_text = Some(text);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(80));
+        }
+
+        // --- Phase 6: exit copy mode; the on_copy_mode_exit observer must fire and
+        // restore the live view (repaint_full).
+        app.world_mut()
+            .entity_mut(pane_entity)
+            .remove::<CopyModeState>();
+        // Pump so the observer and ApplyDeferred flush.
+        let exit_deadline = Instant::now() + Duration::from_millis(500);
+        while Instant::now() < exit_deadline {
+            app.update();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // CopyRenderHandle must have been dropped by the observer.
+        let render_handle_gone = app.world().get::<CopyRenderHandle>(pane_entity).is_none();
+        // CopyModeSnapshot must also be removed.
+        let snapshot_gone = app.world().get::<CopyModeSnapshot>(pane_entity).is_none();
+        // Refresh bookkeeping must be pruned.
+        let refresh = app.world().resource::<CopyRefreshState>();
+        let state_pruned = !refresh.state_in_flight.contains(&pane_id);
+        let scroll_pruned = !refresh.last_scroll.contains_key(&pane_id);
+
+        // --- Cleanup: kill the tmux server unconditionally.
+        if let Some(c) = app
+            .world_mut()
+            .get_non_send_resource_mut::<ozmux_tmux::TmuxConnection>()
+            .unwrap()
+            .take()
+        {
+            c.handle().send("kill-server").ok();
+        }
+
+        // --- Assertions (all collected above so cleanup always runs first).
+        assert!(
+            snapshot_ok,
+            "OzmuxTmuxCopyModePlugin must receive at least one CopyModeSnapshot \
+             (state→capture round-trip) within 5 s of entering copy mode"
+        );
+        assert!(
+            vi_cursor_present,
+            "apply_copy_overlay must set vi_cursor on the pane's TerminalGrid \
+             while a CopyModeSnapshot is present"
+        );
+        assert!(
+            selection_present,
+            "begin-selection followed by cursor-down must produce \
+             selection_present=true in the CopyModeSnapshot"
+        );
+        assert!(
+            clipboard_text.is_some(),
+            "show-buffer routed as CopyQueryKind::Buffer must write non-empty \
+             text to the Clipboard resource within 5 s"
+        );
+        assert!(
+            render_handle_gone,
+            "on_copy_mode_exit must remove the CopyRenderHandle from the pane entity"
+        );
+        assert!(
+            snapshot_gone,
+            "on_copy_mode_exit must remove the CopyModeSnapshot from the pane entity"
+        );
+        assert!(
+            state_pruned,
+            "on_copy_mode_exit must prune the pane from state_in_flight \
+             (otherwise re-entry would wedge the coalescing guard)"
+        );
+        assert!(
+            scroll_pruned,
+            "on_copy_mode_exit must prune the pane from last_scroll \
+             (otherwise re-entry would skip the first capture)"
+        );
+    }
 }
