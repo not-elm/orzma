@@ -94,8 +94,10 @@ impl Webview {
         self
     }
 
-    /// Registers an RPC handler for `method`. The parameter is a tuple
-    /// deserialized from the page's `window.ozmux.call(method, args)` array.
+    /// Registers an RPC handler for `method`. The parameter is any
+    /// `DeserializeOwned` type, deserialized from the single `params` value the
+    /// page passes to `window.ozmux.call(method, params)` (an object becomes a
+    /// struct, an array a tuple, and an omitted/`null` params the unit `()`).
     ///
     /// # Panics
     /// Panics if `method` starts with the reserved `__ozma.` prefix, which is
@@ -198,15 +200,15 @@ mod tests {
 
     #[test]
     fn on_registers_handler() {
-        let wv = Webview::inline("x").on("ping", |(n,): (String,)| Ok(format!("pong:{n}")));
+        let wv = Webview::inline("x").on("ping", |n: String| Ok(format!("pong:{n}")));
         let h = wv.handlers.get("ping").expect("handler present");
-        assert_eq!(h(vec![json!("hi")]).unwrap(), json!("pong:hi"));
+        assert_eq!(h(json!("hi")).unwrap(), json!("pong:hi"));
     }
 
     #[test]
     #[should_panic(expected = "__ozma.")]
     fn user_on_rejects_reserved_namespace() {
-        let _ = Webview::inline("x").on("__ozma.nav", |(): ()| Ok::<_, crate::error::RpcError>(()));
+        let _ = Webview::inline("x").on("__ozma.nav", |_: ()| Ok::<_, crate::error::RpcError>(()));
     }
 
     #[test]

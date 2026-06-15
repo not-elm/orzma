@@ -309,10 +309,12 @@ fn dispatch_call(writer: &SharedWriter, handlers: &HandlerRegistry, call: Incomi
         // A user handler runs on this reader thread; isolate panics so one bad
         // handler can't unwind the thread and silence all future RPC + register
         // replies. A panicked handler reports as a rejected call.
-        Some(h) => match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h(call.args))) {
-            Ok(r) => r.map_err(|e| e.message().to_owned()),
-            Err(_) => Err("handler panicked".to_owned()),
-        },
+        Some(h) => {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h(call.params))) {
+                Ok(r) => r.map_err(|e| e.message().to_owned()),
+                Err(_) => Err("handler panicked".to_owned()),
+            }
+        }
         None => Err("unknown_method".to_owned()),
     };
 

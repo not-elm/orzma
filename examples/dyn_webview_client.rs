@@ -39,7 +39,7 @@ fn main() -> std::io::Result<()> {
             "<input id='field' placeholder='click here, then type\u{2026}' ",
             "style='font:16px sans-serif;padding:4px;width:92%;margin-top:8px'>",
             "<script>",
-            "window.ozmux.call('ping',['hi'])",
+            "window.ozmux.call('ping','hi')",
             ".then(function(v){document.getElementById('out').textContent='ping \u{2192} '+v;})",
             ".catch(function(e){document.getElementById('out').textContent='error: '+e.message;});",
             "window.ozmux.on('tick',function(n){document.getElementById('tick').textContent='tick #'+n;});",
@@ -116,12 +116,7 @@ fn main() -> std::io::Result<()> {
         let req_id = req_id.clone();
         let method = msg.get("method").and_then(Value::as_str).unwrap_or("");
         let reply = if method == "ping" {
-            let arg = msg
-                .get("args")
-                .and_then(Value::as_array)
-                .and_then(|a| a.first())
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let arg = msg.get("params").and_then(Value::as_str).unwrap_or("");
             json!({ "op": "reply", "reqId": req_id, "ok": true, "value": format!("pong:{arg}") })
         } else {
             json!({ "op": "reply", "reqId": req_id, "ok": false, "error": "unknown_method" })
