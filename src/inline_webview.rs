@@ -266,7 +266,6 @@ pub(crate) fn mount_inline(
     };
     let source = WebviewSource::new(url);
     let webview = params.commands.spawn_empty().id();
-    let preload = build_dynamic_preload(ctx.workspace, ctx.pane, webview);
     // NOTE: keep this entity free of Node / Mesh2d / Mesh3d / Sprite /
     // MaterialNode (even for debug visualization). bevy_cef's mesh/sprite
     // input paths and display-size allocators key on `With<WebviewSource>`
@@ -289,16 +288,23 @@ pub(crate) fn mount_inline(
             cols: ctx.cols,
             frame_seq: anchor.frame_seq,
         },
-        preload,
     ));
     if !resolved.interactive {
         params.commands.entity(webview).insert(NonInteractive);
     }
+    // NOTE: the ozmux bridge scripts (window.ozmux + __ozmuxContext) and
+    // WebviewOwner (the inbound-call gate) are inserted only for a bridged
+    // registration. A display-only view (owner None) gets no bridge scripts
+    // (PreloadScripts remains the empty default from WebviewSource #[require])
+    // and no WebviewOwner.
     if let Some((connection_id, handle)) = resolved.owner {
-        params.commands.entity(webview).insert(WebviewOwner {
-            connection_id,
-            handle,
-        });
+        params.commands.entity(webview).insert((
+            build_dynamic_preload(ctx.workspace, ctx.pane, webview),
+            WebviewOwner {
+                connection_id,
+                handle,
+            },
+        ));
     }
     params
         .commands
@@ -729,6 +735,30 @@ mod tests {
                 source: DynSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive,
+                owner_surface,
+                connection_id: 1,
+                passthrough: vec![],
+            },
+        );
+    }
+
+    fn register_url(
+        app: &mut App,
+        view_id: &str,
+        owner_surface: Entity,
+        url: &str,
+        bridge: bool,
+    ) {
+        use crate::control_plane::DynamicView;
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            view_id.into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: url.into(),
+                    bridge,
+                },
+                entry: String::new(),
+                interactive: true,
                 owner_surface,
                 connection_id: 1,
                 passthrough: vec![],
@@ -2181,5 +2211,69 @@ mod tests {
         let appv = resolve_mount("appv", surface, &reg).expect("registered");
         assert_eq!(appv.url.as_deref(), Some("https://app.example.com"));
         assert_eq!(appv.owner, Some((7, "appv".to_string())));
+    }
+
+    #[test]
+    fn mount_url_display_only_has_no_preload_or_owner() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_url(&mut app, "disp", terminal, "https://example.com", false);
+
+        mount(&mut app, terminal, "disp", Some(test_anchor()));
+
+        let children = inline_children_of(&app, terminal);
+        assert_eq!(children.len(), 1);
+        let child = children[0];
+        match app
+            .world()
+            .get::<WebviewSource>(child)
+            .expect("WebviewSource present")
+        {
+            WebviewSource::Url(url) => assert_eq!(url, "https://example.com"),
+            other => panic!("unexpected WebviewSource: {other:?}"),
+        }
+        // NOTE: WebviewSource carries #[require(PreloadScripts)] in bevy_cef, so
+        // the component is always inserted (Default = empty vec) by Bevy's
+        // required-component machinery. The gate for a display-only view is that
+        // the ozmux bridge scripts are absent (empty vec), not that the component
+        // itself is absent.
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts always present via WebviewSource #[require]");
+        assert!(
+            preload.0.is_empty(),
+            "a display-only url must carry no ozmux bridge scripts"
+        );
+        assert!(
+            app.world().get::<WebviewOwner>(child).is_none(),
+            "a display-only url must carry no WebviewOwner"
+        );
+    }
+
+    #[test]
+    fn mount_url_bridged_has_preload_and_owner() {
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        register_url(&mut app, "appv", terminal, "https://app.example.com", true);
+
+        mount(&mut app, terminal, "appv", Some(test_anchor()));
+
+        let child = inline_children_of(&app, terminal)[0];
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts present");
+        assert!(
+            !preload.0.is_empty(),
+            "a bridged url must carry the ozmux bridge scripts"
+        );
+        assert_eq!(
+            app.world().get::<WebviewOwner>(child),
+            Some(&WebviewOwner {
+                connection_id: 1,
+                handle: "appv".into(),
+            }),
+        );
     }
 }
