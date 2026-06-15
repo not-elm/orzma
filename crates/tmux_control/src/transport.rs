@@ -138,7 +138,7 @@ impl TmuxServer {
             return WindowEntry::parse_list(&output.stdout);
         }
         let stderr = String::from_utf8_lossy(&output.stderr);
-        if output.stdout.is_empty() && stderr.contains("no server running") {
+        if is_no_server_stderr(&output.stdout, &stderr) {
             return Ok(Vec::new());
         }
         let message = stderr.trim();
@@ -356,11 +356,7 @@ fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Ve
         return SessionInfo::parse_list(stdout);
     }
     let stderr = String::from_utf8_lossy(stderr);
-    let no_server = stdout.is_empty()
-        && (stderr.contains("no server running")
-            || (stderr.contains("error connecting")
-                && stderr.contains("No such file or directory")));
-    if no_server {
+    if is_no_server_stderr(stdout, &stderr) {
         Ok(Vec::new())
     } else {
         let message = stderr.trim();
@@ -371,6 +367,13 @@ fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Ve
         };
         Err(TmuxError::Spawn(std::io::Error::other(message.to_string())))
     }
+}
+
+fn is_no_server_stderr(stdout: &[u8], stderr: &str) -> bool {
+    stdout.is_empty()
+        && (stderr.contains("no server running")
+            || (stderr.contains("error connecting")
+                && stderr.contains("No such file or directory")))
 }
 
 #[cfg(unix)]
@@ -757,24 +760,47 @@ mod tests {
     }
 
     #[test]
-    fn list_windows_all_argv_targets_all_with_format() {
-        let server = TmuxServer::new().socket_name("sock");
-        let argv = server.list_windows_all_argv();
-        assert_eq!(argv[0..2], ["-L".to_string(), "sock".to_string()]);
-        assert!(argv.contains(&"list-windows".to_string()));
-        assert!(argv.contains(&"-a".to_string()));
-        assert!(argv.iter().any(|a| a.contains("#{session_id}")));
+    fn list_windows_all_argv_default() {
+        assert_eq!(
+            TmuxServer::new().list_windows_all_argv(),
+            argv(&["list-windows", "-a", "-F", LIST_ALL_FORMAT])
+        );
     }
 
     #[test]
-    fn create_detached_session_argv_is_detached_with_name_format() {
-        let server = TmuxServer::new();
-        let argv = server.create_detached_session_argv();
-        assert_eq!(argv[0], "new-session");
-        assert!(argv.contains(&"-d".to_string()));
-        assert!(argv.contains(&"-P".to_string()));
-        assert!(argv.contains(&"-F".to_string()));
-        assert!(argv.contains(&"#{session_name}".to_string()));
+    fn list_windows_all_argv_socket_name() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_name("sock")
+                .list_windows_all_argv(),
+            argv(&["-L", "sock", "list-windows", "-a", "-F", LIST_ALL_FORMAT])
+        );
+    }
+
+    #[test]
+    fn create_detached_session_argv_default() {
+        assert_eq!(
+            TmuxServer::new().create_detached_session_argv(),
+            argv(&["new-session", "-d", "-P", "-F", "#{session_name}"])
+        );
+    }
+
+    #[test]
+    fn create_detached_session_argv_socket_name() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_name("sock")
+                .create_detached_session_argv(),
+            argv(&[
+                "-L",
+                "sock",
+                "new-session",
+                "-d",
+                "-P",
+                "-F",
+                "#{session_name}"
+            ])
+        );
     }
 
     #[test]
