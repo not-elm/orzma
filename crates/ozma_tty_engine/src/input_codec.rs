@@ -8,10 +8,11 @@ use crate::events::{TerminalKey, TerminalModifiers};
 ///
 /// Priority order:
 /// 1. Ctrl + ASCII letter → `0x01..=0x1A` (1 byte)
-/// 2. Arrow keys → `ESC [ A/B/C/D` (normal) or `ESC O A/B/C/D` (app-cursor)
-/// 3. Special key table (Enter, Backspace, Tab, Escape, Delete, Home, End,
+/// 2. Alt/Meta + `Text(s)` → `ESC` + `s.as_bytes()` (meta-sends-escape)
+/// 3. Arrow keys → `ESC [ A/B/C/D` (normal) or `ESC O A/B/C/D` (app-cursor)
+/// 4. Special key table (Enter, Backspace, Tab, Escape, Delete, Home, End,
 ///    PageUp, PageDown)
-/// 4. `Text(s)` fallback → `s.as_bytes()` (UTF-8 passthrough). Empty → `None`.
+/// 5. `Text(s)` fallback → `s.as_bytes()` (UTF-8 passthrough). Empty → `None`.
 ///
 /// Returns `None` if the key/modifier combination produces no PTY output
 /// (e.g. empty `Text`, unmapped combination).
@@ -25,6 +26,17 @@ pub(crate) fn encode_key(
         && let Some(byte) = ctrl_letter_byte(s)
     {
         return Some(vec![byte]);
+    }
+    // NOTE: meta-sends-escape — Alt/Meta on a Text key emits ESC + the key
+    // bytes, which crossterm decodes back as an Alt-modified key. Placed after
+    // the Ctrl-letter branch so Ctrl keeps priority for letters.
+    if (mods.alt || mods.meta)
+        && let TerminalKey::Text(s) = key
+        && !s.is_empty()
+    {
+        let mut out = vec![0x1b];
+        out.extend_from_slice(s.as_bytes());
+        return Some(out);
     }
     if let Some(bytes) = arrow_bytes(key, app_cursor_keys) {
         return Some(bytes);
@@ -91,6 +103,12 @@ mod tests {
     fn ctrl() -> TerminalModifiers {
         TerminalModifiers {
             ctrl: true,
+            ..Default::default()
+        }
+    }
+    fn alt() -> TerminalModifiers {
+        TerminalModifiers {
+            alt: true,
             ..Default::default()
         }
     }
@@ -274,6 +292,38 @@ mod tests {
         assert_eq!(
             encode_key(&TerminalKey::Text("1".into()), &ctrl(), false),
             Some(b"1".to_vec())
+        );
+    }
+
+    #[test]
+    fn alt_letter_is_esc_prefixed() {
+        assert_eq!(
+            encode_key(&TerminalKey::Text("h".into()), &alt(), false),
+            Some(b"\x1bh".to_vec())
+        );
+    }
+
+    #[test]
+    fn meta_letter_is_esc_prefixed() {
+        let meta = TerminalModifiers {
+            meta: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&TerminalKey::Text("x".into()), &meta, false),
+            Some(b"\x1bx".to_vec())
+        );
+    }
+
+    #[test]
+    fn ctrl_takes_priority_over_alt_for_letters() {
+        let ctrl = TerminalModifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            encode_key(&TerminalKey::Text("a".into()), &ctrl, false),
+            Some(vec![0x01])
         );
     }
 }

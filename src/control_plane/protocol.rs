@@ -47,6 +47,25 @@ pub(crate) enum ClientMsg {
         #[serde(default)]
         payload: Value,
     },
+    /// Sets (or clears, with `handle: None`) the app-owned focus target for
+    /// this connection's surface.
+    Focus {
+        /// The handle to focus, or `None` to blur.
+        #[serde(default)]
+        handle: Option<String>,
+        /// The mount instance id, or `None` for the default instance.
+        #[serde(default)]
+        instance: Option<String>,
+    },
+}
+
+/// A passthrough chord as received on the register wire (host side).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub(crate) struct HostKeyChord {
+    /// Modifier names: any of `alt`, `ctrl`, `shift`, `meta`.
+    pub(crate) mods: Vec<String>,
+    /// The base key: a lowercase char (`h`, `5`), or `tab`/`backtab`/`f1`..`f12`.
+    pub(crate) key: String,
 }
 
 /// The content source a `register` declares.
@@ -62,6 +81,9 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
+        /// Chords the host passes through to PTY instead of consuming in CEF.
+        #[serde(default)]
+        passthrough: Vec<HostKeyChord>,
     },
     /// Serve a single dynamic HTML document supplied inline.
     Inline {
@@ -70,6 +92,9 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
+        /// Chords the host passes through to PTY instead of consuming in CEF.
+        #[serde(default)]
+        passthrough: Vec<HostKeyChord>,
     },
 }
 
@@ -137,6 +162,7 @@ mod tests {
                 root: "/abs".into(),
                 entry: "index.html".into(),
                 interactive: true,
+                passthrough: vec![],
             })
         );
     }
@@ -152,6 +178,7 @@ mod tests {
             ClientMsg::Register(RegisterKind::Inline {
                 html: "<h1>x</h1>".into(),
                 interactive: false,
+                passthrough: vec![],
             })
         );
     }
@@ -212,6 +239,47 @@ mod tests {
                 payload: serde_json::json!({"n":1})
             }
         );
+    }
+
+    #[test]
+    fn parses_focus_with_handle() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"op":"focus","handle":"h1","instance":null}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Focus {
+                handle: Some("h1".into()),
+                instance: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_blur_with_null_handle() {
+        let m: ClientMsg = serde_json::from_str(r#"{"op":"focus","handle":null}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Focus {
+                handle: None,
+                instance: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_register_with_passthrough() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"op":"register","kind":"inline","html":"x","passthrough":[{"mods":["alt"],"key":"h"}]}"#,
+        )
+        .unwrap();
+        match m {
+            ClientMsg::Register(RegisterKind::Inline { passthrough, .. }) => {
+                assert_eq!(passthrough.len(), 1);
+                assert_eq!(passthrough[0].key, "h");
+                assert_eq!(passthrough[0].mods, vec!["alt".to_string()]);
+            }
+            _ => panic!("expected inline register"),
+        }
     }
 
     #[test]

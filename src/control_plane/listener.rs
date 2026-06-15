@@ -68,6 +68,17 @@ pub(crate) enum ControlEvent {
         /// The event payload.
         payload: Value,
     },
+    /// An app-owned focus set/clear for the connection's surface.
+    SetFocus {
+        /// Connection id (ownership check in apply).
+        connection_id: u64,
+        /// The surface the connection's token resolved to.
+        owner_surface: Entity,
+        /// The handle to focus, or `None` to blur.
+        handle: Option<String>,
+        /// The mount instance id, or `None` for the default instance.
+        instance: Option<String>,
+    },
 }
 
 /// Binds `sock_path`, spawns the accept loop, and returns the receiver of
@@ -297,6 +308,14 @@ fn handle_client_msg(
                 payload,
             });
         }
+        ClientMsg::Focus { handle, instance } => {
+            let _ = events.send(ControlEvent::SetFocus {
+                connection_id,
+                owner_surface,
+                handle,
+                instance,
+            });
+        }
     }
     ControlFlow::Continue(())
 }
@@ -451,6 +470,36 @@ mod tests {
                 break;
             }
             assert!(Instant::now() < deadline, "no Emit event within 2s");
+        }
+    }
+
+    #[test]
+    fn client_focus_line_emits_a_set_focus_event() {
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("ctl.sock");
+        let tokens = TokenRegistry::default();
+        let surface = Entity::from_bits(7);
+        tokens.insert("tok", surface);
+        let events = spawn_listener(&sock, tokens, ConnectionWriters::default()).unwrap();
+
+        let mut client = UnixStream::connect(&sock).unwrap();
+        writeln!(client, r#"{{"op":"hello","token":"tok"}}"#).unwrap();
+        writeln!(client, r#"{{"op":"focus","handle":"h1","instance":null}}"#).unwrap();
+        client.flush().unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(ControlEvent::SetFocus {
+                owner_surface,
+                handle,
+                ..
+            }) = events.recv_timeout(Duration::from_millis(50))
+            {
+                assert_eq!(owner_surface, surface);
+                assert_eq!(handle.as_deref(), Some("h1"));
+                break;
+            }
+            assert!(Instant::now() < deadline, "no SetFocus within 2s");
         }
     }
 

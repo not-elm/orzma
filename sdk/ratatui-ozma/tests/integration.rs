@@ -1,8 +1,13 @@
 mod support;
 
-use ratatui_ozma::{Ozma, OzmaError, RpcError, Webview};
+use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::buffer::{Buffer, Cell};
+use ratatui::layout::Rect;
+use ratatui::widgets::StatefulWidget;
+use ratatui_ozma::{Ozma, OzmaBackend, OzmaError, RpcError, Webview, WebviewWidget};
 use serde_json::json;
-use std::sync::Mutex;
+use std::io::Write;
+use std::sync::{Arc, Mutex};
 use support::FakeServer;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -21,6 +26,57 @@ fn with_env(sock: &std::path::Path, f: impl FnOnce()) {
         std::env::remove_var("OZMUX_SOCK");
         std::env::remove_var("OZMUX_TOKEN");
     }
+}
+
+#[derive(Clone)]
+struct SharedBuf(Arc<Mutex<Vec<u8>>>);
+
+impl Write for SharedBuf {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn backend_draw_emits_mount_osc_and_focus_op() {
+    let server = FakeServer::start("view-1");
+    with_env(&server.sock_path.clone(), || {
+        let ozma = Ozma::connect().unwrap();
+        let handle = ozma.register(Webview::inline("x")).unwrap();
+
+        let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let mut backend = OzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &ozma);
+
+        // A WebviewWidget records its placement + focus into the frame the SDK
+        // shares with the backend — the same path render_stateful_widget drives.
+        {
+            let mut scratch = Buffer::empty(Rect::new(0, 0, 80, 40));
+            let mut frame = ozma.frame();
+            WebviewWidget::new(handle.id()).focused(true).render(
+                Rect::new(2, 3, 48, 12),
+                &mut scratch,
+                &mut *frame,
+            );
+        }
+
+        // Terminal::flush calls Backend::draw once per frame; drive it directly.
+        let no_cells: Vec<(u16, u16, &Cell)> = Vec::new();
+        Backend::draw(&mut backend, no_cells.into_iter()).unwrap();
+
+        let out = String::from_utf8(term_bytes.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            out.contains("mount-inline;view-1;12;48"),
+            "terminal output missing mount OSC: {out:?}"
+        );
+
+        let msg = server.next_message();
+        assert_eq!(msg["op"], "focus");
+        assert_eq!(msg["handle"], "view-1");
+    });
 }
 
 #[test]

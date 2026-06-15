@@ -6,13 +6,11 @@ use crate::osc::{clamp_dims, cursor_to, mount_inline, unmount_inline, valid_hand
 use crate::protocol::{ClientMsg, IncomingCall, RegisterReply};
 use crate::webview::{SharedWriter, Webview, WebviewHandle};
 use crossbeam_channel::{Sender, bounded};
-use ratatui::Terminal;
-use ratatui::backend::Backend;
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
 /// One webview's requested position this frame.
@@ -26,6 +24,7 @@ pub(crate) struct Placement {
 #[derive(Debug, Default)]
 pub struct FramePlacements {
     placements: Vec<Placement>,
+    focused: Option<String>,
 }
 
 impl FramePlacements {
@@ -33,16 +32,55 @@ impl FramePlacements {
         self.placements.push(Placement { handle, area });
     }
 
+    /// Marks `handle` focused for this frame. Last writer wins; a debug build
+    /// trips an assertion if more than one widget claims focus in a single frame
+    /// (the app must focus at most one webview at a time).
+    pub(crate) fn set_focused(&mut self, handle: String) {
+        debug_assert!(
+            self.focused.is_none(),
+            "multiple webviews marked focused in one frame (last wins): had {:?}, now {handle:?}",
+            self.focused
+        );
+        self.focused = Some(handle);
+    }
+
     #[cfg(test)]
     pub(crate) fn placements_for_test(&self) -> &[Placement] {
         &self.placements
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focused_for_test(&self) -> Option<&str> {
+        self.focused.as_deref()
     }
 }
 
 /// Last-emitted geometry per handle, for diff-driven flush.
 #[derive(Debug, Default)]
 pub(crate) struct FlushState {
-    last: HashMap<String, (u16, u16, u16, u16)>,
+    last: HashMap<String, Rect>,
+    last_focused: Option<String>,
+}
+
+impl FlushState {
+    /// Emits this frame's geometry (mount/unmount OSC) to `out` and, when focus
+    /// changed since the last frame, the control-plane focus op to `socket`.
+    pub(crate) fn emit_frame(
+        &mut self,
+        out: &mut impl Write,
+        socket: &SharedWriter,
+        frame: &FramePlacements,
+    ) -> OzmaResult<()> {
+        flush_placements(out, self, &frame.placements)?;
+        // NOTE: only take the writer lock (shared with the reader thread and
+        // every WebviewHandle::emit) when focus actually changed; this runs every
+        // render frame and the unchanged path must not contend the lock.
+        if self.last_focused == frame.focused {
+            return Ok(());
+        }
+        let mut w = socket.lock()?;
+        flush_focus(&mut *w, &mut self.last_focused, &frame.focused)
+    }
 }
 
 type HandlerRegistry = Arc<Mutex<HashMap<String, Arc<HashMap<String, BoxedHandler>>>>>;
@@ -59,8 +97,7 @@ struct PendingRegister {
 pub struct Ozma {
     writer: SharedWriter,
     pending: PendingRegisters,
-    frame: FramePlacements,
-    flush_state: FlushState,
+    frame: Arc<Mutex<FramePlacements>>,
 }
 
 impl Ozma {
@@ -87,8 +124,7 @@ impl Ozma {
         Ok(Self {
             writer,
             pending,
-            frame: FramePlacements::default(),
-            flush_state: FlushState::default(),
+            frame: Arc::new(Mutex::new(FramePlacements::default())),
         })
     }
 
@@ -118,29 +154,35 @@ impl Ozma {
         Ok(WebviewHandle::new(handle, self.writer.clone()))
     }
 
-    /// Returns the per-frame placement collector, cleared, for `render_stateful_widget`.
-    pub fn frame(&mut self) -> &mut FramePlacements {
-        self.frame.placements.clear();
-        &mut self.frame
+    /// Locks and clears the per-frame placement collector for `render_stateful_widget`.
+    ///
+    /// The returned guard derefs to [`FramePlacements`]; pass `&mut *ozma.frame()`
+    /// as the widget state. Let it drop at the end of the `terminal.draw` closure
+    /// so the [`crate::OzmaBackend`] can read the frame during that draw's flush.
+    pub fn frame(&self) -> MutexGuard<'_, FramePlacements> {
+        let mut frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
+        frame.placements.clear();
+        frame.focused = None;
+        frame
     }
 
-    /// Emits mount/unmount OSC for this frame's placements, after `terminal.draw()`.
-    pub fn flush<B: Backend + Write>(&mut self, terminal: &mut Terminal<B>) -> OzmaResult<()> {
-        let placements = std::mem::take(&mut self.frame.placements);
-        let result = flush_placements(terminal.backend_mut(), &mut self.flush_state, &placements);
-        self.frame.placements = placements;
-        result
+    pub(crate) fn frame_handle(&self) -> Arc<Mutex<FramePlacements>> {
+        self.frame.clone()
+    }
+
+    pub(crate) fn writer_handle(&self) -> SharedWriter {
+        self.writer.clone()
     }
 }
 
 /// Emits CUP + mount-inline for new/changed placements and unmount for vanished
 /// handles, updating `state` to the new frame. Degenerate rects are skipped.
-pub(crate) fn flush_placements(
+fn flush_placements(
     out: &mut impl Write,
     state: &mut FlushState,
     placements: &[Placement],
 ) -> OzmaResult<()> {
-    let mut current: HashMap<String, (u16, u16, u16, u16)> = HashMap::new();
+    let mut current: HashMap<String, Rect> = HashMap::new();
     for p in placements {
         // Skip degenerate rects and invalid handles so a single bad placement
         // can't abort the whole flush (which would also desync flush state for
@@ -150,7 +192,12 @@ pub(crate) fn flush_placements(
             continue;
         }
         let (rows, cols) = clamp_dims(p.area.height, p.area.width);
-        let key = (p.area.y, p.area.x, rows, cols);
+        let key = Rect {
+            x: p.area.x,
+            y: p.area.y,
+            width: cols,
+            height: rows,
+        };
         current.insert(p.handle.clone(), key);
         if state.last.get(&p.handle) != Some(&key) {
             let seq = mount_inline(&p.handle, rows, cols)?;
@@ -164,6 +211,27 @@ pub(crate) fn flush_placements(
     }
     out.flush()?;
     state.last = current;
+    Ok(())
+}
+
+/// Emits the control-plane focus op (`ClientMsg::Focus`) when the focused handle
+/// changed from the last flush. `Some(h)` focuses handle `h`; `None` blurs. No
+/// write when unchanged (diff-driven, like geometry in `flush_placements`).
+fn flush_focus(
+    out: &mut impl Write,
+    last_focused: &mut Option<String>,
+    focused: &Option<String>,
+) -> OzmaResult<()> {
+    if last_focused == focused {
+        return Ok(());
+    }
+    let line = serde_json::to_string(&ClientMsg::Focus {
+        handle: focused.clone(),
+        instance: None,
+    })?;
+    writeln!(out, "{line}")?;
+    out.flush()?;
+    *last_focused = focused.clone();
     Ok(())
 }
 
@@ -333,5 +401,35 @@ mod tests {
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &placements).unwrap();
         assert!(String::from_utf8(buf).unwrap().is_empty());
+    }
+
+    #[test]
+    fn flush_focus_emits_on_change_and_skips_unchanged() {
+        let mut last = None;
+        let mut buf = Vec::new();
+        flush_focus(&mut buf, &mut last, &Some("v".to_string())).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert_eq!(v["handle"], "v");
+
+        let mut buf2 = Vec::new();
+        flush_focus(&mut buf2, &mut last, &Some("v".to_string())).unwrap();
+        assert!(
+            String::from_utf8(buf2).unwrap().is_empty(),
+            "unchanged focus emits nothing"
+        );
+    }
+
+    #[test]
+    fn flush_focus_emits_blur_on_none() {
+        let mut last = Some("v".to_string());
+        let mut buf = Vec::new();
+        flush_focus(&mut buf, &mut last, &None).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_str(String::from_utf8(buf).unwrap().trim()).unwrap();
+        assert_eq!(v["op"], "focus");
+        assert_eq!(v["handle"], serde_json::Value::Null);
+        assert_eq!(last, None);
     }
 }
