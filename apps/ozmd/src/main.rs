@@ -5,6 +5,7 @@ mod document;
 mod keymap;
 mod outline;
 mod protocol;
+mod watcher;
 
 fn main() {
     println!("ozmd");
