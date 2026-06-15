@@ -8,20 +8,20 @@ use ratatui::widgets::{Clear, StatefulWidget, Widget};
 /// A ratatui widget that mounts an ozmux webview at its area.
 ///
 /// Blanks its cells (the webview composites under the text) and records its rect
-/// for the next [`crate::Ozma::flush`]. Optionally paints a fallback under-layer
-/// (shown on non-macOS or before the page composites).
-pub struct WebviewWidget<'a, W = Blank> {
+/// into the frame the [`crate::OzmaBackend`] emits on the next draw. Optionally
+/// paints a fallback under-layer (shown on non-macOS or before the page composites).
+pub struct WebviewWidget<'a, W = WebviewDefaultPlaceholder> {
     handle: &'a str,
     fallback: W,
     focused: bool,
 }
 
-impl<'a> WebviewWidget<'a, Blank> {
+impl<'a> WebviewWidget<'a, WebviewDefaultPlaceholder> {
     /// Creates a widget for the given webview handle id.
     pub fn new(handle: &'a str) -> Self {
         Self {
             handle,
-            fallback: Blank,
+            fallback: WebviewDefaultPlaceholder,
             focused: false,
         }
     }
@@ -74,9 +74,9 @@ impl<W: Widget> StatefulWidget for WebviewWidget<'_, W> {
 
 /// A no-op fallback widget (the default): renders nothing.
 #[derive(Debug, Default, Clone, Copy)]
-pub struct Blank;
+pub struct WebviewDefaultPlaceholder;
 
-impl Widget for Blank {
+impl Widget for WebviewDefaultPlaceholder {
     fn render(self, _area: Rect, _buf: &mut Buffer) {}
 }
 

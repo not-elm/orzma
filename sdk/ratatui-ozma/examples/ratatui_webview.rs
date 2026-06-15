@@ -5,8 +5,8 @@
 //! app, and `q` quits while the app is focused. `Alt+h`/`Alt+l` are declared as
 //! passthrough chords, so the host forwards them to the PTY (reaching plain
 //! `event::read`) and suppresses them from the page even while the webview is
-//! focused. `WebviewWidget::focused` tells the SDK the current focus; `Ozma::flush`
-//! emits the control-plane focus op on change.
+//! focused. `WebviewWidget::focused` tells the SDK the current focus; the
+//! `OzmaBackend` wrapping the terminal emits the control-plane focus op on change.
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -16,9 +16,12 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::layout::{Constraint, Layout};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui_ozma::{KeyChord, Ozma, RpcError, Webview, WebviewHandle, WebviewWidget};
+use ratatui_ozma::{KeyChord, Ozma, OzmaBackend, RpcError, Webview, WebviewHandle, WebviewWidget};
+use std::io::Stdout;
 use std::io::stdout;
 use std::time::{Duration, Instant};
+
+type Backend = OzmaBackend<CrosstermBackend<Stdout>>;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ozma = Ozma::connect()?;
@@ -59,7 +62,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+        let backend = OzmaBackend::new(CrosstermBackend::new(stdout()), &ozma);
+        let mut terminal = Terminal::new(backend)?;
         run(&mut terminal, &mut ozma, &view)
     })();
 
@@ -69,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run(
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    terminal: &mut Terminal<Backend>,
     ozma: &mut Ozma,
     view: &WebviewHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -89,10 +93,9 @@ fn run(
                     .focused(web_focused)
                     .fallback(Block::bordered().title("loading…")),
                 rows[1],
-                ozma.frame(),
+                &mut *ozma.frame(),
             );
         })?;
-        ozma.flush(terminal)?;
 
         if last.elapsed() >= Duration::from_secs(1) {
             n += 1;

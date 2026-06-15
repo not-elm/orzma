@@ -7,9 +7,9 @@
 //! The webview cells declare those chords as PASSTHROUGH, so the host forwards
 //! them to the PTY (reaching plain `event::read`) and suppresses them from the
 //! page even while a webview is focused — that is how focus can leave a focused
-//! webview. `WebviewWidget::focused` reports focus to the SDK; `Ozma::flush`
-//! emits the control-plane focus op on change (the host gives CEF focus to the
-//! focused webview, so bare keys type into its input).
+//! webview. `WebviewWidget::focused` reports focus to the SDK; the `OzmaBackend`
+//! wrapping the terminal emits the control-plane focus op on change (the host gives
+//! CEF focus to the focused webview, so bare keys type into its input).
 //!
 //! Verify:
 //! - Initial focus is NW (highlighted border).
@@ -27,9 +27,12 @@ use ratatui::crossterm::terminal::{
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Paragraph};
-use ratatui_ozma::{KeyChord, Ozma, Webview, WebviewHandle, WebviewWidget};
+use ratatui_ozma::{KeyChord, Ozma, OzmaBackend, Webview, WebviewHandle, WebviewWidget};
+use std::io::Stdout;
 use std::io::stdout;
 use std::time::Duration;
+
+type Backend = OzmaBackend<CrosstermBackend<Stdout>>;
 
 #[derive(Clone, Copy)]
 enum Dir {
@@ -73,7 +76,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
-        let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
+        let backend = OzmaBackend::new(CrosstermBackend::new(stdout()), &ozma);
+        let mut terminal = Terminal::new(backend)?;
         run(&mut terminal, &mut ozma, &ne, &sw)
     })();
 
@@ -83,7 +87,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run(
-    terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
+    terminal: &mut Terminal<Backend>,
     ozma: &mut Ozma,
     ne: &WebviewHandle,
     sw: &WebviewHandle,
@@ -92,7 +96,6 @@ fn run(
     let mut last_key = String::from("(none yet)");
     loop {
         terminal.draw(|f| draw(f, ozma, ne, sw, &focused, &last_key))?;
-        ozma.flush(terminal)?;
 
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(k) = event::read()?
@@ -179,7 +182,7 @@ fn draw(
 
     // NOTE: Ozma::frame clears the collector, so call it once before rendering both
     // webviews — calling it twice would drop the first placement.
-    let frame = ozma.frame();
+    let mut frame = ozma.frame();
     f.render_stateful_widget(
         WebviewWidget::new(ne.id())
             .focused(focused == "ne")
@@ -192,7 +195,7 @@ fn draw(
             .focused(focused == "sw")
             .fallback(focus_block("SW (webview)", focused == "sw")),
         sw_area,
-        frame,
+        &mut *frame,
     );
 
     f.render_widget(
