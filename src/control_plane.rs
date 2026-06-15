@@ -75,7 +75,7 @@ impl DynSource {
 pub(crate) struct DynamicView {
     /// The content source.
     pub(crate) source: DynSource,
-    /// HTML entry path relative to a `Dir` root (ignored for `Inline`).
+    /// HTML entry path relative to a `Dir` root (ignored for `Inline` and `Url`).
     pub(crate) entry: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub(crate) interactive: bool,
@@ -1749,6 +1749,7 @@ mod url_source_tests {
     fn validate_url_source_rejects_garbage_as_invalid() {
         assert_eq!(validate_url_source("not a url"), Err("invalid_url"));
         assert_eq!(validate_url_source(""), Err("invalid_url"));
+        assert_eq!(validate_url_source("http://"), Err("invalid_url"));
     }
 
     #[test]

@@ -333,7 +333,15 @@ mod tests {
     fn host_parses_the_exact_wire_string_the_sdk_emits() {
         let wire = r#"{"op":"register","kind":"url","url":"https://example.com","interactive":true,"bridge":false}"#;
         let m: ClientMsg = serde_json::from_str(wire).unwrap();
-        assert!(matches!(m, ClientMsg::Register(RegisterKind::Url { .. })));
+        assert_eq!(
+            m,
+            ClientMsg::Register(RegisterKind::Url {
+                url: "https://example.com".into(),
+                interactive: true,
+                bridge: false,
+                passthrough: vec![],
+            })
+        );
     }
 
     #[test]
