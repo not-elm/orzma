@@ -3,6 +3,7 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::control_plane::ControlPlaneHandle;
+use crate::theme;
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
@@ -64,6 +65,9 @@ struct PickerBackdrop;
 
 #[derive(Component)]
 struct PickerList;
+
+#[derive(Component)]
+struct PickerRowLabel;
 
 fn build_rows(sessions: &[SessionInfo], windows: &[WindowEntry]) -> Vec<PickerRow> {
     let mut rows = Vec::new();
@@ -157,23 +161,92 @@ fn spawn_picker_ui(mut commands: Commands) {
             PickerBackdrop,
         ))
         .with_children(|parent| {
-            parent.spawn(Text::new("Select tmux session"));
-            parent.spawn((
-                Node {
-                    flex_direction: FlexDirection::Column,
-                    align_items: AlignItems::FlexStart,
-                    ..default()
-                },
-                PickerList,
-            ));
+            parent
+                .spawn((
+                    Node {
+                        flex_direction: FlexDirection::Column,
+                        align_items: AlignItems::Stretch,
+                        min_width: Val::Px(360.0),
+                        padding: UiRect::axes(Val::Px(20.0), Val::Px(16.0)),
+                        row_gap: Val::Px(10.0),
+                        border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(8.0)),
+                        ..default()
+                    },
+                    BackgroundColor(theme::TAB_BAR_BG),
+                    BorderColor::all(theme::BORDER),
+                ))
+                .with_children(|panel| {
+                    panel.spawn((
+                        Text::new("Select tmux session"),
+                        TextColor(theme::FOREGROUND),
+                        TextFont {
+                            font_size: 16.0,
+                            ..default()
+                        },
+                    ));
+                    panel.spawn((
+                        Node {
+                            flex_direction: FlexDirection::Column,
+                            width: Val::Percent(100.0),
+                            row_gap: Val::Px(2.0),
+                            ..default()
+                        },
+                        PickerList,
+                    ));
+                });
         });
+}
+
+/// The label text, foreground color, and highlight-bar color for each row,
+/// derived from the picker data and the selected index. The selected row gets
+/// the accent bar + white text; unselected rows are transparent, with window
+/// rows muted to read as a level below their session header.
+fn row_visuals(
+    picker: &SessionPicker,
+    rows: &[PickerRow],
+    selected: usize,
+) -> Vec<(String, Color, Color)> {
+    rows.iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let is_selected = i == selected;
+            let (label, base) = match row {
+                PickerRow::Session(si) => {
+                    let s = &picker.sessions[*si];
+                    let attached = if s.attached { " *attached" } else { "" };
+                    (
+                        format!("{}  ({} windows){}", s.name, s.windows, attached),
+                        theme::FOREGROUND,
+                    )
+                }
+                PickerRow::Window { window, .. } => {
+                    let w = &picker.windows[*window];
+                    let active = if w.window_active { "*" } else { " " };
+                    (
+                        format!("    {}{}: {}", active, w.window_index, w.window_name),
+                        theme::MUTED,
+                    )
+                }
+                PickerRow::NewSession => ("+ New session".to_string(), theme::FOREGROUND),
+            };
+            let text_color = if is_selected { Color::WHITE } else { base };
+            let bar_color = if is_selected {
+                theme::ACCENT
+            } else {
+                Color::NONE
+            };
+            (label, text_color, bar_color)
+        })
+        .collect()
 }
 
 fn sync_picker_ui(
     mut backdrop: Query<&mut Node, With<PickerBackdrop>>,
+    mut rows_q: Query<(&mut Text, &mut TextColor, &mut BackgroundColor), With<PickerRowLabel>>,
     mut commands: Commands,
     picker: Res<SessionPicker>,
-    list_query: Query<Entity, With<PickerList>>,
+    list_query: Query<(Entity, Option<&Children>), With<PickerList>>,
 ) {
     let Ok(mut node) = backdrop.single_mut() else {
         return;
@@ -184,43 +257,57 @@ fn sync_picker_ui(
         Display::None
     };
 
-    let Ok(list_entity) = list_query.single() else {
+    let Ok((list_entity, children)) = list_query.single() else {
         return;
     };
 
-    commands.entity(list_entity).despawn_related::<Children>();
-
     let rows = build_rows(&picker.sessions, &picker.windows);
     let selected = picker.selected.min(rows.len().saturating_sub(1));
-    let mut child_commands = commands.entity(list_entity);
-    child_commands.with_children(|parent| {
-        for (i, row) in rows.iter().enumerate() {
-            let is_selected = i == selected;
-            let prefix = if is_selected { "> " } else { "  " };
-            let label = match row {
-                PickerRow::Session(si) => {
-                    let s = &picker.sessions[*si];
-                    let attached = if s.attached { " *attached" } else { "" };
-                    format!("{}{}  ({} windows){}", prefix, s.name, s.windows, attached)
-                }
-                PickerRow::Window { window, .. } => {
-                    let w = &picker.windows[*window];
-                    let active = if w.window_active { "*" } else { " " };
-                    format!(
-                        "{}    {}{}: {}",
-                        prefix, active, w.window_index, w.window_name
-                    )
-                }
-                PickerRow::NewSession => format!("{}+ New session", prefix),
+    let visuals = row_visuals(&picker, &rows, selected);
+
+    let existing: &[Entity] = children.map(|c| &**c).unwrap_or(&[]);
+    if existing.len() == visuals.len() {
+        // NOTE: update existing row entities in place rather than despawning and
+        // respawning — recreating Text nodes on every selection change drops a
+        // frame of layout and makes navigation flicker. Guarded writes keep
+        // change detection honest.
+        for (&entity, (label, text_color, bar_color)) in existing.iter().zip(visuals) {
+            let Ok((mut text, mut color, mut bg)) = rows_q.get_mut(entity) else {
+                continue;
             };
-            let color = if is_selected {
-                TextColor(Color::WHITE)
-            } else {
-                TextColor(Color::srgba(0.6, 0.6, 0.6, 1.0))
-            };
-            parent.spawn((Text::new(label), color));
+            if text.0 != label {
+                text.0 = label;
+            }
+            if color.0 != text_color {
+                color.0 = text_color;
+            }
+            if bg.0 != bar_color {
+                bg.0 = bar_color;
+            }
         }
-    });
+    } else {
+        commands.entity(list_entity).despawn_related::<Children>();
+        commands.entity(list_entity).with_children(|parent| {
+            for (label, text_color, bar_color) in visuals {
+                parent.spawn((
+                    Node {
+                        width: Val::Percent(100.0),
+                        padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
+                        border_radius: BorderRadius::all(Val::Px(4.0)),
+                        ..default()
+                    },
+                    Text::new(label),
+                    TextColor(text_color),
+                    BackgroundColor(bar_color),
+                    TextFont {
+                        font_size: 14.0,
+                        ..default()
+                    },
+                    PickerRowLabel,
+                ));
+            }
+        });
+    }
 }
 
 fn handle_picker_input(
@@ -473,5 +560,54 @@ mod tests {
     #[test]
     fn nav_arrow_up_clamps_at_zero() {
         assert_eq!(step_selection(0, 3, true), 0);
+    }
+
+    fn list_children(app: &mut App) -> Vec<Entity> {
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Children, With<PickerList>>();
+        match q.single(app.world()) {
+            Ok(c) => (**c).to_vec(),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    #[test]
+    fn nav_reuses_row_entities_in_place() {
+        let mut app = App::new();
+        app.insert_resource(SessionPicker {
+            sessions: vec![fake_session(0, "alpha"), fake_session(1, "beta")],
+            windows: vec![fake_window(0, "alpha", 0, true, "zsh")],
+            selected: 0,
+            open: true,
+            last_open: true,
+        });
+        app.add_systems(Startup, spawn_picker_ui);
+        app.add_systems(Update, sync_picker_ui);
+        app.update();
+
+        let before = list_children(&mut app);
+        assert!(!before.is_empty(), "rows should have been spawned");
+
+        app.world_mut().resource_mut::<SessionPicker>().selected = 1;
+        app.update();
+
+        let after = list_children(&mut app);
+        assert_eq!(
+            before, after,
+            "navigation must reuse row entities in place, not respawn them"
+        );
+
+        // The in-place update actually moved the highlight: exactly one row
+        // carries the accent bar (the newly-selected one).
+        let accent_rows = after
+            .iter()
+            .filter(|&&e| {
+                app.world()
+                    .get::<BackgroundColor>(e)
+                    .is_some_and(|bg| bg.0 == theme::ACCENT)
+            })
+            .count();
+        assert_eq!(accent_rows, 1, "exactly one row is highlighted after nav");
     }
 }
