@@ -8,6 +8,7 @@ mod components;
 mod connect;
 mod connection;
 mod enumerate;
+mod events;
 mod event_pump;
 mod input;
 mod model;
