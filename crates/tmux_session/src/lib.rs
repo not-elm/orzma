@@ -12,7 +12,7 @@ mod enumerate;
 mod event_pump;
 mod events;
 mod input;
-mod keybinds;
+mod keybindings;
 mod observers;
 mod output;
 mod plugin;
@@ -27,6 +27,7 @@ pub use enumerate::{
     select_window_command, set_environment_command, switch_client_command,
 };
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_pane_keys_command};
+pub use keybindings::{Forwarded, KeyBindings, plan_forward};
 pub use output::PaneOutput;
 pub use plugin::{TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
 pub use select::{AttachTarget, select_attach_target};

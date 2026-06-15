@@ -85,14 +85,6 @@ pub fn refresh_client_command(cols: u16, rows: u16) -> String {
     format!("refresh-client -C {cols},{rows}")
 }
 
-/// Builds `list-keys` to enumerate tmux's key tables for the (cosmetic) mirror.
-///
-/// No `-F`: the custom format was only added in tmux 3.7; the reply is the
-/// default human-readable `bind-key` lines, parsed by `parse_key_bindings`.
-pub(crate) fn list_keys_command() -> String {
-    "list-keys".to_string()
-}
-
 /// Builds `display-message -p '#{client_name}'` — prints the control
 /// client's name as a one-line command reply (correlated like `list-windows`).
 pub(crate) fn client_name_command() -> String {
@@ -165,8 +157,12 @@ pub(crate) struct EnumerationState {
     pub(crate) client_name_pending: Option<CommandId>,
     /// The id of the in-flight `display-message` active-pane query, if any.
     pub(crate) active_pane_pending: Option<CommandId>,
-    /// The id of the in-flight `list-keys` mirror query, if any.
-    pub(crate) list_keys_pending: Option<CommandId>,
+    /// The id of the in-flight `list-keys -T root` command, if any.
+    pub(crate) keys_root_pending: Option<CommandId>,
+    /// The id of the in-flight `list-keys -T prefix` command, if any.
+    pub(crate) keys_prefix_pending: Option<CommandId>,
+    /// The id of the in-flight `display-message` prefix-key query, if any.
+    pub(crate) prefix_keys_pending: Option<CommandId>,
     /// In-flight `capture-pane` commands → the pane each reply seeds.
     pub(crate) capture_pending: HashMap<CommandId, PaneId>,
 }
@@ -238,11 +234,6 @@ mod tests {
     #[test]
     fn client_name_command_has_expected_format() {
         assert_eq!(client_name_command(), "display-message -p '#{client_name}'");
-    }
-
-    #[test]
-    fn list_keys_command_has_no_format_flag() {
-        assert_eq!(list_keys_command(), "list-keys");
     }
 
     #[test]

@@ -6,12 +6,12 @@ use crate::events::{
     TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxLayoutChanged, TmuxSessionChanged,
     TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
-use crate::keybinds::{KeyBinding, parse_key_bindings};
+use crate::keybindings::{KeyBinding, parse_list_keys, parse_prefix};
 use crate::output::PaneOutput;
 use crate::state::{ConnectionState, next_state};
 use bevy::prelude::Commands;
 use crossbeam_channel::Receiver;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tmux_control::{ClientEvent, CommandId, ControlEvent, TransportEvent};
 use tmux_control_parser::{PaneId, SessionId, WindowId};
 
@@ -182,10 +182,10 @@ pub(crate) fn take_active_pane(
     None
 }
 
-/// Returns the parsed key bindings from a `CommandComplete` whose id matches
-/// `pending` (the `list-keys` reply), clearing `pending`. Returns `None` when no
-/// matching reply is in the batch.
-pub(crate) fn take_key_bindings(
+/// Returns parsed key bindings from a `CommandComplete` matching `pending`
+/// (running `parse_list_keys` on the reply), clearing `pending`. Returns `None`
+/// when no matching reply is in the batch.
+pub(crate) fn take_keybindings(
     pending: &mut Option<CommandId>,
     events: &[TransportEvent],
 ) -> Option<Vec<KeyBinding>> {
@@ -195,9 +195,35 @@ pub(crate) fn take_key_bindings(
         {
             *pending = None;
             if *ok {
-                return Some(parse_key_bindings(output));
+                return Some(parse_list_keys(output));
             }
-            tracing::warn!("list-keys mirror query failed");
+            tracing::warn!("list-keys command failed");
+            return None;
+        }
+    }
+    None
+}
+
+/// Returns the prefix-key set from a `CommandComplete` matching `pending`
+/// (running `parse_prefix` on the first reply line), clearing `pending`.
+pub(crate) fn take_prefix_keys(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<HashSet<String>> {
+    for event in events {
+        if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
+            && *pending == Some(*id)
+        {
+            *pending = None;
+            if *ok {
+                return Some(
+                    output
+                        .first()
+                        .map(|line| parse_prefix(line))
+                        .unwrap_or_default(),
+                );
+            }
+            tracing::warn!("prefix query command failed");
             return None;
         }
     }
@@ -385,20 +411,6 @@ mod tests {
     }
 
     #[test]
-    fn take_key_bindings_parses_matching_reply() {
-        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
-            id: CommandId(4),
-            number: 0,
-            ok: true,
-            output: vec!["bind-key -T prefix c new-window".to_string()],
-        })];
-        let mut pending = Some(CommandId(4));
-        let got = take_key_bindings(&mut pending, &events).unwrap();
-        assert_eq!(got.len(), 1);
-        assert_eq!(pending, None);
-    }
-
-    #[test]
     fn take_active_pane_parses_window_and_pane() {
         let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
             id: CommandId(9),
@@ -582,5 +594,48 @@ mod tests {
 
         assert_eq!(*log.0.lock().unwrap(), vec!["add@1", "layout@1", "retain1"]);
         assert_eq!(app.world().resource::<EnumerationState>().pending, None);
+    }
+
+    #[test]
+    fn take_keybindings_parses_matching_reply() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(11),
+            number: 0,
+            ok: true,
+            output: vec!["bind-key -T root M-i split-window -h".to_string()],
+        })];
+        let mut pending = Some(CommandId(11));
+        let got = take_keybindings(&mut pending, &events).expect("a parsed reply");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].key, "M-i");
+        assert_eq!(got[0].command, "split-window -h");
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn take_keybindings_unmatched_keeps_pending() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(2),
+            number: 0,
+            ok: true,
+            output: vec![],
+        })];
+        let mut pending = Some(CommandId(11));
+        assert!(take_keybindings(&mut pending, &events).is_none());
+        assert_eq!(pending, Some(CommandId(11)));
+    }
+
+    #[test]
+    fn take_prefix_keys_parses_matching_reply() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(12),
+            number: 0,
+            ok: true,
+            output: vec!["C-b None".to_string()],
+        })];
+        let mut pending = Some(CommandId(12));
+        let got = take_prefix_keys(&mut pending, &events).expect("a parsed reply");
+        assert_eq!(got, std::collections::HashSet::from(["C-b".to_string()]));
+        assert_eq!(pending, None);
     }
 }

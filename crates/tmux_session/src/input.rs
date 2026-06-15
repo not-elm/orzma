@@ -26,8 +26,9 @@ pub struct KeyMods {
 }
 
 /// Maps a Bevy logical key + physical key code + modifiers to a tmux key-name
-/// string for `send-keys -K`, or `None` if the key has no tmux representation OR
-/// carries `Super` (which is GUI-only and must never be forwarded).
+/// string (used to forward the key pane-direct and to match it against tmux
+/// bindings), or `None` if the key has no tmux representation OR carries `Super`
+/// (which is GUI-only and must never be forwarded).
 ///
 /// NOTE: `Shift` is folded into the glyph for `Key::Character` (so a shifted
 /// letter arrives already uppercased) — the `S-` prefix is only emitted for
