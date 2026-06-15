@@ -17,7 +17,7 @@ mod reconcile;
 mod select;
 mod state;
 
-pub use components::{TmuxPane, TmuxSession, TmuxWindow};
+pub use components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow};
 pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
 pub use enumerate::{

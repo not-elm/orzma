@@ -1,7 +1,7 @@
 //! Reconciles the [`ProjectionModel`] into ECS entities, maintaining the
 //! tmux-id → entity index.
 
-use crate::components::{TmuxPane, TmuxSession, TmuxWindow};
+use crate::components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow};
 use crate::model::ProjectionModel;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -24,10 +24,13 @@ pub struct TmuxProjection {
 pub(crate) fn reconcile_projection(
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
+    prev_active_window: Query<Entity, With<ActiveWindow>>,
+    prev_active_pane: Query<Entity, With<ActivePane>>,
     model: Res<ProjectionModel>,
 ) {
     reconcile_windows(&mut commands, &mut index, &model);
     reconcile_session(&mut commands, &mut index, &model);
+    reconcile_markers(&mut commands, &index, &prev_active_window, &prev_active_pane, &model);
 }
 
 fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model: &ProjectionModel) {
@@ -110,12 +113,13 @@ fn reconcile_windows(commands: &mut Commands, index: &mut TmuxProjection, model:
 }
 
 fn reconcile_session(commands: &mut Commands, index: &mut TmuxProjection, model: &ProjectionModel) {
+    let name = model.session_name.clone().unwrap_or_default();
     match (model.session, index.session) {
         (Some(id), Some(entity)) => {
-            commands.entity(entity).insert(TmuxSession { id });
+            commands.entity(entity).insert(TmuxSession { id, name });
         }
         (Some(id), None) => {
-            let entity = commands.spawn(TmuxSession { id }).id();
+            let entity = commands.spawn(TmuxSession { id, name }).id();
             index.session = Some(entity);
         }
         (None, Some(entity)) => {
@@ -123,6 +127,31 @@ fn reconcile_session(commands: &mut Commands, index: &mut TmuxProjection, model:
             index.session = None;
         }
         (None, None) => {}
+    }
+}
+
+fn reconcile_markers(
+    commands: &mut Commands,
+    index: &TmuxProjection,
+    prev_active_window: &Query<Entity, With<ActiveWindow>>,
+    prev_active_pane: &Query<Entity, With<ActivePane>>,
+    model: &ProjectionModel,
+) {
+    for e in prev_active_window.iter() {
+        commands.entity(e).remove::<ActiveWindow>();
+    }
+    if let Some(active) = model.windows.iter().find(|w| w.active)
+        && let Some(&entity) = index.windows.get(&active.id)
+    {
+        commands.entity(entity).insert(ActiveWindow);
+    }
+    for e in prev_active_pane.iter() {
+        commands.entity(e).remove::<ActivePane>();
+    }
+    if let Some(pane) = model.active_pane
+        && let Some(&entity) = index.panes.get(&pane)
+    {
+        commands.entity(entity).insert(ActivePane);
     }
 }
 
@@ -248,5 +277,33 @@ mod tests {
             .get::<ChildOf>(pane_entity)
             .expect("pane has ChildOf");
         assert_eq!(child_of.parent(), window_entity);
+    }
+
+    #[test]
+    fn reconcile_sets_session_name_and_active_markers() {
+        let mut app = app();
+        {
+            let mut model = app.world_mut().resource_mut::<ProjectionModel>();
+            model.session = Some(SessionId(1));
+            model.session_name = Some("main".to_string());
+            model.active_pane = Some(PaneId(9));
+            model.windows = vec![WindowModel {
+                id: WindowId(1),
+                active: true,
+                index: 0,
+                name: "w".to_string(),
+                panes: vec![PaneModel { id: PaneId(9), dims: dims() }],
+            }];
+        }
+        app.update();
+
+        let index = app.world().resource::<TmuxProjection>();
+        let session_entity = index.session.unwrap();
+        let window_entity = index.windows[&WindowId(1)];
+        let pane_entity = index.panes[&PaneId(9)];
+
+        assert_eq!(app.world().get::<TmuxSession>(session_entity).unwrap().name, "main");
+        assert!(app.world().get::<ActiveWindow>(window_entity).is_some());
+        assert!(app.world().get::<ActivePane>(pane_entity).is_some());
     }
 }
