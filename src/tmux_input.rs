@@ -4,6 +4,7 @@
 
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::tmux_picker::SessionPicker;
+use crate::ui::copy_mode::CopyModeState;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -39,6 +40,7 @@ enum GuiChord {
 const PASTE_CHUNK_BYTES: usize = 256;
 
 fn forward_keys_to_tmux(
+    mut commands: Commands,
     mut picker: ResMut<SessionPicker>,
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
@@ -49,7 +51,7 @@ fn forward_keys_to_tmux(
     keys: Res<ButtonInput<KeyCode>>,
     ime: Res<crate::input::ime::ImeState>,
     bindings: Res<KeyBindings>,
-    active_pane: Option<Single<&TmuxPane, With<ActivePane>>>,
+    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // NOTE: while the picker is open it owns the keyboard; forwarding would
@@ -104,9 +106,13 @@ fn forward_keys_to_tmux(
     // The active pane (if any) is the forward/paste target. GUI chords below do
     // not need it (so quit/picker work before a pane is projected); tmux key
     // dispatch does.
-    let target = active_pane
-        .as_deref()
-        .map(|active| format!("%{}", active.id.0));
+    let (active_entity, target) = match active_pane {
+        Some(single) => {
+            let (entity, pane) = *single;
+            (Some(entity), Some(format!("%{}", pane.id.0)))
+        }
+        None => (None, None),
+    };
 
     // Collect forwardable tmux key names in event order. Super-modified keys are
     // handled as GUI chords (Paste/Quit/Picker) or swallowed; none reach tmux.
@@ -164,6 +170,7 @@ fn forward_keys_to_tmux(
     };
     let handle = client.handle();
     for action in actions {
+        let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
         let cmd = match action {
             Forwarded::Run(command) => command,
             Forwarded::Keys(names) => send_pane_keys_command(target, &names),
@@ -172,7 +179,20 @@ fn forward_keys_to_tmux(
             tracing::warn!(?e, "tmux forward send failed");
             break;
         }
+        if enters_copy_mode && let Some(entity) = active_entity {
+            commands.entity(entity).insert(CopyModeState);
+        }
     }
+}
+
+/// True when a resolved tmux command enters copy mode (`copy-mode`, with any
+/// flags). ozmux intercepts these to insert `CopyModeState` alongside running
+/// the command on tmux.
+fn is_copy_mode_entry(command: &str) -> bool {
+    command
+        .split_whitespace()
+        .next()
+        .is_some_and(|first| first == "copy-mode")
 }
 
 /// Classifies a key event as a GUI chord (matched on physical `key_code` + the
@@ -197,6 +217,15 @@ fn gui_chord(key_code: &KeyCode, mods: KeyMods) -> Option<GuiChord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_copy_mode_entry_command() {
+        assert!(is_copy_mode_entry("copy-mode"));
+        assert!(is_copy_mode_entry("copy-mode -u"));
+        assert!(is_copy_mode_entry("copy-mode -eu"));
+        assert!(!is_copy_mode_entry("copy-selection"));
+        assert!(!is_copy_mode_entry("new-window"));
+    }
 
     fn m(shift: bool, super_: bool) -> KeyMods {
         KeyMods {
