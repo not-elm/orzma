@@ -29,6 +29,10 @@ pub const ACCENT: Color = Color::srgb(0.302, 0.561, 0.851);
 pub const SELECTION: Color = Color::srgb(0.847, 0.651, 0.341);
 /// Text on the SELECTION bar — near-black for contrast.
 pub const SELECTION_FG: Color = Color::srgb(0.094, 0.086, 0.063);
+/// Faint divider line (chooser footer separator, etc.).
+pub const DIVIDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
+/// Session-chooser title / footer font size.
+pub const PICKER_TITLE_FONT_SIZE_PX: f32 = 11.0;
 
 /// Terminal surface placeholder background.
 pub const SURFACE_TERMINAL: Color = Color::srgb(0.094, 0.094, 0.110);

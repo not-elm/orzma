@@ -178,10 +178,10 @@ fn spawn_picker_ui(mut commands: Commands) {
                 ))
                 .with_children(|panel| {
                     panel.spawn((
-                        Text::new("Select tmux session"),
-                        TextColor(theme::FOREGROUND),
+                        Text::new("TMUX SESSIONS"),
+                        TextColor(theme::MUTED),
                         TextFont {
-                            font_size: 16.0,
+                            font_size: theme::PICKER_TITLE_FONT_SIZE_PX,
                             ..default()
                         },
                     ));
@@ -193,6 +193,20 @@ fn spawn_picker_ui(mut commands: Commands) {
                             ..default()
                         },
                         PickerList,
+                    ));
+                    panel.spawn((
+                        Node {
+                            border: UiRect::top(Val::Px(1.0)),
+                            padding: UiRect::top(Val::Px(8.0)),
+                            ..default()
+                        },
+                        BorderColor::all(theme::DIVIDER),
+                        Text::new("↑↓/jk select · ⏎ open · esc cancel"),
+                        TextColor(theme::MUTED),
+                        TextFont {
+                            font_size: theme::PICKER_TITLE_FONT_SIZE_PX,
+                            ..default()
+                        },
                     ));
                 });
         });
