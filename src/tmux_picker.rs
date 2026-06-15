@@ -12,7 +12,7 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use ozmux_tmux::{
     AttachTarget, ConnectionState, TmuxConnection, attach_or_create, select_window_command,
-    set_environment_command, switch_client_command,
+    set_environment_command, set_environment_in_session_command, switch_client_command,
 };
 use tmux_control::{SessionInfo, TmuxServer, WindowEntry};
 
@@ -360,7 +360,14 @@ fn handle_picker_input(
                     .copied()
                     .unwrap_or(PickerRow::NewSession);
                 if connection.client().is_some() {
-                    apply_switch(&mut connection, &mut state, &configs, &picker, row);
+                    apply_switch(
+                        &mut connection,
+                        &mut state,
+                        &configs,
+                        control.as_deref(),
+                        &picker,
+                        row,
+                    );
                 } else {
                     apply_attach(
                         &mut connection,
@@ -386,20 +393,45 @@ fn apply_switch(
     connection: &mut TmuxConnection,
     state: &mut ConnectionState,
     configs: &OzmuxConfigsResource,
+    control: Option<&ControlPlaneHandle>,
     picker: &SessionPicker,
     row: PickerRow,
 ) {
     if connection.client().is_none() {
         return;
     }
-    let cmds: Vec<String> = match row {
-        PickerRow::Session(si) => vec![switch_client_command(&picker.sessions[si].name)],
-        PickerRow::Window { session, window } => vec![
-            switch_client_command(&picker.sessions[session].name),
-            select_window_command(picker.windows[window].window_id),
-        ],
-        PickerRow::NewSession => {
-            let server = build_server(configs);
+    // The attach path's current-session set-environment does not re-run on a
+    // switch, so each switched-to session needs $OZMA_SOCK set explicitly;
+    // newly-created sessions get it via `new-session -e` instead.
+    let ozma_sock = control.map(|handle| handle.sock_path.to_string_lossy().into_owned());
+    let target = match row {
+        PickerRow::Session(si) => Some((picker.sessions[si].name.clone(), None)),
+        PickerRow::Window { session, window } => Some((
+            picker.sessions[session].name.clone(),
+            Some(picker.windows[window].window_id),
+        )),
+        PickerRow::NewSession => None,
+    };
+    let cmds: Vec<String> = match target {
+        Some((name, window)) => {
+            // set-environment before switch-client so the target session carries
+            // $OZMA_SOCK before any pane is spawned there post-switch; `-t` makes
+            // it independent of which session is current.
+            let mut cmds = Vec::new();
+            if let Some(sock) = &ozma_sock {
+                cmds.push(set_environment_in_session_command(&name, "OZMA_SOCK", sock));
+            }
+            cmds.push(switch_client_command(&name));
+            if let Some(window_id) = window {
+                cmds.push(select_window_command(window_id));
+            }
+            cmds
+        }
+        None => {
+            let mut server = build_server(configs);
+            if let Some(sock) = &ozma_sock {
+                server = server.env("OZMA_SOCK", sock);
+            }
             match server.create_detached_session() {
                 Ok(name) => vec![switch_client_command(&name)],
                 Err(e) => {

@@ -95,11 +95,15 @@ impl TmuxServer {
 
     fn new_session_subcommand(&self) -> Vec<String> {
         let mut subcommand = vec!["new-session".to_string()];
-        for (key, value) in &self.env {
-            subcommand.push("-e".to_string());
-            subcommand.push(format!("{key}={value}"));
-        }
+        self.push_env_flags(&mut subcommand);
         subcommand
+    }
+
+    fn push_env_flags(&self, argv: &mut Vec<String>) {
+        for (key, value) in &self.env {
+            argv.push("-e".to_string());
+            argv.push(format!("{key}={value}"));
+        }
     }
 
     /// Lists attachable sessions (`tmux [..] list-sessions -F ..`, plain pipe, no
@@ -193,6 +197,7 @@ impl TmuxServer {
         let mut argv = self.socket_args();
         argv.push("new-session".to_string());
         argv.push("-d".to_string());
+        self.push_env_flags(&mut argv);
         argv.push("-P".to_string());
         argv.push("-F".to_string());
         argv.push("#{session_name}".to_string());
@@ -796,6 +801,24 @@ mod tests {
                 "sock",
                 "new-session",
                 "-d",
+                "-P",
+                "-F",
+                "#{session_name}"
+            ])
+        );
+    }
+
+    #[test]
+    fn create_detached_session_argv_emits_dash_e_per_env_pair() {
+        assert_eq!(
+            TmuxServer::new()
+                .env("OZMA_SOCK", "/tmp/ctl.sock")
+                .create_detached_session_argv(),
+            argv(&[
+                "new-session",
+                "-d",
+                "-e",
+                "OZMA_SOCK=/tmp/ctl.sock",
                 "-P",
                 "-F",
                 "#{session_name}"
