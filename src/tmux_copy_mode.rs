@@ -16,9 +16,13 @@
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
+use ozma_tty_renderer::schema::{
+    SelectionKind, SelectionRange, TerminalGrid, ViCursor, ViewportPoint,
+};
 use ozmux_tmux::{
     CopyModeQueries, CopyModeReply, CopyQueryKind, CopyState, PaneId, TmuxConnection, TmuxPane,
-    TmuxProjectionSet, copy_mode_capture_command, copy_state_query_command, parse_copy_state,
+    TmuxProjectionSet, absolute_to_visible_row, copy_mode_capture_command,
+    copy_state_query_command, parse_copy_state,
 };
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -36,8 +40,10 @@ impl Plugin for OzmuxTmuxCopyModePlugin {
             (
                 issue_copy_state.run_if(any_pane_in_copy_mode),
                 consume_copy_reply.run_if(on_message::<CopyModeReply>),
+                apply_copy_overlay
+                    .run_if(any_with_component::<CopyModeSnapshot>)
+                    .after(consume_copy_reply),
             )
-                .chain()
                 .after(TmuxProjectionSet),
         );
     }
@@ -55,7 +61,6 @@ struct CopyRefreshState {
 /// The latest copy-mode state snapshot for a pane. Written only when the state
 /// changes (so `Changed<CopyModeSnapshot>` is meaningful), and read back to
 /// diff against the next reply.
-// TODO: Task 9 reads this to map the cursor/selection into the rendered grid.
 #[derive(Component)]
 struct CopyModeSnapshot(CopyState);
 
@@ -266,6 +271,71 @@ fn capture_dims(lines: &[String]) -> (u16, u16) {
     (cols, rows)
 }
 
+/// Writes the copy cursor and selection from `CopyModeSnapshot` onto the pane's
+/// `TerminalGrid`. Runs each frame while any pane has a `CopyModeSnapshot`,
+/// ordered after `consume_copy_reply`.
+///
+/// # Ordering
+///
+/// `flush_emit` (called by `consume_copy_reply`) clears `vi_cursor`/`selection`
+/// because the capture render handle is not in vi mode. This system re-asserts
+/// the overlay each frame after a capture paint. The conditional writes avoid
+/// per-frame change notifications when no snapshot changed.
+// NOTE: The conditional mutation is load-bearing: without it, every frame
+// unconditionally marks the grid changed and triggers downstream repaint. If the
+// guard is removed the renderer will repaint every frame even in steady state,
+// defeating Bevy's change-detection optimizations for the glyph pipeline.
+fn apply_copy_overlay(mut grids: Query<(&mut TerminalGrid, &CopyModeSnapshot)>) {
+    for (mut grid, snapshot) in &mut grids {
+        let (vi_cursor, selection) = build_overlay(&snapshot.0);
+        let want_cursor = Some(vi_cursor);
+        if grid.vi_cursor != want_cursor {
+            grid.vi_cursor = want_cursor;
+        }
+        if grid.selection != selection {
+            grid.selection = selection;
+        }
+    }
+}
+
+/// Builds the `ViCursor` and optional `SelectionRange` overlay from a copy-mode
+/// state snapshot. Maps `cursor_y` directly (it is already a visible viewport
+/// row), and maps absolute selection rows through `absolute_to_visible_row`,
+/// clamping off-screen endpoints to `-1` (above) or `pane_height` (below).
+/// Rectangle selections render as `Char` in v1 (the grid schema has no block
+/// selection kind).
+fn build_overlay(state: &CopyState) -> (ViCursor, Option<SelectionRange>) {
+    let vi_cursor = ViCursor {
+        row: state.cursor_y as i16,
+        column: state.cursor_x,
+        in_scrollback: false,
+    };
+    let selection = state.selection_present.then(|| {
+        let start_row =
+            absolute_to_visible_row(state.sel_start_y, state.history_size, state.scroll_position);
+        let end_row =
+            absolute_to_visible_row(state.sel_end_y, state.history_size, state.scroll_position);
+        SelectionRange {
+            start: ViewportPoint {
+                row: clamp_row(start_row, state.pane_height),
+                column: state.sel_start_x,
+            },
+            end: ViewportPoint {
+                row: clamp_row(end_row, state.pane_height),
+                column: state.sel_end_x,
+            },
+            kind: SelectionKind::Char,
+        }
+    });
+    (vi_cursor, selection)
+}
+
+/// Clamps a visible row to `-1` (above viewport) or `rows` (below) for
+/// off-screen selection endpoints, matching `ViewportPoint`'s convention.
+fn clamp_row(row: i32, rows: u16) -> i16 {
+    row.clamp(-1, rows as i32) as i16
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +518,73 @@ mod tests {
             !refresh.last_scroll.contains_key(&pane_id),
             "despawn must prune last_scroll (else re-entry skips the capture)",
         );
+    }
+
+    #[test]
+    fn overlay_maps_cursor_and_selection_to_viewport() {
+        let state = CopyState {
+            pane_in_mode: true,
+            scroll_position: 3,
+            pane_height: 8,
+            history_size: 53,
+            cursor_x: 6,
+            cursor_y: 7,
+            selection_present: true,
+            rectangle: false,
+            sel_start_x: 2,
+            sel_start_y: 54,
+            sel_end_x: 6,
+            sel_end_y: 57,
+        };
+        let (vi_cursor, selection) = build_overlay(&state);
+        assert_eq!((vi_cursor.column, vi_cursor.row), (6, 7));
+        let sel = selection.expect("selection present");
+        // sel_start_y=54: absolute_to_visible_row(54, 53, 3) = 54 - (53-3) = 4
+        assert_eq!((sel.start.column, sel.start.row), (2, 4));
+        // sel_end_y=57: absolute_to_visible_row(57, 53, 3) = 57 - 50 = 7
+        assert_eq!((sel.end.column, sel.end.row), (6, 7));
+        assert_eq!(sel.kind, SelectionKind::Char);
+    }
+
+    #[test]
+    fn overlay_omits_selection_when_absent() {
+        let state = CopyState {
+            pane_in_mode: true,
+            scroll_position: 0,
+            pane_height: 8,
+            history_size: 0,
+            cursor_x: 1,
+            cursor_y: 1,
+            selection_present: false,
+            rectangle: false,
+            sel_start_x: 0,
+            sel_start_y: 0,
+            sel_end_x: 0,
+            sel_end_y: 0,
+        };
+        let (_c, selection) = build_overlay(&state);
+        assert!(selection.is_none());
+    }
+
+    #[test]
+    fn overlay_clips_offscreen_selection_rows() {
+        let state = CopyState {
+            pane_in_mode: true,
+            scroll_position: 0,
+            pane_height: 8,
+            history_size: 100,
+            cursor_x: 0,
+            cursor_y: 0,
+            selection_present: true,
+            rectangle: false,
+            sel_start_x: 0,
+            sel_start_y: 10,
+            sel_end_x: 3,
+            sel_end_y: 95,
+        };
+        let (_c, selection) = build_overlay(&state);
+        let sel = selection.unwrap();
+        // sel_start_y=10: 10 - (100-0) = -90 → clamped to -1
+        assert_eq!(sel.start.row, -1);
     }
 }
