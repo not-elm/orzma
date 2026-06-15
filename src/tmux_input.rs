@@ -11,8 +11,9 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozmux_tmux::{
-    ActivePane, Forwarded, KeyBindings, KeyMods, TmuxConnection, TmuxPane, bevy_key_to_tmux_name,
-    plan_forward, send_bytes_command, send_pane_keys_command,
+    ActivePane, CopyAction, Forwarded, KeyBindings, KeyMods, PromptKind, TmuxConnection, TmuxPane,
+    bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward, send_bytes_command,
+    send_pane_keys_command,
 };
 
 /// Registers the tmux keyboard-forwarding system.
@@ -39,6 +40,46 @@ enum GuiChord {
 
 const PASTE_CHUNK_BYTES: usize = 256;
 
+/// One key's effect while in copy mode: a verbatim command to relay (if any),
+/// whether to exit copy mode afterward, and a prompt to open (search/jump).
+#[derive(Debug, Default, PartialEq)]
+struct CopyOutcome {
+    command: Option<String>,
+    exit: bool,
+    prompt: Option<PromptKind>,
+}
+
+/// Maps a dispatched `CopyAction` to its `CopyOutcome`. The bound command runs
+/// verbatim; ozmux adds the marker toggle / prompt. (Clipboard bridging for
+/// `Copy` is wired in a later task — here a copy still relays + exits-if-and-cancel.)
+fn outcome_of(action: CopyAction) -> CopyOutcome {
+    match action {
+        CopyAction::Relay(command) => CopyOutcome {
+            command: Some(command),
+            ..Default::default()
+        },
+        CopyAction::Copy {
+            command,
+            and_cancel,
+            ..
+        } => CopyOutcome {
+            command: Some(command),
+            exit: and_cancel,
+            ..Default::default()
+        },
+        CopyAction::Exit(command) => CopyOutcome {
+            command: Some(command),
+            exit: true,
+            ..Default::default()
+        },
+        CopyAction::Prompt { kind } => CopyOutcome {
+            prompt: Some(kind),
+            ..Default::default()
+        },
+        CopyAction::Ignore => CopyOutcome::default(),
+    }
+}
+
 fn forward_keys_to_tmux(
     mut commands: Commands,
     mut picker: ResMut<SessionPicker>,
@@ -52,6 +93,7 @@ fn forward_keys_to_tmux(
     ime: Res<crate::input::ime::ImeState>,
     bindings: Res<KeyBindings>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
+    copy_modes: Query<(), With<CopyModeState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // NOTE: while the picker is open it owns the keyboard; forwarding would
@@ -157,6 +199,36 @@ fn forward_keys_to_tmux(
         }
     }
 
+    // While in copy mode route each key through the copy table and relay
+    // verbatim, toggling CopyModeState on exit. This early-return also prevents
+    // re-inserting CopyModeState if the copy-mode entry binding is pressed again.
+    let in_copy_mode = active_entity.is_some_and(|e| copy_modes.get(e).is_ok());
+    if in_copy_mode {
+        let Some(client) = connection.client() else {
+            return;
+        };
+        let handle = client.handle();
+        for name in key_names {
+            let outcome = outcome_of(copy_mode_dispatch(&bindings, &name));
+            if let Some(cmd) = outcome.command
+                && let Err(e) = handle.send(&cmd)
+            {
+                tracing::warn!(?e, "copy-mode relay send failed");
+                break;
+            }
+            if outcome.exit
+                && let Some(entity) = active_entity
+            {
+                commands.entity(entity).remove::<CopyModeState>();
+            }
+            if let Some(kind) = outcome.prompt {
+                // TODO: open the copy-mode search/jump prompt (Task 11).
+                tracing::debug!(?kind, "copy-mode prompt not yet wired");
+            }
+        }
+        return;
+    }
+
     // Dispatch the keys against the tmux bindings: bound keys run their command
     // verbatim, unbound keys forward to the active pane. NOTE: the bound command
     // acts on tmux's current pane; ozmux keeps that synced to the focused pane
@@ -217,6 +289,63 @@ fn gui_chord(key_code: &KeyCode, mods: KeyMods) -> Option<GuiChord> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozmux_tmux::PromptKind;
+
+    #[test]
+    fn relay_outcome_sends_command_only() {
+        let o = outcome_of(CopyAction::Relay("send-keys -X cursor-down".into()));
+        assert_eq!(o.command.as_deref(), Some("send-keys -X cursor-down"));
+        assert!(!o.exit);
+        assert!(o.prompt.is_none());
+    }
+
+    #[test]
+    fn copy_and_cancel_outcome_relays_and_exits() {
+        let o = outcome_of(CopyAction::Copy {
+            command: "send-keys -X copy-selection-and-cancel".into(),
+            pipes: false,
+            and_cancel: true,
+        });
+        assert_eq!(
+            o.command.as_deref(),
+            Some("send-keys -X copy-selection-and-cancel")
+        );
+        assert!(o.exit);
+    }
+
+    #[test]
+    fn copy_without_cancel_does_not_exit() {
+        let o = outcome_of(CopyAction::Copy {
+            command: "send-keys -X copy-selection".into(),
+            pipes: false,
+            and_cancel: false,
+        });
+        assert!(!o.exit);
+        assert!(o.command.is_some());
+    }
+
+    #[test]
+    fn exit_outcome_relays_cancel_and_exits() {
+        let o = outcome_of(CopyAction::Exit("send-keys -X cancel".into()));
+        assert!(o.exit);
+        assert_eq!(o.command.as_deref(), Some("send-keys -X cancel"));
+    }
+
+    #[test]
+    fn prompt_outcome_carries_kind_no_command() {
+        let o = outcome_of(CopyAction::Prompt {
+            kind: PromptKind::SearchForward,
+        });
+        assert!(o.command.is_none());
+        assert!(!o.exit);
+        assert_eq!(o.prompt, Some(PromptKind::SearchForward));
+    }
+
+    #[test]
+    fn ignore_outcome_is_empty() {
+        let o = outcome_of(CopyAction::Ignore);
+        assert!(o.command.is_none() && !o.exit && o.prompt.is_none());
+    }
 
     #[test]
     fn detects_copy_mode_entry_command() {
