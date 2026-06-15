@@ -588,5 +588,6 @@ mod tests {
         })];
         let mut pending = Some(CommandId(22));
         assert_eq!(take_mode_keys(&mut pending, &events), Some(ModeKeys::Emacs));
+        assert_eq!(pending, None);
     }
 }
