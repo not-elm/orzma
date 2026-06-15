@@ -27,7 +27,9 @@ pub use enumerate::{
     select_window_command, set_environment_command,
 };
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_pane_keys_command};
-pub use keybindings::{Forwarded, KeyBindings, plan_forward};
+pub use keybindings::{
+    CopyAction, Forwarded, KeyBindings, PromptKind, copy_mode_dispatch, plan_forward,
+};
 pub use output::PaneOutput;
 pub use plugin::{TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
 pub use select::{AttachTarget, select_attach_target};
