@@ -2,6 +2,7 @@
 
 mod document;
 mod outline;
+mod protocol;
 
 fn main() {
     println!("ozmd");
