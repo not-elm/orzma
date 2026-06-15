@@ -11,7 +11,7 @@ use crate::ui::tmux_window_bar_input::{switch_window_on_click, window_entry_hove
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{ProjectionModel, WindowId};
+use ozmux_tmux::{ActiveWindow, TmuxSession, TmuxWindow, WindowId};
 
 /// Marker on the tmux window bar root Node — the fixed-height Row mounted at the
 /// bottom of `UiRoot`. `spawn_window_bar` inserts it once; `rebuild_window_bar`
@@ -53,7 +53,7 @@ pub(crate) struct WindowEntryActive(
 struct SessionLabel;
 
 /// Wires the tmux window status bar: spawns the bar on Startup and rebuilds its
-/// children whenever the `ProjectionModel` changes.
+/// children whenever the window set, active window, or session name changes.
 pub struct OzmuxTmuxWindowBarPlugin;
 
 impl Plugin for OzmuxTmuxWindowBarPlugin {
@@ -61,7 +61,7 @@ impl Plugin for OzmuxTmuxWindowBarPlugin {
         app.add_systems(Startup, spawn_window_bar);
         app.add_systems(
             Update,
-            rebuild_window_bar.run_if(resource_exists_and_changed::<ProjectionModel>),
+            rebuild_window_bar.run_if(window_bar_dirty),
         );
         app.add_systems(
             Update,
@@ -99,14 +99,31 @@ fn spawn_window_bar(
     ));
 }
 
-/// Despawns the window bar's children and rebuilds them from the current
-/// `ProjectionModel`: a `[session]` label followed by one clickable entry per
-/// window. Gated by `resource_exists_and_changed::<ProjectionModel>` at
-/// registration; do not add an in-body change guard.
+/// True when the window set, any window's metadata, the active window, or the
+/// session name may have changed this frame.
+fn window_bar_dirty(
+    mut removed_windows: RemovedComponents<TmuxWindow>,
+    mut removed_active: RemovedComponents<ActiveWindow>,
+    changed_windows: Query<(), Changed<TmuxWindow>>,
+    added_active: Query<(), Added<ActiveWindow>>,
+    changed_session: Query<(), Changed<TmuxSession>>,
+) -> bool {
+    !changed_windows.is_empty()
+        || !added_active.is_empty()
+        || !changed_session.is_empty()
+        || removed_windows.read().next().is_some()
+        || removed_active.read().next().is_some()
+}
+
+/// Despawns the window bar's children and rebuilds them from the window
+/// entities + the session entity: a `[session]` label followed by one
+/// clickable entry per window (ascending `index`), with the `ActiveWindow`
+/// highlighted. Gated by `window_bar_dirty` at registration.
 fn rebuild_window_bar(
     mut commands: Commands,
     bar: Query<Entity, With<WindowBarRoot>>,
-    model: Res<ProjectionModel>,
+    windows: Query<(&TmuxWindow, Has<ActiveWindow>)>,
+    session: Query<&TmuxSession>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     let Ok(bar) = bar.single() else {
@@ -116,10 +133,10 @@ fn rebuild_window_bar(
 
     let font = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
 
-    let session = model.session_name.as_deref().unwrap_or("");
+    let session_name = session.iter().next().map(|s| s.name.as_str()).unwrap_or("");
     commands.spawn((
         SessionLabel,
-        Text::new(format!("[{session}]")),
+        Text::new(format!("[{session_name}]")),
         TextColor(palette::ACCENT),
         TextFont {
             font: font.clone(),
@@ -129,8 +146,14 @@ fn rebuild_window_bar(
         ChildOf(bar),
     ));
 
-    for w in &model.windows {
-        let (bg, fg) = if w.active {
+    let mut entries: Vec<(u32, WindowId, String, bool)> = windows
+        .iter()
+        .map(|(w, active)| (w.index, w.id, w.name.clone(), active))
+        .collect();
+    entries.sort_by_key(|(index, id, _, _)| (*index, id.0));
+
+    for (index, id, name, active) in entries {
+        let (bg, fg) = if active {
             (palette::TAB_ACTIVE_BG, palette::FOREGROUND)
         } else {
             (palette::PANEL, palette::MUTED)
@@ -144,16 +167,13 @@ fn rebuild_window_bar(
                     ..default()
                 },
                 BackgroundColor(bg),
-                WindowEntry {
-                    index: w.index,
-                    window: w.id,
-                },
-                WindowEntryActive(w.active),
+                WindowEntry { index, window: id },
+                WindowEntryActive(active),
                 ChildOf(bar),
             ))
             .id();
         commands.spawn((
-            Text::new(window_label(w.index, &w.name)),
+            Text::new(window_label(index, &name)),
             TextColor(fg),
             TextFont {
                 font: font.clone(),
@@ -203,7 +223,7 @@ mod tests {
 
     #[test]
     fn rebuild_renders_window_entries_with_active_highlight() {
-        use ozmux_tmux::WindowModel;
+        use ozmux_tmux::{ActiveWindow, TmuxWindow};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -212,27 +232,22 @@ mod tests {
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.world_mut().spawn((Node::default(), UiRoot));
 
-        let model = ProjectionModel {
-            session_name: Some("main".into()),
-            windows: vec![
-                WindowModel {
-                    id: WindowId(1),
-                    active: false,
-                    index: 0,
-                    name: "zsh".into(),
-                    panes: vec![],
-                },
-                WindowModel {
-                    id: WindowId(2),
-                    active: true,
-                    index: 1,
-                    name: "vim".into(),
-                    panes: vec![],
-                },
-            ],
-            ..default()
-        };
-        app.insert_resource(model);
+        app.world_mut().spawn(TmuxWindow {
+            id: WindowId(1),
+            active: false,
+            index: 0,
+            name: "zsh".into(),
+        });
+        app.world_mut().spawn((
+            TmuxWindow {
+                id: WindowId(2),
+                active: false,
+                index: 1,
+                name: "vim".into(),
+            },
+            ActiveWindow,
+        ));
+
         app.update();
         app.update();
 
