@@ -112,16 +112,24 @@ fn any_pane_in_copy_mode(copy_modes: Query<(), With<CopyModeState>>) -> bool {
 /// the rendered grid switches back from the captured scrolled view to live
 /// content (`route_tmux_output` only emits on new `%output`, so an idle pane
 /// would otherwise stay frozen on capture content, and a later delta would
-/// paint over it), drops the scratch `CopyRenderHandle`, and prunes this pane's
+/// paint over it), drops the scratch `CopyRenderHandle`, prunes this pane's
 /// refresh bookkeeping (otherwise a stale `PaneId` wedges `issue_copy_state`'s
-/// coalescing guard and blocks re-entry capture at the same scroll position).
+/// coalescing guard and blocks re-entry capture at the same scroll position),
+/// and resets the global `DragSelect`.
+// NOTE: the unconditional DragSelect reset is load-bearing: if a pane leaves
+// copy mode while the mouse button is held, a still-`active` drag would fire
+// phantom cursor_deltas against the NEXT pane to enter copy mode (a selection
+// the user never started). Resetting here covers every exit path.
 fn on_copy_mode_exit(
     ev: On<Remove, CopyModeState>,
     mut commands: Commands,
     mut refresh: ResMut<CopyRefreshState>,
+    mut drag: ResMut<DragSelect>,
     mut live_handles: Query<&mut TerminalHandle>,
     panes: Query<&TmuxPane>,
 ) {
+    drag.active = false;
+    drag.target = None;
     let entity = ev.entity;
     if let Ok(mut handle) = live_handles.get_mut(entity) {
         handle.repaint_full(&mut commands, entity);
@@ -510,6 +518,9 @@ fn drag_select_in_copy_mode(
         }
         match ev.state {
             ButtonState::Pressed => {
+                if drag.active {
+                    continue;
+                }
                 let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
                     continue;
                 };
@@ -821,11 +832,17 @@ mod tests {
         );
 
         // Pre-load the refresh bookkeeping + scratch handle for this pane, as the
-        // live loop would.
+        // live loop would, and mark a drag in progress (button held while the
+        // pane leaves copy mode).
         {
             let mut refresh = app.world_mut().resource_mut::<CopyRefreshState>();
             refresh.state_in_flight.insert(pane_id);
             refresh.last_scroll.insert(pane_id, 7);
+        }
+        {
+            let mut drag = app.world_mut().resource_mut::<DragSelect>();
+            drag.active = true;
+            drag.target = Some((4, 2));
         }
         app.world_mut()
             .entity_mut(entity)
@@ -861,6 +878,11 @@ mod tests {
         assert!(
             app.world().get::<CopyRenderHandle>(entity).is_none(),
             "exit drops the scratch CopyRenderHandle",
+        );
+        let drag = app.world().resource::<DragSelect>();
+        assert!(
+            !drag.active && drag.target.is_none(),
+            "exit resets DragSelect (else a held button fires phantom deltas on re-entry)",
         );
     }
 
