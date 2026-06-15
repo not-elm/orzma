@@ -4,12 +4,14 @@
 use crate::components::TmuxPane;
 use crate::connection::TmuxConnection;
 use crate::enumerate::{
-    EnumerationState, capture_pane_command, client_name_command, list_windows_command,
+    EnumerationState, active_pane_command, capture_pane_command, client_name_command,
+    list_windows_command,
 };
 use crate::event_pump::{
-    advance_state, drain_transport, take_client_name, take_pane_captures, trigger_events,
+    advance_state, drain_transport, take_active_pane, take_client_name, take_pane_captures,
+    trigger_events,
 };
-use crate::events::TmuxConnectionReset;
+use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
 use crate::state::ConnectionState;
@@ -114,6 +116,10 @@ fn drain_tmux_events(
                 Ok(id) => enumeration.client_name_pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to send client-name query"),
             }
+            match client.handle().send(&active_pane_command()) {
+                Ok(id) => enumeration.active_pane_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send active-pane query"),
+            }
         }
     }
     if events
@@ -123,11 +129,17 @@ fn drain_tmux_events(
         connection.take();
         enumeration.pending = None;
         enumeration.client_name_pending = None;
+        enumeration.active_pane_pending = None;
         enumeration.capture_pending.clear();
         commands.trigger(TmuxConnectionReset);
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
             connection.set_client_name(name);
+        }
+        if let Some((window, pane)) =
+            take_active_pane(&mut enumeration.active_pane_pending, &events)
+        {
+            commands.trigger(TmuxActivePaneChanged { window, pane });
         }
         for output in take_pane_captures(&mut enumeration.capture_pending, &events) {
             pane_output.write(output);

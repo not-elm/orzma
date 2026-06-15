@@ -90,6 +90,15 @@ pub(crate) fn client_name_command() -> String {
     "display-message -p '#{client_name}'".to_string()
 }
 
+/// Builds `display-message -p '#{window_id} #{pane_id}'` — prints the attached
+/// client's active window and pane as one reply line (`@N %M`).
+///
+/// tmux does not emit `%window-pane-changed` on attach, so the active pane is
+/// queried explicitly to seed the `ActivePane` marker (which drives pane dim).
+pub(crate) fn active_pane_command() -> String {
+    "display-message -p '#{window_id} #{pane_id}'".to_string()
+}
+
 /// Builds the `list-windows` command ozmux sends on attach to enumerate the
 /// session's existing windows.
 ///
@@ -128,6 +137,8 @@ pub(crate) struct EnumerationState {
     pub(crate) pending: Option<CommandId>,
     /// The id of the in-flight `display-message` client-name query, if any.
     pub(crate) client_name_pending: Option<CommandId>,
+    /// The id of the in-flight `display-message` active-pane query, if any.
+    pub(crate) active_pane_pending: Option<CommandId>,
     /// In-flight `capture-pane` commands → the pane each reply seeds.
     pub(crate) capture_pending: HashMap<CommandId, PaneId>,
 }
@@ -199,6 +210,14 @@ mod tests {
     #[test]
     fn client_name_command_has_expected_format() {
         assert_eq!(client_name_command(), "display-message -p '#{client_name}'");
+    }
+
+    #[test]
+    fn active_pane_command_queries_window_and_pane() {
+        assert_eq!(
+            active_pane_command(),
+            "display-message -p '#{window_id} #{pane_id}'"
+        );
     }
 
     #[test]

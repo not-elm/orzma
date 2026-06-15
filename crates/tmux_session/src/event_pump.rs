@@ -12,7 +12,7 @@ use bevy::prelude::Commands;
 use crossbeam_channel::Receiver;
 use std::collections::HashMap;
 use tmux_control::{ClientEvent, CommandId, ControlEvent, TransportEvent};
-use tmux_control_parser::PaneId;
+use tmux_control_parser::{PaneId, WindowId};
 
 /// Upper bound on events drained per frame, so a pane flooding `%output`
 /// cannot stall the schedule with unbounded parse/apply work in one tick;
@@ -149,6 +149,39 @@ pub(crate) fn take_pane_captures(
 /// (the reply omits line terminators) so the receiving terminal advances rows.
 fn capture_to_bytes(lines: &[String]) -> Vec<u8> {
     lines.join("\r\n").into_bytes()
+}
+
+/// Returns the active `(window, pane)` from a `CommandComplete` whose id matches
+/// `pending` (parsing the `@N %M` reply line), clearing `pending`.
+///
+/// Used to seed the `ActivePane` marker on attach, since tmux does not emit
+/// `%window-pane-changed` then. Returns `None` when no matching reply is in the
+/// batch or the line does not parse.
+pub(crate) fn take_active_pane(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<(WindowId, PaneId)> {
+    for event in events {
+        if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
+            && *pending == Some(*id)
+        {
+            *pending = None;
+            if *ok {
+                return output.iter().find_map(|line| parse_active_pane(line));
+            }
+            tracing::warn!("active-pane query command failed");
+            return None;
+        }
+    }
+    None
+}
+
+/// Parses an `@N %M` line into `(WindowId, PaneId)`.
+fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
+    let mut parts = line.split_whitespace();
+    let window = parts.next()?.strip_prefix('@')?.parse().ok()?;
+    let pane = parts.next()?.strip_prefix('%')?.parse().ok()?;
+    Some((WindowId(window), PaneId(pane)))
 }
 
 fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
@@ -291,6 +324,22 @@ mod tests {
             }]
         );
         assert!(capture_pending.is_empty());
+    }
+
+    #[test]
+    fn take_active_pane_parses_window_and_pane() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(9),
+            number: 0,
+            ok: true,
+            output: vec!["@7 %88".to_string()],
+        })];
+        let mut pending = Some(CommandId(9));
+        assert_eq!(
+            take_active_pane(&mut pending, &events),
+            Some((WindowId(7), PaneId(88)))
+        );
+        assert_eq!(pending, None);
     }
 
     #[test]
