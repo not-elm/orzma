@@ -235,10 +235,7 @@ mod tests {
             parse_dyn_url("ozma-dyn://abc/"),
             Some(("abc", "index.html"))
         );
-        assert_eq!(
-            parse_dyn_url("ozma-dyn://abc"),
-            Some(("abc", "index.html"))
-        );
+        assert_eq!(parse_dyn_url("ozma-dyn://abc"), Some(("abc", "index.html")));
     }
 
     #[test]
