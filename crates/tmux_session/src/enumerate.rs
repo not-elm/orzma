@@ -1,6 +1,7 @@
 //! Parsing the `list-windows -F` reply used to enumerate windows on attach.
 
 use bevy::prelude::Resource;
+use std::collections::HashMap;
 use tmux_control::CommandId;
 use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
@@ -109,6 +110,16 @@ pub fn select_pane_command(id: PaneId) -> String {
     format!("select-pane -t %{}", id.0)
 }
 
+/// Builds `capture-pane -p -e -t %<id>` to fetch a pane's current visible
+/// content (with SGR escapes) as a command reply.
+///
+/// tmux `-CC` does not replay existing pane content on attach — it only streams
+/// new `%output`. So on attach each projected pane is captured once to seed its
+/// initial screen; the reply bytes are fed into the pane like ordinary output.
+pub(crate) fn capture_pane_command(id: PaneId) -> String {
+    format!("capture-pane -p -e -t %{}", id.0)
+}
+
 /// Tracks the in-flight `list-windows` enumeration command so its reply can
 /// be correlated by [`CommandId`] and seeded into the projection.
 #[derive(Resource, Default)]
@@ -117,6 +128,8 @@ pub(crate) struct EnumerationState {
     pub(crate) pending: Option<CommandId>,
     /// The id of the in-flight `display-message` client-name query, if any.
     pub(crate) client_name_pending: Option<CommandId>,
+    /// In-flight `capture-pane` commands → the pane each reply seeds.
+    pub(crate) capture_pending: HashMap<CommandId, PaneId>,
 }
 
 #[cfg(test)]
@@ -207,5 +220,10 @@ mod tests {
     #[test]
     fn select_pane_command_targets_at_id() {
         assert_eq!(select_pane_command(PaneId(3)), "select-pane -t %3");
+    }
+
+    #[test]
+    fn capture_pane_command_targets_at_id_with_escapes() {
+        assert_eq!(capture_pane_command(PaneId(5)), "capture-pane -p -e -t %5");
     }
 }

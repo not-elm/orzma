@@ -1,9 +1,14 @@
 //! The `TmuxSessionPlugin`: connection state, the projection observers, and the
 //! per-frame transport-drain system that triggers the projection events.
 
+use crate::components::TmuxPane;
 use crate::connection::TmuxConnection;
-use crate::enumerate::{EnumerationState, client_name_command, list_windows_command};
-use crate::event_pump::{advance_state, drain_transport, take_client_name, trigger_events};
+use crate::enumerate::{
+    EnumerationState, capture_pane_command, client_name_command, list_windows_command,
+};
+use crate::event_pump::{
+    advance_state, drain_transport, take_client_name, take_pane_captures, trigger_events,
+};
 use crate::events::TmuxConnectionReset;
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
@@ -36,7 +41,34 @@ impl Plugin for TmuxSessionPlugin {
             .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
-            .add_systems(Update, drain_tmux_events.in_set(TmuxProjectionSet));
+            .add_systems(Update, drain_tmux_events.in_set(TmuxProjectionSet))
+            .add_systems(Update, request_pane_captures.after(TmuxProjectionSet));
+    }
+}
+
+/// Sends `capture-pane` once for each newly-projected pane so its current screen
+/// seeds the first paint. tmux `-CC` does not replay existing content on attach
+/// (it only streams new `%output`), so without this a quiescent pane stays blank
+/// until its program writes again. Gated on `Added<TmuxPane>` — runs once per
+/// pane. The reply is consumed by [`take_pane_captures`] and routed as
+/// `PaneOutput`.
+fn request_pane_captures(
+    mut enumeration: ResMut<EnumerationState>,
+    connection: NonSend<TmuxConnection>,
+    new_panes: Query<&TmuxPane, Added<TmuxPane>>,
+) {
+    let Some(client) = connection.client() else {
+        return;
+    };
+    for pane in new_panes.iter() {
+        match client.handle().send(&capture_pane_command(pane.id)) {
+            Ok(id) => {
+                enumeration.capture_pending.insert(id, pane.id);
+            }
+            Err(error) => {
+                tracing::warn!(?error, pane = pane.id.0, "failed to send capture-pane")
+            }
+        }
     }
 }
 
@@ -91,10 +123,14 @@ fn drain_tmux_events(
         connection.take();
         enumeration.pending = None;
         enumeration.client_name_pending = None;
+        enumeration.capture_pending.clear();
         commands.trigger(TmuxConnectionReset);
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
             connection.set_client_name(name);
+        }
+        for output in take_pane_captures(&mut enumeration.capture_pending, &events) {
+            pane_output.write(output);
         }
         trigger_events(&mut commands, &mut enumeration.pending, &events);
     }

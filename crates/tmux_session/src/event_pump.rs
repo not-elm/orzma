@@ -6,10 +6,13 @@ use crate::events::{
     TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxLayoutChanged, TmuxSessionChanged,
     TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
+use crate::output::PaneOutput;
 use crate::state::{ConnectionState, next_state};
 use bevy::prelude::Commands;
 use crossbeam_channel::Receiver;
+use std::collections::HashMap;
 use tmux_control::{ClientEvent, CommandId, ControlEvent, TransportEvent};
+use tmux_control_parser::PaneId;
 
 /// Upper bound on events drained per frame, so a pane flooding `%output`
 /// cannot stall the schedule with unbounded parse/apply work in one tick;
@@ -110,6 +113,42 @@ pub(crate) fn take_client_name(
         }
     }
     None
+}
+
+/// Drains matching `capture-pane` replies from `events`, returning a
+/// [`PaneOutput`] seeding each captured pane's initial screen.
+///
+/// For every `CommandComplete` whose id is in `capture_pending`, the entry is
+/// removed and (on success) its body lines are joined with CRLF into VT bytes
+/// fed to the pane like ordinary `%output`. tmux `-CC` does not replay existing
+/// content on attach, so this seeds the first paint; the live `%output` stream
+/// keeps it current thereafter.
+pub(crate) fn take_pane_captures(
+    capture_pending: &mut HashMap<CommandId, PaneId>,
+    events: &[TransportEvent],
+) -> Vec<PaneOutput> {
+    let mut out = Vec::new();
+    for event in events {
+        if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
+            && let Some(pane) = capture_pending.remove(id)
+        {
+            if *ok {
+                out.push(PaneOutput {
+                    pane,
+                    data: capture_to_bytes(output),
+                });
+            } else {
+                tracing::warn!(pane = pane.0, "capture-pane command failed");
+            }
+        }
+    }
+    out
+}
+
+/// Joins `capture-pane -p -e` reply lines into VT bytes: lines are CRLF-joined
+/// (the reply omits line terminators) so the receiving terminal advances rows.
+fn capture_to_bytes(lines: &[String]) -> Vec<u8> {
+    lines.join("\r\n").into_bytes()
 }
 
 fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
@@ -232,6 +271,43 @@ mod tests {
             Some("main-client".to_string())
         );
         assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn take_pane_captures_seeds_matching_reply_as_output() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(5),
+            number: 0,
+            ok: true,
+            output: vec!["line one".to_string(), "line two".to_string()],
+        })];
+        let mut capture_pending = HashMap::from([(CommandId(5), PaneId(88))]);
+        let out = take_pane_captures(&mut capture_pending, &events);
+        assert_eq!(
+            out,
+            vec![PaneOutput {
+                pane: PaneId(88),
+                data: b"line one\r\nline two".to_vec(),
+            }]
+        );
+        assert!(capture_pending.is_empty());
+    }
+
+    #[test]
+    fn take_pane_captures_drops_failed_reply_without_output() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(5),
+            number: 0,
+            ok: false,
+            output: vec![],
+        })];
+        let mut capture_pending = HashMap::from([(CommandId(5), PaneId(88))]);
+        let out = take_pane_captures(&mut capture_pending, &events);
+        assert!(out.is_empty());
+        assert!(
+            capture_pending.is_empty(),
+            "failed capture is still cleared"
+        );
     }
 
     #[test]
