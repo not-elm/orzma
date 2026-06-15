@@ -26,6 +26,9 @@ update (the flicker fix) is preserved.
 2. **Quick keys are display-only.** `(N)` is shown for orientation; it is the
    flat row position (0-based) in `build_rows` order, exactly like tmux. There
    is **no** digit-key jump — navigation stays `↑↓` / `j`/`k` + `Enter`.
+   NOTE: tmux's bracketed index IS a functional jump key, so a tmux-literate
+   user may expect `(N)` to jump; this divergence is accepted for now (wiring
+   digit-jump is a later follow-up).
 3. **Window count removed.** No `(N windows)` next to session names.
 4. **`Esc` cancels** (closes the popup with no action).
 5. **`j`/`k` move the cursor** (down/up) in addition to `↑`/`↓`.
@@ -68,6 +71,10 @@ already iterates with `enumerate()`, so `N == i`.
 pub const SELECTION: Color = Color::srgb(0.847, 0.651, 0.341);
 /// Text on the SELECTION bar — near-black for contrast.
 pub const SELECTION_FG: Color = Color::srgb(0.094, 0.086, 0.063);
+/// Faint divider line (chooser footer separator, etc.).
+pub const DIVIDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
+/// Session-chooser title / footer font size.
+pub const PICKER_TITLE_FONT_SIZE_PX: f32 = 11.0;
 ```
 
 `sync_picker_ui` swaps the selected-row colors from `theme::ACCENT` / white to
@@ -75,14 +82,15 @@ pub const SELECTION_FG: Color = Color::srgb(0.094, 0.086, 0.063);
 
 ### Panel chrome (`spawn_picker_ui`)
 
-- Title: keep the title node but style it muted + uppercase + small
-  (`theme::MUTED`, `font_size: 11`, existing letter-spacing via text) reading
-  `tmux sessions`.
-- Footer: add one `Text` child to the panel **after** `PickerList`:
-  `↑↓ select · ⏎ open · esc cancel`, `theme::MUTED`, `font_size: 11`, with a
-  1px top border (`border: UiRect::top(Val::Px(1.0))`, `BorderColor::all` a
-  faint divider color, e.g. `Color::srgba(1.0,1.0,1.0,0.06)`) and small top
-  padding so it reads as a separated status line.
+- Title: keep the title node, styled muted + small + uppercased
+  (`theme::MUTED`, font size `theme::PICKER_TITLE_FONT_SIZE_PX`), reading
+  `TMUX SESSIONS`. NOTE: Bevy 0.18 `TextFont` has no letter-spacing/tracking —
+  the "spaced" look is just the uppercased string, not a font feature.
+- Footer: add one **plain `Text` child** (no marker component — it is static)
+  to the panel **after** `PickerList`: `↑↓ select · ⏎ open · esc cancel`,
+  `theme::MUTED`, font size `theme::PICKER_TITLE_FONT_SIZE_PX`, with a 1px top
+  border (`border: UiRect::top(Val::Px(1.0))`, `BorderColor::all(theme::DIVIDER)`)
+  and small top padding so it reads as a separated status line.
 
 ### Input (`handle_picker_input`)
 
@@ -94,6 +102,10 @@ never leak to tmux):
 - `KeyCode::Escape` → `picker.open = false; break;` (cancel, no action)
 - `KeyCode::Enter` → unchanged (switch / attach via `apply_switch` /
   `apply_attach`).
+
+While editing `handle_picker_input`, build the flattened `rows` once at the top
+and reuse it for both `entry_count` and the `Enter` branch (today it calls
+`build_rows` 2–3× per keypress).
 
 ## Affected files
 
@@ -110,8 +122,9 @@ never leak to tmux):
     `theme::SELECTION` bar + `SELECTION_FG` text; unselected gets `Color::NONE`.
   - Quick-key index equals the flat row position for every row.
 - **Bevy (headless):**
-  - Keep the Phase 4 `nav_reuses_row_entities_in_place` test (in-place update
-    must still hold after the label change).
+  - Keep the Phase 4 `nav_reuses_row_entities_in_place` test, but UPDATE its
+    selected-row assertion from `theme::ACCENT` to `theme::SELECTION` (the bar
+    color changed) — otherwise the preserved test fails.
   - `j`/`k` change `selected` like `↓`/`↑`; `Esc` sets `open = false`. (Drive
     `handle_picker_input` with synthetic `KeyboardInput` messages, mirroring the
     existing input-handling test style.)
