@@ -49,12 +49,18 @@ except the active one.
   (`select_window_command`, `client_name_command`, …). The new
   `select_pane_command` joins it; exported from `lib.rs`.
 - Interaction model: the repo uses **`bevy_ui` `Interaction`** (no
-  `bevy_picking`/`Pickable` anywhere). `drive_tab_clicks` (`src/ui/tab_input.rs`)
-  and the 3b window-bar entries use `(&Interaction, &Marker), Changed<Interaction>`
-  in `InputPhase::Dispatch`. The same pattern is used here. UI focus picks the
-  topmost node under the cursor whose `FocusPolicy` is `Block`; a child with
-  `FocusPolicy::Pass` does not intercept — so the dim overlay must be
-  `FocusPolicy::Pass` to let clicks reach the pane.
+  `bevy_picking`/`Pickable` anywhere). The repo's existing interactive nodes
+  (`src/ui/tab_bar.rs`, `src/ui/tmux_window_bar.rs`) spawn **`Button`** (which
+  requires `Interaction`); their click systems read
+  `(&Interaction, &Marker), Changed<Interaction>` in `InputPhase::Dispatch`.
+  3c follows the same pattern — the pane node gets `Button`, not bare
+  `Interaction`. UI focus picks the topmost node under the cursor whose
+  effective `FocusPolicy` is `Block`. **Verified in `bevy_ui 0.18.1`
+  (`focus.rs:324`): a node with NO `FocusPolicy` component is treated as
+  `Block`** (`unwrap_or(&FocusPolicy::Block)`) — only `FocusPolicy::default()`
+  is `Pass`. So the pane node needs no `FocusPolicy` to be a click target, but
+  the dim overlay child MUST carry an **explicit** `FocusPolicy::Pass` or it
+  intercepts the click meant for the pane.
 - `src/input/mouse_buttons.rs` — the legacy old-multiplexer mouse path
   (`PtyHandle`/`MultiplexerCommands`/surfaces). Dormant in tmux mode; NOT
   touched here (Phase 5 removes it). 3c adds a small dedicated tmux system
@@ -77,20 +83,24 @@ click pane node ─▶ Interaction::Pressed ─▶ focus_pane_on_click
 
 ### Pane focus + dim (`src/ui/tmux_pane_focus.rs`, new binary module)
 
-- **`augment_tmux_pane`** (Update system, runs each frame, targets each pane
-  once — query `TmuxPane` `With<TerminalHandle>` `Without<PaneFocusReady>`, OR
-  fold into a marker): for each rendered pane that hasn't been augmented yet:
-  - add `Interaction` (make the pane node a click target, as the window-bar
-    entries do; add `FocusPolicy::Block` if the pane node's default isn't Block),
-  - spawn a `PaneDimOverlay` child: an absolute `Node` filling the pane
-    (`top/left/right/bottom: 0` or `width/height: 100%`), a themed
-    semi-transparent dark `BackgroundColor` (~35% black; pick a `src/theme`
-    token or a documented constant), `FocusPolicy::Pass` (never intercept the
-    pane's click), and `Visibility::Hidden` initially,
-  - mark the pane augmented (a `PaneFocusReady` marker) so it's done once.
-  (NOTE: the overlay is a CHILD of the pane node; UI z-order renders children
-  above the parent, so the overlay dims the terminal material beneath it. It
-  follows the pane on resize because it is sized relative to the parent.)
+- **`augment_tmux_pane`** (Update system, targets each pane once via its own
+  idempotency gate — query `TmuxPane` `With<TerminalHandle>, Without<Button>`,
+  so a pane is augmented exactly once after it gets its render node; NO separate
+  `PaneFocusReady` marker). For each such pane:
+  - insert `Button` on the pane node (makes it a click target; `Button` requires
+    `Interaction`). The pane needs no `FocusPolicy` (absent ⇒ `Block` ⇒ it
+    receives clicks).
+  - spawn a dim-overlay child: an absolute `Node` filling the pane
+    (`top/left/right/bottom: Val::Px(0.0)`), a themed semi-transparent dark
+    `BackgroundColor` (~35% black; a `src/theme` token or a documented
+    constant), an **explicit** `FocusPolicy::Pass` (so it never intercepts the
+    pane's click), and `Visibility::Hidden` initially.
+  - store the overlay entity on the pane as a `PaneDim(Entity)` component for an
+    O(1) lookup in `sync_pane_dim` (avoids a `Children` scan).
+  (NOTE: the overlay is a CHILD of the pane node; verified against
+  `bevy_ui_render 0.18.1` stack ordering — the child's stack index is above the
+  parent's `MaterialNode`, so the overlay composites above and dims the terminal
+  beneath it. It follows the pane on resize because it is sized to the parent.)
 - **`focus_pane_on_click`** (`InputPhase::Dispatch`, mirroring
   `drive_tab_clicks` so the focus change is same-frame): query
   `(&Interaction, &TmuxPane), Changed<Interaction>` + `connection:
@@ -98,12 +108,13 @@ click pane node ─▶ Interaction::Pressed ─▶ focus_pane_on_click
   is `Some`, send `select_pane_command(pane.id)`; `tracing::warn!` on error. No
   projection mutation (command-echo).
 - **`sync_pane_dim`** (gated `run_if(resource_exists_and_changed::<ProjectionModel>)`):
-  for each `(&TmuxPane, &PaneDimOverlay-child)` — resolve each pane's overlay
-  child and set its `Visibility` to `Hidden` when `Some(pane.id) ==
-  model.active_pane`, else `Visible`. Change-guard the write (only assign when
-  the value differs) to avoid per-frame relayout/redraw. Find the overlay via
-  the pane's `Children` + a `PaneDimOverlay` filter (or store the overlay entity
-  on the pane via a component for an O(1) lookup — plan's choice).
+  for each `(&TmuxPane, &PaneDim)`, look up the overlay entity and set its
+  `Visibility` with `set_if_neq` to `Hidden` when `Some(pane.id) ==
+  model.active_pane`, else `Visible`. **When `model.active_pane` is `None`, dim
+  NOTHING** (all overlays `Hidden`) — avoids an all-panes-dim flash on attach
+  before the first `%window-pane-changed`. Tolerate a pane whose overlay entity
+  isn't resolvable yet (augment may run a frame later) — `get_mut` miss is a
+  no-op, never `expect()`/panic.
 - **`OzmuxTmuxPaneFocusPlugin`** registers the three systems; added in
   `src/main.rs` near the other tmux plugins. `src/tmux_render.rs` stays
   render-only.
@@ -116,10 +127,12 @@ click pane node ─▶ Interaction::Pressed ─▶ focus_pane_on_click
   `select_pane_command(pane.id)` (a tiny helper if it aids testing, like the
   window-bar `entry_command`).
 - **Bevy headless (binary):** seed a `ProjectionModel` with `active_pane =
-  Some(PaneId(1))` and two `TmuxPane` entities (ids 1 and 2) each with a
-  `PaneDimOverlay` child; run `sync_pane_dim`; assert pane 1's overlay is
-  `Hidden` and pane 2's is `Visible`. Then flip `active_pane` to `PaneId(2)`,
-  re-run, assert the visibilities swap.
+  Some(PaneId(1))` and two `TmuxPane` entities (ids 1 and 2), each carrying a
+  `PaneDim(overlay)` component pointing at a spawned overlay entity with a
+  `Visibility`; run `sync_pane_dim`; assert pane 1's overlay is `Hidden` and
+  pane 2's is `Visible`. Flip `active_pane` to `PaneId(2)`, re-run, assert the
+  visibilities swap. Set `active_pane = None`, re-run, assert BOTH overlays are
+  `Hidden` (dim nothing).
 - **Gated real-tmux (`crates/tmux_session/tests/real_tmux_pane.rs`, ignored):**
   attach → `split-window` (now ≥2 panes; tmux auto-focuses the new one) → drain
   until `active_pane` moves off the first pane → `select-pane -t %<first>` →
@@ -133,19 +146,18 @@ click pane node ─▶ Interaction::Pressed ─▶ focus_pane_on_click
 ## Risks / unknowns
 
 - **Overlay must not steal the click:** the dim overlay child is rendered above
-  the pane and could intercept the `Interaction` if its `FocusPolicy` is `Block`.
-  It MUST be `FocusPolicy::Pass`. Verify against `bevy_ui` 0.18 focus semantics
-  (the default `FocusPolicy` for a plain `Node` may already be `Pass`, but set it
-  explicitly). Covered by the manual GUI check.
+  the pane and WOULD intercept the `Interaction` by default — verified in
+  `bevy_ui 0.18.1` (`focus.rs:324`), a node with no `FocusPolicy` component is
+  treated as `Block`. The overlay MUST carry an **explicit** `FocusPolicy::Pass`.
+  Covered by the headless test (click maps to `select_pane_command`) and the
+  manual GUI check (clicking a dimmed pane focuses it).
 - **Click vs future text-selection:** when mouse selection/forwarding is added
   later, a click will need to both focus and (maybe) start selection; 3c's
   click-to-focus is the baseline those will build on. Deferred, noted.
 - **`active_pane` availability:** set by `%window-pane-changed`; on initial
-  attach it should already be present (the projection seeds it). If `None`, no
-  pane is treated as active → all panes dim until the first focus event;
-  acceptable (and self-corrects on the first `%window-pane-changed`). Consider
-  treating `active_pane == None` as "dim nothing" to avoid an all-dim flash —
-  plan's call.
+  attach it should already be present (the projection seeds it). When `None`,
+  `sync_pane_dim` dims NOTHING (decided — see Architecture), so there is no
+  all-panes-dim flash before the first `%window-pane-changed`.
 
 ## Deferred scope (later phases)
 
