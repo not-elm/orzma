@@ -33,7 +33,10 @@ pub struct KeyMods {
 /// NOTE: when `Alt` is held, the base key is taken from the physical `code`, not
 /// the logical glyph. macOS composes Option-modified keys (Option+p → "π"),
 /// which tmux cannot map to its `M-p` bindings (it types `<ffffffff>`); tmux
-/// `M-` bindings are defined on the base key, so `Alt` acts as Meta here.
+/// `M-` bindings are defined on the base key, so `Alt` acts as Meta here. `Shift`
+/// is folded into the base by uppercasing it (Alt+Shift+p → `M-P`), matching the
+/// `Key::Character` convention. Only letter/digit keys have a physical base;
+/// other Alt-modified keys fall through to the logical glyph below.
 pub fn bevy_key_to_tmux_name(key: &Key, code: KeyCode, mods: KeyMods) -> Option<String> {
     if mods.super_ {
         return None;
@@ -41,6 +44,11 @@ pub fn bevy_key_to_tmux_name(key: &Key, code: KeyCode, mods: KeyMods) -> Option<
     if mods.alt
         && let Some(base) = physical_base_char(code)
     {
+        let base = if mods.shift {
+            base.to_ascii_uppercase()
+        } else {
+            base
+        };
         return Some(prefix(&mods, false, &base.to_string()));
     }
     let base = match key {
@@ -250,6 +258,20 @@ mod tests {
                 m(false, true, false, false)
             ),
             Some("M-i".to_string())
+        );
+    }
+
+    #[test]
+    fn alt_shift_letter_folds_shift_into_uppercase_base() {
+        // Alt+Shift+P must reach tmux as M-P, not M-p; the composed logical
+        // glyph is irrelevant — the physical key + Shift decide the base.
+        assert_eq!(
+            bevy_key_to_tmux_name(
+                &Key::Character("π".into()),
+                KeyCode::KeyP,
+                m(false, true, true, false)
+            ),
+            Some("M-P".to_string())
         );
     }
 

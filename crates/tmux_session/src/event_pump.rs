@@ -145,10 +145,15 @@ pub(crate) fn take_pane_captures(
     out
 }
 
-/// Joins `capture-pane -p -e` reply lines into VT bytes: lines are CRLF-joined
-/// (the reply omits line terminators) so the receiving terminal advances rows.
+/// Joins `capture-pane -p -e` reply lines into VT bytes for seeding a pane's
+/// screen: a cursor-home + clear-screen prefix so the snapshot repaints from a
+/// clean grid (the reply can arrive after live `%output` has already moved the
+/// cursor — without the reset the rows would stack and duplicate), then the rows
+/// CRLF-joined (the reply omits line terminators).
 fn capture_to_bytes(lines: &[String]) -> Vec<u8> {
-    lines.join("\r\n").into_bytes()
+    let mut bytes = b"\x1b[H\x1b[2J".to_vec();
+    bytes.extend_from_slice(lines.join("\r\n").as_bytes());
+    bytes
 }
 
 /// Returns the active `(window, pane)` from a `CommandComplete` whose id matches
@@ -320,7 +325,7 @@ mod tests {
             out,
             vec![PaneOutput {
                 pane: PaneId(88),
-                data: b"line one\r\nline two".to_vec(),
+                data: b"\x1b[H\x1b[2Jline one\r\nline two".to_vec(),
             }]
         );
         assert!(capture_pending.is_empty());
