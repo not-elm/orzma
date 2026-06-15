@@ -249,4 +249,17 @@ mod tests {
             "empty passthrough must be skipped"
         );
     }
+
+    #[test]
+    fn register_url_serializes_bridge_true() {
+        let v = serde_json::to_value(ClientMsg::Register(RegisterKind::Url {
+            url: "https://app.example.com".into(),
+            interactive: true,
+            bridge: true,
+            passthrough: Vec::new(),
+        }))
+        .unwrap();
+        assert_eq!(v["kind"], "url");
+        assert_eq!(v["bridge"], true);
+    }
 }
