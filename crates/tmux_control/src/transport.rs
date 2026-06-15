@@ -4,6 +4,7 @@
 use crate::error::{TmuxError, TmuxResult};
 use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
 use crate::session::{LIST_FORMAT, SessionInfo};
+use crate::window_list::{LIST_ALL_FORMAT, WindowEntry};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
@@ -120,6 +121,81 @@ impl TmuxServer {
         argv.push("list-sessions".to_string());
         argv.push("-F".to_string());
         argv.push(LIST_FORMAT.to_string());
+        argv
+    }
+
+    /// Lists every window across all sessions (`tmux [..] list-windows -a -F ..`,
+    /// plain pipe, no control mode). Returns `Ok(vec![])` when no server is
+    /// running. Used to build the session-chooser tree against the same socket
+    /// whether or not a control client is attached.
+    pub fn list_windows_all(&self) -> TmuxResult<Vec<WindowEntry>> {
+        let output = std::process::Command::new(&self.program)
+            .args(self.list_windows_all_argv())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(TmuxError::Spawn)?;
+        if output.status.success() {
+            return WindowEntry::parse_list(&output.stdout);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if output.stdout.is_empty() && stderr.contains("no server running") {
+            return Ok(Vec::new());
+        }
+        let message = stderr.trim();
+        let message = if message.is_empty() {
+            "tmux list-windows failed"
+        } else {
+            message
+        };
+        Err(TmuxError::Spawn(std::io::Error::other(message.to_string())))
+    }
+
+    /// The argv (after the program) for the `list-windows -a` query.
+    pub fn list_windows_all_argv(&self) -> Vec<String> {
+        let mut argv = self.socket_args();
+        argv.push("list-windows".to_string());
+        argv.push("-a".to_string());
+        argv.push("-F".to_string());
+        argv.push(LIST_ALL_FORMAT.to_string());
+        argv
+    }
+
+    /// Creates a new detached session (`tmux new-session -d -P -F ..`) and
+    /// returns its name, without attaching. Used by the chooser's "New session"
+    /// entry while a control client is already attached: create here, then
+    /// `switch-client` the live client to the returned name.
+    pub fn create_detached_session(&self) -> TmuxResult<String> {
+        let output = std::process::Command::new(&self.program)
+            .args(self.create_detached_session_argv())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(TmuxError::Spawn)?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let message = if message.is_empty() {
+                "tmux new-session failed".to_string()
+            } else {
+                message
+            };
+            return Err(TmuxError::Spawn(std::io::Error::other(message)));
+        }
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if name.is_empty() {
+            return Err(TmuxError::Spawn(std::io::Error::other(
+                "tmux new-session returned no name".to_string(),
+            )));
+        }
+        Ok(name)
+    }
+
+    /// The argv (after the program) for `create_detached_session`.
+    pub fn create_detached_session_argv(&self) -> Vec<String> {
+        let mut argv = self.socket_args();
+        argv.push("new-session".to_string());
+        argv.push("-d".to_string());
+        argv.push("-P".to_string());
+        argv.push("-F".to_string());
+        argv.push("#{session_name}".to_string());
         argv
     }
 
@@ -678,6 +754,27 @@ mod tests {
                 .list_sessions_argv(),
             argv(&["-S", "/tmp/foo", "list-sessions", "-F", LIST_FORMAT])
         );
+    }
+
+    #[test]
+    fn list_windows_all_argv_targets_all_with_format() {
+        let server = TmuxServer::new().socket_name("sock");
+        let argv = server.list_windows_all_argv();
+        assert_eq!(argv[0..2], ["-L".to_string(), "sock".to_string()]);
+        assert!(argv.contains(&"list-windows".to_string()));
+        assert!(argv.contains(&"-a".to_string()));
+        assert!(argv.iter().any(|a| a.contains("#{session_id}")));
+    }
+
+    #[test]
+    fn create_detached_session_argv_is_detached_with_name_format() {
+        let server = TmuxServer::new();
+        let argv = server.create_detached_session_argv();
+        assert_eq!(argv[0], "new-session");
+        assert!(argv.contains(&"-d".to_string()));
+        assert!(argv.contains(&"-P".to_string()));
+        assert!(argv.contains(&"-F".to_string()));
+        assert!(argv.contains(&"#{session_name}".to_string()));
     }
 
     #[test]
