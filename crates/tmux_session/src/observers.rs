@@ -225,15 +225,18 @@ fn upsert_pane(
         id: geom.id,
         dims: geom.dims,
     };
-    match index.panes.get(&geom.id) {
-        Some(&(e, _)) => {
-            commands.entity(e).insert(pane);
+    // NOTE: re-assert ChildOf(window) on every upsert, not just on spawn — a pane
+    // tmux moves between windows (break/join-pane) reappears in the new window's
+    // layout, and without re-parenting it would keep a stale parent (rendering
+    // under the wrong window or as a UI root). Refresh the stored window id too.
+    let entity = match index.panes.get(&geom.id).map(|&(e, _)| e) {
+        Some(e) => {
+            commands.entity(e).insert((pane, ChildOf(window)));
+            e
         }
-        None => {
-            let e = commands.spawn((pane, ChildOf(window))).id();
-            index.panes.insert(geom.id, (e, window_id));
-        }
-    }
+        None => commands.spawn((pane, ChildOf(window))).id(),
+    };
+    index.panes.insert(geom.id, (entity, window_id));
 }
 
 fn apply_pending_active_pane(

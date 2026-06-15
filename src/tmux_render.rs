@@ -58,6 +58,7 @@ fn attach_tmux_window_container(
     for window in windows.iter() {
         commands.entity(window).insert((
             Node {
+                display: Display::Flex,
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),

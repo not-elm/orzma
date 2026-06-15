@@ -150,18 +150,26 @@ impl ProtocolClient {
             }
         };
         match frame {
-            Some(Frame::Reply { number, ok, body }) => {
-                let id = self
-                    .pending
-                    .pop_front()
-                    .ok_or(TmuxError::UnsolicitedReply { number })?;
-                Ok(Some(ClientEvent::CommandComplete {
+            Some(Frame::Reply { number, ok, body }) => match self.pending.pop_front() {
+                Some(id) => Ok(Some(ClientEvent::CommandComplete {
                     id,
                     number,
                     ok,
                     output: body,
-                }))
-            }
+                })),
+                // NOTE: a reply block with no pending command means tmux emitted a
+                // command-output block this control client did not originate
+                // (observed on pane select in multi-pane sessions). Closing the
+                // transport over it would tear down the whole projection (blank
+                // screen); warn and skip so the connection stays alive.
+                None => {
+                    warn!(
+                        number,
+                        "skipping tmux reply with no pending command; transport remains open"
+                    );
+                    Ok(None)
+                }
+            },
             Some(Frame::Notification(event)) => Ok(Some(ClientEvent::Notification(event))),
             None => Ok(None),
         }
@@ -489,10 +497,12 @@ mod tests {
     }
 
     #[test]
-    fn unsolicited_reply_errors() {
+    fn unsolicited_reply_is_skipped_not_fatal() {
         let mut c = ProtocolClient::new();
-        let err = c.feed(b"%begin 1 4 0\n%end 1 4 0\n").unwrap_err();
-        assert!(matches!(err, TmuxError::UnsolicitedReply { number: 4 }));
+        // A reply block with no pending command must be skipped, not close the
+        // transport (tmux can emit blocks this control client did not originate).
+        let events = c.feed(b"%begin 1 4 0\n%end 1 4 0\n").unwrap();
+        assert!(events.is_empty());
     }
 
     #[test]
