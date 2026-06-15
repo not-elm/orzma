@@ -215,10 +215,10 @@ pub fn capture_offsets(scroll_position: u32, pane_height: u16) -> (i32, i32) {
     (start, end)
 }
 
-/// Builds `capture-pane -e -p -t %N -S {start} -E {end}` for the scrolled view.
+/// Builds `capture-pane -p -e -t %N -S {start} -E {end}` for the scrolled view.
 pub fn copy_mode_capture_command(pane: PaneId, scroll_position: u32, pane_height: u16) -> String {
     let (start, end) = capture_offsets(scroll_position, pane_height);
-    format!("capture-pane -e -p -t %{} -S {start} -E {end}", pane.0)
+    format!("capture-pane -p -e -t %{} -S {start} -E {end}", pane.0)
 }
 
 /// Maps an absolute (history-relative) grid line to a visible viewport row:
@@ -403,7 +403,7 @@ mod tests {
     fn copy_mode_capture_command_uses_scroll_offsets() {
         assert_eq!(
             copy_mode_capture_command(PaneId(3), 12, 8),
-            "capture-pane -e -p -t %3 -S -12 -E -5"
+            "capture-pane -p -e -t %3 -S -12 -E -5"
         );
     }
 
@@ -439,6 +439,12 @@ mod tests {
     fn parse_copy_state_detects_exited_mode() {
         let s = parse_copy_state("0\t0\t8\t53\t0\t0\t0\t0\t0\t0\t0\t0").expect("parse");
         assert!(!s.pane_in_mode);
+    }
+
+    #[test]
+    fn parse_copy_state_returns_none_on_short_or_garbage_line() {
+        assert!(parse_copy_state("1\t3\t8").is_none());
+        assert!(parse_copy_state("not-a-number\t0\t8\t53\t0\t0\t0\t0\t0\t0\t0\t0").is_none());
     }
 
     #[test]
