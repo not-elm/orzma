@@ -59,15 +59,27 @@ No reply is sent for `hello`.
 {"op":"register","kind":"dir","root":"/absolute/path","entry":"index.html","interactive":true}
 ```
 
+```json
+{"op":"register","kind":"url","url":"https://example.com","interactive":true,"bridge":false}
+```
+
 Fields:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `kind` | `"inline"` \| `"dir"` | required | Content source |
+| `kind` | `"inline"` \| `"dir"` \| `"url"` | required | Content source |
 | `html` | string | — | Full HTML document (`inline` only). Max 4 MiB. |
 | `root` | string | — | Absolute directory path (`dir` only). Must exist. |
 | `entry` | string | — | HTML entry relative to `root` (`dir` only). No `..` or leading `/`. |
 | `interactive` | bool | `true` | Whether the mounted webview accepts pointer/keyboard input. |
+| `url` | string | — | Remote `http(s)` URL (`url` only). `http`/`https` schemes only. |
+| `bridge` | bool | `false` | Inject the `window.ozmux` back-channel (`url` only; `inline`/`dir` are always bridged). |
+
+A `url` webview is display-only by default: without `bridge:true`, the page
+receives no `window.ozmux` bridge, and ozmux delivers it no `emit` events. The
+URL itself still travels the authenticated socket (never PTY bytes), preserving
+the Tier 1 trust model. `http`/`https` only — other schemes are rejected with
+`unsupported_scheme`.
 
 Reply on success:
 
@@ -88,6 +100,8 @@ Error codes:
 | `invalid_root` | `root` is not absolute, or does not name an existing directory |
 | `unsafe_entry` | `entry` contains `..`, `.`, a leading `/`, or is empty |
 | `html_too_large` | `html` exceeds the 4 MiB limit |
+| `unsupported_scheme` | `url` scheme is not `http`/`https` |
+| `invalid_url` | `url` is unparseable or has no host |
 | `internal` | Server-side fallback if the ECS apply system drops the reply channel before responding — should not occur in normal operation (not a `build_view` validation error). |
 
 The reply arrives synchronously (the listener blocks until the Bevy system
@@ -158,7 +172,6 @@ is killed (`Ctrl-C` → socket disconnect → automatic registration teardown).
 
 The following are explicitly out of scope for Phase A and are deferred:
 
-- **localhost URL mounts** — `kind:"url"` with an `http://localhost/…` source.
 - **Host-API escalation** — dynamic webviews that call `window.<ns>.<method>`
   APIs; Phase A webviews are display-only (no `window.ozmux` bridge).
 - **Untrusted raw-OSC tier** — a lower-trust path that bypasses the socket
