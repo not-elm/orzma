@@ -11,6 +11,7 @@ mod multiplexer;
 mod osc_webview;
 mod system_set;
 mod theme;
+mod tmux_copy_mode;
 mod tmux_input;
 mod tmux_picker;
 mod tmux_render;
@@ -37,6 +38,7 @@ use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
 use ozmux_webview_host::DynAssetRegistry;
+use tmux_copy_mode::OzmuxTmuxCopyModePlugin;
 use tmux_input::OzmuxTmuxInputPlugin;
 use tmux_picker::OzmuxTmuxPickerPlugin;
 use tmux_render::OzmuxTmuxRenderPlugin;
@@ -86,6 +88,7 @@ fn main() {
         .add_plugins(OzmuxTmuxInputPlugin)
         .add_plugins(OzmuxTmuxWindowBarPlugin)
         .add_plugins(OzmuxTmuxPaneFocusPlugin)
+        .add_plugins(OzmuxTmuxCopyModePlugin)
         .add_plugins((
             MouseWheelInputPlugin,
             MouseButtonsInputPlugin,

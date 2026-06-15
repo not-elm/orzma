@@ -103,11 +103,18 @@ fn attach_tmux_pane_terminal(
 /// The per-pane alacritty handle is display-only: tmux is the real terminal and
 /// already answers the program's device queries (DSR/DA) itself. So this drains
 /// the handle's reply queue and discards it — see the `take_replies` `NOTE`.
+///
+/// While a pane is in copy mode the live bytes are still advanced (tmux keeps
+/// streaming `%output` — copy mode does not pause it), but the emit to the
+/// rendered grid is gated: the capture-fed refresh path
+/// (`OzmuxTmuxCopyModePlugin`) paints the scrolled view instead. On exit the
+/// live grid is already current — nothing to resume.
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
     mut handles: Query<&mut TerminalHandle>,
     panes: Query<(Entity, &TmuxPane)>,
+    copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
     let mut by_pane: HashMap<_, Vec<u8>> = HashMap::new();
     for msg in reader.read() {
@@ -125,7 +132,9 @@ fn route_tmux_output(
             continue;
         };
         handle.advance(&data);
-        handle.flush_emit(&mut commands, entity);
+        if copy_modes.get(entity).is_err() {
+            handle.flush_emit(&mut commands, entity);
+        }
         // NOTE: drain and DISCARD — never forward these replies to tmux. The
         // handle is a display-only renderer; tmux already answered the program's
         // DSR/DA query. Injecting alacritty's duplicate answer via `send-keys -H`
@@ -361,6 +370,98 @@ mod tests {
         assert!(
             row0.starts_with("hi"),
             "rendered grid row 0 should start with 'hi', got {row0:?}",
+        );
+    }
+
+    #[test]
+    fn copy_mode_pane_advances_but_gates_the_emit() {
+        use crate::ui::copy_mode::CopyModeState;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_message::<PaneOutput>();
+        app.insert_non_send_resource(TmuxConnection::default());
+
+        let pane_id = PaneId(1);
+        let pane_entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: pane_id,
+                dims: dims(),
+            })
+            .id();
+
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
+        );
+
+        // Frame 1: attach the handle, then paint "hi" so there is a baseline grid.
+        app.update();
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"hi".to_vec(),
+            });
+        app.update();
+        let baseline: String = app
+            .world()
+            .get::<TerminalGrid>(pane_entity)
+            .expect("pane has a TerminalGrid")
+            .cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(baseline.starts_with("hi"), "baseline grid painted 'hi'");
+
+        // Enter copy mode, then deliver more output: the live handle must advance
+        // but the rendered grid must NOT change (emit gated).
+        app.world_mut()
+            .entity_mut(pane_entity)
+            .insert(CopyModeState);
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"\r\nXY".to_vec(),
+            });
+        app.update();
+        let gated: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            gated.starts_with("hi"),
+            "grid stays at the baseline while in copy mode, got {gated:?}",
+        );
+
+        // Exit copy mode and deliver one more (empty) output batch: now that the
+        // marker is gone, route_tmux_output emits, so the gated-but-advanced live
+        // content ("XY" on row 1) reaches the rendered grid.
+        app.world_mut()
+            .entity_mut(pane_entity)
+            .remove::<CopyModeState>();
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: Vec::new(),
+            });
+        app.update();
+        let resumed: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[1]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            resumed.starts_with("XY"),
+            "the live handle advanced under copy mode; after exit + emit row 1 shows 'XY', got {resumed:?}",
         );
     }
 
