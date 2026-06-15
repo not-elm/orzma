@@ -10,7 +10,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use ozmux_tmux::{ConnectionState, TmuxConnection, attach_or_create, set_environment_command};
-use tmux_control::{SessionInfo, TmuxServer};
+use tmux_control::{SessionInfo, TmuxServer, WindowEntry};
 
 const PICKER_Z: i32 = 310;
 
@@ -36,9 +36,20 @@ impl Plugin for OzmuxTmuxPickerPlugin {
     }
 }
 
+/// One selectable row in the chooser tree: a session header, a window under a
+/// session (indices into the picker's `sessions` / `windows`), or the trailing
+/// "New session" entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PickerRow {
+    Session(usize),
+    Window { session: usize, window: usize },
+    NewSession,
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct SessionPicker {
     sessions: Vec<SessionInfo>,
+    windows: Vec<WindowEntry>,
     selected: usize,
     pub(crate) open: bool,
 }
@@ -48,6 +59,23 @@ struct PickerBackdrop;
 
 #[derive(Component)]
 struct PickerList;
+
+fn build_rows(sessions: &[SessionInfo], windows: &[WindowEntry]) -> Vec<PickerRow> {
+    let mut rows = Vec::new();
+    for (si, session) in sessions.iter().enumerate() {
+        rows.push(PickerRow::Session(si));
+        for (wi, window) in windows.iter().enumerate() {
+            if window.session_id == session.id {
+                rows.push(PickerRow::Window {
+                    session: si,
+                    window: wi,
+                });
+            }
+        }
+    }
+    rows.push(PickerRow::NewSession);
+    rows
+}
 
 fn target_for(sessions: &[SessionInfo], selected: usize) -> ozmux_tmux::AttachTarget {
     match sessions.get(selected) {
@@ -255,7 +283,7 @@ fn step_selection(selected: usize, entry_count: usize, up: bool) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tmux_control::SessionId;
+    use tmux_control::{SessionId, WindowId};
 
     fn fake_session(id: u32, name: &str) -> SessionInfo {
         SessionInfo {
@@ -265,6 +293,53 @@ mod tests {
             attached: false,
             created: 0,
         }
+    }
+
+    fn fake_window(session: u32, sname: &str, wid: u32, active: bool, wname: &str) -> WindowEntry {
+        WindowEntry {
+            session_id: SessionId(session),
+            session_name: sname.to_string(),
+            window_id: WindowId(wid),
+            window_index: 0,
+            window_active: active,
+            window_name: wname.to_string(),
+        }
+    }
+
+    #[test]
+    fn build_rows_nests_windows_under_sessions_then_new_session() {
+        let sessions = vec![fake_session(0, "alpha"), fake_session(1, "beta")];
+        let windows = vec![
+            fake_window(0, "alpha", 0, true, "zsh"),
+            fake_window(0, "alpha", 1, false, "editor"),
+            fake_window(1, "beta", 2, true, "top"),
+        ];
+        let rows = build_rows(&sessions, &windows);
+        assert_eq!(
+            rows,
+            vec![
+                PickerRow::Session(0),
+                PickerRow::Window {
+                    session: 0,
+                    window: 0
+                },
+                PickerRow::Window {
+                    session: 0,
+                    window: 1
+                },
+                PickerRow::Session(1),
+                PickerRow::Window {
+                    session: 1,
+                    window: 2
+                },
+                PickerRow::NewSession,
+            ]
+        );
+    }
+
+    #[test]
+    fn build_rows_with_no_sessions_is_just_new_session() {
+        assert_eq!(build_rows(&[], &[]), vec![PickerRow::NewSession]);
     }
 
     #[test]
