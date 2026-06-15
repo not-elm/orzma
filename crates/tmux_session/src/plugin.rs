@@ -8,10 +8,11 @@ use crate::enumerate::{
     list_windows_command,
 };
 use crate::event_pump::{
-    advance_state, drain_transport, take_active_pane, take_client_name, take_pane_captures,
-    trigger_events,
+    advance_state, drain_transport, take_active_pane, take_client_name, take_keybindings,
+    take_pane_captures, take_prefix_keys, trigger_events,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset};
+use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
 use crate::state::ConnectionState;
@@ -40,6 +41,7 @@ impl Plugin for TmuxSessionPlugin {
         app.init_resource::<ConnectionState>()
             .init_resource::<TmuxProjection>()
             .init_resource::<EnumerationState>()
+            .init_resource::<KeyBindings>()
             .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
@@ -90,6 +92,7 @@ fn drain_tmux_events(
     mut commands: Commands,
     mut state: ResMut<ConnectionState>,
     mut enumeration: ResMut<EnumerationState>,
+    mut keybindings: ResMut<KeyBindings>,
     mut connection: NonSendMut<TmuxConnection>,
     mut pane_output: MessageWriter<PaneOutput>,
 ) {
@@ -120,6 +123,18 @@ fn drain_tmux_events(
                 Ok(id) => enumeration.active_pane_pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to send active-pane query"),
             }
+            match client.handle().send(&list_keys_command("root")) {
+                Ok(id) => enumeration.keys_root_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send list-keys -T root"),
+            }
+            match client.handle().send(&list_keys_command("prefix")) {
+                Ok(id) => enumeration.keys_prefix_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send list-keys -T prefix"),
+            }
+            match client.handle().send(&prefix_options_command()) {
+                Ok(id) => enumeration.prefix_keys_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send prefix query"),
+            }
         }
     }
     if events
@@ -131,6 +146,10 @@ fn drain_tmux_events(
         enumeration.client_name_pending = None;
         enumeration.active_pane_pending = None;
         enumeration.capture_pending.clear();
+        enumeration.keys_root_pending = None;
+        enumeration.keys_prefix_pending = None;
+        enumeration.prefix_keys_pending = None;
+        keybindings.clear();
         commands.trigger(TmuxConnectionReset);
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
@@ -143,6 +162,15 @@ fn drain_tmux_events(
         }
         for output in take_pane_captures(&mut enumeration.capture_pending, &events) {
             pane_output.write(output);
+        }
+        if let Some(bindings) = take_keybindings(&mut enumeration.keys_root_pending, &events) {
+            keybindings.install(bindings);
+        }
+        if let Some(bindings) = take_keybindings(&mut enumeration.keys_prefix_pending, &events) {
+            keybindings.install(bindings);
+        }
+        if let Some(keys) = take_prefix_keys(&mut enumeration.prefix_keys_pending, &events) {
+            keybindings.set_prefix_keys(keys);
         }
         trigger_events(&mut commands, &mut enumeration.pending, &events);
     }
