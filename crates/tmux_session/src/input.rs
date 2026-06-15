@@ -40,8 +40,11 @@ pub struct KeyMods {
 /// which tmux cannot map to its `M-p` bindings (it types `<ffffffff>`); tmux
 /// `M-` bindings are defined on the base key, so `Alt` acts as Meta here. `Shift`
 /// is folded into the base by uppercasing it (Alt+Shift+p → `M-P`), matching the
-/// `Key::Character` convention. Only letter/digit keys have a physical base;
-/// other Alt-modified keys fall through to the logical glyph below.
+/// `Key::Character` convention. Letter, digit, and ASCII-punctuation keys have a
+/// physical base (so Alt+. → `M-.` despite macOS composing Option+. into `≥`);
+/// other Alt-modified keys fall through to the logical glyph below. Punctuation
+/// has no ASCII uppercase, so the Shift fold leaves it unchanged (Alt+Shift+. →
+/// `M-.`).
 pub fn bevy_key_to_tmux_name(key: &Key, code: KeyCode, mods: KeyMods) -> Option<String> {
     if mods.super_ {
         return None;
@@ -127,8 +130,9 @@ pub fn send_pane_keys_command(pane: &str, names: &[String]) -> String {
     cmd
 }
 
-/// Returns the base character a letter/digit physical key produces, ignoring
-/// any layout composition (e.g. macOS Option). `None` for non-character keys.
+/// Returns the base character a letter/digit/ASCII-punctuation physical key
+/// produces, ignoring any layout composition (e.g. macOS Option). `None` for
+/// non-character keys.
 fn physical_base_char(code: KeyCode) -> Option<char> {
     Some(match code {
         KeyCode::KeyA => 'a',
@@ -167,6 +171,17 @@ fn physical_base_char(code: KeyCode) -> Option<char> {
         KeyCode::Digit7 => '7',
         KeyCode::Digit8 => '8',
         KeyCode::Digit9 => '9',
+        KeyCode::Backquote => '`',
+        KeyCode::Minus => '-',
+        KeyCode::Equal => '=',
+        KeyCode::BracketLeft => '[',
+        KeyCode::BracketRight => ']',
+        KeyCode::Backslash => '\\',
+        KeyCode::Semicolon => ';',
+        KeyCode::Quote => '\'',
+        KeyCode::Comma => ',',
+        KeyCode::Period => '.',
+        KeyCode::Slash => '/',
         _ => return None,
     })
 }
@@ -270,6 +285,30 @@ mod tests {
                 m(false, true, false, false)
             ),
             Some("M-i".to_string())
+        );
+    }
+
+    #[test]
+    fn alt_punctuation_uses_physical_key_not_composed_glyph() {
+        // macOS Option+. yields logical "≥" (Option+, → "≤"); tmux needs M-.
+        // (the base key) to match its `M-.` binding — otherwise it types
+        // <ffffffff>. The base comes from the physical key, layout composition
+        // notwithstanding.
+        assert_eq!(
+            bevy_key_to_tmux_name(
+                &Key::Character("≥".into()),
+                KeyCode::Period,
+                m(false, true, false, false)
+            ),
+            Some("M-.".to_string())
+        );
+        assert_eq!(
+            bevy_key_to_tmux_name(
+                &Key::Character("≤".into()),
+                KeyCode::Comma,
+                m(false, true, false, false)
+            ),
+            Some("M-,".to_string())
         );
     }
 
