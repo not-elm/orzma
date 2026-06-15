@@ -9,13 +9,13 @@ use crate::ui::UiRoot;
 use crate::ui::status_bar::build_status_bar;
 use bevy::prelude::*;
 use ozmux_multiplexer::{AttachedWorkspace, WorkspaceCreatedAt, WorkspaceMarker};
-use ozmux_tmux::ProjectionModel;
+use ozmux_tmux::TmuxPresence;
 
-/// Run condition: true once a tmux `ProjectionModel` resource exists. The old
-/// multiplexer status bar is gated off in tmux mode so only the tmux window
-/// bar (`OzmuxTmuxWindowBarPlugin`) renders.
-pub(crate) fn tmux_projection_present(model: Option<Res<ProjectionModel>>) -> bool {
-    model.is_some()
+/// Run condition: true once the tmux backend is active (the `TmuxPresence`
+/// resource exists, inserted at plugin build). The old multiplexer status bar
+/// is gated off in tmux mode so only the tmux window bar renders.
+pub(crate) fn tmux_projection_present(presence: Option<Res<TmuxPresence>>) -> bool {
+    presence.is_some()
 }
 
 /// Marker on the currently-active status bar root Node. `build_status_bar`
@@ -30,9 +30,9 @@ pub struct StatusBarRoot;
 /// - any `WorkspaceMarker` was added or removed this frame, OR
 /// - any `AttachedWorkspace` marker was added or removed this frame.
 ///
-/// Gated off (via `tmux_projection_present` at registration) once a tmux
-/// `ProjectionModel` exists, so the tmux window bar is the only status bar in
-/// tmux mode.
+/// Gated off (via `tmux_projection_present` at registration) once the tmux
+/// backend is active (`TmuxPresence` exists), so the tmux window bar is the
+/// only status bar in tmux mode.
 pub fn rebuild_status_bar_on_workspace_set_change(
     mut commands: Commands,
     mut attached_removed: RemovedComponents<AttachedWorkspace>,

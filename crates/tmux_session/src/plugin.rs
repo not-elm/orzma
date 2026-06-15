@@ -11,6 +11,11 @@ use crate::state::ConnectionState;
 use bevy::prelude::*;
 use tmux_control::TransportEvent;
 
+/// Present (inserted at plugin build) whenever the tmux backend is active, so
+/// consumers can gate "tmux mode" from frame 0 — before any `%session-changed`.
+#[derive(Resource, Default)]
+pub struct TmuxPresence;
+
 /// Wires the tmux integration into the Bevy app: connection state, the
 /// projection model + index, the per-frame drain system, and the reconcile
 /// system.
@@ -28,6 +33,7 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<ProjectionModel>()
             .init_resource::<TmuxProjection>()
             .init_resource::<EnumerationState>()
+            .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
             .add_systems(
