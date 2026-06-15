@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::material::PaneDim;
-use ozmux_tmux::{TmuxConnection, TmuxPane, TmuxProjectionSet, select_pane_command};
+use ozmux_tmux::{ActivePane, TmuxConnection, TmuxPane, TmuxProjectionSet, select_pane_command};
 
 /// Registers pane click-to-focus and dim systems.
 pub struct OzmuxTmuxPaneFocusPlugin;
@@ -22,7 +22,7 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
             (
                 augment_tmux_pane.after(TmuxProjectionSet),
                 focus_pane_on_click.in_set(InputPhase::Dispatch),
-                sync_pane_dim.run_if(resource_exists_and_changed::<ozmux_tmux::ProjectionModel>),
+                sync_pane_dim.run_if(pane_active_state_changed),
             ),
         );
     }
@@ -65,21 +65,30 @@ fn focus_pane_on_click(
     }
 }
 
-/// Sets each pane entity's [`PaneDim`] brightness multiplier: `1.0` for the
-/// active pane, the configured dim factor for every other pane. When
-/// `ProjectionModel.active_pane` is `None`, all panes are set to `1.0` (dim
-/// nothing). Gated on `ProjectionModel` change; only inserts when the value
-/// actually changes to avoid redundant renderer updates.
+/// True when a pane's active state may have changed this frame: a new pane
+/// appeared, or the `ActivePane` marker was inserted/removed.
+fn pane_active_state_changed(
+    mut removed_active: RemovedComponents<ActivePane>,
+    added_panes: Query<(), Added<TmuxPane>>,
+    added_active: Query<(), Added<ActivePane>>,
+) -> bool {
+    added_panes.iter().next().is_some()
+        || added_active.iter().next().is_some()
+        || removed_active.read().next().is_some()
+}
+
+/// Sets each pane entity's [`PaneDim`] brightness: `1.0` for the pane carrying
+/// `ActivePane` (or for all panes when no pane is active), the configured dim
+/// factor otherwise. Only inserts when the value changes.
 fn sync_pane_dim(
     mut commands: Commands,
-    panes: Query<(Entity, &TmuxPane, Option<&PaneDim>)>,
-    model: Res<ozmux_tmux::ProjectionModel>,
+    panes: Query<(Entity, Has<ActivePane>, Option<&PaneDim>), With<TmuxPane>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
-    for (entity, pane, current) in panes.iter() {
-        let active = model.active_pane == Some(pane.id) || model.active_pane.is_none();
-        let want = if active { 1.0 } else { dim_factor };
+    let any_active = panes.iter().any(|(_, active, _)| active);
+    for (entity, active, current) in panes.iter() {
+        let want = if active || !any_active { 1.0 } else { dim_factor };
         if current.map(|d| d.0) != Some(want) {
             commands.entity(entity).insert(PaneDim(want));
         }
@@ -110,65 +119,34 @@ mod tests {
     }
 
     #[test]
-    fn sync_sets_pane_dim_from_active_pane() {
-        use ozmux_tmux::ProjectionModel;
+    fn sync_sets_pane_dim_from_active_marker() {
+        use ozmux_tmux::ActivePane;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.insert_resource(OzmuxConfigsResource::default());
         let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
-        let p1 = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: dims(),
-                },
-                h(),
-            ))
-            .id();
-        let p2 = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(2),
-                    dims: dims(),
-                },
-                h(),
-            ))
-            .id();
+        let p1 = app.world_mut().spawn((TmuxPane { id: PaneId(1), dims: dims() }, h(), ActivePane)).id();
+        let p2 = app.world_mut().spawn((TmuxPane { id: PaneId(2), dims: dims() }, h())).id();
         let dim = |app: &App, e| app.world().get::<PaneDim>(e).map(|d| d.0);
 
-        app.insert_resource(ProjectionModel {
-            active_pane: Some(PaneId(1)),
-            ..default()
-        });
         app.update();
-        assert_eq!(dim(&app, p1), Some(1.0), "active pane has PaneDim 1.0");
-        assert_eq!(dim(&app, p2), Some(0.5), "inactive pane has PaneDim 0.5");
+        assert_eq!(dim(&app, p1), Some(1.0), "active pane full-bright");
+        assert_eq!(dim(&app, p2), Some(0.5), "inactive pane dimmed");
 
-        app.world_mut()
-            .resource_mut::<ProjectionModel>()
-            .active_pane = Some(PaneId(2));
+        // Move ActivePane to p2.
+        app.world_mut().entity_mut(p1).remove::<ActivePane>();
+        app.world_mut().entity_mut(p2).insert(ActivePane);
         app.update();
-        assert_eq!(dim(&app, p1), Some(0.5), "p1 now inactive");
-        assert_eq!(dim(&app, p2), Some(1.0), "p2 now active");
+        assert_eq!(dim(&app, p1), Some(0.5));
+        assert_eq!(dim(&app, p2), Some(1.0));
 
-        app.world_mut()
-            .resource_mut::<ProjectionModel>()
-            .active_pane = None;
+        // No active pane: both full-bright.
+        app.world_mut().entity_mut(p2).remove::<ActivePane>();
         app.update();
-        assert_eq!(
-            dim(&app, p1),
-            Some(1.0),
-            "no active pane: p1 is full-bright"
-        );
-        assert_eq!(
-            dim(&app, p2),
-            Some(1.0),
-            "no active pane: p2 is full-bright"
-        );
+        assert_eq!(dim(&app, p1), Some(1.0));
+        assert_eq!(dim(&app, p2), Some(1.0));
     }
 
     #[test]
