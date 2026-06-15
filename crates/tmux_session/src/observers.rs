@@ -63,7 +63,6 @@ fn on_window_added(
             if !(ev.index == 0 && ev.name.is_empty()) {
                 commands.entity(e).insert(TmuxWindow {
                     id: ev.window,
-                    active: false,
                     index: ev.index,
                     name: ev.name.clone(),
                 });
@@ -73,7 +72,6 @@ fn on_window_added(
             let e = commands
                 .spawn(TmuxWindow {
                     id: ev.window,
-                    active: false,
                     index: ev.index,
                     name: ev.name.clone(),
                 })
@@ -97,7 +95,6 @@ fn on_window_renamed(
     };
     commands.entity(e).insert(TmuxWindow {
         id: w.id,
-        active: w.active,
         index: w.index,
         name: ev.name.clone(),
     });
@@ -209,7 +206,6 @@ fn ensure_window(commands: &mut Commands, index: &mut TmuxProjection, id: Window
     let e = commands
         .spawn(TmuxWindow {
             id,
-            active: false,
             index: 0,
             name: String::new(),
         })

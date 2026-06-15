@@ -72,7 +72,8 @@ fn attach_tmux_window_container(
 /// placeholder absolute `Node` to each `TmuxPane` that lacks a
 /// `TerminalHandle`. Runs every frame but targets each pane exactly once.
 /// The grid is sized from the pane's projected `dims`. `ChildOf` is NOT set
-/// here — `reconcile` already establishes the correct `ChildOf(window)` parent.
+/// here — the projection observers already establish the correct
+/// `ChildOf(window)` parent.
 /// `layout_tmux_panes` sets the real rect every frame.
 fn attach_tmux_pane_terminal(
     mut commands: Commands,

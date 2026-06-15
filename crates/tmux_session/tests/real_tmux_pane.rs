@@ -1,16 +1,39 @@
 //! Gated end-to-end test: attach a real tmux `-CC` client, split the initial
 //! window to get two panes, then use `select-pane` to return focus to the
-//! first pane and assert `active_pane` flips back — verifying the
+//! first pane and assert the active pane flips back — verifying the
 //! command-echo path for pane focus.
 //! Run with: `cargo test -p ozmux_tmux --test real_tmux_pane -- --ignored`.
 
 use bevy::prelude::*;
 use ozmux_tmux::{
-    ConnectionState, PaneId, ProjectionModel, TmuxConnection, TmuxSessionPlugin,
+    ActivePane, ActiveWindow, ConnectionState, PaneId, TmuxConnection, TmuxPane, TmuxSessionPlugin,
     select_pane_command,
 };
 use std::time::{Duration, Instant};
 use tmux_control::TmuxServer;
+
+fn active_pane_id(world: &mut World) -> Option<PaneId> {
+    world
+        .query_filtered::<&TmuxPane, With<ActivePane>>()
+        .iter(world)
+        .next()
+        .map(|pane| pane.id)
+}
+
+fn active_window_pane_count(world: &mut World) -> usize {
+    let Some(active_window) = world
+        .query_filtered::<Entity, With<ActiveWindow>>()
+        .iter(world)
+        .next()
+    else {
+        return 0;
+    };
+    world
+        .query_filtered::<&ChildOf, With<TmuxPane>>()
+        .iter(world)
+        .filter(|child| child.parent() == active_window)
+        .count()
+}
 
 #[test]
 #[ignore = "requires a real tmux binary and a controlling PTY"]
@@ -30,11 +53,7 @@ fn select_pane_round_trips_active_pane() {
     while Instant::now() < attach_deadline {
         app.update();
         let attached = *app.world().resource::<ConnectionState>() == ConnectionState::Attached;
-        let has_active_pane = app
-            .world()
-            .resource::<ProjectionModel>()
-            .active_pane
-            .is_some();
+        let has_active_pane = active_pane_id(app.world_mut()).is_some();
         if attached && has_active_pane {
             break;
         }
@@ -47,18 +66,12 @@ fn select_pane_round_trips_active_pane() {
         "should reach Attached within 5 s"
     );
     assert!(
-        app.world()
-            .resource::<ProjectionModel>()
-            .active_pane
-            .is_some(),
-        "active_pane should be populated from %%window-pane-changed"
+        active_pane_id(app.world_mut()).is_some(),
+        "the active pane should be marked from %%window-pane-changed"
     );
 
-    let first_active: PaneId = app
-        .world()
-        .resource::<ProjectionModel>()
-        .active_pane
-        .expect("active_pane is some");
+    let first_active: PaneId =
+        active_pane_id(app.world_mut()).expect("an active pane is marked");
 
     app.world()
         .get_non_send_resource::<TmuxConnection>()
@@ -72,29 +85,14 @@ fn select_pane_round_trips_active_pane() {
     let split_deadline = Instant::now() + Duration::from_secs(5);
     while Instant::now() < split_deadline {
         app.update();
-        let pane_count = app
-            .world()
-            .resource::<ProjectionModel>()
-            .windows
-            .iter()
-            .find(|w| w.active)
-            .map(|w| w.panes.len())
-            .unwrap_or(0);
-        if pane_count >= 2 {
+        if active_window_pane_count(app.world_mut()) >= 2 {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
 
     assert!(
-        app.world()
-            .resource::<ProjectionModel>()
-            .windows
-            .iter()
-            .find(|w| w.active)
-            .map(|w| w.panes.len())
-            .unwrap_or(0)
-            >= 2,
+        active_window_pane_count(app.world_mut()) >= 2,
         "at least 2 panes should appear in the active window after split-window"
     );
 
@@ -102,8 +100,7 @@ fn select_pane_round_trips_active_pane() {
     let mut departed = false;
     while Instant::now() < depart_deadline {
         app.update();
-        let active_pane = app.world().resource::<ProjectionModel>().active_pane;
-        if active_pane != Some(first_active) {
+        if active_pane_id(app.world_mut()) != Some(first_active) {
             departed = true;
             break;
         }
@@ -128,8 +125,7 @@ fn select_pane_round_trips_active_pane() {
     let mut switched = false;
     while Instant::now() < switch_deadline {
         app.update();
-        let active_pane = app.world().resource::<ProjectionModel>().active_pane;
-        if active_pane == Some(first_active) {
+        if active_pane_id(app.world_mut()) == Some(first_active) {
             switched = true;
             break;
         }

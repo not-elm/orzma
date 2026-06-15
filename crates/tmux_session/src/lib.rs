@@ -1,8 +1,9 @@
 //! ozmux ⇄ tmux control-mode integration: owns a `tmux -CC` connection,
 //! drains its transport events into the Bevy world, tracks the connection
 //! lifecycle, and projects tmux session/window/pane state as ECS entities
-//! (`TmuxSession`/`TmuxWindow`/`TmuxPane`) reconciled from a `ProjectionModel`
-//! maintained by the control-event reducer. Rendering is not done here.
+//! (`TmuxSession`/`TmuxWindow`/`TmuxPane`). The drain system translates each
+//! transport batch into global projection events that observers apply directly
+//! to the world. Rendering is not done here.
 
 mod components;
 mod connect;
@@ -11,11 +12,9 @@ mod enumerate;
 mod events;
 mod event_pump;
 mod input;
-mod model;
 mod observers;
 mod output;
 mod plugin;
-mod reconcile;
 mod select;
 mod state;
 
@@ -27,7 +26,6 @@ pub use enumerate::{
     select_window_command,
 };
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_keys_command};
-pub use model::{PaneModel, ProjectionModel, WindowModel, pane_leaves};
 pub use output::PaneOutput;
 pub use plugin::{TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
 pub use select::{AttachTarget, select_attach_target};

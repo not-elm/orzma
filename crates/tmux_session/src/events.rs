@@ -22,6 +22,10 @@ pub(crate) struct TmuxSessionChanged {
 }
 
 /// `%window-add` (defaults) or a seed row (real `index`/`name`).
+///
+/// A bare `%window-add` notification carries no index or name, so it uses the
+/// sentinel `index: 0` / `name: ""`; observers must not treat those as
+/// authoritative (the later seed row supplies the real values).
 #[derive(Event, Debug, Clone)]
 pub(crate) struct TmuxWindowAdded {
     pub(crate) window: WindowId,

@@ -234,14 +234,12 @@ mod tests {
 
         app.world_mut().spawn(TmuxWindow {
             id: WindowId(1),
-            active: false,
             index: 0,
             name: "zsh".into(),
         });
         app.world_mut().spawn((
             TmuxWindow {
                 id: WindowId(2),
-                active: false,
                 index: 1,
                 name: "vim".into(),
             },

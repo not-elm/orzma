@@ -1,12 +1,12 @@
-//! The `TmuxSessionPlugin`: connection state, projection, and the per-frame
-//! event-drain + reconcile systems.
+//! The `TmuxSessionPlugin`: connection state, the projection observers, and the
+//! per-frame transport-drain system that triggers the projection events.
 
 use crate::connection::TmuxConnection;
 use crate::enumerate::{EnumerationState, client_name_command, list_windows_command};
-use crate::event_pump::{advance_state, apply_events, drain_transport, take_client_name};
-use crate::model::ProjectionModel;
+use crate::event_pump::{advance_state, drain_transport, take_client_name, trigger_events};
+use crate::events::TmuxConnectionReset;
+use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
-use crate::reconcile::{TmuxProjection, reconcile_projection};
 use crate::state::ConnectionState;
 use bevy::prelude::*;
 use tmux_control::TransportEvent;
@@ -17,49 +17,43 @@ use tmux_control::TransportEvent;
 pub struct TmuxPresence;
 
 /// Wires the tmux integration into the Bevy app: connection state, the
-/// projection model + index, the per-frame drain system, and the reconcile
-/// system.
+/// projection observers + id->entity index, and the per-frame transport-drain
+/// system that triggers the global projection events.
 pub struct TmuxSessionPlugin;
 
-/// Ordering label for the tmux drain + reconcile chain. The binary's render
-/// systems run `.after(TmuxProjectionSet)` so a freshly-projected pane is
-/// attached and its output routed in the same frame the projection spawns it.
+/// Ordering label for the tmux drain system. The binary's render systems run
+/// `.after(TmuxProjectionSet)` so a freshly-projected pane is attached and its
+/// output routed in the same frame the projection spawns it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TmuxProjectionSet;
 
 impl Plugin for TmuxSessionPlugin {
     fn build(&self, app: &mut App) {
+        register_observers(app);
         app.init_resource::<ConnectionState>()
-            .init_resource::<ProjectionModel>()
             .init_resource::<TmuxProjection>()
             .init_resource::<EnumerationState>()
             .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
-            .add_systems(
-                Update,
-                (
-                    drain_tmux_events,
-                    reconcile_projection.run_if(resource_exists_and_changed::<ProjectionModel>),
-                )
-                    .chain()
-                    .in_set(TmuxProjectionSet),
-            );
+            .add_systems(Update, drain_tmux_events.in_set(TmuxProjectionSet));
     }
 }
 
 /// Drains the live connection's transport events each frame: advances
 /// `ConnectionState`, sends the `list-windows` enumeration once on attach, and
-/// applies the batch (notifications + the enumeration reply, in stream order)
-/// to the `ProjectionModel`. On `Closed` it reclaims the dead client and tears
-/// the projection down so its entities do not linger.
+/// triggers the global projection events (notifications + the enumeration
+/// reply, in stream order) the observers consume. On `Closed` it reclaims the
+/// dead client and triggers `TmuxConnectionReset` so the projected entities do
+/// not linger.
 ///
-/// State and model are mutated through `bypass_change_detection` and marked
-/// changed only on real change, so an output flood does not force a reconcile
+/// `ConnectionState` is mutated through `bypass_change_detection` and marked
+/// changed only on a real transition, so an output flood does not force the
+/// `resource_exists_and_changed::<ConnectionState>`-gated consumers to re-run
 /// every frame.
 fn drain_tmux_events(
+    mut commands: Commands,
     mut state: ResMut<ConnectionState>,
-    mut model: ResMut<ProjectionModel>,
     mut enumeration: ResMut<EnumerationState>,
     mut connection: NonSendMut<TmuxConnection>,
     mut pane_output: MessageWriter<PaneOutput>,
@@ -96,19 +90,12 @@ fn drain_tmux_events(
         connection.take();
         enumeration.pending = None;
         enumeration.client_name_pending = None;
-        *model.bypass_change_detection() = ProjectionModel::default();
-        model.set_changed();
+        commands.trigger(TmuxConnectionReset);
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
             connection.set_client_name(name);
         }
-        if apply_events(
-            model.bypass_change_detection(),
-            &mut enumeration.pending,
-            &events,
-        ) {
-            model.set_changed();
-        }
+        trigger_events(&mut commands, &mut enumeration.pending, &events);
     }
     // NOTE: runs after the Closed branch took the connection, so `client()` is
     // None there and this is a no-op — safe to re-arm only while still attached.
@@ -137,7 +124,10 @@ mod tests {
             *app.world().resource::<ConnectionState>(),
             ConnectionState::Idle
         );
-        assert!(app.world().resource::<ProjectionModel>().windows.is_empty());
         assert!(app.world().resource::<EnumerationState>().pending.is_none());
+        let index = app.world().resource::<TmuxProjection>();
+        assert!(index.windows.is_empty());
+        assert!(index.panes.is_empty());
+        assert!(index.session.is_none());
     }
 }
