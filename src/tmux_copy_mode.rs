@@ -30,6 +30,7 @@ pub struct OzmuxTmuxCopyModePlugin;
 impl Plugin for OzmuxTmuxCopyModePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CopyRefreshState>();
+        app.add_observer(on_copy_mode_exit);
         app.add_systems(
             Update,
             (
@@ -51,10 +52,10 @@ struct CopyRefreshState {
     last_scroll: HashMap<PaneId, u32>,
 }
 
-/// The latest copy-mode state snapshot for a pane, stashed for the overlay step
-/// (Task 9). Updated each `State` reply.
+/// The latest copy-mode state snapshot for a pane. Written only when the state
+/// changes (so `Changed<CopyModeSnapshot>` is meaningful), and read back to
+/// diff against the next reply.
 // TODO: Task 9 reads this to map the cursor/selection into the rendered grid.
-#[expect(dead_code, reason = "consumed by the Task 9 cursor/selection overlay")]
 #[derive(Component)]
 struct CopyModeSnapshot(CopyState);
 
@@ -69,6 +70,36 @@ struct CopyRenderHandle(TerminalHandle);
 /// system so it does not run (or acquire its data) when copy mode is inactive.
 fn any_pane_in_copy_mode(copy_modes: Query<(), With<CopyModeState>>) -> bool {
     !copy_modes.is_empty()
+}
+
+/// Observer for `On<Remove, CopyModeState>`. Fires for every copy-mode exit —
+/// `pane_in_mode==0`, an input-driven `CopyAction::Exit`, and despawn (e.g.
+/// `TmuxConnectionReset`). Forces a FULL repaint of the pane's live handle so
+/// the rendered grid switches back from the captured scrolled view to live
+/// content (`route_tmux_output` only emits on new `%output`, so an idle pane
+/// would otherwise stay frozen on capture content, and a later delta would
+/// paint over it), drops the scratch `CopyRenderHandle`, and prunes this pane's
+/// refresh bookkeeping (otherwise a stale `PaneId` wedges `issue_copy_state`'s
+/// coalescing guard and blocks re-entry capture at the same scroll position).
+fn on_copy_mode_exit(
+    ev: On<Remove, CopyModeState>,
+    mut commands: Commands,
+    mut refresh: ResMut<CopyRefreshState>,
+    mut live_handles: Query<&mut TerminalHandle>,
+    panes: Query<&TmuxPane>,
+) {
+    let entity = ev.entity;
+    if let Ok(mut handle) = live_handles.get_mut(entity) {
+        handle.repaint_full(&mut commands, entity);
+    }
+    commands
+        .entity(entity)
+        .remove::<CopyRenderHandle>()
+        .remove::<CopyModeSnapshot>();
+    if let Ok(pane) = panes.get(entity) {
+        refresh.state_in_flight.remove(&pane.id);
+        refresh.last_scroll.remove(&pane.id);
+    }
 }
 
 /// Issues one `display-message` copy-state query per in-copy-mode pane, coalesced
@@ -108,6 +139,7 @@ fn consume_copy_reply(
     mut render_handles: Query<&mut CopyRenderHandle>,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane)>,
+    snapshots: Query<&CopyModeSnapshot>,
 ) {
     let entity_of: HashMap<PaneId, Entity> = panes.iter().map(|(e, p)| (p.id, e)).collect();
     for reply in replies.read() {
@@ -117,6 +149,7 @@ fn consume_copy_reply(
         match reply.kind {
             CopyQueryKind::State => {
                 refresh.state_in_flight.remove(&reply.pane);
+                let stored = snapshots.get(entity).map(|s| s.0).ok();
                 apply_state_reply(
                     &mut commands,
                     &mut refresh,
@@ -124,6 +157,7 @@ fn consume_copy_reply(
                     &connection,
                     entity,
                     reply,
+                    stored.as_ref(),
                 );
             }
             CopyQueryKind::Capture => {
@@ -135,8 +169,10 @@ fn consume_copy_reply(
 }
 
 /// Handles a `State` reply: on `pane_in_mode == 0` removes `CopyModeState` (the
-/// live grid resumes via the gated emit in `route_tmux_output`); otherwise
-/// stashes the snapshot and, when the scrolled region changed, issues a capture.
+/// `on_copy_mode_exit` observer then forces the live repaint and prunes refresh
+/// state); otherwise stashes the snapshot — only when it changed, so a steady
+/// state does not re-mark `Changed` every frame — and, when the scrolled region
+/// changed, issues a capture. `stored` is the pane's current snapshot, if any.
 fn apply_state_reply(
     commands: &mut Commands,
     refresh: &mut CopyRefreshState,
@@ -144,6 +180,7 @@ fn apply_state_reply(
     connection: &TmuxConnection,
     entity: Entity,
     reply: &CopyModeReply,
+    stored: Option<&CopyState>,
 ) {
     if !reply.ok {
         return;
@@ -153,11 +190,11 @@ fn apply_state_reply(
     };
     if !state.pane_in_mode {
         commands.entity(entity).remove::<CopyModeState>();
-        commands.entity(entity).remove::<CopyModeSnapshot>();
-        refresh.last_scroll.remove(&reply.pane);
         return;
     }
-    commands.entity(entity).insert(CopyModeSnapshot(state));
+    if stored != Some(&state) {
+        commands.entity(entity).insert(CopyModeSnapshot(state));
+    }
     let changed = refresh.last_scroll.get(&reply.pane) != Some(&state.scroll_position);
     if !changed {
         return;
@@ -257,5 +294,107 @@ mod tests {
     fn capture_dims_clamps_empty_to_one_by_one() {
         assert_eq!(capture_dims(&[]), (1, 1));
         assert_eq!(capture_dims(&["".to_string()]), (1, 1));
+    }
+
+    #[test]
+    fn copy_mode_exit_repaints_live_grid_and_prunes_refresh_state() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozma_tty_renderer::prelude::TerminalGridPlugin;
+        use ozma_tty_renderer::schema::TerminalGrid;
+        use tmux_control_parser::{CellDims, PaneId};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.add_message::<CopyModeReply>();
+        app.init_resource::<CopyModeQueries>();
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.add_plugins(OzmuxTmuxCopyModePlugin);
+
+        let pane_id = PaneId(1);
+        let entity = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: pane_id,
+                    dims: CellDims {
+                        width: 20,
+                        height: 3,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                TerminalHandle::detached(20, 3, Arc::new(AtomicBool::new(false))),
+                TerminalGrid::default(),
+                CopyModeState,
+            ))
+            .id();
+
+        // Seed the live handle with "LIVE" (it was advanced during copy mode but
+        // its emit was gated), and paint a *different* capture view ("CAP") into
+        // the grid via a scratch handle, modelling the captured scrolled view.
+        app.world_mut()
+            .run_system_once(
+                move |mut commands: Commands, mut handles: Query<&mut TerminalHandle>| {
+                    let mut live = handles.get_mut(entity).unwrap();
+                    live.advance(b"LIVE");
+                    let mut cap = TerminalHandle::detached(20, 3, Arc::new(AtomicBool::new(false)));
+                    cap.advance(b"CAP");
+                    cap.flush_emit(&mut commands, entity);
+                },
+            )
+            .unwrap();
+        app.update();
+        let before: String = app.world().get::<TerminalGrid>(entity).unwrap().cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            before.starts_with("CAP"),
+            "grid shows the captured view before exit, got {before:?}",
+        );
+
+        // Pre-load the refresh bookkeeping + scratch handle for this pane, as the
+        // live loop would.
+        {
+            let mut refresh = app.world_mut().resource_mut::<CopyRefreshState>();
+            refresh.state_in_flight.insert(pane_id);
+            refresh.last_scroll.insert(pane_id, 7);
+        }
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(CopyRenderHandle(TerminalHandle::detached(
+                20,
+                3,
+                Arc::new(AtomicBool::new(false)),
+            )));
+
+        // Exit copy mode: the On<Remove, CopyModeState> observer forces a full
+        // live repaint and prunes the refresh state.
+        app.world_mut().entity_mut(entity).remove::<CopyModeState>();
+        app.update();
+
+        let after: String = app.world().get::<TerminalGrid>(entity).unwrap().cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            after.starts_with("LIVE"),
+            "exit forces the grid back to the live handle content, got {after:?}",
+        );
+
+        let refresh = app.world().resource::<CopyRefreshState>();
+        assert!(
+            !refresh.state_in_flight.contains(&pane_id),
+            "exit prunes the in-flight mark (else a reconnect wedges re-query)",
+        );
+        assert!(
+            !refresh.last_scroll.contains_key(&pane_id),
+            "exit prunes last_scroll (else re-entry skips the capture)",
+        );
+        assert!(
+            app.world().get::<CopyRenderHandle>(entity).is_none(),
+            "exit drops the scratch CopyRenderHandle",
+        );
     }
 }
