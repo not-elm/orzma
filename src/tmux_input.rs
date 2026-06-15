@@ -5,6 +5,7 @@
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::tmux_picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
+use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -88,6 +89,7 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 fn forward_keys_to_tmux(
     mut commands: Commands,
     mut picker: ResMut<SessionPicker>,
+    mut copy_prompt: ResMut<CopyPrompt>,
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
@@ -105,6 +107,14 @@ fn forward_keys_to_tmux(
     // NOTE: while the picker is open it owns the keyboard; forwarding would
     // leak picker-navigation keys to the active tmux pane. Drain (don't replay).
     if picker.open {
+        *prefix_pending = false;
+        events.clear();
+        return;
+    }
+    // NOTE: while the copy-mode prompt is open it owns the keyboard; the prompt's
+    // own system handles raw keys. Drain here so no key leaks to tmux or the
+    // prefix state machine.
+    if copy_prompt.open.is_some() {
         *prefix_pending = false;
         events.clear();
         return;
@@ -242,9 +252,14 @@ fn forward_keys_to_tmux(
             {
                 commands.entity(entity).remove::<CopyModeState>();
             }
-            if let Some(kind) = outcome.prompt {
-                // TODO: open the copy-mode search/jump prompt (Task 11).
-                tracing::debug!(?kind, "copy-mode prompt not yet wired");
+            if let Some(kind) = outcome.prompt
+                && let Some(pane_id) = active_pane_id
+            {
+                copy_prompt.open = Some(CopyPromptState {
+                    kind,
+                    pane: pane_id,
+                    text: String::new(),
+                });
             }
         }
         return;
