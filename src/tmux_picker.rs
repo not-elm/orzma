@@ -200,7 +200,7 @@ fn spawn_picker_ui(mut commands: Commands) {
 
 /// The label text, foreground color, and highlight-bar color for each row,
 /// derived from the picker data and the selected index. The selected row gets
-/// the accent bar + white text; unselected rows are transparent, with window
+/// the amber bar + dark text; unselected rows are transparent, with window
 /// rows muted to read as a level below their session header.
 fn row_visuals(
     picker: &SessionPicker,
@@ -214,25 +214,26 @@ fn row_visuals(
             let (label, base) = match row {
                 PickerRow::Session(si) => {
                     let s = &picker.sessions[*si];
-                    let attached = if s.attached { " *attached" } else { "" };
-                    (
-                        format!("{}  ({} windows){}", s.name, s.windows, attached),
-                        theme::FOREGROUND,
-                    )
+                    let attached = if s.attached { " ·attached" } else { "" };
+                    (format!("({}) {}{}", i, s.name, attached), theme::FOREGROUND)
                 }
                 PickerRow::Window { window, .. } => {
                     let w = &picker.windows[*window];
-                    let active = if w.window_active { "*" } else { " " };
+                    let active = if w.window_active { "*" } else { "" };
                     (
-                        format!("    {}{}: {}", active, w.window_index, w.window_name),
+                        format!("({}) └ {}: {}{}", i, w.window_index, w.window_name, active),
                         theme::MUTED,
                     )
                 }
-                PickerRow::NewSession => ("+ New session".to_string(), theme::FOREGROUND),
+                PickerRow::NewSession => (format!("({}) + New session", i), theme::MUTED),
             };
-            let text_color = if is_selected { Color::WHITE } else { base };
+            let text_color = if is_selected {
+                theme::SELECTION_FG
+            } else {
+                base
+            };
             let bar_color = if is_selected {
-                theme::ACCENT
+                theme::SELECTION
             } else {
                 Color::NONE
             };
@@ -573,6 +574,35 @@ mod tests {
     }
 
     #[test]
+    fn row_visuals_choose_tree_format() {
+        let picker = SessionPicker {
+            sessions: vec![
+                fake_session(0, "alpha"),
+                SessionInfo {
+                    attached: true,
+                    ..fake_session(1, "beta")
+                },
+            ],
+            windows: vec![fake_window(0, "alpha", 0, true, "zsh")],
+            selected: 0,
+            open: true,
+            last_open: true,
+        };
+        let rows = build_rows(&picker.sessions, &picker.windows);
+        let v = row_visuals(&picker, &rows, 0);
+        assert_eq!(v[0].0, "(0) alpha");
+        assert!(!v[0].0.contains("windows"), "no window count");
+        assert_eq!(v[1].0, "(1) └ 0: zsh*");
+        assert_eq!(v[2].0, "(2) beta ·attached");
+        assert_eq!(v[3].0, "(3) + New session");
+        assert_eq!(v[0].2, theme::SELECTION);
+        assert_eq!(v[0].1, theme::SELECTION_FG);
+        assert_eq!(v[1].2, Color::NONE);
+        assert_eq!(v[1].1, theme::MUTED);
+        assert_eq!(v[2].1, theme::FOREGROUND);
+    }
+
+    #[test]
     fn nav_reuses_row_entities_in_place() {
         let mut app = App::new();
         app.insert_resource(SessionPicker {
@@ -605,7 +635,7 @@ mod tests {
             .filter(|&&e| {
                 app.world()
                     .get::<BackgroundColor>(e)
-                    .is_some_and(|bg| bg.0 == theme::ACCENT)
+                    .is_some_and(|bg| bg.0 == theme::SELECTION)
             })
             .count();
         assert_eq!(accent_rows, 1, "exactly one row is highlighted after nav");
