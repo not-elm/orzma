@@ -101,12 +101,12 @@ fn forward_keys_to_tmux(
         return;
     }
 
-    let Some(active) = active_pane.as_deref() else {
-        *prefix_pending = false;
-        events.clear();
-        return;
-    };
-    let target = format!("%{}", active.id.0);
+    // The active pane (if any) is the forward/paste target. GUI chords below do
+    // not need it (so quit/picker work before a pane is projected); tmux key
+    // dispatch does.
+    let target = active_pane
+        .as_deref()
+        .map(|active| format!("%{}", active.id.0));
 
     // Collect forwardable tmux key names in event order. Super-modified keys are
     // handled as GUI chords (Paste/Quit/Picker) or swallowed; none reach tmux.
@@ -116,6 +116,8 @@ fn forward_keys_to_tmux(
             continue;
         }
         if let Some(chord) = gui_chord(&ev.key_code, mods) {
+            // A GUI action abandons any pending tmux prefix sequence.
+            *prefix_pending = false;
             match chord {
                 GuiChord::OpenPicker => picker.open = true,
                 GuiChord::Quit => {
@@ -128,13 +130,14 @@ fn forward_keys_to_tmux(
                     if text.is_empty() {
                         continue;
                     }
-                    let Some(client) = connection.client() else {
+                    let (Some(target), Some(client)) = (target.as_deref(), connection.client())
+                    else {
                         continue;
                     };
                     let bytes = build_paste_bytes(&text, false);
                     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
-                        if let Err(e) = client.handle().send(&send_bytes_command(&target, chunk)) {
-                            tracing::warn!(?e, pane = active.id.0, "paste send failed");
+                        if let Err(e) = client.handle().send(&send_bytes_command(target, chunk)) {
+                            tracing::warn!(?e, "paste send failed");
                             break;
                         }
                     }
@@ -156,14 +159,14 @@ fn forward_keys_to_tmux(
     if actions.is_empty() {
         return;
     }
-    let Some(client) = connection.client() else {
+    let (Some(target), Some(client)) = (target.as_deref(), connection.client()) else {
         return;
     };
     let handle = client.handle();
     for action in actions {
         let cmd = match action {
             Forwarded::Run(command) => command,
-            Forwarded::Keys(names) => send_pane_keys_command(&target, &names),
+            Forwarded::Keys(names) => send_pane_keys_command(target, &names),
         };
         if let Err(e) = handle.send(&cmd) {
             tracing::warn!(?e, "tmux forward send failed");

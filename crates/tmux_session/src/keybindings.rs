@@ -136,24 +136,27 @@ fn parse_binding_line(line: &str) -> Option<KeyBinding> {
     let mut repeat = false;
     loop {
         rest = rest.trim_start();
-        if let Some(after) = rest.strip_prefix("-T") {
-            let (name, tail) = split_first_token(after);
-            table = match name {
-                "root" => Some(Table::Root),
-                "prefix" => Some(Table::Prefix),
-                _ => return None,
-            };
-            rest = tail;
-        } else if let Some(after) = rest.strip_prefix("-N") {
-            let (_count, tail) = split_first_token(after);
-            rest = tail;
-        } else if let Some(after) = rest.strip_prefix("-r") {
-            repeat = true;
-            rest = after;
-        } else if let Some(after) = rest.strip_prefix("-a") {
-            rest = after;
-        } else {
-            break;
+        let (token, tail) = split_first_token(rest);
+        match token {
+            "-T" => {
+                let (name, after) = split_first_token(tail);
+                table = match name {
+                    "root" => Some(Table::Root),
+                    "prefix" => Some(Table::Prefix),
+                    _ => return None,
+                };
+                rest = after;
+            }
+            "-N" => {
+                let (_count, after) = split_first_token(tail);
+                rest = after;
+            }
+            "-r" => {
+                repeat = true;
+                rest = tail;
+            }
+            "-a" => rest = tail,
+            _ => break,
         }
     }
     let (key_raw, command) = split_first_token(rest);
