@@ -463,9 +463,9 @@ fn apply_control_events(
                 event,
                 payload,
             } => {
-                let deliver = registry.get(&handle).is_some_and(|v| {
-                    v.connection_id == connection_id && v.source.is_bridged()
-                });
+                let deliver = registry
+                    .get(&handle)
+                    .is_some_and(|v| v.connection_id == connection_id && v.source.is_bridged());
                 if !deliver {
                     continue;
                 }

@@ -742,13 +742,7 @@ mod tests {
         );
     }
 
-    fn register_url(
-        app: &mut App,
-        view_id: &str,
-        owner_surface: Entity,
-        url: &str,
-        bridge: bool,
-    ) {
+    fn register_url(app: &mut App, view_id: &str, owner_surface: Entity, url: &str, bridge: bool) {
         use crate::control_plane::DynamicView;
         app.world_mut().resource_mut::<DynamicRegistry>().insert(
             view_id.into(),
