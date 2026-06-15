@@ -2,7 +2,7 @@
 
 use bevy::prelude::Resource;
 use tmux_control::CommandId;
-use tmux_control_parser::{WindowId, WindowLayout};
+use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
 /// The `-F` format ozmux sends to enumerate windows. Tab-separated, with the
 /// free-text `window_name` LAST so a `splitn(6, '\t')` keeps it intact.
@@ -104,6 +104,11 @@ pub fn select_window_command(id: WindowId) -> String {
     format!("select-window -t @{}", id.0)
 }
 
+/// Builds `select-pane -t %<id>` to focus a pane.
+pub fn select_pane_command(id: PaneId) -> String {
+    format!("select-pane -t %{}", id.0)
+}
+
 /// Tracks the in-flight `list-windows` enumeration command so its reply can
 /// be correlated by [`CommandId`] and seeded into the projection.
 #[derive(Resource, Default)]
@@ -197,5 +202,10 @@ mod tests {
     #[test]
     fn select_window_command_targets_at_id() {
         assert_eq!(select_window_command(WindowId(4)), "select-window -t @4");
+    }
+
+    #[test]
+    fn select_pane_command_targets_at_id() {
+        assert_eq!(select_pane_command(PaneId(3)), "select-pane -t %3");
     }
 }

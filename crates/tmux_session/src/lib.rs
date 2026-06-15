@@ -21,7 +21,7 @@ pub use components::{TmuxPane, TmuxSession, TmuxWindow};
 pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
 pub use enumerate::{
-    LIST_WINDOWS_FORMAT, WindowRow, parse_window_rows, refresh_client_command,
+    LIST_WINDOWS_FORMAT, WindowRow, parse_window_rows, refresh_client_command, select_pane_command,
     select_window_command,
 };
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_keys_command};
@@ -31,4 +31,4 @@ pub use plugin::{TmuxProjectionSet, TmuxSessionPlugin};
 pub use reconcile::TmuxProjection;
 pub use select::{AttachTarget, select_attach_target};
 pub use state::ConnectionState;
-pub use tmux_control_parser::WindowId;
+pub use tmux_control_parser::{PaneId, WindowId};
