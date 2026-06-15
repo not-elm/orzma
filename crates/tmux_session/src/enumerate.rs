@@ -143,7 +143,7 @@ pub(crate) fn capture_pane_command(id: PaneId) -> String {
 
 /// The tab-separated `display-message -F` format ozmux reads each refresh while
 /// a pane is in copy mode. Field order is fixed; `parse_copy_state` depends on it.
-pub const COPY_STATE_FORMAT: &str = "#{pane_in_mode}\t#{scroll_position}\t#{pane_height}\t#{history_size}\t#{copy_cursor_x}\t#{copy_cursor_y}\t#{selection_present}\t#{rectangle_toggle}\t#{selection_start_x}\t#{selection_start_y}\t#{selection_end_x}\t#{selection_end_y}";
+const COPY_STATE_FORMAT: &str = "#{pane_in_mode}\t#{scroll_position}\t#{pane_height}\t#{history_size}\t#{copy_cursor_x}\t#{copy_cursor_y}\t#{selection_present}\t#{rectangle_toggle}\t#{selection_start_x}\t#{selection_start_y}\t#{selection_end_x}\t#{selection_end_y}";
 
 /// One snapshot of a pane's copy-mode state from `COPY_STATE_FORMAT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -209,7 +209,7 @@ pub fn parse_copy_state(line: &str) -> Option<CopyState> {
 /// Returns the `capture-pane -S/-E` offsets for the scrolled copy-mode view:
 /// `(-scroll_position, pane_height - 1 - scroll_position)`. Verified against
 /// tmux 3.6a.
-pub fn capture_offsets(scroll_position: u32, pane_height: u16) -> (i32, i32) {
+fn capture_offsets(scroll_position: u32, pane_height: u16) -> (i32, i32) {
     let start = -(scroll_position as i32);
     let end = pane_height as i32 - 1 - scroll_position as i32;
     (start, end)
@@ -234,7 +234,7 @@ pub fn copy_state_query_command(pane: PaneId) -> String {
 }
 
 /// Builds `display-message -p '#{mode-keys}'` to read the active copy table.
-pub fn mode_keys_command() -> String {
+pub(crate) fn mode_keys_command() -> String {
     "display-message -p '#{mode-keys}'".to_string()
 }
 

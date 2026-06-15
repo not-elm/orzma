@@ -25,10 +25,10 @@ pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
 pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
-    COPY_STATE_FORMAT, CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row,
-    capture_offsets, copy_mode_capture_command, copy_state_query_command, mode_keys_command,
-    parse_copy_state, parse_window_rows, prompt_command, refresh_client_command,
-    select_pane_command, select_window_command, set_environment_command, show_buffer_command,
+    CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, copy_mode_capture_command,
+    copy_state_query_command, parse_copy_state, parse_window_rows, prompt_command,
+    refresh_client_command, select_pane_command, select_window_command, set_environment_command,
+    show_buffer_command,
 };
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_pane_keys_command};
 pub use keybindings::{

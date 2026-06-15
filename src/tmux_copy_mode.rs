@@ -155,6 +155,10 @@ fn issue_copy_state(
     let Some(client) = connection.client() else {
         return;
     };
+    // NOTE: state_in_flight is only cleared when the State reply arrives in
+    // consume_copy_reply; a silently-dropped reply (without a transport Closed
+    // event, which prunes via on_copy_mode_exit) leaves the pane un-refreshing
+    // until it exits and re-enters copy mode.
     for pane in panes.iter() {
         if !refresh.state_in_flight.insert(pane.id) {
             continue;

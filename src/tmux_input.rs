@@ -305,7 +305,7 @@ fn forward_keys_to_tmux(
 /// True when a resolved tmux command enters copy mode (`copy-mode`, with any
 /// flags). ozmux intercepts these to insert `CopyModeState` alongside running
 /// the command on tmux.
-pub(crate) fn is_copy_mode_entry(command: &str) -> bool {
+fn is_copy_mode_entry(command: &str) -> bool {
     command
         .split_whitespace()
         .next()
