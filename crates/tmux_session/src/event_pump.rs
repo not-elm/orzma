@@ -220,6 +220,12 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
                 name: name.clone(),
             });
         }
+        ControlEvent::ClientSessionChanged { session, name, .. } => {
+            commands.trigger(TmuxSessionChanged {
+                session: *session,
+                name: name.clone(),
+            });
+        }
         ControlEvent::WindowAdd { window } => {
             commands.trigger(TmuxWindowAdded {
                 window: *window,
@@ -427,6 +433,42 @@ mod tests {
             take_client_name(&mut pending, &events),
             Some("/dev/ttys001".to_string())
         );
+    }
+
+    #[test]
+    fn client_session_changed_triggers_session_changed() {
+        use crate::events::TmuxSessionChanged;
+        use std::sync::{Arc, Mutex};
+        use tmux_control_parser::SessionId;
+
+        #[derive(Resource, Default, Clone)]
+        struct Seen(Arc<Mutex<Vec<(u32, String)>>>);
+
+        #[derive(Resource)]
+        struct Batch(Vec<TransportEvent>);
+
+        fn run(mut commands: Commands, mut pending: ResMut<EnumerationState>, batch: Res<Batch>) {
+            trigger_events(&mut commands, &mut pending.pending, &batch.0);
+        }
+
+        let mut app = App::new();
+        app.init_resource::<Seen>();
+        app.init_resource::<EnumerationState>();
+        app.insert_resource(Batch(vec![TransportEvent::Protocol(
+            ClientEvent::Notification(ControlEvent::ClientSessionChanged {
+                client: "main".to_string(),
+                session: SessionId(9),
+                name: "beta".to_string(),
+            }),
+        )]));
+        app.add_observer(|ev: On<TmuxSessionChanged>, seen: Res<Seen>| {
+            seen.0.lock().unwrap().push((ev.session.0, ev.name.clone()));
+        });
+        app.add_systems(Update, run);
+        let seen = app.world().resource::<Seen>().clone();
+        app.update();
+
+        assert_eq!(*seen.0.lock().unwrap(), vec![(9, "beta".to_string())]);
     }
 
     #[test]
