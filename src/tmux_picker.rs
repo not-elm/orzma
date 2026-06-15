@@ -337,20 +337,24 @@ fn handle_picker_input(
         keys.clear();
         return;
     }
-    let entry_count = build_rows(&picker.sessions, &picker.windows).len();
+    let rows = build_rows(&picker.sessions, &picker.windows);
+    let entry_count = rows.len();
     for ev in keys.read() {
         if ev.state != ButtonState::Pressed {
             continue;
         }
         match ev.key_code {
-            KeyCode::ArrowUp => {
+            KeyCode::ArrowUp | KeyCode::KeyK => {
                 picker.selected = step_selection(picker.selected, entry_count, true);
             }
-            KeyCode::ArrowDown => {
+            KeyCode::ArrowDown | KeyCode::KeyJ => {
                 picker.selected = step_selection(picker.selected, entry_count, false);
             }
+            KeyCode::Escape => {
+                picker.open = false;
+                break;
+            }
             KeyCode::Enter => {
-                let rows = build_rows(&picker.sessions, &picker.windows);
                 let row = rows
                     .get(picker.selected)
                     .copied()
@@ -575,6 +579,56 @@ mod tests {
     #[test]
     fn nav_arrow_up_clamps_at_zero() {
         assert_eq!(step_selection(0, 3, true), 0);
+    }
+
+    fn key_press(code: KeyCode) -> bevy::input::keyboard::KeyboardInput {
+        bevy::input::keyboard::KeyboardInput {
+            key_code: code,
+            logical_key: bevy::input::keyboard::Key::Character("x".into()),
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        }
+    }
+
+    fn picker_input_app() -> App {
+        let mut app = App::new();
+        app.add_message::<bevy::input::keyboard::KeyboardInput>();
+        app.insert_resource(SessionPicker {
+            sessions: vec![fake_session(0, "alpha"), fake_session(1, "beta")],
+            windows: vec![fake_window(0, "alpha", 0, true, "zsh")],
+            selected: 0,
+            open: true,
+            last_open: true,
+        });
+        app.init_resource::<ConnectionState>();
+        app.init_resource::<OzmuxConfigsResource>();
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.add_systems(Update, handle_picker_input);
+        app
+    }
+
+    fn send_key(app: &mut App, code: KeyCode) {
+        app.world_mut().write_message(key_press(code));
+        app.update();
+    }
+
+    #[test]
+    fn j_k_move_selection_like_arrows() {
+        let mut app = picker_input_app();
+        send_key(&mut app, KeyCode::KeyJ);
+        assert_eq!(app.world().resource::<SessionPicker>().selected, 1);
+        send_key(&mut app, KeyCode::KeyK);
+        assert_eq!(app.world().resource::<SessionPicker>().selected, 0);
+    }
+
+    #[test]
+    fn esc_closes_the_picker() {
+        let mut app = picker_input_app();
+        assert!(app.world().resource::<SessionPicker>().open);
+        send_key(&mut app, KeyCode::Escape);
+        assert!(!app.world().resource::<SessionPicker>().open);
     }
 
     fn list_children(app: &mut App) -> Vec<Entity> {
