@@ -178,18 +178,31 @@ pub struct CopyState {
 /// missing or unparseable (one malformed refresh is dropped, not fatal).
 pub fn parse_copy_state(line: &str) -> Option<CopyState> {
     let mut f = line.split('\t');
-    let pane_in_mode = f.next()?.trim().parse::<u32>().ok()? != 0;
-    let scroll_position = f.next()?.trim().parse::<u32>().ok()?;
-    let pane_height = f.next()?.trim().parse::<u32>().ok()? as u16;
-    let history_size = f.next()?.trim().parse::<u32>().ok()?;
-    let cursor_x = f.next()?.trim().parse::<u32>().ok()? as u16;
-    let cursor_y = f.next()?.trim().parse::<u32>().ok()? as u16;
-    let selection_present = f.next()?.trim().parse::<u32>().ok()? != 0;
-    let rectangle = f.next()?.trim().parse::<u32>().ok()? != 0;
-    let sel_start_x = f.next()?.trim().parse::<u32>().ok()? as u16;
-    let sel_start_y = f.next()?.trim().parse::<u32>().ok()?;
-    let sel_end_x = f.next()?.trim().parse::<u32>().ok()? as u16;
-    let sel_end_y = f.next()?.trim().parse::<u32>().ok()?;
+    // NOTE: a field can be EMPTY (not "0") — tmux expands #{selection_start_x}
+    // and the other selection_* vars to "" when there is no active selection,
+    // which is the normal state while scrolling/reading without selecting.
+    // Treat an empty numeric field as 0 so the refresh snapshot still parses; a
+    // MISSING field (too few) or non-numeric text still returns None.
+    let mut next = || -> Option<u32> {
+        let raw = f.next()?.trim();
+        if raw.is_empty() {
+            Some(0)
+        } else {
+            raw.parse::<u32>().ok()
+        }
+    };
+    let pane_in_mode = next()? != 0;
+    let scroll_position = next()?;
+    let pane_height = next()? as u16;
+    let history_size = next()?;
+    let cursor_x = next()? as u16;
+    let cursor_y = next()? as u16;
+    let selection_present = next()? != 0;
+    let rectangle = next()? != 0;
+    let sel_start_x = next()? as u16;
+    let sel_start_y = next()?;
+    let sel_end_x = next()? as u16;
+    let sel_end_y = next()?;
     Some(CopyState {
         pane_in_mode,
         scroll_position,
@@ -451,6 +464,21 @@ mod tests {
     fn parse_copy_state_returns_none_on_short_or_garbage_line() {
         assert!(parse_copy_state("1\t3\t8").is_none());
         assert!(parse_copy_state("not-a-number\t0\t8\t53\t0\t0\t0\t0\t0\t0\t0\t0").is_none());
+    }
+
+    #[test]
+    fn parse_copy_state_treats_empty_selection_fields_as_zero() {
+        // tmux expands #{selection_start_x} etc. to EMPTY (not "0") when there is
+        // no active selection — the normal state while scrolling/reading without
+        // selecting. The line has all 12 tab fields; the last 4 are empty.
+        let s = parse_copy_state("1\t0\t10\t31\t0\t9\t0\t0\t\t\t\t")
+            .expect("must parse with empty (no-selection) selection fields");
+        assert!(s.pane_in_mode);
+        assert_eq!(s.scroll_position, 0);
+        assert_eq!((s.cursor_x, s.cursor_y), (0, 9));
+        assert!(!s.selection_present);
+        assert_eq!((s.sel_start_x, s.sel_start_y), (0, 0));
+        assert_eq!((s.sel_end_x, s.sel_end_y), (0, 0));
     }
 
     #[test]

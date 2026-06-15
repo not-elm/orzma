@@ -34,7 +34,7 @@ use ozmux_tmux::{
     TmuxPane, TmuxProjectionSet, absolute_to_visible_row, copy_mode_capture_command,
     copy_state_query_command, parse_copy_state, show_buffer_command,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -69,14 +69,21 @@ impl Plugin for OzmuxTmuxCopyModePlugin {
     }
 }
 
-/// Bookkeeping for the copy-mode refresh loop: which panes have a state query in
-/// flight (so at most one is outstanding per pane) and the last captured
-/// `scroll_position` per pane (so an unchanged viewport skips re-capturing).
+/// Bookkeeping for the copy-mode refresh loop: per-pane the number of updates a
+/// state query has been outstanding (so at most one is in flight, but a stale one
+/// is re-issued — see `issue_copy_state`), and the last captured `scroll_position`
+/// per pane (so an unchanged viewport skips re-capturing).
 #[derive(Resource, Default)]
 struct CopyRefreshState {
-    state_in_flight: HashSet<PaneId>,
+    state_in_flight: HashMap<PaneId, u32>,
     last_scroll: HashMap<PaneId, u32>,
 }
+
+/// Updates a still-in-flight state query waits before `issue_copy_state` re-sends
+/// it. Bounds the wedge if a reply is delayed or dropped: the re-send is a write
+/// that also flushes any reply stuck behind the lack of client→server traffic,
+/// so an idle copy-mode pane self-heals instead of freezing.
+const STALE_STATE_RESEND_UPDATES: u32 = 12;
 
 /// Drag-select state for mouse selection in copy mode. `active` is set on a
 /// left press over an in-copy-mode pane and cleared on release; `target` is the
@@ -155,16 +162,27 @@ fn issue_copy_state(
     let Some(client) = connection.client() else {
         return;
     };
-    // NOTE: state_in_flight is only cleared when the State reply arrives in
-    // consume_copy_reply; a silently-dropped reply (without a transport Closed
-    // event, which prunes via on_copy_mode_exit) leaves the pane un-refreshing
-    // until it exits and re-enters copy mode.
+    // NOTE: re-send a state query that has been in flight for too long. The reply
+    // normally clears the entry in consume_copy_reply; if it is delayed or dropped
+    // (or stuck behind a lack of client→server writes), waiting on it forever would
+    // freeze the refresh. Re-sending after STALE_STATE_RESEND_UPDATES is itself a
+    // write that flushes any stuck reply, so the pane self-heals.
     for pane in panes.iter() {
-        if !refresh.state_in_flight.insert(pane.id) {
+        let send_now = match refresh.state_in_flight.get_mut(&pane.id) {
+            None => true,
+            Some(age) => {
+                *age += 1;
+                *age >= STALE_STATE_RESEND_UPDATES
+            }
+        };
+        if !send_now {
             continue;
         }
         match client.handle().send(&copy_state_query_command(pane.id)) {
-            Ok(id) => queries.register(id, pane.id, CopyQueryKind::State),
+            Ok(id) => {
+                queries.register(id, pane.id, CopyQueryKind::State);
+                refresh.state_in_flight.insert(pane.id, 0);
+            }
             Err(error) => {
                 refresh.state_in_flight.remove(&pane.id);
                 tracing::warn!(?error, pane = pane.id.0, "copy-state query send failed");
@@ -186,6 +204,7 @@ fn consume_copy_reply(
     mut render_handles: Query<&mut CopyRenderHandle>,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane)>,
+    copy_modes: Query<(), With<CopyModeState>>,
     snapshots: Query<&CopyModeSnapshot>,
 ) {
     let entity_of: HashMap<PaneId, Entity> = panes.iter().map(|(e, p)| (p.id, e)).collect();
@@ -196,6 +215,15 @@ fn consume_copy_reply(
         match reply.kind {
             CopyQueryKind::State => {
                 refresh.state_in_flight.remove(&reply.pane);
+                // NOTE: a State/Capture reply can land AFTER the pane left copy
+                // mode (the query was in flight at exit). Ignoring it is required:
+                // applying a stale Capture would re-create the CopyRenderHandle and
+                // repaint scrolled content over the live grid the exit observer just
+                // restored. (Buffer replies are still applied below — a copy's
+                // buffer is valid after the copy-and-cancel that ended the mode.)
+                if copy_modes.get(entity).is_err() {
+                    continue;
+                }
                 let stored = snapshots.get(entity).map(|s| s.0).ok();
                 apply_state_reply(
                     &mut commands,
@@ -208,6 +236,9 @@ fn consume_copy_reply(
                 );
             }
             CopyQueryKind::Capture => {
+                if copy_modes.get(entity).is_err() {
+                    continue;
+                }
                 apply_capture_reply(&mut commands, &mut render_handles, entity, reply);
             }
             CopyQueryKind::Buffer => {
@@ -780,7 +811,6 @@ mod tests {
     fn copy_mode_exit_repaints_live_grid_and_prunes_refresh_state() {
         use bevy::ecs::system::RunSystemOnce;
         use ozma_tty_renderer::prelude::TerminalGridPlugin;
-        use ozma_tty_renderer::schema::TerminalGrid;
         use tmux_control_parser::{CellDims, PaneId};
 
         let mut app = App::new();
@@ -840,7 +870,7 @@ mod tests {
         // pane leaves copy mode).
         {
             let mut refresh = app.world_mut().resource_mut::<CopyRefreshState>();
-            refresh.state_in_flight.insert(pane_id);
+            refresh.state_in_flight.insert(pane_id, 0);
             refresh.last_scroll.insert(pane_id, 7);
         }
         {
@@ -872,7 +902,7 @@ mod tests {
 
         let refresh = app.world().resource::<CopyRefreshState>();
         assert!(
-            !refresh.state_in_flight.contains(&pane_id),
+            !refresh.state_in_flight.contains_key(&pane_id),
             "exit prunes the in-flight mark (else a reconnect wedges re-query)",
         );
         assert!(
@@ -926,7 +956,7 @@ mod tests {
         // TmuxPane to prune, so a reconnect that re-projects %7 cannot wedge.
         {
             let mut refresh = app.world_mut().resource_mut::<CopyRefreshState>();
-            refresh.state_in_flight.insert(pane_id);
+            refresh.state_in_flight.insert(pane_id, 0);
             refresh.last_scroll.insert(pane_id, 7);
         }
         app.world_mut().entity_mut(entity).despawn();
@@ -934,7 +964,7 @@ mod tests {
 
         let refresh = app.world().resource::<CopyRefreshState>();
         assert!(
-            !refresh.state_in_flight.contains(&pane_id),
+            !refresh.state_in_flight.contains_key(&pane_id),
             "despawn must prune the in-flight mark (else reconnect wedges re-query)",
         );
         assert!(
@@ -1009,6 +1039,172 @@ mod tests {
         let sel = selection.unwrap();
         // sel_start_y=10: 10 - (100-0) = -90 → clamped to -1
         assert_eq!(sel.start.row, -1);
+    }
+
+    #[test]
+    #[ignore = "requires a real tmux binary and a controlling PTY"]
+    fn copy_mode_scroll_without_selection_repaints_grid() {
+        // Regression: scrolling in copy mode WITHOUT an active selection must
+        // repaint the grid with older lines. tmux expands the selection_* format
+        // vars to EMPTY when no selection exists; if parse_copy_state rejects
+        // those, no snapshot/capture forms and the view freezes (the original
+        // "scroll movement doesn't work" bug). The integration test below masked
+        // this by starting a selection first.
+        use crate::clipboard::Clipboard;
+        use crate::tmux_render::OzmuxTmuxRenderPlugin;
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+        use ozma_tty_renderer::material::TerminalUiMaterial;
+        use ozma_tty_renderer::prelude::TerminalGridPlugin;
+        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+        use ozmux_tmux::{ConnectionState, TmuxSessionPlugin};
+        use std::time::{Duration, Instant};
+        use tmux_control::TmuxServer;
+        use tmux_control_parser::PaneId;
+
+        let socket = format!("ozmux-scroll-{}", std::process::id());
+        let server = TmuxServer::new().socket_name(&socket);
+        let client = server.new_session().expect("spawn tmux -CC new-session");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_plugins(TmuxSessionPlugin);
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 13.0,
+                descent_phys: 3.0,
+                underline_position_phys: -1.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        });
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        drag_select_test_scaffold(&mut app);
+        app.insert_resource(Clipboard::new());
+        app.add_plugins(OzmuxTmuxRenderPlugin);
+        app.add_plugins(OzmuxTmuxCopyModePlugin);
+        app.world_mut()
+            .get_non_send_resource_mut::<ozmux_tmux::TmuxConnection>()
+            .expect("TmuxConnection")
+            .set(client);
+
+        // NOTE: yield generously between updates so the transport reader thread
+        // is scheduled to deliver replies (a tight busy-loop starves it; the real
+        // app yields each frame at the refresh rate). The yield+sleep+yield gives
+        // the reader a scheduling window both before and after the sleep.
+        let tick = |app: &mut App| {
+            app.update();
+            std::thread::yield_now();
+            std::thread::sleep(Duration::from_millis(25));
+            std::thread::yield_now();
+        };
+        let snap_scroll = |app: &mut App, e: bevy::ecs::entity::Entity| -> Option<u32> {
+            app.world()
+                .get::<CopyModeSnapshot>(e)
+                .map(|s| s.0.scroll_position)
+        };
+
+        let attach_deadline = Instant::now() + Duration::from_secs(5);
+        let mut pane: Option<(bevy::ecs::entity::Entity, PaneId)> = None;
+        while Instant::now() < attach_deadline {
+            tick(&mut app);
+            if *app.world().resource::<ConnectionState>() == ConnectionState::Attached {
+                let mut q = app
+                    .world_mut()
+                    .query_filtered::<(bevy::ecs::entity::Entity, &ozmux_tmux::TmuxPane), With<TerminalHandle>>();
+                if let Some((e, p)) = q.iter(app.world()).next() {
+                    pane = Some((e, p.id));
+                    break;
+                }
+            }
+        }
+        let (pane_entity, pane_id) = pane.expect("a pane must be projected within 5 s");
+        let target = format!("%{}", pane_id.0);
+        let handle = app
+            .world()
+            .get_non_send_resource::<ozmux_tmux::TmuxConnection>()
+            .unwrap()
+            .client()
+            .unwrap()
+            .handle();
+
+        handle
+            .send(&format!(
+                "send-keys -t {target} -l -- 'for i in $(seq 1 60); do printf ROW-$i; printf \"\\n\"; done'"
+            ))
+            .expect("seed");
+        handle
+            .send(&format!("send-keys -t {target} Enter"))
+            .expect("enter");
+        let seed = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < seed {
+            tick(&mut app);
+        }
+
+        // Enter copy mode WITHOUT starting any selection.
+        handle
+            .send(&format!("copy-mode -t {target}"))
+            .expect("copy-mode");
+        app.world_mut()
+            .entity_mut(pane_entity)
+            .insert(CopyModeState);
+
+        // A snapshot must form even with NO selection (this is the regression:
+        // the parse bug rejected the empty selection_* fields and never produced
+        // one, so the refresh never ran).
+        let init = Instant::now() + Duration::from_secs(6);
+        while Instant::now() < init {
+            tick(&mut app);
+            if snap_scroll(&mut app, pane_entity).is_some() {
+                break;
+            }
+        }
+        let snapshot_ok = snap_scroll(&mut app, pane_entity).is_some();
+        let scroll_before = snap_scroll(&mut app, pane_entity).unwrap_or(0);
+
+        // Scroll up; the refresh must observe the new scroll_position (which in
+        // turn drives the capture that repaints the scrolled view).
+        handle
+            .send(&format!("send-keys -X -t {target} -N 15 scroll-up"))
+            .expect("scroll-up");
+        let scroll = Instant::now() + Duration::from_secs(10);
+        let mut scroll_after = scroll_before;
+        while Instant::now() < scroll {
+            tick(&mut app);
+            scroll_after = snap_scroll(&mut app, pane_entity).unwrap_or(scroll_after);
+            if scroll_after > scroll_before {
+                break;
+            }
+        }
+
+        if let Some(c) = app
+            .world_mut()
+            .get_non_send_resource_mut::<ozmux_tmux::TmuxConnection>()
+            .unwrap()
+            .take()
+        {
+            c.handle().send("kill-server").ok();
+        }
+
+        assert!(
+            snapshot_ok,
+            "a CopyModeSnapshot must form even with NO selection \
+             (parse_copy_state must accept empty selection_* fields)"
+        );
+        assert!(
+            scroll_after > scroll_before,
+            "scrolling up without a selection must advance the tracked \
+             scroll_position (was {scroll_before}, still {scroll_after})"
+        );
     }
 
     #[test]
@@ -1144,11 +1340,20 @@ mod tests {
 
         // Pump for up to 5 s so issue_copy_state and consume_copy_reply can
         // complete at least one full state→capture round-trip.
+        // Wait for a snapshot that REFLECTS THE SELECTION. A pre-selection
+        // snapshot (selection_present=false) can land first now that
+        // parse_copy_state accepts the empty selection_* fields tmux emits before
+        // a selection exists; breaking on the first snapshot would race the
+        // begin-selection just sent above.
         let copy_deadline = Instant::now() + Duration::from_secs(5);
         let mut got_snapshot = false;
         while Instant::now() < copy_deadline {
             app.update();
-            if app.world().get::<CopyModeSnapshot>(pane_entity).is_some() {
+            if app
+                .world()
+                .get::<CopyModeSnapshot>(pane_entity)
+                .is_some_and(|s| s.0.selection_present)
+            {
                 got_snapshot = true;
                 break;
             }
@@ -1190,13 +1395,13 @@ mod tests {
         let mut clipboard_text: Option<String> = None;
         while Instant::now() < clipboard_deadline {
             app.update();
-            if let Some(text) = app.world_mut().resource_mut::<Clipboard>().read() {
-                if !text.is_empty() {
-                    let matched = text.contains("ROW-");
-                    clipboard_text = Some(text);
-                    if matched {
-                        break;
-                    }
+            if let Some(text) = app.world_mut().resource_mut::<Clipboard>().read()
+                && !text.is_empty()
+            {
+                let matched = text.contains("ROW-");
+                clipboard_text = Some(text);
+                if matched {
+                    break;
                 }
             }
             std::thread::sleep(Duration::from_millis(80));
@@ -1220,7 +1425,7 @@ mod tests {
         let snapshot_gone = app.world().get::<CopyModeSnapshot>(pane_entity).is_none();
         // Refresh bookkeeping must be pruned.
         let refresh = app.world().resource::<CopyRefreshState>();
-        let state_pruned = !refresh.state_in_flight.contains(&pane_id);
+        let state_pruned = !refresh.state_in_flight.contains_key(&pane_id);
         let scroll_pruned = !refresh.last_scroll.contains_key(&pane_id);
 
         // --- Cleanup: kill the tmux server unconditionally.
