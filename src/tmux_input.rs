@@ -10,8 +10,8 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozmux_tmux::{
-    ActivePane, KeyMods, TmuxConnection, TmuxPane, bevy_key_to_tmux_name, send_bytes_command,
-    send_pane_keys_command,
+    ActivePane, Forwarded, KeyBindings, KeyMods, TmuxConnection, TmuxPane, bevy_key_to_tmux_name,
+    plan_forward, send_bytes_command, send_pane_keys_command,
 };
 
 /// Registers the tmux keyboard-forwarding system.
@@ -44,26 +44,31 @@ fn forward_keys_to_tmux(
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
     mut focused_webview: ResMut<FocusedWebview>,
+    mut prefix_pending: Local<bool>,
     connection: NonSend<TmuxConnection>,
     keys: Res<ButtonInput<KeyCode>>,
     ime: Res<crate::input::ime::ImeState>,
+    bindings: Res<KeyBindings>,
     active_pane: Option<Single<&TmuxPane, With<ActivePane>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // NOTE: while the picker is open it owns the keyboard; forwarding would
     // leak picker-navigation keys to the active tmux pane. Drain (don't replay).
     if picker.open {
+        *prefix_pending = false;
         events.clear();
         return;
     }
     // NOTE: drain (don't replay) while composing — forwarding preedit
     // navigation keys would both garble IME composition and double-send.
     if ime.is_composing() {
+        *prefix_pending = false;
         events.clear();
         return;
     }
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if !focused {
+        *prefix_pending = false;
         events.clear();
         return;
     }
@@ -91,16 +96,28 @@ fn forward_keys_to_tmux(
                 break;
             }
         }
+        *prefix_pending = false;
         events.clear();
         return;
     }
 
-    let mut names: Vec<String> = Vec::new();
+    // The active pane (if any) is the forward/paste target. GUI chords below do
+    // not need it (so quit/picker work before a pane is projected); tmux key
+    // dispatch does.
+    let target = active_pane
+        .as_deref()
+        .map(|active| format!("%{}", active.id.0));
+
+    // Collect forwardable tmux key names in event order. Super-modified keys are
+    // handled as GUI chords (Paste/Quit/Picker) or swallowed; none reach tmux.
+    let mut key_names: Vec<String> = Vec::new();
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
         }
         if let Some(chord) = gui_chord(&ev.key_code, mods) {
+            // A GUI action abandons any pending tmux prefix sequence.
+            *prefix_pending = false;
             match chord {
                 GuiChord::OpenPicker => picker.open = true,
                 GuiChord::Quit => {
@@ -113,19 +130,14 @@ fn forward_keys_to_tmux(
                     if text.is_empty() {
                         continue;
                     }
-                    let Some(active) = active_pane.as_deref() else {
-                        continue;
-                    };
-                    let pane = active.id;
-                    let Some(client) = connection.client() else {
+                    let (Some(target), Some(client)) = (target.as_deref(), connection.client())
+                    else {
                         continue;
                     };
                     let bytes = build_paste_bytes(&text, false);
-                    let target = format!("%{}", pane.0);
                     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
-                        let cmd = send_bytes_command(&target, chunk);
-                        if let Err(e) = client.handle().send(&cmd) {
-                            tracing::warn!(?e, pane = pane.0, "paste send failed");
+                        if let Err(e) = client.handle().send(&send_bytes_command(target, chunk)) {
+                            tracing::warn!(?e, "paste send failed");
                             break;
                         }
                     }
@@ -135,25 +147,31 @@ fn forward_keys_to_tmux(
             continue;
         }
         if let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods) {
-            names.push(name);
+            key_names.push(name);
         }
     }
 
-    if names.is_empty() {
+    // Dispatch the keys against the tmux bindings: bound keys run their command
+    // verbatim, unbound keys forward to the active pane. NOTE: the bound command
+    // acts on tmux's current pane; ozmux keeps that synced to the focused pane
+    // via select-pane, and both travel this FIFO control connection in order.
+    let actions = plan_forward(&mut prefix_pending, &bindings, key_names);
+    if actions.is_empty() {
         return;
     }
-    // NOTE: forward straight to the active pane, NOT via `send-keys -K -c
-    // <client>`. Under `tmux -CC`, `-K` mis-encodes named keys (Up arrives as a
-    // literal `n`); sending to the pane lets tmux's pane-input encoder translate
-    // them correctly (respecting the pane's application-cursor mode).
-    let Some(active) = active_pane.as_deref() else {
+    let (Some(target), Some(client)) = (target.as_deref(), connection.client()) else {
         return;
     };
-    let target = format!("%{}", active.id.0);
-    if let Some(c) = connection.client()
-        && let Err(e) = c.handle().send(&send_pane_keys_command(&target, &names))
-    {
-        tracing::warn!(?e, "send-keys forward failed");
+    let handle = client.handle();
+    for action in actions {
+        let cmd = match action {
+            Forwarded::Run(command) => command,
+            Forwarded::Keys(names) => send_pane_keys_command(target, &names),
+        };
+        if let Err(e) = handle.send(&cmd) {
+            tracing::warn!(?e, "tmux forward send failed");
+            break;
+        }
     }
 }
 
