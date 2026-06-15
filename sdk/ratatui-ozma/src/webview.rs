@@ -34,6 +34,23 @@ impl Webview {
         }
     }
 
+    /// Creates a webview that loads a remote `http(s)` URL.
+    ///
+    /// Display-only by default — the `window.ozmux` back-channel is **not**
+    /// injected. Call [`Webview::bridge`] (or register a handler with
+    /// [`Webview::on`], which enables it implicitly) to opt in.
+    pub fn url(url: impl Into<String>) -> Self {
+        Self {
+            kind: RegisterKind::Url {
+                url: url.into(),
+                interactive: true,
+                bridge: false,
+                passthrough: Vec::new(),
+            },
+            handlers: HashMap::new(),
+        }
+    }
+
     /// Creates a webview served from a directory of assets.
     pub fn dir(root: impl AsRef<Path>, entry: impl Into<String>) -> Self {
         Self {
@@ -53,6 +70,15 @@ impl Webview {
             RegisterKind::Inline { interactive: i, .. } => *i = interactive,
             RegisterKind::Dir { interactive: i, .. } => *i = interactive,
             RegisterKind::Url { interactive: i, .. } => *i = interactive,
+        }
+        self
+    }
+
+    /// Opts a `url` webview into the `window.ozmux` back-channel. A no-op for
+    /// `inline`/`dir` webviews, which are always bridged. Fixed at register.
+    pub fn bridge(mut self, bridge: bool) -> Self {
+        if let RegisterKind::Url { bridge: b, .. } = &mut self.kind {
+            *b = bridge;
         }
         self
     }
@@ -84,6 +110,9 @@ impl Webview {
             "method {method:?} uses the reserved __ozma. namespace"
         );
         self.handlers.insert(method, make_handler(f));
+        if let RegisterKind::Url { bridge, .. } = &mut self.kind {
+            *bridge = true;
+        }
         self
     }
 }
@@ -199,5 +228,56 @@ mod tests {
             v.get("passthrough").is_none(),
             "empty passthrough must be skipped"
         );
+    }
+
+    #[test]
+    fn url_builder_records_kind_with_display_only_defaults() {
+        let wv = Webview::url("https://example.com");
+        match &wv.kind {
+            RegisterKind::Url {
+                url,
+                interactive,
+                bridge,
+                ..
+            } => {
+                assert_eq!(url, "https://example.com");
+                assert!(*interactive, "url webviews are interactive by default");
+                assert!(!*bridge, "url webviews are display-only by default");
+            }
+            _ => panic!("expected url"),
+        }
+    }
+
+    #[test]
+    fn bridge_opts_a_url_webview_into_the_back_channel() {
+        let wv = Webview::url("https://example.com").bridge(true);
+        match &wv.kind {
+            RegisterKind::Url { bridge, .. } => assert!(*bridge),
+            _ => panic!("expected url"),
+        }
+    }
+
+    #[test]
+    fn on_implicitly_enables_the_bridge_for_url_webviews() {
+        let wv = Webview::url("https://example.com")
+            .on("ping", |(): ()| Ok::<_, crate::error::RpcError>(()));
+        match &wv.kind {
+            RegisterKind::Url { bridge, .. } => {
+                assert!(*bridge, "registering a handler must enable the bridge");
+            }
+            _ => panic!("expected url"),
+        }
+    }
+
+    #[test]
+    fn url_passthrough_rides_register_wire() {
+        use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+        let wv = Webview::url("https://example.com").passthrough([KeyChord {
+            mods: KeyModifiers::ALT,
+            code: KeyCode::Char('h'),
+        }]);
+        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
+        assert_eq!(v["kind"], "url");
+        assert_eq!(v["passthrough"][0]["key"], "h");
     }
 }
