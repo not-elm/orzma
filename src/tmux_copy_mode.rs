@@ -80,9 +80,12 @@ struct CopyRefreshState {
 }
 
 /// Updates a still-in-flight state query waits before `issue_copy_state` re-sends
-/// it. Bounds the wedge if a reply is delayed or dropped: the re-send is a write
-/// that also flushes any reply stuck behind the lack of client→server traffic,
-/// so an idle copy-mode pane self-heals instead of freezing.
+/// it. The reply normally clears the entry in `consume_copy_reply`; the re-send is
+/// a backstop for the rare case where a reply is never correlated back (a parser
+/// gap, or a command tmux never answers), which would otherwise freeze the refresh
+/// until the pane exits and re-enters copy mode. The transport reader is a
+/// continuous loop, so a reply tmux has emitted is always read — this is not a
+/// flush of "stuck" traffic, just a fresh query whose reply can still land.
 const STALE_STATE_RESEND_UPDATES: u32 = 12;
 
 /// Drag-select state for mouse selection in copy mode. `active` is set on a
@@ -163,10 +166,10 @@ fn issue_copy_state(
         return;
     };
     // NOTE: re-send a state query that has been in flight for too long. The reply
-    // normally clears the entry in consume_copy_reply; if it is delayed or dropped
-    // (or stuck behind a lack of client→server writes), waiting on it forever would
-    // freeze the refresh. Re-sending after STALE_STATE_RESEND_UPDATES is itself a
-    // write that flushes any stuck reply, so the pane self-heals.
+    // normally clears the entry in consume_copy_reply; the re-send is a backstop
+    // for the rare case where a reply is never correlated back (a parser gap, or a
+    // command tmux never answers), which would otherwise freeze the refresh until
+    // the pane exits and re-enters copy mode.
     for pane in panes.iter() {
         let send_now = match refresh.state_in_flight.get_mut(&pane.id) {
             None => true,
@@ -1186,6 +1189,22 @@ mod tests {
             }
         }
 
+        // The refresh must REPAINT, not merely track scroll: a changed
+        // scroll_position drives a capture whose reply creates the pane's
+        // CopyRenderHandle (the scratch grid the scrolled view renders into).
+        // Under the regression no snapshot formed, so no capture was ever sent and
+        // this handle is never created — asserting snapshot+scroll alone would miss
+        // a break anywhere in the capture→repaint path.
+        let repaint = Instant::now() + Duration::from_secs(6);
+        let mut repaint_ok = false;
+        while Instant::now() < repaint {
+            tick(&mut app);
+            if app.world().get::<CopyRenderHandle>(pane_entity).is_some() {
+                repaint_ok = true;
+                break;
+            }
+        }
+
         if let Some(c) = app
             .world_mut()
             .get_non_send_resource_mut::<ozmux_tmux::TmuxConnection>()
@@ -1204,6 +1223,12 @@ mod tests {
             scroll_after > scroll_before,
             "scrolling up without a selection must advance the tracked \
              scroll_position (was {scroll_before}, still {scroll_after})"
+        );
+        assert!(
+            repaint_ok,
+            "scrolling without a selection must drive a capture that creates the \
+             pane's CopyRenderHandle (the capture→repaint path must run, not just \
+             snapshot/scroll bookkeeping)"
         );
     }
 
