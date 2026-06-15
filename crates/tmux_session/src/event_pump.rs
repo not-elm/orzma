@@ -6,6 +6,7 @@ use crate::events::{
     TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxLayoutChanged, TmuxSessionChanged,
     TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
+use crate::keybinds::{KeyBinding, parse_key_bindings};
 use crate::output::PaneOutput;
 use crate::state::{ConnectionState, next_state};
 use bevy::prelude::Commands;
@@ -181,6 +182,28 @@ pub(crate) fn take_active_pane(
     None
 }
 
+/// Returns the parsed key bindings from a `CommandComplete` whose id matches
+/// `pending` (the `list-keys` reply), clearing `pending`. Returns `None` when no
+/// matching reply is in the batch.
+pub(crate) fn take_key_bindings(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<Vec<KeyBinding>> {
+    for event in events {
+        if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
+            && *pending == Some(*id)
+        {
+            *pending = None;
+            if *ok {
+                return Some(parse_key_bindings(output));
+            }
+            tracing::warn!("list-keys mirror query failed");
+            return None;
+        }
+    }
+    None
+}
+
 /// Parses an `@N %M` line into `(WindowId, PaneId)`.
 fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
     let mut parts = line.split_whitespace();
@@ -329,6 +352,20 @@ mod tests {
             }]
         );
         assert!(capture_pending.is_empty());
+    }
+
+    #[test]
+    fn take_key_bindings_parses_matching_reply() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(4),
+            number: 0,
+            ok: true,
+            output: vec!["bind-key -T prefix c new-window".to_string()],
+        })];
+        let mut pending = Some(CommandId(4));
+        let got = take_key_bindings(&mut pending, &events).unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(pending, None);
     }
 
     #[test]

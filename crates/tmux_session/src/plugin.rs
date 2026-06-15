@@ -5,13 +5,14 @@ use crate::components::TmuxPane;
 use crate::connection::TmuxConnection;
 use crate::enumerate::{
     EnumerationState, active_pane_command, capture_pane_command, client_name_command,
-    list_windows_command,
+    list_keys_command, list_windows_command,
 };
 use crate::event_pump::{
-    advance_state, drain_transport, take_active_pane, take_client_name, take_pane_captures,
-    trigger_events,
+    advance_state, drain_transport, take_active_pane, take_client_name, take_key_bindings,
+    take_pane_captures, trigger_events,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset};
+use crate::keybinds::TmuxKeyBindings;
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
 use crate::state::ConnectionState;
@@ -40,6 +41,7 @@ impl Plugin for TmuxSessionPlugin {
         app.init_resource::<ConnectionState>()
             .init_resource::<TmuxProjection>()
             .init_resource::<EnumerationState>()
+            .init_resource::<TmuxKeyBindings>()
             .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
@@ -90,6 +92,7 @@ fn drain_tmux_events(
     mut commands: Commands,
     mut state: ResMut<ConnectionState>,
     mut enumeration: ResMut<EnumerationState>,
+    mut key_bindings: ResMut<TmuxKeyBindings>,
     mut connection: NonSendMut<TmuxConnection>,
     mut pane_output: MessageWriter<PaneOutput>,
 ) {
@@ -120,6 +123,10 @@ fn drain_tmux_events(
                 Ok(id) => enumeration.active_pane_pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to send active-pane query"),
             }
+            match client.handle().send(&list_keys_command()) {
+                Ok(id) => enumeration.list_keys_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send list-keys mirror query"),
+            }
         }
     }
     if events
@@ -130,6 +137,7 @@ fn drain_tmux_events(
         enumeration.pending = None;
         enumeration.client_name_pending = None;
         enumeration.active_pane_pending = None;
+        enumeration.list_keys_pending = None;
         enumeration.capture_pending.clear();
         commands.trigger(TmuxConnectionReset);
     } else {
@@ -140,6 +148,9 @@ fn drain_tmux_events(
             take_active_pane(&mut enumeration.active_pane_pending, &events)
         {
             commands.trigger(TmuxActivePaneChanged { window, pane });
+        }
+        if let Some(bindings) = take_key_bindings(&mut enumeration.list_keys_pending, &events) {
+            key_bindings.bindings = bindings;
         }
         for output in take_pane_captures(&mut enumeration.capture_pending, &events) {
             pane_output.write(output);
