@@ -40,6 +40,9 @@ impl Plugin for OzmuxTmuxCopyModePlugin {
             (
                 issue_copy_state.run_if(any_pane_in_copy_mode),
                 consume_copy_reply.run_if(on_message::<CopyModeReply>),
+                // NOTE: .after(consume_copy_reply) is load-bearing — the ApplyDeferred
+                // between them flushes the capture FrameSnapshot (which clears
+                // vi_cursor/selection) before this system re-asserts the overlay.
                 apply_copy_overlay
                     .run_if(any_with_component::<CopyModeSnapshot>)
                     .after(consume_copy_reply),
