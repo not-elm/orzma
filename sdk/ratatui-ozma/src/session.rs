@@ -60,7 +60,7 @@ impl FramePlacements {
 /// Last-emitted geometry per handle, for diff-driven flush.
 #[derive(Debug, Default)]
 pub(crate) struct FlushState {
-    last: HashMap<String, (u16, u16, u16, u16)>,
+    last: HashMap<String, Rect>,
     last_focused: Option<String>,
 }
 
@@ -172,7 +172,7 @@ pub(crate) fn flush_placements(
     state: &mut FlushState,
     placements: &[Placement],
 ) -> OzmaResult<()> {
-    let mut current: HashMap<String, (u16, u16, u16, u16)> = HashMap::new();
+    let mut current: HashMap<String, Rect> = HashMap::new();
     for p in placements {
         // Skip degenerate rects and invalid handles so a single bad placement
         // can't abort the whole flush (which would also desync flush state for
@@ -182,7 +182,12 @@ pub(crate) fn flush_placements(
             continue;
         }
         let (rows, cols) = clamp_dims(p.area.height, p.area.width);
-        let key = (p.area.y, p.area.x, rows, cols);
+        let key = Rect {
+            x: p.area.x,
+            y: p.area.y,
+            width: cols,
+            height: rows,
+        };
         current.insert(p.handle.clone(), key);
         if state.last.get(&p.handle) != Some(&key) {
             let seq = mount_inline(&p.handle, rows, cols)?;
