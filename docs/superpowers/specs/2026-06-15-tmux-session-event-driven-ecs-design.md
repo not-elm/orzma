@@ -120,22 +120,29 @@ an internal helper.
 #[derive(Resource, Default)]
 struct TmuxProjection {
     windows: HashMap<WindowId, Entity>,
-    panes: HashMap<PaneId, Entity>,
+    panes: HashMap<PaneId, (Entity, WindowId)>,
     session: Option<Entity>,
+    pending_active_pane: Option<PaneId>,
 }
 ```
 
 It is now an internal implementation detail of the crate (no longer part of the
 state read by consumers); demote its visibility accordingly.
 
-**In-batch ordering guarantee:** an observer that creates an entity reserves the
-`Entity` id with `commands.spawn(()).id()` and writes it into
-`ResMut<TmuxProjection>` *synchronously* before returning. Observers run in
-trigger order on the main thread, so a later same-batch event (e.g. seed →
-`TmuxWindowAdded @1` → `TmuxLayoutChanged @1`) resolves `@1` to the reserved
-entity even though the spawn command has not yet flushed. All structural
-mutation (component insert, child spawn, despawn) flows through `Commands` and
-applies in order. This replaces the synchronous-stream-order reducer.
+**In-batch ordering guarantee:** `Commands::trigger` is *deferred*, not
+immediate — it enqueues a trigger command. When the command queue is applied,
+the trigger commands run in FIFO order; each applied trigger runs its
+observer(s) synchronously, and that observer's own commands flush immediately
+after it, before the next trigger command applies. The load-bearing fact is
+therefore: an observer that creates an entity reserves the `Entity` id with
+`commands.spawn(()).id()` and writes it into `ResMut<TmuxProjection>`
+**synchronously during observer execution**. A later same-batch event (e.g.
+seed → `TmuxWindowAdded @1` → `TmuxLayoutChanged @1`) then resolves `@1` from
+the index. It must NOT rely on the reserved entity's components being visible
+before the spawn flushes — all component access goes through the index +
+`Commands`. **Each event type must have exactly one observer**; multiple
+observers of the same event have unspecified order and would break this
+invariant (bevy#19569). This replaces the synchronous-stream-order reducer.
 
 ### Observers
 
@@ -143,17 +150,22 @@ All observers take `ResMut<TmuxProjection>` + `Commands`; they resolve ids and
 mutate the world.
 
 - `on_session_changed` — ensure the session entity (spawn-reserve + index if
-  absent); insert `TmuxSession { id }` and `TmuxSessionName(name)`.
-- `on_window_added` — ensure the window entity; insert
-  `TmuxWindow { id, index, name }`. Idempotent ensure: spawn-and-set if absent,
-  set fields if present.
+  absent); insert `TmuxSession { id, name }`.
+- `on_window_added` — ensure the window entity. If absent, spawn and insert
+  `TmuxWindow { id, index, name }`. If present, update `index`/`name` ONLY when
+  the event carries non-default metadata (`!(index == 0 && name.is_empty())`),
+  so a bare `%window-add` notification (defaults) never clobbers seed-supplied
+  metadata while the seed's real values still apply.
 - `on_window_renamed` — resolve; set `TmuxWindow.name`.
 - `on_layout_changed` — per-window pane diff: spawn missing panes as
   `ChildOf(window)` and index them, update `TmuxPane.dims` on existing, despawn
   removed panes and remove them from the index.
-- `on_active_pane_changed` — ensure window + pane exist; move the `ActivePane`
-  marker (remove from prior holder, insert on the resolved pane) and move
-  `ActiveWindow` to the resolved window.
+- `on_active_pane_changed` — the event carries only the pane id, but `TmuxPane`
+  requires `dims`, so this observer must NOT spawn a pane. If the pane is in the
+  index, move the `ActivePane` marker (remove from prior holder, insert on the
+  resolved pane); otherwise record the id in a `pending_active_pane` field on
+  the index, which `on_layout_changed` applies when that pane entity appears.
+  Always move `ActiveWindow` to the resolved window (ensuring the window).
 - `on_active_window_changed` — move the `ActiveWindow` marker only (seed's
   per-row active flag).
 - `on_windows_retained` — despawn every window not in the set (and its panes via
@@ -168,8 +180,10 @@ despawned by `on_layout_changed` / `on_windows_retained`, matching the current
 
 `on_window_closed` / `on_windows_retained` despawning a window cascades to its
 `ChildOf` pane children; the observer must remove those pane ids from the index
-to avoid dangling entries (look them up via the window's `Children` or a reverse
-scan of `index.panes`).
+to avoid dangling entries. It MUST find them via the index (the reverse
+`WindowId` stored in `panes`), NOT via the window's `Children`: panes spawned
+earlier in the same batch are reserved-not-live, so `Children` can be
+incomplete at observer time.
 
 ### `drain_tmux_events` (pure translator)
 
@@ -188,11 +202,11 @@ continue to run `.after(TmuxProjectionSet)`.
 
 ### Components
 
-- `TmuxSession { id: SessionId }` — unchanged.
+- `TmuxSession { id: SessionId, name: String }` — gains `name` (was the
+  separate `session_name` model field); no separate `TmuxSessionName` component.
 - `TmuxWindow { id, index, name }` — **`active: bool` removed**.
 - `TmuxPane { id, dims }` — unchanged.
-- New: `TmuxSessionName(String)`, `ActivePane` (ZST marker), `ActiveWindow`
-  (ZST marker).
+- New: `ActivePane` (ZST marker), `ActiveWindow` (ZST marker).
 
 Hierarchy is unchanged: a window entity's ECS parent is `WorkspaceUiRoot`
 (attached by the render layer), a pane is `ChildOf(window)`, and the session
@@ -204,10 +218,10 @@ entity stands alone. Teardown despawns via the index.
 | --- | --- | --- |
 | `src/tmux_render.rs` `sync_active_window` | reads `TmuxWindow.active` | query `With<ActiveWindow>` to pick the shown window; hide others |
 | `src/tmux_render.rs` (rest) | reads `TmuxPane` / `TmuxWindow` / `TmuxProjection` | unchanged (output routing keeps using the index) |
-| `src/tmux_input.rs` paste | `model.active_pane` | `Single<&TmuxPane, With<ActivePane>>` |
-| `src/ui/tmux_pane_focus.rs` `sync_pane_dim` | `model.active_pane` + `run_if(resource_changed)` | `Has<ActivePane>` query, gated by `Added<ActivePane>` / `RemovedComponents<ActivePane>` |
-| `src/ui/tmux_window_bar.rs` `rebuild_window_bar` | rebuild from `model.windows` / `model.session_name` + `run_if(resource_changed::<ProjectionModel>)` | rebuild from window entities + the session entity's `TmuxSessionName`; gate on window-set / metadata / active-marker changes |
-| `src/ui/status_bar_sync.rs` `tmux_projection_present` | `Option<Res<ProjectionModel>>` | based on the session entity existing (e.g. a `Single<(), With<TmuxSession>>` check or a lightweight presence resource) |
+| `src/tmux_input.rs` paste | `model.active_pane` | `Option<Single<&TmuxPane, With<ActivePane>>>` (a bare `Single` skips the whole `forward_keys_to_tmux` system on 0/≥2 matches, stopping ALL key forwarding — not just paste) |
+| `src/ui/tmux_pane_focus.rs` `sync_pane_dim` | `model.active_pane` + `run_if(resource_changed)` | `Has<ActivePane>` query, gated by `Added<ActivePane>` / `RemovedComponents<ActivePane>` **and `Added<TmuxPane>`** (new panes need their initial `PaneDim` even when the active pane is unchanged) |
+| `src/ui/tmux_window_bar.rs` `rebuild_window_bar` | rebuild from `model.windows` / `model.session_name` + `run_if(resource_changed::<ProjectionModel>)` | rebuild from window entities + the session entity's `TmuxSession.name`; gate on window-set / metadata / active-marker changes |
+| `src/ui/status_bar_sync.rs` `tmux_projection_present` | `Option<Res<ProjectionModel>>` | a lightweight presence resource inserted at plugin build (true from frame 0). NOT `With<TmuxSession>` — the session entity only exists after `%session-changed`, which would let the old status bar render then tear down (flicker) |
 
 `TmuxProjection` becomes crate-private, so any consumer reference to it must
 route through the new component/marker queries instead. Per-entity
@@ -219,9 +233,10 @@ so they comply with the repo's `run_if` rule.
 
 - Remove exports: `PaneModel`, `ProjectionModel`, `WindowModel`, `pane_leaves`.
 - Remove `TmuxProjection` from the public surface (now crate-private).
-- Add exports: the event types consumers need to observe (if any consumer
-  observes them directly), `ActivePane`, `ActiveWindow`, `TmuxSessionName`.
-  `TmuxSession` / `TmuxWindow` / `TmuxPane` stay exported.
+- Events stay `pub(crate)` — every consumer reads components/markers, not
+  events, so none are exported (matches the visibility-minimization rule).
+- Add exports: `ActivePane`, `ActiveWindow`. `TmuxSession` (now `{ id, name }`) /
+  `TmuxWindow` / `TmuxPane` stay exported.
 
 ## Testing
 
@@ -248,8 +263,20 @@ so they comply with the repo's `run_if` rule.
   window-close / retain tests.
 - **Active markers are singletons** — at most one `ActivePane` and one
   `ActiveWindow` should exist. Observers must remove the marker from the prior
-  holder before inserting on the new one; consumers using `Single` would panic
-  on a duplicate, so tests assert singleton-ness.
+  holder before inserting on the new one. A bare `Single` system param does not
+  panic in Bevy 0.18 — it *skips the whole system* on 0 or ≥2 matches — so a
+  transient double-marker would silently stop key forwarding; consumers use
+  `Option<Single>` / fallible queries and tests assert singleton-ness.
+- **Active pane without geometry** — `%window-pane-changed` carries no `dims`, so
+  `on_active_pane_changed` cannot spawn the pane. If the pane is not yet in the
+  index its id is parked in `pending_active_pane` and applied by
+  `on_layout_changed` when the pane entity is spawned. Tested by an
+  active-before-layout ordering case.
+- **Status-bar presence timing** — the tmux presence signal must be true from
+  plugin build (frame 0), not gated on the session entity, or the old
+  multiplexer status bar flickers in before the first `%session-changed`.
+- **New-pane dim** — `sync_pane_dim` must also react to `Added<TmuxPane>`, not
+  only active-marker moves, so freshly spawned panes get their initial `PaneDim`.
 - **Window `index` provenance** — `index` only ever arrives via the seed (full
   enumeration); notifications leave it at its last-seen value. This matches
   current behavior (the model only set `index` from `seed_from_rows`).
