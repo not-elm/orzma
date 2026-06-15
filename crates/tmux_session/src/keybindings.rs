@@ -4,7 +4,78 @@
 //! adapter. `-K` is deliberately NOT used — it mis-encodes named keys under
 //! `tmux -CC` — and tmux.conf is the single source of truth for bindings.
 
-use std::collections::HashSet;
+use bevy::prelude::Resource;
+use std::collections::{HashMap, HashSet};
+
+/// tmux key bindings read from `list-keys`, plus the prefix-key set. Built once
+/// on attach; empty until then, so every key forwards pane-direct (the
+/// pre-binding behavior).
+#[derive(Resource, Default, Debug)]
+pub struct KeyBindings {
+    root: HashMap<String, String>,
+    prefix: HashMap<String, String>,
+    prefix_keys: HashSet<String>,
+}
+
+impl KeyBindings {
+    /// Installs parsed bindings, routing each into its table's map.
+    pub(crate) fn install(&mut self, bindings: Vec<KeyBinding>) {
+        for binding in bindings {
+            match binding.table {
+                Table::Root => {
+                    self.root.insert(binding.key, binding.command);
+                }
+                Table::Prefix => {
+                    self.prefix.insert(binding.key, binding.command);
+                }
+            }
+        }
+    }
+
+    /// Replaces the prefix-key set.
+    pub(crate) fn set_prefix_keys(&mut self, keys: HashSet<String>) {
+        self.prefix_keys = keys;
+    }
+
+    /// Clears all tables (on disconnect, so a reconnect re-reads).
+    pub(crate) fn clear(&mut self) {
+        self.root.clear();
+        self.prefix.clear();
+        self.prefix_keys.clear();
+    }
+}
+
+/// One ordered forwarding action for a frame of key input.
+#[derive(Debug)]
+pub enum Forwarded {
+    /// Run a bound tmux command verbatim over the control connection.
+    Run(String),
+    /// Forward these key names to the active pane (one batched `send-keys`).
+    Keys(Vec<String>),
+}
+
+/// Plans the ordered forwarding actions for a frame's tmux key names, threading
+/// `prefix_pending` across frames. Consecutive forwarded keys coalesce into one
+/// `Keys` batch; a bound key emits a `Run`; the prefix key and unmatched
+/// prefix-table keys are swallowed.
+pub fn plan_forward(
+    prefix_pending: &mut bool,
+    bindings: &KeyBindings,
+    key_names: impl IntoIterator<Item = String>,
+) -> Vec<Forwarded> {
+    let mut actions: Vec<Forwarded> = Vec::new();
+    for name in key_names {
+        match dispatch(prefix_pending, bindings, &name) {
+            Dispatch::Run(command) => actions.push(Forwarded::Run(command)),
+            Dispatch::Forward => match actions.last_mut() {
+                Some(Forwarded::Keys(batch)) => batch.push(name),
+                _ => actions.push(Forwarded::Keys(vec![name])),
+            },
+            Dispatch::Swallow => {}
+        }
+    }
+    actions
+}
 
 /// Builds `list-keys -T <table>` to list one key table's bindings.
 pub(crate) fn list_keys_command(table: &str) -> String {
@@ -123,6 +194,32 @@ fn unescape_key(s: &str) -> String {
     out
 }
 
+/// What to do with one keypress.
+enum Dispatch {
+    Run(String),
+    Forward,
+    Swallow,
+}
+
+/// Routes one key name against the bindings, threading prefix state.
+fn dispatch(prefix_pending: &mut bool, bindings: &KeyBindings, key_name: &str) -> Dispatch {
+    if *prefix_pending {
+        *prefix_pending = false;
+        return lookup(&bindings.prefix, key_name).map_or(Dispatch::Swallow, Dispatch::Run);
+    }
+    if bindings.prefix_keys.contains(key_name) {
+        *prefix_pending = true;
+        return Dispatch::Swallow;
+    }
+    lookup(&bindings.root, key_name).map_or(Dispatch::Forward, Dispatch::Run)
+}
+
+/// Looks up a key in a table, falling back to the table's `Any` binding (tmux
+/// runs `Any` when no more-specific key matches).
+fn lookup(table: &HashMap<String, String>, key_name: &str) -> Option<String> {
+    table.get(key_name).or_else(|| table.get("Any")).cloned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +303,106 @@ mod tests {
             HashSet::from(["C-a".to_string(), "C-b".to_string()])
         );
         assert!(parse_prefix("none None").is_empty());
+    }
+
+    fn bindings(
+        root: &[(&str, &str)],
+        prefix: &[(&str, &str)],
+        prefix_keys: &[&str],
+    ) -> KeyBindings {
+        let mut kb = KeyBindings::default();
+        kb.install(
+            root.iter()
+                .map(|(k, c)| KeyBinding {
+                    table: Table::Root,
+                    key: (*k).to_string(),
+                    command: (*c).to_string(),
+                    repeat: false,
+                })
+                .chain(prefix.iter().map(|(k, c)| KeyBinding {
+                    table: Table::Prefix,
+                    key: (*k).to_string(),
+                    command: (*c).to_string(),
+                    repeat: false,
+                }))
+                .collect(),
+        );
+        kb.set_prefix_keys(prefix_keys.iter().map(|k| (*k).to_string()).collect());
+        kb
+    }
+
+    #[test]
+    fn root_bound_key_runs_its_command() {
+        let kb = bindings(&[("M-i", "split-window -h")], &[], &["C-b"]);
+        let actions = plan_forward(&mut false, &kb, vec!["M-i".to_string()]);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], Forwarded::Run(c) if c == "split-window -h"));
+    }
+
+    #[test]
+    fn unbound_key_is_forwarded() {
+        let kb = bindings(&[("M-i", "split-window -h")], &[], &["C-b"]);
+        let actions = plan_forward(&mut false, &kb, vec!["Up".to_string()]);
+        assert_eq!(actions.len(), 1);
+        assert!(matches!(&actions[0], Forwarded::Keys(v) if v == &vec!["Up".to_string()]));
+    }
+
+    #[test]
+    fn prefix_then_bound_key_runs_prefix_command() {
+        let kb = bindings(&[], &[("c", "new-window")], &["C-b"]);
+        let mut pending = false;
+        let first = plan_forward(&mut pending, &kb, vec!["C-b".to_string()]);
+        assert!(first.is_empty(), "prefix key is swallowed");
+        assert!(pending, "prefix is now pending");
+        let second = plan_forward(&mut pending, &kb, vec!["c".to_string()]);
+        assert!(matches!(&second[0], Forwarded::Run(c) if c == "new-window"));
+        assert!(!pending, "pending cleared after the prefix key");
+    }
+
+    #[test]
+    fn prefix_then_unbound_key_is_swallowed() {
+        let kb = bindings(&[], &[("c", "new-window")], &["C-b"]);
+        let mut pending = false;
+        plan_forward(&mut pending, &kb, vec!["C-b".to_string()]);
+        let actions = plan_forward(&mut pending, &kb, vec!["z".to_string()]);
+        assert!(
+            actions.is_empty(),
+            "unbound prefix key is dropped, not forwarded"
+        );
+        assert!(!pending);
+    }
+
+    #[test]
+    fn any_binding_is_the_fallback() {
+        let kb = bindings(
+            &[("M-i", "split-window -h"), ("Any", "display-message hi")],
+            &[],
+            &["C-b"],
+        );
+        let specific = plan_forward(&mut false, &kb, vec!["M-i".to_string()]);
+        assert!(matches!(&specific[0], Forwarded::Run(c) if c == "split-window -h"));
+        let fallback = plan_forward(&mut false, &kb, vec!["X".to_string()]);
+        assert!(matches!(&fallback[0], Forwarded::Run(c) if c == "display-message hi"));
+    }
+
+    #[test]
+    fn consecutive_forwards_coalesce_then_split_on_run() {
+        let kb = bindings(&[("M-i", "split-window -h")], &[], &["C-b"]);
+        let actions = plan_forward(
+            &mut false,
+            &kb,
+            vec![
+                "a".to_string(),
+                "b".to_string(),
+                "M-i".to_string(),
+                "c".to_string(),
+            ],
+        );
+        assert_eq!(actions.len(), 3);
+        assert!(
+            matches!(&actions[0], Forwarded::Keys(v) if v == &vec!["a".to_string(), "b".to_string()])
+        );
+        assert!(matches!(&actions[1], Forwarded::Run(c) if c == "split-window -h"));
+        assert!(matches!(&actions[2], Forwarded::Keys(v) if v == &vec!["c".to_string()]));
     }
 }
