@@ -1191,8 +1191,6 @@ mod apply_tests {
                 passthrough: vec![],
             },
         );
-        // A mounted inline child for that handle — it WOULD receive the emit if
-        // the fan-out were not bridge-gated.
         app.world_mut().spawn(InlineWebview {
             view_id: "disp".into(),
             instance_id: None,
