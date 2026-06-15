@@ -52,6 +52,7 @@ impl Webview {
         match &mut self.kind {
             RegisterKind::Inline { interactive: i, .. } => *i = interactive,
             RegisterKind::Dir { interactive: i, .. } => *i = interactive,
+            RegisterKind::Url { interactive: i, .. } => *i = interactive,
         }
         self
     }
@@ -59,7 +60,7 @@ impl Webview {
     /// Declares chords the page lets through to the app while focused (the host
     /// forwards them to the PTY so the app reads them via `crossterm::event::read`).
     pub fn passthrough(mut self, keys: impl IntoIterator<Item = KeyChord>) -> Self {
-        let (RegisterKind::Inline { passthrough, .. } | RegisterKind::Dir { passthrough, .. }) =
+        let (RegisterKind::Inline { passthrough, .. } | RegisterKind::Dir { passthrough, .. } | RegisterKind::Url { passthrough, .. }) =
             &mut self.kind;
         passthrough.extend(keys);
         self
