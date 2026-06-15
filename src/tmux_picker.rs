@@ -2,13 +2,14 @@
 //! overlay, and attaches only after the user selects an entry (or "New session").
 
 use crate::configs::OzmuxConfigsResource;
+use crate::control_plane::ControlPlaneHandle;
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
-use ozmux_tmux::{ConnectionState, TmuxConnection, attach_or_create};
+use ozmux_tmux::{ConnectionState, TmuxConnection, attach_or_create, set_environment_command};
 use tmux_control::{SessionInfo, TmuxServer};
 
 const PICKER_Z: i32 = 310;
@@ -23,6 +24,10 @@ impl Plugin for OzmuxTmuxPickerPlugin {
             .add_systems(
                 Update,
                 handle_picker_input.after(crate::input::InputPhase::FocusedKey),
+            )
+            .add_systems(
+                Update,
+                inject_session_ozmux_sock.run_if(resource_exists_and_changed::<ConnectionState>),
             )
             .add_systems(
                 PostUpdate,
@@ -165,6 +170,7 @@ fn handle_picker_input(
     mut state: ResMut<ConnectionState>,
     mut keys: MessageReader<KeyboardInput>,
     configs: Res<OzmuxConfigsResource>,
+    control: Option<Res<ControlPlaneHandle>>,
 ) {
     if !picker.open {
         keys.clear();
@@ -184,7 +190,10 @@ fn handle_picker_input(
             }
             KeyCode::Enter => {
                 let target = target_for(&picker.sessions, picker.selected);
-                let server = build_server(&configs);
+                let mut server = build_server(&configs);
+                if let Some(handle) = &control {
+                    server = server.env("OZMUX_SOCK", &handle.sock_path.to_string_lossy());
+                }
                 match attach_or_create(&server, &target) {
                     Ok(client) => {
                         connection.set(client);
@@ -201,6 +210,32 @@ fn handle_picker_input(
             }
             _ => {}
         }
+    }
+}
+
+/// Sets `$OZMUX_SOCK` in the freshly-connected session's tmux environment so
+/// panes created after attach inherit it. Gated to run on every
+/// [`ConnectionState`] change; the body acts only on the `Attached` transition.
+///
+/// `new-session` already injects `$OZMUX_SOCK` via `-e` (covering its initial
+/// pane), but attaching to a pre-existing session cannot — its panes are spawned
+/// by an already-running server. This session-scoped `set-environment` closes
+/// that gap for panes opened after attach (already-running shells are
+/// unreachable). No-op when the control plane is down.
+fn inject_session_ozmux_sock(
+    state: Res<ConnectionState>,
+    connection: NonSend<TmuxConnection>,
+    control: Option<Res<ControlPlaneHandle>>,
+) {
+    if !matches!(*state, ConnectionState::Attached) {
+        return;
+    }
+    let (Some(handle), Some(client)) = (control, connection.client()) else {
+        return;
+    };
+    let cmd = set_environment_command("OZMUX_SOCK", &handle.sock_path.to_string_lossy());
+    if let Err(e) = client.handle().send(&cmd) {
+        tracing::warn!(?e, "failed to set $OZMUX_SOCK in tmux session environment");
     }
 }
 

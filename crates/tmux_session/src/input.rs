@@ -177,7 +177,7 @@ fn prefix(mods: &KeyMods, shift: bool, base: &str) -> String {
 
 /// Quotes a tmux command argument: wraps in single quotes if it contains
 /// whitespace or shell/tmux metacharacters, escaping embedded single quotes.
-fn quote(arg: &str) -> String {
+pub(crate) fn quote(arg: &str) -> String {
     let needs = arg.is_empty()
         || arg
             .chars()

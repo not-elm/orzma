@@ -105,8 +105,11 @@ impl Ozma {
     /// background reader thread.
     pub fn connect() -> OzmaResult<Self> {
         let sock = std::env::var("OZMUX_SOCK").map_err(|_| OzmaError::NotInPane("OZMUX_SOCK"))?;
-        let token =
-            std::env::var("OZMUX_TOKEN").map_err(|_| OzmaError::NotInPane("OZMUX_TOKEN"))?;
+        let token = pane_identity(
+            std::env::var("OZMUX_TOKEN").ok(),
+            std::env::var("TMUX_PANE").ok(),
+        )
+        .ok_or(OzmaError::NotInPane("OZMUX_TOKEN or TMUX_PANE"))?;
         let stream = UnixStream::connect(sock)?;
         let writer: SharedWriter = Arc::new(Mutex::new(stream.try_clone()?));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
@@ -173,6 +176,15 @@ impl Ozma {
     pub(crate) fn writer_handle(&self) -> SharedWriter {
         self.writer.clone()
     }
+}
+
+/// Resolves the identity sent in the `hello` handshake: the legacy per-surface
+/// `$OZMUX_TOKEN` (direct-PTY backend) when set, else the tmux pane id
+/// `$TMUX_PANE`. tmux injects `$TMUX_PANE` into every pane it spawns, so the
+/// fallback covers the tmux backend where `$OZMUX_TOKEN` is never set. `None`
+/// when neither is present — the process is not inside an ozmux pane.
+fn pane_identity(ozmux_token: Option<String>, tmux_pane: Option<String>) -> Option<String> {
+    ozmux_token.filter(|t| !t.is_empty()).or(tmux_pane)
 }
 
 /// Emits CUP + mount-inline for new/changed placements and unmount for vanished
@@ -342,6 +354,32 @@ mod tests {
             width: w,
             height: h,
         }
+    }
+
+    #[test]
+    fn pane_identity_prefers_ozmux_token() {
+        assert_eq!(
+            pane_identity(Some("tok".into()), Some("%3".into())),
+            Some("tok".into())
+        );
+    }
+
+    #[test]
+    fn pane_identity_falls_back_to_tmux_pane() {
+        assert_eq!(pane_identity(None, Some("%3".into())), Some("%3".into()));
+    }
+
+    #[test]
+    fn pane_identity_treats_empty_token_as_absent() {
+        assert_eq!(
+            pane_identity(Some(String::new()), Some("%3".into())),
+            Some("%3".into())
+        );
+    }
+
+    #[test]
+    fn pane_identity_none_when_neither_set() {
+        assert_eq!(pane_identity(None, None), None);
     }
 
     #[test]
