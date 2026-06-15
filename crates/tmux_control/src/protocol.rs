@@ -592,7 +592,10 @@ mod tests {
         // prevents a single malformed notification from blanking all panes.
         let mut c = ProtocolClient::new();
         let events = c.feed(b"hello world\n").unwrap();
-        assert!(events.is_empty(), "malformed notification is silently skipped");
+        assert!(
+            events.is_empty(),
+            "malformed notification is silently skipped"
+        );
     }
 
     #[test]

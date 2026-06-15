@@ -206,11 +206,20 @@ impl ControlEvent {
                 // Attempt to parse the next token as a layout; if it fails,
                 // treat the entire remainder as the flags string and fall back
                 // to cloning the main layout so the event stays valid.
-                let (visible_layout, flags) = match fields.layout("layout-change", "visible_layout") {
+                let (visible_layout, flags) = match fields.layout("layout-change", "visible_layout")
+                {
                     Ok(vl) => (vl, text(fields.rest(), "flags")?),
-                    Err(_) => (layout.clone(), text(fields.rest(), "flags").unwrap_or_default()),
+                    Err(_) => (
+                        layout.clone(),
+                        text(fields.rest(), "flags").unwrap_or_default(),
+                    ),
                 };
-                Ok(ControlEvent::LayoutChange { window, layout, visible_layout, flags })
+                Ok(ControlEvent::LayoutChange {
+                    window,
+                    layout,
+                    visible_layout,
+                    flags,
+                })
             }
             b"%client-detached" => Ok(ControlEvent::ClientDetached {
                 client: fields.required_text("client-detached", "client")?,
@@ -626,11 +635,25 @@ mod tests {
         // The parser must not fail; visible_layout falls back to layout.
         let event = ev(b"%layout-change @1 b25f,80x24,0,0,2 *");
         assert!(
-            matches!(event, ControlEvent::LayoutChange { window: WindowId(1), .. }),
+            matches!(
+                event,
+                ControlEvent::LayoutChange {
+                    window: WindowId(1),
+                    ..
+                }
+            ),
             "should parse as LayoutChange for window @1"
         );
-        if let ControlEvent::LayoutChange { layout, visible_layout, .. } = event {
-            assert_eq!(layout, visible_layout, "visible_layout falls back to layout");
+        if let ControlEvent::LayoutChange {
+            layout,
+            visible_layout,
+            ..
+        } = event
+        {
+            assert_eq!(
+                layout, visible_layout,
+                "visible_layout falls back to layout"
+            );
         }
     }
 
