@@ -120,6 +120,13 @@ pub fn set_environment_command(key: &str, value: &str) -> String {
     format!("set-environment {} {}", quote(key), quote(value))
 }
 
+/// Builds `switch-client -t <name>` to repoint the attached control client at
+/// another session. The resulting `%session-changed` / `%client-session-changed`
+/// drives the projection rebuild; ozmux never mutates it optimistically.
+pub fn switch_client_command(name: &str) -> String {
+    format!("switch-client -t {}", quote(name))
+}
+
 /// Builds `select-window -t @<id>` to switch the client's active window.
 pub fn select_window_command(id: WindowId) -> String {
     format!("select-window -t @{}", id.0)
@@ -276,6 +283,15 @@ mod tests {
         assert_eq!(
             set_environment_command("OZMA_SOCK", "/tmp/a b/ctl.sock"),
             "set-environment OZMA_SOCK '/tmp/a b/ctl.sock'"
+        );
+    }
+
+    #[test]
+    fn switch_client_command_targets_quoted_name() {
+        assert_eq!(switch_client_command("main"), "switch-client -t main");
+        assert_eq!(
+            switch_client_command("my work"),
+            "switch-client -t 'my work'"
         );
     }
 }

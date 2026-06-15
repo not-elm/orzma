@@ -5,10 +5,13 @@ pub use crate::error::{TmuxError, TmuxResult};
 pub use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
 pub use crate::session::SessionInfo;
 pub use crate::transport::{TmuxClient, TmuxHandle, TmuxServer, TransportEvent};
+pub use crate::window_list::WindowEntry;
 pub use tmux_control_parser::ControlEvent;
 pub use tmux_control_parser::SessionId;
+pub use tmux_control_parser::WindowId;
 
 mod error;
 mod protocol;
 mod session;
 mod transport;
+mod window_list;
