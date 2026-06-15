@@ -30,32 +30,52 @@ pub(crate) fn parse_key_bindings(lines: &[String]) -> Vec<KeyBinding> {
     lines.iter().filter_map(|line| parse_line(line)).collect()
 }
 
-fn parse_line(line: &str) -> Option<KeyBinding> {
-    let mut tokens = line.split_whitespace();
-    if tokens.next()? != "bind-key" {
+fn next_token(line: &str, from: usize) -> Option<(usize, usize)> {
+    let bytes = line.as_bytes();
+    let mut i = from;
+    while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+        i += 1;
+    }
+    if i >= bytes.len() {
         return None;
     }
+    let start = i;
+    while i < bytes.len() && bytes[i] != b' ' && bytes[i] != b'\t' {
+        i += 1;
+    }
+    Some((start, i))
+}
+
+fn parse_line(line: &str) -> Option<KeyBinding> {
+    let (s, e) = next_token(line, 0)?;
+    if &line[s..e] != "bind-key" {
+        return None;
+    }
+    let mut pos = e;
     let mut table: Option<String> = None;
     let mut no_prefix = false;
     let key;
+    let key_end;
     loop {
-        let tok = tokens.next()?;
-        match tok {
-            "-r" => continue,
+        let (ts, te) = next_token(line, pos)?;
+        match &line[ts..te] {
+            "-r" => pos = te,
             "-n" => {
                 no_prefix = true;
-                continue;
+                pos = te;
             }
             "-N" => {
-                tokens.next();
-                continue;
+                let (_, ae) = next_token(line, te)?;
+                pos = ae;
             }
             "-T" => {
-                table = Some(tokens.next()?.to_string());
-                continue;
+                let (vs, ve) = next_token(line, te)?;
+                table = Some(line[vs..ve].to_string());
+                pos = ve;
             }
             other => {
                 key = other.to_string();
+                key_end = te;
                 break;
             }
         }
@@ -67,35 +87,12 @@ fn parse_line(line: &str) -> Option<KeyBinding> {
             "prefix".to_string()
         }
     });
-    // NOTE: the command tail is free-form (may contain spaces, quotes, braces);
-    // take everything after the key token verbatim rather than re-splitting.
-    let consumed = consumed_prefix_len(line, &key)?;
-    let command = line[consumed..].trim().to_string();
+    let command = line[key_end..].trim().to_string();
     Some(KeyBinding {
         table,
         key,
         command,
     })
-}
-
-fn consumed_prefix_len(line: &str, key: &str) -> Option<usize> {
-    let key_start = find_key_token(line, key)?;
-    Some(key_start + key.len())
-}
-
-fn find_key_token(line: &str, key: &str) -> Option<usize> {
-    let mut search_from = 0;
-    while let Some(rel) = line[search_from..].find(key) {
-        let abs = search_from + rel;
-        let before_ok = abs == 0 || line.as_bytes()[abs - 1] == b' ';
-        let after = abs + key.len();
-        let after_ok = after == line.len() || line.as_bytes()[after] == b' ';
-        if before_ok && after_ok {
-            return Some(abs);
-        }
-        search_from = abs + key.len();
-    }
-    None
 }
 
 #[cfg(test)]
@@ -140,6 +137,24 @@ mod tests {
             got[0].command,
             "command-prompt -1 -p \"(jump backward)\" { send-keys -X jump-backward }"
         );
+    }
+
+    #[test]
+    fn key_equal_to_table_name_is_located_correctly() {
+        let got = parse_key_bindings(&lines(&["bind-key -T prefix prefix send-prefix"]));
+        assert_eq!(got[0].table, "prefix");
+        assert_eq!(got[0].key, "prefix");
+        assert_eq!(got[0].command, "send-prefix");
+    }
+
+    #[test]
+    fn note_argument_equal_to_key_is_located_correctly() {
+        let got = parse_key_bindings(&lines(&[
+            "bind-key -N Enter -T copy-mode Enter copy-selection",
+        ]));
+        assert_eq!(got[0].table, "copy-mode");
+        assert_eq!(got[0].key, "Enter");
+        assert_eq!(got[0].command, "copy-selection");
     }
 
     #[test]
