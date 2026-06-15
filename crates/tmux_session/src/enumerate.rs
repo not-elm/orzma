@@ -430,13 +430,13 @@ mod tests {
     fn parse_copy_state_reads_all_fields() {
         let line = "1\t3\t8\t53\t6\t7\t1\t0\t2\t54\t6\t57";
         let s = parse_copy_state(line).expect("parse");
-        assert_eq!(s.pane_in_mode, true);
+        assert!(s.pane_in_mode);
         assert_eq!(s.scroll_position, 3);
         assert_eq!(s.pane_height, 8);
         assert_eq!(s.history_size, 53);
         assert_eq!((s.cursor_x, s.cursor_y), (6, 7));
-        assert_eq!(s.selection_present, true);
-        assert_eq!(s.rectangle, false);
+        assert!(s.selection_present);
+        assert!(!s.rectangle);
         assert_eq!((s.sel_start_x, s.sel_start_y), (2, 54));
         assert_eq!((s.sel_end_x, s.sel_end_y), (6, 57));
     }
