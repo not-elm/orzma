@@ -58,7 +58,7 @@ impl KeyBindings {
             ModeKeys::Vi => &self.copy_mode_vi,
             ModeKeys::Emacs => &self.copy_mode,
         };
-        table.get(key).or_else(|| table.get("Any")).cloned()
+        lookup(table, key)
     }
 
     /// Clears all tables (on disconnect, so a reconnect re-reads).
@@ -464,7 +464,10 @@ mod tests {
     fn parses_copy_mode_emacs_binding() {
         let lines = vec!["bind-key -T copy-mode C-n send-keys -X cursor-down".to_string()];
         let got = parse_list_keys(&lines);
+        assert_eq!(got.len(), 1);
         assert_eq!(got[0].table, Table::CopyMode);
+        assert_eq!(got[0].key, "C-n");
+        assert_eq!(got[0].command, "send-keys -X cursor-down");
     }
 
     #[test]
@@ -502,5 +505,18 @@ mod tests {
         kb.set_mode_keys(ModeKeys::Vi);
         kb.clear();
         assert_eq!(kb.copy_command("j"), None);
+    }
+
+    #[test]
+    fn copy_command_falls_back_to_any() {
+        let mut kb = KeyBindings::default();
+        kb.install(vec![KeyBinding {
+            table: Table::CopyModeVi,
+            key: "Any".into(),
+            command: "cancel".into(),
+            repeat: false,
+        }]);
+        kb.set_mode_keys(ModeKeys::Vi);
+        assert_eq!(kb.copy_command("Escape"), Some("cancel".to_string()));
     }
 }
