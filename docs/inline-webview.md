@@ -70,31 +70,34 @@ Caveats (the rect is anchored to an absolute scrollback line, not reflowed):
   sequences are rejected until the history drops below the limit (e.g. after
   `clear`).
 
-## SDK helper
+## Emitting the sequences
 
-`@ozmux/sdk/inline` builds the sequences (with validation and the newline
-reservation) so tooling doesn't hand-roll escape codes:
+Write OSC 5379 directly to stdout from any language. Example in shell:
 
-```ts
-import { mountInline, unmountInline } from '@ozmux/sdk/inline';
+```sh
+# anchor heading, then mount memo.main as a 12×48 cell rect + 12 newlines
+printf 'memo:\n'
+printf '\033]5379;mount-inline;memo.main;12;48\033\\'
+printf '\n%.0s' $(seq 12)
 
-process.stdout.write('memo:\n');                          // anchor heading
-process.stdout.write(mountInline('memo.main', { rows: 12, cols: 48 }));
-// a second instance of the same view, addressed by instanceId:
-process.stdout.write('\nmemo (second):\n');
-process.stdout.write(mountInline('memo.main', { rows: 12, cols: 48, instanceId: 'b' }));
-// later:
-process.stdout.write(unmountInline('memo.main', 'b'));    // just instance 'b'
-process.stdout.write(unmountInline('memo.main'));         // every instance of memo.main
-process.stdout.write(unmountInline());                    // every inline webview
+# a second instance of the same view (instanceId = 'b'):
+printf '\nmemo (second):\n'
+printf '\033]5379;mount-inline;memo.main;12;48;b\033\\'
+printf '\n%.0s' $(seq 12)
+
+# later — unmount instance 'b' only:
+printf '\033]5379;unmount-inline;memo.main;b\033\\'
+# unmount every instance of memo.main:
+printf '\033]5379;unmount-inline;memo.main\033\\'
+# unmount every inline webview on the terminal:
+printf '\033]5379;unmount-inline\033\\'
 ```
 
-`mountInline` returns the OSC sequence followed by `rows` newlines as one
-string (one atomic `write`). It throws `RangeError` on an invalid view id or
-out-of-range geometry rather than emitting a sequence the terminal would drop.
+The `@ozma/web` npm package (`sdk/ozma-web`) is the page-side TypeScript client
+for the `window.ozma` bridge inside webview pages — it does not emit OSC sequences.
 
 For a runnable end-to-end client (register over the control plane → mount →
-`window.ozmux` back-channel) see `examples/dyn_webview_client.rs`:
+`window.ozma` back-channel) see `examples/dyn_webview_client.rs`:
 `cargo run --example dyn_webview_client` inside an ozmux terminal.
 
 ## Focus and input

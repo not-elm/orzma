@@ -1,9 +1,9 @@
 //! Minimal reference client for ozmux Tier 1 dynamic webviews. Run inside an
-//! ozmux pane: it reads `$OZMUX_SOCK`/`$OZMUX_TOKEN`, registers an inline HTML
+//! ozmux pane: it reads `$OZMA_SOCK`/`$OZMA_TOKEN`, registers an inline HTML
 //! view over the control socket, prints the `mount-inline` OSC at the cursor,
 //! then demonstrates the back-channel by:
-//!   - replying to `ping` calls from the page (`window.ozmux.call`)
-//!   - emitting a `tick` event every second (`window.ozmux.on`)
+//!   - replying to `ping` calls from the page (`window.ozma.call`)
+//!   - emitting a `tick` event every second (`window.ozma.on`)
 //!
 //! The page also has an `<input>`, so clicking it shows the focus ring and typing
 //! (routed to the focused inline webview) echoes back into the page.
@@ -18,9 +18,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn main() -> std::io::Result<()> {
-    let sock = std::env::var("OZMUX_SOCK")
-        .expect("not inside an ozmux pane (or control plane down): $OZMUX_SOCK unset");
-    let token = std::env::var("OZMUX_TOKEN").expect("$OZMUX_TOKEN unset");
+    let sock = std::env::var("OZMA_SOCK")
+        .expect("not inside an ozmux pane (or control plane down): $OZMA_SOCK unset");
+    let token = std::env::var("OZMA_TOKEN").expect("$OZMA_TOKEN unset");
 
     let stream = UnixStream::connect(&sock)?;
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
@@ -31,7 +31,7 @@ fn main() -> std::io::Result<()> {
         writeln!(w, "{}", json!({ "op": "hello", "token": token }))?;
         let html = concat!(
             "<body style='background:#13131a;color:#8be9fd;font:16px sans-serif;margin:0;padding:8px'>",
-            "<h1>window.ozmux demo</h1>",
+            "<h1>window.ozma demo</h1>",
             "<div id='out'>calling ping\u{2026}</div>",
             "<div id='tick'>no ticks yet</div>",
             // A focusable element so click-to-focus is visible: clicking it shows the
@@ -39,10 +39,10 @@ fn main() -> std::io::Result<()> {
             "<input id='field' placeholder='click here, then type\u{2026}' ",
             "style='font:16px sans-serif;padding:4px;width:92%;margin-top:8px'>",
             "<script>",
-            "window.ozmux.call('ping','hi')",
+            "window.ozma.call('ping','hi')",
             ".then(function(v){document.getElementById('out').textContent='ping \u{2192} '+v;})",
             ".catch(function(e){document.getElementById('out').textContent='error: '+e.message;});",
-            "window.ozmux.on('tick',function(n){document.getElementById('tick').textContent='tick #'+n;});",
+            "window.ozma.on('tick',function(n){document.getElementById('tick').textContent='tick #'+n;});",
             "document.getElementById('field').addEventListener('input',function(e){",
             "document.getElementById('out').textContent='typed: '+e.target.value;});",
             "</script>",

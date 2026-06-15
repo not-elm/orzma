@@ -9,8 +9,8 @@ display-only support; host-API escalation is deferred (see [Phase A scope](#phas
 
 Content and capabilities never arrive from PTY bytes. The control socket is the
 authenticated-local channel: only a process with access to the local Unix
-socket and a valid per-surface `$OZMUX_TOKEN` can register a view. The kernel's
-peer-UID check on the socket connection is the outer boundary; `$OZMUX_TOKEN`
+socket and a valid per-surface `$OZMA_TOKEN` can register a view. The kernel's
+peer-UID check on the socket connection is the outer boundary; `$OZMA_TOKEN`
 provides attribution (which pane surface owns the registration). Remote input
 piped into a shell prompt cannot reach the socket.
 
@@ -28,8 +28,8 @@ ozmux injects these into every PTY when the control plane is running:
 
 | Variable | Contents |
 |---|---|
-| `$OZMUX_SOCK` | Absolute path to the control Unix socket |
-| `$OZMUX_TOKEN` | Opaque per-surface token (attribution only) |
+| `$OZMA_SOCK` | Absolute path to the control Unix socket |
+| `$OZMA_TOKEN` | Opaque per-surface token (attribution only) |
 
 Both are absent when the control plane is not up (e.g. during `cargo test`
 builds or when the feature flag is off).
@@ -44,7 +44,7 @@ requests, read one reply per `register`. Unknown `op` values are rejected.
 Send once, before any `register`:
 
 ```json
-{"op":"hello","token":"<$OZMUX_TOKEN value>"}
+{"op":"hello","token":"<$OZMA_TOKEN value>"}
 ```
 
 No reply is sent for `hello`.
@@ -73,10 +73,10 @@ Fields:
 | `entry` | string | — | HTML entry relative to `root` (`dir` only). No `..` or leading `/`. |
 | `interactive` | bool | `true` | Whether the mounted webview accepts pointer/keyboard input. |
 | `url` | string | — | Remote `http(s)` URL (`url` only). `http`/`https` schemes only. |
-| `bridge` | bool | `false` | Inject the `window.ozmux` back-channel (`url` only; `inline`/`dir` are always bridged). |
+| `bridge` | bool | `false` | Inject the `window.ozma` back-channel (`url` only; `inline`/`dir` are always bridged). |
 
 A `url` webview is display-only by default: without `bridge:true`, the page
-receives no `window.ozmux` bridge, and ozmux delivers it no `emit` events. The
+receives no `window.ozma` bridge, and ozmux delivers it no `emit` events. The
 URL itself still travels the authenticated socket (never PTY bytes), preserving
 the Tier 1 trust model. `http`/`https` only — other schemes are rejected with
 `unsupported_scheme`.
@@ -134,7 +134,7 @@ lands below the webview.
 - `<handle>` — the opaque string returned by the socket.
 - `<rows>` / `<cols>` — view size in terminal cells.
 - A handle may only be mounted from the surface that registered it (the one
-  whose `$OZMUX_TOKEN` was used in `hello`). Mounting from a different surface
+  whose `$OZMA_TOKEN` was used in `hello`). Mounting from a different surface
   is silently dropped.
 
 For the full OSC 5379 protocol (including `unmount-inline`, geometry limits,
@@ -173,7 +173,7 @@ is killed (`Ctrl-C` → socket disconnect → automatic registration teardown).
 The following are explicitly out of scope for Phase A and are deferred:
 
 - **Host-API escalation** — dynamic webviews that call `window.<ns>.<method>`
-  APIs; Phase A webviews are display-only (no `window.ozmux` bridge).
+  APIs; Phase A webviews are display-only (no `window.ozma` bridge).
 - **Untrusted raw-OSC tier** — a lower-trust path that bypasses the socket
   entirely, using PTY escape codes alone; deferred pending a separate threat
   model review.
