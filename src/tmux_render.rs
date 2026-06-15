@@ -34,9 +34,10 @@ pub struct OzmuxTmuxRenderPlugin;
 impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>();
-        // Over-sized split-filling panes paint padding beyond their grid; match
-        // it to the terminal background so no band shows (see `layout_panes`).
-        app.insert_resource(TerminalBgPadding(theme::BACKGROUND.to_linear()));
+        // Over-sized split-filling panes paint padding beyond their grid (see
+        // `layout_panes`). Match it to the terminal's default background so no
+        // band shows — `ozma_tty_engine` maps `NamedColor::Background` to black.
+        app.insert_resource(TerminalBgPadding(LinearRgba::BLACK));
         app.add_systems(
             Update,
             (
