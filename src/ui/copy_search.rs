@@ -16,7 +16,7 @@ use ozmux_tmux::{PaneId, PromptKind, TmuxConnection, prompt_command};
 const PROMPT_Z: i32 = 320;
 
 /// Registers the copy-mode prompt resource, input system, and render system.
-pub struct CopyPromptPlugin;
+pub(crate) struct CopyPromptPlugin;
 
 impl Plugin for CopyPromptPlugin {
     fn build(&self, app: &mut App) {
@@ -24,7 +24,9 @@ impl Plugin for CopyPromptPlugin {
             .add_systems(Startup, spawn_prompt_ui)
             .add_systems(
                 Update,
-                handle_prompt_input.run_if(|p: Res<CopyPrompt>| p.open.is_some()),
+                handle_prompt_input
+                    .after(crate::input::InputPhase::FocusedKey)
+                    .run_if(|p: Res<CopyPrompt>| p.open.is_some()),
             )
             .add_systems(
                 PostUpdate,
@@ -36,19 +38,19 @@ impl Plugin for CopyPromptPlugin {
 /// The active copy-mode prompt (search regex or jump char). Present while the
 /// user is typing; owns the keyboard like the session picker.
 #[derive(Resource, Default)]
-pub struct CopyPrompt {
+pub(crate) struct CopyPrompt {
     /// The pending prompt, if open.
-    pub open: Option<CopyPromptState>,
+    pub(crate) open: Option<CopyPromptState>,
 }
 
 /// In-progress copy-mode prompt input.
-pub struct CopyPromptState {
+pub(crate) struct CopyPromptState {
     /// Which copy command to run on submit.
-    pub kind: PromptKind,
+    pub(crate) kind: PromptKind,
     /// The pane the result targets.
-    pub pane: PaneId,
+    pub(crate) pane: PaneId,
     /// Text typed so far.
-    pub text: String,
+    pub(crate) text: String,
 }
 
 /// The effect of one key on an open prompt.
@@ -157,8 +159,20 @@ fn sync_prompt_ui(
 fn handle_prompt_input(
     mut copy_prompt: ResMut<CopyPrompt>,
     mut events: MessageReader<KeyboardInput>,
+    mut armed: Local<bool>,
     connection: NonSend<TmuxConnection>,
 ) {
+    // NOTE: the keystroke that opened the prompt (e.g. `/`, or `f` for a jump)
+    // is still in the shared KeyboardInput buffer; each reader has its own
+    // cursor, so `forward_keys_to_tmux` clearing it does not advance ours. Skip
+    // the open frame — drain past the opening key without processing it — or the
+    // opening char leaks into the prompt text (and single-char jumps submit on
+    // it immediately).
+    if !*armed {
+        events.clear();
+        *armed = true;
+        return;
+    }
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
@@ -177,10 +191,12 @@ fn handle_prompt_input(
                     tracing::warn!(?e, "copy-mode prompt submit failed");
                 }
                 copy_prompt.open = None;
+                *armed = false;
                 break;
             }
             PromptStep::Cancel => {
                 copy_prompt.open = None;
+                *armed = false;
                 break;
             }
         }
@@ -304,6 +320,85 @@ mod tests {
             PromptStep::Continue
         );
         assert_eq!(s.text, "");
+    }
+
+    use bevy::input::ButtonState;
+    use bevy::input::keyboard::KeyCode;
+
+    fn key_event(logical: Key, code: KeyCode) -> KeyboardInput {
+        KeyboardInput {
+            key_code: code,
+            logical_key: logical,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        }
+    }
+
+    fn armed_skip_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<KeyboardInput>()
+            .init_resource::<CopyPrompt>()
+            .insert_non_send_resource(TmuxConnection::default())
+            .add_systems(
+                Update,
+                handle_prompt_input.run_if(|p: Res<CopyPrompt>| p.open.is_some()),
+            );
+        app
+    }
+
+    #[test]
+    fn open_frame_skips_the_opening_key_for_a_jump_prompt() {
+        let mut app = armed_skip_app();
+        app.world_mut().resource_mut::<CopyPrompt>().open = Some(CopyPromptState {
+            kind: PromptKind::JumpForward,
+            pane: PaneId(0),
+            text: String::new(),
+        });
+        // The opening `f` is still in the shared buffer when the prompt opens.
+        app.world_mut()
+            .resource_mut::<Messages<KeyboardInput>>()
+            .write(key_event(char_key("f"), KeyCode::KeyF));
+        app.update();
+
+        let prompt = app.world().resource::<CopyPrompt>();
+        assert!(
+            prompt.open.is_some(),
+            "single-char jump must NOT submit on the opening key (open frame is skipped)"
+        );
+        assert_eq!(
+            prompt.open.as_ref().unwrap().text,
+            "",
+            "the opening key must not leak into the prompt text"
+        );
+    }
+
+    #[test]
+    fn target_key_after_open_frame_submits_a_jump_prompt() {
+        let mut app = armed_skip_app();
+        app.world_mut().resource_mut::<CopyPrompt>().open = Some(CopyPromptState {
+            kind: PromptKind::JumpForward,
+            pane: PaneId(0),
+            text: String::new(),
+        });
+        // Open frame: the opening `f` is drained, prompt stays open.
+        app.world_mut()
+            .resource_mut::<Messages<KeyboardInput>>()
+            .write(key_event(char_key("f"), KeyCode::KeyF));
+        app.update();
+        assert!(app.world().resource::<CopyPrompt>().open.is_some());
+
+        // Next frame: the real target char submits (no client → just closes).
+        app.world_mut()
+            .resource_mut::<Messages<KeyboardInput>>()
+            .write(key_event(char_key("x"), KeyCode::KeyX));
+        app.update();
+        assert!(
+            app.world().resource::<CopyPrompt>().open.is_none(),
+            "the first post-open char submits a single-char jump"
+        );
     }
 
     #[test]
