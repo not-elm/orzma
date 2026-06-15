@@ -627,6 +627,8 @@ fn is_safe_entry(entry: &str) -> bool {
 /// purpose — `url::Url::parse("javascript:…")` succeeds with no host, so a
 /// host-first order would mis-report `javascript:` as `invalid_url` instead of
 /// `unsupported_scheme`.
+/// Returns the parser-normalized URL (not the raw input) so the validated and
+/// loaded forms are identical.
 fn validate_url_source(url: &str) -> Result<String, &'static str> {
     let parsed = Url::parse(url).map_err(|_| "invalid_url")?;
     if !matches!(parsed.scheme(), "http" | "https") {
@@ -635,7 +637,7 @@ fn validate_url_source(url: &str) -> Result<String, &'static str> {
     if parsed.host_str().is_none_or(str::is_empty) {
         return Err("invalid_url");
     }
-    Ok(url.to_string())
+    Ok(parsed.to_string())
 }
 
 /// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
@@ -1768,11 +1770,19 @@ mod url_source_tests {
     fn validate_url_source_accepts_http_and_https() {
         assert_eq!(
             validate_url_source("https://example.com").unwrap(),
-            "https://example.com"
+            "https://example.com/"
         );
         assert_eq!(
             validate_url_source("http://localhost:3000/x").unwrap(),
             "http://localhost:3000/x"
+        );
+    }
+
+    #[test]
+    fn validate_url_source_returns_the_normalized_url() {
+        assert_eq!(
+            validate_url_source("  https://example.com  ").unwrap(),
+            "https://example.com/"
         );
     }
 
@@ -1818,7 +1828,7 @@ mod url_source_tests {
         .expect("https accepted");
         assert!(matches!(
             v.source,
-            DynSource::Url { ref url, bridge: true } if url == "https://example.com"
+            DynSource::Url { ref url, bridge: true } if url == "https://example.com/"
         ));
     }
 

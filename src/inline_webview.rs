@@ -925,9 +925,13 @@ mod tests {
             app.world().get::<WebviewTextureTarget>(child).is_some(),
             "inline webview must carry a headless WebviewTextureTarget"
         );
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("inline webview must carry PreloadScripts");
         assert!(
-            app.world().get::<PreloadScripts>(child).is_some(),
-            "inline webview must carry the shared preload scripts"
+            !preload.0.is_empty(),
+            "an inline (bridged) webview must carry the populated window.ozmux preload"
         );
         assert_eq!(
             app.world().get::<WebviewSize>(child),
