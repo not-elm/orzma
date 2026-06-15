@@ -338,11 +338,30 @@ fn forward_wheel_to_tmux(
     mut wheel: MessageReader<MouseWheel>,
     connection: NonSend<TmuxConnection>,
     bindings: Res<KeyBindings>,
+    picker: Res<SessionPicker>,
+    copy_prompt: Res<CopyPrompt>,
+    focused_webview: Res<FocusedWebview>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let notches = collect_notches(&mut wheel);
     if notches.is_empty() {
+        return;
+    }
+    // NOTE: a background scroll must not mutate tmux; mirror the keyboard path.
+    let focused = windows.single().map(|w| w.focused).unwrap_or(false);
+    if !focused {
+        return;
+    }
+    // NOTE: while the picker or copy-mode prompt is open it owns the overlay;
+    // scrolling/entering copy mode behind the modal would be invisible and wrong.
+    if picker.open || copy_prompt.open.is_some() {
+        return;
+    }
+    // When an inline webview holds focus it owns input; forwarding the wheel to
+    // tmux too would scroll both. Parity with the keyboard path.
+    if focused_webview.0.is_some() {
         return;
     }
     let Some(single) = active_pane else {
@@ -397,9 +416,17 @@ fn forward_wheel_to_tmux(
     }
 }
 
+/// Per-frame cap on emitted wheel notches; one `send-keys` is dispatched per
+/// notch, so an uncapped fast fling would flood the control connection.
+const MAX_NOTCHES_PER_FRAME: usize = 10;
+
 /// Drains all `MouseWheel` messages for this frame into a list of per-notch
 /// up/down booleans. `Line` units contribute one bool per integer notch;
 /// `Pixel` units contribute a single notch in the dominant direction.
+///
+/// NOTE: sub-1.0 `Line` deltas are intentionally dropped (no residual carry in
+/// v1), and the total is capped at `MAX_NOTCHES_PER_FRAME` so a fast trackpad
+/// fling cannot flood the control connection with `send-keys` commands.
 fn collect_notches(wheel: &mut MessageReader<MouseWheel>) -> Vec<bool> {
     let mut out = Vec::new();
     for ev in wheel.read() {
@@ -420,6 +447,7 @@ fn collect_notches(wheel: &mut MessageReader<MouseWheel>) -> Vec<bool> {
             }
         }
     }
+    out.truncate(MAX_NOTCHES_PER_FRAME);
     out
 }
 
@@ -519,6 +547,14 @@ mod tests {
     fn collect_notches_pixel_zero_no_notch() {
         let evs = [make_wheel_event(MouseScrollUnit::Pixel, 0.0)];
         assert_eq!(notches_from_events(&evs), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn collect_notches_clamps_fast_fling() {
+        let evs = [make_wheel_event(MouseScrollUnit::Line, 50.0)];
+        let notches = notches_from_events(&evs);
+        assert_eq!(notches.len(), MAX_NOTCHES_PER_FRAME);
+        assert!(notches.iter().all(|&up| up));
     }
 
     #[test]
