@@ -27,7 +27,7 @@ importers:
         specifier: 'catalog:'
         version: 24.12.2
 
-  sdk/typescript:
+  sdk/ozma-web:
     devDependencies:
       '@types/node':
         specifier: 'catalog:'
