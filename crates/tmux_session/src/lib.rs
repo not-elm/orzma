@@ -12,6 +12,7 @@ mod enumerate;
 mod event_pump;
 mod events;
 mod input;
+mod keybinds;
 mod observers;
 mod output;
 mod plugin;
