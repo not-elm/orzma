@@ -89,10 +89,7 @@ fn register_view(
             .interactive(false)
             .on("ready", move |(): ()| -> Result<Content, RpcError> {
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
-                Ok(Content {
-                    markdown: doc.text.clone(),
-                    base_dir: doc.base_dir.display().to_string(),
-                })
+                Ok(content_of(&doc))
             })
             .on(
                 "searchCount",
@@ -207,17 +204,15 @@ fn apply_reload(
     shared: &Arc<Mutex<document::Document>>,
     path: &Path,
 ) -> anyhow::Result<()> {
-    match document::fingerprint(path) {
-        Ok(fp) => {
-            if Some(fp) == *last_fp {
-                return Ok(());
-            }
-            *last_fp = Some(fp);
-        }
+    let fp = match document::fingerprint(path) {
+        Ok(fp) => fp,
         Err(_) => {
             *live = LiveStatus::Missing;
             return Ok(());
         }
+    };
+    if Some(fp) == *last_fp {
+        return Ok(());
     }
     let doc = match document::load(path) {
         Ok(d) => d,
@@ -226,12 +221,13 @@ fn apply_reload(
             return Ok(());
         }
     };
+    // NOTE: record the fingerprint only after a successful load — setting it
+    // before would let a transient read failure poison the skip-check and
+    // permanently suppress a later reload with the same fingerprint.
+    *last_fp = Some(fp);
     *live = LiveStatus::Watching;
     state.set_outline(doc.outline.clone());
-    let content = Content {
-        markdown: doc.text.clone(),
-        base_dir: doc.base_dir.display().to_string(),
-    };
+    let content = content_of(&doc);
     {
         let mut guard = shared
             .lock()
@@ -240,6 +236,13 @@ fn apply_reload(
     }
     let _ = view.emit("content", &content);
     Ok(())
+}
+
+fn content_of(doc: &document::Document) -> Content {
+    Content {
+        markdown: doc.text.clone(),
+        base_dir: doc.base_dir.display().to_string(),
+    }
 }
 
 fn install_panic_hook() {

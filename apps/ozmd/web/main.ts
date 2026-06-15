@@ -11,6 +11,9 @@ mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'dark' 
 const content = document.getElementById('content') as HTMLElement;
 const search = new Search();
 
+let mermaidSeq = 0;
+let renderGeneration = 0;
+
 interface ContentPayload {
   markdown: string;
   baseDir: string;
@@ -20,6 +23,10 @@ function headingEls(): HTMLElement[] {
   return Array.from(content.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')).filter((h) =>
     /^h\d+$/.test(h.id),
   );
+}
+
+function scrollMax(): number {
+  return document.documentElement.scrollHeight - window.innerHeight;
 }
 
 interface ScrollAnchor {
@@ -41,7 +48,7 @@ function captureScrollAnchor(): ScrollAnchor {
       break;
     }
   }
-  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const max = scrollMax();
   const ratio = max > 0 ? window.scrollY / max : 0;
   return { id, offset, ratio };
 }
@@ -54,12 +61,12 @@ function restoreScrollAnchor(anchor: ScrollAnchor): void {
       return;
     }
   }
-  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const max = scrollMax();
   window.scrollTo({ top: max > 0 ? anchor.ratio * max : 0 });
 }
 
 function reportScrollState(): void {
-  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const max = scrollMax();
   const ratio = max > 0 ? window.scrollY / max : 0;
   const heads = headingEls();
   let currentHeadingIndex: number | null = null;
@@ -79,7 +86,10 @@ async function renderMermaid(): Promise<void> {
       continue;
     }
     try {
-      const { svg } = await mermaid.render(`ozmd-mermaid-${i}`, blocks[i].textContent ?? '');
+      const { svg } = await mermaid.render(
+        `ozmd-mermaid-${mermaidSeq++}`,
+        blocks[i].textContent ?? '',
+      );
       // NOTE: mermaid source is attacker-controllable; strict mode sanitizes, and
       // this DOMPurify pass (allowing SVG foreignObject) is defense-in-depth.
       pre.outerHTML = DOMPurify.sanitize(svg, {
@@ -94,9 +104,16 @@ async function renderMermaid(): Promise<void> {
 }
 
 async function setContent(payload: ContentPayload): Promise<void> {
+  const generation = ++renderGeneration;
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   await renderMermaid();
+  // NOTE: a newer setContent superseded this one during the await (rapid reloads
+  // race) — skip the stale scroll restore so only the latest render positions the
+  // viewport.
+  if (generation !== renderGeneration) {
+    return;
+  }
   restoreScrollAnchor(anchor);
   reportScrollState();
 }
@@ -127,7 +144,7 @@ function scrollByAction(action: string): void {
       window.scrollTo({ top: 0 });
       break;
     case 'bottom':
-      window.scrollTo({ top: document.documentElement.scrollHeight });
+      window.scrollTo({ top: scrollMax() });
       break;
   }
   reportScrollState();
