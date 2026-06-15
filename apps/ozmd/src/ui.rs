@@ -31,7 +31,7 @@ pub(crate) fn draw(
     scroll_percent: u16,
     search: Option<SearchCount>,
 ) {
-    let search_open = app.mode() == Mode::Search;
+    let search_open = app.mode() == Mode::Search || app.search_active();
     let vchunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

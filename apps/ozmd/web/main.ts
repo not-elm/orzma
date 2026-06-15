@@ -22,6 +22,42 @@ function headingEls(): HTMLElement[] {
   );
 }
 
+interface ScrollAnchor {
+  id: string | null;
+  offset: number;
+  ratio: number;
+}
+
+function captureScrollAnchor(): ScrollAnchor {
+  const heads = headingEls();
+  let id: string | null = null;
+  let offset = 0;
+  for (const h of heads) {
+    const top = h.getBoundingClientRect().top;
+    if (top <= 1) {
+      id = h.id;
+      offset = top;
+    } else {
+      break;
+    }
+  }
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  const ratio = max > 0 ? window.scrollY / max : 0;
+  return { id, offset, ratio };
+}
+
+function restoreScrollAnchor(anchor: ScrollAnchor): void {
+  if (anchor.id !== null) {
+    const el = document.getElementById(anchor.id);
+    if (el !== null) {
+      window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - anchor.offset });
+      return;
+    }
+  }
+  const max = document.documentElement.scrollHeight - window.innerHeight;
+  window.scrollTo({ top: max > 0 ? anchor.ratio * max : 0 });
+}
+
 function reportScrollState(): void {
   const max = document.documentElement.scrollHeight - window.innerHeight;
   const ratio = max > 0 ? window.scrollY / max : 0;
@@ -58,8 +94,10 @@ async function renderMermaid(): Promise<void> {
 }
 
 async function setContent(payload: ContentPayload): Promise<void> {
+  const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   await renderMermaid();
+  restoreScrollAnchor(anchor);
   reportScrollState();
 }
 

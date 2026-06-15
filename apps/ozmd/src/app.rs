@@ -76,6 +76,11 @@ impl App {
         self.current_heading_index = index;
     }
 
+    /// Whether a search is active (matches highlighted, awaiting clear).
+    pub(crate) fn search_active(&self) -> bool {
+        self.search_active
+    }
+
     /// Processes an [`Action`], returning the side effects to perform.
     pub(crate) fn on_action(&mut self, action: Action) -> Vec<Cmd> {
         if let Some(prefix) = self.pending_prefix.take()
@@ -327,6 +332,18 @@ mod tests {
         assert_eq!(app.on_action(Action::Escape), vec![]);
         assert!(!app.outline_open());
         assert_eq!(app.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn search_active_reflects_lifecycle() {
+        let mut app = App::default();
+        assert!(!app.search_active());
+        app.on_action(Action::EnterSearch);
+        app.on_action(Action::SearchChar('x'));
+        app.on_action(Action::SearchConfirm);
+        assert!(app.search_active());
+        app.on_action(Action::Escape);
+        assert!(!app.search_active());
     }
 
     #[test]
