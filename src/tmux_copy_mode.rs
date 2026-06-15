@@ -13,6 +13,7 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
+use crate::clipboard::Clipboard;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
@@ -144,6 +145,7 @@ fn consume_copy_reply(
     mut refresh: ResMut<CopyRefreshState>,
     mut queries: ResMut<CopyModeQueries>,
     mut replies: MessageReader<CopyModeReply>,
+    mut clipboard: ResMut<Clipboard>,
     mut render_handles: Query<&mut CopyRenderHandle>,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane)>,
@@ -171,7 +173,11 @@ fn consume_copy_reply(
             CopyQueryKind::Capture => {
                 apply_capture_reply(&mut commands, &mut render_handles, entity, reply);
             }
-            CopyQueryKind::Buffer => {}
+            CopyQueryKind::Buffer => {
+                if reply.ok {
+                    clipboard.write(buffer_reply_to_text(&reply.output));
+                }
+            }
         }
     }
 }
@@ -339,9 +345,40 @@ fn clamp_row(row: i32, rows: u16) -> i16 {
     row.clamp(-1, rows as i32) as i16
 }
 
+/// Joins `show-buffer` reply lines into the clipboard text string.
+/// tmux strips trailing newlines from buffer content; the join preserves
+/// internal newlines so multi-line selections paste correctly.
+fn buffer_reply_to_text(lines: &[String]) -> String {
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buffer_reply_to_text_joins_lines_with_newline() {
+        let lines = vec![
+            "first line".to_string(),
+            "second line".to_string(),
+            "third line".to_string(),
+        ];
+        assert_eq!(
+            buffer_reply_to_text(&lines),
+            "first line\nsecond line\nthird line",
+        );
+    }
+
+    #[test]
+    fn buffer_reply_to_text_single_line_no_trailing_newline() {
+        let lines = vec!["hello world".to_string()];
+        assert_eq!(buffer_reply_to_text(&lines), "hello world");
+    }
+
+    #[test]
+    fn buffer_reply_to_text_empty_is_empty_string() {
+        assert_eq!(buffer_reply_to_text(&[]), "");
+    }
 
     #[test]
     fn capture_to_bytes_prefixes_reset_and_crlf_joins() {

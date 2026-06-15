@@ -11,9 +11,9 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozmux_tmux::{
-    ActivePane, CopyAction, Forwarded, KeyBindings, KeyMods, PromptKind, TmuxConnection, TmuxPane,
-    bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward, send_bytes_command,
-    send_pane_keys_command,
+    ActivePane, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings, KeyMods,
+    PromptKind, TmuxConnection, TmuxPane, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
+    send_bytes_command, send_pane_keys_command, show_buffer_command,
 };
 
 /// Registers the tmux keyboard-forwarding system.
@@ -41,17 +41,21 @@ enum GuiChord {
 const PASTE_CHUNK_BYTES: usize = 256;
 
 /// One key's effect while in copy mode: a verbatim command to relay (if any),
-/// whether to exit copy mode afterward, and a prompt to open (search/jump).
+/// whether to exit copy mode afterward, whether to bridge the tmux paste buffer
+/// to the system clipboard, and a prompt to open (search/jump).
 #[derive(Debug, Default, PartialEq)]
 struct CopyOutcome {
     command: Option<String>,
     exit: bool,
+    bridge: bool,
     prompt: Option<PromptKind>,
 }
 
 /// Maps a dispatched `CopyAction` to its `CopyOutcome`. The bound command runs
-/// verbatim; ozmux adds the marker toggle / prompt. (Clipboard bridging for
-/// `Copy` is wired in a later task — here a copy still relays + exits-if-and-cancel.)
+/// verbatim; ozmux adds the marker toggle / prompt. `bridge` is `true` for
+/// non-pipe copy commands so the tmux paste buffer is mirrored to the system
+/// clipboard via `show-buffer`; `false` for pipe commands (they already exfiltrate
+/// externally, e.g. `pbcopy`, so bridging would read stale/foreign content).
 fn outcome_of(action: CopyAction) -> CopyOutcome {
     match action {
         CopyAction::Relay(command) => CopyOutcome {
@@ -60,11 +64,12 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
         },
         CopyAction::Copy {
             command,
+            pipes,
             and_cancel,
-            ..
         } => CopyOutcome {
             command: Some(command),
             exit: and_cancel,
+            bridge: !pipes,
             ..Default::default()
         },
         CopyAction::Exit(command) => CopyOutcome {
@@ -87,6 +92,7 @@ fn forward_keys_to_tmux(
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
     mut focused_webview: ResMut<FocusedWebview>,
+    mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
     connection: NonSend<TmuxConnection>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -148,12 +154,12 @@ fn forward_keys_to_tmux(
     // The active pane (if any) is the forward/paste target. GUI chords below do
     // not need it (so quit/picker work before a pane is projected); tmux key
     // dispatch does.
-    let (active_entity, target) = match active_pane {
+    let (active_entity, active_pane_id, target) = match active_pane {
         Some(single) => {
             let (entity, pane) = *single;
-            (Some(entity), Some(format!("%{}", pane.id.0)))
+            (Some(entity), Some(pane.id), Some(format!("%{}", pane.id.0)))
         }
-        None => (None, None),
+        None => (None, None, None),
     };
 
     // Collect forwardable tmux key names in event order. Super-modified keys are
@@ -210,11 +216,26 @@ fn forward_keys_to_tmux(
         let handle = client.handle();
         for name in key_names {
             let outcome = outcome_of(copy_mode_dispatch(&bindings, &name));
-            if let Some(cmd) = outcome.command
-                && let Err(e) = handle.send(&cmd)
-            {
-                tracing::warn!(?e, "copy-mode relay send failed");
-                break;
+            if let Some(cmd) = &outcome.command {
+                match handle.send(cmd) {
+                    Ok(_) if outcome.bridge => {
+                        if let Some(pane_id) = active_pane_id {
+                            match handle.send(&show_buffer_command()) {
+                                Ok(buf_id) => {
+                                    copy_queries.register(buf_id, pane_id, CopyQueryKind::Buffer);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(?e, "show-buffer send failed");
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(?e, "copy-mode relay send failed");
+                        break;
+                    }
+                }
             }
             if outcome.exit
                 && let Some(entity) = active_entity
@@ -296,11 +317,12 @@ mod tests {
         let o = outcome_of(CopyAction::Relay("send-keys -X cursor-down".into()));
         assert_eq!(o.command.as_deref(), Some("send-keys -X cursor-down"));
         assert!(!o.exit);
+        assert!(!o.bridge);
         assert!(o.prompt.is_none());
     }
 
     #[test]
-    fn copy_and_cancel_outcome_relays_and_exits() {
+    fn copy_and_cancel_outcome_relays_exits_and_bridges() {
         let o = outcome_of(CopyAction::Copy {
             command: "send-keys -X copy-selection-and-cancel".into(),
             pipes: false,
@@ -311,10 +333,11 @@ mod tests {
             Some("send-keys -X copy-selection-and-cancel")
         );
         assert!(o.exit);
+        assert!(o.bridge, "non-pipe copy must set bridge=true");
     }
 
     #[test]
-    fn copy_without_cancel_does_not_exit() {
+    fn copy_without_cancel_does_not_exit_but_bridges() {
         let o = outcome_of(CopyAction::Copy {
             command: "send-keys -X copy-selection".into(),
             pipes: false,
@@ -322,12 +345,28 @@ mod tests {
         });
         assert!(!o.exit);
         assert!(o.command.is_some());
+        assert!(o.bridge, "non-pipe copy must set bridge=true");
+    }
+
+    #[test]
+    fn copy_pipe_does_not_bridge() {
+        let o = outcome_of(CopyAction::Copy {
+            command: "send-keys -X copy-pipe pbcopy".into(),
+            pipes: true,
+            and_cancel: false,
+        });
+        assert!(o.command.is_some());
+        assert!(
+            !o.bridge,
+            "pipe copy must NOT bridge (pbcopy already handles it)"
+        );
     }
 
     #[test]
     fn exit_outcome_relays_cancel_and_exits() {
         let o = outcome_of(CopyAction::Exit("send-keys -X cancel".into()));
         assert!(o.exit);
+        assert!(!o.bridge);
         assert_eq!(o.command.as_deref(), Some("send-keys -X cancel"));
     }
 
@@ -338,13 +377,14 @@ mod tests {
         });
         assert!(o.command.is_none());
         assert!(!o.exit);
+        assert!(!o.bridge);
         assert_eq!(o.prompt, Some(PromptKind::SearchForward));
     }
 
     #[test]
     fn ignore_outcome_is_empty() {
         let o = outcome_of(CopyAction::Ignore);
-        assert!(o.command.is_none() && !o.exit && o.prompt.is_none());
+        assert!(o.command.is_none() && !o.exit && !o.bridge && o.prompt.is_none());
     }
 
     #[test]
