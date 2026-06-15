@@ -47,8 +47,9 @@ impl Plugin for TmuxSessionPlugin {
 /// dead client and triggers `TmuxConnectionReset` so the projected entities do
 /// not linger.
 ///
-/// `ConnectionState` is mutated through `bypass_change_detection` and marked
-/// changed only on a real transition, so an output flood does not force the
+/// `ConnectionState` is written back only when [`advance_state`] reports a real
+/// transition, so normal change detection fires it exactly once per transition —
+/// an output flood does not force the
 /// `resource_exists_and_changed::<ConnectionState>`-gated consumers to re-run
 /// every frame.
 fn drain_tmux_events(
@@ -68,8 +69,8 @@ fn drain_tmux_events(
     for output in collect_pane_outputs(&events) {
         pane_output.write(output);
     }
-    if advance_state(state.bypass_change_detection(), &events) {
-        state.set_changed();
+    if let Some(next) = advance_state(&state, &events) {
+        *state = next;
         if matches!(*state, ConnectionState::Attached)
             && let Some(client) = connection.client()
         {

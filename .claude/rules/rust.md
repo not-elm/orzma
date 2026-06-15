@@ -303,6 +303,57 @@ Not covered by this rule (leave as-is):
 - Bodies that branch on change state to do *different* work (not an
   all-or-nothing early return).
 
+## Change detection — let mutation drive it, don't force it manually
+
+Bevy emits a change notification automatically when you write through a
+`ResMut` / `Mut` (any `DerefMut`); readers gate on that via `run_if`
+(see the section above) or `Changed<T>` / `Added<T>` queries. A design
+that follows ordinary ECS data flow therefore never needs to *manually*
+announce that something changed. Manual notification breaks the contract
+that "changed" means "the value actually changed", so every downstream
+`run_if`/`Changed` consumer can no longer trust it.
+
+Forbidden:
+
+| Pattern | Why |
+| --- | --- |
+| `res.set_changed()` / `query_item.set_changed()` | Forces a notification the mutation itself should have produced |
+| `*res.bypass_change_detection() = …; res.set_changed();` | Suppresses the real change then re-emits it by hand — the honest form is one ordinary write through `&mut` |
+| `res.bypass_change_detection()` used to *hide* a genuine mutation from readers | Silently desyncs consumers gated on `Changed` / `run_if` |
+
+Root cause and fix: this dance almost always appears because the code
+writes through the mutable reference **unconditionally every frame** (so
+naive change detection would fire every frame) and then tries to undo
+that with `bypass_change_detection()` + a conditional `set_changed()`.
+The ECS-aligned fix is to mutate **conditionally** — compute the next
+value from an immutable read, compare, and write through the normal
+`&mut` only when it differs. Change detection then fires exactly on real
+changes, for free:
+
+```rust
+// Avoid: unconditional deref_mut, then hand-managed notification.
+let changed = step(state.bypass_change_detection(), &events);
+if changed { state.set_changed(); }
+
+// Prefer: write through ResMut only on a real change.
+let mut next = state.clone();
+if step(&mut next, &events) {
+    *state = next; // the single DerefMut — change fires here, only when it differs
+}
+```
+
+The same applies to components: don't assign an identical value every
+frame; guard the write with an equality check (the renderer's "only write
+the `Node` fields when they actually change" pattern is the model).
+
+Escape hatch (justify with a `// NOTE:`, and `#[expect]` where a lint
+applies): genuine interior mutation that change detection cannot observe
+— e.g. a component owning a handle/buffer whose *contents* are mutated in
+place (no `DerefMut` on the component) while a downstream system must
+still be told — or a documented workaround for a specific upstream Bevy
+bug. "It's simpler" or "I mutate it every frame anyway" is not a valid
+reason; mutate conditionally instead.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:
@@ -337,6 +388,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Item ordering — private (no-modifier) items declared after `pub` / exported ones (see "Item ordering — private items last")
 - Parameter ordering — mutable parameters declared before immutable ones in function signatures (see "Parameter ordering — mutable parameters first")
 - System optimization — whole-system resource change/added guards expressed as in-body early returns must be `run_if` run conditions instead (see "System optimization — gate with `run_if`, not in-body change checks")
+- Change detection — no manual `set_changed()` / `bypass_change_detection()`-then-`set_changed()` notification; mutate conditionally so normal `DerefMut` drives change detection (see "Change detection — let mutation drive it, don't force it manually")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 

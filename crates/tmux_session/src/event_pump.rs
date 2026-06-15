@@ -33,18 +33,21 @@ pub(crate) fn drain_transport(events: &Receiver<TransportEvent>) -> Vec<Transpor
     drained
 }
 
-/// Advances `state` through [`next_state`] for each event, returning `true`
-/// if the state actually changed.
-pub(crate) fn advance_state(state: &mut ConnectionState, events: &[TransportEvent]) -> bool {
-    let mut changed = false;
+/// Folds `events` through [`next_state`] from `current`, returning the resulting
+/// `ConnectionState` if the batch changed it, or `None` if it ended unchanged.
+///
+/// Returning the next state (rather than mutating in place) lets the caller
+/// write it back through `ResMut` only on a real transition, so change
+/// detection fires once per transition instead of every frame.
+pub(crate) fn advance_state(
+    current: &ConnectionState,
+    events: &[TransportEvent],
+) -> Option<ConnectionState> {
+    let mut next: Option<ConnectionState> = None;
     for event in events {
-        let next = next_state(state, event);
-        if *state != next {
-            *state = next;
-            changed = true;
-        }
+        next = Some(next_state(next.as_ref().unwrap_or(current), event));
     }
-    changed
+    next.filter(|n| n != current)
 }
 
 /// Translates a drained transport batch into global projection events, in
@@ -211,9 +214,8 @@ mod tests {
         let (tx, rx) = unbounded();
         tx.send(window_add(1)).unwrap();
         let drained = drain_transport(&rx);
-        let mut state = ConnectionState::Connecting;
-        advance_state(&mut state, &drained);
-        assert_eq!(state, ConnectionState::Attached);
+        let next = advance_state(&ConnectionState::Connecting, &drained);
+        assert_eq!(next, Some(ConnectionState::Attached));
     }
 
     #[test]
