@@ -18,13 +18,13 @@ fn with_env(sock: &std::path::Path, f: impl FnOnce()) {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // SAFETY: ENV_LOCK serializes all callers; no other test thread touches these vars.
     unsafe {
-        std::env::set_var("OZMUX_SOCK", sock);
-        std::env::set_var("OZMUX_TOKEN", "test-token");
+        std::env::set_var("OZMA_SOCK", sock);
+        std::env::set_var("OZMA_TOKEN", "test-token");
     }
     f();
     unsafe {
-        std::env::remove_var("OZMUX_SOCK");
-        std::env::remove_var("OZMUX_TOKEN");
+        std::env::remove_var("OZMA_SOCK");
+        std::env::remove_var("OZMA_TOKEN");
     }
 }
 

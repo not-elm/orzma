@@ -44,24 +44,24 @@ pub(crate) struct NormalizedChord {
 /// Where a dynamic view's content lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DynSource {
-    /// Files served under this absolute root via `ozmux-dyn://`.
+    /// Files served under this absolute root via `ozma-dyn://`.
     Dir(PathBuf),
     /// A single inline HTML document, registered into `DynAssetRegistry` and
-    /// served under `ozmux-dyn://<handle>/`.
+    /// served under `ozma-dyn://<handle>/`.
     Inline(String),
-    /// A remote `http(s)` URL loaded directly by CEF (no `ozmux-dyn://` origin,
+    /// A remote `http(s)` URL loaded directly by CEF (no `ozma-dyn://` origin,
     /// no `DynAssetRegistry` entry). `bridge` records whether the registering
-    /// program opted into the `window.ozmux` back-channel.
+    /// program opted into the `window.ozma` back-channel.
     Url {
         /// The validated `http(s)` URL.
         url: String,
-        /// Whether the `window.ozmux` back-channel is injected.
+        /// Whether the `window.ozma` back-channel is injected.
         bridge: bool,
     },
 }
 
 impl DynSource {
-    /// Whether a mounted view of this source receives the `window.ozmux`
+    /// Whether a mounted view of this source receives the `window.ozma`
     /// back-channel. Only a display-only (`bridge: false`) `Url` source is
     /// unbridged; `Dir`/`Inline` are always bridged.
     pub(crate) fn is_bridged(&self) -> bool {
@@ -156,7 +156,7 @@ impl DynamicRegistry {
 }
 
 /// In-flight `globalReqId → (webview, pageReqId, connection_id)` correlation for
-/// the back-channel, plus the Rust-minted id counter. Routes each `window.ozmux`
+/// the back-channel, plus the Rust-minted id counter. Routes each `window.ozma`
 /// call to the control-plane connection that registered the webview.
 #[derive(Resource, Default)]
 pub(crate) struct OzmuxRpc {
@@ -230,7 +230,7 @@ impl OzmuxRpc {
     }
 }
 
-/// A shared `token → surface` map: the env-injected `$OZMUX_TOKEN` of each PTY
+/// A shared `token → surface` map: the env-injected `$OZMA_TOKEN` of each PTY
 /// resolves to the surface that owns it. Read by the listener thread on `hello`,
 /// written when a terminal surface is spawned. `Entity` is stored directly; it
 /// is only meaningful inside the same `World` generation.
@@ -294,7 +294,7 @@ pub(crate) fn mint_token() -> String {
 ///
 /// # Invariants
 /// The output MUST be lowercase. A handle is used as the host of the
-/// `ozmux-dyn://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
+/// `ozma-dyn://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
 /// of a STANDARD-scheme URL before it reaches the scheme handler; an uppercase
 /// handle would then miss the case-sensitive `DynAssetRegistry` lookup → 404.
 fn mint_id() -> String {
@@ -313,23 +313,23 @@ pub(crate) struct ControlEvents(pub(crate) Receiver<ControlEvent>);
 pub(crate) struct DynAssetRegistryRes(pub(crate) DynAssetRegistry);
 
 /// The bound control-socket path + token registry, surfaced so terminal-surface
-/// setup can mint per-surface tokens and inject `$OZMUX_SOCK` / `$OZMUX_TOKEN`.
+/// setup can mint per-surface tokens and inject `$OZMA_SOCK` / `$OZMA_TOKEN`.
 #[derive(Resource, Clone)]
 pub(crate) struct ControlPlaneHandle {
-    /// The bound listener socket path (`$OZMUX_SOCK`).
+    /// The bound listener socket path (`$OZMA_SOCK`).
     pub(crate) sock_path: PathBuf,
     /// The shared `token → surface` registry.
     pub(crate) tokens: TokenRegistry,
 }
 
 /// Wires the control-plane listener, the event-apply system, and the teardown
-/// observer. Takes the `DynAssetRegistry` shared with the `ozmux-dyn` scheme handler.
+/// observer. Takes the `DynAssetRegistry` shared with the `ozma-dyn` scheme handler.
 pub(crate) struct OzmuxControlPlanePlugin {
     dyn_assets: DynAssetRegistry,
 }
 
 impl OzmuxControlPlanePlugin {
-    /// Builds the plugin sharing `dyn_assets` with the `ozmux-dyn` scheme handler.
+    /// Builds the plugin sharing `dyn_assets` with the `ozma-dyn` scheme handler.
     pub(crate) fn new(dyn_assets: DynAssetRegistry) -> Self {
         Self { dyn_assets }
     }
@@ -366,7 +366,7 @@ impl Plugin for OzmuxControlPlanePlugin {
 /// tmux pane id (`%N`, matching `$TMUX_PANE`), so a program's `hello` resolves
 /// to the pane entity that owns it. tmux injects `$TMUX_PANE` into every pane it
 /// spawns — including user-created ones — which the legacy per-surface
-/// `$OZMUX_TOKEN` injection (terminal-surface spawn path) cannot reach under the
+/// `$OZMA_TOKEN` injection (terminal-surface spawn path) cannot reach under the
 /// tmux backend. Despawned panes are unbound first so a recycled `Entity` id
 /// cannot resolve a stale key.
 fn sync_tmux_pane_tokens(
@@ -465,7 +465,7 @@ fn apply_control_events(
                 despawn_mounted(&mut commands, &inline, &removed);
                 for (webview, page_req) in rpc.drain_connection(connection_id) {
                     let payload = serde_json::json!({ "reqId": page_req, "ok": false, "error": "owner_disconnected" });
-                    commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+                    commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
                 }
             }
             ControlEvent::Reply {
@@ -488,7 +488,7 @@ fn apply_control_events(
                 } else {
                     serde_json::json!({ "reqId": page_req, "ok": false, "error": error.unwrap_or_default() })
                 };
-                commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+                commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
             }
             ControlEvent::Emit {
                 connection_id,
@@ -505,7 +505,7 @@ fn apply_control_events(
                 let frame = serde_json::json!({ "event": event, "payload": payload });
                 for (entity, view) in &inline {
                     if view.view_id == handle {
-                        commands.trigger(HostEmitEvent::new(entity, "ozmux.event", &frame));
+                        commands.trigger(HostEmitEvent::new(entity, "ozma.event", &frame));
                     }
                 }
             }
@@ -775,7 +775,7 @@ mod token_tests {
             );
             assert!(
                 !id.chars().any(|c| c.is_ascii_uppercase()),
-                "minted id {id} must be lowercase — it is used as an ozmux-dyn:// host that Chromium lowercases"
+                "minted id {id} must be lowercase — it is used as an ozma-dyn:// host that Chromium lowercases"
             );
         }
     }
@@ -1194,7 +1194,7 @@ mod apply_tests {
         assert_eq!(caps.0.len(), 1);
         let (wv, channel, payload) = &caps.0[0];
         assert_eq!(*wv, webview);
-        assert_eq!(channel, "ozmux");
+        assert_eq!(channel, "ozma");
         assert_eq!(payload["reqId"], "p9");
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["value"], 99);
@@ -1246,7 +1246,7 @@ mod apply_tests {
 
         assert_eq!(
             app.world().resource::<Caps>().0,
-            vec![(webview, "ozmux".to_string())],
+            vec![(webview, "ozma".to_string())],
             "only the owning connection's reply settles the page"
         );
     }
@@ -1408,7 +1408,7 @@ mod apply_tests {
         app.update();
 
         let caps = app.world().resource::<Caps>();
-        assert_eq!(caps.0, vec![(mounted, "ozmux.event".to_string())]);
+        assert_eq!(caps.0, vec![(mounted, "ozma.event".to_string())]);
     }
 }
 
@@ -1879,7 +1879,7 @@ mod url_source_tests {
             Err("unsupported_scheme")
         );
         assert_eq!(
-            validate_url_source("ozmux-dyn://h/index.html"),
+            validate_url_source("ozma-dyn://h/index.html"),
             Err("unsupported_scheme")
         );
     }

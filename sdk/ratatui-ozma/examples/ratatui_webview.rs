@@ -30,8 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "<h1>ratatui-ozma</h1><div id='out'>calling ping…</div><div id='tick'>no ticks</div>",
         "<input id='in' placeholder='type here…' style='font:14px monospace;padding:6px'>",
         "<script>",
-        "window.ozmux.call('ping','hi').then(v=>out.textContent='ping → '+v);",
-        "window.ozmux.on('tick',n=>tick.textContent='tick #'+n);",
+        "window.ozma.call('ping','hi').then(v=>out.textContent='ping → '+v);",
+        "window.ozma.on('tick',n=>tick.textContent='tick #'+n);",
         "document.getElementById('in').focus();",
         "</script></body>"
     );

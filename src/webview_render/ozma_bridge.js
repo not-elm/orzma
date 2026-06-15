@@ -1,10 +1,10 @@
 // NOTE: bevy_cef contract — Rust->JS cef.listen delivers a JSON *string* (hence
 // JSON.parse); JS->Rust cef.emit serializes only its FIRST argument. Replies
-// arrive on the "ozmux" channel keyed by reqId; push events on "ozmux.event".
+// arrive on the "ozma" channel keyed by reqId; push events on "ozma.event".
 // The {__u8} base64 tag carries a Uint8Array, but only as a top-level value (the
 // `params` sent, or a reply `value`/event `payload` received via decodeValue) —
 // bytes nested inside an object/array param are NOT tagged and won't round-trip.
-// window.ozmux is frozen so a page cannot shadow it.
+// window.ozma is frozen so a page cannot shadow it.
 (function () {
   var cef = window.cef;
   var nextId = 0;
@@ -30,7 +30,7 @@
     return v;
   }
 
-  cef.listen('ozmux', function (raw) {
+  cef.listen('ozma', function (raw) {
     var frame = typeof raw === 'string' ? JSON.parse(raw) : raw;
     var c = calls.get(frame.reqId);
     if (!c) return;
@@ -39,7 +39,7 @@
     else c.reject(new Error(frame.error));
   });
 
-  cef.listen('ozmux.event', function (raw) {
+  cef.listen('ozma.event', function (raw) {
     var frame = typeof raw === 'string' ? JSON.parse(raw) : raw;
     var hs = listeners.get(frame.event);
     if (!hs) return;
@@ -54,7 +54,7 @@
       return new Promise(function (resolve, reject) {
         calls.set(reqId, { resolve: resolve, reject: reject });
         try {
-          cef.emit({ kind: 'ozmux.call', reqId: reqId, method: method, params: encoded });
+          cef.emit({ kind: 'ozma.call', reqId: reqId, method: method, params: encoded });
         } catch (e) {
           // A synchronous emit failure never gets a reply, so settle and drop the
           // entry here — otherwise it leaks in calls forever.
@@ -74,5 +74,5 @@
     },
   };
 
-  Object.defineProperty(window, 'ozmux', { value: Object.freeze(api), configurable: false, writable: false });
+  Object.defineProperty(window, 'ozma', { value: Object.freeze(api), configurable: false, writable: false });
 })();

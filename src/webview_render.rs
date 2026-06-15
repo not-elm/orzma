@@ -1,6 +1,6 @@
-//! CEF webview wiring for the `window.ozmux` Tier 1 back-channel: registers the
-//! `ozmux-dyn://` dynamic asset scheme, keeps `bevy_cef`'s `FocusedWebview` in
-//! step with the active pane, and routes the `ozmux.call` frames the page bridge
+//! CEF webview wiring for the `window.ozma` Tier 1 back-channel: registers the
+//! `ozma-dyn://` dynamic asset scheme, keeps `bevy_cef`'s `FocusedWebview` in
+//! step with the active pane, and routes the `ozma.call` frames the page bridge
 //! emits to the registering program over the control socket.
 
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
@@ -16,7 +16,7 @@ use serde_json::Value;
 
 pub(crate) mod preload;
 
-/// One frame emitted by the page bridge (`ozmux_bridge.js`) via
+/// One frame emitted by the page bridge (`ozma_bridge.js`) via
 /// `cef.emit({ kind: '…', … })`, inspected by the per-kind observers.
 ///
 /// `#[serde(transparent)]` makes it deserialize from the bare emitted object
@@ -28,10 +28,10 @@ pub(crate) mod preload;
 struct OzmuxFrame(serde_json::Value);
 
 /// The `kind` discriminator routing a `Receive<OzmuxFrame>` to the Tier 1
-/// back-channel (`on_ozmux_call_frame`). The page side emits it in `ozmux_bridge.js`.
-const OZMUX_CALL_KIND: &str = "ozmux.call";
+/// back-channel (`on_ozmux_call_frame`). The page side emits it in `ozma_bridge.js`.
+const OZMA_CALL_KIND: &str = "ozma.call";
 
-/// Builds the `CefPlugin` with the `ozmux-dyn://` (dynamic, Tier 1) scheme bound
+/// Builds the `CefPlugin` with the `ozma-dyn://` (dynamic, Tier 1) scheme bound
 /// to its shared `DynAssetRegistry`.
 pub fn cef_plugin(dyn_registry: DynAssetRegistry) -> CefPlugin {
     CefPlugin {
@@ -53,7 +53,7 @@ fn cef_command_line_config() -> CommandLineConfig {
     config
 }
 
-/// Wires the `window.ozmux` Tier 1 back-channel: the `ozmux.call` frame
+/// Wires the `window.ozma` Tier 1 back-channel: the `ozma.call` frame
 /// observer, the webview-load loggers, and the focus sync that keeps
 /// `bevy_cef`'s `FocusedWebview` in step with the active pane.
 pub struct OzmuxWebviewRenderPlugin;
@@ -113,16 +113,16 @@ pub(crate) fn sync_focused_webview(
     }
 }
 
-/// Inbound (Tier 1 back-channel): a `window.ozmux.call` arrives as a
-/// `Receive<OzmuxFrame>` with `kind:"ozmux.call"`. The trusted caller is
+/// Inbound (Tier 1 back-channel): a `window.ozma.call` arrives as a
+/// `Receive<OzmuxFrame>` with `kind:"ozma.call"`. The trusted caller is
 /// `frame.webview` (bound per-webview by `bevy_cef`, never the JS payload); its
 /// `WebviewOwner` names the registering connection. The call is forwarded over
 /// that connection's writer under a Rust-minted global reqId; a missing
 /// owner/connection rejects the page Promise directly.
 ///
 /// Registered as an observer on the shared `Receive<OzmuxFrame>` event (NOT a
-/// second `JsEmitEventPlugin`): the event carries all frames; non-`ozmux.call`
-/// frames are ignored via the early return on `OZMUX_CALL_KIND`.
+/// second `JsEmitEventPlugin`): the event carries all frames; non-`ozma.call`
+/// frames are ignored via the early return on `OZMA_CALL_KIND`.
 fn on_ozmux_call_frame(
     frame: On<Receive<OzmuxFrame>>,
     mut commands: Commands,
@@ -131,7 +131,7 @@ fn on_ozmux_call_frame(
     owners: Query<&WebviewOwner>,
 ) {
     let payload = &frame.payload.0;
-    if payload.get("kind").and_then(Value::as_str) != Some(OZMUX_CALL_KIND) {
+    if payload.get("kind").and_then(Value::as_str) != Some(OZMA_CALL_KIND) {
         return;
     }
     let webview = frame.webview;
@@ -161,11 +161,11 @@ fn on_ozmux_call_frame(
     rpc.note(&global_id, webview, req_id, owner.connection_id);
 }
 
-/// Emits a `{reqId, ok:false, error}` reply to one webview on the `"ozmux"`
+/// Emits a `{reqId, ok:false, error}` reply to one webview on the `"ozma"`
 /// channel (settling the page Promise).
 fn reject_ozmux_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
     let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
-    commands.trigger(HostEmitEvent::new(webview, "ozmux", &payload));
+    commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
 }
 
 /// Despawn prune: drop a despawned webview's in-flight back-channel calls.
@@ -259,7 +259,7 @@ mod tests {
         let _ = terminal_surface;
         app.world_mut()
             .entity_mut(ext_surface)
-            .insert(WebviewSource::new("ozmux-dyn://memo/index.html"));
+            .insert(WebviewSource::new("ozma-dyn://memo/index.html"));
 
         let set_active = move |app: &mut App, pane: Entity| {
             app.world_mut()
@@ -337,7 +337,7 @@ mod tests {
             .entity_mut(workspace)
             .insert(AttachedWorkspace);
         app.world_mut().entity_mut(render_only_surface).insert((
-            WebviewSource::new("ozmux-dyn://memo/index.html"),
+            WebviewSource::new("ozma-dyn://memo/index.html"),
             NonInteractive,
         ));
 
@@ -443,7 +443,7 @@ mod tests {
         app.world_mut().trigger(Receive {
             webview,
             payload: OzmuxFrame(serde_json::json!({
-                "kind": "ozmux.call", "reqId": "p0", "method": "save", "params": [1, 2]
+                "kind": "ozma.call", "reqId": "p0", "method": "save", "params": [1, 2]
             })),
         });
 

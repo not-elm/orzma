@@ -111,15 +111,10 @@ impl Plugin for OzmuxInlineWebviewPlugin {
 }
 
 /// Everything the `MountInline` verb carries into `mount_inline`: the target
-/// terminal surface, its resolved multiplexer owners (for the preload
-/// context), and the parsed verb + anchor payload.
+/// terminal surface and the parsed verb + anchor payload.
 pub(crate) struct InlineMountContext<'a> {
     /// The requesting terminal surface — the `ChildOf` parent of the mount.
     pub(crate) terminal_surface: Entity,
-    /// The workspace owning the terminal's pane (preload context).
-    pub(crate) workspace: Entity,
-    /// The pane owning the terminal surface (preload context).
-    pub(crate) pane: Entity,
     /// The registered view id to mount.
     pub(crate) view_id: &'a str,
     /// The client-assigned instance id (`None` = implicit default instance).
@@ -146,7 +141,7 @@ pub(crate) struct InlineWebviewParams<'w, 's> {
 }
 
 /// The resolved content + trust facts for a `mount-inline;<handle>`: the URL to
-/// load (an `ozmux-dyn://<handle>/…` origin for `Dir`/`Inline` sources, or the
+/// load (an `ozma-dyn://<handle>/…` origin for `Dir`/`Inline` sources, or the
 /// verbatim remote URL for a `Url` source), the input policy, and the
 /// registering program's `(connection_id, handle)` for back-channel routing.
 pub(crate) struct ResolvedWebviewMount {
@@ -155,7 +150,7 @@ pub(crate) struct ResolvedWebviewMount {
     /// Whether the page receives pointer/keyboard input.
     pub(crate) interactive: bool,
     /// `(connection_id, handle)` of the registering program, used to stamp
-    /// `WebviewOwner` for `window.ozmux` back-channel routing. `Some` only when
+    /// `WebviewOwner` for `window.ozma` back-channel routing. `Some` only when
     /// the registration is bridged; a display-only `Url` view leaves it `None`,
     /// which is the gate that also withholds the preload at mount.
     pub(crate) owner: Option<(u64, String)>,
@@ -166,7 +161,7 @@ pub(crate) struct ResolvedWebviewMount {
 }
 
 /// Resolves a `mount-inline` `<handle>` against the `DynamicRegistry` (Tier 1).
-/// `Dir`/`Inline` handles resolve to an `ozmux-dyn://<handle>/…` URL (one origin
+/// `Dir`/`Inline` handles resolve to an `ozma-dyn://<handle>/…` URL (one origin
 /// per handle); a `Url` handle resolves to its verbatim remote URL. A handle
 /// resolves ONLY when `requesting_surface` is its `owner_surface` — the scoping
 /// gate that stops one surface from mounting another's handle. `owner` is
@@ -182,8 +177,8 @@ pub(crate) fn resolve_mount(
         return None;
     }
     let url = match &view.source {
-        DynSource::Dir(_) => format!("ozmux-dyn://{id}/{}", view.entry),
-        DynSource::Inline(_) => format!("ozmux-dyn://{id}/index.html"),
+        DynSource::Dir(_) => format!("ozma-dyn://{id}/{}", view.entry),
+        DynSource::Inline(_) => format!("ozma-dyn://{id}/index.html"),
         DynSource::Url { url, .. } => url.clone(),
     };
     let owner = view
@@ -292,14 +287,14 @@ pub(crate) fn mount_inline(
     if !resolved.interactive {
         params.commands.entity(webview).insert(NonInteractive);
     }
-    // NOTE: the ozmux bridge scripts (window.ozmux + __ozmuxContext) and
-    // WebviewOwner (the inbound-call gate) are inserted only for a bridged
-    // registration. A display-only view (owner None) gets no bridge scripts
-    // (PreloadScripts remains the empty default from WebviewSource #[require])
-    // and no WebviewOwner.
+    // NOTE: the ozma bridge script (window.ozma) and WebviewOwner (the
+    // inbound-call gate) are inserted only for a bridged registration. A
+    // display-only view (owner None) gets no bridge script (PreloadScripts
+    // remains the empty default from WebviewSource #[require]) and no
+    // WebviewOwner.
     if let Some((connection_id, handle)) = resolved.owner {
         params.commands.entity(webview).insert((
-            build_dynamic_preload(ctx.workspace, ctx.pane, webview),
+            build_dynamic_preload(),
             WebviewOwner {
                 connection_id,
                 handle,
@@ -918,7 +913,7 @@ mod tests {
             .get::<WebviewSource>(child)
             .expect("inline webview must carry WebviewSource")
         {
-            WebviewSource::Url(url) => assert_eq!(url, "ozmux-dyn://dash/index.html"),
+            WebviewSource::Url(url) => assert_eq!(url, "ozma-dyn://dash/index.html"),
             other => panic!("unexpected WebviewSource: {other:?}"),
         }
         assert!(
@@ -931,7 +926,7 @@ mod tests {
             .expect("inline webview must carry PreloadScripts");
         assert!(
             !preload.0.is_empty(),
-            "an inline (bridged) webview must carry the populated window.ozmux preload"
+            "an inline (bridged) webview must carry the populated window.ozma preload"
         );
         assert_eq!(
             app.world().get::<WebviewSize>(child),
@@ -1957,8 +1952,8 @@ mod tests {
             "dynamic mount must spawn one inline child"
         );
         match app.world().get::<WebviewSource>(children[0]).unwrap() {
-            WebviewSource::Url(u) => assert_eq!(u, "ozmux-dyn://DYN1/index.html"),
-            other => panic!("expected ozmux-dyn URL, got {other:?}"),
+            WebviewSource::Url(u) => assert_eq!(u, "ozma-dyn://DYN1/index.html"),
+            other => panic!("expected ozma-dyn URL, got {other:?}"),
         }
         let preload = app.world().get::<PreloadScripts>(children[0]).unwrap();
         assert!(
@@ -1986,7 +1981,7 @@ mod tests {
         );
 
         let d = resolve_mount("DYNHANDLE", owner, &dynamic).expect("dynamic resolves");
-        assert_eq!(d.url.as_deref(), Some("ozmux-dyn://DYNHANDLE/index.html"));
+        assert_eq!(d.url.as_deref(), Some("ozma-dyn://DYNHANDLE/index.html"));
         assert!(!d.interactive);
 
         assert!(
@@ -2013,7 +2008,7 @@ mod tests {
             },
         );
         let r = resolve_mount("INLINEH", owner, &dynamic).expect("inline resolves");
-        assert_eq!(r.url.as_deref(), Some("ozmux-dyn://INLINEH/index.html"));
+        assert_eq!(r.url.as_deref(), Some("ozma-dyn://INLINEH/index.html"));
         assert!(r.owner.is_some());
     }
 

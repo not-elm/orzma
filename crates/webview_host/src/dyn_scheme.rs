@@ -1,4 +1,4 @@
-//! `ozmux-dyn://<handle>/<path>` custom-scheme handler for Tier 1 dynamic
+//! `ozma-dyn://<handle>/<path>` custom-scheme handler for Tier 1 dynamic
 //! webviews. Resolves `<handle>` to a registered asset (`Dir` root or inline
 //! HTML bytes) via a shared `DynAssetRegistry` and serves files through
 //! `serve_static_asset` or directly from memory. Behind the `cef` feature.
@@ -57,12 +57,12 @@ impl DynAssetRegistry {
     }
 }
 
-/// Parses `ozmux-dyn://<handle>/<path>[?query]` into `(handle, path)`; strips
+/// Parses `ozma-dyn://<handle>/<path>[?query]` into `(handle, path)`; strips
 /// the query/fragment and defaults an empty path to `"index.html"`. Returns
-/// `None` unless it is a well-formed `ozmux-dyn://` URL with a non-empty handle.
+/// `None` unless it is a well-formed `ozma-dyn://` URL with a non-empty handle.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
 fn parse_dyn_url(url: &str) -> Option<(&str, &str)> {
-    let rest = url.strip_prefix("ozmux-dyn://")?;
+    let rest = url.strip_prefix("ozma-dyn://")?;
     let rest = rest
         .split_once(['?', '#'])
         .map_or(rest, |(before, _)| before);
@@ -77,7 +77,7 @@ fn parse_dyn_url(url: &str) -> Option<(&str, &str)> {
     Some((handle, path))
 }
 
-/// The resolved outcome of an `ozmux-dyn://` URL lookup.
+/// The resolved outcome of an `ozma-dyn://` URL lookup.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
 enum ResolvedDyn<'a> {
     /// Serve files from this directory root; `path` is the relative file path.
@@ -86,7 +86,7 @@ enum ResolvedDyn<'a> {
     Inline(Vec<u8>),
 }
 
-/// Resolves an `ozmux-dyn://<handle>/<path>` URL via the registry, or `Err(404)`
+/// Resolves an `ozma-dyn://<handle>/<path>` URL via the registry, or `Err(404)`
 /// for an unknown or unparseable handle.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
 fn resolve_request<'a>(registry: &DynAssetRegistry, url: &'a str) -> Result<ResolvedDyn<'a>, u16> {
@@ -133,9 +133,9 @@ fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
 
 /// The custom scheme name registered with CEF for dynamic Tier 1 webviews.
 #[cfg(feature = "cef")]
-pub const SCHEME_NAME: &str = "ozmux-dyn";
+pub const SCHEME_NAME: &str = "ozma-dyn";
 
-/// Serves `ozmux-dyn://<handle>/<path>` by dispatching `<handle>` through a
+/// Serves `ozma-dyn://<handle>/<path>` by dispatching `<handle>` through a
 /// shared `DynAssetRegistry` to `serve_static_asset` (Dir) or memory (Inline).
 #[cfg(feature = "cef")]
 struct OzmuxDynScheme {
@@ -156,7 +156,7 @@ impl CefSchemeHandler for OzmuxDynScheme {
             Err(_) => {
                 bevy::log::debug!(
                     url = %request.url,
-                    "ozmux-dyn request unresolved (unknown handle or non-index inline path) -> 404"
+                    "ozma-dyn request unresolved (unknown handle or non-index inline path) -> 404"
                 );
                 CefSchemeResponse::not_found()
             }
@@ -164,7 +164,7 @@ impl CefSchemeHandler for OzmuxDynScheme {
                 bevy::log::debug!(
                     url = %request.url,
                     bytes = html.len(),
-                    "ozmux-dyn inline html served"
+                    "ozma-dyn inline html served"
                 );
                 CefSchemeResponse {
                     status: 200,
@@ -180,7 +180,7 @@ impl CefSchemeHandler for OzmuxDynScheme {
                         url = %request.url,
                         mime = %mime,
                         bytes = body.len(),
-                        "ozmux-dyn static asset served"
+                        "ozma-dyn static asset served"
                     );
                     CefSchemeResponse {
                         status: 200,
@@ -197,8 +197,8 @@ impl CefSchemeHandler for OzmuxDynScheme {
     }
 }
 
-/// Builds the `ozmux-dyn` scheme registration to pass to `CefPlugin`, dispatching
-/// every `ozmux-dyn://<handle>/…` URL through the shared `DynAssetRegistry`.
+/// Builds the `ozma-dyn` scheme registration to pass to `CefPlugin`, dispatching
+/// every `ozma-dyn://<handle>/…` URL through the shared `DynAssetRegistry`.
 #[cfg(feature = "cef")]
 pub fn custom_dyn_scheme(registry: DynAssetRegistry) -> CefCustomScheme {
     CefCustomScheme {
@@ -220,11 +220,11 @@ mod tests {
     #[test]
     fn parses_handle_and_path() {
         assert_eq!(
-            parse_dyn_url("ozmux-dyn://abc/index.html"),
+            parse_dyn_url("ozma-dyn://abc/index.html"),
             Some(("abc", "index.html"))
         );
         assert_eq!(
-            parse_dyn_url("ozmux-dyn://abc/sub/app.js"),
+            parse_dyn_url("ozma-dyn://abc/sub/app.js"),
             Some(("abc", "sub/app.js"))
         );
     }
@@ -232,23 +232,20 @@ mod tests {
     #[test]
     fn empty_path_defaults_to_index() {
         assert_eq!(
-            parse_dyn_url("ozmux-dyn://abc/"),
+            parse_dyn_url("ozma-dyn://abc/"),
             Some(("abc", "index.html"))
         );
-        assert_eq!(
-            parse_dyn_url("ozmux-dyn://abc"),
-            Some(("abc", "index.html"))
-        );
+        assert_eq!(parse_dyn_url("ozma-dyn://abc"), Some(("abc", "index.html")));
     }
 
     #[test]
     fn strips_query_and_fragment() {
         assert_eq!(
-            parse_dyn_url("ozmux-dyn://abc/a.js?v=2"),
+            parse_dyn_url("ozma-dyn://abc/a.js?v=2"),
             Some(("abc", "a.js"))
         );
         assert_eq!(
-            parse_dyn_url("ozmux-dyn://abc/a.js#section"),
+            parse_dyn_url("ozma-dyn://abc/a.js#section"),
             Some(("abc", "a.js"))
         );
     }
@@ -256,7 +253,7 @@ mod tests {
     #[test]
     fn rejects_foreign_or_empty_handle() {
         assert_eq!(parse_dyn_url("ozmux-ext://abc/x"), None);
-        assert_eq!(parse_dyn_url("ozmux-dyn:///x"), None);
+        assert_eq!(parse_dyn_url("ozma-dyn:///x"), None);
     }
 
     #[test]
@@ -277,7 +274,7 @@ mod tests {
     fn resolve_request_returns_inline_bytes_as_html() {
         let reg = DynAssetRegistry::default();
         reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
-        match resolve_request(&reg, "ozmux-dyn://i1/index.html").expect("registered") {
+        match resolve_request(&reg, "ozma-dyn://i1/index.html").expect("registered") {
             ResolvedDyn::Inline(html) => assert_eq!(html, b"<h1>hi</h1>"),
             ResolvedDyn::Dir { .. } => panic!("expected inline"),
         }
@@ -287,14 +284,14 @@ mod tests {
     fn inline_404s_subresource_paths_other_than_the_index() {
         let reg = DynAssetRegistry::default();
         reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
-        assert!(resolve_request(&reg, "ozmux-dyn://i1/").is_ok());
-        assert!(resolve_request(&reg, "ozmux-dyn://i1/index.html").is_ok());
+        assert!(resolve_request(&reg, "ozma-dyn://i1/").is_ok());
+        assert!(resolve_request(&reg, "ozma-dyn://i1/index.html").is_ok());
         assert_eq!(
-            resolve_request(&reg, "ozmux-dyn://i1/app.js").err(),
+            resolve_request(&reg, "ozma-dyn://i1/app.js").err(),
             Some(404)
         );
         assert_eq!(
-            resolve_request(&reg, "ozmux-dyn://i1/logo.png").err(),
+            resolve_request(&reg, "ozma-dyn://i1/logo.png").err(),
             Some(404)
         );
     }
@@ -303,11 +300,11 @@ mod tests {
     fn resolves_registered_dir_and_404s_unknown() {
         let reg = DynAssetRegistry::default();
         assert_eq!(
-            resolve_request(&reg, "ozmux-dyn://ghost/index.html").err(),
+            resolve_request(&reg, "ozma-dyn://ghost/index.html").err(),
             Some(404)
         );
         reg.insert_dir("h1", PathBuf::from("/abs/ui"));
-        match resolve_request(&reg, "ozmux-dyn://h1/app.js").expect("registered") {
+        match resolve_request(&reg, "ozma-dyn://h1/app.js").expect("registered") {
             ResolvedDyn::Dir { root, path } => {
                 assert_eq!(root, PathBuf::from("/abs/ui"));
                 assert_eq!(path, "app.js");
@@ -322,7 +319,7 @@ mod tests {
         reg.insert_dir("h1", PathBuf::from("/abs/ui"));
         reg.remove("h1");
         assert_eq!(
-            resolve_request(&reg, "ozmux-dyn://h1/index.html").err(),
+            resolve_request(&reg, "ozma-dyn://h1/index.html").err(),
             Some(404)
         );
     }

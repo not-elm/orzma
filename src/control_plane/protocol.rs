@@ -13,7 +13,7 @@ pub(crate) enum ClientMsg {
     /// Connection handshake: binds this connection to the pane whose env
     /// carries `token`. Sent once, before any `register`.
     Hello {
-        /// The per-surface `$OZMUX_TOKEN` value.
+        /// The per-surface `$OZMA_TOKEN` value.
         token: String,
     },
     /// Registers a dynamic view and requests a handle.
@@ -41,7 +41,7 @@ pub(crate) enum ClientMsg {
     Emit {
         /// The handle whose mounted webviews receive the event.
         handle: String,
-        /// The event name dispatched to page `window.ozmux.on(name, …)`.
+        /// The event name dispatched to page `window.ozma.on(name, …)`.
         event: String,
         /// The event payload.
         #[serde(default)]
@@ -103,7 +103,7 @@ pub(crate) enum RegisterKind {
         /// Whether the mounted webview accepts pointer/keyboard input.
         #[serde(default = "default_true")]
         interactive: bool,
-        /// Whether the `window.ozmux` back-channel is injected (opt-in).
+        /// Whether the `window.ozma` back-channel is injected (opt-in).
         #[serde(default)]
         bridge: bool,
         /// Chords the host passes through to PTY instead of consuming in CEF.
