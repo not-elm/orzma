@@ -25,6 +25,7 @@ impl Plugin for OzmuxTmuxPickerPlugin {
                 Update,
                 handle_picker_input.after(crate::input::InputPhase::FocusedKey),
             )
+            .add_systems(Update, refresh_picker_on_open)
             .add_systems(
                 Update,
                 inject_session_ozmux_sock.run_if(resource_exists_and_changed::<ConnectionState>),
@@ -52,6 +53,7 @@ pub(crate) struct SessionPicker {
     windows: Vec<WindowEntry>,
     selected: usize,
     pub(crate) open: bool,
+    last_open: bool,
 }
 
 #[derive(Component)]
@@ -91,6 +93,32 @@ fn build_server(configs: &OzmuxConfigsResource) -> TmuxServer {
         server = server.socket_name(name);
     }
     server
+}
+
+/// Refreshes the chooser's session + window lists on the closed→open edge via
+/// one-shot `TmuxServer` subprocess queries against the same socket. The
+/// subprocess sees the live server whether or not a control client is attached,
+/// mirroring the boot path — so the chooser needs no control-mode reply
+/// correlation.
+fn refresh_picker_on_open(mut picker: ResMut<SessionPicker>, configs: Res<OzmuxConfigsResource>) {
+    let opened = picker.open && !picker.last_open;
+    if picker.last_open != picker.open {
+        picker.last_open = picker.open;
+    }
+    if !opened {
+        return;
+    }
+    let server = build_server(&configs);
+    match (server.list_sessions(), server.list_windows_all()) {
+        (Ok(sessions), Ok(windows)) => {
+            picker.sessions = sessions;
+            picker.windows = windows;
+            picker.selected = 0;
+        }
+        (Err(e), _) | (_, Err(e)) => {
+            tracing::warn!(?e, "failed to refresh session chooser");
+        }
+    }
 }
 
 fn list_sessions_into_picker(
@@ -166,21 +194,28 @@ fn sync_picker_ui(
 
     commands.entity(list_entity).despawn_related::<Children>();
 
-    let entry_count = picker.sessions.len() + 1;
+    let rows = build_rows(&picker.sessions, &picker.windows);
+    let selected = picker.selected.min(rows.len().saturating_sub(1));
     let mut child_commands = commands.entity(list_entity);
     child_commands.with_children(|parent| {
-        for i in 0..entry_count {
-            let is_selected = i == picker.selected;
+        for (i, row) in rows.iter().enumerate() {
+            let is_selected = i == selected;
             let prefix = if is_selected { "> " } else { "  " };
-            let label = if i < picker.sessions.len() {
-                let s = &picker.sessions[i];
-                let attached_suffix = if s.attached { " *attached" } else { "" };
-                format!(
-                    "{}{}  ({} windows){}",
-                    prefix, s.name, s.windows, attached_suffix
-                )
-            } else {
-                format!("{}+ New session", prefix)
+            let label = match row {
+                PickerRow::Session(si) => {
+                    let s = &picker.sessions[*si];
+                    let attached = if s.attached { " *attached" } else { "" };
+                    format!("{}{}  ({} windows){}", prefix, s.name, s.windows, attached)
+                }
+                PickerRow::Window { window, .. } => {
+                    let w = &picker.windows[*window];
+                    let active = if w.window_active { "*" } else { " " };
+                    format!(
+                        "{}    {}{}: {}",
+                        prefix, active, w.window_index, w.window_name
+                    )
+                }
+                PickerRow::NewSession => format!("{}+ New session", prefix),
             };
             let color = if is_selected {
                 TextColor(Color::WHITE)
@@ -204,7 +239,7 @@ fn handle_picker_input(
         keys.clear();
         return;
     }
-    let entry_count = picker.sessions.len() + 1;
+    let entry_count = build_rows(&picker.sessions, &picker.windows).len();
     for ev in keys.read() {
         if ev.state != ButtonState::Pressed {
             continue;
