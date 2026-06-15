@@ -18,6 +18,7 @@ use ozmux_webview_host::host::RuntimeRoot;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
+use url::Url;
 
 mod listener;
 mod protocol;
@@ -47,6 +48,24 @@ pub(crate) enum DynSource {
     /// A single inline HTML document, registered into `DynAssetRegistry` and
     /// served under `ozmux-dyn://<handle>/`.
     Inline(String),
+    /// A remote `http(s)` URL loaded directly by CEF (no `ozmux-dyn://` origin,
+    /// no `DynAssetRegistry` entry). `bridge` records whether the registering
+    /// program opted into the `window.ozmux` back-channel.
+    Url {
+        /// The validated `http(s)` URL.
+        url: String,
+        /// Whether the `window.ozmux` back-channel is injected.
+        bridge: bool,
+    },
+}
+
+impl DynSource {
+    /// Whether a mounted view of this source receives the `window.ozmux`
+    /// back-channel. Only a display-only (`bridge: false`) `Url` source is
+    /// unbridged; `Dir`/`Inline` are always bridged.
+    pub(crate) fn is_bridged(&self) -> bool {
+        !matches!(self, DynSource::Url { bridge: false, .. })
+    }
 }
 
 /// A Tier 1 dynamic registration: its content source, entry, input policy, and
@@ -384,6 +403,7 @@ fn apply_control_events(
                             .0
                             .insert_inline(handle.clone(), html.clone().into_bytes());
                     }
+                    DynSource::Url { .. } => {}
                 }
                 registry.insert(handle.clone(), view);
                 let _ = reply.send(ServerMsg::ok(handle));
@@ -574,6 +594,22 @@ fn build_view(
                 passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
             })
         }
+        RegisterKind::Url {
+            url,
+            interactive,
+            bridge,
+            passthrough,
+        } => {
+            let url = validate_url_source(&url)?;
+            Ok(DynamicView {
+                source: DynSource::Url { url, bridge },
+                entry: String::new(),
+                interactive,
+                owner_surface,
+                connection_id,
+                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
+            })
+        }
     }
 }
 
@@ -584,6 +620,22 @@ fn is_safe_entry(entry: &str) -> bool {
     !p.as_os_str().is_empty()
         && p.components()
             .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// Validates a `url` register source: parses it, requires an `http`/`https`
+/// scheme, then a non-empty host. The scheme check precedes the host check on
+/// purpose — `url::Url::parse("javascript:…")` succeeds with no host, so a
+/// host-first order would mis-report `javascript:` as `invalid_url` instead of
+/// `unsupported_scheme`.
+fn validate_url_source(url: &str) -> Result<String, &'static str> {
+    let parsed = Url::parse(url).map_err(|_| "invalid_url")?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err("unsupported_scheme");
+    }
+    if parsed.host_str().is_none_or(str::is_empty) {
+        return Err("invalid_url");
+    }
+    Ok(url.to_string())
 }
 
 /// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
@@ -1120,6 +1172,50 @@ mod apply_tests {
     }
 
     #[test]
+    fn apply_register_url_mints_handle_without_dyn_asset() {
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let dyn_assets = DynAssetRegistry::default();
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.add_systems(Update, apply_control_events);
+
+        let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
+        ev_tx
+            .send(ControlEvent::Register {
+                connection_id: 1,
+                owner_surface: Entity::from_bits(11),
+                kind: RegisterKind::Url {
+                    url: "https://example.com".into(),
+                    interactive: true,
+                    bridge: false,
+                    passthrough: vec![],
+                },
+                reply: reply_tx,
+            })
+            .unwrap();
+        app.update();
+
+        let handle = match reply_rx.try_recv().expect("apply must reply") {
+            ServerMsg::Ok { handle, .. } => handle,
+            ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
+        };
+        assert!(
+            app.world()
+                .resource::<DynamicRegistry>()
+                .get(&handle)
+                .is_some(),
+            "DynamicRegistry populated"
+        );
+        assert!(
+            dyn_assets.get(&handle).is_none(),
+            "DynAssetRegistry must NOT be populated for a url handle"
+        );
+    }
+
+    #[test]
     fn apply_emit_broadcasts_only_to_owning_connections_handle() {
         use bevy_cef::prelude::HostEmitEvent;
         let mut app = App::new();
@@ -1609,5 +1705,84 @@ mod normalize_tests {
             })
             .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod url_source_tests {
+    use super::*;
+    use bevy::prelude::Entity;
+
+    #[test]
+    fn validate_url_source_accepts_http_and_https() {
+        assert_eq!(
+            validate_url_source("https://example.com").unwrap(),
+            "https://example.com"
+        );
+        assert_eq!(
+            validate_url_source("http://localhost:3000/x").unwrap(),
+            "http://localhost:3000/x"
+        );
+    }
+
+    #[test]
+    fn validate_url_source_rejects_non_web_schemes_as_unsupported() {
+        assert_eq!(
+            validate_url_source("file:///etc/passwd"),
+            Err("unsupported_scheme")
+        );
+        assert_eq!(
+            validate_url_source("javascript:alert(1)"),
+            Err("unsupported_scheme")
+        );
+        assert_eq!(
+            validate_url_source("data:text/html,<h1>x</h1>"),
+            Err("unsupported_scheme")
+        );
+        assert_eq!(
+            validate_url_source("ozmux-dyn://h/index.html"),
+            Err("unsupported_scheme")
+        );
+    }
+
+    #[test]
+    fn validate_url_source_rejects_garbage_as_invalid() {
+        assert_eq!(validate_url_source("not a url"), Err("invalid_url"));
+        assert_eq!(validate_url_source(""), Err("invalid_url"));
+    }
+
+    #[test]
+    fn build_view_url_accepts_https_and_carries_bridge() {
+        let v = build_view(
+            RegisterKind::Url {
+                url: "https://example.com".into(),
+                interactive: true,
+                bridge: true,
+                passthrough: vec![],
+            },
+            Entity::from_bits(1),
+            7,
+        )
+        .expect("https accepted");
+        assert!(matches!(
+            v.source,
+            DynSource::Url { ref url, bridge: true } if url == "https://example.com"
+        ));
+    }
+
+    #[test]
+    fn build_view_url_rejects_file_scheme() {
+        let err = build_view(
+            RegisterKind::Url {
+                url: "file:///etc/passwd".into(),
+                interactive: true,
+                bridge: false,
+                passthrough: vec![],
+            },
+            Entity::from_bits(1),
+            7,
+        )
+        .unwrap_err();
+        assert_eq!(err, "unsupported_scheme");
     }
 }

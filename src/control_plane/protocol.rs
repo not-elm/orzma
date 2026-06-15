@@ -96,6 +96,20 @@ pub(crate) enum RegisterKind {
         #[serde(default)]
         passthrough: Vec<HostKeyChord>,
     },
+    /// Load a remote `http(s)` URL as the top-level document.
+    Url {
+        /// The `http(s)` URL to load.
+        url: String,
+        /// Whether the mounted webview accepts pointer/keyboard input.
+        #[serde(default = "default_true")]
+        interactive: bool,
+        /// Whether the `window.ozmux` back-channel is injected (opt-in).
+        #[serde(default)]
+        bridge: bool,
+        /// Chords the host passes through to PTY instead of consuming in CEF.
+        #[serde(default)]
+        passthrough: Vec<HostKeyChord>,
+    },
 }
 
 /// One outbound control-plane reply line.
@@ -280,6 +294,46 @@ mod tests {
             }
             _ => panic!("expected inline register"),
         }
+    }
+
+    #[test]
+    fn parses_url_register_with_defaults() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"op":"register","kind":"url","url":"https://example.com"}"#)
+                .unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Register(RegisterKind::Url {
+                url: "https://example.com".into(),
+                interactive: true,
+                bridge: false,
+                passthrough: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn parses_url_register_with_bridge_true() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"op":"register","kind":"url","url":"https://app.example.com","bridge":true}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Register(RegisterKind::Url {
+                url: "https://app.example.com".into(),
+                interactive: true,
+                bridge: true,
+                passthrough: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn host_parses_the_exact_wire_string_the_sdk_emits() {
+        let wire = r#"{"op":"register","kind":"url","url":"https://example.com","interactive":true,"bridge":false}"#;
+        let m: ClientMsg = serde_json::from_str(wire).unwrap();
+        assert!(matches!(m, ClientMsg::Register(RegisterKind::Url { .. })));
     }
 
     #[test]
