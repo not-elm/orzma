@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozmux_tmux::{
-    KeyMods, ProjectionModel, TmuxConnection, bevy_key_to_tmux_name, send_bytes_command,
+    ActivePane, KeyMods, TmuxConnection, TmuxPane, bevy_key_to_tmux_name, send_bytes_command,
     send_keys_command,
 };
 
@@ -47,7 +47,7 @@ fn forward_keys_to_tmux(
     connection: NonSend<TmuxConnection>,
     keys: Res<ButtonInput<KeyCode>>,
     ime: Res<crate::input::ime::ImeState>,
-    model: Res<ProjectionModel>,
+    active_pane: Option<Single<&TmuxPane, With<ActivePane>>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     // NOTE: while the picker is open it owns the keyboard; forwarding would
@@ -113,9 +113,10 @@ fn forward_keys_to_tmux(
                     if text.is_empty() {
                         continue;
                     }
-                    let Some(pane) = model.active_pane else {
+                    let Some(active) = active_pane.as_deref() else {
                         continue;
                     };
+                    let pane = active.id;
                     let Some(client) = connection.client() else {
                         continue;
                     };
