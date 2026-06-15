@@ -3,6 +3,7 @@
 
 use crate::components::TmuxPane;
 use crate::connection::TmuxConnection;
+use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, active_pane_command, capture_pane_command, client_name_command,
     list_windows_command, mode_keys_command,
@@ -42,9 +43,11 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<TmuxProjection>()
             .init_resource::<EnumerationState>()
             .init_resource::<KeyBindings>()
+            .init_resource::<CopyModeQueries>()
             .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
+            .add_message::<CopyModeReply>()
             .add_systems(Update, drain_tmux_events.in_set(TmuxProjectionSet))
             .add_systems(Update, request_pane_captures.after(TmuxProjectionSet));
     }
@@ -93,8 +96,10 @@ fn drain_tmux_events(
     mut state: ResMut<ConnectionState>,
     mut enumeration: ResMut<EnumerationState>,
     mut keybindings: ResMut<KeyBindings>,
+    mut copy_queries: ResMut<CopyModeQueries>,
     mut connection: NonSendMut<TmuxConnection>,
     mut pane_output: MessageWriter<PaneOutput>,
+    mut copy_replies: MessageWriter<CopyModeReply>,
 ) {
     let events = match connection.client() {
         Some(client) => drain_transport(client.events()),
@@ -165,6 +170,7 @@ fn drain_tmux_events(
         enumeration.keys_copy_mode_vi_pending = None;
         enumeration.mode_keys_pending = None;
         keybindings.clear();
+        copy_queries.clear();
         commands.trigger(TmuxConnectionReset);
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
@@ -197,6 +203,9 @@ fn drain_tmux_events(
         }
         if let Some(mode_keys) = take_mode_keys(&mut enumeration.mode_keys_pending, &events) {
             keybindings.set_mode_keys(mode_keys);
+        }
+        for reply in drain_copy_replies(&mut copy_queries, &events) {
+            copy_replies.write(reply);
         }
         trigger_events(&mut commands, &mut enumeration.pending, &events);
     }

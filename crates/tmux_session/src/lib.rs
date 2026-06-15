@@ -8,6 +8,7 @@
 mod components;
 mod connect;
 mod connection;
+mod copy_queries;
 mod enumerate;
 mod event_pump;
 mod events;
@@ -22,6 +23,7 @@ mod state;
 pub use components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow};
 pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
+pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
     COPY_STATE_FORMAT, CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row,
     capture_offsets, copy_mode_capture_command, copy_state_query_command, mode_keys_command,
