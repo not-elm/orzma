@@ -69,6 +69,18 @@ pub(crate) enum RegisterKind {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         passthrough: Vec<KeyChord>,
     },
+    /// Load a remote `http(s)` URL as the top-level document.
+    Url {
+        /// The `http(s)` URL to load.
+        url: String,
+        /// Whether the view accepts focus/input.
+        interactive: bool,
+        /// Whether the `window.ozmux` back-channel is injected (opt-in).
+        bridge: bool,
+        /// Chords the page lets through to the app while focused.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        passthrough: Vec<KeyChord>,
+    },
 }
 
 /// The untagged reply to a `register` request.
@@ -94,9 +106,9 @@ pub(crate) struct IncomingCall {
     pub(crate) req_id: Value,
     /// The invoked method name.
     pub(crate) method: String,
-    /// The positional arguments array.
+    /// The single params value (any JSON shape; absent deserializes as null).
     #[serde(default)]
-    pub(crate) args: Vec<Value>,
+    pub(crate) params: Value,
 }
 
 mod reply_result {
@@ -185,12 +197,20 @@ mod tests {
     #[test]
     fn call_deserializes() {
         let c: IncomingCall = serde_json::from_str(
-            r#"{"op":"call","handle":"h","reqId":"3","method":"ping","args":["x"]}"#,
+            r#"{"op":"call","handle":"h","reqId":"3","method":"ping","params":"x"}"#,
         )
         .unwrap();
         assert_eq!(c.handle, "h");
         assert_eq!(c.method, "ping");
-        assert_eq!(c.args, vec![serde_json::json!("x")]);
+        assert_eq!(c.params, serde_json::json!("x"));
+    }
+
+    #[test]
+    fn call_without_params_deserializes_as_null() {
+        let c: IncomingCall =
+            serde_json::from_str(r#"{"op":"call","handle":"h","reqId":"3","method":"ping"}"#)
+                .unwrap();
+        assert_eq!(c.params, Value::Null);
     }
 
     #[test]
@@ -216,5 +236,38 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(v["op"], "focus");
         assert_eq!(v["handle"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn register_url_serializes() {
+        let v = serde_json::to_value(ClientMsg::Register(RegisterKind::Url {
+            url: "https://example.com".into(),
+            interactive: true,
+            bridge: false,
+            passthrough: Vec::new(),
+        }))
+        .unwrap();
+        assert_eq!(v["op"], "register");
+        assert_eq!(v["kind"], "url");
+        assert_eq!(v["url"], "https://example.com");
+        assert_eq!(v["interactive"], true);
+        assert_eq!(v["bridge"], false);
+        assert!(
+            v.get("passthrough").is_none(),
+            "empty passthrough must be skipped"
+        );
+    }
+
+    #[test]
+    fn register_url_serializes_bridge_true() {
+        let v = serde_json::to_value(ClientMsg::Register(RegisterKind::Url {
+            url: "https://app.example.com".into(),
+            interactive: true,
+            bridge: true,
+            passthrough: Vec::new(),
+        }))
+        .unwrap();
+        assert_eq!(v["kind"], "url");
+        assert_eq!(v["bridge"], true);
     }
 }

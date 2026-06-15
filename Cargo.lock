@@ -4797,6 +4797,7 @@ dependencies = [
  "tmux_control_parser",
  "tracing",
  "unicode-width 0.2.0",
+ "url",
 ]
 
 [[package]]

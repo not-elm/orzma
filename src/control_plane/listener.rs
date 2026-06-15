@@ -520,7 +520,7 @@ mod tests {
         loop {
             if writers.send(
                 1,
-                r#"{"op":"call","handle":"H","reqId":"g0","method":"m","args":[]}"#.into(),
+                r#"{"op":"call","handle":"H","reqId":"g0","method":"m","params":null}"#.into(),
             ) {
                 break;
             }

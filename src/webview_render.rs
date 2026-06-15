@@ -143,10 +143,7 @@ fn on_ozmux_call_frame(
         .get("method")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let args = payload
-        .get("args")
-        .cloned()
-        .unwrap_or_else(|| Value::Array(Vec::new()));
+    let params = payload.get("params").cloned().unwrap_or(Value::Null);
 
     let Ok(owner) = owners.get(webview) else {
         reject_ozmux_call(&mut commands, webview, req_id, "no_owner");
@@ -154,7 +151,7 @@ fn on_ozmux_call_frame(
     };
     let global_id = rpc.mint();
     let line = serde_json::json!({
-        "op": "call", "handle": owner.handle, "reqId": global_id, "method": method, "args": args
+        "op": "call", "handle": owner.handle, "reqId": global_id, "method": method, "params": params
     })
     .to_string();
     if !writers.send(owner.connection_id, line) {
@@ -446,7 +443,7 @@ mod tests {
         app.world_mut().trigger(Receive {
             webview,
             payload: OzmuxFrame(serde_json::json!({
-                "kind": "ozmux.call", "reqId": "p0", "method": "save", "args": [1, 2]
+                "kind": "ozmux.call", "reqId": "p0", "method": "save", "params": [1, 2]
             })),
         });
 
@@ -456,6 +453,7 @@ mod tests {
         assert_eq!(v["handle"], "H");
         assert_eq!(v["method"], "save");
         assert_eq!(v["reqId"], "0");
+        assert_eq!(v["params"], serde_json::json!([1, 2]));
         assert_eq!(
             app.world()
                 .resource::<OzmuxRpc>()
