@@ -8,9 +8,9 @@ use serde_json::Value;
 #[derive(Debug, Serialize)]
 #[serde(tag = "op", rename_all = "lowercase")]
 pub(crate) enum ClientMsg {
-    /// Handshake with `$OZMUX_TOKEN`.
+    /// Handshake with `$OZMA_TOKEN`.
     Hello {
-        /// The pane's `$OZMUX_TOKEN`.
+        /// The pane's `$OZMA_TOKEN`.
         token: String,
     },
     /// Register content; the reply mints a handle.
@@ -28,7 +28,7 @@ pub(crate) enum ClientMsg {
     Emit {
         /// The target handle.
         handle: String,
-        /// The event name routed to `window.ozmux.on(event, …)`.
+        /// The event name routed to `window.ozma.on(event, …)`.
         event: String,
         /// The event payload.
         payload: Value,
@@ -57,7 +57,7 @@ pub(crate) enum RegisterKind {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         passthrough: Vec<KeyChord>,
     },
-    /// A directory of assets served at `ozmux-dyn://<handle>/`.
+    /// A directory of assets served at `ozma-dyn://<handle>/`.
     Dir {
         /// Absolute asset root.
         root: String,
@@ -75,7 +75,7 @@ pub(crate) enum RegisterKind {
         url: String,
         /// Whether the view accepts focus/input.
         interactive: bool,
-        /// Whether the `window.ozmux` back-channel is injected (opt-in).
+        /// Whether the `window.ozma` back-channel is injected (opt-in).
         bridge: bool,
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -96,7 +96,7 @@ pub(crate) struct RegisterReply {
     pub(crate) error: Option<String>,
 }
 
-/// An inbound `call` frame forwarded from a page's `window.ozmux.call`.
+/// An inbound `call` frame forwarded from a page's `window.ozma.call`.
 #[derive(Debug, Deserialize)]
 pub(crate) struct IncomingCall {
     /// The view handle the call targets.

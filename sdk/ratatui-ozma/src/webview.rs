@@ -36,7 +36,7 @@ impl Webview {
 
     /// Creates a webview that loads a remote `http(s)` URL.
     ///
-    /// Display-only by default — the `window.ozmux` back-channel is **not**
+    /// Display-only by default — the `window.ozma` back-channel is **not**
     /// injected. Call [`Webview::bridge`] (or register a handler with
     /// [`Webview::on`], which enables it implicitly) to opt in.
     pub fn url(url: impl Into<String>) -> Self {
@@ -74,7 +74,7 @@ impl Webview {
         self
     }
 
-    /// Opts a `url` webview into the `window.ozmux` back-channel. A no-op for
+    /// Opts a `url` webview into the `window.ozma` back-channel. A no-op for
     /// `inline`/`dir` webviews, which are always bridged. Fixed at register.
     pub fn bridge(mut self, bridge: bool) -> Self {
         if let RegisterKind::Url { bridge: b, .. } = &mut self.kind {
@@ -96,7 +96,7 @@ impl Webview {
 
     /// Registers an RPC handler for `method`. The parameter is any
     /// `DeserializeOwned` type, deserialized from the single `params` value the
-    /// page passes to `window.ozmux.call(method, params)` (an object becomes a
+    /// page passes to `window.ozma.call(method, params)` (an object becomes a
     /// struct, an array a tuple, and an omitted/`null` params the unit `()`).
     ///
     /// # Panics

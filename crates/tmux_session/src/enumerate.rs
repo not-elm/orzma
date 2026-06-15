@@ -114,7 +114,7 @@ pub(crate) fn list_windows_command() -> String {
 /// environment variable on the control client's current session, so panes the
 /// session spawns afterward inherit it. Session-scoped (no `-g`) to avoid
 /// polluting the server-global environment of an attached, user-owned tmux
-/// server. Used to propagate `$OZMUX_SOCK` to panes created after attach —
+/// server. Used to propagate `$OZMA_SOCK` to panes created after attach —
 /// already-running panes cannot be updated.
 pub fn set_environment_command(key: &str, value: &str) -> String {
     format!("set-environment {} {}", quote(key), quote(value))
@@ -266,16 +266,16 @@ mod tests {
     #[test]
     fn set_environment_command_is_session_scoped() {
         assert_eq!(
-            set_environment_command("OZMUX_SOCK", "/tmp/ctl.sock"),
-            "set-environment OZMUX_SOCK /tmp/ctl.sock"
+            set_environment_command("OZMA_SOCK", "/tmp/ctl.sock"),
+            "set-environment OZMA_SOCK /tmp/ctl.sock"
         );
     }
 
     #[test]
     fn set_environment_command_quotes_paths_with_spaces() {
         assert_eq!(
-            set_environment_command("OZMUX_SOCK", "/tmp/a b/ctl.sock"),
-            "set-environment OZMUX_SOCK '/tmp/a b/ctl.sock'"
+            set_environment_command("OZMA_SOCK", "/tmp/a b/ctl.sock"),
+            "set-environment OZMA_SOCK '/tmp/a b/ctl.sock'"
         );
     }
 }

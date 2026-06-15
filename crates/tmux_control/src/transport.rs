@@ -57,7 +57,7 @@ impl TmuxServer {
 
     /// Adds an environment variable for the spawned `tmux -CC` process. The tmux
     /// server inherits it, so every pane the server spawns (the initial one and
-    /// any created later) sees it. Used to propagate `$OZMUX_SOCK` into panes.
+    /// any created later) sees it. Used to propagate `$OZMA_SOCK` into panes.
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.to_string(), value.to_string()));
         self
@@ -444,12 +444,12 @@ mod tests {
     #[test]
     fn env_builder_accumulates_pairs() {
         let server = TmuxServer::new()
-            .env("OZMUX_SOCK", "/tmp/ctl.sock")
+            .env("OZMA_SOCK", "/tmp/ctl.sock")
             .env("FOO", "bar");
         assert_eq!(
             server.env,
             vec![
-                ("OZMUX_SOCK".to_string(), "/tmp/ctl.sock".to_string()),
+                ("OZMA_SOCK".to_string(), "/tmp/ctl.sock".to_string()),
                 ("FOO".to_string(), "bar".to_string()),
             ]
         );
@@ -457,10 +457,10 @@ mod tests {
 
     #[test]
     fn new_session_subcommand_emits_dash_e_per_env_pair() {
-        let server = TmuxServer::new().env("OZMUX_SOCK", "/tmp/ctl.sock");
+        let server = TmuxServer::new().env("OZMA_SOCK", "/tmp/ctl.sock");
         assert_eq!(
             server.new_session_subcommand(),
-            vec!["new-session", "-e", "OZMUX_SOCK=/tmp/ctl.sock"]
+            vec!["new-session", "-e", "OZMA_SOCK=/tmp/ctl.sock"]
         );
     }
 

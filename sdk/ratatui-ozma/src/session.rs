@@ -101,15 +101,15 @@ pub struct Ozma {
 }
 
 impl Ozma {
-    /// Connects to `$OZMUX_SOCK`, performs the `hello` handshake, and spawns the
+    /// Connects to `$OZMA_SOCK`, performs the `hello` handshake, and spawns the
     /// background reader thread.
     pub fn connect() -> OzmaResult<Self> {
-        let sock = std::env::var("OZMUX_SOCK").map_err(|_| OzmaError::NotInPane("OZMUX_SOCK"))?;
+        let sock = std::env::var("OZMA_SOCK").map_err(|_| OzmaError::NotInPane("OZMA_SOCK"))?;
         let token = pane_identity(
-            std::env::var("OZMUX_TOKEN").ok(),
+            std::env::var("OZMA_TOKEN").ok(),
             std::env::var("TMUX_PANE").ok(),
         )
-        .ok_or(OzmaError::NotInPane("OZMUX_TOKEN or TMUX_PANE"))?;
+        .ok_or(OzmaError::NotInPane("OZMA_TOKEN or TMUX_PANE"))?;
         let stream = UnixStream::connect(sock)?;
         let writer: SharedWriter = Arc::new(Mutex::new(stream.try_clone()?));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
@@ -179,9 +179,9 @@ impl Ozma {
 }
 
 /// Resolves the identity sent in the `hello` handshake: the legacy per-surface
-/// `$OZMUX_TOKEN` (direct-PTY backend) when set, else the tmux pane id
+/// `$OZMA_TOKEN` (direct-PTY backend) when set, else the tmux pane id
 /// `$TMUX_PANE`. tmux injects `$TMUX_PANE` into every pane it spawns, so the
-/// fallback covers the tmux backend where `$OZMUX_TOKEN` is never set. `None`
+/// fallback covers the tmux backend where `$OZMA_TOKEN` is never set. `None`
 /// when neither is present — the process is not inside an ozmux pane.
 fn pane_identity(ozmux_token: Option<String>, tmux_pane: Option<String>) -> Option<String> {
     ozmux_token.filter(|t| !t.is_empty()).or(tmux_pane)
