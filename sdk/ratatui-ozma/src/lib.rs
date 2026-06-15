@@ -21,4 +21,4 @@ pub use error::{OzmaError, OzmaResult, RpcError};
 pub use keychord::KeyChord;
 pub use session::Ozma;
 pub use webview::{Webview, WebviewHandle};
-pub use widget::{Blank, WebviewWidget};
+pub use widget::{WebviewDefaultPlaceholder, WebviewWidget};
