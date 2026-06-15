@@ -1,4 +1,4 @@
-.PHONY: run build clean help fix-lint setup-cef
+.PHONY: run build clean help fix-lint setup-cef ozmd ozmd-web
 
 OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
 CARGO_BIN_DIR := $(if $(CARGO_HOME),$(CARGO_HOME)/bin,$(HOME)/.cargo/bin)
@@ -16,6 +16,8 @@ help:
 	@echo "  setup-cef      - Install the CEF framework + debug render process for ozmux-gui (macOS, one-time)"
 	@echo "  fix-lint       - clippy --fix + rustfmt + biome lint:fix"
 	@echo "  clean          - cargo clean (remove the workspace target dir)"
+	@echo "  ozmd           - Build the web bundle then the ozmd binary"
+	@echo "  ozmd-web       - Build the ozmd web bundle (esbuild)"
 
 run:
 	cargo run
@@ -36,3 +38,9 @@ fix-lint:
 
 clean:
 	cargo clean
+
+ozmd-web:
+	pnpm --filter @ozma/ozmd-web build
+
+ozmd: ozmd-web
+	cargo build -p ozmd
