@@ -270,6 +270,12 @@ pub(crate) struct EnumerationState {
     pub(crate) keys_prefix_pending: Option<CommandId>,
     /// The id of the in-flight `display-message` prefix-key query, if any.
     pub(crate) prefix_keys_pending: Option<CommandId>,
+    /// In-flight `list-keys -T copy-mode` command, if any.
+    pub(crate) keys_copy_mode_pending: Option<CommandId>,
+    /// In-flight `list-keys -T copy-mode-vi` command, if any.
+    pub(crate) keys_copy_mode_vi_pending: Option<CommandId>,
+    /// In-flight `#{mode-keys}` query, if any.
+    pub(crate) mode_keys_pending: Option<CommandId>,
     /// In-flight `capture-pane` commands → the pane each reply seeds.
     pub(crate) capture_pending: HashMap<CommandId, PaneId>,
 }

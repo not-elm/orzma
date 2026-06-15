@@ -229,6 +229,17 @@ pub(crate) enum ModeKeys {
     Emacs,
 }
 
+impl ModeKeys {
+    /// Parses tmux's `#{mode-keys}` reply (`vi` → `Vi`, anything else → `Emacs`).
+    pub(crate) fn parse(s: &str) -> ModeKeys {
+        if s.trim() == "vi" {
+            ModeKeys::Vi
+        } else {
+            ModeKeys::Emacs
+        }
+    }
+}
+
 /// One parsed tmux key binding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KeyBinding {
