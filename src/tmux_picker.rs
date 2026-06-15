@@ -9,7 +9,10 @@ use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
-use ozmux_tmux::{ConnectionState, TmuxConnection, attach_or_create, set_environment_command};
+use ozmux_tmux::{
+    AttachTarget, ConnectionState, TmuxConnection, attach_or_create, select_window_command,
+    set_environment_command, switch_client_command,
+};
 use tmux_control::{SessionInfo, TmuxServer, WindowEntry};
 
 const PICKER_Z: i32 = 310;
@@ -77,13 +80,6 @@ fn build_rows(sessions: &[SessionInfo], windows: &[WindowEntry]) -> Vec<PickerRo
     }
     rows.push(PickerRow::NewSession);
     rows
-}
-
-fn target_for(sessions: &[SessionInfo], selected: usize) -> ozmux_tmux::AttachTarget {
-    match sessions.get(selected) {
-        Some(s) => ozmux_tmux::AttachTarget::Attach(s.name.clone()),
-        None => ozmux_tmux::AttachTarget::CreateNew,
-    }
 }
 
 fn build_server(configs: &OzmuxConfigsResource) -> TmuxServer {
@@ -252,26 +248,100 @@ fn handle_picker_input(
                 picker.selected = step_selection(picker.selected, entry_count, false);
             }
             KeyCode::Enter => {
-                let target = target_for(&picker.sessions, picker.selected);
-                let mut server = build_server(&configs);
-                if let Some(handle) = &control {
-                    server = server.env("OZMUX_SOCK", &handle.sock_path.to_string_lossy());
-                }
-                match attach_or_create(&server, &target) {
-                    Ok(client) => {
-                        connection.set(client);
-                        *state = ConnectionState::Connecting;
-                    }
-                    Err(e) => {
-                        *state = ConnectionState::Error {
-                            reason: format!("tmux connect failed: {e}"),
-                        };
-                    }
+                let rows = build_rows(&picker.sessions, &picker.windows);
+                let row = rows
+                    .get(picker.selected)
+                    .copied()
+                    .unwrap_or(PickerRow::NewSession);
+                if connection.client().is_some() {
+                    apply_switch(&mut connection, &mut state, &configs, &picker, row);
+                } else {
+                    apply_attach(
+                        &mut connection,
+                        &mut state,
+                        &configs,
+                        control.as_deref(),
+                        &picker,
+                        row,
+                    );
                 }
                 picker.open = false;
                 break;
             }
             _ => {}
+        }
+    }
+}
+
+// NOTE: while attached, switching must go through the live control client so the
+// single `tmux -CC` connection survives; a fresh `attach_or_create` would spawn a
+// second client and orphan the first.
+fn apply_switch(
+    connection: &mut TmuxConnection,
+    state: &mut ConnectionState,
+    configs: &OzmuxConfigsResource,
+    picker: &SessionPicker,
+    row: PickerRow,
+) {
+    let Some(client) = connection.client() else {
+        return;
+    };
+    let cmds: Vec<String> = match row {
+        PickerRow::Session(si) => vec![switch_client_command(&picker.sessions[si].name)],
+        PickerRow::Window { session, window } => vec![
+            switch_client_command(&picker.sessions[session].name),
+            select_window_command(picker.windows[window].window_id),
+        ],
+        PickerRow::NewSession => {
+            let server = build_server(configs);
+            match server.create_detached_session() {
+                Ok(name) => vec![switch_client_command(&name)],
+                Err(e) => {
+                    tracing::warn!(?e, "failed to create new session");
+                    return;
+                }
+            }
+        }
+    };
+    for cmd in &cmds {
+        if let Err(e) = client.handle().send(cmd) {
+            tracing::warn!(?e, cmd, "switch command send failed");
+            *state = ConnectionState::Error {
+                reason: format!("switch failed: {e}"),
+            };
+            return;
+        }
+    }
+}
+
+fn apply_attach(
+    connection: &mut TmuxConnection,
+    state: &mut ConnectionState,
+    configs: &OzmuxConfigsResource,
+    control: Option<&ControlPlaneHandle>,
+    picker: &SessionPicker,
+    row: PickerRow,
+) {
+    let target = match row {
+        PickerRow::Session(si) => AttachTarget::Attach(picker.sessions[si].name.clone()),
+        PickerRow::Window { session, .. } => {
+            AttachTarget::Attach(picker.sessions[session].name.clone())
+        }
+        PickerRow::NewSession => AttachTarget::CreateNew,
+    };
+    let mut server = build_server(configs);
+    if let Some(handle) = control {
+        server = server.env("OZMUX_SOCK", &handle.sock_path.to_string_lossy());
+    }
+    match attach_or_create(&server, &target) {
+        Ok(client) => {
+            connection.set(client);
+            *state = ConnectionState::Connecting;
+        }
+        Err(e) => {
+            *state = ConnectionState::Error {
+                reason: format!("tmux connect failed: {e}"),
+            };
         }
     }
 }
@@ -375,33 +445,6 @@ mod tests {
     #[test]
     fn build_rows_with_no_sessions_is_just_new_session() {
         assert_eq!(build_rows(&[], &[]), vec![PickerRow::NewSession]);
-    }
-
-    #[test]
-    fn target_for_empty_sessions_gives_create_new() {
-        assert_eq!(target_for(&[], 0), ozmux_tmux::AttachTarget::CreateNew,);
-    }
-
-    #[test]
-    fn target_for_session_index_gives_attach() {
-        let sessions = vec![fake_session(1, "a"), fake_session(2, "b")];
-        assert_eq!(
-            target_for(&sessions, 0),
-            ozmux_tmux::AttachTarget::Attach("a".to_string()),
-        );
-        assert_eq!(
-            target_for(&sessions, 1),
-            ozmux_tmux::AttachTarget::Attach("b".to_string()),
-        );
-    }
-
-    #[test]
-    fn target_for_trailing_entry_gives_create_new() {
-        let sessions = vec![fake_session(1, "a"), fake_session(2, "b")];
-        assert_eq!(
-            target_for(&sessions, 2),
-            ozmux_tmux::AttachTarget::CreateNew,
-        );
     }
 
     #[test]
