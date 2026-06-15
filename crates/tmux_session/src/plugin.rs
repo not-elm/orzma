@@ -1,17 +1,17 @@
 //! The `TmuxSessionPlugin`: connection state, the projection observers, and the
 //! per-frame transport-drain system that triggers the projection events.
 
-use crate::components::TmuxPane;
+use crate::components::{TmuxPane, TmuxSession};
 use crate::connection::TmuxConnection;
 use crate::enumerate::{
     EnumerationState, active_pane_command, capture_pane_command, client_name_command,
     list_keys_command, list_windows_command,
 };
 use crate::event_pump::{
-    advance_state, drain_transport, take_active_pane, take_client_name, take_key_bindings,
-    take_pane_captures, trigger_events,
+    advance_state, detect_session_switch, drain_transport, take_active_pane, take_client_name,
+    take_key_bindings, take_pane_captures, trigger_events,
 };
-use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset};
+use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
 use crate::keybinds::TmuxKeyBindings;
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
@@ -95,6 +95,8 @@ fn drain_tmux_events(
     mut key_bindings: ResMut<TmuxKeyBindings>,
     mut connection: NonSendMut<TmuxConnection>,
     mut pane_output: MessageWriter<PaneOutput>,
+    index: Res<TmuxProjection>,
+    sessions: Query<&TmuxSession>,
 ) {
     let events = match connection.client() {
         Some(client) => drain_transport(client.events()),
@@ -106,22 +108,27 @@ fn drain_tmux_events(
     for output in collect_pane_outputs(&events) {
         pane_output.write(output);
     }
+    let current_session = index
+        .session
+        .and_then(|e| sessions.get(e).ok())
+        .map(|s| s.id);
+    if detect_session_switch(&events, current_session).is_some()
+        && let Some(client) = connection.client()
+    {
+        commands.trigger(TmuxWindowsRetained {
+            windows: Vec::new(),
+        });
+        send_session_enumeration(client, &mut enumeration);
+    }
     if let Some(next) = advance_state(&state, &events) {
         *state = next;
         if matches!(*state, ConnectionState::Attached)
             && let Some(client) = connection.client()
         {
-            match client.handle().send(&list_windows_command()) {
-                Ok(id) => enumeration.pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send list-windows enumeration"),
-            }
+            send_session_enumeration(client, &mut enumeration);
             match client.handle().send(&client_name_command()) {
                 Ok(id) => enumeration.client_name_pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to send client-name query"),
-            }
-            match client.handle().send(&active_pane_command()) {
-                Ok(id) => enumeration.active_pane_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send active-pane query"),
             }
             match client.handle().send(&list_keys_command()) {
                 Ok(id) => enumeration.list_keys_pending = Some(id),
@@ -171,6 +178,20 @@ fn drain_tmux_events(
     }
 }
 
+// NOTE: re-enumerating on a session switch must use the SAME query set as the
+// attach transition, so factor it; drift here would leave a switched-to session
+// with stale windows or no active-pane marker.
+fn send_session_enumeration(client: &tmux_control::TmuxClient, enumeration: &mut EnumerationState) {
+    match client.handle().send(&list_windows_command()) {
+        Ok(id) => enumeration.pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send list-windows enumeration"),
+    }
+    match client.handle().send(&active_pane_command()) {
+        Ok(id) => enumeration.active_pane_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send active-pane query"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -189,5 +210,39 @@ mod tests {
         assert!(index.windows.is_empty());
         assert!(index.panes.is_empty());
         assert!(index.session.is_none());
+    }
+
+    #[test]
+    fn empty_windows_retained_clears_windows_and_panes_keeps_session() {
+        use crate::events::{
+            TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowsRetained, pane_geoms,
+        };
+        use tmux_control_parser::{SessionId, WindowId, WindowLayout};
+
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+        app.world_mut().trigger(TmuxSessionChanged {
+            session: SessionId(1),
+            name: "a".into(),
+        });
+        app.world_mut().trigger(TmuxWindowAdded {
+            window: WindowId(1),
+            index: 0,
+            name: "w".into(),
+        });
+        app.world_mut().trigger(TmuxLayoutChanged {
+            window: WindowId(1),
+            panes: pane_geoms(&WindowLayout::parse(b"abcd,80x24,0,0,1").unwrap()),
+        });
+        app.update();
+        app.world_mut().trigger(TmuxWindowsRetained {
+            windows: Vec::new(),
+        });
+        app.update();
+
+        let index = app.world().resource::<TmuxProjection>();
+        assert!(index.windows.is_empty());
+        assert!(index.panes.is_empty());
+        assert!(index.session.is_some());
     }
 }

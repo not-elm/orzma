@@ -13,7 +13,7 @@ use bevy::prelude::Commands;
 use crossbeam_channel::Receiver;
 use std::collections::HashMap;
 use tmux_control::{ClientEvent, CommandId, ControlEvent, TransportEvent};
-use tmux_control_parser::{PaneId, WindowId};
+use tmux_control_parser::{PaneId, SessionId, WindowId};
 
 /// Upper bound on events drained per frame, so a pane flooding `%output`
 /// cannot stall the schedule with unbounded parse/apply work in one tick;
@@ -199,6 +199,30 @@ pub(crate) fn take_key_bindings(
             }
             tracing::warn!("list-keys mirror query failed");
             return None;
+        }
+    }
+    None
+}
+
+/// Returns the new session id if `events` contains a session-change to an id
+/// different from `current`, i.e. a real `switch-client`. Returns `None` on the
+/// first attach (`current == None`) or when the id is unchanged, so the initial
+/// enumeration is not duplicated and only an actual switch triggers a rebuild.
+pub(crate) fn detect_session_switch(
+    events: &[TransportEvent],
+    current: Option<SessionId>,
+) -> Option<SessionId> {
+    let current = current?;
+    for event in events {
+        let next = match event {
+            TransportEvent::Protocol(ClientEvent::Notification(
+                ControlEvent::SessionChanged { session, .. }
+                | ControlEvent::ClientSessionChanged { session, .. },
+            )) => *session,
+            _ => continue,
+        };
+        if next != current {
+            return Some(next);
         }
     }
     None
@@ -469,6 +493,24 @@ mod tests {
         app.update();
 
         assert_eq!(*seen.0.lock().unwrap(), vec![(9, "beta".to_string())]);
+    }
+
+    #[test]
+    fn detect_session_switch_reports_new_id_only_on_change() {
+        use tmux_control_parser::SessionId;
+        let changed = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::SessionChanged {
+                session: SessionId(2),
+                name: "b".to_string(),
+            },
+        ))];
+        assert_eq!(detect_session_switch(&changed, None), None);
+        assert_eq!(detect_session_switch(&changed, Some(SessionId(2))), None);
+        assert_eq!(
+            detect_session_switch(&changed, Some(SessionId(1))),
+            Some(SessionId(2))
+        );
+        assert_eq!(detect_session_switch(&[], Some(SessionId(1))), None);
     }
 
     #[test]
