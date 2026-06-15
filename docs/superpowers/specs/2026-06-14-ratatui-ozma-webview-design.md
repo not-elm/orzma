@@ -32,7 +32,7 @@ apps never hand-roll escape codes or NDJSON.
      line is **obsolete** after #115).
 3. **`window.ozmux`** JS bridge — `call` / `on` / `off`, injected into every
    Tier 1 page. The SDK is the program-side peer of this bridge.
-   - Code: `src/extension_render/ozmux_bridge.js`, `src/extension_render.rs`.
+   - Code: `src/webview_render/ozmux_bridge.js`, `src/webview_render.rs`.
 
 ### Constraints (inherited from the repo)
 
@@ -174,11 +174,11 @@ chart.emit("tick", &n)?;          // -> window.ozmux.on('tick', n)
 ```
 
 - **Wire protocol** (the control plane already speaks these; note the inbound
-  `call` frame is synthesized in `src/extension_render.rs`, not a `ServerMsg`
+  `call` frame is synthesized in `src/webview_render.rs`, not a `ServerMsg`
   variant in `protocol.rs`, and register replies are untagged `{ok, handle}` /
   `{ok:false, error}` — the SDK serializes `register()` through its single I/O
   thread so each reply matches its request):
-  - inbound to the program: `{"op":"call","handle":H,"reqId":R,"method":M,"args":[…]}`
+  - inbound to the program: `{"op":"call","handle":H,"reqId":R,"method":M,"params":V}`
   - program reply: `{"op":"reply","reqId":R,"ok":true,"value":V}` /
     `{"op":"reply","reqId":R,"ok":false,"error":E}`
   - program → page push: `{"op":"emit","handle":H,"event":E,"payload":P}`.
@@ -197,13 +197,13 @@ chart.emit("tick", &n)?;          // -> window.ozmux.on('tick', n)
   around each `writeln!`, matching `examples/dyn_webview_client.rs`. A
   channel-drained command pattern is offered as the deadlock-free default, with
   `Arc<Mutex<…>>` as the terser escape hatch.
-- **Args mapping:** `window.ozmux.call(method, args)` always sends `args` as a
-  JSON **array**. The handler parameter is deserialized from that array:
-  single-arg closures via an extractor-style trait impl (`|arg: String|` ⇐
-  `["hi"]`), multi-arg via a tuple (`|(a, b): (u32, String)|` ⇐ `[1, "x"]`). The
-  precise extractor ergonomics (how many arities, the trait shape) are settled in
-  the implementation plan; the fallback if extractors prove fiddly is a single
-  `Params` argument with `.get::<T>(i)` accessors.
+- **Params mapping:** `window.ozmux.call(method, params)` sends a **single**
+  `params` value (any JSON shape, not a positional array). The handler parameter
+  is any `DeserializeOwned` type, deserialized directly from that value: an
+  object becomes a struct (`|p: SaveReq|` ⇐ `{id, name}`), an array a tuple
+  (`|(a, b): (u32, String)|` ⇐ `[1, "x"]`), a scalar a scalar (`|n: u32|` ⇐ `7`),
+  and an omitted/`null` params the unit type (`|_: ()|`). There is no positional
+  arg array and no extractor trait — one value in, one `P` out.
 - **Errors:** a handler returning `Err(_)`, an unknown method, or a
   deserialization failure produces `{ok:false, error}`, surfacing as a rejected
   Promise in the page.
@@ -243,7 +243,7 @@ Resolved from spec review:
 2. **`flush` shape:** implement the byte emission as `flush_to(&mut impl Write)`
    and provide `flush(&mut Terminal<B>)` as the ergonomic wrapper over it (eases
    sequence tests and custom backend/output splits).
-3. **RPC dispatch:** look up the method *before* deserializing args (return
+3. **RPC dispatch:** look up the method *before* deserializing params (return
    `unknown_method` first).
 
 Plan-time options (ergonomics; do not affect correctness):

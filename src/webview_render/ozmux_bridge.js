@@ -1,8 +1,10 @@
 // NOTE: bevy_cef contract — Rust->JS cef.listen delivers a JSON *string* (hence
 // JSON.parse); JS->Rust cef.emit serializes only its FIRST argument. Replies
 // arrive on the "ozmux" channel keyed by reqId; push events on "ozmux.event".
-// The {__u8} base64 tag mirrors binary-codec.ts (top-level only). window.ozmux
-// is frozen so a page cannot shadow it.
+// The {__u8} base64 tag carries a Uint8Array, but only as a top-level value (the
+// `params` sent, or a reply `value`/event `payload` received via decodeValue) —
+// bytes nested inside an object/array param are NOT tagged and won't round-trip.
+// window.ozmux is frozen so a page cannot shadow it.
 (function () {
   var cef = window.cef;
   var nextId = 0;
@@ -10,13 +12,13 @@
   var calls = new Map();
   var listeners = new Map();
 
-  function encodeArg(a) {
-    if (a instanceof Uint8Array) {
+  function encodeParam(p) {
+    if (p instanceof Uint8Array) {
       var bin = '';
-      for (var i = 0; i < a.length; i++) bin += String.fromCharCode(a[i]);
+      for (var i = 0; i < p.length; i++) bin += String.fromCharCode(p[i]);
       return { __u8: btoa(bin) };
     }
-    return a;
+    return p;
   }
   function decodeValue(v) {
     if (v && typeof v === 'object' && typeof v.__u8 === 'string') {
@@ -46,13 +48,13 @@
   });
 
   var api = {
-    call: function (method, args) {
+    call: function (method, params) {
       var reqId = 'o' + nextId++;
-      var encoded = (args || []).map(encodeArg);
+      var encoded = encodeParam(params);
       return new Promise(function (resolve, reject) {
         calls.set(reqId, { resolve: resolve, reject: reject });
         try {
-          cef.emit({ kind: 'ozmux.call', reqId: reqId, method: method, args: encoded });
+          cef.emit({ kind: 'ozmux.call', reqId: reqId, method: method, params: encoded });
         } catch (e) {
           // A synchronous emit failure never gets a reply, so settle and drop the
           // entry here — otherwise it leaks in calls forever.

@@ -94,9 +94,9 @@ pub(crate) struct IncomingCall {
     pub(crate) req_id: Value,
     /// The invoked method name.
     pub(crate) method: String,
-    /// The positional arguments array.
+    /// The single params value (any JSON shape; absent deserializes as null).
     #[serde(default)]
-    pub(crate) args: Vec<Value>,
+    pub(crate) params: Value,
 }
 
 mod reply_result {
@@ -185,12 +185,20 @@ mod tests {
     #[test]
     fn call_deserializes() {
         let c: IncomingCall = serde_json::from_str(
-            r#"{"op":"call","handle":"h","reqId":"3","method":"ping","args":["x"]}"#,
+            r#"{"op":"call","handle":"h","reqId":"3","method":"ping","params":"x"}"#,
         )
         .unwrap();
         assert_eq!(c.handle, "h");
         assert_eq!(c.method, "ping");
-        assert_eq!(c.args, vec![serde_json::json!("x")]);
+        assert_eq!(c.params, serde_json::json!("x"));
+    }
+
+    #[test]
+    fn call_without_params_deserializes_as_null() {
+        let c: IncomingCall =
+            serde_json::from_str(r#"{"op":"call","handle":"h","reqId":"3","method":"ping"}"#)
+                .unwrap();
+        assert_eq!(c.params, Value::Null);
     }
 
     #[test]
