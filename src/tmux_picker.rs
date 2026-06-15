@@ -283,9 +283,9 @@ fn apply_switch(
     picker: &SessionPicker,
     row: PickerRow,
 ) {
-    let Some(client) = connection.client() else {
+    if connection.client().is_none() {
         return;
-    };
+    }
     let cmds: Vec<String> = match row {
         PickerRow::Session(si) => vec![switch_client_command(&picker.sessions[si].name)],
         PickerRow::Window { session, window } => vec![
@@ -303,14 +303,20 @@ fn apply_switch(
             }
         }
     };
+    let mut failure: Option<String> = None;
     for cmd in &cmds {
-        if let Err(e) = client.handle().send(cmd) {
-            tracing::warn!(?e, cmd, "switch command send failed");
-            *state = ConnectionState::Error {
-                reason: format!("switch failed: {e}"),
-            };
+        let Some(client) = connection.client() else {
             return;
+        };
+        if let Err(e) = client.handle().send(cmd) {
+            tracing::warn!(?e, cmd = cmd.as_str(), "switch command send failed");
+            failure = Some(format!("switch failed: {e}"));
+            break;
         }
+    }
+    if let Some(reason) = failure {
+        connection.take();
+        *state = ConnectionState::Error { reason };
     }
 }
 

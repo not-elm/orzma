@@ -208,6 +208,11 @@ pub(crate) fn take_key_bindings(
 /// different from `current`, i.e. a real `switch-client`. Returns `None` on the
 /// first attach (`current == None`) or when the id is unchanged, so the initial
 /// enumeration is not duplicated and only an actual switch triggers a rebuild.
+///
+/// The switch decision lives here (driven from the per-frame drain) rather than
+/// in the `on_session_changed` observer, because the teardown + re-enumeration
+/// it triggers need the event batch and the live `NonSend` client, which an
+/// observer cannot access.
 pub(crate) fn detect_session_switch(
     events: &[TransportEvent],
     current: Option<SessionId>,
