@@ -101,7 +101,11 @@ impl App {
             Action::GoBottom => vec![Cmd::Scroll(ScrollAction::Bottom)],
             Action::ToggleOutline => {
                 self.outline_open = !self.outline_open;
-                self.mode = if self.outline_open { Mode::Outline } else { Mode::Normal };
+                self.mode = if self.outline_open {
+                    Mode::Outline
+                } else {
+                    Mode::Normal
+                };
                 vec![]
             }
             Action::OutlineMoveDown => {
@@ -189,7 +193,14 @@ mod tests {
 
     fn app_with_outline(n: usize) -> App {
         let mut app = App::default();
-        app.set_outline((0..n).map(|i| Heading { level: 1, text: format!("h{i}") }).collect());
+        app.set_outline(
+            (0..n)
+                .map(|i| Heading {
+                    level: 1,
+                    text: format!("h{i}"),
+                })
+                .collect(),
+        );
         app
     }
 
@@ -197,14 +208,20 @@ mod tests {
     fn gg_chord_scrolls_to_top() {
         let mut app = App::default();
         assert_eq!(app.on_action(Action::Prefix('g')), vec![]);
-        assert_eq!(app.on_action(Action::Prefix('g')), vec![Cmd::Scroll(ScrollAction::Top)]);
+        assert_eq!(
+            app.on_action(Action::Prefix('g')),
+            vec![Cmd::Scroll(ScrollAction::Top)]
+        );
     }
 
     #[test]
     fn dangling_prefix_then_other_key_is_cleared() {
         let mut app = App::default();
         assert_eq!(app.on_action(Action::Prefix('g')), vec![]);
-        assert_eq!(app.on_action(Action::ScrollLineDown), vec![Cmd::Scroll(ScrollAction::Down)]);
+        assert_eq!(
+            app.on_action(Action::ScrollLineDown),
+            vec![Cmd::Scroll(ScrollAction::Down)]
+        );
     }
 
     #[test]
@@ -212,17 +229,26 @@ mod tests {
         let mut app = app_with_outline(3);
         app.set_current_heading_index(Some(0));
         app.on_action(Action::Prefix(']'));
-        assert_eq!(app.on_action(Action::Prefix(']')), vec![Cmd::ScrollToHeading(1)]);
+        assert_eq!(
+            app.on_action(Action::Prefix(']')),
+            vec![Cmd::ScrollToHeading(1)]
+        );
         app.set_current_heading_index(Some(2));
         app.on_action(Action::Prefix('['));
-        assert_eq!(app.on_action(Action::Prefix('[')), vec![Cmd::ScrollToHeading(1)]);
+        assert_eq!(
+            app.on_action(Action::Prefix('[')),
+            vec![Cmd::ScrollToHeading(1)]
+        );
     }
 
     #[test]
     fn next_heading_from_none_goes_to_first() {
         let mut app = app_with_outline(3);
         app.on_action(Action::Prefix(']'));
-        assert_eq!(app.on_action(Action::Prefix(']')), vec![Cmd::ScrollToHeading(0)]);
+        assert_eq!(
+            app.on_action(Action::Prefix(']')),
+            vec![Cmd::ScrollToHeading(0)]
+        );
     }
 
     #[test]
@@ -232,7 +258,10 @@ mod tests {
         assert_eq!(app.mode(), Mode::Search);
         app.on_action(Action::SearchChar('f'));
         app.on_action(Action::SearchChar('o'));
-        assert_eq!(app.on_action(Action::SearchConfirm), vec![Cmd::Search("fo".into())]);
+        assert_eq!(
+            app.on_action(Action::SearchConfirm),
+            vec![Cmd::Search("fo".into())]
+        );
         assert_eq!(app.mode(), Mode::Normal);
     }
 
@@ -243,7 +272,10 @@ mod tests {
         app.on_action(Action::EnterSearch);
         app.on_action(Action::SearchChar('x'));
         app.on_action(Action::SearchConfirm);
-        assert_eq!(app.on_action(Action::SearchNext), vec![Cmd::SearchNav(SearchDir::Next)]);
+        assert_eq!(
+            app.on_action(Action::SearchNext),
+            vec![Cmd::SearchNav(SearchDir::Next)]
+        );
     }
 
     #[test]
@@ -263,7 +295,10 @@ mod tests {
         assert!(app.outline_open());
         app.on_action(Action::OutlineMoveDown);
         app.on_action(Action::OutlineMoveDown);
-        assert_eq!(app.on_action(Action::OutlineConfirm), vec![Cmd::ScrollToHeading(2)]);
+        assert_eq!(
+            app.on_action(Action::OutlineConfirm),
+            vec![Cmd::ScrollToHeading(2)]
+        );
     }
 
     #[test]

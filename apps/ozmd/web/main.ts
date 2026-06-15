@@ -120,4 +120,7 @@ ozma.on('clearSearch', () => {
 
 window.addEventListener('scroll', reportScrollState, { passive: true });
 
-void ozma.call<ContentPayload>('ready').then((doc) => setContent(doc)).catch(console.error);
+void ozma
+  .call<ContentPayload>('ready')
+  .then((doc) => setContent(doc))
+  .catch(console.error);

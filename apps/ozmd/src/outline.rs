@@ -61,9 +61,18 @@ mod tests {
         assert_eq!(
             parse(md),
             vec![
-                Heading { level: 1, text: "Title".into() },
-                Heading { level: 2, text: "Setup".into() },
-                Heading { level: 3, text: "Deep".into() },
+                Heading {
+                    level: 1,
+                    text: "Title".into()
+                },
+                Heading {
+                    level: 2,
+                    text: "Setup".into()
+                },
+                Heading {
+                    level: 3,
+                    text: "Deep".into()
+                },
             ]
         );
     }
@@ -71,7 +80,13 @@ mod tests {
     #[test]
     fn strips_inline_markup_but_keeps_code_text() {
         let md = "# Hello `world` and **bold**\n";
-        assert_eq!(parse(md), vec![Heading { level: 1, text: "Hello world and bold".into() }]);
+        assert_eq!(
+            parse(md),
+            vec![Heading {
+                level: 1,
+                text: "Hello world and bold".into()
+            }]
+        );
     }
 
     #[test]
@@ -80,8 +95,14 @@ mod tests {
         assert_eq!(
             parse(md),
             vec![
-                Heading { level: 1, text: "Real".into() },
-                Heading { level: 2, text: "Also real".into() },
+                Heading {
+                    level: 1,
+                    text: "Real".into()
+                },
+                Heading {
+                    level: 2,
+                    text: "Also real".into()
+                },
             ]
         );
     }

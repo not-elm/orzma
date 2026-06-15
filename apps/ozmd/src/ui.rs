@@ -3,11 +3,11 @@
 use crate::app::App;
 use crate::keymap::Mode;
 use crate::protocol::SearchCount;
+use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use ratatui::Frame;
 use ratatui_ozma::{FramePlacements, WebviewWidget};
 
 /// Whether live-reload is currently healthy.

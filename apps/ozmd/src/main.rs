@@ -10,16 +10,16 @@ mod ui;
 mod watcher;
 
 use crate::app::{App, Cmd};
-use crate::protocol::{Content, Scroll, Search, SearchCount, SearchNav, ScrollState};
+use crate::protocol::{Content, Scroll, ScrollState, Search, SearchCount, SearchNav};
 use crate::ui::LiveStatus;
 use crossbeam_channel::{Receiver, Sender};
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::Terminal;
 use ratatui_ozma::{Ozma, OzmaBackend, RpcError, Webview, WebviewHandle};
 use std::io::stdout;
 use std::path::Path;
@@ -44,12 +44,14 @@ fn run() -> anyhow::Result<()> {
     let arg = std::env::args()
         .nth(1)
         .ok_or_else(|| anyhow::anyhow!("usage: ozmd <markdown-file>"))?;
-    let path = document::resolve_path(&arg).map_err(|e| anyhow::anyhow!("cannot open {arg}: {e}"))?;
+    let path =
+        document::resolve_path(&arg).map_err(|e| anyhow::anyhow!("cannot open {arg}: {e}"))?;
 
     let doc = document::load(&path)?;
     let shared = Arc::new(Mutex::new(doc));
 
-    let ozma = Ozma::connect().map_err(|e| anyhow::anyhow!("{e}. Run ozmd inside an ozmux pane."))?;
+    let ozma =
+        Ozma::connect().map_err(|e| anyhow::anyhow!("{e}. Run ozmd inside an ozmux pane."))?;
 
     let asset_dir = assets::materialize()?;
 
@@ -92,14 +94,20 @@ fn register_view(
                     base_dir: doc.base_dir.display().to_string(),
                 })
             })
-            .on("searchCount", move |c: SearchCount| -> Result<(), RpcError> {
-                let _ = count_tx.send(PageMsg::SearchCount(c));
-                Ok(())
-            })
-            .on("scrollState", move |s: ScrollState| -> Result<(), RpcError> {
-                let _ = state_tx.send(PageMsg::ScrollState(s));
-                Ok(())
-            }),
+            .on(
+                "searchCount",
+                move |c: SearchCount| -> Result<(), RpcError> {
+                    let _ = count_tx.send(PageMsg::SearchCount(c));
+                    Ok(())
+                },
+            )
+            .on(
+                "scrollState",
+                move |s: ScrollState| -> Result<(), RpcError> {
+                    let _ = state_tx.send(PageMsg::ScrollState(s));
+                    Ok(())
+                },
+            ),
     )?;
     Ok(view)
 }
@@ -148,7 +156,7 @@ fn event_loop(
         terminal.draw(|f| {
             ui::draw(
                 f,
-                &mut *ozma.frame(),
+                &mut ozma.frame(),
                 &state,
                 view.id(),
                 &file_name,
@@ -172,7 +180,8 @@ fn event_loop(
                         let _ = view.emit("scroll", &Scroll { action });
                     }
                     Cmd::ScrollToHeading(index) => {
-                        let _ = view.emit("scrollToHeading", &serde_json::json!({ "index": index }));
+                        let _ =
+                            view.emit("scrollToHeading", &serde_json::json!({ "index": index }));
                     }
                     Cmd::Search(query) => {
                         let _ = view.emit("search", &Search { query });
@@ -224,7 +233,9 @@ fn apply_reload(
         base_dir: doc.base_dir.display().to_string(),
     };
     {
-        let mut guard = shared.lock().map_err(|_| anyhow::anyhow!("state poisoned"))?;
+        let mut guard = shared
+            .lock()
+            .map_err(|_| anyhow::anyhow!("state poisoned"))?;
         *guard = doc;
     }
     let _ = view.emit("content", &content);

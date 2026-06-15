@@ -87,7 +87,9 @@ export class Search {
   }
 
   private focusCurrent(): void {
-    this.marks.forEach((m, i) => m.classList.toggle('ozmd-current', i === this.index));
+    for (let i = 0; i < this.marks.length; i++) {
+      this.marks[i].classList.toggle('ozmd-current', i === this.index);
+    }
     const current = this.marks[this.index];
     if (current?.scrollIntoView) {
       current.scrollIntoView({ block: 'center' });

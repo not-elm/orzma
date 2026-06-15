@@ -137,17 +137,47 @@ mod tests {
     #[test]
     fn search_mode_typing() {
         assert_eq!(map(Mode::Search, key('a')), Action::SearchChar('a'));
-        assert_eq!(map(Mode::Search, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Action::SearchConfirm);
-        assert_eq!(map(Mode::Search, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)), Action::SearchBackspace);
-        assert_eq!(map(Mode::Search, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)), Action::Escape);
+        assert_eq!(
+            map(
+                Mode::Search,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            ),
+            Action::SearchConfirm
+        );
+        assert_eq!(
+            map(
+                Mode::Search,
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+            ),
+            Action::SearchBackspace
+        );
+        assert_eq!(
+            map(
+                Mode::Search,
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+            ),
+            Action::Escape
+        );
     }
 
     #[test]
     fn outline_mode_navigation() {
         assert_eq!(map(Mode::Outline, key('j')), Action::OutlineMoveDown);
         assert_eq!(map(Mode::Outline, key('k')), Action::OutlineMoveUp);
-        assert_eq!(map(Mode::Outline, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Action::OutlineConfirm);
+        assert_eq!(
+            map(
+                Mode::Outline,
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+            ),
+            Action::OutlineConfirm
+        );
         assert_eq!(map(Mode::Outline, key('o')), Action::ToggleOutline);
-        assert_eq!(map(Mode::Outline, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)), Action::Escape);
+        assert_eq!(
+            map(
+                Mode::Outline,
+                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
+            ),
+            Action::Escape
+        );
     }
 }

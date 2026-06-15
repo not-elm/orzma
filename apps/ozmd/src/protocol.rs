@@ -83,19 +83,32 @@ mod tests {
 
     #[test]
     fn scroll_action_is_camel_case() {
-        assert_eq!(serde_json::to_value(ScrollAction::HalfDown).unwrap(), json!("halfDown"));
-        assert_eq!(serde_json::to_value(ScrollAction::Top).unwrap(), json!("top"));
+        assert_eq!(
+            serde_json::to_value(ScrollAction::HalfDown).unwrap(),
+            json!("halfDown")
+        );
+        assert_eq!(
+            serde_json::to_value(ScrollAction::Top).unwrap(),
+            json!("top")
+        );
     }
 
     #[test]
     fn content_renames_base_dir() {
-        let c = Content { markdown: "# x".into(), base_dir: "/tmp".into() };
-        assert_eq!(serde_json::to_value(&c).unwrap(), json!({"markdown": "# x", "baseDir": "/tmp"}));
+        let c = Content {
+            markdown: "# x".into(),
+            base_dir: "/tmp".into(),
+        };
+        assert_eq!(
+            serde_json::to_value(&c).unwrap(),
+            json!({"markdown": "# x", "baseDir": "/tmp"})
+        );
     }
 
     #[test]
     fn scroll_state_reads_camel_case_and_null_index() {
-        let s: ScrollState = serde_json::from_value(json!({"ratio": 0.5, "currentHeadingIndex": null})).unwrap();
+        let s: ScrollState =
+            serde_json::from_value(json!({"ratio": 0.5, "currentHeadingIndex": null})).unwrap();
         assert_eq!(s.ratio, 0.5);
         assert_eq!(s.current_heading_index, None);
     }
@@ -103,6 +116,12 @@ mod tests {
     #[test]
     fn search_count_reads_camel_case() {
         let s: SearchCount = serde_json::from_value(json!({"total": 12, "current": 3})).unwrap();
-        assert_eq!(s, SearchCount { total: 12, current: 3 });
+        assert_eq!(
+            s,
+            SearchCount {
+                total: 12,
+                current: 3
+            }
+        );
     }
 }

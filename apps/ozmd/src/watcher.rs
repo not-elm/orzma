@@ -2,11 +2,11 @@
 //! atomic save = write-temp-then-rename is caught) and sends a reload signal on
 //! the channel whenever an event references the target path.
 
+use notify_debouncer_full::notify::{RecursiveMode, Watcher};
+use notify_debouncer_full::{DebounceEventResult, Debouncer, FileIdMap, new_debouncer};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
-use notify_debouncer_full::notify::{RecursiveMode, Watcher};
-use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, FileIdMap};
 
 /// A live watcher; dropping it stops the background thread.
 pub(crate) struct FileWatcher {
@@ -29,10 +29,10 @@ pub(crate) fn watch(path: &Path, tx: Sender<()>) -> anyhow::Result<FileWatcher> 
         Duration::from_millis(150),
         None,
         move |res: DebounceEventResult| {
-            if let Ok(events) = res {
-                if events.iter().any(|e| e.paths.iter().any(|p| p == &target)) {
-                    let _ = tx.send(());
-                }
+            if let Ok(events) = res
+                && events.iter().any(|e| e.paths.iter().any(|p| p == &target))
+            {
+                let _ = tx.send(());
             }
         },
     )?;

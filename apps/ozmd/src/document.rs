@@ -29,7 +29,11 @@ impl Document {
     /// parsing the outline from `text`.
     fn from_source(text: String, base_dir: PathBuf) -> Self {
         let outline = outline::parse(&text);
-        Self { text, base_dir, outline }
+        Self {
+            text,
+            base_dir,
+            outline,
+        }
     }
 }
 
@@ -40,7 +44,10 @@ impl Document {
 pub(crate) fn resolve_path(arg: &str) -> io::Result<PathBuf> {
     let path = fs::canonicalize(arg)?;
     if !path.is_file() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
     }
     Ok(path)
 }
@@ -55,7 +62,10 @@ pub(crate) fn load(path: &Path) -> io::Result<Document> {
 /// Reads the change fingerprint (length + mtime) for `path`.
 pub(crate) fn fingerprint(path: &Path) -> io::Result<Fingerprint> {
     let meta = fs::metadata(path)?;
-    Ok(Fingerprint { len: meta.len(), mtime: meta.modified().ok() })
+    Ok(Fingerprint {
+        len: meta.len(),
+        mtime: meta.modified().ok(),
+    })
 }
 
 #[cfg(test)]
