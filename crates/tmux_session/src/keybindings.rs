@@ -743,4 +743,32 @@ mod tests {
         )]);
         assert!(matches!(copy_mode_dispatch(&kb, "*"), CopyAction::Relay(_)));
     }
+
+    #[test]
+    fn copy_selection_without_cancel_keeps_mode_open() {
+        let kb = vi_bindings(&[("Enter", "send-keys -X copy-selection")]);
+        match copy_mode_dispatch(&kb, "Enter") {
+            CopyAction::Copy {
+                pipes, and_cancel, ..
+            } => {
+                assert!(!pipes);
+                assert!(!and_cancel);
+            }
+            other => panic!("expected Copy, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_prompt_search_backward_is_prompt() {
+        let kb = vi_bindings(&[(
+            "?",
+            r#"command-prompt -T search -p "(search up)" { send-keys -X search-backward "%%%" }"#,
+        )]);
+        assert!(matches!(
+            copy_mode_dispatch(&kb, "?"),
+            CopyAction::Prompt {
+                kind: PromptKind::SearchBackward
+            }
+        ));
+    }
 }
