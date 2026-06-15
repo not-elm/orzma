@@ -4,6 +4,7 @@
 use crate::error::{TmuxError, TmuxResult};
 use std::collections::VecDeque;
 use tmux_control_parser::{BlockAssembler, ControlEvent, Frame};
+use tracing::warn;
 
 // NOTE: `tmux -CC` wraps its entire control stream in a DCS sequence —
 // `ESC P 1000 p` … `ESC \`. The introducer is glued to the first `%begin`, so
@@ -130,7 +131,23 @@ impl ProtocolClient {
             // A blank/whitespace-only line only errors outside a block; inside a
             // block the assembler keeps it as body. Treat it as a no-op here.
             Err(tmux_control_parser::TmuxError::Empty) => return Ok(None),
-            Err(e) => return Err(e.into()),
+            // NOTE: a stray %end/%error outside a block means the stream is
+            // desynchronised — propagate as fatal so the transport closes cleanly.
+            Err(e @ tmux_control_parser::TmuxError::UnexpectedEnd { .. }) => {
+                return Err(e.into());
+            }
+            // NOTE: any other error is a parse failure on a standalone notification
+            // line (e.g. a %layout-change format from an older tmux version that
+            // the parser does not recognise). Closing the transport over a single
+            // bad notification line would blank all panes; warn and skip instead.
+            Err(e) => {
+                warn!(
+                    line = ?String::from_utf8_lossy(line),
+                    error = %e,
+                    "skipping malformed tmux notification; transport remains open"
+                );
+                return Ok(None);
+            }
         };
         match frame {
             Some(Frame::Reply { number, ok, body }) => {
@@ -559,9 +576,20 @@ mod tests {
     }
 
     #[test]
-    fn malformed_line_outside_block_errors() {
+    fn malformed_line_outside_block_is_skipped() {
+        // A line outside a block that fails to parse as a control event is
+        // skipped with a warning rather than closing the transport. This
+        // prevents a single malformed notification from blanking all panes.
         let mut c = ProtocolClient::new();
-        let err = c.feed(b"hello world\n").unwrap_err();
+        let events = c.feed(b"hello world\n").unwrap();
+        assert!(events.is_empty(), "malformed notification is silently skipped");
+    }
+
+    #[test]
+    fn stray_end_outside_block_is_still_fatal() {
+        // A stray %end/%error outside a block is a stream desync — fatal.
+        let mut c = ProtocolClient::new();
+        let err = c.feed(b"%end 1 4 0\n").unwrap_err();
         assert!(matches!(err, TmuxError::Parse(_)));
     }
 
