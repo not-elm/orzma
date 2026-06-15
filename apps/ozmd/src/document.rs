@@ -8,18 +8,18 @@ use std::time::SystemTime;
 
 /// A loaded Markdown document and its derived outline.
 #[derive(Debug, Clone)]
-pub struct Document {
+pub(crate) struct Document {
     /// Raw Markdown source.
-    pub text: String,
+    pub(crate) text: String,
     /// Absolute parent directory of the source file.
-    pub base_dir: PathBuf,
+    pub(crate) base_dir: PathBuf,
     /// Headings parsed from `text`, in document order.
-    pub outline: Vec<Heading>,
+    pub(crate) outline: Vec<Heading>,
 }
 
 /// A cheap change fingerprint: file length plus mtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Fingerprint {
+pub(crate) struct Fingerprint {
     len: u64,
     mtime: Option<SystemTime>,
 }
@@ -27,7 +27,7 @@ pub struct Fingerprint {
 impl Document {
     /// Builds a document from source text and the file's parent directory,
     /// parsing the outline from `text`.
-    pub fn from_source(text: String, base_dir: PathBuf) -> Self {
+    fn from_source(text: String, base_dir: PathBuf) -> Self {
         let outline = outline::parse(&text);
         Self { text, base_dir, outline }
     }
@@ -37,7 +37,7 @@ impl Document {
 ///
 /// # Errors
 /// Returns an error if the path does not exist or is not a regular file.
-pub fn resolve_path(arg: &str) -> io::Result<PathBuf> {
+pub(crate) fn resolve_path(arg: &str) -> io::Result<PathBuf> {
     let path = fs::canonicalize(arg)?;
     if !path.is_file() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "not a regular file"));
@@ -46,14 +46,14 @@ pub fn resolve_path(arg: &str) -> io::Result<PathBuf> {
 }
 
 /// Reads and parses the Markdown file at `path` into a [`Document`].
-pub fn load(path: &Path) -> io::Result<Document> {
+pub(crate) fn load(path: &Path) -> io::Result<Document> {
     let text = fs::read_to_string(path)?;
     let base_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     Ok(Document::from_source(text, base_dir))
 }
 
 /// Reads the change fingerprint (length + mtime) for `path`.
-pub fn fingerprint(path: &Path) -> io::Result<Fingerprint> {
+pub(crate) fn fingerprint(path: &Path) -> io::Result<Fingerprint> {
     let meta = fs::metadata(path)?;
     Ok(Fingerprint { len: meta.len(), mtime: meta.modified().ok() })
 }

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// A scroll command sent to the page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum ScrollAction {
+pub(crate) enum ScrollAction {
     Down,
     Up,
     HalfDown,
@@ -20,7 +20,7 @@ pub enum ScrollAction {
 /// A search-navigation direction sent to the page.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub enum SearchDir {
+pub(crate) enum SearchDir {
     Next,
     Prev,
 }
@@ -28,31 +28,31 @@ pub enum SearchDir {
 /// The full document content pushed to the page (and returned from `ready`).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct Content {
+pub(crate) struct Content {
     /// Raw Markdown source.
-    pub markdown: String,
+    pub(crate) markdown: String,
     /// Absolute parent directory (string form) of the source file.
-    pub base_dir: String,
+    pub(crate) base_dir: String,
 }
 
 /// Search-result counts the page reports back (`searchCount` call).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SearchCount {
+pub(crate) struct SearchCount {
     /// Total matches in the document.
-    pub total: usize,
+    pub(crate) total: usize,
     /// 1-based index of the current match (0 when none).
-    pub current: usize,
+    pub(crate) current: usize,
 }
 
 /// Viewport state the page reports back (`scrollState` call).
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ScrollState {
+pub(crate) struct ScrollState {
     /// Vertical scroll position as a 0.0..=1.0 ratio.
-    pub ratio: f64,
+    pub(crate) ratio: f64,
     /// Index of the `id="h{n}"` anchor nearest the top, or `None`.
-    pub current_heading_index: Option<usize>,
+    pub(crate) current_heading_index: Option<usize>,
 }
 
 #[cfg(test)]

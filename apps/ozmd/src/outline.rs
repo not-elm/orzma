@@ -4,11 +4,11 @@ use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
 
 /// A single heading in the document outline.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Heading {
+pub(crate) struct Heading {
     /// Heading level, 1..=6.
-    pub level: u8,
+    pub(crate) level: u8,
     /// Plain-text content of the heading (inline markup stripped).
-    pub text: String,
+    pub(crate) text: String,
 }
 
 /// Parses the Markdown source into an ordered list of headings.
@@ -16,7 +16,7 @@ pub struct Heading {
 /// Enumerates only Markdown headings (ATX/Setext) in document order; raw-HTML
 /// `<h2>` blocks are not counted, so the indices line up one-to-one with the
 /// `id="h{n}"` anchors the renderer page injects.
-pub fn parse(source: &str) -> Vec<Heading> {
+pub(crate) fn parse(source: &str) -> Vec<Heading> {
     let mut headings = Vec::new();
     let mut current: Option<(u8, String)> = None;
     for event in Parser::new(source) {
