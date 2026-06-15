@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 tmux_control_parser = { path = "../tmux_control_parser/" }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 crossbeam-channel = "0.5"
 portable-pty = { workspace = true }
 

@@ -34,11 +34,15 @@ pub(crate) mod tab_input;
 pub(crate) mod tab_label;
 pub mod terminal;
 pub(crate) mod tmux_dialog;
+pub(crate) mod tmux_pane_focus;
+pub(crate) mod tmux_window_bar;
+pub(crate) mod tmux_window_bar_input;
 pub mod workspace;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
 /// never despawned. Hosts `WorkspaceUiRoot` (the attachment point for the
-/// active workspace) and `StatusBarRoot` as direct children.
+/// active workspace), the tmux window status bar (`WindowBarRoot`), and —
+/// in non-tmux mode — the legacy `StatusBarRoot`, as direct children.
 #[derive(Component)]
 pub struct UiRoot;
 
@@ -107,7 +111,8 @@ impl Plugin for OzmuxUiPlugin {
             ))
             .add_systems(
                 Update,
-                status_bar_sync::rebuild_status_bar_on_workspace_set_change,
+                status_bar_sync::rebuild_status_bar_on_workspace_set_change
+                    .run_if(not(status_bar_sync::tmux_projection_present)),
             );
     }
 }
@@ -115,7 +120,6 @@ impl Plugin for OzmuxUiPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::OzmuxActionPlugin;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
     use bevy::asset::AssetPlugin;
@@ -185,7 +189,6 @@ mod tests {
             .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
-            .add_plugins(OzmuxActionPlugin)
             .add_plugins(OzmuxUiPlugin)
             // NOTE: production no longer seeds a workspace at boot (tmux owns the
             // window now — see `bootstrap.rs`), but these tests exercise the
@@ -795,6 +798,7 @@ mod tests {
     #[test]
     fn status_bar_chips_appear_in_workspace_creation_order_after_cmd_r() {
         use crate::ui::status_bar_sync::StatusBarRoot;
+        use bevy::ecs::system::RunSystemOnce;
 
         let (mut app, _guard) = make_test_app();
         // Two ticks for Startup + first Update so bootstrap settles and
@@ -802,7 +806,8 @@ mod tests {
         app.update();
         app.update();
 
-        // Drive a CMD+R-equivalent NewWorkspace action through its observer.
+        // Mint a second attached workspace directly (tmux owns this in
+        // production now); the status bar reacts to the resulting ECS state.
         let attached = app
             .world_mut()
             .query_filtered::<Entity, (
@@ -810,11 +815,15 @@ mod tests {
                 With<AttachedWorkspace>,
             )>()
             .single(app.world())
-            .expect("one attached workspace before CMD+R");
+            .expect("one attached workspace before second workspace");
         app.world_mut()
-            .trigger(crate::action::workspace::NewWorkspaceActionEvent {
-                workspace: attached,
-            });
+            .entity_mut(attached)
+            .remove::<AttachedWorkspace>();
+        app.world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.spawn_attached_workspace();
+            })
+            .unwrap();
         // One tick for commands to flush + status bar rebuild to enqueue,
         // one for rebuild's commands to flush.
         app.update();

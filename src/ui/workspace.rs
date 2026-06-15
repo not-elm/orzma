@@ -79,7 +79,7 @@ fn sync_active_workspace(
 
 /// Inactive-terminal brightness multiplier from config: `inactive_pane.dim`
 /// when dimming is enabled, else `1.0` (disabled or absent config = no dim).
-fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
+pub(crate) fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
     match configs {
         Some(cfg) if cfg.inactive_pane.enabled => cfg.inactive_pane.dim,
         _ => 1.0,
@@ -159,7 +159,6 @@ fn sync_terminal_dim_on_mount(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::OzmuxActionPlugin;
     use crate::bootstrap::OzmuxBootstrapPlugin;
     use crate::configs::OzmuxConfigsPlugin;
     use crate::ui::OzmuxUiPlugin;
@@ -353,7 +352,6 @@ mod tests {
             .add_plugins(MultiplexerPlugin)
             .add_plugins(OzmuxConfigsPlugin)
             .add_plugins(OzmuxBootstrapPlugin)
-            .add_plugins(OzmuxActionPlugin)
             .add_plugins(OzmuxUiPlugin)
             // NOTE: production no longer seeds a workspace at boot (tmux owns the
             // window now — see `bootstrap.rs`), but these tests exercise the
@@ -557,6 +555,7 @@ mod tests {
 
     #[test]
     fn new_workspace_action_reparents_new_subtree_to_workspace_ui_root() {
+        use bevy::ecs::system::RunSystemOnce;
         let (mut app, _guard) = make_test_app_v2();
         // Two ticks for Startup + first Update so bootstrap settles and
         // sync_active_workspace runs at least once in PostUpdate.
@@ -587,10 +586,16 @@ mod tests {
             "bootstrap subtree must start under WorkspaceUiRoot",
         );
 
+        // Mint a second attached workspace directly (tmux owns this in
+        // production now); the UI reacts to the resulting ECS state.
         app.world_mut()
-            .trigger(crate::action::workspace::NewWorkspaceActionEvent {
-                workspace: bootstrap_workspace,
-            });
+            .entity_mut(bootstrap_workspace)
+            .remove::<AttachedWorkspace>();
+        app.world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                mux.spawn_attached_workspace();
+            })
+            .unwrap();
         // One tick for commands to flush + chrome to build, one for
         // PostUpdate sync_active_workspace to react.
         app.update();

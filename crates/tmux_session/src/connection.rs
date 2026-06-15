@@ -11,6 +11,7 @@ use tmux_control::TmuxClient;
 #[derive(Default)]
 pub struct TmuxConnection {
     client: Option<TmuxClient>,
+    client_name: Option<String>,
 }
 
 impl TmuxConnection {
@@ -25,7 +26,21 @@ impl TmuxConnection {
     }
 
     /// Removes and returns the live client, leaving the connection empty.
+    ///
+    /// Also clears the cached client name so a fresh reconnect re-queries it.
     pub fn take(&mut self) -> Option<TmuxClient> {
+        self.client_name = None;
         self.client.take()
+    }
+
+    /// Returns the control client's name as reported by tmux, or `None` if the
+    /// name query has not yet completed.
+    pub fn client_name(&self) -> Option<&str> {
+        self.client_name.as_deref()
+    }
+
+    /// Caches the control client name returned by the `display-message` query.
+    pub(crate) fn set_client_name(&mut self, name: String) {
+        self.client_name = Some(name);
     }
 }

@@ -19,12 +19,12 @@ impl Plugin for TabInteractionPlugin {
             Update,
             (
                 // NOTE: drive_tab_clicks mutates `Workspace::active_pane`, which
-                // dispatch_focused_key (InputPhase::FocusedKey) reads to route
-                // keystrokes, and which the chrome-rebuild / dim systems (run
-                // after OzmuxSystems::Input) react to. It MUST live in
-                // InputPhase::Dispatch so that focus change is visible the same
-                // frame — see the OzmuxSystems::Input invariant in system_set.rs
-                // and the matching placement of dispatch_mouse_buttons.
+                // InputPhase::FocusedKey (keyboard forwarding, phase-3b) will
+                // read to route keystrokes, and which the chrome-rebuild / dim
+                // systems (run after OzmuxSystems::Input) react to. It MUST live
+                // in InputPhase::Dispatch so that the focus change is visible the
+                // same frame — see the OzmuxSystems::Input invariant in
+                // system_set.rs and the matching placement of dispatch_mouse_buttons.
                 drive_tab_clicks.in_set(InputPhase::Dispatch),
                 tab_hover_cursor.after(InputPhase::Hover),
             ),

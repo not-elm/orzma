@@ -12,8 +12,8 @@ use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
-    PaneOutput, TmuxConnection, TmuxPane, TmuxProjection, TmuxProjectionSet, TmuxWindow,
-    refresh_client_command,
+    ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
+    refresh_client_command, send_bytes_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -36,7 +36,7 @@ impl Plugin for OzmuxTmuxRenderPlugin {
             (
                 attach_tmux_window_container,
                 attach_tmux_pane_terminal,
-                route_tmux_output,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
                 sync_active_window,
                 layout_tmux_panes,
             )
@@ -58,6 +58,7 @@ fn attach_tmux_window_container(
     for window in windows.iter() {
         commands.entity(window).insert((
             Node {
+                display: Display::Flex,
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
                 height: Val::Percent(100.0),
@@ -72,7 +73,8 @@ fn attach_tmux_window_container(
 /// placeholder absolute `Node` to each `TmuxPane` that lacks a
 /// `TerminalHandle`. Runs every frame but targets each pane exactly once.
 /// The grid is sized from the pane's projected `dims`. `ChildOf` is NOT set
-/// here — `reconcile` already establishes the correct `ChildOf(window)` parent.
+/// here — the projection observers already establish the correct
+/// `ChildOf(window)` parent.
 /// `layout_tmux_panes` sets the real rect every frame.
 fn attach_tmux_pane_terminal(
     mut commands: Commands,
@@ -94,14 +96,18 @@ fn attach_tmux_pane_terminal(
     }
 }
 
+const REPLY_CHUNK_BYTES: usize = 256;
+
 /// Routes tmux `%output` into each pane's handle. Groups a frame's
 /// `PaneOutput` messages by pane, advances all of a pane's bytes, then emits
-/// once per pane (immediate emit, coalesced per pane).
+/// once per pane (immediate emit, coalesced per pane). Drained terminal replies
+/// (DSR/DA answers) are forwarded back to the owning pane via `send-keys -H`.
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
     mut handles: Query<&mut TerminalHandle>,
-    index: Res<TmuxProjection>,
+    panes: Query<(Entity, &TmuxPane)>,
+    connection: NonSend<TmuxConnection>,
 ) {
     let mut by_pane: HashMap<_, Vec<u8>> = HashMap::new();
     for msg in reader.read() {
@@ -110,8 +116,9 @@ fn route_tmux_output(
             .or_default()
             .extend_from_slice(&msg.data);
     }
+    let entity_of: HashMap<_, _> = panes.iter().map(|(e, p)| (p.id, e)).collect();
     for (pane, data) in by_pane {
-        let Some(&entity) = index.panes.get(&pane) else {
+        let Some(&entity) = entity_of.get(&pane) else {
             continue;
         };
         let Ok(mut handle) = handles.get_mut(entity) else {
@@ -119,11 +126,21 @@ fn route_tmux_output(
         };
         handle.advance(&data);
         handle.flush_emit(&mut commands, entity);
-        // TODO: Phase 3 — forward these DSR/DA answers to tmux as pane input.
-        // For now drain-and-drop: `detached` uses an unbounded reply channel,
-        // so a program that probes capabilities (DSR/DA) every prompt would
-        // otherwise grow it without bound for the pane's lifetime.
-        let _ = handle.take_replies();
+        let replies = handle.take_replies();
+        if replies.is_empty() {
+            continue;
+        }
+        let Some(client) = connection.client() else {
+            continue;
+        };
+        let target = format!("%{}", pane.0);
+        for chunk in replies.chunks(REPLY_CHUNK_BYTES) {
+            let cmd = send_bytes_command(&target, chunk);
+            if let Err(e) = client.handle().send(&cmd) {
+                tracing::warn!(?e, pane = pane.0, "reply forward send failed");
+                break;
+            }
+        }
     }
 }
 
@@ -203,6 +220,14 @@ fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
     (cols, rows)
 }
 
+fn rows_for_panes(total_rows: u16) -> u16 {
+    total_rows.saturating_sub(1).max(1)
+}
+
+/// Sends `refresh-client -C <cols>,<rows>` to tmux so it lays out panes for
+/// the current window size. One row is reserved for the ozmux window status
+/// bar via [`rows_for_panes`], since tmux `-CC` does not reserve a status row.
+/// Results are deduped via [`LastClientSize`].
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
     connection: NonSend<TmuxConnection>,
@@ -223,6 +248,7 @@ fn sync_client_size(
         cell_w,
         cell_h,
     );
+    let rows = rows_for_panes(rows);
     if (cols, rows) == (last.cols, last.rows) {
         return;
     }
@@ -238,13 +264,9 @@ fn sync_client_size(
     }
 }
 
-fn sync_active_window(mut windows: Query<(&TmuxWindow, &mut Node)>) {
-    for (w, mut node) in windows.iter_mut() {
-        let want = if w.active {
-            Display::Flex
-        } else {
-            Display::None
-        };
+fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<TmuxWindow>>) {
+    for (mut node, active) in windows.iter_mut() {
+        let want = if active { Display::Flex } else { Display::None };
         if node.display != want {
             node.display = want;
         }
@@ -257,6 +279,13 @@ mod tests {
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
     use tmux_control_parser::{CellDims, PaneId};
+
+    #[test]
+    fn rows_for_panes_reserves_one_row_for_the_bar() {
+        assert_eq!(rows_for_panes(24), 23);
+        assert_eq!(rows_for_panes(1), 1); // never zero
+        assert_eq!(rows_for_panes(2), 1);
+    }
 
     #[test]
     fn cells_for_divides_and_floors() {
@@ -295,10 +324,9 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
-        app.init_resource::<TmuxProjection>();
         app.add_message::<PaneOutput>();
+        app.insert_non_send_resource(TmuxConnection::default());
 
-        // A projected pane entity + its index mapping.
         let pane_id = PaneId(1);
         let pane_entity = app
             .world_mut()
@@ -307,14 +335,14 @@ mod tests {
                 dims: dims(),
             })
             .id();
-        app.world_mut()
-            .resource_mut::<TmuxProjection>()
-            .panes
-            .insert(pane_id, pane_entity);
 
         app.add_systems(
             Update,
-            (attach_tmux_pane_terminal, route_tmux_output).chain(),
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
         );
 
         // Frame 1: attach the handle (no output yet).

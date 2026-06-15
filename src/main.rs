@@ -1,6 +1,5 @@
 //! ozmux Bevy GUI entry point.
 
-mod action;
 mod bootstrap;
 mod clipboard;
 mod configs;
@@ -12,12 +11,12 @@ mod multiplexer;
 mod osc_webview;
 mod system_set;
 mod theme;
+mod tmux_input;
 mod tmux_picker;
 mod tmux_render;
 mod ui;
 mod webview_render;
 
-use crate::action::OzmuxActionPlugin;
 use crate::clipboard::ClipboardActionPlugin;
 use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
@@ -38,10 +37,13 @@ use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
 use ozmux_webview_host::DynAssetRegistry;
+use tmux_input::OzmuxTmuxInputPlugin;
 use tmux_picker::OzmuxTmuxPickerPlugin;
 use tmux_render::OzmuxTmuxRenderPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::tmux_dialog::TmuxDialogPlugin;
+use ui::tmux_pane_focus::OzmuxTmuxPaneFocusPlugin;
+use ui::tmux_window_bar::OzmuxTmuxWindowBarPlugin;
 use ui::{
     OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
     tab_input::TabInteractionPlugin,
@@ -81,6 +83,9 @@ fn main() {
         .add_plugins(TabInteractionPlugin)
         .add_plugins(TmuxDialogPlugin)
         .add_plugins(OzmuxTmuxRenderPlugin)
+        .add_plugins(OzmuxTmuxInputPlugin)
+        .add_plugins(OzmuxTmuxWindowBarPlugin)
+        .add_plugins(OzmuxTmuxPaneFocusPlugin)
         .add_plugins((
             MouseWheelInputPlugin,
             MouseButtonsInputPlugin,
@@ -90,7 +95,6 @@ fn main() {
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),
-            OzmuxActionPlugin,
         ))
         .run();
 }

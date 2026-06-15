@@ -4,7 +4,7 @@
 //! Run with: `cargo test -p ozmux_tmux --test real_tmux_enumeration -- --ignored`.
 
 use bevy::prelude::*;
-use ozmux_tmux::{ProjectionModel, TmuxConnection, TmuxSessionPlugin};
+use ozmux_tmux::{TmuxConnection, TmuxPane, TmuxSessionPlugin, TmuxWindow};
 use std::time::{Duration, Instant};
 use tmux_control::TmuxServer;
 
@@ -29,8 +29,19 @@ fn enumeration_populates_existing_windows_with_panes() {
     let mut ready = false;
     while Instant::now() < deadline {
         app.update();
-        let model = app.world().resource::<ProjectionModel>();
-        if model.windows.len() >= 2 && model.windows.iter().all(|w| !w.panes.is_empty()) {
+        let window_entities: Vec<Entity> = app
+            .world_mut()
+            .query_filtered::<Entity, With<TmuxWindow>>()
+            .iter(app.world())
+            .collect();
+        let pane_parents: Vec<Entity> = app
+            .world_mut()
+            .query_filtered::<&ChildOf, With<TmuxPane>>()
+            .iter(app.world())
+            .map(|c| c.parent())
+            .collect();
+        let all_have_panes = window_entities.iter().all(|w| pane_parents.contains(w));
+        if window_entities.len() >= 2 && all_have_panes {
             ready = true;
             break;
         }

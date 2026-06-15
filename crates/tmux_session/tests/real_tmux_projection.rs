@@ -1,9 +1,9 @@
-//! Gated end-to-end test: connect to a real tmux and verify the projection
-//! model populates from the live notification stream.
+//! Gated end-to-end test: connect to a real tmux and verify the projected
+//! window entities populate from the live notification stream.
 //! Run with: `cargo test -p ozmux_tmux --test real_tmux_projection -- --ignored`.
 
 use bevy::prelude::*;
-use ozmux_tmux::{ConnectionState, ProjectionModel, TmuxConnection, TmuxSessionPlugin};
+use ozmux_tmux::{ConnectionState, TmuxConnection, TmuxSessionPlugin, TmuxWindow};
 use std::time::{Duration, Instant};
 use tmux_control::TmuxServer;
 
@@ -25,7 +25,13 @@ fn projection_populates_from_real_tmux() {
     let mut has_window = false;
     while Instant::now() < deadline {
         app.update();
-        if !app.world().resource::<ProjectionModel>().windows.is_empty() {
+        if app
+            .world_mut()
+            .query::<&TmuxWindow>()
+            .iter(app.world())
+            .next()
+            .is_some()
+        {
             has_window = true;
             break;
         }

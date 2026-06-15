@@ -3,20 +3,30 @@
 use bevy::prelude::Component;
 use tmux_control_parser::{CellDims, PaneId, SessionId, WindowId};
 
-/// The projected tmux session entity.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+/// The projected tmux session entity, carrying the session id and name.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct TmuxSession {
     /// tmux session id (`$N`).
     pub id: SessionId,
+    /// Session name, from `%session-changed`. Empty until first known.
+    pub name: String,
 }
+
+/// Marker on the single active pane entity (`%window-pane-changed`).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ActivePane;
+
+/// Marker on the single active window entity (`%window-pane-changed`).
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ActiveWindow;
 
 /// A projected tmux window entity.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct TmuxWindow {
     /// tmux window id (`@N`).
     pub id: WindowId,
-    /// Whether this is the session's active window.
-    pub active: bool,
+    /// tmux display index (#{window_index}).
+    pub index: u32,
     /// Window name.
     pub name: String,
 }
