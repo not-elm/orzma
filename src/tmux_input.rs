@@ -1,6 +1,6 @@
-//! Forwards focused keyboard input to tmux via `send-keys -K`, intercepting a
-//! fixed set of ozmux GUI chords. Replaces the legacy `dispatch_focused_key`
-//! path for the tmux backend.
+//! Forwards focused keyboard input to the active tmux pane via
+//! `send-keys -t <pane>`, intercepting a fixed set of ozmux GUI chords. Replaces
+//! the legacy `dispatch_focused_key` path for the tmux backend.
 
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::tmux_picker::SessionPicker;
@@ -11,7 +11,7 @@ use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozmux_tmux::{
     ActivePane, KeyMods, TmuxConnection, TmuxPane, bevy_key_to_tmux_name, send_bytes_command,
-    send_keys_command,
+    send_pane_keys_command,
 };
 
 /// Registers the tmux keyboard-forwarding system.
@@ -142,11 +142,16 @@ fn forward_keys_to_tmux(
     if names.is_empty() {
         return;
     }
-    let Some(client) = connection.client_name() else {
+    // NOTE: forward straight to the active pane, NOT via `send-keys -K -c
+    // <client>`. Under `tmux -CC`, `-K` mis-encodes named keys (Up arrives as a
+    // literal `n`); sending to the pane lets tmux's pane-input encoder translate
+    // them correctly (respecting the pane's application-cursor mode).
+    let Some(active) = active_pane.as_deref() else {
         return;
     };
+    let target = format!("%{}", active.id.0);
     if let Some(c) = connection.client()
-        && let Err(e) = c.handle().send(&send_keys_command(client, &names))
+        && let Err(e) = c.handle().send(&send_pane_keys_command(&target, &names))
     {
         tracing::warn!(?e, "send-keys forward failed");
     }
