@@ -24,15 +24,22 @@ For the full threat model see
 
 ## Environment variables
 
-ozmux injects these into every PTY when the control plane is running:
+How these reach a pane depends on the multiplexer backend:
 
-| Variable | Contents |
-|---|---|
-| `$OZMA_SOCK` | Absolute path to the control Unix socket |
-| `$OZMA_TOKEN` | Opaque per-surface token (attribution only) |
+| Variable | Contents | Availability |
+|---|---|---|
+| `$OZMA_SOCK` | Absolute path to the control Unix socket | Present in every pane the direct-PTY backend spawns. Under the tmux backend, a pane that forked before ozma set it (a pre-existing session, or any pane opened before attach) does **not** inherit it — recover it with `tmux show-environment OZMA_SOCK` (see below). |
+| `$OZMA_TOKEN` | Opaque per-surface token (attribution only) | Set only by the direct-PTY backend. Under the tmux backend it is unset; use the tmux pane id `$TMUX_PANE` (injected into every pane) as the identity instead. |
 
 Both are absent when the control plane is not up (e.g. during `cargo test`
 builds or when the feature flag is off).
+
+The `ratatui-ozma` SDK does this resolution in `Ozma::connect()`: it reads
+`$OZMA_SOCK`, falling back to `tmux -S <socket> show-environment OZMA_SOCK`
+(deriving `<socket>` from `$TMUX`) so a pre-existing tmux pane still resolves the
+path without a shell-rc hook; and it uses `$OZMA_TOKEN` when set, else
+`$TMUX_PANE`. A program that speaks to the socket directly (without the SDK)
+should do the same.
 
 ## Control protocol (NDJSON)
 
@@ -44,7 +51,7 @@ requests, read one reply per `register`. Unknown `op` values are rejected.
 Send once, before any `register`:
 
 ```json
-{"op":"hello","token":"<$OZMA_TOKEN value>"}
+{"op":"hello","token":"<$OZMA_TOKEN, else $TMUX_PANE>"}
 ```
 
 No reply is sent for `hello`.
