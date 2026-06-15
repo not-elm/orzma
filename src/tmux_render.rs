@@ -4,6 +4,7 @@
 
 use crate::ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
+use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::TerminalHandle;
@@ -18,6 +19,7 @@ use ozmux_tmux::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use tmux_control_parser::{Cell, PaneId, SplitDir};
 
 #[derive(Resource, Default)]
 struct LastClientSize {
@@ -160,6 +162,90 @@ fn pane_rect(
     )
 }
 
+/// Computes packed pixel rects for every pane in a layout tree, collapsing
+/// tmux's reserved 1-cell inter-pane separators to `gap` pixels. Returns the
+/// per-pane rects keyed by tmux pane id, plus the root subtree's packed size.
+fn collapse(root: &Cell, cell_w: f32, cell_h: f32, gap: f32) -> (HashMap<PaneId, Rect>, Vec2) {
+    let mut out = HashMap::new();
+    let size = place(&mut out, root, Vec2::ZERO, cell_w, cell_h, gap);
+    (out, size)
+}
+
+/// Places `cell` at `origin`, recording leaf rects into `out`, and returns the
+/// subtree's packed pixel size. Siblings advance by the returned packed size
+/// (not tmux container dims) so nested separators are never double-counted.
+/// The Floating arm diverges from packing: it ignores `origin` and positions
+/// each child at its absolute tmux `xoff`/`yoff` (popups float over the layout
+/// rather than packing).
+fn place(
+    out: &mut HashMap<PaneId, Rect>,
+    cell: &Cell,
+    origin: Vec2,
+    cell_w: f32,
+    cell_h: f32,
+    gap: f32,
+) -> Vec2 {
+    match cell {
+        Cell::Leaf { dims, pane_id } => {
+            let size = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
+            if let Some(id) = pane_id {
+                let min = origin.round();
+                let max = (origin + size).round();
+                out.insert(PaneId(*id), Rect::from_corners(min, max));
+            }
+            size
+        }
+        Cell::Split {
+            dir: SplitDir::LeftRight,
+            children,
+            ..
+        } => {
+            let mut x = origin.x;
+            let mut max_h = 0.0_f32;
+            let last = children.len().saturating_sub(1);
+            for (i, child) in children.iter().enumerate() {
+                let csz = place(out, child, Vec2::new(x, origin.y), cell_w, cell_h, gap);
+                x += csz.x;
+                max_h = max_h.max(csz.y);
+                if i < last {
+                    x += gap;
+                }
+            }
+            Vec2::new(x - origin.x, max_h)
+        }
+        Cell::Split {
+            dir: SplitDir::TopBottom,
+            children,
+            ..
+        } => {
+            let mut y = origin.y;
+            let mut max_w = 0.0_f32;
+            let last = children.len().saturating_sub(1);
+            for (i, child) in children.iter().enumerate() {
+                let csz = place(out, child, Vec2::new(origin.x, y), cell_w, cell_h, gap);
+                y += csz.y;
+                max_w = max_w.max(csz.x);
+                if i < last {
+                    y += gap;
+                }
+            }
+            Vec2::new(max_w, y - origin.y)
+        }
+        Cell::Split {
+            dir: SplitDir::Floating,
+            children,
+            dims,
+        } => {
+            for child in children {
+                let d = child.dims();
+                let popup_origin = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
+                place(out, child, popup_origin, cell_w, cell_h, gap);
+            }
+            Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h)
+        }
+    }
+}
+
 fn layout_tmux_panes(
     mut commands: Commands,
     mut panes: Query<(
@@ -270,7 +356,7 @@ mod tests {
     use super::*;
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
-    use tmux_control_parser::{CellDims, PaneId};
+    use tmux_control_parser::CellDims;
 
     #[test]
     fn rows_for_panes_reserves_one_row_for_the_bar() {
@@ -662,5 +748,198 @@ mod tests {
             "resize must fire a fresh FrameSnapshot when first_emit is already false \
              (got {hits_after_resize} total, was {hits_after_first} before resize)",
         );
+    }
+
+    #[test]
+    fn collapse_single_pane_fills_with_no_gap() {
+        let root = Cell::Leaf {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            pane_id: Some(0),
+        };
+        let (rects, size) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(
+            rects[&PaneId(0)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 384.0)),
+        );
+        assert_eq!(size, Vec2::new(640.0, 384.0));
+    }
+
+    #[test]
+    fn collapse_horizontal_split_is_one_px_gap() {
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                    pane_id: Some(2),
+                },
+            ],
+        };
+        let (rects, size) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(
+            rects[&PaneId(1)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0)),
+        );
+        assert_eq!(
+            rects[&PaneId(2)],
+            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(633.0, 384.0)),
+        );
+        assert_eq!(size, Vec2::new(633.0, 384.0));
+    }
+
+    #[test]
+    fn collapse_nested_split_advances_by_packed_extent() {
+        // LeftRight[ pane1(40x24), TopBottom[ pane2(39x12), pane3(39x11) ] ]
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                Cell::Split {
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                    dir: SplitDir::TopBottom,
+                    children: vec![
+                        Cell::Leaf {
+                            dims: CellDims {
+                                width: 39,
+                                height: 12,
+                                xoff: 41,
+                                yoff: 0,
+                            },
+                            pane_id: Some(2),
+                        },
+                        Cell::Leaf {
+                            dims: CellDims {
+                                width: 39,
+                                height: 11,
+                                xoff: 41,
+                                yoff: 13,
+                            },
+                            pane_id: Some(3),
+                        },
+                    ],
+                },
+            ],
+        };
+        let (rects, _size) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(
+            rects[&PaneId(1)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0)),
+        );
+        assert_eq!(
+            rects[&PaneId(2)],
+            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(633.0, 192.0)),
+        );
+        assert_eq!(
+            rects[&PaneId(3)],
+            Rect::from_corners(Vec2::new(321.0, 193.0), Vec2::new(633.0, 369.0)),
+        );
+    }
+
+    #[test]
+    fn collapse_skips_leaf_without_pane_id() {
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: None,
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                    pane_id: Some(2),
+                },
+            ],
+        };
+        let (rects, _size) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(rects.len(), 1);
+        assert!(rects.contains_key(&PaneId(2)));
+    }
+
+    #[test]
+    fn collapse_floating_uses_literal_offsets() {
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::Floating,
+            children: vec![Cell::Leaf {
+                dims: CellDims {
+                    width: 10,
+                    height: 5,
+                    xoff: 4,
+                    yoff: 2,
+                },
+                pane_id: Some(7),
+            }],
+        };
+        let (rects, size) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(
+            rects[&PaneId(7)],
+            Rect::from_corners(Vec2::new(32.0, 32.0), Vec2::new(112.0, 112.0)),
+        );
+        assert_eq!(size, Vec2::new(640.0, 384.0));
     }
 }
