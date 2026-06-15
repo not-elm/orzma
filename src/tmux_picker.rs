@@ -45,7 +45,7 @@ impl Plugin for OzmuxTmuxPickerPlugin {
 /// session (indices into the picker's `sessions` / `windows`), or the trailing
 /// "New session" entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PickerRow {
+enum PickerRow {
     Session(usize),
     Window { session: usize, window: usize },
     NewSession,
