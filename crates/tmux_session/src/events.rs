@@ -107,7 +107,12 @@ mod tests {
     use super::*;
 
     fn dims(width: u32, height: u32, xoff: i32, yoff: i32) -> CellDims {
-        CellDims { width, height, xoff, yoff }
+        CellDims {
+            width,
+            height,
+            xoff,
+            yoff,
+        }
     }
 
     #[test]
@@ -115,7 +120,10 @@ mod tests {
         let layout = WindowLayout::parse(b"b25f,80x24,0,0,0").unwrap();
         assert_eq!(
             pane_geoms(&layout),
-            vec![PaneGeom { id: PaneId(0), dims: dims(80, 24, 0, 0) }]
+            vec![PaneGeom {
+                id: PaneId(0),
+                dims: dims(80, 24, 0, 0)
+            }]
         );
     }
 

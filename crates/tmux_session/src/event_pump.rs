@@ -271,7 +271,11 @@ mod tests {
         #[derive(Resource)]
         struct Batch(Vec<TransportEvent>);
 
-        fn run(mut commands: Commands, mut enumeration: ResMut<EnumerationState>, batch: Res<Batch>) {
+        fn run(
+            mut commands: Commands,
+            mut enumeration: ResMut<EnumerationState>,
+            batch: Res<Batch>,
+        ) {
             trigger_events(&mut commands, &mut enumeration.pending, &batch.0);
         }
 
@@ -291,10 +295,16 @@ mod tests {
             log.0.lock().unwrap().push(format!("add@{}", ev.window.0));
         });
         app.add_observer(|ev: On<TmuxLayoutChanged>, log: Res<Log>| {
-            log.0.lock().unwrap().push(format!("layout@{}", ev.window.0));
+            log.0
+                .lock()
+                .unwrap()
+                .push(format!("layout@{}", ev.window.0));
         });
         app.add_observer(|ev: On<TmuxWindowsRetained>, log: Res<Log>| {
-            log.0.lock().unwrap().push(format!("retain{}", ev.windows.len()));
+            log.0
+                .lock()
+                .unwrap()
+                .push(format!("retain{}", ev.windows.len()));
         });
         app.add_systems(Update, run);
 

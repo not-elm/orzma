@@ -70,8 +70,7 @@ fn select_pane_round_trips_active_pane() {
         "the active pane should be marked from %%window-pane-changed"
     );
 
-    let first_active: PaneId =
-        active_pane_id(app.world_mut()).expect("an active pane is marked");
+    let first_active: PaneId = active_pane_id(app.world_mut()).expect("an active pane is marked");
 
     app.world()
         .get_non_send_resource::<TmuxConnection>()

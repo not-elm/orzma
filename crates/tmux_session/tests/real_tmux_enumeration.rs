@@ -40,9 +40,7 @@ fn enumeration_populates_existing_windows_with_panes() {
             .iter(app.world())
             .map(|c| c.parent())
             .collect();
-        let all_have_panes = window_entities
-            .iter()
-            .all(|w| pane_parents.contains(w));
+        let all_have_panes = window_entities.iter().all(|w| pane_parents.contains(w));
         if window_entities.len() >= 2 && all_have_panes {
             ready = true;
             break;

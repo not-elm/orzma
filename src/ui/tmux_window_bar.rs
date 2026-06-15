@@ -59,10 +59,7 @@ pub struct OzmuxTmuxWindowBarPlugin;
 impl Plugin for OzmuxTmuxWindowBarPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_window_bar);
-        app.add_systems(
-            Update,
-            rebuild_window_bar.run_if(window_bar_dirty),
-        );
+        app.add_systems(Update, rebuild_window_bar.run_if(window_bar_dirty));
         app.add_systems(
             Update,
             (

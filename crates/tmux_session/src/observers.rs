@@ -338,13 +338,19 @@ mod tests {
     #[test]
     fn window_close_despawns_window_and_prunes_panes() {
         let mut app = app();
-        app.world_mut().trigger(TmuxWindowAdded { window: WindowId(1), index: 0, name: "w".into() });
+        app.world_mut().trigger(TmuxWindowAdded {
+            window: WindowId(1),
+            index: 0,
+            name: "w".into(),
+        });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
             panes: pane_geoms(&layout(b"abcd,80x24,0,0,9")),
         });
         app.update();
-        app.world_mut().trigger(TmuxWindowClosed { window: WindowId(1) });
+        app.world_mut().trigger(TmuxWindowClosed {
+            window: WindowId(1),
+        });
         app.update();
 
         let index = app.world().resource::<TmuxProjection>();
@@ -356,36 +362,54 @@ mod tests {
     fn windows_retained_prunes_absent_windows() {
         let mut app = app();
         for id in [1u32, 2, 3] {
-            app.world_mut().trigger(TmuxWindowAdded { window: WindowId(id), index: 0, name: "w".into() });
+            app.world_mut().trigger(TmuxWindowAdded {
+                window: WindowId(id),
+                index: 0,
+                name: "w".into(),
+            });
         }
         app.update();
-        app.world_mut().trigger(TmuxWindowsRetained { windows: vec![WindowId(2)] });
+        app.world_mut().trigger(TmuxWindowsRetained {
+            windows: vec![WindowId(2)],
+        });
         app.update();
 
         let index = app.world().resource::<TmuxProjection>();
-        assert_eq!(index.windows.keys().copied().collect::<Vec<_>>(), vec![WindowId(2)]);
+        assert_eq!(
+            index.windows.keys().copied().collect::<Vec<_>>(),
+            vec![WindowId(2)]
+        );
     }
 
     #[test]
     fn active_markers_are_singletons() {
         let mut app = app();
-        app.world_mut().trigger(TmuxActiveWindowChanged { window: WindowId(1) });
+        app.world_mut().trigger(TmuxActiveWindowChanged {
+            window: WindowId(1),
+        });
         // NOTE: flush is required so the first observer's deferred commands (inserting
         // ActiveWindow on entity 1) are applied before the second trigger runs; without
         // it the second observer's Query<With<ActiveWindow>> sees no holders and both
         // entities end up with the marker.
         app.world_mut().flush();
-        app.world_mut().trigger(TmuxActiveWindowChanged { window: WindowId(2) });
+        app.world_mut().trigger(TmuxActiveWindowChanged {
+            window: WindowId(2),
+        });
         app.update();
 
-        let mut q = app.world_mut().query_filtered::<Entity, With<ActiveWindow>>();
+        let mut q = app
+            .world_mut()
+            .query_filtered::<Entity, With<ActiveWindow>>();
         assert_eq!(q.iter(app.world()).count(), 1);
     }
 
     #[test]
     fn session_changed_sets_id_and_name() {
         let mut app = app();
-        app.world_mut().trigger(TmuxSessionChanged { session: SessionId(7), name: "main".into() });
+        app.world_mut().trigger(TmuxSessionChanged {
+            session: SessionId(7),
+            name: "main".into(),
+        });
         app.update();
         let e = app.world().resource::<TmuxProjection>().session.unwrap();
         let s = app.world().get::<TmuxSession>(e).unwrap();
@@ -395,8 +419,15 @@ mod tests {
     #[test]
     fn connection_reset_clears_everything() {
         let mut app = app();
-        app.world_mut().trigger(TmuxSessionChanged { session: SessionId(1), name: "m".into() });
-        app.world_mut().trigger(TmuxWindowAdded { window: WindowId(1), index: 0, name: "w".into() });
+        app.world_mut().trigger(TmuxSessionChanged {
+            session: SessionId(1),
+            name: "m".into(),
+        });
+        app.world_mut().trigger(TmuxWindowAdded {
+            window: WindowId(1),
+            index: 0,
+            name: "w".into(),
+        });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
             panes: pane_geoms(&layout(b"abcd,80x24,0,0,1")),

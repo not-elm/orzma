@@ -88,7 +88,11 @@ fn sync_pane_dim(
     let dim_factor = inactive_dim_factor(configs.as_deref());
     let any_active = panes.iter().any(|(_, active, _)| active);
     for (entity, active, current) in panes.iter() {
-        let want = if active || !any_active { 1.0 } else { dim_factor };
+        let want = if active || !any_active {
+            1.0
+        } else {
+            dim_factor
+        };
         if current.map(|d| d.0) != Some(want) {
             commands.entity(entity).insert(PaneDim(want));
         }
@@ -127,8 +131,27 @@ mod tests {
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.insert_resource(OzmuxConfigsResource::default());
         let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
-        let p1 = app.world_mut().spawn((TmuxPane { id: PaneId(1), dims: dims() }, h(), ActivePane)).id();
-        let p2 = app.world_mut().spawn((TmuxPane { id: PaneId(2), dims: dims() }, h())).id();
+        let p1 = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: dims(),
+                },
+                h(),
+                ActivePane,
+            ))
+            .id();
+        let p2 = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(2),
+                    dims: dims(),
+                },
+                h(),
+            ))
+            .id();
         let dim = |app: &App, e| app.world().get::<PaneDim>(e).map(|d| d.0);
 
         app.update();
