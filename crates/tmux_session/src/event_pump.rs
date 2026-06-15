@@ -243,13 +243,8 @@ fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
 
 fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
     match event {
-        ControlEvent::SessionChanged { session, name } => {
-            commands.trigger(TmuxSessionChanged {
-                session: *session,
-                name: name.clone(),
-            });
-        }
-        ControlEvent::ClientSessionChanged { session, name, .. } => {
+        ControlEvent::SessionChanged { session, name }
+        | ControlEvent::ClientSessionChanged { session, name, .. } => {
             commands.trigger(TmuxSessionChanged {
                 session: *session,
                 name: name.clone(),

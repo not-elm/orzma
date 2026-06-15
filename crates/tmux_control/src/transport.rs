@@ -151,7 +151,7 @@ impl TmuxServer {
     }
 
     /// The argv (after the program) for the `list-windows -a` query.
-    pub fn list_windows_all_argv(&self) -> Vec<String> {
+    fn list_windows_all_argv(&self) -> Vec<String> {
         let mut argv = self.socket_args();
         argv.push("list-windows".to_string());
         argv.push("-a".to_string());
@@ -189,7 +189,7 @@ impl TmuxServer {
     }
 
     /// The argv (after the program) for `create_detached_session`.
-    pub fn create_detached_session_argv(&self) -> Vec<String> {
+    fn create_detached_session_argv(&self) -> Vec<String> {
         let mut argv = self.socket_args();
         argv.push("new-session".to_string());
         argv.push("-d".to_string());
