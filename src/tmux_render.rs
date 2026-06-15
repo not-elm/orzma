@@ -575,6 +575,107 @@ mod tests {
     }
 
     #[test]
+    fn layout_packs_two_panes_and_sizes_container() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+        use tmux_control_parser::{WindowId, WindowLayout};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 13.0,
+                descent_phys: 3.0,
+                underline_position_phys: -1.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        });
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        let window_e = app
+            .world_mut()
+            .spawn((
+                TmuxWindow {
+                    id: WindowId(1),
+                    index: 0,
+                    name: String::new(),
+                },
+                TmuxWindowLayout(
+                    WindowLayout::parse(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}").unwrap(),
+                ),
+                Node::default(),
+            ))
+            .id();
+        let pane1 = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                Node::default(),
+                TerminalHandle::detached(40, 24, Arc::new(AtomicBool::new(false))),
+                TerminalGrid::default(),
+                ChildOf(window_e),
+            ))
+            .id();
+        let pane2 = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(2),
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                },
+                Node::default(),
+                TerminalHandle::detached(39, 24, Arc::new(AtomicBool::new(false))),
+                TerminalGrid::default(),
+                ChildOf(window_e),
+            ))
+            .id();
+
+        app.add_systems(Update, layout_tmux_panes);
+        app.update();
+
+        let container = app
+            .world()
+            .get::<Node>(window_e)
+            .expect("window container has a Node");
+        assert_eq!(container.width, Val::Px(633.0), "container bbox width");
+        assert_eq!(container.height, Val::Px(384.0), "container bbox height");
+
+        let p1 = app.world().get::<Node>(pane1).expect("pane1 has a Node");
+        assert_eq!(p1.left, Val::Px(0.0), "pane1 left");
+        assert_eq!(p1.top, Val::Px(0.0), "pane1 top");
+        assert_eq!(p1.width, Val::Px(320.0), "pane1 width");
+        assert_eq!(p1.height, Val::Px(384.0), "pane1 height");
+
+        let p2 = app.world().get::<Node>(pane2).expect("pane2 has a Node");
+        assert_eq!(p2.left, Val::Px(321.0), "pane2 left (320 + 1px gap)");
+        assert_eq!(p2.top, Val::Px(0.0), "pane2 top");
+        assert_eq!(p2.width, Val::Px(312.0), "pane2 width");
+        assert_eq!(p2.height, Val::Px(384.0), "pane2 height");
+    }
+
+    #[test]
     #[ignore = "requires a real tmux binary and a controlling PTY"]
     fn display_only_pane_does_not_inject_phantom_device_replies() {
         use ozmux_tmux::{ConnectionState, TmuxSessionPlugin};
