@@ -192,7 +192,7 @@ fn handle_picker_input(
                 let target = target_for(&picker.sessions, picker.selected);
                 let mut server = build_server(&configs);
                 if let Some(handle) = &control {
-                    server = server.env("OZMUX_SOCK", &handle.sock_path.to_string_lossy());
+                    server = server.env("OZMA_SOCK", &handle.sock_path.to_string_lossy());
                 }
                 match attach_or_create(&server, &target) {
                     Ok(client) => {
@@ -213,11 +213,11 @@ fn handle_picker_input(
     }
 }
 
-/// Sets `$OZMUX_SOCK` in the freshly-connected session's tmux environment so
+/// Sets `$OZMA_SOCK` in the freshly-connected session's tmux environment so
 /// panes created after attach inherit it. Gated to run on every
 /// [`ConnectionState`] change; the body acts only on the `Attached` transition.
 ///
-/// `new-session` already injects `$OZMUX_SOCK` via `-e` (covering its initial
+/// `new-session` already injects `$OZMA_SOCK` via `-e` (covering its initial
 /// pane), but attaching to a pre-existing session cannot — its panes are spawned
 /// by an already-running server. This session-scoped `set-environment` closes
 /// that gap for panes opened after attach (already-running shells are
@@ -233,9 +233,9 @@ fn inject_session_ozmux_sock(
     let (Some(handle), Some(client)) = (control, connection.client()) else {
         return;
     };
-    let cmd = set_environment_command("OZMUX_SOCK", &handle.sock_path.to_string_lossy());
+    let cmd = set_environment_command("OZMA_SOCK", &handle.sock_path.to_string_lossy());
     if let Err(e) = client.handle().send(&cmd) {
-        tracing::warn!(?e, "failed to set $OZMUX_SOCK in tmux session environment");
+        tracing::warn!(?e, "failed to set $OZMA_SOCK in tmux session environment");
     }
 }
 
