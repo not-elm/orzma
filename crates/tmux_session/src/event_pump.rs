@@ -511,6 +511,22 @@ mod tests {
             Some(SessionId(2))
         );
         assert_eq!(detect_session_switch(&[], Some(SessionId(1))), None);
+
+        let client_changed = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::ClientSessionChanged {
+                client: "main".to_string(),
+                session: SessionId(3),
+                name: "c".to_string(),
+            },
+        ))];
+        assert_eq!(
+            detect_session_switch(&client_changed, Some(SessionId(1))),
+            Some(SessionId(3))
+        );
+        assert_eq!(
+            detect_session_switch(&client_changed, Some(SessionId(3))),
+            None
+        );
     }
 
     #[test]

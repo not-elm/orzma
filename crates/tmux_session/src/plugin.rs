@@ -118,14 +118,14 @@ fn drain_tmux_events(
         commands.trigger(TmuxWindowsRetained {
             windows: Vec::new(),
         });
-        send_session_enumeration(client, &mut enumeration);
+        send_session_enumeration(&mut enumeration, client);
     }
     if let Some(next) = advance_state(&state, &events) {
         *state = next;
         if matches!(*state, ConnectionState::Attached)
             && let Some(client) = connection.client()
         {
-            send_session_enumeration(client, &mut enumeration);
+            send_session_enumeration(&mut enumeration, client);
             match client.handle().send(&client_name_command()) {
                 Ok(id) => enumeration.client_name_pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to send client-name query"),
@@ -178,10 +178,11 @@ fn drain_tmux_events(
     }
 }
 
-// NOTE: re-enumerating on a session switch must use the SAME query set as the
-// attach transition, so factor it; drift here would leave a switched-to session
-// with stale windows or no active-pane marker.
-fn send_session_enumeration(client: &tmux_control::TmuxClient, enumeration: &mut EnumerationState) {
+/// Sends the per-session enumeration queries (`list-windows` + active-pane) that
+/// rebuild the projection. Shared by the attach transition and a session switch so
+/// the two paths cannot drift (a switched-to session would otherwise risk stale
+/// windows or a missing active-pane marker).
+fn send_session_enumeration(enumeration: &mut EnumerationState, client: &tmux_control::TmuxClient) {
     match client.handle().send(&list_windows_command()) {
         Ok(id) => enumeration.pending = Some(id),
         Err(error) => tracing::warn!(?error, "failed to send list-windows enumeration"),
