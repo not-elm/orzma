@@ -245,17 +245,34 @@ fn layout_tmux_panes(
         return;
     };
     let dpr = window.scale_factor().max(0.5);
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
+    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cell_w = cell_w_phys / dpr;
+    let cell_h = cell_h_phys / dpr;
+
+    // The pane area handed to tmux (cols × rows-1), in logical px — the same
+    // budget `sync_client_size` sends via `refresh-client`.
+    let (cols, total_rows) = cells_for(
+        window.resolution.physical_width(),
+        window.resolution.physical_height(),
+        cell_w_phys,
+        cell_h_phys,
+    );
+    let area_w = cols as f32 * cell_w;
+    let area_h = rows_for_panes(total_rows) as f32 * cell_h;
 
     for (layout, mut container, children) in windows.iter_mut() {
-        let (rects, bbox) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX);
+        let (rects, _) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX);
 
-        // Size the grey container to the packed bbox so the 1px inter-pane gaps
-        // bleed grey as dividers, with no grey band beyond the panes.
-        if container.width != Val::Px(bbox.x) || container.height != Val::Px(bbox.y) {
-            container.width = Val::Px(bbox.x);
-            container.height = Val::Px(bbox.y);
+        // NOTE: size the grey container to the full pane area, NOT the packed
+        // bbox. Collapsing tmux's reserved separator cells to 1px leaves a
+        // reclaimed margin (~1 cell per seam) on the right/bottom; filling it
+        // with the container's divider-grey (iTerm2-style) reads as intentional
+        // chrome, whereas sizing to the bbox leaves a dark void below/right of
+        // the panes — a visible regression for top/bottom splits.
+        if container.width != Val::Px(area_w) || container.height != Val::Px(area_h) {
+            container.width = Val::Px(area_w);
+            container.height = Val::Px(area_h);
         }
 
         for &child in children {
@@ -659,8 +676,19 @@ mod tests {
             .world()
             .get::<Node>(window_e)
             .expect("window container has a Node");
-        assert_eq!(container.width, Val::Px(633.0), "container bbox width");
-        assert_eq!(container.height, Val::Px(384.0), "container bbox height");
+        // Container fills the full pane area (cols 100 × cell_w 8 = 800;
+        // rows-1 = 36 × cell_h 16 = 576), NOT the packed bbox (633×384), so the
+        // reclaimed margin below/right of the panes shows the container grey.
+        assert_eq!(
+            container.width,
+            Val::Px(800.0),
+            "container fills pane-area width"
+        );
+        assert_eq!(
+            container.height,
+            Val::Px(576.0),
+            "container fills pane-area height"
+        );
 
         let p1 = app.world().get::<Node>(pane1).expect("pane1 has a Node");
         assert_eq!(p1.left, Val::Px(0.0), "pane1 left");
