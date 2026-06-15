@@ -397,4 +397,56 @@ mod tests {
             "exit drops the scratch CopyRenderHandle",
         );
     }
+
+    #[test]
+    fn pane_despawn_prunes_refresh_state() {
+        use tmux_control_parser::{CellDims, PaneId};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<CopyModeReply>();
+        app.init_resource::<CopyModeQueries>();
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.add_plugins(OzmuxTmuxCopyModePlugin);
+
+        let pane_id = PaneId(7);
+        let entity = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: pane_id,
+                    dims: CellDims {
+                        width: 20,
+                        height: 3,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                TerminalHandle::detached(20, 3, Arc::new(AtomicBool::new(false))),
+                CopyModeState,
+            ))
+            .id();
+
+        // Seed the bookkeeping as the live refresh loop would, then DESPAWN the
+        // pane (e.g. on TmuxConnectionReset) — not an explicit CopyModeState
+        // remove. The On<Remove, CopyModeState> observer must still fire and read
+        // TmuxPane to prune, so a reconnect that re-projects %7 cannot wedge.
+        {
+            let mut refresh = app.world_mut().resource_mut::<CopyRefreshState>();
+            refresh.state_in_flight.insert(pane_id);
+            refresh.last_scroll.insert(pane_id, 7);
+        }
+        app.world_mut().entity_mut(entity).despawn();
+        app.update();
+
+        let refresh = app.world().resource::<CopyRefreshState>();
+        assert!(
+            !refresh.state_in_flight.contains(&pane_id),
+            "despawn must prune the in-flight mark (else reconnect wedges re-query)",
+        );
+        assert!(
+            !refresh.last_scroll.contains_key(&pane_id),
+            "despawn must prune last_scroll (else re-entry skips the capture)",
+        );
+    }
 }
