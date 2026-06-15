@@ -82,13 +82,15 @@ impl Plugin for OzmuxWebviewRenderPlugin {
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
 /// inline webview child (`InlineWebview`) whose `ChildOf` parent is the
-/// resolved active surface, the click-granted inline focus stands (spec §7,
-/// single focus source). Without this arm the per-frame sync would map the
-/// active terminal surface to `None` and clobber an inline click one frame
-/// after `dispatch_mouse_buttons` set it. Every other case — a different pane
-/// or surface becoming active, or the inline child despawning — keeps the
-/// drive-from-active-pane behavior above.
-fn sync_focused_webview(
+/// resolved active surface, that inline focus stands (spec §7, single focus
+/// source) — this covers both the click-granted focus and the app-declared
+/// focus set via the control-plane `SetFocus` op, since both point
+/// `FocusedWebview` at an inline child of the owner surface. Without this arm
+/// the per-frame sync would map the active terminal surface to `None` and
+/// clobber an inline focus one frame after it was set. Every other case — a
+/// different pane or surface becoming active, or the inline child despawning —
+/// keeps the drive-from-active-pane behavior above.
+pub(crate) fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     mux: MultiplexerCommands,
     attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,

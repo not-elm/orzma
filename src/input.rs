@@ -19,7 +19,7 @@ use crate::action::workspace::{
 };
 use crate::clipboard::{Clipboard, CopyToClipboardActionEvent, PasteFromClipboardActionEvent};
 use crate::configs::OzmuxConfigsResource;
-use crate::inline_webview::{InlineWebview, focused_inline_of};
+use crate::inline_webview::{InlineWebview, PassthroughKeys, focused_inline_of};
 use crate::input::ime::{ImeState, read_ime_events};
 use crate::system_set::OzmuxSystems;
 use crate::ui::copy_mode::{
@@ -28,7 +28,7 @@ use crate::ui::copy_mode::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use bevy_cef::prelude::FocusedWebview;
+use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::{
     Direction as ConfigDirection, KeyChord, Modifiers, ShortcutAction, SplitDirection,
@@ -82,23 +82,25 @@ pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(
-            Update,
-            (
-                InputPhase::Hover,
-                InputPhase::Dispatch,
-                InputPhase::FocusedKey,
+        app.init_resource::<CefKeyboardFilter>()
+            .configure_sets(
+                Update,
+                (
+                    InputPhase::Hover,
+                    InputPhase::Dispatch,
+                    InputPhase::FocusedKey,
+                )
+                    .chain()
+                    .in_set(OzmuxSystems::Input),
             )
-                .chain()
-                .in_set(OzmuxSystems::Input),
-        )
-        .add_systems(
-            Update,
-            dispatch_focused_key
-                .run_if(not(is_ime_composing))
-                .in_set(InputPhase::FocusedKey)
-                .after(read_ime_events),
-        );
+            .add_systems(
+                Update,
+                dispatch_focused_key
+                    .run_if(not(is_ime_composing))
+                    .in_set(InputPhase::FocusedKey)
+                    .after(read_ime_events),
+            )
+            .add_systems(Update, fill_cef_keyboard_filter.before(KeyboardDeliverSet));
     }
 }
 
@@ -119,6 +121,7 @@ pub(crate) fn dispatch_focused_key(
     configs: Res<OzmuxConfigsResource>,
     copy_modes: Query<(), With<CopyModeState>>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    passthrough_q: Query<&PassthroughKeys>,
 ) {
     let bindings = &configs.shortcuts.bindings;
     // NOTE: ButtonInput<KeyCode> is updated in PreUpdate; every Update-tick event
@@ -220,6 +223,27 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
+        // NOTE: hoisted ABOVE the global shortcut lookup so a focused webview's
+        // declared passthrough chord wins over a matching ozmux shortcut. The chord
+        // goes to the PTY (the app reads it via crossterm) and is suppressed from CEF
+        // by `fill_cef_keyboard_filter`.
+        if let Some(child) = focused_inline
+            && passthrough_matches(child, &passthrough_q, ev.key_code, &mods)
+        {
+            if !ev.repeat
+                && let Some(tk) = bevy_to_terminal_key(&ev.logical_key, ev.key_code, mods.alt)
+            {
+                forward_to_active_terminal(
+                    &mut commands,
+                    &mux,
+                    workspace,
+                    tk,
+                    shortcut_mods_to_terminal_mods(&mods),
+                );
+            }
+            continue;
+        }
+
         if let Some(input_key) = bevy_to_configs_key(&ev.logical_key) {
             let chord = KeyChord {
                 key: input_key,
@@ -245,7 +269,7 @@ pub(crate) fn dispatch_focused_key(
             continue;
         }
 
-        if let Some(tk) = bevy_to_terminal_key(&ev.logical_key) {
+        if let Some(tk) = bevy_to_terminal_key(&ev.logical_key, ev.key_code, mods.alt) {
             forward_to_active_terminal(
                 &mut commands,
                 &mux,
@@ -279,6 +303,29 @@ fn is_modifier_only_key(key: &Key) -> bool {
             | Key::Fn
             | Key::Symbol
     )
+}
+
+/// True when the focused webview `child` declared a passthrough chord matching
+/// `key_code` + `mods`. The chord's `logo` modifier corresponds to `mods.meta`
+/// (the Super/Command key).
+fn passthrough_matches(
+    child: Entity,
+    passthrough_q: &Query<&PassthroughKeys>,
+    key_code: KeyCode,
+    mods: &Modifiers,
+) -> bool {
+    passthrough_q
+        .get(child)
+        .map(|p| {
+            p.0.iter().any(|c| {
+                c.code == key_code
+                    && c.alt == mods.alt
+                    && c.ctrl == mods.ctrl
+                    && c.shift == mods.shift
+                    && c.logo == mods.meta
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn bevy_to_configs_key(key: &Key) -> Option<ozmux_configs::shortcuts::Key> {
@@ -479,7 +526,16 @@ fn cycle_direction(o: ConfigSurfaceOffset) -> Option<CycleDirection> {
 /// `ozma_tty_engine` codec accepts. Returns `None` for keys the terminal
 /// does not consume (F-keys, modifier-only keys, etc. — those keys are
 /// silently dropped).
-fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
+///
+/// When `alt` is `true`, the base ASCII character is recovered from
+/// `key_code` instead of using the composed `logical_key`. On macOS,
+/// Alt/Option composes the logical key into a special glyph (e.g.
+/// Option+h → "˙"), which would otherwise prevent Alt escape sequences
+/// from reaching the PTY correctly.
+fn bevy_to_terminal_key(key: &Key, key_code: KeyCode, alt: bool) -> Option<TerminalKey> {
+    if alt && let Some(c) = base_char_from_key_code(key_code) {
+        return Some(TerminalKey::Text(c.to_string()));
+    }
     Some(match key {
         Key::Character(s) => TerminalKey::Text(s.to_string()),
         Key::Space => TerminalKey::Text(" ".into()),
@@ -496,6 +552,52 @@ fn bevy_to_terminal_key(key: &Key) -> Option<TerminalKey> {
         Key::End => TerminalKey::End,
         Key::PageUp => TerminalKey::PageUp,
         Key::PageDown => TerminalKey::PageDown,
+        _ => return None,
+    })
+}
+
+/// Returns the US-layout base character a physical `key_code` produces, used to
+/// recover the unmodified key when a composing modifier (Alt/Option) mangled the
+/// logical key. Letters and digits only; `None` for everything else.
+fn base_char_from_key_code(code: KeyCode) -> Option<char> {
+    use KeyCode::*;
+    Some(match code {
+        KeyA => 'a',
+        KeyB => 'b',
+        KeyC => 'c',
+        KeyD => 'd',
+        KeyE => 'e',
+        KeyF => 'f',
+        KeyG => 'g',
+        KeyH => 'h',
+        KeyI => 'i',
+        KeyJ => 'j',
+        KeyK => 'k',
+        KeyL => 'l',
+        KeyM => 'm',
+        KeyN => 'n',
+        KeyO => 'o',
+        KeyP => 'p',
+        KeyQ => 'q',
+        KeyR => 'r',
+        KeyS => 's',
+        KeyT => 't',
+        KeyU => 'u',
+        KeyV => 'v',
+        KeyW => 'w',
+        KeyX => 'x',
+        KeyY => 'y',
+        KeyZ => 'z',
+        Digit0 => '0',
+        Digit1 => '1',
+        Digit2 => '2',
+        Digit3 => '3',
+        Digit4 => '4',
+        Digit5 => '5',
+        Digit6 => '6',
+        Digit7 => '7',
+        Digit8 => '8',
+        Digit9 => '9',
         _ => return None,
     })
 }
@@ -539,6 +641,38 @@ fn forward_to_active_terminal(
 
 fn is_ime_composing(ime_state: Res<ImeState>) -> bool {
     ime_state.is_composing()
+}
+
+/// Mirrors the focused webview's declared passthrough chords into bevy_cef's
+/// `CefKeyboardFilter` so those keys are suppressed from CEF delivery (the host
+/// forwards them to the PTY instead; see `dispatch_focused_key`). Runs before
+/// `KeyboardDeliverSet` each frame; an unfocused or non-webview focus clears it.
+fn fill_cef_keyboard_filter(
+    mut filter: ResMut<CefKeyboardFilter>,
+    focused_webview: Option<Res<FocusedWebview>>,
+    passthrough_q: Query<&PassthroughKeys>,
+) {
+    let entries: Vec<(Entity, KeyCode, ModifiersState)> = focused_webview
+        .and_then(|f| f.0)
+        .and_then(|e| passthrough_q.get(e).ok().map(|p| (e, p)))
+        .map(|(e, p)| {
+            p.0.iter()
+                .map(|c| {
+                    (
+                        e,
+                        c.code,
+                        ModifiersState {
+                            alt: c.alt,
+                            ctrl: c.ctrl,
+                            shift: c.shift,
+                            logo: c.logo,
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    filter.set(entries);
 }
 
 #[cfg(test)]
@@ -1780,6 +1914,184 @@ mod tests {
             app.world().resource::<FocusedWebview>().0,
             Some(child),
             "Cmd+C must not clear inline focus"
+        );
+    }
+
+    #[test]
+    fn alt_recovers_base_letter_from_key_code() {
+        let tk = bevy_to_terminal_key(&Bk::Character("˙".into()), KeyCode::KeyH, true);
+        assert!(matches!(tk, Some(TerminalKey::Text(ref s)) if s == "h"));
+    }
+
+    #[test]
+    fn non_alt_uses_logical_key() {
+        let tk = bevy_to_terminal_key(&Bk::Character("h".into()), KeyCode::KeyH, false);
+        assert!(matches!(tk, Some(TerminalKey::Text(ref s)) if s == "h"));
+    }
+
+    #[test]
+    fn alt_digit_recovers_from_key_code() {
+        let tk = bevy_to_terminal_key(&Bk::Character("¡".into()), KeyCode::Digit1, true);
+        assert!(matches!(tk, Some(TerminalKey::Text(ref s)) if s == "1"));
+    }
+
+    #[test]
+    fn fill_cef_keyboard_filter_marks_focused_passthrough() {
+        use crate::control_plane::NormalizedChord;
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy_cef::prelude::{CefKeyboardFilter, ModifiersState};
+        let (mut app, _win) = make_app(true);
+        app.init_resource::<CefKeyboardFilter>();
+        let surface = install_active_terminal_surface(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+        app.world_mut()
+            .entity_mut(child)
+            .insert(PassthroughKeys(vec![NormalizedChord {
+                code: KeyCode::KeyH,
+                alt: true,
+                ctrl: false,
+                shift: false,
+                logo: false,
+            }]));
+        app.world_mut()
+            .run_system_once(fill_cef_keyboard_filter)
+            .unwrap();
+        let filter = app.world().resource::<CefKeyboardFilter>();
+        let alt = ModifiersState {
+            alt: true,
+            ctrl: false,
+            shift: false,
+            logo: false,
+        };
+        assert!(filter.contains(child, KeyCode::KeyH, alt));
+        assert!(!filter.contains(child, KeyCode::KeyH, ModifiersState::default()));
+    }
+
+    #[test]
+    fn fill_cef_keyboard_filter_clears_when_unfocused() {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy_cef::prelude::{CefKeyboardFilter, ModifiersState};
+        let (mut app, _win) = make_app(true);
+        app.init_resource::<CefKeyboardFilter>();
+        app.insert_resource(FocusedWebview(None));
+        app.world_mut()
+            .run_system_once(fill_cef_keyboard_filter)
+            .unwrap();
+        let filter = app.world().resource::<CefKeyboardFilter>();
+        assert!(!filter.contains(
+            Entity::from_raw_u32(1).unwrap(),
+            KeyCode::KeyH,
+            ModifiersState::default()
+        ));
+    }
+
+    fn press_code(app: &mut App, window: Entity, logical_key: Bk, key_code: KeyCode) {
+        let ev = KeyboardInput {
+            key_code,
+            logical_key,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window,
+        };
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<KeyboardInput>>()
+            .write(ev);
+    }
+
+    #[test]
+    fn passthrough_chord_forwards_to_pty() {
+        use crate::control_plane::NormalizedChord;
+        let (mut app, window) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let surface = install_active_terminal_surface(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+        app.world_mut()
+            .entity_mut(child)
+            .insert(PassthroughKeys(vec![NormalizedChord {
+                code: KeyCode::KeyH,
+                alt: true,
+                ctrl: false,
+                shift: false,
+                logo: false,
+            }]));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::AltLeft);
+        }
+        press_code(&mut app, window, Bk::Character("h".into()), KeyCode::KeyH);
+        app.update();
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "passthrough chord Alt+H must forward exactly one TerminalKeyInput; captured: {:?}",
+            captured,
+        );
+    }
+
+    #[test]
+    fn non_passthrough_chord_not_forwarded() {
+        use crate::control_plane::NormalizedChord;
+        let (mut app, window) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let surface = install_active_terminal_surface(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+        app.world_mut()
+            .entity_mut(child)
+            .insert(PassthroughKeys(vec![NormalizedChord {
+                code: KeyCode::KeyH,
+                alt: true,
+                ctrl: false,
+                shift: false,
+                logo: false,
+            }]));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::AltLeft);
+        }
+        press_code(&mut app, window, Bk::Character("x".into()), KeyCode::KeyX);
+        app.update();
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            0,
+            "a non-passthrough chord must not forward to the PTY while the inline webview is focused; captured: {:?}",
+            captured,
+        );
+    }
+
+    #[test]
+    fn passthrough_wins_over_shortcut() {
+        use crate::control_plane::NormalizedChord;
+        let (mut app, window) = make_app(true);
+        app.insert_resource(CapturedKeys::default());
+        app.add_observer(capture_key_input);
+        let surface = install_active_terminal_surface(&mut app);
+        let child = spawn_focused_inline_child(&mut app, surface);
+        app.world_mut()
+            .entity_mut(child)
+            .insert(PassthroughKeys(vec![NormalizedChord {
+                code: KeyCode::KeyH,
+                alt: false,
+                ctrl: false,
+                shift: false,
+                logo: true,
+            }]));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::SuperLeft);
+        }
+        press_code(&mut app, window, Bk::Character("h".into()), KeyCode::KeyH);
+        app.update();
+        let captured = app.world().resource::<CapturedKeys>().0.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "passthrough chord Cmd+H must reach PTY before the shortcut lookup consumes it; captured: {:?}",
+            captured,
         );
     }
 }

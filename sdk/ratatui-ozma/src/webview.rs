@@ -2,6 +2,7 @@
 
 use crate::error::OzmaResult;
 use crate::handler::{BoxedHandler, make_handler};
+use crate::keychord::KeyChord;
 use crate::protocol::{ClientMsg, RegisterKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -27,6 +28,7 @@ impl Webview {
             kind: RegisterKind::Inline {
                 html: html.into(),
                 interactive: true,
+                passthrough: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -39,6 +41,7 @@ impl Webview {
                 root: root.as_ref().display().to_string(),
                 entry: entry.into(),
                 interactive: true,
+                passthrough: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -53,24 +56,48 @@ impl Webview {
         self
     }
 
+    /// Declares chords the page lets through to the app while focused (the host
+    /// forwards them to the PTY so the app reads them via `crossterm::event::read`).
+    pub fn passthrough(mut self, keys: impl IntoIterator<Item = KeyChord>) -> Self {
+        let (RegisterKind::Inline { passthrough, .. } | RegisterKind::Dir { passthrough, .. }) =
+            &mut self.kind;
+        passthrough.extend(keys);
+        self
+    }
+
     /// Registers an RPC handler for `method`. The parameter is a tuple
     /// deserialized from the page's `window.ozmux.call(method, args)` array.
+    ///
+    /// # Panics
+    /// Panics if `method` starts with the reserved `__ozma.` prefix, which is
+    /// owned by the SDK.
     pub fn on<P, R, F>(mut self, method: impl Into<String>, f: F) -> Self
     where
         P: DeserializeOwned,
         R: Serialize,
         F: Fn(P) -> Result<R, crate::error::RpcError> + Send + Sync + 'static,
     {
-        self.handlers.insert(method.into(), make_handler(f));
+        let method = method.into();
+        assert!(
+            !method.starts_with("__ozma."),
+            "method {method:?} uses the reserved __ozma. namespace"
+        );
+        self.handlers.insert(method, make_handler(f));
         self
     }
 }
 
 /// A registered webview handle: emit events to the page, read its id.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct WebviewHandle {
     id: String,
     writer: SharedWriter,
+}
+
+impl PartialEq for WebviewHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
 }
 
 impl WebviewHandle {
@@ -109,7 +136,9 @@ mod tests {
     fn inline_builder_records_kind_and_default_interactive() {
         let wv = Webview::inline("<h1>hi</h1>");
         match &wv.kind {
-            RegisterKind::Inline { html, interactive } => {
+            RegisterKind::Inline {
+                html, interactive, ..
+            } => {
                 assert_eq!(html, "<h1>hi</h1>");
                 assert!(*interactive);
             }
@@ -125,6 +154,7 @@ mod tests {
                 root,
                 entry,
                 interactive,
+                ..
             } => {
                 assert_eq!(root, "/abs/ui");
                 assert_eq!(entry, "index.html");
@@ -139,5 +169,34 @@ mod tests {
         let wv = Webview::inline("x").on("ping", |(n,): (String,)| Ok(format!("pong:{n}")));
         let h = wv.handlers.get("ping").expect("handler present");
         assert_eq!(h(vec![json!("hi")]).unwrap(), json!("pong:hi"));
+    }
+
+    #[test]
+    #[should_panic(expected = "__ozma.")]
+    fn user_on_rejects_reserved_namespace() {
+        let _ = Webview::inline("x").on("__ozma.nav", |(): ()| Ok::<_, crate::error::RpcError>(()));
+    }
+
+    #[test]
+    fn passthrough_rides_register_wire() {
+        use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+        let wv = Webview::inline("x").passthrough([KeyChord {
+            mods: KeyModifiers::ALT,
+            code: KeyCode::Char('h'),
+        }]);
+        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
+        assert_eq!(v["op"], "register");
+        assert_eq!(v["passthrough"][0]["key"], "h");
+        assert_eq!(v["passthrough"][0]["mods"][0], "alt");
+    }
+
+    #[test]
+    fn empty_passthrough_is_omitted_from_wire() {
+        let wv = Webview::inline("x");
+        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
+        assert!(
+            v.get("passthrough").is_none(),
+            "empty passthrough must be skipped"
+        );
     }
 }

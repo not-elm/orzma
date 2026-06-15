@@ -4,9 +4,11 @@
 //! disconnect or surface despawn. Uses a Tokio-free reader/writer thread model.
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
-use crate::control_plane::protocol::{RegisterKind, ServerMsg};
+use crate::control_plane::protocol::{HostKeyChord, RegisterKind, ServerMsg};
 use crate::inline_webview::InlineWebview;
+use crate::osc_webview::NonInteractive;
 use bevy::prelude::*;
+use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
@@ -19,6 +21,23 @@ use std::sync::{Arc, RwLock};
 
 mod listener;
 mod protocol;
+
+/// A passthrough chord normalized to host input types: a bevy `KeyCode` plus
+/// modifier booleans. Used to suppress CEF double-delivery and to match keys
+/// for PTY forwarding (design spec §E type normalization).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NormalizedChord {
+    /// The base key as a bevy `KeyCode`.
+    pub(crate) code: KeyCode,
+    /// Alt modifier active.
+    pub(crate) alt: bool,
+    /// Ctrl modifier active.
+    pub(crate) ctrl: bool,
+    /// Shift modifier active.
+    pub(crate) shift: bool,
+    /// The Super/Command/Meta modifier (bevy calls it Super/logo).
+    pub(crate) logo: bool,
+}
 
 /// Where a dynamic view's content lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +66,10 @@ pub(crate) struct DynamicView {
     pub(crate) owner_surface: Entity,
     /// The control-plane connection that registered it.
     pub(crate) connection_id: u64,
+    /// The normalized passthrough chords for this view, derived from the
+    /// `register` wire payload. Copied onto the mounted webview entity as
+    /// `PassthroughKeys` so Phase-4 systems can read them off the focused child.
+    pub(crate) passthrough: Vec<NormalizedChord>,
 }
 
 /// Stamped on a Tier 1 inline webview entity at mount: the control-plane
@@ -328,9 +351,12 @@ fn apply_control_events(
     mut commands: Commands,
     mut registry: ResMut<DynamicRegistry>,
     mut rpc: ResMut<OzmuxRpc>,
+    mut focused: Option<ResMut<FocusedWebview>>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<DynAssetRegistryRes>,
     inline: Query<(Entity, &InlineWebview)>,
+    child_of: Query<&ChildOf>,
+    non_interactive: Query<(), With<NonInteractive>>,
 ) {
     let Some(events) = events else {
         return;
@@ -430,6 +456,48 @@ fn apply_control_events(
                     }
                 }
             }
+            ControlEvent::SetFocus {
+                connection_id,
+                owner_surface,
+                handle,
+                instance,
+            } => {
+                let Some(focused) = focused.as_mut() else {
+                    continue;
+                };
+                match handle {
+                    Some(h) => {
+                        let owned = registry
+                            .get(&h)
+                            .is_some_and(|v| v.connection_id == connection_id);
+                        if !owned {
+                            tracing::debug!(handle = %h, "focus op for unowned handle, dropping");
+                            continue;
+                        }
+                        let target = inline.iter().find(|(entity, view)| {
+                            view.view_id == h
+                                && view.instance_id.as_deref() == instance.as_deref()
+                                && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
+                                && !non_interactive.contains(*entity)
+                        });
+                        match target {
+                            Some((entity, _)) => focused.0 = Some(entity),
+                            None => tracing::debug!(
+                                handle = %h,
+                                "focus op for unmounted/non-interactive view, dropping"
+                            ),
+                        }
+                    }
+                    None => {
+                        let owned_current = focused.0.is_some_and(|e| {
+                            child_of.get(e).map(|c| c.parent()) == Ok(owner_surface)
+                        });
+                        if owned_current {
+                            focused.0 = None;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -471,6 +539,7 @@ fn build_view(
             root,
             entry,
             interactive,
+            passthrough,
         } => {
             let root_path = PathBuf::from(&root);
             if !root_path.is_absolute() || !root_path.is_dir() {
@@ -485,9 +554,14 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
+                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
             })
         }
-        RegisterKind::Inline { html, interactive } => {
+        RegisterKind::Inline {
+            html,
+            interactive,
+            passthrough,
+        } => {
             if html.len() > MAX_INLINE_HTML {
                 return Err("html_too_large");
             }
@@ -497,6 +571,7 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
+                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
             })
         }
     }
@@ -509,6 +584,85 @@ fn is_safe_entry(entry: &str) -> bool {
     !p.as_os_str().is_empty()
         && p.components()
             .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+/// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
+/// for unrecognized key names. Note that `"backtab"` maps to [`KeyCode::Tab`]
+/// (the same as `"tab"`): the shift distinction is carried in the modifier bits,
+/// so a passthrough `BackTab` and `Tab` are indistinguishable at the host.
+fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
+    let code = match chord.key.as_str() {
+        "tab" | "backtab" => KeyCode::Tab,
+        "f1" => KeyCode::F1,
+        "f2" => KeyCode::F2,
+        "f3" => KeyCode::F3,
+        "f4" => KeyCode::F4,
+        "f5" => KeyCode::F5,
+        "f6" => KeyCode::F6,
+        "f7" => KeyCode::F7,
+        "f8" => KeyCode::F8,
+        "f9" => KeyCode::F9,
+        "f10" => KeyCode::F10,
+        "f11" => KeyCode::F11,
+        "f12" => KeyCode::F12,
+        "0" => KeyCode::Digit0,
+        "1" => KeyCode::Digit1,
+        "2" => KeyCode::Digit2,
+        "3" => KeyCode::Digit3,
+        "4" => KeyCode::Digit4,
+        "5" => KeyCode::Digit5,
+        "6" => KeyCode::Digit6,
+        "7" => KeyCode::Digit7,
+        "8" => KeyCode::Digit8,
+        "9" => KeyCode::Digit9,
+        "a" => KeyCode::KeyA,
+        "b" => KeyCode::KeyB,
+        "c" => KeyCode::KeyC,
+        "d" => KeyCode::KeyD,
+        "e" => KeyCode::KeyE,
+        "f" => KeyCode::KeyF,
+        "g" => KeyCode::KeyG,
+        "h" => KeyCode::KeyH,
+        "i" => KeyCode::KeyI,
+        "j" => KeyCode::KeyJ,
+        "k" => KeyCode::KeyK,
+        "l" => KeyCode::KeyL,
+        "m" => KeyCode::KeyM,
+        "n" => KeyCode::KeyN,
+        "o" => KeyCode::KeyO,
+        "p" => KeyCode::KeyP,
+        "q" => KeyCode::KeyQ,
+        "r" => KeyCode::KeyR,
+        "s" => KeyCode::KeyS,
+        "t" => KeyCode::KeyT,
+        "u" => KeyCode::KeyU,
+        "v" => KeyCode::KeyV,
+        "w" => KeyCode::KeyW,
+        "x" => KeyCode::KeyX,
+        "y" => KeyCode::KeyY,
+        "z" => KeyCode::KeyZ,
+        _ => return None,
+    };
+    let mut alt = false;
+    let mut ctrl = false;
+    let mut shift = false;
+    let mut logo = false;
+    for m in &chord.mods {
+        match m.as_str() {
+            "alt" => alt = true,
+            "ctrl" => ctrl = true,
+            "shift" => shift = true,
+            "meta" => logo = true,
+            _ => {}
+        }
+    }
+    Some(NormalizedChord {
+        code,
+        alt,
+        ctrl,
+        shift,
+        logo,
+    })
 }
 
 /// Upper bound on a single inline HTML document (4 MiB).
@@ -575,6 +729,7 @@ mod registry_tests {
                 interactive: true,
                 owner_surface: surface(1),
                 connection_id: 7,
+                passthrough: vec![],
             },
         );
         assert_eq!(reg.get("h1").map(|v| v.interactive), Some(true));
@@ -621,6 +776,7 @@ mod registry_tests {
             interactive: true,
             owner_surface: owner,
             connection_id: conn,
+            passthrough: vec![],
         }
     }
 }
@@ -651,6 +807,7 @@ mod apply_tests {
                     root: dir.path().to_string_lossy().into_owned(),
                     entry: "index.html".into(),
                     interactive: true,
+                    passthrough: vec![],
                 },
                 reply: reply_tx,
             })
@@ -695,6 +852,7 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
+                    passthrough: vec![],
                 },
                 reply: reply_tx,
             })
@@ -731,6 +889,7 @@ mod apply_tests {
                     root: "/nonexistent/abs/xyz".into(),
                     entry: "index.html".into(),
                     interactive: true,
+                    passthrough: vec![],
                 },
                 reply: reply_tx,
             })
@@ -756,6 +915,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
+                passthrough: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -799,6 +959,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 1,
+                passthrough: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -831,6 +992,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 9,
+                passthrough: vec![],
             },
         );
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
@@ -971,6 +1133,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
+                passthrough: vec![],
             },
         );
         let mounted = app
@@ -1023,6 +1186,347 @@ mod apply_tests {
 }
 
 #[cfg(test)]
+mod focus_tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy_cef::prelude::FocusedWebview;
+    use crossbeam_channel::unbounded;
+
+    #[test]
+    fn set_focus_points_focused_webview_at_the_owned_inline_child() {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
+            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmuxRpc>()
+            .init_resource::<FocusedWebview>()
+            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+
+        let surface = app
+            .world_mut()
+            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
+                mux.create_workspace(Some("t".into())).surface
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "h1".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 1,
+                passthrough: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                InlineWebview {
+                    view_id: "h1".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+
+        let (tx, rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(rx));
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface,
+            handle: Some("h1".into()),
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "SetFocus must point FocusedWebview at the owned inline child"
+        );
+
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface,
+            handle: None,
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
+        assert_eq!(app.world().resource::<FocusedWebview>().0, None);
+    }
+
+    #[test]
+    fn set_focus_rejects_unowned_handle() {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
+            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmuxRpc>()
+            .init_resource::<FocusedWebview>()
+            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        let surface = app
+            .world_mut()
+            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
+                mux.create_workspace(Some("t".into())).surface
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "h1".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 99,
+                passthrough: vec![],
+            },
+        );
+        // Spawn a VALID interactive inline child that WOULD be focused if the
+        // ownership check passed. This ensures the guard is the sole gate:
+        // deleting the `connection_id` check would let focus be granted and
+        // this assertion would FAIL.
+        app.world_mut().spawn((
+            ChildOf(surface),
+            InlineWebview {
+                view_id: "h1".into(),
+                instance_id: None,
+                slot: 0,
+            },
+        ));
+        let (tx, rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(rx));
+        // connection_id 1 ≠ owner 99 — ownership guard must reject this.
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface,
+            handle: Some("h1".into()),
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "focus must be denied when connection_id does not match the registered owner"
+        );
+    }
+
+    #[test]
+    fn blur_does_not_clobber_another_surfaces_focus() {
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
+            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmuxRpc>()
+            .init_resource::<FocusedWebview>()
+            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+
+        let surface_a = app
+            .world_mut()
+            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
+                mux.create_workspace(Some("a".into())).surface
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        let surface_b = app
+            .world_mut()
+            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
+                mux.create_workspace(Some("b".into())).surface
+            })
+            .unwrap();
+        app.world_mut().flush();
+
+        // Register "ha" owned by connection 1 / surface_a.
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "ha".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>a</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface_a,
+                connection_id: 1,
+                passthrough: vec![],
+            },
+        );
+        // Spawn the matching interactive inline child on surface_a.
+        let child_a = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface_a),
+                InlineWebview {
+                    view_id: "ha".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+
+        let (tx, rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(rx));
+
+        // Focus the surface_a child via the owning connection.
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface_a,
+            handle: Some("ha".into()),
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child_a),
+            "focus must land on the surface_a child after the SetFocus from connection 1"
+        );
+
+        // Blur from a DIFFERENT surface (surface_b / connection 2) must NOT
+        // clear the focus that belongs to surface_a.
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 2,
+            owner_surface: surface_b,
+            handle: None,
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child_a),
+            "blur from surface_b must not clobber surface_a's active focus"
+        );
+
+        // Blur from the OWNING side (surface_a / connection 1) must clear it.
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface_a,
+            handle: None,
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "blur from the owning surface must clear focus"
+        );
+    }
+
+    #[test]
+    fn sync_preserves_app_declared_focus_from_control_plane() {
+        use crate::webview_render::sync_focused_webview;
+        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, Side, SplitOrientation};
+
+        let mut app = bevy::app::App::new();
+        app.add_plugins(bevy::MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
+            .init_resource::<FocusedWebview>()
+            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmuxRpc>()
+            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()))
+            .add_systems(Update, sync_focused_webview);
+
+        let (workspace, pane, surface) = app
+            .world_mut()
+            .run_system_once(|mut mux: MultiplexerCommands| {
+                let o = mux.create_workspace(Some("t".into()));
+                (o.workspace, o.pane, o.surface)
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.world_mut()
+            .entity_mut(workspace)
+            .insert(AttachedWorkspace);
+
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "h1".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 1,
+                passthrough: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(surface),
+                InlineWebview {
+                    view_id: "h1".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+
+        let (tx, rx) = unbounded::<ControlEvent>();
+        app.insert_resource(ControlEvents(rx));
+        tx.send(ControlEvent::SetFocus {
+            connection_id: 1,
+            owner_surface: surface,
+            handle: Some("h1".into()),
+            instance: None,
+        })
+        .unwrap();
+        app.world_mut()
+            .run_system_once(apply_control_events)
+            .unwrap();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "SetFocus must point FocusedWebview at the owned inline child"
+        );
+
+        // The regression: the per-frame sync must NOT clobber app-declared focus
+        // while the owning surface is active — the preserve arm covers it the
+        // same way it covers click-granted inline focus.
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "app-declared inline focus must survive the per-frame sync_focused_webview"
+        );
+
+        // Promoting a different pane makes the owner surface inactive, so the
+        // preserve arm no longer holds and app-declared focus correctly clears.
+        app.world_mut()
+            .run_system_once(move |mut mux: MultiplexerCommands| {
+                mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
+                    .expect("split_pane")
+            })
+            .unwrap();
+        app.world_mut().flush();
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "app-declared focus must clear once a different pane/surface becomes active"
+        );
+    }
+}
+
+#[cfg(test)]
 mod back_channel_state_tests {
     use super::*;
     use bevy::prelude::Entity;
@@ -1063,5 +1567,47 @@ mod back_channel_state_tests {
         rpc.drain_webview(Entity::from_bits(1));
         assert!(rpc.take_for_connection(&a, 5).is_none());
         assert!(rpc.take_for_connection(&b, 5).is_some());
+    }
+}
+
+#[cfg(test)]
+mod normalize_tests {
+    use super::*;
+    use crate::control_plane::protocol::HostKeyChord;
+
+    #[test]
+    fn normalize_chord_maps_keys_and_mods() {
+        let n = normalize_chord(&HostKeyChord {
+            mods: vec!["alt".into()],
+            key: "h".into(),
+        })
+        .unwrap();
+        assert_eq!(n.code, KeyCode::KeyH);
+        assert!(n.alt && !n.ctrl && !n.shift && !n.logo);
+        assert_eq!(
+            normalize_chord(&HostKeyChord {
+                mods: vec![],
+                key: "f5".into()
+            })
+            .unwrap()
+            .code,
+            KeyCode::F5
+        );
+        assert_eq!(
+            normalize_chord(&HostKeyChord {
+                mods: vec![],
+                key: "tab".into()
+            })
+            .unwrap()
+            .code,
+            KeyCode::Tab
+        );
+        assert!(
+            normalize_chord(&HostKeyChord {
+                mods: vec![],
+                key: "nope".into()
+            })
+            .is_none()
+        );
     }
 }
