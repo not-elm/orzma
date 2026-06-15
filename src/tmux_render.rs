@@ -13,7 +13,7 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
-    refresh_client_command, send_bytes_command,
+    refresh_client_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -96,18 +96,18 @@ fn attach_tmux_pane_terminal(
     }
 }
 
-const REPLY_CHUNK_BYTES: usize = 256;
-
 /// Routes tmux `%output` into each pane's handle. Groups a frame's
 /// `PaneOutput` messages by pane, advances all of a pane's bytes, then emits
-/// once per pane (immediate emit, coalesced per pane). Drained terminal replies
-/// (DSR/DA answers) are forwarded back to the owning pane via `send-keys -H`.
+/// once per pane (immediate emit, coalesced per pane).
+///
+/// The per-pane alacritty handle is display-only: tmux is the real terminal and
+/// already answers the program's device queries (DSR/DA) itself. So this drains
+/// the handle's reply queue and discards it — see the `take_replies` `NOTE`.
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
     mut handles: Query<&mut TerminalHandle>,
     panes: Query<(Entity, &TmuxPane)>,
-    connection: NonSend<TmuxConnection>,
 ) {
     let mut by_pane: HashMap<_, Vec<u8>> = HashMap::new();
     for msg in reader.read() {
@@ -126,21 +126,13 @@ fn route_tmux_output(
         };
         handle.advance(&data);
         handle.flush_emit(&mut commands, entity);
-        let replies = handle.take_replies();
-        if replies.is_empty() {
-            continue;
-        }
-        let Some(client) = connection.client() else {
-            continue;
-        };
-        let target = format!("%{}", pane.0);
-        for chunk in replies.chunks(REPLY_CHUNK_BYTES) {
-            let cmd = send_bytes_command(&target, chunk);
-            if let Err(e) = client.handle().send(&cmd) {
-                tracing::warn!(?e, pane = pane.0, "reply forward send failed");
-                break;
-            }
-        }
+        // NOTE: drain and DISCARD — never forward these replies to tmux. The
+        // handle is a display-only renderer; tmux already answered the program's
+        // DSR/DA query. Injecting alacritty's duplicate answer via `send-keys -H`
+        // delivers it to the program as phantom keystrokes (e.g. the DSR-OK reply
+        // `ESC[0n` makes readline self-insert a stray `n` and desyncs arrow-key
+        // history recall). Draining still matters: the reply channel is unbounded.
+        let _ = handle.take_replies();
     }
 }
 
@@ -439,6 +431,127 @@ mod tests {
         assert!(
             app.world().resource::<SnapHits>().0 >= 1,
             "resize emitted a FrameSnapshot (#1)",
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a real tmux binary and a controlling PTY"]
+    fn display_only_pane_does_not_inject_phantom_device_replies() {
+        use ozmux_tmux::{ConnectionState, TmuxSessionPlugin};
+        use std::time::{Duration, Instant};
+        use tmux_control::TmuxServer;
+
+        #[derive(Resource, Default)]
+        struct Captured(Vec<u8>);
+
+        fn capture(mut sink: ResMut<Captured>, mut reader: MessageReader<PaneOutput>) {
+            for msg in reader.read() {
+                sink.0.extend_from_slice(&msg.data);
+            }
+        }
+
+        let socket = format!("ozmux-replyloop-{}", std::process::id());
+        let server = TmuxServer::new().socket_name(&socket);
+        let client = server.new_session().expect("spawn tmux -CC new-session");
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_plugins(TmuxSessionPlugin);
+        app.init_resource::<Captured>();
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+                capture,
+            )
+                .chain()
+                .after(TmuxProjectionSet),
+        );
+        app.world_mut()
+            .get_non_send_resource_mut::<TmuxConnection>()
+            .expect("TmuxConnection inserted by the plugin")
+            .set(client);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut pane_id: Option<PaneId> = None;
+        while Instant::now() < deadline {
+            app.update();
+            if *app.world().resource::<ConnectionState>() == ConnectionState::Attached {
+                let mut q = app
+                    .world_mut()
+                    .query_filtered::<&TmuxPane, With<TerminalHandle>>();
+                if let Some(id) = q.iter(app.world()).next().map(|p| p.id) {
+                    pane_id = Some(id);
+                    break;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let pane_id = pane_id.expect("a pane should be projected with a TerminalHandle attached");
+        let target = format!("%{}", pane_id.0);
+
+        // Run `cat` so the pane TTY is in cooked mode with echo on: any bytes
+        // injected into the pane's input are reflected back as %output, making
+        // a spurious injected device-report reply observable.
+        let handle = app
+            .world()
+            .get_non_send_resource::<TmuxConnection>()
+            .unwrap()
+            .client()
+            .unwrap()
+            .handle();
+        handle
+            .send(&format!("send-keys -t {target} -l -- cat"))
+            .expect("send-keys cat");
+        handle
+            .send(&format!("send-keys -t {target} Enter"))
+            .expect("send-keys Enter");
+
+        let cat_deadline = Instant::now() + Duration::from_secs(1);
+        while Instant::now() < cat_deadline {
+            app.update();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        app.world_mut().resource_mut::<Captured>().0.clear();
+
+        // NOTE: inject the DSR-5 query as a *synthetic* %output — tmux never saw
+        // a real query, so it answers nothing. Any `[0n` (the DSR-OK reply)
+        // echoed back can therefore only be ozmux's display-only renderer
+        // answering the probe and injecting it into the pane via send-keys -H.
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"\x1b[5n".to_vec(),
+            });
+
+        let echo_deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < echo_deadline {
+            app.update();
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        let (injected, captured_len) = {
+            let captured = &app.world().resource::<Captured>().0;
+            (captured.windows(3).any(|w| w == b"[0n"), captured.len())
+        };
+
+        if let Some(client) = app
+            .world_mut()
+            .get_non_send_resource_mut::<TmuxConnection>()
+            .unwrap()
+            .take()
+        {
+            client.handle().send("kill-server").ok();
+        }
+
+        assert!(
+            !injected,
+            "display-only pane must not answer device queries: an echoed DSR reply ([0n) was \
+             injected back into the tmux pane (captured {captured_len} bytes)"
         );
     }
 

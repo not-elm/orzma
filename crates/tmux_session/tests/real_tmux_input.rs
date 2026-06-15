@@ -1,11 +1,12 @@
-//! Gated end-to-end test: attach a real tmux `-CC` client, await the
-//! client-name query, forward a keystroke via `send-keys -K -c <client>`,
-//! and verify the typed character echoes back through `%output`.
+//! Gated end-to-end tests against a real tmux `-CC`: forward keys to a pane via
+//! `send_pane_keys_command` (the production forward path) and observe the result
+//! through `%output`.
 //! Run with: `cargo test -p ozmux_tmux --test real_tmux_input -- --ignored`.
 
 use bevy::prelude::*;
 use ozmux_tmux::{
-    ConnectionState, PaneOutput, TmuxConnection, TmuxSessionPlugin, send_keys_command,
+    ConnectionState, PaneOutput, TmuxConnection, TmuxPane, TmuxSessionPlugin,
+    send_pane_keys_command,
 };
 use std::time::{Duration, Instant};
 use tmux_control::TmuxServer;
@@ -19,10 +20,24 @@ fn capture_output(mut sink: ResMut<Captured>, mut reader: MessageReader<PaneOutp
     }
 }
 
-#[test]
-#[ignore = "requires a real tmux binary and a controlling PTY"]
-fn send_keys_echoes_back_from_real_tmux() {
-    let socket = format!("ozmux-phase3a-{}", std::process::id());
+fn pump_until(app: &mut App, secs: u64, mut done: impl FnMut(&mut App) -> bool) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while Instant::now() < deadline {
+        app.update();
+        if done(app) {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    false
+}
+
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    haystack.windows(needle.len()).any(|w| w == needle)
+}
+
+fn attach_and_project(tag: &str) -> (App, String) {
+    let socket = format!("ozmux-key-{}-{}", std::process::id(), tag);
     let server = TmuxServer::new().socket_name(&socket);
     let client = server.new_session().expect("spawn tmux -CC new-session");
 
@@ -35,58 +50,87 @@ fn send_keys_echoes_back_from_real_tmux() {
         .expect("TmuxConnection inserted by the plugin")
         .set(client);
 
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut client_name: Option<String> = None;
-    while Instant::now() < deadline {
-        app.update();
-        let attached = *app.world().resource::<ConnectionState>() == ConnectionState::Attached;
-        if attached {
-            client_name = app
-                .world()
-                .get_non_send_resource::<TmuxConnection>()
-                .expect("TmuxConnection present")
-                .client_name()
-                .map(str::to_owned);
-            if client_name.is_some() {
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    let mut pane_q = app.world_mut().query::<&TmuxPane>();
+    let ready = pump_until(&mut app, 5, |app| {
+        *app.world().resource::<ConnectionState>() == ConnectionState::Attached
+            && pane_q.iter(app.world()).next().is_some()
+    });
+    assert!(ready, "tmux should attach and project a pane within 5s");
 
-    let client_name = client_name
-        .expect("the display-message client-name query should complete shortly after attach");
+    let target = pane_q
+        .iter(app.world())
+        .next()
+        .map(|p| format!("%{}", p.id.0))
+        .expect("a projected pane");
+    (app, target)
+}
 
-    let cmd = send_keys_command(&client_name, &["a".to_string()]);
-    assert!(cmd.starts_with("send-keys -K -c "));
+fn handle_of(app: &App) -> tmux_control::TmuxHandle {
     app.world()
         .get_non_send_resource::<TmuxConnection>()
         .unwrap()
         .client()
         .unwrap()
         .handle()
-        .send(&cmd)
-        .expect("send-keys -K");
+}
 
-    let echo_deadline = Instant::now() + Duration::from_secs(5);
-    let mut echoed = false;
-    while Instant::now() < echo_deadline {
-        app.update();
-        if app.world().resource::<Captured>().0.contains(&b'a') {
-            echoed = true;
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    assert!(echoed, "typed 'a' should echo back via %output");
-
+fn teardown(app: &mut App) {
     if let Some(client) = app
         .world_mut()
         .get_non_send_resource_mut::<TmuxConnection>()
-        .expect("TmuxConnection present")
+        .unwrap()
         .take()
     {
         client.handle().send("kill-server").ok();
     }
+}
+
+#[test]
+#[ignore = "requires a real tmux binary and a controlling PTY"]
+fn key_a_echoes_back_from_real_tmux() {
+    let (mut app, target) = attach_and_project("echo");
+    let handle = handle_of(&app);
+    handle
+        .send(&send_pane_keys_command(&target, &["a".to_string()]))
+        .expect("send-keys a");
+    let echoed = pump_until(&mut app, 5, |app| {
+        app.world().resource::<Captured>().0.contains(&b'a')
+    });
+    teardown(&mut app);
+    assert!(echoed, "typed 'a' should echo back via %output");
+}
+
+#[test]
+#[ignore = "requires a real tmux binary and a controlling PTY"]
+fn arrow_up_recalls_previous_command_via_pane_send() {
+    let (mut app, target) = attach_and_project("arrowup");
+    let handle = handle_of(&app);
+
+    // Seed one shell-history entry (the pane runs an interactive shell, which
+    // puts the terminal in application-cursor mode for readline).
+    handle
+        .send(&format!("send-keys -t {target} -l -- 'echo OZMUXHIST'"))
+        .expect("type command");
+    handle
+        .send(&format!("send-keys -t {target} Enter"))
+        .expect("run command");
+    pump_until(&mut app, 2, |_| false);
+    app.world_mut().resource_mut::<Captured>().0.clear();
+
+    // Forward ArrowUp exactly as the production input plugin does.
+    handle
+        .send(&send_pane_keys_command(&target, &["Up".to_string()]))
+        .expect("forward Up");
+    let recalled = pump_until(&mut app, 3, |app| {
+        contains(&app.world().resource::<Captured>().0, b"echo OZMUXHIST")
+    });
+
+    let captured = app.world().resource::<Captured>().0.clone();
+    teardown(&mut app);
+    assert!(
+        recalled,
+        "ArrowUp must recall the previous command via history; the `-K` path \
+         instead injected a literal char. Captured after Up: {:?}",
+        String::from_utf8_lossy(&captured)
+    );
 }

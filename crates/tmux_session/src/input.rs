@@ -1,9 +1,13 @@
 //! Pure translation of Bevy keyboard input to tmux `send-keys` commands.
 //!
-//! Forwarded keys route through tmux's key tables (`send-keys -K`), so tmux's
-//! prefix + bindings act. Raw bytes (terminal replies) go to a pane via
-//! `send-keys -H`. All construction here is pure + unit-tested; the binary's
-//! input plugin is a thin adapter.
+//! Forwarded keys go straight to the active pane (`send-keys -t <pane> --`),
+//! which tmux's pane-input encoder translates (respecting the pane's
+//! application-cursor mode). `-K` is deliberately NOT used: under `tmux -CC` it
+//! mis-encodes named keys (e.g. `Up` arrives as a literal `n`), and routing
+//! through the client key tables is not needed since ozmux owns its own chords.
+//! Raw bytes (clipboard paste) go to a pane via `send-keys -H`. All
+//! construction here is pure + unit-tested; the binary's input plugin is a thin
+//! adapter.
 
 use bevy::input::keyboard::{Key, KeyCode};
 use std::fmt::Write;
@@ -94,23 +98,30 @@ pub fn bevy_key_to_tmux_name(key: &Key, code: KeyCode, mods: KeyMods) -> Option<
     Some(prefix(&mods, shift_prefix, &base))
 }
 
-/// Builds a batched `send-keys -K -c <client>` command for the given key names
-/// (one tmux command per frame). `client` and each name are quoted.
-pub fn send_keys_command(client: &str, names: &[String]) -> String {
-    let mut cmd = format!("send-keys -K -c {}", quote(client));
-    for n in names {
-        cmd.push(' ');
-        cmd.push_str(&quote(n));
-    }
-    cmd
-}
-
 /// Builds a `send-keys -H -t <pane> <hex>…` command injecting raw bytes into a
 /// pane (used for terminal replies). `pane` is the tmux pane id like `%3`.
 pub fn send_bytes_command(pane: &str, bytes: &[u8]) -> String {
     let mut cmd = format!("send-keys -H -t {}", quote(pane));
     for b in bytes {
         let _ = write!(cmd, " {b:02x}");
+    }
+    cmd
+}
+
+/// Builds a `send-keys -t <pane> -- <name>…` command delivering the given key
+/// names straight to a pane (one batched command per frame), bypassing tmux's
+/// client key tables. The `--` terminates options so a key whose name is `-`
+/// cannot be parsed as a flag; `pane` and each name are quoted.
+///
+/// NOTE: this is the forward path, NOT `send-keys -K`. Under `tmux -CC`, `-K`
+/// mis-encodes named keys (e.g. `Up` arrives at the pane as a literal `n`),
+/// so keys go directly to the pane, which tmux's pane-input encoder translates
+/// correctly (respecting the pane's application-cursor mode).
+pub fn send_pane_keys_command(pane: &str, names: &[String]) -> String {
+    let mut cmd = format!("send-keys -t {} --", quote(pane));
+    for n in names {
+        cmd.push(' ');
+        cmd.push_str(&quote(n));
     }
     cmd
 }
@@ -360,18 +371,28 @@ mod tests {
     }
 
     #[test]
-    fn send_keys_batches_and_quotes() {
+    fn send_pane_keys_targets_pane_with_double_dash() {
         assert_eq!(
-            send_keys_command("ozmux", &["a".into(), "C-c".into(), "Up".into()]),
-            "send-keys -K -c ozmux a C-c Up"
+            send_pane_keys_command("%3", &["a".into(), "C-c".into(), "Up".into()]),
+            "send-keys -t %3 -- a C-c Up"
         );
+    }
+
+    #[test]
+    fn send_pane_keys_double_dash_guards_a_dash_named_key() {
+        // A key whose name is a bare '-' must reach the pane, not be parsed as a
+        // flag — the `--` terminator guarantees that.
         assert_eq!(
-            send_keys_command("pts 3", &["a".into()]),
-            "send-keys -K -c 'pts 3' a"
+            send_pane_keys_command("%1", &["-".into()]),
+            "send-keys -t %1 -- -"
         );
+    }
+
+    #[test]
+    fn send_pane_keys_quotes_metachars() {
         assert_eq!(
-            send_keys_command("c", &[";".into()]),
-            "send-keys -K -c c ';'"
+            send_pane_keys_command("%2", &[";".into()]),
+            "send-keys -t %2 -- ';'"
         );
     }
 

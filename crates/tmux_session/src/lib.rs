@@ -25,7 +25,7 @@ pub use enumerate::{
     LIST_WINDOWS_FORMAT, WindowRow, parse_window_rows, refresh_client_command, select_pane_command,
     select_window_command, set_environment_command,
 };
-pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_keys_command};
+pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_pane_keys_command};
 pub use output::PaneOutput;
 pub use plugin::{TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
 pub use select::{AttachTarget, select_attach_target};
