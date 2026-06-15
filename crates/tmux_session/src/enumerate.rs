@@ -120,6 +120,25 @@ pub fn set_environment_command(key: &str, value: &str) -> String {
     format!("set-environment {} {}", quote(key), quote(value))
 }
 
+/// Builds `set-environment -t <session> <key> <value>` to set an environment
+/// variable on a specific session rather than the control client's current one,
+/// so panes that session spawns afterward inherit it.
+///
+/// Used when the client switches to another session: the attach path's
+/// current-session [`set_environment_command`] does not re-run on
+/// `switch-client`, so the target session would otherwise never receive
+/// `$OZMA_SOCK`. Session-scoped (no `-g`) for the same reason as
+/// [`set_environment_command`]; already-running panes recover the value via
+/// `tmux show-environment`.
+pub fn set_environment_in_session_command(session: &str, key: &str, value: &str) -> String {
+    format!(
+        "set-environment -t {} {} {}",
+        quote(session),
+        quote(key),
+        quote(value)
+    )
+}
+
 /// Builds `switch-client -t <name>` to repoint the attached control client at
 /// another session. The resulting `%session-changed` / `%client-session-changed`
 /// drives the projection rebuild; ozmux never mutates it optimistically.
@@ -283,6 +302,22 @@ mod tests {
         assert_eq!(
             set_environment_command("OZMA_SOCK", "/tmp/a b/ctl.sock"),
             "set-environment OZMA_SOCK '/tmp/a b/ctl.sock'"
+        );
+    }
+
+    #[test]
+    fn set_environment_in_session_command_targets_named_session() {
+        assert_eq!(
+            set_environment_in_session_command("work", "OZMA_SOCK", "/tmp/ctl.sock"),
+            "set-environment -t work OZMA_SOCK /tmp/ctl.sock"
+        );
+    }
+
+    #[test]
+    fn set_environment_in_session_command_quotes_session_and_value() {
+        assert_eq!(
+            set_environment_in_session_command("my work", "OZMA_SOCK", "/tmp/a b/ctl.sock"),
+            "set-environment -t 'my work' OZMA_SOCK '/tmp/a b/ctl.sock'"
         );
     }
 
