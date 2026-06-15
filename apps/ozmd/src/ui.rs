@@ -2,6 +2,7 @@
 
 use crate::app::App;
 use crate::keymap::Mode;
+use crate::protocol::SearchCount;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
@@ -28,6 +29,7 @@ pub(crate) fn draw(
     file_name: &str,
     live: LiveStatus,
     scroll_percent: u16,
+    search: Option<SearchCount>,
 ) {
     let search_open = app.mode() == Mode::Search;
     let vchunks = Layout::default()
@@ -42,7 +44,7 @@ pub(crate) fn draw(
     draw_status(frame, vchunks[0], file_name, live, scroll_percent);
     draw_body(frame, placements, vchunks[1], app, handle_id);
     if search_open {
-        draw_search(frame, vchunks[2], app);
+        draw_search(frame, vchunks[2], app, search);
     }
 }
 
@@ -107,6 +109,10 @@ fn draw_outline(frame: &mut Frame<'_>, area: Rect, app: &App) {
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_search(frame: &mut Frame<'_>, area: Rect, app: &App) {
-    frame.render_widget(Paragraph::new(format!("/{}", app.query())), area);
+fn draw_search(frame: &mut Frame<'_>, area: Rect, app: &App, search: Option<SearchCount>) {
+    let count = match search {
+        Some(c) if c.total > 0 => format!("   {}/{}", c.current, c.total),
+        _ => String::new(),
+    };
+    frame.render_widget(Paragraph::new(format!("/{}{count}", app.query())), area);
 }

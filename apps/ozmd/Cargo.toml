@@ -21,6 +21,7 @@ pulldown-cmark = "0.12"
 notify-debouncer-full = "0.3"
 rust-embed = "8"
 tempfile = { workspace = true }
+crossbeam-channel = "0.5"
 
 [lints]
 workspace = true

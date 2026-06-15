@@ -55,6 +55,27 @@ pub(crate) struct ScrollState {
     pub(crate) current_heading_index: Option<usize>,
 }
 
+/// A scroll command payload (`scroll` emit).
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct Scroll {
+    /// Which way to scroll.
+    pub(crate) action: ScrollAction,
+}
+
+/// A search request payload (`search` emit).
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct Search {
+    /// The query string to highlight.
+    pub(crate) query: String,
+}
+
+/// A search-navigation payload (`searchNav` emit).
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct SearchNav {
+    /// Direction to move within the match set.
+    pub(crate) dir: SearchDir,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
