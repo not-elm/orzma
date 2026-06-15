@@ -150,6 +150,12 @@ pub(crate) struct EnumerationState {
     pub(crate) client_name_pending: Option<CommandId>,
     /// The id of the in-flight `display-message` active-pane query, if any.
     pub(crate) active_pane_pending: Option<CommandId>,
+    /// The id of the in-flight `list-keys -T root` command, if any.
+    pub(crate) keys_root_pending: Option<CommandId>,
+    /// The id of the in-flight `list-keys -T prefix` command, if any.
+    pub(crate) keys_prefix_pending: Option<CommandId>,
+    /// The id of the in-flight `display-message` prefix-key query, if any.
+    pub(crate) prefix_keys_pending: Option<CommandId>,
     /// In-flight `capture-pane` commands → the pane each reply seeds.
     pub(crate) capture_pending: HashMap<CommandId, PaneId>,
 }
