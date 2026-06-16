@@ -6,7 +6,7 @@ use crate::enumerate::{WINDOW_FLAGS_SUBSCRIPTION, parse_window_rows};
 use crate::events::{
     TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxLayoutChanged, TmuxSessionChanged,
     TmuxWindowAdded, TmuxWindowClosed, TmuxWindowFlagsChanged, TmuxWindowRenamed,
-    TmuxWindowsRetained, pane_geoms,
+    TmuxWindowsRetained,
 };
 use crate::keybindings::{KeyBinding, ModeKeys, parse_list_keys, parse_prefix};
 use crate::output::PaneOutput;
@@ -15,7 +15,7 @@ use bevy::prelude::Commands;
 use crossbeam_channel::Receiver;
 use std::collections::{HashMap, HashSet};
 use tmux_control::{ClientEvent, CommandId, ControlEvent, TransportEvent};
-use tmux_control_parser::{PaneId, SessionId, WindowId, dividers};
+use tmux_control_parser::{PaneId, SessionId, WindowId};
 
 /// Upper bound on events drained per frame, so a pane flooding `%output`
 /// cannot stall the schedule with unbounded parse/apply work in one tick;
@@ -359,8 +359,7 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
         ControlEvent::LayoutChange { window, layout, .. } => {
             commands.trigger(TmuxLayoutChanged {
                 window: *window,
-                panes: pane_geoms(layout),
-                dividers: dividers(layout),
+                layout: layout.clone(),
             });
         }
         ControlEvent::WindowPaneChanged { window, pane } => {
@@ -405,8 +404,7 @@ fn trigger_seed(commands: &mut Commands, output: &[String]) {
         });
         commands.trigger(TmuxLayoutChanged {
             window: row.id,
-            panes: pane_geoms(&row.layout),
-            dividers: dividers(&row.layout),
+            layout: row.layout.clone(),
         });
         if row.active {
             commands.trigger(TmuxActiveWindowChanged { window: row.id });

@@ -4,7 +4,7 @@
 
 use crate::components::WindowFlags;
 use bevy::prelude::Event;
-use tmux_control_parser::{Cell, CellDims, Divider, PaneId, SessionId, WindowId, WindowLayout};
+use tmux_control_parser::{Cell, CellDims, PaneId, SessionId, WindowId, WindowLayout};
 
 /// A pane's tmux id plus its cell geometry, carried in `TmuxLayoutChanged`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,12 +55,11 @@ pub(crate) struct TmuxWindowFlagsChanged {
     pub(crate) flags: WindowFlags,
 }
 
-/// `%layout-change` or a seed row: the window's full pane set.
+/// `%layout-change` or a seed row: the window's full layout tree.
 #[derive(Event, Debug, Clone)]
 pub(crate) struct TmuxLayoutChanged {
     pub(crate) window: WindowId,
-    pub(crate) panes: Vec<PaneGeom>,
-    pub(crate) dividers: Vec<Divider>,
+    pub(crate) layout: WindowLayout,
 }
 
 /// `%window-pane-changed`: the active pane (and its window).
