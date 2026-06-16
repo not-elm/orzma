@@ -583,13 +583,7 @@ mod tests {
         assert_eq!(rows[0].id, WindowId(2));
         assert!(rows[0].active);
         assert_eq!(rows[0].name, "my editor");
-        assert_eq!(
-            rows[0].flags,
-            WindowFlags {
-                zoom: true,
-                ..WindowFlags::default()
-            }
-        );
+        assert_eq!(rows[0].flags, WindowFlags::ZOOM);
     }
 
     #[test]

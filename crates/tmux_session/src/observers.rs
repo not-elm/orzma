@@ -451,10 +451,7 @@ mod tests {
         app.world_mut().flush();
         app.world_mut().trigger(TmuxWindowFlagsChanged {
             window: WindowId(1),
-            flags: WindowFlags {
-                bell: true,
-                ..WindowFlags::default()
-            },
+            flags: WindowFlags::BELL,
         });
         app.update();
 
@@ -462,10 +459,7 @@ mod tests {
         let e = index.windows[&WindowId(1)];
         assert_eq!(
             app.world().get::<WindowFlags>(e).copied(),
-            Some(WindowFlags {
-                bell: true,
-                ..WindowFlags::default()
-            })
+            Some(WindowFlags::BELL)
         );
     }
 
@@ -477,10 +471,7 @@ mod tests {
         let mut app = app();
         app.world_mut().trigger(TmuxWindowFlagsChanged {
             window: WindowId(99),
-            flags: WindowFlags {
-                zoom: true,
-                ..WindowFlags::default()
-            },
+            flags: WindowFlags::ZOOM,
         });
         app.update();
         assert!(app.world().resource::<TmuxProjection>().windows.is_empty());

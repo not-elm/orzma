@@ -847,13 +847,7 @@ mod tests {
 
         assert_eq!(
             *captured.0.lock().unwrap(),
-            vec![(
-                WindowId(2),
-                WindowFlags {
-                    zoom: true,
-                    ..WindowFlags::default()
-                }
-            )]
+            vec![(WindowId(2), WindowFlags::ZOOM)]
         );
     }
 }

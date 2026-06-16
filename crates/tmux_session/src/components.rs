@@ -1,6 +1,7 @@
 //! ECS components mirroring tmux session/window/pane identity + geometry.
 
 use bevy::prelude::Component;
+use bitflags::bitflags;
 use tmux_control_parser::{CellDims, PaneId, SessionId, WindowId};
 
 /// The projected tmux session entity, carrying the session id and name.
@@ -31,35 +32,37 @@ pub struct TmuxWindow {
     pub name: String,
 }
 
-/// tmux per-window status flags, projected from `#{window_raw_flags}`.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct WindowFlags {
-    /// `Z` — the window's active pane is zoomed.
-    pub zoom: bool,
-    /// `!` — a bell occurred in the window.
-    pub bell: bool,
-    /// `#` — monitored activity was detected.
-    pub activity: bool,
-    /// `~` — the window has been silent (monitor-silence).
-    pub silence: bool,
-    /// `M` — the window contains the marked pane.
-    pub marked: bool,
+bitflags! {
+    /// tmux per-window status flags, projected from `#{window_raw_flags}`.
+    #[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct WindowFlags: u8 {
+        /// `Z` — the window's active pane is zoomed.
+        const ZOOM = 1 << 0;
+        /// `!` — a bell occurred in the window.
+        const BELL = 1 << 1;
+        /// `#` — monitored activity was detected.
+        const ACTIVITY = 1 << 2;
+        /// `~` — the window has been silent (monitor-silence).
+        const SILENCE = 1 << 3;
+        /// `M` — the window contains the marked pane.
+        const MARKED = 1 << 4;
+    }
 }
 
 impl WindowFlags {
     /// Parses a tmux `#{window_raw_flags}` string (e.g. `"*Z"`, `"!"`, `"#"`,
-    /// `"~"`). Recognized characters set their field; `*` (current), `-`
-    /// (last), and any unknown character are ignored. An empty string yields
-    /// all-false.
+    /// `"~"`). Recognized characters set their bit; `*` (current), `-` (last),
+    /// and any unknown character are ignored. An empty string yields an empty
+    /// set.
     pub fn parse(raw: &str) -> Self {
-        let mut flags = WindowFlags::default();
+        let mut flags = WindowFlags::empty();
         for ch in raw.chars() {
             match ch {
-                'Z' => flags.zoom = true,
-                '!' => flags.bell = true,
-                '#' => flags.activity = true,
-                '~' => flags.silence = true,
-                'M' => flags.marked = true,
+                'Z' => flags |= WindowFlags::ZOOM,
+                '!' => flags |= WindowFlags::BELL,
+                '#' => flags |= WindowFlags::ACTIVITY,
+                '~' => flags |= WindowFlags::SILENCE,
+                'M' => flags |= WindowFlags::MARKED,
                 _ => {}
             }
         }
@@ -89,24 +92,16 @@ mod tests {
     fn parse_recognizes_each_flag() {
         assert_eq!(
             WindowFlags::parse("Z!#~M"),
-            WindowFlags {
-                zoom: true,
-                bell: true,
-                activity: true,
-                silence: true,
-                marked: true,
-            }
+            WindowFlags::ZOOM
+                | WindowFlags::BELL
+                | WindowFlags::ACTIVITY
+                | WindowFlags::SILENCE
+                | WindowFlags::MARKED
         );
     }
 
     #[test]
     fn parse_ignores_current_last_and_unknown() {
-        assert_eq!(
-            WindowFlags::parse("*-Z?"),
-            WindowFlags {
-                zoom: true,
-                ..WindowFlags::default()
-            }
-        );
+        assert_eq!(WindowFlags::parse("*-Z?"), WindowFlags::ZOOM);
     }
 }

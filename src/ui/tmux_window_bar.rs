@@ -388,7 +388,7 @@ fn window_label(index: u32, name: &str) -> String {
 fn entry_colors(is_active: bool, flags: WindowFlags) -> (Color, Color) {
     if is_active {
         (palette::BACKGROUND, palette::BACKGROUND)
-    } else if flags.bell || flags.activity {
+    } else if flags.intersects(WindowFlags::BELL | WindowFlags::ACTIVITY) {
         (palette::MUTED, palette::FLAG_WARN)
     } else {
         (palette::MUTED, palette::MUTED)
@@ -400,19 +400,19 @@ fn entry_colors(is_active: bool, flags: WindowFlags) -> (Color, Color) {
 /// "current" is conveyed by the accent pill.
 fn flag_suffix(flags: WindowFlags) -> String {
     let mut chars = String::new();
-    if flags.zoom {
+    if flags.contains(WindowFlags::ZOOM) {
         chars.push('Z');
     }
-    if flags.bell {
+    if flags.contains(WindowFlags::BELL) {
         chars.push('!');
     }
-    if flags.activity {
+    if flags.contains(WindowFlags::ACTIVITY) {
         chars.push('#');
     }
-    if flags.silence {
+    if flags.contains(WindowFlags::SILENCE) {
         chars.push('~');
     }
-    if flags.marked {
+    if flags.contains(WindowFlags::MARKED) {
         chars.push('M');
     }
     if chars.is_empty() {
@@ -478,21 +478,9 @@ mod tests {
     fn flag_suffix_orders_and_space_prefixes() {
         use ozmux_tmux::WindowFlags;
         assert_eq!(flag_suffix(WindowFlags::default()), "");
+        assert_eq!(flag_suffix(WindowFlags::ZOOM | WindowFlags::BELL), " Z!");
         assert_eq!(
-            flag_suffix(WindowFlags {
-                zoom: true,
-                bell: true,
-                ..WindowFlags::default()
-            }),
-            " Z!"
-        );
-        assert_eq!(
-            flag_suffix(WindowFlags {
-                activity: true,
-                silence: true,
-                marked: true,
-                ..WindowFlags::default()
-            }),
+            flag_suffix(WindowFlags::ACTIVITY | WindowFlags::SILENCE | WindowFlags::MARKED),
             " #~M"
         );
     }
@@ -501,13 +489,7 @@ mod tests {
     fn entry_colors_active_is_dark_text() {
         use ozmux_tmux::WindowFlags;
         assert_eq!(
-            entry_colors(
-                true,
-                WindowFlags {
-                    bell: true,
-                    ..WindowFlags::default()
-                }
-            ),
+            entry_colors(true, WindowFlags::BELL),
             (palette::BACKGROUND, palette::BACKGROUND)
         );
     }
@@ -516,13 +498,7 @@ mod tests {
     fn entry_colors_inactive_bell_or_activity_is_warn() {
         use ozmux_tmux::WindowFlags;
         assert_eq!(
-            entry_colors(
-                false,
-                WindowFlags {
-                    bell: true,
-                    ..WindowFlags::default()
-                }
-            ),
+            entry_colors(false, WindowFlags::BELL),
             (palette::MUTED, palette::FLAG_WARN)
         );
     }
@@ -563,10 +539,7 @@ mod tests {
                 name: "vim".into(),
             },
             ActiveWindow,
-            WindowFlags {
-                zoom: true,
-                ..WindowFlags::default()
-            },
+            WindowFlags::ZOOM,
         ));
 
         app.update();
