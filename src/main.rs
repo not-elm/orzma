@@ -13,6 +13,7 @@ mod system_set;
 mod theme;
 mod tmux_copy_mode;
 mod tmux_input;
+mod tmux_mouse;
 mod tmux_picker;
 mod tmux_render;
 mod ui;
@@ -40,6 +41,7 @@ use ozmux_tmux::TmuxSessionPlugin;
 use ozmux_webview_host::DynAssetRegistry;
 use tmux_copy_mode::OzmuxTmuxCopyModePlugin;
 use tmux_input::OzmuxTmuxInputPlugin;
+use tmux_mouse::OzmuxTmuxMousePlugin;
 use tmux_picker::OzmuxTmuxPickerPlugin;
 use tmux_render::OzmuxTmuxRenderPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
@@ -90,6 +92,7 @@ fn main() {
         .add_plugins(OzmuxTmuxWindowBarPlugin)
         .add_plugins(OzmuxTmuxPaneFocusPlugin)
         .add_plugins(OzmuxTmuxCopyModePlugin)
+        .add_plugins(OzmuxTmuxMousePlugin)
         .add_plugins((
             MouseWheelInputPlugin,
             MouseButtonsInputPlugin,
