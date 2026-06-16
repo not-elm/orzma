@@ -14,6 +14,7 @@ mod theme;
 mod tmux_copy_mode;
 mod tmux_input;
 mod tmux_mouse;
+mod tmux_pane_hit;
 mod tmux_picker;
 mod tmux_render;
 mod ui;
