@@ -16,7 +16,7 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActivePane, ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
-    refresh_client_command,
+    TmuxWindowLayout, refresh_client_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -67,12 +67,10 @@ fn attach_tmux_window_container(
     for window in windows.iter() {
         commands.entity(window).insert((
             Node {
-                display: Display::Flex,
                 position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
                 ..default()
             },
+            BackgroundColor(theme::BORDER),
             ChildOf(root),
         ));
     }
@@ -328,31 +326,17 @@ fn grid_dims(width: u32, height: u32) -> (u16, u16) {
     (clamp(width), clamp(height))
 }
 
-fn pane_rect(
-    xoff: i32,
-    yoff: i32,
-    width: u32,
-    height: u32,
-    cell_w: f32,
-    cell_h: f32,
-) -> (f32, f32, f32, f32) {
-    (
-        xoff as f32 * cell_w,
-        yoff as f32 * cell_h,
-        width as f32 * cell_w,
-        height as f32 * cell_h,
-    )
-}
 
 fn layout_tmux_panes(
     mut commands: Commands,
-    mut panes: Query<(
-        Entity,
-        &TmuxPane,
-        &mut Node,
-        &mut TerminalHandle,
-        &mut TerminalGrid,
-    )>,
+    mut windows: Query<
+        (Entity, &TmuxWindowLayout, &mut Node, &Children, Option<&PackedTmuxLayout>),
+        With<TmuxWindow>,
+    >,
+    mut panes: Query<
+        (&TmuxPane, &mut Node, &mut TerminalHandle, &mut TerminalGrid),
+        Without<TmuxWindow>,
+    >,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -362,30 +346,54 @@ fn layout_tmux_panes(
     let dpr = window.scale_factor().max(0.5);
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
-    for (entity, pane, mut node, mut handle, mut grid) in panes.iter_mut() {
-        let d = pane.dims;
-        let (left, top, width, height) =
-            pane_rect(d.xoff, d.yoff, d.width, d.height, cell_w, cell_h);
+
+    for (window_entity, layout, mut container, children, maybe_packed) in windows.iter_mut() {
+        let (rects, dividers, bbox) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX);
+
         // NOTE: only write the Node fields when they actually change — writing
-        // through `Mut<Node>` every frame would mark the component changed and
-        // force a full UI relayout pass each tick even when nothing moved.
-        if node.left != Val::Px(left)
-            || node.top != Val::Px(top)
-            || node.width != Val::Px(width)
-            || node.height != Val::Px(height)
-        {
-            node.left = Val::Px(left);
-            node.top = Val::Px(top);
-            node.width = Val::Px(width);
-            node.height = Val::Px(height);
+        // through `Mut<Node>` every frame marks the component changed and forces
+        // a full UI relayout pass each tick even when nothing moved.
+        if container.width != Val::Px(bbox.x) || container.height != Val::Px(bbox.y) {
+            container.width = Val::Px(bbox.x);
+            container.height = Val::Px(bbox.y);
         }
-        let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
-        let (cur_cols, cur_rows, _) = handle.read_geometry();
-        if (cur_cols, cur_rows) != (cols, rows) {
-            handle.resize_grid_only(cols, rows);
-            grid.cols = cols;
-            grid.rows = rows;
-            handle.emit_pending(&mut commands, entity);
+
+        let packed_changed = maybe_packed.map_or(true, |p| {
+            p.panes != rects || p.dividers != dividers || p.bbox != bbox
+        });
+        if packed_changed {
+            commands
+                .entity(window_entity)
+                .insert(PackedTmuxLayout { panes: rects.clone(), dividers: dividers.clone(), bbox });
+        }
+
+        for child in children.iter() {
+            let Ok((pane, mut node, mut handle, mut grid)) = panes.get_mut(child) else {
+                continue;
+            };
+            let Some(rect) = rects.get(&pane.id) else {
+                continue;
+            };
+            let (left, top, width, height) =
+                (rect.min.x, rect.min.y, rect.width(), rect.height());
+            if node.left != Val::Px(left)
+                || node.top != Val::Px(top)
+                || node.width != Val::Px(width)
+                || node.height != Val::Px(height)
+            {
+                node.left = Val::Px(left);
+                node.top = Val::Px(top);
+                node.width = Val::Px(width);
+                node.height = Val::Px(height);
+            }
+            let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
+            let (cur_cols, cur_rows, _) = handle.read_geometry();
+            if (cur_cols, cur_rows) != (cols, rows) {
+                handle.resize_grid_only(cols, rows);
+                grid.cols = cols;
+                grid.rows = rows;
+                handle.emit_pending(&mut commands, child);
+            }
         }
     }
 }
@@ -766,6 +774,18 @@ mod tests {
         };
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
+
+        use ozmux_tmux::{TmuxWindow, TmuxWindowLayout};
+        use tmux_control_parser::{WindowId, WindowLayout};
+
+        let window_e = app
+            .world_mut()
+            .spawn((
+                TmuxWindow { id: WindowId(1), index: 0, name: String::new() },
+                TmuxWindowLayout(WindowLayout::parse(b"0000,40x10,0,0,1").unwrap()),
+                Node::default(),
+            ))
+            .id();
         let entity = app
             .world_mut()
             .spawn((
@@ -781,6 +801,7 @@ mod tests {
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
                 TerminalGrid::default(),
+                ChildOf(window_e),
             ))
             .id();
 
@@ -958,7 +979,18 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
 
+        use ozmux_tmux::{TmuxWindow, TmuxWindowLayout};
+        use tmux_control_parser::{WindowId, WindowLayout};
+
         let pane_id = PaneId(2);
+        let window_e = app
+            .world_mut()
+            .spawn((
+                TmuxWindow { id: WindowId(1), index: 0, name: String::new() },
+                TmuxWindowLayout(WindowLayout::parse(b"0000,20x5,0,0,2").unwrap()),
+                Node::default(),
+            ))
+            .id();
         let entity = app
             .world_mut()
             .spawn((
@@ -974,6 +1006,7 @@ mod tests {
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
                 TerminalGrid::default(),
+                ChildOf(window_e),
             ))
             .id();
 
@@ -1029,20 +1062,6 @@ mod tests {
             hits_after_resize > hits_after_first,
             "resize must fire a fresh FrameSnapshot when first_emit is already false \
              (got {hits_after_resize} total, was {hits_after_first} before resize)",
-        );
-    }
-
-    #[test]
-    fn pane_rect_scales_cell_dims_to_pixels() {
-        let dims = CellDims {
-            width: 10,
-            height: 4,
-            xoff: 2,
-            yoff: 1,
-        };
-        assert_eq!(
-            pane_rect(dims.xoff, dims.yoff, dims.width, dims.height, 8.0, 16.0),
-            (16.0, 16.0, 80.0, 64.0),
         );
     }
 
