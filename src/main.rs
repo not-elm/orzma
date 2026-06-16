@@ -20,12 +20,9 @@ mod tmux_render;
 mod ui;
 mod webview_render;
 
-use crate::clipboard::ClipboardActionPlugin;
 use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
-use crate::input::mouse_buttons::MouseButtonsInputPlugin;
-use crate::input::mouse_wheel::MouseWheelInputPlugin;
 use crate::osc_webview::OzmuxOscWebviewPlugin;
 use crate::webview_render::{OzmuxWebviewRenderPlugin, cef_plugin};
 use bevy::prelude::*;
@@ -83,7 +80,6 @@ fn main() {
             OzmuxUiPlugin,
             OzmuxWebviewRenderPlugin,
             CopyModePlugin,
-            ClipboardActionPlugin,
             CopyModeIndicatorPlugin,
         ))
         .add_plugins(CopyPromptPlugin)
@@ -97,8 +93,6 @@ fn main() {
         .add_plugins(OzmuxTmuxMousePlugin)
         .add_plugins(OzmuxTmuxDividerHandlePlugin)
         .add_plugins((
-            MouseWheelInputPlugin,
-            MouseButtonsInputPlugin,
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,

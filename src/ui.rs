@@ -1,7 +1,7 @@
 //! Bevy UI Plugin and shared UI markers. Spawns the singleton `UiRoot` /
 //! `WorkspaceUiRoot` Node tree (via `OzmuxUiRootPlugin`) that the tmux render
-//! layer attaches its window container under. Shared markers (`Slotted`,
-//! `TerminalSurfaceMarker`) and the `HomeDir` resource live here.
+//! layer attaches its window container under. The `HomeDir` resource lives
+//! here.
 
 use crate::ui::root::OzmuxUiRootPlugin;
 use bevy::prelude::*;
@@ -32,25 +32,6 @@ pub struct UiRoot;
 /// Startup; never despawned.
 #[derive(Component)]
 pub struct WorkspaceUiRoot;
-
-/// Marks the Surface entity currently slotted into its pane's visible
-/// `surface_slot` (i.e. the active surface). Inactive surfaces are parked
-/// under a non-`Node` parent and keep this marker removed.
-///
-/// # Invariants
-///
-/// Geometric hit-tests (`resolve_pane_at_phys`) MUST filter on this marker:
-/// a parked surface is excluded from layout, so its `ComputedNode` retains
-/// stale, often window-sized geometry. Without this filter a click resolves
-/// to a parked surface of an already-active pane and focus never moves.
-#[derive(Component)]
-pub struct Slotted;
-
-/// Marks a terminal Surface entity. Queried with `With<TerminalSurfaceMarker>`
-/// to find surfaces that need a `TerminalBundle` + `TerminalRenderBundle`
-/// attached.
-#[derive(Component)]
-pub struct TerminalSurfaceMarker;
 
 /// Resolved `$HOME` at startup (`None` if unset). Used to home-abbreviate
 /// terminal paths; the value matches the terminal spawner's `$HOME` fallback
