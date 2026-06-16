@@ -22,10 +22,11 @@ use crate::input::InputPhase;
 use crate::input::current_modifiers;
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::tmux_copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
-use crate::tmux_pane_hit::cell_at_local;
+use crate::tmux_pane_hit::{cell_at_local, phys_to_pane_local};
 use crate::tmux_picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
@@ -49,6 +50,15 @@ impl Plugin for OzmuxTmuxMousePlugin {
         app.init_resource::<TmuxMouseGesture>();
         app.add_systems(Update, arbiter.in_set(InputPhase::Dispatch));
     }
+}
+
+/// Modal-input gate: the resources whose presence means another surface owns
+/// input and the arbiter must drain events without mutating tmux.
+#[derive(SystemParam)]
+struct ModalGate<'w> {
+    picker: Res<'w, SessionPicker>,
+    copy_prompt: Res<'w, CopyPrompt>,
+    focused_webview: Res<'w, FocusedWebview>,
 }
 
 /// Word- vs line-granularity selection for a double/triple click.
@@ -222,13 +232,17 @@ fn arbiter(
     dividers_q: Query<&TmuxDividers, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OzmuxConfigsResource>>,
-    modals: (Res<SessionPicker>, Res<CopyPrompt>, Res<FocusedWebview>),
+    modals: ModalGate,
     copy_modes: Query<(), With<CopyModeState>>,
     snapshots: Query<&CopyModeSnapshot>,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let (picker, copy_prompt, focused_webview) = &modals;
+    let ModalGate {
+        picker,
+        copy_prompt,
+        focused_webview,
+    } = &modals;
     let Ok(window) = windows.single() else {
         buttons.clear();
         gesture.state = GestureState::Idle;
@@ -278,15 +292,16 @@ fn arbiter(
                     continue;
                 };
                 let pane_under = pane_under_cursor(&panes, cursor_phys);
-                // Cmd/Ctrl+click on an OSC-8 link opens it and consumes the
-                // press (no select-pane). Mirrors the old mouse_buttons path.
+                // NOTE: this open-check must run (and `continue`) before the
+                // divider / select-pane logic below — otherwise a
+                // modifier-click on a link would also focus/select the pane in
+                // the same press.
                 if let Some((pane_e, _pane_id)) = pane_under {
                     let mods = current_modifiers(&keys);
                     if link_modifier_held(&mods)
                         && let Some((_, _, node, transform)) =
                             panes.iter().find(|(e, _, _, _)| *e == pane_e)
-                        && let Some(local) =
-                            crate::tmux_pane_hit::phys_to_pane_local(node, transform, cursor_phys)
+                        && let Some(local) = phys_to_pane_local(node, transform, cursor_phys)
                         && let Ok(grid) = grids.get(pane_e)
                     {
                         let (col, row, _) =
