@@ -1,7 +1,7 @@
 //! Minimal remote-URL webview demo. Run inside an ozmux pane:
 //! `cargo run -p ratatui-ozma --example ratatui_remote_url`.
 //!
-//! Mounts a display-only remote page (no `window.ozmux` bridge — `Webview::url`
+//! Mounts a display-only remote page (no `window.ozma` bridge — `Webview::url`
 //! defaults to display-only) filling the pane, and quits on `q`. This is the
 //! manual end-to-end check for the `url` content source: the remote page should
 //! render inline where the widget is placed.

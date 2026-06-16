@@ -13,7 +13,7 @@ use bevy::prelude::Commands;
 use crossbeam_channel::Receiver;
 use std::collections::{HashMap, HashSet};
 use tmux_control::{ClientEvent, CommandId, ControlEvent, TransportEvent};
-use tmux_control_parser::{PaneId, WindowId};
+use tmux_control_parser::{PaneId, SessionId, WindowId};
 
 /// Upper bound on events drained per frame, so a pane flooding `%output`
 /// cannot stall the schedule with unbounded parse/apply work in one tick;
@@ -256,6 +256,35 @@ pub(crate) fn take_mode_keys(
     None
 }
 
+/// Returns the new session id if `events` contains a session-change to an id
+/// different from `current`, i.e. a real `switch-client`. Returns `None` on the
+/// first attach (`current == None`) or when the id is unchanged, so the initial
+/// enumeration is not duplicated and only an actual switch triggers a rebuild.
+///
+/// The switch decision lives here (driven from the per-frame drain) rather than
+/// in the `on_session_changed` observer, because the teardown + re-enumeration
+/// it triggers need the event batch and the live `NonSend` client, which an
+/// observer cannot access.
+pub(crate) fn detect_session_switch(
+    events: &[TransportEvent],
+    current: Option<SessionId>,
+) -> Option<SessionId> {
+    let current = current?;
+    for event in events {
+        let next = match event {
+            TransportEvent::Protocol(ClientEvent::Notification(
+                ControlEvent::SessionChanged { session, .. }
+                | ControlEvent::ClientSessionChanged { session, .. },
+            )) => *session,
+            _ => continue,
+        };
+        if next != current {
+            return Some(next);
+        }
+    }
+    None
+}
+
 /// Parses an `@N %M` line into `(WindowId, PaneId)`.
 fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
     let mut parts = line.split_whitespace();
@@ -266,7 +295,8 @@ fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
 
 fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
     match event {
-        ControlEvent::SessionChanged { session, name } => {
+        ControlEvent::SessionChanged { session, name }
+        | ControlEvent::ClientSessionChanged { session, name, .. } => {
             commands.trigger(TmuxSessionChanged {
                 session: *session,
                 name: name.clone(),
@@ -464,6 +494,76 @@ mod tests {
         assert_eq!(
             take_client_name(&mut pending, &events),
             Some("/dev/ttys001".to_string())
+        );
+    }
+
+    #[test]
+    fn client_session_changed_triggers_session_changed() {
+        use crate::events::TmuxSessionChanged;
+        use std::sync::{Arc, Mutex};
+        use tmux_control_parser::SessionId;
+
+        #[derive(Resource, Default, Clone)]
+        struct Seen(Arc<Mutex<Vec<(u32, String)>>>);
+
+        #[derive(Resource)]
+        struct Batch(Vec<TransportEvent>);
+
+        fn run(mut commands: Commands, mut pending: ResMut<EnumerationState>, batch: Res<Batch>) {
+            trigger_events(&mut commands, &mut pending.pending, &batch.0);
+        }
+
+        let mut app = App::new();
+        app.init_resource::<Seen>();
+        app.init_resource::<EnumerationState>();
+        app.insert_resource(Batch(vec![TransportEvent::Protocol(
+            ClientEvent::Notification(ControlEvent::ClientSessionChanged {
+                client: "main".to_string(),
+                session: SessionId(9),
+                name: "beta".to_string(),
+            }),
+        )]));
+        app.add_observer(|ev: On<TmuxSessionChanged>, seen: Res<Seen>| {
+            seen.0.lock().unwrap().push((ev.session.0, ev.name.clone()));
+        });
+        app.add_systems(Update, run);
+        let seen = app.world().resource::<Seen>().clone();
+        app.update();
+
+        assert_eq!(*seen.0.lock().unwrap(), vec![(9, "beta".to_string())]);
+    }
+
+    #[test]
+    fn detect_session_switch_reports_new_id_only_on_change() {
+        use tmux_control_parser::SessionId;
+        let changed = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::SessionChanged {
+                session: SessionId(2),
+                name: "b".to_string(),
+            },
+        ))];
+        assert_eq!(detect_session_switch(&changed, None), None);
+        assert_eq!(detect_session_switch(&changed, Some(SessionId(2))), None);
+        assert_eq!(
+            detect_session_switch(&changed, Some(SessionId(1))),
+            Some(SessionId(2))
+        );
+        assert_eq!(detect_session_switch(&[], Some(SessionId(1))), None);
+
+        let client_changed = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::ClientSessionChanged {
+                client: "main".to_string(),
+                session: SessionId(3),
+                name: "c".to_string(),
+            },
+        ))];
+        assert_eq!(
+            detect_session_switch(&client_changed, Some(SessionId(1))),
+            Some(SessionId(3))
+        );
+        assert_eq!(
+            detect_session_switch(&client_changed, Some(SessionId(3))),
+            None
         );
     }
 

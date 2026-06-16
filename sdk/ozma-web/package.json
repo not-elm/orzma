@@ -1,12 +1,12 @@
 {
-  "name": "@ozmux/sdk",
+  "name": "@ozma/web",
   "version": "1.0.0",
-  "description": "",
+  "description": "In-page TypeScript client for the ozma webview bridge (window.ozma).",
   "type": "module",
   "exports": {
-    "./inline": {
-      "types": "./src/inline/index.ts",
-      "default": "./src/inline/index.ts"
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
     }
   },
   "scripts": {

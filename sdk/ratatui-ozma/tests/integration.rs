@@ -18,13 +18,13 @@ fn with_env(sock: &std::path::Path, f: impl FnOnce()) {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // SAFETY: ENV_LOCK serializes all callers; no other test thread touches these vars.
     unsafe {
-        std::env::set_var("OZMUX_SOCK", sock);
-        std::env::set_var("OZMUX_TOKEN", "test-token");
+        std::env::set_var("OZMA_SOCK", sock);
+        std::env::set_var("OZMA_TOKEN", "test-token");
     }
     f();
     unsafe {
-        std::env::remove_var("OZMUX_SOCK");
-        std::env::remove_var("OZMUX_TOKEN");
+        std::env::remove_var("OZMA_SOCK");
+        std::env::remove_var("OZMA_TOKEN");
     }
 }
 
@@ -177,4 +177,108 @@ fn panicking_handler_does_not_kill_reader() {
         assert_eq!(ping["ok"], true);
         assert_eq!(ping["value"], "pong");
     });
+}
+
+// A private tmux server for the gated fallback test: kills the server and
+// removes its socket on drop so a panicking assertion cannot leak it.
+struct TmuxServerGuard {
+    socket: std::path::PathBuf,
+}
+
+impl TmuxServerGuard {
+    fn run(&self, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("tmux")
+            .arg("-S")
+            .arg(&self.socket)
+            .args(args)
+            .output()
+            .expect("run tmux")
+    }
+}
+
+impl Drop for TmuxServerGuard {
+    fn drop(&mut self) {
+        let _ = self.run(&["kill-server"]);
+        let _ = std::fs::remove_file(&self.socket);
+    }
+}
+
+fn set_or_remove(key: &str, val: Option<std::ffi::OsString>) {
+    // SAFETY: callers hold ENV_LOCK; no other test thread touches these vars.
+    unsafe {
+        match val {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a real tmux binary"]
+fn connect_resolves_ozma_sock_from_tmux_when_env_unset() {
+    // The control socket the program connects to once it discovers the path.
+    let server = FakeServer::start("view-fallback");
+    let server_sock = server.sock_path.to_string_lossy().into_owned();
+
+    // A detached tmux session forks its pane shell now — before set-environment —
+    // so the shell never inherits OZMA_SOCK (the pre-existing-pane scenario).
+    let tmux_socket =
+        std::env::temp_dir().join(format!("ozma-resolve-{}.tmuxsock", std::process::id()));
+    let _ = std::fs::remove_file(&tmux_socket);
+    let tmux = TmuxServerGuard {
+        socket: tmux_socket.clone(),
+    };
+    let created = tmux.run(&["new-session", "-d", "-s", "ozmares"]);
+    assert!(
+        created.status.success(),
+        "tmux new-session failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+
+    // ozma's post-attach injection: set OZMA_SOCK in the session environment.
+    let set = tmux.run(&[
+        "set-environment",
+        "-t",
+        "ozmares",
+        "OZMA_SOCK",
+        &server_sock,
+    ]);
+    assert!(
+        set.status.success(),
+        "set-environment failed: {}",
+        String::from_utf8_lossy(&set.stderr)
+    );
+
+    // Reconstruct the $TMUX a pane carries: <socket>,<server-pid>,<session-id>.
+    let session_field = |format: &str| {
+        let out = tmux.run(&["display-message", "-p", "-t", "ozmares", format]);
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let sid = session_field("#{session_id}");
+    let sid = sid.trim_start_matches('$');
+    let pid = session_field("#{pid}");
+    let tmux_env = format!("{},{},{}", tmux_socket.display(), pid, sid);
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_sock = std::env::var_os("OZMA_SOCK");
+    let prev_token = std::env::var_os("OZMA_TOKEN");
+    let prev_tmux = std::env::var_os("TMUX");
+    // SAFETY: ENV_LOCK serializes all callers; no other test thread touches these vars.
+    unsafe {
+        std::env::remove_var("OZMA_SOCK");
+        std::env::set_var("OZMA_TOKEN", "fallback-token");
+        std::env::set_var("TMUX", &tmux_env);
+    }
+
+    let connected = Ozma::connect();
+
+    set_or_remove("OZMA_SOCK", prev_sock);
+    set_or_remove("OZMA_TOKEN", prev_token);
+    set_or_remove("TMUX", prev_tmux);
+
+    assert!(
+        connected.is_ok(),
+        "connect should resolve OZMA_SOCK via tmux show-environment: {:?}",
+        connected.err()
+    );
 }

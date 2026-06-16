@@ -8,7 +8,6 @@ use crate::inline_webview::{
 };
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
-use ozmux_multiplexer::{MultiplexerCommands, SurfaceOf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -43,15 +42,10 @@ fn init_gate_from_config(
 pub(crate) fn on_osc_webview_request(
     ev: On<OscWebviewRequest>,
     mut inline: InlineWebviewParams,
-    mux: MultiplexerCommands,
     dynamic: Res<DynamicRegistry>,
-    surface_of: Query<&SurfaceOf>,
 ) {
     let req = ev.event();
     let terminal_surface = req.entity;
-    let Ok(pane) = surface_of.get(terminal_surface).map(|s| s.0) else {
-        return;
-    };
     match &req.verb {
         OscWebviewVerb::MountInline {
             view_id,
@@ -59,17 +53,11 @@ pub(crate) fn on_osc_webview_request(
             cols,
             instance_id,
         } => {
-            let Some(workspace) = mux.workspace_of_pane(pane) else {
-                tracing::debug!(%view_id, "osc-webview: mount-inline from a pane with no workspace, dropping");
-                return;
-            };
             mount_inline(
                 &mut inline,
                 &dynamic,
                 InlineMountContext {
                     terminal_surface,
-                    workspace,
-                    pane,
                     view_id,
                     instance_id: instance_id.as_deref(),
                     rows: *rows,

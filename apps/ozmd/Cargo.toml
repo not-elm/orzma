@@ -1,0 +1,27 @@
+[package]
+name = "ozmd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ozmd"
+path = "src/main.rs"
+
+[dependencies]
+ratatui-ozma = { path = "../../sdk/ratatui-ozma" }
+ratatui = "0.29"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+pulldown-cmark = "0.12"
+notify-debouncer-full = "0.3"
+rust-embed = "8"
+tempfile = { workspace = true }
+crossbeam-channel = "0.5"
+
+[lints]
+workspace = true

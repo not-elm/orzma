@@ -90,7 +90,7 @@ fn finish_terminal_setup(
     }
 }
 
-/// Appends `$OZMUX_SOCK` and a freshly-minted, surface-bound `$OZMUX_TOKEN` to
+/// Appends `$OZMA_SOCK` and a freshly-minted, surface-bound `$OZMA_TOKEN` to
 /// `env` when the control plane is up. A program in this PTY uses them to
 /// register Tier 1 dynamic webviews. No-op when the listener is absent.
 fn inject_dyn_env(
@@ -104,10 +104,10 @@ fn inject_dyn_env(
     let token = mint_token();
     handle.tokens.insert(&token, surface);
     env.push((
-        "OZMUX_SOCK".to_string(),
+        "OZMA_SOCK".to_string(),
         handle.sock_path.to_string_lossy().into_owned(),
     ));
-    env.push(("OZMUX_TOKEN".to_string(), token));
+    env.push(("OZMA_TOKEN".to_string(), token));
 }
 
 /// Resolves a surface's seed cwd to a concrete spawn directory: the path when
@@ -363,13 +363,13 @@ mod tests {
 
         assert!(
             env.iter()
-                .any(|(k, v)| k == "OZMUX_SOCK" && v == "/tmp/ctl.sock")
+                .any(|(k, v)| k == "OZMA_SOCK" && v == "/tmp/ctl.sock")
         );
         let token = env
             .iter()
-            .find(|(k, _)| k == "OZMUX_TOKEN")
+            .find(|(k, _)| k == "OZMA_TOKEN")
             .map(|(_, v)| v.clone());
-        assert!(token.is_some(), "OZMUX_TOKEN injected");
+        assert!(token.is_some(), "OZMA_TOKEN injected");
         assert_eq!(
             handle.tokens.resolve(&token.unwrap()),
             Some(surface),

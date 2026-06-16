@@ -4,6 +4,7 @@
 use crate::error::{TmuxError, TmuxResult};
 use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
 use crate::session::{LIST_FORMAT, SessionInfo};
+use crate::window_list::{LIST_ALL_FORMAT, WindowEntry};
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
@@ -57,7 +58,7 @@ impl TmuxServer {
 
     /// Adds an environment variable for the spawned `tmux -CC` process. The tmux
     /// server inherits it, so every pane the server spawns (the initial one and
-    /// any created later) sees it. Used to propagate `$OZMUX_SOCK` into panes.
+    /// any created later) sees it. Used to propagate `$OZMA_SOCK` into panes.
     pub fn env(mut self, key: &str, value: &str) -> Self {
         self.env.push((key.to_string(), value.to_string()));
         self
@@ -94,11 +95,15 @@ impl TmuxServer {
 
     fn new_session_subcommand(&self) -> Vec<String> {
         let mut subcommand = vec!["new-session".to_string()];
-        for (key, value) in &self.env {
-            subcommand.push("-e".to_string());
-            subcommand.push(format!("{key}={value}"));
-        }
+        self.push_env_flags(&mut subcommand);
         subcommand
+    }
+
+    fn push_env_flags(&self, argv: &mut Vec<String>) {
+        for (key, value) in &self.env {
+            argv.push("-e".to_string());
+            argv.push(format!("{key}={value}"));
+        }
     }
 
     /// Lists attachable sessions (`tmux [..] list-sessions -F ..`, plain pipe, no
@@ -120,6 +125,82 @@ impl TmuxServer {
         argv.push("list-sessions".to_string());
         argv.push("-F".to_string());
         argv.push(LIST_FORMAT.to_string());
+        argv
+    }
+
+    /// Lists every window across all sessions (`tmux [..] list-windows -a -F ..`,
+    /// plain pipe, no control mode). Returns `Ok(vec![])` when no server is
+    /// running. Used to build the session-chooser tree against the same socket
+    /// whether or not a control client is attached.
+    pub fn list_windows_all(&self) -> TmuxResult<Vec<WindowEntry>> {
+        let output = std::process::Command::new(&self.program)
+            .args(self.list_windows_all_argv())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(TmuxError::Spawn)?;
+        if output.status.success() {
+            return WindowEntry::parse_list(&output.stdout);
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if is_no_server_stderr(&output.stdout, &stderr) {
+            return Ok(Vec::new());
+        }
+        let message = stderr.trim();
+        let message = if message.is_empty() {
+            "tmux list-windows failed"
+        } else {
+            message
+        };
+        Err(TmuxError::Spawn(std::io::Error::other(message.to_string())))
+    }
+
+    /// The argv (after the program) for the `list-windows -a` query.
+    fn list_windows_all_argv(&self) -> Vec<String> {
+        let mut argv = self.socket_args();
+        argv.push("list-windows".to_string());
+        argv.push("-a".to_string());
+        argv.push("-F".to_string());
+        argv.push(LIST_ALL_FORMAT.to_string());
+        argv
+    }
+
+    /// Creates a new detached session (`tmux new-session -d -P -F ..`) and
+    /// returns its name, without attaching. Used by the chooser's "New session"
+    /// entry while a control client is already attached: create here, then
+    /// `switch-client` the live client to the returned name.
+    pub fn create_detached_session(&self) -> TmuxResult<String> {
+        let output = std::process::Command::new(&self.program)
+            .args(self.create_detached_session_argv())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(TmuxError::Spawn)?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let message = if message.is_empty() {
+                "tmux new-session failed".to_string()
+            } else {
+                message
+            };
+            return Err(TmuxError::Spawn(std::io::Error::other(message)));
+        }
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if name.is_empty() {
+            return Err(TmuxError::Spawn(std::io::Error::other(
+                "tmux new-session returned no name".to_string(),
+            )));
+        }
+        Ok(name)
+    }
+
+    /// The argv (after the program) for `create_detached_session`.
+    fn create_detached_session_argv(&self) -> Vec<String> {
+        let mut argv = self.socket_args();
+        argv.push("new-session".to_string());
+        argv.push("-d".to_string());
+        self.push_env_flags(&mut argv);
+        argv.push("-P".to_string());
+        argv.push("-F".to_string());
+        argv.push("#{session_name}".to_string());
         argv
     }
 
@@ -280,11 +361,7 @@ fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Ve
         return SessionInfo::parse_list(stdout);
     }
     let stderr = String::from_utf8_lossy(stderr);
-    let no_server = stdout.is_empty()
-        && (stderr.contains("no server running")
-            || (stderr.contains("error connecting")
-                && stderr.contains("No such file or directory")));
-    if no_server {
+    if is_no_server_stderr(stdout, &stderr) {
         Ok(Vec::new())
     } else {
         let message = stderr.trim();
@@ -295,6 +372,13 @@ fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Ve
         };
         Err(TmuxError::Spawn(std::io::Error::other(message.to_string())))
     }
+}
+
+fn is_no_server_stderr(stdout: &[u8], stderr: &str) -> bool {
+    stdout.is_empty()
+        && (stderr.contains("no server running")
+            || (stderr.contains("error connecting")
+                && stderr.contains("No such file or directory")))
 }
 
 #[cfg(unix)]
@@ -444,12 +528,12 @@ mod tests {
     #[test]
     fn env_builder_accumulates_pairs() {
         let server = TmuxServer::new()
-            .env("OZMUX_SOCK", "/tmp/ctl.sock")
+            .env("OZMA_SOCK", "/tmp/ctl.sock")
             .env("FOO", "bar");
         assert_eq!(
             server.env,
             vec![
-                ("OZMUX_SOCK".to_string(), "/tmp/ctl.sock".to_string()),
+                ("OZMA_SOCK".to_string(), "/tmp/ctl.sock".to_string()),
                 ("FOO".to_string(), "bar".to_string()),
             ]
         );
@@ -457,10 +541,10 @@ mod tests {
 
     #[test]
     fn new_session_subcommand_emits_dash_e_per_env_pair() {
-        let server = TmuxServer::new().env("OZMUX_SOCK", "/tmp/ctl.sock");
+        let server = TmuxServer::new().env("OZMA_SOCK", "/tmp/ctl.sock");
         assert_eq!(
             server.new_session_subcommand(),
-            vec!["new-session", "-e", "OZMUX_SOCK=/tmp/ctl.sock"]
+            vec!["new-session", "-e", "OZMA_SOCK=/tmp/ctl.sock"]
         );
     }
 
@@ -677,6 +761,68 @@ mod tests {
                 .socket_path("/tmp/foo")
                 .list_sessions_argv(),
             argv(&["-S", "/tmp/foo", "list-sessions", "-F", LIST_FORMAT])
+        );
+    }
+
+    #[test]
+    fn list_windows_all_argv_default() {
+        assert_eq!(
+            TmuxServer::new().list_windows_all_argv(),
+            argv(&["list-windows", "-a", "-F", LIST_ALL_FORMAT])
+        );
+    }
+
+    #[test]
+    fn list_windows_all_argv_socket_name() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_name("sock")
+                .list_windows_all_argv(),
+            argv(&["-L", "sock", "list-windows", "-a", "-F", LIST_ALL_FORMAT])
+        );
+    }
+
+    #[test]
+    fn create_detached_session_argv_default() {
+        assert_eq!(
+            TmuxServer::new().create_detached_session_argv(),
+            argv(&["new-session", "-d", "-P", "-F", "#{session_name}"])
+        );
+    }
+
+    #[test]
+    fn create_detached_session_argv_socket_name() {
+        assert_eq!(
+            TmuxServer::new()
+                .socket_name("sock")
+                .create_detached_session_argv(),
+            argv(&[
+                "-L",
+                "sock",
+                "new-session",
+                "-d",
+                "-P",
+                "-F",
+                "#{session_name}"
+            ])
+        );
+    }
+
+    #[test]
+    fn create_detached_session_argv_emits_dash_e_per_env_pair() {
+        assert_eq!(
+            TmuxServer::new()
+                .env("OZMA_SOCK", "/tmp/ctl.sock")
+                .create_detached_session_argv(),
+            argv(&[
+                "new-session",
+                "-d",
+                "-e",
+                "OZMA_SOCK=/tmp/ctl.sock",
+                "-P",
+                "-F",
+                "#{session_name}"
+            ])
         );
     }
 

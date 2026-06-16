@@ -19,7 +19,7 @@ The workspace root package is the one and only binary; library crates live under
 
 - `crates/ozma_tty_engine` (`ozma_tty_engine`) — Bevy-native terminal: PTY ownership and `alacritty_terminal` VT emulation, emitting coalesced `FrameSnapshot` / `FrameDelta` against the `ozma_tty_renderer` schema. Exposes `TerminalHandlePlugin`.
 - `crates/ozma_tty_renderer` (`ozma_tty_renderer`) — GPU terminal renderer plus the grid schema shared with `ozma_tty_engine`. `TerminalRendererPlugin` wires the grid, material, and glyph sub-plugins (`TerminalGridPlugin`, `TerminalMaterialPlugin`, `TerminalGlyphPlugin`) and hyperlink-hover state; `schema` holds the cell/grid types both crates render against.
-- `crates/webview_host` (`ozmux_webview_host`) — Tokio-free webview host integration for ozmux: a per-handle `RuntimeRoot` runtime directory tree (the 0700 socket dir the control plane mints), and (behind the `cef` feature) serving dynamically-registered Tier 1 webview assets from disk/memory through a `bevy_cef` `ozmux-dyn://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std only. Exposes `DynAsset`, `DynAssetRegistry`, `custom_dyn_scheme`, and `RuntimeRoot`.
+- `crates/webview_host` (`ozmux_webview_host`) — Tokio-free webview host integration for ozmux: a per-handle `RuntimeRoot` runtime directory tree (the 0700 socket dir the control plane mints), and (behind the `cef` feature) serving dynamically-registered Tier 1 webview assets from disk/memory through a `bevy_cef` `ozma-dyn://` custom scheme via the `bevy_cef_core` path dep. The `cef` feature is off by default so the core builds/tests with std only. Exposes `DynAsset`, `DynAssetRegistry`, `custom_dyn_scheme`, and `RuntimeRoot`.
 - `crates/multiplexer` (`ozmux_multiplexer`) — ECS-native multiplexer. Session, Pane, and Surface are Bevy entities related by `ChildOf`; there are no typed IDs (every reference is a Bevy `Entity`, each carrying a `Name`). All mutations route through the `MultiplexerCommands` `SystemParam`; the only observers handle dangling `Entity` references when a child is despawned. Exposes `MultiplexerPlugin`.
 - `crates/configs` (`ozmux_configs`) — config loader. Reads `~/.config/ozmux/config.toml` (or `$OZMUX_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
 
@@ -29,12 +29,12 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 
 `packageManager` is `pnpm@10.30.2`. `catalogMode: strict` — shared versions for `@types/node`, `typescript`, `vitest` live under `pnpm-workspace.yaml`'s `catalog:`. Workspace packages are `sdk/*`:
 
-- `sdk/typescript` (`@ozmux/sdk`) — exposes the `./inline` entry (`mountInline` / `unmountInline`, the OSC 5379 sequence builders); tests via `vitest`.
+- `sdk/ozma-web` (`@ozma/web`) — in-page TypeScript client for the `window.ozma` bridge (`ozma`, `isOzmaAvailable`, `OzmaApi`); tests via `vitest`.
 
 ### How the pieces connect at runtime
 
 1. `ozmux-gui` boots a single Bevy `App`. `OzmuxBootstrapPlugin` seeds the initial session / pane / surface; `ozma_tty_engine` spawns the PTY and runs VT emulation, emitting frame snapshots/deltas that `ozma_tty_renderer` draws on the GPU. Layout, input, copy-mode, IME, and shortcuts are all plugins in the same world.
-2. A program registers webview content over the control socket (Tier 1, `OzmuxControlPlanePlugin`) to mint an opaque handle, then writes an OSC 5379 `mount-inline;<handle>` sequence to mount it as an in-process `bevy_cef` inline webview (assets served from disk/memory via `ozmux-dyn://`, one origin per handle). The page talks back to the registering program through `window.ozmux.call/on` routed over the control socket.
+2. A program registers webview content over the control socket (Tier 1, `OzmuxControlPlanePlugin`) to mint an opaque handle, then writes an OSC 5379 `mount-inline;<handle>` sequence to mount it as an in-process `bevy_cef` inline webview (assets served from disk/memory via `ozma-dyn://`, one origin per handle). The page talks back to the registering program through `window.ozma.call/on` routed over the control socket.
 
 ### `src/` module map
 

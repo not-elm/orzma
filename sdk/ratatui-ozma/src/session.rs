@@ -101,15 +101,20 @@ pub struct Ozma {
 }
 
 impl Ozma {
-    /// Connects to `$OZMUX_SOCK`, performs the `hello` handshake, and spawns the
-    /// background reader thread.
+    /// Connects to the ozma control socket, performs the `hello` handshake, and
+    /// spawns the background reader thread.
+    ///
+    /// The socket path is `$OZMA_SOCK` when present; otherwise — in a pane that
+    /// forked before ozma set it — it is recovered from tmux's session
+    /// environment via `$TMUX` and `show-environment`, so no shell-rc hook is
+    /// required (see `resolve_ozma_sock`).
     pub fn connect() -> OzmaResult<Self> {
-        let sock = std::env::var("OZMUX_SOCK").map_err(|_| OzmaError::NotInPane("OZMUX_SOCK"))?;
+        let sock = resolve_ozma_sock().ok_or(OzmaError::NotInPane("OZMA_SOCK"))?;
         let token = pane_identity(
-            std::env::var("OZMUX_TOKEN").ok(),
+            std::env::var("OZMA_TOKEN").ok(),
             std::env::var("TMUX_PANE").ok(),
         )
-        .ok_or(OzmaError::NotInPane("OZMUX_TOKEN or TMUX_PANE"))?;
+        .ok_or(OzmaError::NotInPane("OZMA_TOKEN or TMUX_PANE"))?;
         let stream = UnixStream::connect(sock)?;
         let writer: SharedWriter = Arc::new(Mutex::new(stream.try_clone()?));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
@@ -179,12 +184,58 @@ impl Ozma {
 }
 
 /// Resolves the identity sent in the `hello` handshake: the legacy per-surface
-/// `$OZMUX_TOKEN` (direct-PTY backend) when set, else the tmux pane id
+/// `$OZMA_TOKEN` (direct-PTY backend) when set, else the tmux pane id
 /// `$TMUX_PANE`. tmux injects `$TMUX_PANE` into every pane it spawns, so the
-/// fallback covers the tmux backend where `$OZMUX_TOKEN` is never set. `None`
+/// fallback covers the tmux backend where `$OZMA_TOKEN` is never set. `None`
 /// when neither is present — the process is not inside an ozmux pane.
 fn pane_identity(ozmux_token: Option<String>, tmux_pane: Option<String>) -> Option<String> {
     ozmux_token.filter(|t| !t.is_empty()).or(tmux_pane)
+}
+
+/// Extracts the tmux server socket path from a `$TMUX` value
+/// (`<socket-path>,<server-pid>,<session-id>`): everything up to the first
+/// comma. `None` for an empty value or one starting with a comma, mirroring
+/// tmux's own `$TMUX` validity guard so a malformed value cannot resolve to an
+/// empty socket path.
+fn socket_from_tmux(tmux: &str) -> Option<&str> {
+    tmux.split(',').next().filter(|first| !first.is_empty())
+}
+
+/// Reads the value of `key` from `tmux show-environment` output. tmux prints one
+/// `KEY=value` line per variable and `-KEY` for an unset one; returns the value
+/// when a `KEY=` line is present, else `None`.
+fn parse_show_environment<'a>(output: &'a str, key: &str) -> Option<&'a str> {
+    let prefix = format!("{key}=");
+    output.lines().find_map(|line| line.strip_prefix(&prefix))
+}
+
+/// Resolves the control-socket path, falling back to tmux when the process did
+/// not inherit `$OZMA_SOCK`.
+///
+/// A pane that forked before ozma ran `set-environment` never received
+/// `$OZMA_SOCK`, and a running process's environment cannot be changed from
+/// outside. tmux does inject `$TMUX` into every pane, so reading the value back
+/// with `tmux -S <socket> show-environment OZMA_SOCK` recovers it without a
+/// shell-rc hook or `send-keys`. `None` when neither the env var nor a tmux
+/// lookup yields a value (outside tmux, or tmux unavailable / the variable
+/// unset on the session).
+fn resolve_ozma_sock() -> Option<String> {
+    if let Some(sock) = std::env::var("OZMA_SOCK").ok().filter(|s| !s.is_empty()) {
+        return Some(sock);
+    }
+    let tmux = std::env::var("TMUX").ok()?;
+    let socket = socket_from_tmux(&tmux)?;
+    let output = std::process::Command::new("tmux")
+        .args(["-S", socket, "show-environment", "OZMA_SOCK"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    parse_show_environment(&stdout, "OZMA_SOCK")
+        .filter(|sock| !sock.is_empty())
+        .map(str::to_owned)
 }
 
 /// Emits CUP + mount-inline for new/changed placements and unmount for vanished
@@ -380,6 +431,67 @@ mod tests {
     #[test]
     fn pane_identity_none_when_neither_set() {
         assert_eq!(pane_identity(None, None), None);
+    }
+
+    #[test]
+    fn socket_from_tmux_takes_first_comma_field() {
+        assert_eq!(
+            socket_from_tmux("/tmp/tmux-501/default,12345,0"),
+            Some("/tmp/tmux-501/default")
+        );
+    }
+
+    #[test]
+    fn socket_from_tmux_handles_path_without_commas() {
+        assert_eq!(
+            socket_from_tmux("/tmp/only-socket"),
+            Some("/tmp/only-socket")
+        );
+    }
+
+    #[test]
+    fn socket_from_tmux_none_for_empty() {
+        assert_eq!(socket_from_tmux(""), None);
+    }
+
+    #[test]
+    fn socket_from_tmux_none_for_leading_comma() {
+        assert_eq!(socket_from_tmux(",12345,0"), None);
+    }
+
+    #[test]
+    fn parse_show_environment_reads_value() {
+        assert_eq!(
+            parse_show_environment("OZMA_SOCK=/tmp/ctl.sock\n", "OZMA_SOCK"),
+            Some("/tmp/ctl.sock")
+        );
+    }
+
+    #[test]
+    fn parse_show_environment_none_for_unset_marker() {
+        assert_eq!(parse_show_environment("-OZMA_SOCK\n", "OZMA_SOCK"), None);
+    }
+
+    #[test]
+    fn parse_show_environment_finds_key_among_many_lines() {
+        let output = "FOO=bar\nOZMA_SOCK=/run/ozma/x.sock\nBAZ=qux\n";
+        assert_eq!(
+            parse_show_environment(output, "OZMA_SOCK"),
+            Some("/run/ozma/x.sock")
+        );
+    }
+
+    #[test]
+    fn parse_show_environment_keeps_equals_in_value() {
+        assert_eq!(
+            parse_show_environment("OZMA_SOCK=/a=b/ctl.sock\n", "OZMA_SOCK"),
+            Some("/a=b/ctl.sock")
+        );
+    }
+
+    #[test]
+    fn parse_show_environment_none_when_key_absent() {
+        assert_eq!(parse_show_environment("OTHER=/x\n", "OZMA_SOCK"), None);
     }
 
     #[test]

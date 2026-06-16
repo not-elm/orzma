@@ -2,11 +2,12 @@
 //! GPU render bundle to each projected `TmuxPane`, then routes tmux `%output`
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
+use crate::osc_webview::OscWebviewGate;
 use crate::ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_tty_engine::TerminalHandle;
+use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
@@ -79,14 +80,23 @@ fn attach_tmux_window_container(
 fn attach_tmux_pane_terminal(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
+    gate: Option<Res<OscWebviewGate>>,
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
 ) {
+    // NOTE: clone the SHARED OscWebviewGate so a tmux pane captures OSC 5379 when
+    // the feature is enabled; a fresh `false` atomic would leave inline-webview
+    // capture permanently off for tmux panes. The fallback is only reached in
+    // tests that do not install the gate resource.
+    let gate = gate
+        .map(|g| g.0.clone())
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     for (entity, pane) in panes.iter() {
         let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
-        let handle = TerminalHandle::detached(cols, rows, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(cols, rows, gate.clone());
         let material = materials.add(TerminalUiMaterial::default());
         commands.entity(entity).insert((
             handle,
+            TerminalTitle::default(),
             TerminalRenderBundle::new(material),
             Node {
                 position_type: PositionType::Absolute,
@@ -115,7 +125,7 @@ fn attach_tmux_pane_terminal(
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
-    mut handles: Query<&mut TerminalHandle>,
+    mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle)>,
     panes: Query<(Entity, &TmuxPane)>,
     copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
@@ -131,10 +141,19 @@ fn route_tmux_output(
         let Some(&entity) = entity_of.get(&pane) else {
             continue;
         };
-        let Ok(mut handle) = handles.get_mut(entity) else {
+        let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
             continue;
         };
         handle.advance(&data);
+        // NOTE: drain captured control frames — crucially the OSC 5379
+        // mount/unmount verbs — into observer triggers. The engine's own control
+        // drain runs only for PtyHandle-backed terminals; tmux panes have no
+        // PtyHandle, so without this call a pane program's inline-webview mount
+        // OSC is parsed and then silently dropped (no webview ever mounts).
+        handle.drain_control_events(&mut commands, entity, &mut title);
+        // While the pane is in copy mode, the copy-mode plugin paints the scrolled
+        // capture onto the grid; skip the live flush so a late %output delta does
+        // not overwrite it (the exit observer forces the full repaint on return).
         if copy_modes.get(entity).is_err() {
             handle.flush_emit(&mut commands, entity);
         }
@@ -465,6 +484,59 @@ mod tests {
         assert!(
             resumed.starts_with("XY"),
             "the live handle advanced under copy mode; after exit + emit row 1 shows 'XY', got {resumed:?}",
+        );
+    }
+
+    #[test]
+    fn mount_inline_osc_from_pane_triggers_webview_request() {
+        use ozma_tty_engine::OscWebviewRequest;
+
+        #[derive(Resource, Default)]
+        struct Seen(u32);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_message::<PaneOutput>();
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(true))));
+        app.init_resource::<Seen>();
+        app.add_observer(|_ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
+            seen.0 += 1;
+        });
+
+        let pane_id = PaneId(1);
+        app.world_mut().spawn(TmuxPane {
+            id: pane_id,
+            dims: dims(),
+        });
+
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
+        );
+
+        // Frame 1: attach the handle + TerminalTitle (no output yet).
+        app.update();
+
+        // Frame 2: deliver a mount-inline OSC and route it.
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"\x1b]5379;mount-inline;memo;3;10\x1b\\".to_vec(),
+            });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            1,
+            "a mount-inline OSC from a tmux pane must trigger exactly one OscWebviewRequest",
         );
     }
 

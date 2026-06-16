@@ -29,6 +29,12 @@ pub enum TmuxError {
         /// The offending line, verbatim.
         line: String,
     },
+    /// A `list-windows` output line could not be parsed.
+    #[error("malformed list-windows line: {line}")]
+    MalformedWindowList {
+        /// The offending line, verbatim.
+        line: String,
+    },
     /// Spawning the tmux process failed.
     // NOTE: `Io` carries `#[from]`, so `?` on an io::Error yields `Io`, not
     // `Spawn`. Construct `Spawn(e)` explicitly via `map_err` at spawn sites.

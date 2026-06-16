@@ -1,9 +1,11 @@
 //! Minimal reference client for ozmux Tier 1 dynamic webviews. Run inside an
-//! ozmux pane: it reads `$OZMUX_SOCK`/`$OZMUX_TOKEN`, registers an inline HTML
+//! ozmux pane: it resolves `$OZMA_SOCK` (falling back to `tmux show-environment`
+//! for a pre-existing tmux pane) and the pane identity (`$OZMA_TOKEN`, else
+//! `$TMUX_PANE`), registers an inline HTML
 //! view over the control socket, prints the `mount-inline` OSC at the cursor,
 //! then demonstrates the back-channel by:
-//!   - replying to `ping` calls from the page (`window.ozmux.call`)
-//!   - emitting a `tick` event every second (`window.ozmux.on`)
+//!   - replying to `ping` calls from the page (`window.ozma.call`)
+//!   - emitting a `tick` event every second (`window.ozma.on`)
 //!
 //! The page also has an `<input>`, so clicking it shows the focus ring and typing
 //! (routed to the focused inline webview) echoes back into the page.
@@ -18,9 +20,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 fn main() -> std::io::Result<()> {
-    let sock = std::env::var("OZMUX_SOCK")
-        .expect("not inside an ozmux pane (or control plane down): $OZMUX_SOCK unset");
-    let token = std::env::var("OZMUX_TOKEN").expect("$OZMUX_TOKEN unset");
+    let sock = resolve_sock().expect(
+        "not inside an ozmux pane (or control plane down): $OZMA_SOCK unset and not resolvable via tmux",
+    );
+    let token = resolve_token().expect("no pane identity: neither $OZMA_TOKEN nor $TMUX_PANE set");
 
     let stream = UnixStream::connect(&sock)?;
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
@@ -31,7 +34,7 @@ fn main() -> std::io::Result<()> {
         writeln!(w, "{}", json!({ "op": "hello", "token": token }))?;
         let html = concat!(
             "<body style='background:#13131a;color:#8be9fd;font:16px sans-serif;margin:0;padding:8px'>",
-            "<h1>window.ozmux demo</h1>",
+            "<h1>window.ozma demo</h1>",
             "<div id='out'>calling ping\u{2026}</div>",
             "<div id='tick'>no ticks yet</div>",
             // A focusable element so click-to-focus is visible: clicking it shows the
@@ -39,10 +42,10 @@ fn main() -> std::io::Result<()> {
             "<input id='field' placeholder='click here, then type\u{2026}' ",
             "style='font:16px sans-serif;padding:4px;width:92%;margin-top:8px'>",
             "<script>",
-            "window.ozmux.call('ping','hi')",
+            "window.ozma.call('ping','hi')",
             ".then(function(v){document.getElementById('out').textContent='ping \u{2192} '+v;})",
             ".catch(function(e){document.getElementById('out').textContent='error: '+e.message;});",
-            "window.ozmux.on('tick',function(n){document.getElementById('tick').textContent='tick #'+n;});",
+            "window.ozma.on('tick',function(n){document.getElementById('tick').textContent='tick #'+n;});",
             "document.getElementById('field').addEventListener('input',function(e){",
             "document.getElementById('out').textContent='typed: '+e.target.value;});",
             "</script>",
@@ -129,4 +132,37 @@ fn main() -> std::io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolves `$OZMA_SOCK`, falling back to tmux's session environment (via `$TMUX`)
+/// so a pane that forked before ozma set it still finds the socket. Mirrors what
+/// the `ratatui-ozma` SDK does in `Ozma::connect()`.
+fn resolve_sock() -> Option<String> {
+    if let Some(sock) = std::env::var("OZMA_SOCK").ok().filter(|s| !s.is_empty()) {
+        return Some(sock);
+    }
+    let tmux = std::env::var("TMUX").ok()?;
+    let socket = tmux.split(',').next().filter(|s| !s.is_empty())?;
+    let output = std::process::Command::new("tmux")
+        .args(["-S", socket, "show-environment", "OZMA_SOCK"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("OZMA_SOCK="))
+        .filter(|sock| !sock.is_empty())
+        .map(str::to_owned)
+}
+
+/// Resolves the pane identity sent in `hello`: `$OZMA_TOKEN` (direct-PTY backend)
+/// when set, else the tmux pane id `$TMUX_PANE` (tmux backend).
+fn resolve_token() -> Option<String> {
+    std::env::var("OZMA_TOKEN")
+        .ok()
+        .filter(|t| !t.is_empty())
+        .or_else(|| std::env::var("TMUX_PANE").ok())
 }
