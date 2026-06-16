@@ -12,7 +12,6 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
-use ozmux_multiplexer::SurfaceMarker;
 use ozmux_tmux::TmuxPane;
 use ozmux_webview_host::DynAssetRegistry;
 use ozmux_webview_host::host::RuntimeRoot;
@@ -358,7 +357,6 @@ impl Plugin for OzmuxControlPlanePlugin {
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(DynAssetRegistryRes(self.dyn_assets.clone()));
         app.add_systems(Update, (apply_control_events, sync_tmux_pane_tokens));
-        app.add_observer(purge_dynamic_on_surface_removed);
     }
 }
 
@@ -369,17 +367,31 @@ impl Plugin for OzmuxControlPlanePlugin {
 /// `$OZMA_TOKEN` injection (terminal-surface spawn path) cannot reach under the
 /// tmux backend. Despawned panes are unbound first so a recycled `Entity` id
 /// cannot resolve a stale key.
+///
+/// A despawned pane also owns any dynamic registrations whose `owner_surface`
+/// is that pane entity: those are purged from the [`DynamicRegistry`] and their
+/// assets from the [`DynAssetRegistry`] here.
 fn sync_tmux_pane_tokens(
-    handle: Option<Res<ControlPlaneHandle>>,
+    mut registry: ResMut<DynamicRegistry>,
     mut closed: RemovedComponents<TmuxPane>,
     new_panes: Query<(Entity, &TmuxPane), Added<TmuxPane>>,
+    handle: Option<Res<ControlPlaneHandle>>,
+    dyn_assets: Res<DynAssetRegistryRes>,
 ) {
+    // NOTE: the registry/asset purge must run for every removed pane even when
+    // the `ControlPlaneHandle` resource is absent; gating it behind the handle
+    // guard below would leak dynamic registrations + assets in that case.
+    for entity in closed.read() {
+        for handle_str in registry.remove_by_surface(entity) {
+            dyn_assets.0.remove(&handle_str);
+        }
+        if let Some(handle) = handle.as_ref() {
+            handle.tokens.remove_entity(entity);
+        }
+    }
     let Some(handle) = handle else {
         return;
     };
-    for entity in closed.read() {
-        handle.tokens.remove_entity(entity);
-    }
     for (entity, pane) in new_panes.iter() {
         handle.tokens.insert(format!("%{}", pane.id.0), entity);
     }
@@ -552,19 +564,6 @@ fn apply_control_events(
                 }
             }
         }
-    }
-}
-
-/// Despawn observer: when a terminal surface goes away (tab close, or pane
-/// despawn cascading to its surfaces), purge every dynamic registration owned by
-/// that surface. Mirrors the multiplexer's existing `on_remove_*` observers.
-fn purge_dynamic_on_surface_removed(
-    ev: On<Remove, SurfaceMarker>,
-    mut registry: ResMut<DynamicRegistry>,
-    dyn_assets: Res<DynAssetRegistryRes>,
-) {
-    for handle in registry.remove_by_surface(ev.entity) {
-        dyn_assets.0.remove(&handle);
     }
 }
 
@@ -829,6 +828,8 @@ mod token_tests {
         };
         let tokens = handle.tokens.clone();
         app.insert_resource(handle);
+        app.init_resource::<DynamicRegistry>();
+        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
         app.add_systems(Update, sync_tmux_pane_tokens);
 
         let pane = app.world_mut().spawn(tmux_pane(5)).id();
@@ -838,6 +839,42 @@ mod token_tests {
         app.world_mut().entity_mut(pane).despawn();
         app.update();
         assert_eq!(tokens.resolve("%5"), None);
+    }
+
+    #[test]
+    fn pane_despawn_purges_its_dynamic_registrations() {
+        let mut app = App::new();
+        let dyn_assets = DynAssetRegistry::default();
+        let mut reg = DynamicRegistry::default();
+        let pane = app.world_mut().spawn(tmux_pane(1)).id();
+        reg.insert(
+            "h".into(),
+            DynamicView {
+                source: DynSource::Dir("/x".into()),
+                entry: "i".into(),
+                interactive: true,
+                owner_surface: pane,
+                connection_id: 1,
+                passthrough: vec![],
+            },
+        );
+        dyn_assets.insert_dir("h", "/x".into());
+        app.insert_resource(reg);
+        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.add_systems(Update, sync_tmux_pane_tokens);
+
+        app.update();
+        app.world_mut().entity_mut(pane).despawn();
+        app.update();
+
+        assert!(
+            app.world().resource::<DynamicRegistry>().get("h").is_none(),
+            "purged from DynamicRegistry on pane despawn"
+        );
+        assert!(
+            dyn_assets.get("h").is_none(),
+            "purged from DynAssetRegistry"
+        );
     }
 }
 
@@ -1074,40 +1111,6 @@ mod apply_tests {
         app.add_systems(Update, apply_control_events);
         app.update();
         assert!(app.world().get_resource::<ControlEvents>().is_none());
-    }
-
-    #[test]
-    fn surface_despawn_purges_its_dynamic_registrations() {
-        let mut app = App::new();
-        app.add_observer(purge_dynamic_on_surface_removed);
-        let dyn_assets = DynAssetRegistry::default();
-        let surface = app.world_mut().spawn(SurfaceMarker).id();
-        let mut reg = DynamicRegistry::default();
-        reg.insert(
-            "h".into(),
-            DynamicView {
-                source: DynSource::Dir("/x".into()),
-                entry: "i".into(),
-                interactive: true,
-                owner_surface: surface,
-                connection_id: 1,
-                passthrough: vec![],
-            },
-        );
-        dyn_assets.insert_dir("h", "/x".into());
-        app.insert_resource(reg);
-        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
-
-        app.world_mut().entity_mut(surface).despawn();
-
-        assert!(
-            app.world().resource::<DynamicRegistry>().get("h").is_none(),
-            "purged from DynamicRegistry on surface despawn"
-        );
-        assert!(
-            dyn_assets.get("h").is_none(),
-            "purged from DynAssetRegistry"
-        );
     }
 
     #[test]
@@ -1423,19 +1426,12 @@ mod focus_tests {
     fn set_focus_points_focused_webview_at_the_owned_inline_child() {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
-            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
             .init_resource::<DynamicRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
             .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
 
-        let surface = app
-            .world_mut()
-            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
-                mux.create_workspace(Some("t".into())).surface
-            })
-            .unwrap();
-        app.world_mut().flush();
+        let surface = app.world_mut().spawn_empty().id();
 
         app.world_mut().resource_mut::<DynamicRegistry>().insert(
             "h1".into(),
@@ -1496,18 +1492,11 @@ mod focus_tests {
     fn set_focus_rejects_unowned_handle() {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
-            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
             .init_resource::<DynamicRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
             .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
-        let surface = app
-            .world_mut()
-            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
-                mux.create_workspace(Some("t".into())).surface
-            })
-            .unwrap();
-        app.world_mut().flush();
+        let surface = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<DynamicRegistry>().insert(
             "h1".into(),
             DynamicView {
@@ -1555,27 +1544,13 @@ mod focus_tests {
     fn blur_does_not_clobber_another_surfaces_focus() {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
-            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
             .init_resource::<DynamicRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
             .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
 
-        let surface_a = app
-            .world_mut()
-            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
-                mux.create_workspace(Some("a".into())).surface
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        let surface_b = app
-            .world_mut()
-            .run_system_once(|mut mux: ozmux_multiplexer::MultiplexerCommands| {
-                mux.create_workspace(Some("b".into())).surface
-            })
-            .unwrap();
-        app.world_mut().flush();
+        let surface_a = app.world_mut().spawn_empty().id();
+        let surface_b = app.world_mut().spawn_empty().id();
 
         // Register "ha" owned by connection 1 / surface_a.
         app.world_mut().resource_mut::<DynamicRegistry>().insert(
@@ -1661,28 +1636,33 @@ mod focus_tests {
     #[test]
     fn sync_preserves_app_declared_focus_from_control_plane() {
         use crate::webview_render::sync_focused_webview;
-        use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, Side, SplitOrientation};
+        use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
+        use tmux_control_parser::CellDims;
 
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
-            .add_plugins(ozmux_multiplexer::MultiplexerPlugin)
             .init_resource::<FocusedWebview>()
             .init_resource::<DynamicRegistry>()
             .init_resource::<OzmuxRpc>()
             .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()))
             .add_systems(Update, sync_focused_webview);
 
-        let (workspace, pane, surface) = app
+        // The owner surface IS the active TmuxPane.
+        let surface = app
             .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.workspace, o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.world_mut()
-            .entity_mut(workspace)
-            .insert(AttachedWorkspace);
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 80,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                ActivePane,
+            ))
+            .id();
 
         app.world_mut().resource_mut::<DynamicRegistry>().insert(
             "h1".into(),
@@ -1726,7 +1706,7 @@ mod focus_tests {
         );
 
         // The regression: the per-frame sync must NOT clobber app-declared focus
-        // while the owning surface is active — the preserve arm covers it the
+        // while the owning pane is live — the preserve arm covers it the
         // same way it covers click-granted inline focus.
         app.update();
         assert_eq!(
@@ -1735,20 +1715,14 @@ mod focus_tests {
             "app-declared inline focus must survive the per-frame sync_focused_webview"
         );
 
-        // Promoting a different pane makes the owner surface inactive, so the
-        // preserve arm no longer holds and app-declared focus correctly clears.
-        app.world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane(pane, Side::After, SplitOrientation::Horizontal)
-                    .expect("split_pane")
-            })
-            .unwrap();
-        app.world_mut().flush();
+        // Despawning the inline child fails the preserve arm, so the sync GC's
+        // it out of FocusedWebview.
+        app.world_mut().entity_mut(child).despawn();
         app.update();
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             None,
-            "app-declared focus must clear once a different pane/surface becomes active"
+            "app-declared focus must clear once its inline child despawns"
         );
     }
 }
