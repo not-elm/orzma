@@ -8,18 +8,30 @@
 //! absolute target size and an `resize-pane -x/-y` command is sent when the
 //! target differs from the last-sent size and the prior resize has been
 //! confirmed by `%layout-change` (one-in-flight throttle).
+//!
+//! A press on a pane that drags past `drag_threshold_px` enters `Selecting`
+//! state: copy mode is auto-entered on the pane under the press, then the copy
+//! cursor is positioned to the press cell and a selection begun, extending as
+//! the pointer moves and copying to the clipboard (via the tmux paste buffer)
+//! on release. All copy-mode commands are pane-targeted (`send-keys -X -t %id`)
+//! so they act on the pressed pane regardless of the client's active pane.
 
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
+use crate::tmux_copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
+use crate::tmux_picker::SessionPicker;
+use crate::ui::copy_mode::CopyModeState;
+use crate::ui::copy_search::CopyPrompt;
 use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
+use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{
-    ActiveWindow, PaneId, TmuxConnection, TmuxDividers, TmuxPane, resize_pane_x_command,
-    resize_pane_y_command, select_pane_command,
+    ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxDividers, TmuxPane,
+    resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
 };
 use tmux_control_parser::{Divider, DividerAxis};
 
@@ -39,11 +51,21 @@ enum GestureState {
     /// No button is held; the arbiter is waiting for the next press.
     #[default]
     Idle,
-    /// Left button is held; `pane_id` is the pane that received the press and
-    /// `origin_phys` is the physical-pixel cursor position at press time.
+    /// Left button is held; `pane`/`pane_id` is the pane that received the press
+    /// and `origin_phys` is the physical-pixel cursor position at press time.
+    /// Becomes `Selecting` once the pointer drags past `drag_threshold_px`.
     Pressed {
+        pane: Entity,
         pane_id: PaneId,
         origin_phys: Vec2,
+    },
+    /// Selecting text in a pane via tmux copy-mode (entered on drag-start).
+    Selecting {
+        pane: Entity,
+        pane_id: PaneId,
+        anchor: (u16, u16),
+        begun: bool,
+        last_target: Option<(u16, u16)>,
     },
     /// Dragging a divider to resize its primary pane.
     Resizing {
@@ -71,16 +93,16 @@ enum Press {
     None,
 }
 
-/// Returns the `PaneId` of the first `TmuxPane` whose `ComputedNode` contains
-/// `cursor_phys` (physical px), or `None` when no pane covers the point.
+/// Returns the `(Entity, PaneId)` of the first `TmuxPane` whose `ComputedNode`
+/// contains `cursor_phys` (physical px), or `None` when no pane covers the point.
 fn pane_under_cursor(
-    panes: &Query<(&TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     cursor_phys: Vec2,
-) -> Option<PaneId> {
+) -> Option<(Entity, PaneId)> {
     panes
         .iter()
-        .find(|(_, node, transform)| node.contains_point(**transform, cursor_phys))
-        .map(|(pane, _, _)| pane.id)
+        .find(|(_, _, node, transform)| node.contains_point(**transform, cursor_phys))
+        .map(|(entity, pane, _, _)| (entity, pane.id))
 }
 
 /// Returns the divider whose grab zone contains `cursor_phys` (physical px),
@@ -144,7 +166,17 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 /// drift-free); the column uses relative cursor motion. `history` and `scroll`
 /// are `CopyState.history_size` / `scroll_position` for the absolute mapping
 /// (`absolute_line = (history - scroll) + visible_row`).
-fn position_commands(cur: (u16, u16), target: (u16, u16), history: u32, scroll: u32) -> Vec<String> {
+// NOTE: kept for the real-tmux drag-select validation (plan Task 13); the
+// arbiter currently uses relative cursor_deltas. dead_code is allowed (not
+// expected) because the test build references it, so the lint only fires for
+// the non-test build.
+#[allow(dead_code)]
+fn position_commands(
+    cur: (u16, u16),
+    target: (u16, u16),
+    history: u32,
+    scroll: u32,
+) -> Vec<String> {
     let mut out = Vec::new();
     let top = history as i32 - scroll as i32;
     let target_line = (top + target.1 as i32).max(0);
@@ -158,26 +190,38 @@ fn position_commands(cur: (u16, u16), target: (u16, u16), history: u32, scroll: 
     out
 }
 
-/// Interprets raw left-button messages into tmux `select-pane` or
-/// `resize-pane` commands.
+/// Interprets raw left-button messages into tmux `select-pane`, `resize-pane`,
+/// or copy-mode selection commands.
 ///
 /// On each `Pressed` event the cursor's physical position is classified via
 /// `classify_press`: a divider hit enters `Resizing` state; a pane hit sends
-/// `select-pane` and enters `Pressed`; a miss leaves the state `Idle`. Each
-/// frame while `Resizing` the pointer's major-axis cell coordinate is mapped to
-/// an absolute target size and sent as `resize-pane -x/-y` when the target
-/// differs from the last-sent size and the prior resize has been confirmed
-/// (one-in-flight throttle). On `Released` the state returns to `Idle`. When
-/// the primary window is not focused any queued events are drained and the
-/// state is reset.
+/// `select-pane` and enters `Pressed`; a miss leaves the state `Idle`. While
+/// `Pressed`, a pointer that drags past `drag_threshold_px` auto-enters tmux
+/// copy mode on the pressed pane and transitions to `Selecting`, which positions
+/// the copy cursor to the press cell, begins a selection, and extends it as the
+/// pointer moves (all pane-targeted via `send-keys -X -t %id`). Each frame while
+/// `Resizing` the pointer's major-axis cell coordinate is mapped to an absolute
+/// target size and sent as `resize-pane -x/-y` when the target differs from the
+/// last-sent size and the prior resize has been confirmed (one-in-flight
+/// throttle). On `Released` from `Selecting` the selection is copied and bridged
+/// to the clipboard; any other release returns the state to `Idle`. When the
+/// primary window is not focused, or a modal (picker / copy-search prompt /
+/// webview) owns input, queued events are drained and the state is reset.
 fn arbiter(
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
+    mut commands: Commands,
+    mut queries: ResMut<CopyModeQueries>,
     connection: NonSend<TmuxConnection>,
-    panes: Query<(&TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     dividers_q: Query<&TmuxDividers, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OzmuxConfigsResource>>,
+    picker: Res<SessionPicker>,
+    copy_prompt: Res<CopyPrompt>,
+    focused_webview: Res<FocusedWebview>,
+    copy_modes: Query<(), With<CopyModeState>>,
+    snapshots: Query<&CopyModeSnapshot>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else {
@@ -190,26 +234,33 @@ fn arbiter(
         gesture.state = GestureState::Idle;
         return;
     }
+    // NOTE: a gesture behind a modal must not mutate tmux; mirror the keyboard
+    // path. While a picker / copy-search prompt or a webview owns input, drain
+    // the events so they do not replay later, and reset the gesture.
+    if picker.open || copy_prompt.open.is_some() || focused_webview.0.is_some() {
+        buttons.clear();
+        gesture.state = GestureState::Idle;
+        return;
+    }
 
     let scale = window.scale_factor();
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    let (grab_tol_logical, max_resize_per_frame) = configs
+    let (grab_tol_logical, max_resize_per_frame, drag_threshold_logical) = configs
         .as_deref()
         .map(|c| {
             (
                 c.mouse.divider_grab_tolerance_px,
                 c.mouse.max_resize_commands_per_frame,
+                c.mouse.drag_threshold_px,
             )
         })
-        .unwrap_or((4.0, 4));
+        .unwrap_or((4.0, 4, 4.0));
     let tol_phys = grab_tol_logical * scale;
+    let drag_threshold_phys = drag_threshold_logical * scale;
 
-    let dividers: &[Divider] = dividers_q
-        .single()
-        .map(|d| d.0.as_slice())
-        .unwrap_or(&[]);
+    let dividers: &[Divider] = dividers_q.single().map(|d| d.0.as_slice()).unwrap_or(&[]);
 
     for ev in buttons.read() {
         if ev.button != bevy::input::mouse::MouseButton::Left {
@@ -221,12 +272,19 @@ fn arbiter(
                     continue;
                 };
                 let pane_under = pane_under_cursor(&panes, cursor_phys);
-                match classify_press(dividers, pane_under, cursor_phys, cell_w, cell_h, tol_phys) {
+                match classify_press(
+                    dividers,
+                    pane_under.map(|(_, id)| id),
+                    cursor_phys,
+                    cell_w,
+                    cell_h,
+                    tol_phys,
+                ) {
                     Press::Divider(d) => {
                         let (near, last_sent) = panes
                             .iter()
-                            .find(|(p, _, _)| p.id == d.primary)
-                            .map(|(p, _, _)| match d.axis {
+                            .find(|(_, p, _, _)| p.id == d.primary)
+                            .map(|(_, p, _, _)| match d.axis {
                                 DividerAxis::Vertical => (p.dims.xoff, p.dims.width),
                                 DividerAxis::Horizontal => (p.dims.yoff, p.dims.height),
                             })
@@ -248,7 +306,9 @@ fn arbiter(
                                 tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
                             }
                         }
+                        let pane = pane_under.map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER);
                         gesture.state = GestureState::Pressed {
+                            pane,
                             pane_id,
                             origin_phys: cursor_phys,
                         };
@@ -257,9 +317,140 @@ fn arbiter(
                 }
             }
             ButtonState::Released => {
+                if let GestureState::Selecting { pane_id, .. } = gesture.state
+                    && let Some(client) = connection.client()
+                {
+                    let handle = client.handle();
+                    let copy = target_copy_cmd(pane_id, "send-keys -X copy-selection");
+                    if let Err(e) = handle.send(&copy) {
+                        tracing::warn!(
+                            ?e,
+                            pane = pane_id.0,
+                            "drag-select copy-selection send failed"
+                        );
+                    } else {
+                        match handle.send(&show_buffer_command()) {
+                            Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
+                            Err(e) => {
+                                tracing::warn!(
+                                    ?e,
+                                    pane = pane_id.0,
+                                    "drag-select show-buffer send failed"
+                                )
+                            }
+                        }
+                    }
+                }
                 gesture.state = GestureState::Idle;
             }
         }
+    }
+
+    if let GestureState::Pressed {
+        pane,
+        pane_id,
+        origin_phys,
+    } = gesture.state
+    {
+        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
+            return;
+        };
+        if cursor_phys.distance(origin_phys) <= drag_threshold_phys {
+            return;
+        }
+        let Some((_, p, node, transform)) = panes.iter().find(|(e, _, _, _)| *e == pane) else {
+            gesture.state = GestureState::Idle;
+            return;
+        };
+        let cols = p.dims.width as u16;
+        let rows = p.dims.height as u16;
+        if copy_modes.get(pane).is_err() {
+            if let Some(client) = connection.client() {
+                if let Err(e) = client
+                    .handle()
+                    .send(&format!("copy-mode -t %{}", pane_id.0))
+                {
+                    tracing::warn!(?e, pane = pane_id.0, "copy-mode entry send failed");
+                    return;
+                }
+            } else {
+                return;
+            }
+            commands.entity(pane).insert(CopyModeState);
+        }
+        let Some(anchor) = cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
+        else {
+            return;
+        };
+        gesture.state = GestureState::Selecting {
+            pane,
+            pane_id,
+            anchor,
+            begun: false,
+            last_target: None,
+        };
+        return;
+    }
+
+    if let GestureState::Selecting {
+        pane,
+        pane_id,
+        anchor,
+        begun,
+        last_target,
+    } = &mut gesture.state
+    {
+        let Some((_, p, node, transform)) = panes.iter().find(|(e, _, _, _)| *e == *pane) else {
+            gesture.state = GestureState::Idle;
+            return;
+        };
+        // NOTE: the snapshot is the copy cursor the relative cursor_deltas are
+        // computed from. copy-mode was just entered, so the first state refresh
+        // round-trips over a frame; without a snapshot, defer to a later frame
+        // rather than computing deltas off a stale/absent cursor.
+        let Ok(snapshot_cursor) = snapshots.get(*pane).map(|s| (s.0.cursor_x, s.0.cursor_y)) else {
+            return;
+        };
+        let Some(client) = connection.client() else {
+            return;
+        };
+        let handle = client.handle();
+        let cols = p.dims.width as u16;
+        let rows = p.dims.height as u16;
+        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
+            return;
+        };
+        let Some(cell) = cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows)
+        else {
+            return;
+        };
+
+        if !*begun {
+            for cmd in cursor_deltas(snapshot_cursor, *anchor) {
+                if let Err(e) = handle.send(&target_copy_cmd(*pane_id, &cmd)) {
+                    tracing::warn!(?e, pane = pane_id.0, "drag-select anchor delta send failed");
+                }
+            }
+            if let Err(e) = handle.send(&target_copy_cmd(*pane_id, "send-keys -X begin-selection"))
+            {
+                tracing::warn!(
+                    ?e,
+                    pane = pane_id.0,
+                    "drag-select begin-selection send failed"
+                );
+                return;
+            }
+            *begun = true;
+            *last_target = Some(*anchor);
+        } else if Some(cell) != *last_target {
+            for cmd in cursor_deltas(snapshot_cursor, cell) {
+                if let Err(e) = handle.send(&target_copy_cmd(*pane_id, &cmd)) {
+                    tracing::warn!(?e, pane = pane_id.0, "drag-select extend delta send failed");
+                }
+            }
+            *last_target = Some(cell);
+        }
+        return;
     }
 
     if let GestureState::Resizing {
@@ -288,8 +479,8 @@ fn arbiter(
 
         let current_size = panes
             .iter()
-            .find(|(p, _, _)| p.id == divider.primary)
-            .map(|(p, _, _)| match divider.axis {
+            .find(|(_, p, _, _)| p.id == divider.primary)
+            .map(|(_, p, _, _)| match divider.axis {
                 DividerAxis::Vertical => p.dims.width,
                 DividerAxis::Horizontal => p.dims.height,
             });
@@ -322,6 +513,16 @@ fn arbiter(
 
         *last_sent = target;
         *commands_this_frame += 1;
+    }
+}
+
+/// Inserts `-t %<id>` into a `send-keys -X ...` copy-mode command so it targets
+/// a specific pane instead of the client's active pane. Non-`send-keys -X`
+/// commands are returned unchanged.
+fn target_copy_cmd(pane: PaneId, cmd: &str) -> String {
+    match cmd.strip_prefix("send-keys -X") {
+        Some(rest) => format!("send-keys -X -t %{}{}", pane.0, rest),
+        None => cmd.to_string(),
     }
 }
 
@@ -426,7 +627,14 @@ mod tests {
 
     #[test]
     fn classify_press_none_when_both_miss() {
-        let result = classify_press(&[], Option::<PaneId>::None, Vec2::new(0.0, 0.0), 8.0, 16.0, 4.0);
+        let result = classify_press(
+            &[],
+            Option::<PaneId>::None,
+            Vec2::new(0.0, 0.0),
+            8.0,
+            16.0,
+            4.0,
+        );
         assert_eq!(result, Press::None);
     }
 
@@ -466,10 +674,19 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
+        app.init_resource::<CopyModeQueries>();
+        app.init_resource::<SessionPicker>();
+        app.init_resource::<CopyPrompt>();
+        app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, arbiter);
-        app.world_mut()
-            .spawn((Window { focused: true, ..default() }, PrimaryWindow));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<MouseButtonInput>>()
             .write(MouseButtonInput {
@@ -478,6 +695,33 @@ mod tests {
                 window: Entity::PLACEHOLDER,
             });
         app.update();
-        assert_eq!(app.world().resource::<TmuxMouseGesture>().state, GestureState::Idle);
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle
+        );
+    }
+
+    #[test]
+    fn target_copy_cmd_inserts_pane_target_after_send_keys_x() {
+        assert_eq!(
+            target_copy_cmd(PaneId(2), "send-keys -X begin-selection"),
+            "send-keys -X -t %2 begin-selection",
+        );
+    }
+
+    #[test]
+    fn target_copy_cmd_preserves_flags_after_send_keys_x() {
+        assert_eq!(
+            target_copy_cmd(PaneId(2), "send-keys -X -N 3 cursor-right"),
+            "send-keys -X -t %2 -N 3 cursor-right",
+        );
+    }
+
+    #[test]
+    fn target_copy_cmd_passes_non_matching_through() {
+        assert_eq!(
+            target_copy_cmd(PaneId(2), "copy-mode -t %2"),
+            "copy-mode -t %2",
+        );
     }
 }

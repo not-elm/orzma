@@ -14,25 +14,17 @@
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
 use crate::clipboard::Clipboard;
-use crate::input::InputPhase;
-use crate::tmux_picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
-use crate::ui::copy_search::CopyPrompt;
-use bevy::input::ButtonState;
-use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::PrimaryWindow;
-use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_engine::TerminalHandle;
-use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::{
     SelectionKind, SelectionRange, TerminalGrid, ViCursor, ViewportPoint,
 };
 use ozmux_tmux::{
-    ActivePane, CopyModeQueries, CopyModeReply, CopyQueryKind, CopyState, PaneId, TmuxConnection,
-    TmuxPane, TmuxProjectionSet, absolute_to_visible_row, copy_mode_capture_command,
-    copy_state_query_command, parse_copy_state, show_buffer_command,
+    CopyModeQueries, CopyModeReply, CopyQueryKind, CopyState, PaneId, TmuxConnection, TmuxPane,
+    TmuxProjectionSet, absolute_to_visible_row, copy_mode_capture_command,
+    copy_state_query_command, parse_copy_state,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -44,7 +36,6 @@ pub struct OzmuxTmuxCopyModePlugin;
 impl Plugin for OzmuxTmuxCopyModePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CopyRefreshState>();
-        app.init_resource::<DragSelect>();
         app.add_observer(on_copy_mode_exit);
         app.add_systems(
             Update,
@@ -59,12 +50,6 @@ impl Plugin for OzmuxTmuxCopyModePlugin {
                     .after(consume_copy_reply),
             )
                 .after(TmuxProjectionSet),
-        );
-        app.add_systems(
-            Update,
-            drag_select_in_copy_mode
-                .in_set(InputPhase::Dispatch)
-                .run_if(any_pane_in_copy_mode),
         );
     }
 }
@@ -88,20 +73,11 @@ struct CopyRefreshState {
 /// flush of "stuck" traffic, just a fresh query whose reply can still land.
 const STALE_STATE_RESEND_UPDATES: u32 = 12;
 
-/// Drag-select state for mouse selection in copy mode. `active` is set on a
-/// left press over an in-copy-mode pane and cleared on release; `target` is the
-/// cell the cursor was last commanded toward, used to skip redundant motions.
-#[derive(Resource, Default)]
-struct DragSelect {
-    active: bool,
-    target: Option<(u16, u16)>,
-}
-
 /// The latest copy-mode state snapshot for a pane. Written only when the state
 /// changes (so `Changed<CopyModeSnapshot>` is meaningful), and read back to
 /// diff against the next reply.
 #[derive(Component)]
-struct CopyModeSnapshot(CopyState);
+pub(crate) struct CopyModeSnapshot(pub(crate) CopyState);
 
 /// A per-pane scratch terminal used only to parse `capture-pane` bytes into the
 /// pane's rendered grid while in copy mode. The pane's live handle stays
@@ -122,24 +98,16 @@ fn any_pane_in_copy_mode(copy_modes: Query<(), With<CopyModeState>>) -> bool {
 /// the rendered grid switches back from the captured scrolled view to live
 /// content (`route_tmux_output` only emits on new `%output`, so an idle pane
 /// would otherwise stay frozen on capture content, and a later delta would
-/// paint over it), drops the scratch `CopyRenderHandle`, prunes this pane's
+/// paint over it), drops the scratch `CopyRenderHandle`, and prunes this pane's
 /// refresh bookkeeping (otherwise a stale `PaneId` wedges `issue_copy_state`'s
-/// coalescing guard and blocks re-entry capture at the same scroll position),
-/// and resets the global `DragSelect`.
-// NOTE: the unconditional DragSelect reset is load-bearing: if a pane leaves
-// copy mode while the mouse button is held, a still-`active` drag would fire
-// phantom cursor_deltas against the NEXT pane to enter copy mode (a selection
-// the user never started). Resetting here covers every exit path.
+/// coalescing guard and blocks re-entry capture at the same scroll position).
 fn on_copy_mode_exit(
     ev: On<Remove, CopyModeState>,
     mut commands: Commands,
     mut refresh: ResMut<CopyRefreshState>,
-    mut drag: ResMut<DragSelect>,
     mut live_handles: Query<&mut TerminalHandle>,
     panes: Query<&TmuxPane>,
 ) {
-    drag.active = false;
-    drag.target = None;
     let entity = ev.entity;
     if let Ok(mut handle) = live_handles.get_mut(entity) {
         handle.repaint_full(&mut commands, entity);
@@ -482,187 +450,9 @@ pub(crate) fn phys_to_pane_local(
         .map(|normalized| (normalized + Vec2::splat(0.5)) * node.size)
 }
 
-/// Drives mouse drag-select while the active pane is in copy mode.
-///
-/// A left press positions the copy cursor to the clicked cell (via delta
-/// motions off the latest read-back cursor) and begins a selection; cursor
-/// movement while the drag is active extends it; release copies the selection
-/// and bridges the tmux paste buffer to the system clipboard (mirroring the
-/// keyboard `copy-selection` path). Gated by [`any_pane_in_copy_mode`] and an
-/// early-return guard set mirroring the keyboard/wheel forwarders (unfocused
-/// window, open picker / copy-search prompt, webview focus).
-///
-/// Drag-extend reads the window cursor once per frame rather than per
-/// `CursorMoved` event: tmux recomputes the selection from the cursor each
-/// motion, so only the frame's final pointer position is relayed.
-// NOTE: a fast drag can fire a delta off a snapshot that has not yet reflected
-// the previous motion (the copy-state refresh round-trips over a frame), so a
-// fast drag may land slightly off. Click-to-position and slow drags converge;
-// the spec's await-readback-then-recompute loop is out of scope for v1.
-fn drag_select_in_copy_mode(
-    mut drag: ResMut<DragSelect>,
-    mut buttons: MessageReader<MouseButtonInput>,
-    mut queries: ResMut<CopyModeQueries>,
-    connection: NonSend<TmuxConnection>,
-    metrics: Res<TerminalCellMetricsResource>,
-    picker: Res<SessionPicker>,
-    copy_prompt: Res<CopyPrompt>,
-    focused_webview: Res<FocusedWebview>,
-    active_pane: Option<
-        Single<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform), With<ActivePane>>,
-    >,
-    copy_modes: Query<(), With<CopyModeState>>,
-    snapshots: Query<&CopyModeSnapshot, With<ActivePane>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-) {
-    let Ok(window) = windows.single() else {
-        buttons.clear();
-        return;
-    };
-    // NOTE: a background drag must not mutate tmux; mirror the keyboard path.
-    // While a modal (picker / copy-search prompt) or a webview owns input, the
-    // drag would act behind the overlay. Drain so events do not replay later.
-    if !window.focused || picker.open || copy_prompt.open.is_some() || focused_webview.0.is_some() {
-        buttons.clear();
-        drag.active = false;
-        drag.target = None;
-        return;
-    }
-    let Some(single) = active_pane else {
-        buttons.clear();
-        return;
-    };
-    let (entity, pane, node, transform) = *single;
-    if copy_modes.get(entity).is_err() {
-        buttons.clear();
-        return;
-    }
-    let Some(client) = connection.client() else {
-        buttons.clear();
-        return;
-    };
-    let handle = client.handle();
-
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let (cols, rows) = grid_dims_of(pane);
-    let scale = window.scale_factor();
-    let cursor_cell =
-        |cursor_phys: Vec2| cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows);
-
-    for ev in buttons.read() {
-        if ev.button != MouseButton::Left {
-            continue;
-        }
-        match ev.state {
-            ButtonState::Pressed => {
-                if drag.active {
-                    continue;
-                }
-                let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-                    continue;
-                };
-                if !node.contains_point(*transform, cursor_phys) {
-                    continue;
-                }
-                let Some(cell) = cursor_cell(cursor_phys) else {
-                    continue;
-                };
-                let cur = snapshots
-                    .single()
-                    .map(|s| (s.0.cursor_x, s.0.cursor_y))
-                    .ok();
-                if let Some(cur) = cur {
-                    for cmd in cursor_deltas(cur, cell) {
-                        if let Err(e) = handle.send(&cmd) {
-                            tracing::warn!(?e, "drag-select cursor delta send failed");
-                        }
-                    }
-                }
-                if let Err(e) = handle.send("send-keys -X begin-selection") {
-                    tracing::warn!(?e, "drag-select begin-selection send failed");
-                    continue;
-                }
-                drag.active = true;
-                drag.target = Some(cell);
-            }
-            ButtonState::Released => {
-                if !drag.active {
-                    continue;
-                }
-                drag.active = false;
-                drag.target = None;
-                if let Err(e) = handle.send("send-keys -X copy-selection") {
-                    tracing::warn!(?e, "drag-select copy-selection send failed");
-                    continue;
-                }
-                match handle.send(&show_buffer_command()) {
-                    Ok(id) => queries.register(id, pane.id, CopyQueryKind::Buffer),
-                    Err(e) => tracing::warn!(?e, "drag-select show-buffer send failed"),
-                }
-            }
-        }
-    }
-
-    if drag.active {
-        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-            return;
-        };
-        let Some(cell) = cursor_cell(cursor_phys) else {
-            return;
-        };
-        if drag.target == Some(cell) {
-            return;
-        }
-        let cur = snapshots
-            .single()
-            .map(|s| (s.0.cursor_x, s.0.cursor_y))
-            .unwrap_or_else(|_| drag.target.unwrap_or(cell));
-        for cmd in cursor_deltas(cur, cell) {
-            if let Err(e) = handle.send(&cmd) {
-                tracing::warn!(?e, "drag-select extend delta send failed");
-            }
-        }
-        drag.target = Some(cell);
-    }
-}
-
-/// The active pane's visible `(cols, rows)`, clamped into `1..=u16::MAX` to
-/// match `tmux_render::grid_dims`. Used to clamp the drag-target cell.
-fn grid_dims_of(pane: &TmuxPane) -> (u16, u16) {
-    let clamp = |v: u32| v.clamp(1, u16::MAX as u32) as u16;
-    (clamp(pane.dims.width), clamp(pane.dims.height))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozma_tty_renderer::CellMetrics;
-
-    /// Registers the resources/messages `drag_select_in_copy_mode` reads so it
-    /// passes parameter validation in a `MinimalPlugins` test world. The real
-    /// app gets these from `InputPlugin` / the UI / picker / prompt plugins; the
-    /// copy-mode exit/despawn tests build only the copy-mode plugin, so the drag
-    /// system (gated on `any_pane_in_copy_mode`, which those tests trigger) would
-    /// otherwise panic on a missing `Messages<MouseButtonInput>`.
-    fn drag_select_test_scaffold(app: &mut App) {
-        app.add_message::<MouseButtonInput>();
-        app.init_resource::<SessionPicker>();
-        app.init_resource::<CopyPrompt>();
-        app.init_resource::<FocusedWebview>();
-        app.insert_resource(TerminalCellMetricsResource {
-            metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 12.0,
-                descent_phys: 4.0,
-                underline_position_phys: -2.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
-            },
-            phys_font_size: 16,
-        });
-    }
 
     #[test]
     fn cursor_deltas_right_and_down() {
@@ -823,7 +613,6 @@ mod tests {
         app.init_resource::<CopyModeQueries>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.add_plugins(OzmuxTmuxCopyModePlugin);
-        drag_select_test_scaffold(&mut app);
 
         let pane_id = PaneId(1);
         let entity = app
@@ -869,17 +658,11 @@ mod tests {
         );
 
         // Pre-load the refresh bookkeeping + scratch handle for this pane, as the
-        // live loop would, and mark a drag in progress (button held while the
-        // pane leaves copy mode).
+        // live loop would.
         {
             let mut refresh = app.world_mut().resource_mut::<CopyRefreshState>();
             refresh.state_in_flight.insert(pane_id, 0);
             refresh.last_scroll.insert(pane_id, 7);
-        }
-        {
-            let mut drag = app.world_mut().resource_mut::<DragSelect>();
-            drag.active = true;
-            drag.target = Some((4, 2));
         }
         app.world_mut()
             .entity_mut(entity)
@@ -916,11 +699,6 @@ mod tests {
             app.world().get::<CopyRenderHandle>(entity).is_none(),
             "exit drops the scratch CopyRenderHandle",
         );
-        let drag = app.world().resource::<DragSelect>();
-        assert!(
-            !drag.active && drag.target.is_none(),
-            "exit resets DragSelect (else a held button fires phantom deltas on re-entry)",
-        );
     }
 
     #[test]
@@ -933,7 +711,6 @@ mod tests {
         app.init_resource::<CopyModeQueries>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.add_plugins(OzmuxTmuxCopyModePlugin);
-        drag_select_test_scaffold(&mut app);
 
         let pane_id = PaneId(7);
         let entity = app
@@ -1091,7 +868,6 @@ mod tests {
         };
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
-        drag_select_test_scaffold(&mut app);
         app.insert_resource(Clipboard::new());
         app.add_plugins(OzmuxTmuxRenderPlugin);
         app.add_plugins(OzmuxTmuxCopyModePlugin);
@@ -1275,10 +1051,6 @@ mod tests {
         };
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
-
-        // Minimal scaffold resources that OzmuxTmuxCopyModePlugin's drag system
-        // reads (the real app gets these from UI + input plugins).
-        drag_select_test_scaffold(&mut app);
         app.insert_resource(Clipboard::new());
 
         // OzmuxTmuxRenderPlugin registers attach_tmux_pane_terminal,
