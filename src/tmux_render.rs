@@ -35,9 +35,9 @@ pub struct OzmuxTmuxRenderPlugin;
 impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>();
-        // The camera clear color shows through tmux's reserved-cell gaps between
-        // panes (panes are opaque; the UI roots and pane container are
-        // transparent). Adjust `theme::PANE_GAP` to retint those gaps.
+        // NOTE: the camera clear color bleeds through the 1px gaps between panes
+        // (panes are opaque; window containers are grey). Adjust `theme::PANE_GAP`
+        // to retint those gaps.
         app.insert_resource(ClearColor(theme::PANE_GAP));
         app.add_systems(
             Update,
@@ -54,6 +54,31 @@ impl Plugin for OzmuxTmuxRenderPlugin {
         );
         app.add_systems(Update, sync_client_size.after(TmuxProjectionSet));
     }
+}
+
+/// Pixel-space position of a 1px inter-pane gap. Positions are in logical px
+/// (the same coordinate space as Bevy `Node` rects).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DividerPixelRect {
+    pub(crate) axis: DividerAxis,
+    /// Pane on the "before" side; used to identify the resize target.
+    pub(crate) primary: PaneId,
+    /// Logical-px leading edge of the 1px gap on the major axis.
+    pub(crate) pos_px: f32,
+    /// Orthogonal-axis start of the divider line in logical px.
+    pub(crate) span_start_px: f32,
+    /// Orthogonal-axis end of the divider line in logical px.
+    pub(crate) span_end_px: f32,
+}
+
+/// Pixel-space layout derived from a `TmuxWindowLayout` tree, stored on the
+/// window entity by `layout_tmux_panes`.
+#[derive(Component, Clone, Default, PartialEq)]
+pub(crate) struct PackedTmuxLayout {
+    pub(crate) panes: HashMap<PaneId, Rect>,
+    pub(crate) dividers: Vec<DividerPixelRect>,
+    /// Total available size in logical px (equals root cell dims × cell size).
+    pub(crate) bbox: Vec2,
 }
 
 fn attach_tmux_window_container(
@@ -172,31 +197,6 @@ fn route_tmux_output(
         // history recall). Draining still matters: the reply channel is unbounded.
         let _ = handle.take_replies();
     }
-}
-
-/// Pixel-space position of a 1px inter-pane gap. Positions are in logical px
-/// (the same coordinate space as Bevy `Node` rects).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct DividerPixelRect {
-    pub(crate) axis: DividerAxis,
-    /// Pane on the "before" side; used to identify the resize target.
-    pub(crate) primary: PaneId,
-    /// Logical-px leading edge of the 1px gap on the major axis.
-    pub(crate) pos_px: f32,
-    /// Orthogonal-axis start of the divider line in logical px.
-    pub(crate) span_start_px: f32,
-    /// Orthogonal-axis end of the divider line in logical px.
-    pub(crate) span_end_px: f32,
-}
-
-/// Pixel-space layout derived from a `TmuxWindowLayout` tree, stored on the
-/// window entity by `layout_tmux_panes`.
-#[derive(Component, Clone, Default, PartialEq)]
-pub(crate) struct PackedTmuxLayout {
-    pub(crate) panes: HashMap<PaneId, Rect>,
-    pub(crate) dividers: Vec<DividerPixelRect>,
-    /// Total available size in logical px (equals root cell dims × cell size).
-    pub(crate) bbox: Vec2,
 }
 
 /// Computes packed pixel rects, 1px-gap divider positions, and the total bbox
