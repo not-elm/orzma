@@ -13,7 +13,7 @@ use bevy::prelude::Commands;
 use crossbeam_channel::Receiver;
 use std::collections::{HashMap, HashSet};
 use tmux_control::{ClientEvent, CommandId, ControlEvent, TransportEvent};
-use tmux_control_parser::{PaneId, SessionId, WindowId};
+use tmux_control_parser::{PaneId, SessionId, WindowId, dividers};
 
 /// Upper bound on events drained per frame, so a pane flooding `%output`
 /// cannot stall the schedule with unbounded parse/apply work in one tick;
@@ -322,6 +322,7 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
             commands.trigger(TmuxLayoutChanged {
                 window: *window,
                 panes: pane_geoms(layout),
+                dividers: dividers(layout),
             });
         }
         ControlEvent::WindowPaneChanged { window, pane } => {
@@ -352,6 +353,7 @@ fn trigger_seed(commands: &mut Commands, output: &[String]) {
         commands.trigger(TmuxLayoutChanged {
             window: row.id,
             panes: pane_geoms(&row.layout),
+            dividers: dividers(&row.layout),
         });
         if row.active {
             commands.trigger(TmuxActiveWindowChanged { window: row.id });

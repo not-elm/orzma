@@ -1,7 +1,7 @@
 //! Observers that apply the global projection events to the ECS world, plus the
 //! tmux-id -> entity index they resolve through.
 
-use crate::components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow};
+use crate::components::{ActivePane, ActiveWindow, TmuxDividers, TmuxPane, TmuxSession, TmuxWindow};
 use crate::events::{
     PaneGeom, TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxConnectionReset,
     TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed,
@@ -132,6 +132,10 @@ fn on_layout_changed(
     for geom in &ev.panes {
         upsert_pane(&mut commands, &mut index, window, ev.window, geom);
     }
+
+    commands
+        .entity(window)
+        .insert(TmuxDividers(ev.dividers.clone()));
 
     apply_pending_active_pane(&mut commands, &mut index, &active_panes);
 }
@@ -278,7 +282,7 @@ fn set_marker<T: Component + Default>(
 mod tests {
     use super::*;
     use crate::events::pane_geoms;
-    use tmux_control_parser::{SessionId, WindowLayout};
+    use tmux_control_parser::{SessionId, WindowLayout, dividers};
 
     fn app() -> App {
         let mut app = App::new();
@@ -302,6 +306,7 @@ mod tests {
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
             panes: pane_geoms(&layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}")),
+            dividers: vec![],
         });
         app.update();
 
@@ -329,6 +334,7 @@ mod tests {
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
             panes: pane_geoms(&layout(b"abcd,80x24,0,0,5")),
+            dividers: vec![],
         });
         app.update();
 
@@ -349,6 +355,7 @@ mod tests {
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
             panes: pane_geoms(&layout(b"abcd,80x24,0,0,9")),
+            dividers: vec![],
         });
         app.update();
         app.world_mut().trigger(TmuxWindowClosed {
@@ -434,6 +441,7 @@ mod tests {
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
             panes: pane_geoms(&layout(b"abcd,80x24,0,0,1")),
+            dividers: vec![],
         });
         app.update();
         app.world_mut().trigger(TmuxConnectionReset);
@@ -441,5 +449,22 @@ mod tests {
 
         let index = app.world().resource::<TmuxProjection>();
         assert!(index.windows.is_empty() && index.panes.is_empty() && index.session.is_none());
+    }
+
+    #[test]
+    fn layout_changed_projects_dividers_onto_window_entity() {
+        let mut app = app();
+        let l = layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}");
+        app.world_mut().trigger(TmuxLayoutChanged {
+            window: WindowId(1),
+            panes: pane_geoms(&l),
+            dividers: dividers(&l),
+        });
+        app.update();
+
+        let index = app.world().resource::<TmuxProjection>();
+        let window_e = index.windows[&WindowId(1)];
+        let td = app.world().get::<TmuxDividers>(window_e).unwrap();
+        assert_eq!(td.0.len(), 1);
     }
 }

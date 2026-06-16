@@ -286,6 +286,7 @@ mod tests {
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
             panes: pane_geoms(&WindowLayout::parse(b"abcd,80x24,0,0,1").unwrap()),
+            dividers: vec![],
         });
         app.update();
         app.world_mut().trigger(TmuxWindowsRetained {

@@ -3,7 +3,7 @@
 //! ids to entities via the `TmuxProjection` index.
 
 use bevy::prelude::Event;
-use tmux_control_parser::{Cell, CellDims, PaneId, SessionId, WindowId, WindowLayout};
+use tmux_control_parser::{Cell, CellDims, Divider, PaneId, SessionId, WindowId, WindowLayout};
 
 /// A pane's tmux id plus its cell geometry, carried in `TmuxLayoutChanged`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +51,7 @@ pub(crate) struct TmuxWindowRenamed {
 pub(crate) struct TmuxLayoutChanged {
     pub(crate) window: WindowId,
     pub(crate) panes: Vec<PaneGeom>,
+    pub(crate) dividers: Vec<Divider>,
 }
 
 /// `%window-pane-changed`: the active pane (and its window).
@@ -105,6 +106,7 @@ fn collect_leaves(cell: &Cell, out: &mut Vec<PaneGeom>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tmux_control_parser::{DividerAxis, dividers};
 
     fn dims(width: u32, height: u32, xoff: i32, yoff: i32) -> CellDims {
         CellDims {
@@ -135,5 +137,14 @@ mod tests {
         assert_eq!((panes[0].id, panes[1].id), (PaneId(1), PaneId(2)));
         assert_eq!(panes[0].dims, dims(40, 24, 0, 0));
         assert_eq!(panes[1].dims, dims(39, 24, 41, 0));
+    }
+
+    #[test]
+    fn left_right_split_yields_one_vertical_divider() {
+        let layout = WindowLayout::parse(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}").unwrap();
+        let ds = dividers(&layout);
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds[0].axis, DividerAxis::Vertical);
+        assert_eq!(ds[0].primary, PaneId(1));
     }
 }
