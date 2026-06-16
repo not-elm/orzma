@@ -8,18 +8,25 @@
 
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
+use crate::inline_webview::{InlineWebview, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
+use crate::osc_webview::NonInteractive;
+use crate::tmux_mouse::tmux_pane_local_at;
 use crate::tmux_picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
+use bevy_cef_core::prelude::Browsers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_tmux::{
     ActivePane, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings, KeyMods,
     PromptKind, TmuxConnection, TmuxPane, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
@@ -163,9 +170,10 @@ fn forward_keys_to_tmux(
 
     // When an inline webview holds focus it owns the keyboard (bevy_cef routes
     // keystrokes to it); forwarding to tmux too would double-send. Ctrl+Shift+Esc
-    // releases focus back to the terminal. NOTE: in the current tmux backend the
-    // webview-focus machinery is old-multiplexer-driven, so FocusedWebview is
-    // usually None here; this handler is correct for when it is set.
+    // releases focus back to the terminal. NOTE: under the tmux backend a click
+    // on an interactive inline webview sets FocusedWebview (via the mouse
+    // arbiter's inline route), so this guard is load-bearing — removing it would
+    // double-send keystrokes to both the webview and the tmux active pane.
     if focused_webview.0.is_some() {
         for ev in events.read() {
             if ev.state == ButtonState::Pressed
@@ -373,13 +381,93 @@ struct TmuxWheelAccumulator {
     last_pane: Option<Entity>,
 }
 
+/// A focused inline webview claiming the wheel: the child to forward to and
+/// the pointer in its webview-local DIP.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct TmuxInlineWheelTarget {
+    child: Entity,
+    position_dip: Vec2,
+}
+
+/// Wheel-routing params bundled to stay within Bevy's system-parameter limit.
+/// `browsers` is optional so CEF-less tests construct the system.
+#[derive(SystemParam)]
+struct TmuxInlineWheelParams<'w, 's> {
+    focused_webview: Res<'w, FocusedWebview>,
+    inline_parents: Query<'w, 's, &'static ChildOf, With<InlineWebview>>,
+    panes: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static TmuxPane,
+            &'static ComputedNode,
+            &'static UiGlobalTransform,
+        ),
+    >,
+    children: Query<'w, 's, &'static Children>,
+    inline: Query<'w, 's, (&'static InlineWebview, Has<NonInteractive>)>,
+    overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
+    browsers: Option<NonSend<'w, Browsers>>,
+}
+
+/// Resolves the focused inline webview under the pointer, or `None` (the tmux
+/// path runs). `Some` only when `FocusedWebview` holds an inline child of the
+/// pane under the pointer AND the pointer is over that child's rect — the tmux
+/// analog of native `resolve_inline_wheel_target`.
+fn resolve_tmux_inline_wheel_target(
+    params: &TmuxInlineWheelParams,
+    cursor_phys: Vec2,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    scale_factor: f32,
+) -> Option<TmuxInlineWheelTarget> {
+    let (terminal, local_phys) = tmux_pane_local_at(&params.panes, cursor_phys)?;
+    let focused_child = focused_inline_of(
+        Some(&params.focused_webview),
+        &params.inline_parents,
+        Some(terminal),
+    )?;
+    let overlays = params.overlay_rects.get(terminal).ok()?;
+    let hit = inline_hit_at(
+        &params.children,
+        &params.inline,
+        overlays,
+        terminal,
+        local_phys,
+        cell_w_phys,
+        cell_h_phys,
+        scale_factor,
+    )?;
+    (hit.child == focused_child).then_some(TmuxInlineWheelTarget {
+        child: hit.child,
+        position_dip: hit.local_dip,
+    })
+}
+
+/// Converts one `MouseWheel` event to the RAW CEF wheel delta (`Line → ×120`,
+/// `Pixel` unchanged, NO sign flip) — identical to native `inline_wheel_delta`.
+fn tmux_inline_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
+    match unit {
+        MouseScrollUnit::Line => Vec2::new(x, y) * 120.0,
+        MouseScrollUnit::Pixel => Vec2::new(x, y),
+    }
+}
+
 /// Forwards mouse-wheel events to the active tmux pane.
 ///
-/// Events are accumulated into a cell-delta (`Pixel` units divided by the cell
-/// height, like the native terminal path) and quantized into integer notches
-/// against `mouse.cells_per_notch`, carrying the remainder across frames — so a
-/// macOS trackpad's stream of small `Pixel` events scrolls gently instead of
-/// firing a full notch per event.
+/// A focused inline webview under the pointer claims the wheel first
+/// (`resolve_tmux_inline_wheel_target`): each event is forwarded RAW to that
+/// child's CEF browser and dropped before the tmux accumulator, so the gesture
+/// scrolls the page instead of the terminal. Gating is pointer-driven, not the
+/// mere presence of `FocusedWebview` — a focused webview that the pointer is NOT
+/// over still scrolls the terminal pane.
+///
+/// Otherwise events are accumulated into a cell-delta (`Pixel` units divided by
+/// the cell height, like the native terminal path) and quantized into integer
+/// notches against `mouse.cells_per_notch`, carrying the remainder across frames
+/// — so a macOS trackpad's stream of small `Pixel` events scrolls gently instead
+/// of firing a full notch per event.
 ///
 /// In copy mode each notch sends a single pane-targeted `scroll_command`
 /// (`send-keys -X -t %id scroll-up|scroll-down`, `mouse.lines_per_notch` lines)
@@ -393,11 +481,11 @@ fn forward_wheel_to_tmux(
     mut commands: Commands,
     mut wheel: MessageReader<MouseWheel>,
     mut accumulator: ResMut<TmuxWheelAccumulator>,
+    inline: TmuxInlineWheelParams,
     connection: NonSend<TmuxConnection>,
     bindings: Res<KeyBindings>,
     picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
-    focused_webview: Res<FocusedWebview>,
     configs: Res<OzmuxConfigsResource>,
     metrics: Res<TerminalCellMetricsResource>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
@@ -407,15 +495,39 @@ fn forward_wheel_to_tmux(
     let Ok(window) = windows.single() else {
         return;
     };
-    let dpr = window.scale_factor().max(0.5);
-    let cell_h_logical = (metrics.metrics.line_height_phys.floor() / dpr).max(1.0);
-    let Some(delta_cells) = aggregate_wheel_cells(&mut wheel, cell_h_logical) else {
+    let scale = window.scale_factor();
+    // NOTE: the .max(0.5) clamp guards ONLY the cell_h_logical division; the
+    // hit-test cursor and the inline DIP use the raw scale_factor so wheel
+    // events land at the same in-page coordinate as the click/move paths.
+    let cell_h_logical = (metrics.metrics.line_height_phys.floor() / scale.max(0.5)).max(1.0);
+    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cursor_phys = window.cursor_position().map(|c| c * scale);
+
+    let target = cursor_phys.and_then(|c| {
+        resolve_tmux_inline_wheel_target(&inline, c, cell_w_phys, cell_h_phys, scale)
+    });
+
+    let Some(delta_cells) = aggregate_tmux_wheel_cells(
+        &mut wheel,
+        target,
+        inline.browsers.as_deref(),
+        cell_h_logical,
+    ) else {
+        // NOTE: an all-inline frame must reset the residual — leaving carried
+        // cells behind would let tmux momentum lurch when the wheel later resumes
+        // over the terminal. An empty frame (target None) leaves it intact.
+        if target.is_some() {
+            accumulator.residual_cells = 0.0;
+        }
         return;
     };
     // NOTE: a background scroll must not mutate tmux; mirror the keyboard path.
     // Reset any carried remainder on every guarded early-return so momentum
     // can't accumulate behind a modal / unfocused window and lurch on resume.
-    if !window.focused || picker.open || copy_prompt.open.is_some() || focused_webview.0.is_some() {
+    // focused_webview is NOT a guard here — the pointer-gated target above owns
+    // webview scrolling, so a focused webview must not steal terminal wheel.
+    if !window.focused || picker.open || copy_prompt.open.is_some() {
         accumulator.residual_cells = 0.0;
         return;
     }
@@ -485,25 +597,42 @@ fn forward_wheel_to_tmux(
 /// notch, so an uncapped fast fling would flood the control connection.
 const MAX_NOTCHES_PER_FRAME: usize = 10;
 
-/// Drains a frame's `MouseWheel` messages into a single signed cell-delta
-/// (positive = scroll up / toward older lines), or `None` when the frame held
-/// no wheel events. `Line` units contribute `ev.y` directly; `Pixel` units
-/// (macOS trackpads, high-resolution wheels) are divided by the cell height so
-/// a fixed pixel travel maps to a consistent number of lines.
-fn aggregate_wheel_cells(
+/// Drains the frame's `MouseWheel` into a signed cell-delta for the tmux path,
+/// forking inline-routed events to CEF first. Returns `None` when no
+/// terminal-bound events arrived (all forwarded inline, or empty). The tmux
+/// analog of native `aggregate_wheel_delta`.
+///
+/// Terminal-bound events: `Line` units contribute `ev.y` directly (positive =
+/// scroll up / toward older lines); `Pixel` units (macOS trackpads,
+/// high-resolution wheels) are divided by the cell height so a fixed pixel
+/// travel maps to a consistent number of lines. Inline-routed events are
+/// forwarded RAW to CEF via `tmux_inline_wheel_delta` (no sign flip).
+fn aggregate_tmux_wheel_cells(
     wheel: &mut MessageReader<MouseWheel>,
+    target: Option<TmuxInlineWheelTarget>,
+    browsers: Option<&Browsers>,
     cell_h_logical: f32,
 ) -> Option<f32> {
     let mut delta = 0.0f32;
-    let mut had_input = false;
+    let mut had_terminal_input = false;
     for ev in wheel.read() {
-        had_input = true;
+        if let Some(target) = target {
+            if let Some(browsers) = browsers {
+                browsers.send_mouse_wheel(
+                    &target.child,
+                    target.position_dip,
+                    tmux_inline_wheel_delta(ev.unit, ev.x, ev.y),
+                );
+            }
+            continue;
+        }
+        had_terminal_input = true;
         delta += match ev.unit {
             MouseScrollUnit::Line => ev.y,
             MouseScrollUnit::Pixel => ev.y / cell_h_logical,
         };
     }
-    had_input.then_some(delta)
+    had_terminal_input.then_some(delta)
 }
 
 /// Adds this frame's cell-delta to the accumulator and returns the signed
@@ -604,9 +733,12 @@ mod tests {
                 .write(*ev);
         }
         app.world_mut()
-            .run_system_once(move |mut reader: MessageReader<MouseWheel>| {
-                aggregate_wheel_cells(&mut reader, cell_h)
-            })
+            .run_system_once(
+                move |mut reader: MessageReader<MouseWheel>,
+                      browsers: Option<NonSend<Browsers>>| {
+                    aggregate_tmux_wheel_cells(&mut reader, None, browsers.as_deref(), cell_h)
+                },
+            )
             .unwrap()
     }
 
@@ -634,6 +766,99 @@ mod tests {
     #[test]
     fn aggregate_no_events_is_none() {
         assert_eq!(cells_from_events(16.0, &[]), None);
+    }
+
+    fn make_tmux_wheel_app() -> (App, Entity, Entity) {
+        use bevy::window::WindowResolution;
+        use tmux_control_parser::CellDims;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<FocusedWebview>();
+
+        // Pane host node at window center (400, 300), size 800x600 → top-left
+        // at (0, 0). Rect rows 2..12, cols 3..43 → phys y 32..192, x 24..344 at
+        // 8x16 px.
+        let mut overlays = TerminalOverlays::default();
+        overlays.rects[0] = IVec4::new(2, 3, 10, 40);
+        let pane = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: ozmux_tmux::PaneId(1),
+                    dims: CellDims {
+                        width: 100,
+                        height: 37,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                ComputedNode {
+                    size: Vec2::new(800.0, 600.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(400.0, 300.0),
+                overlays,
+            ))
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(pane),
+                InlineWebview {
+                    view_id: "inline".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        (app, pane, child)
+    }
+
+    fn run_resolve_wheel_target(app: &mut App, cursor_phys: Vec2) -> Option<TmuxInlineWheelTarget> {
+        app.world_mut()
+            .run_system_once(move |params: TmuxInlineWheelParams| {
+                resolve_tmux_inline_wheel_target(&params, cursor_phys, 8.0, 16.0, 1.0)
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn wheel_target_resolves_when_focused_inline_under_pointer() {
+        let (mut app, _pane, child) = make_tmux_wheel_app();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        assert_eq!(
+            run_resolve_wheel_target(&mut app, Vec2::new(40.0, 48.0)).map(|t| t.child),
+            Some(child)
+        );
+    }
+
+    #[test]
+    fn wheel_target_none_off_rect() {
+        let (mut app, _pane, child) = make_tmux_wheel_app();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        assert_eq!(
+            run_resolve_wheel_target(&mut app, Vec2::new(400.0, 400.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn wheel_target_none_when_unfocused() {
+        let (mut app, _pane, _child) = make_tmux_wheel_app();
+        assert_eq!(
+            run_resolve_wheel_target(&mut app, Vec2::new(40.0, 48.0)),
+            None
+        );
     }
 
     #[test]

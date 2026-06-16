@@ -1315,7 +1315,10 @@ mod tests {
         );
         assert_eq!(bbox, Vec2::new(640.0, 384.0));
         assert_eq!(dividers.len(), 2);
-        let outer = dividers.iter().find(|d| (d.pos_px - 320.0).abs() < 0.5).unwrap();
+        let outer = dividers
+            .iter()
+            .find(|d| (d.pos_px - 320.0).abs() < 0.5)
+            .unwrap();
         assert_eq!(outer.axis, DividerAxis::Vertical);
         assert_eq!(
             outer.primary,
