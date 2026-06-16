@@ -1,10 +1,13 @@
 //! Forwards focused keyboard and mouse-wheel input to the active tmux pane.
 //! Keyboard forwarding intercepts a fixed set of ozmux GUI chords and copy-mode
-//! entry commands. Mouse-wheel forwarding drives tmux copy-mode scroll when
-//! the active pane is already in copy mode, and enters copy mode when the wheel
-//! binding triggers a copy-mode entry command.
+//! entry commands. Mouse-wheel forwarding accumulates events into cell-deltas
+//! (so trackpad / high-resolution `Pixel` scrolling quantizes the same way the
+//! native terminal path does), drives tmux copy-mode scroll when the active
+//! pane is already in copy mode, and enters copy mode when the wheel binding
+//! triggers a copy-mode entry command.
 
 use crate::clipboard::{Clipboard, build_paste_bytes};
+use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::tmux_picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
@@ -16,6 +19,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
+use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{
     ActivePane, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings, KeyMods,
     PromptKind, TmuxConnection, TmuxPane, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
@@ -27,7 +31,7 @@ pub struct OzmuxTmuxInputPlugin;
 
 impl Plugin for OzmuxTmuxInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.init_resource::<TmuxWheelAccumulator>().add_systems(
             Update,
             (
                 forward_keys_to_tmux
@@ -343,9 +347,6 @@ fn wheel_key_name(up: bool) -> &'static str {
     if up { "WheelUpPane" } else { "WheelDownPane" }
 }
 
-/// Lines scrolled per wheel notch while in copy mode.
-const WHEEL_SCROLL_LINES: u32 = 3;
-
 /// Builds a pane-targeted copy-mode scroll command for one wheel notch:
 /// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down`.
 ///
@@ -361,51 +362,81 @@ fn scroll_command(target: &str, up: bool, lines: u32) -> String {
     )
 }
 
+/// Carries the sub-notch wheel remainder (in cells) across frames for the tmux
+/// scroll path, plus the pane the residual was earned on so switching panes
+/// clears stale momentum. Mirrors the native terminal's `WheelAccumulator` so
+/// trackpad / high-resolution `Pixel` scrolling quantizes identically rather
+/// than firing a full notch per raw event.
+#[derive(Resource, Default)]
+struct TmuxWheelAccumulator {
+    residual_cells: f32,
+    last_pane: Option<Entity>,
+}
+
 /// Forwards mouse-wheel events to the active tmux pane.
 ///
+/// Events are accumulated into a cell-delta (`Pixel` units divided by the cell
+/// height, like the native terminal path) and quantized into integer notches
+/// against `mouse.cells_per_notch`, carrying the remainder across frames — so a
+/// macOS trackpad's stream of small `Pixel` events scrolls gently instead of
+/// firing a full notch per event.
+///
 /// In copy mode each notch sends a single pane-targeted `scroll_command`
-/// (`send-keys -X -t %id scroll-up|scroll-down`) — ozmux owns wheel scrolling
-/// rather than relaying tmux's copy-table wheel bindings. Outside copy mode each
-/// notch dispatches the root/prefix tables: a `Forwarded::Run` (e.g. the default
-/// `WheelUpPane` `copy-mode -e` conditional) runs verbatim and, if it enters
-/// copy mode, inserts `CopyModeState`; a `Forwarded::Keys` for an unbound wheel
-/// key is dropped — a mouse-wheel key is never forwarded as literal pane input.
+/// (`send-keys -X -t %id scroll-up|scroll-down`, `mouse.lines_per_notch` lines)
+/// — ozmux owns wheel scrolling rather than relaying tmux's copy-table wheel
+/// bindings. Outside copy mode each notch dispatches the root/prefix tables: a
+/// `Forwarded::Run` (e.g. the default `WheelUpPane` `copy-mode -e` conditional)
+/// runs verbatim and, if it enters copy mode, inserts `CopyModeState`; a
+/// `Forwarded::Keys` for an unbound wheel key is dropped — a mouse-wheel key is
+/// never forwarded as literal pane input.
 fn forward_wheel_to_tmux(
     mut commands: Commands,
     mut wheel: MessageReader<MouseWheel>,
+    mut accumulator: ResMut<TmuxWheelAccumulator>,
     connection: NonSend<TmuxConnection>,
     bindings: Res<KeyBindings>,
     picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
     focused_webview: Res<FocusedWebview>,
+    configs: Res<OzmuxConfigsResource>,
+    metrics: Res<TerminalCellMetricsResource>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let notches = collect_notches(&mut wheel);
-    if notches.is_empty() {
+    let Ok(window) = windows.single() else {
         return;
-    }
+    };
+    let dpr = window.scale_factor().max(0.5);
+    let cell_h_logical = (metrics.metrics.line_height_phys.floor() / dpr).max(1.0);
+    let Some(delta_cells) = aggregate_wheel_cells(&mut wheel, cell_h_logical) else {
+        return;
+    };
     // NOTE: a background scroll must not mutate tmux; mirror the keyboard path.
-    let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    if !focused {
-        return;
-    }
-    // NOTE: while the picker or copy-mode prompt is open it owns the overlay;
-    // scrolling/entering copy mode behind the modal would be invisible and wrong.
-    if picker.open || copy_prompt.open.is_some() {
-        return;
-    }
-    // When an inline webview holds focus it owns input; forwarding the wheel to
-    // tmux too would scroll both. Parity with the keyboard path.
-    if focused_webview.0.is_some() {
+    // Reset any carried remainder on every guarded early-return so momentum
+    // can't accumulate behind a modal / unfocused window and lurch on resume.
+    if !window.focused || picker.open || copy_prompt.open.is_some() || focused_webview.0.is_some() {
+        accumulator.residual_cells = 0.0;
         return;
     }
     let Some(single) = active_pane else {
+        accumulator.residual_cells = 0.0;
         return;
     };
     let (entity, pane) = *single;
+    let raw_notches = consume_wheel_notches(
+        &mut accumulator,
+        entity,
+        delta_cells,
+        configs.mouse.cells_per_notch,
+    );
+    if raw_notches == 0 {
+        return;
+    }
+    let up = raw_notches > 0;
+    let count = (raw_notches.unsigned_abs() as usize).min(MAX_NOTCHES_PER_FRAME);
     let target = format!("%{}", pane.id.0);
+    let lines = configs.mouse.lines_per_notch;
     // NOTE: mutable so a multi-notch fling that enters copy mode on an early
     // notch routes the remaining notches in the same frame to the scroll path.
     // The `CopyModeState` insert is only deferred (Commands), so `copy_modes`
@@ -417,9 +448,9 @@ fn forward_wheel_to_tmux(
     };
     let handle = client.handle();
 
-    'notches: for up in notches {
+    'notches: for _ in 0..count {
         if in_copy_mode {
-            let cmd = scroll_command(&target, up, WHEEL_SCROLL_LINES);
+            let cmd = scroll_command(&target, up, lines);
             if let Err(e) = handle.send(&cmd) {
                 tracing::warn!(?e, "copy-mode wheel scroll send failed");
                 break 'notches;
@@ -454,35 +485,53 @@ fn forward_wheel_to_tmux(
 /// notch, so an uncapped fast fling would flood the control connection.
 const MAX_NOTCHES_PER_FRAME: usize = 10;
 
-/// Drains all `MouseWheel` messages for this frame into a list of per-notch
-/// up/down booleans. `Line` units contribute one bool per integer notch;
-/// `Pixel` units contribute a single notch in the dominant direction.
-///
-/// NOTE: sub-1.0 `Line` deltas are intentionally dropped (no residual carry in
-/// v1), and the total is capped at `MAX_NOTCHES_PER_FRAME` so a fast trackpad
-/// fling cannot flood the control connection with `send-keys` commands.
-fn collect_notches(wheel: &mut MessageReader<MouseWheel>) -> Vec<bool> {
-    let mut out = Vec::new();
+/// Drains a frame's `MouseWheel` messages into a single signed cell-delta
+/// (positive = scroll up / toward older lines), or `None` when the frame held
+/// no wheel events. `Line` units contribute `ev.y` directly; `Pixel` units
+/// (macOS trackpads, high-resolution wheels) are divided by the cell height so
+/// a fixed pixel travel maps to a consistent number of lines.
+fn aggregate_wheel_cells(
+    wheel: &mut MessageReader<MouseWheel>,
+    cell_h_logical: f32,
+) -> Option<f32> {
+    let mut delta = 0.0f32;
+    let mut had_input = false;
     for ev in wheel.read() {
-        match ev.unit {
-            MouseScrollUnit::Line => {
-                let count = ev.y.abs() as i32;
-                let up = ev.y > 0.0;
-                for _ in 0..count {
-                    out.push(up);
-                }
-            }
-            MouseScrollUnit::Pixel => {
-                if ev.y > 0.0 {
-                    out.push(true);
-                } else if ev.y < 0.0 {
-                    out.push(false);
-                }
-            }
-        }
+        had_input = true;
+        delta += match ev.unit {
+            MouseScrollUnit::Line => ev.y,
+            MouseScrollUnit::Pixel => ev.y / cell_h_logical,
+        };
     }
-    out.truncate(MAX_NOTCHES_PER_FRAME);
-    out
+    had_input.then_some(delta)
+}
+
+/// Adds this frame's cell-delta to the accumulator and returns the signed
+/// integer notch count to emit (positive = up), carrying the sub-notch
+/// remainder to the next frame. Resets the residual on pane change or sign flip
+/// — both signal that prior momentum is stale. Returns `0` until the residual
+/// crosses one `cells_per_notch` threshold.
+fn consume_wheel_notches(
+    accumulator: &mut TmuxWheelAccumulator,
+    pane: Entity,
+    delta_cells: f32,
+    cells_per_notch: f32,
+) -> i32 {
+    if accumulator.last_pane != Some(pane) {
+        accumulator.residual_cells = 0.0;
+        accumulator.last_pane = Some(pane);
+    } else if accumulator.residual_cells != 0.0
+        && accumulator.residual_cells.signum() != delta_cells.signum()
+    {
+        accumulator.residual_cells = 0.0;
+    }
+    let threshold = cells_per_notch.max(f32::EPSILON);
+    accumulator.residual_cells += delta_cells;
+    let notches = (accumulator.residual_cells / threshold).trunc() as i32;
+    if notches != 0 {
+        accumulator.residual_cells -= notches as f32 * threshold;
+    }
+    notches
 }
 
 /// Classifies a key event as a GUI chord (matched on physical `key_code` + the
@@ -546,7 +595,7 @@ mod tests {
         }
     }
 
-    fn notches_from_events(evs: &[MouseWheel]) -> Vec<bool> {
+    fn cells_from_events(cell_h: f32, evs: &[MouseWheel]) -> Option<f32> {
         let mut app = App::new();
         app.add_message::<MouseWheel>();
         for ev in evs {
@@ -555,46 +604,73 @@ mod tests {
                 .write(*ev);
         }
         app.world_mut()
-            .run_system_once(|mut reader: MessageReader<MouseWheel>| collect_notches(&mut reader))
+            .run_system_once(move |mut reader: MessageReader<MouseWheel>| {
+                aggregate_wheel_cells(&mut reader, cell_h)
+            })
             .unwrap()
     }
 
     #[test]
-    fn collect_notches_line_up_two_notches() {
+    fn aggregate_line_units_pass_through_as_cells() {
         let evs = [make_wheel_event(MouseScrollUnit::Line, 2.0)];
-        assert_eq!(notches_from_events(&evs), vec![true, true]);
+        assert_eq!(cells_from_events(16.0, &evs), Some(2.0));
     }
 
     #[test]
-    fn collect_notches_line_down_one_notch() {
-        let evs = [make_wheel_event(MouseScrollUnit::Line, -1.0)];
-        assert_eq!(notches_from_events(&evs), vec![false]);
+    fn aggregate_pixel_units_divide_by_cell_height() {
+        let evs = [make_wheel_event(MouseScrollUnit::Pixel, 8.0)];
+        assert_eq!(cells_from_events(16.0, &evs), Some(0.5));
     }
 
     #[test]
-    fn collect_notches_pixel_up_one_notch() {
-        let evs = [make_wheel_event(MouseScrollUnit::Pixel, 5.0)];
-        assert_eq!(notches_from_events(&evs), vec![true]);
+    fn aggregate_sums_a_frames_events() {
+        let evs = [
+            make_wheel_event(MouseScrollUnit::Pixel, 4.0),
+            make_wheel_event(MouseScrollUnit::Pixel, 4.0),
+        ];
+        assert_eq!(cells_from_events(16.0, &evs), Some(0.5));
     }
 
     #[test]
-    fn collect_notches_pixel_down_one_notch() {
-        let evs = [make_wheel_event(MouseScrollUnit::Pixel, -5.0)];
-        assert_eq!(notches_from_events(&evs), vec![false]);
+    fn aggregate_no_events_is_none() {
+        assert_eq!(cells_from_events(16.0, &[]), None);
     }
 
     #[test]
-    fn collect_notches_pixel_zero_no_notch() {
-        let evs = [make_wheel_event(MouseScrollUnit::Pixel, 0.0)];
-        assert_eq!(notches_from_events(&evs), Vec::<bool>::new());
+    fn consume_notches_quantizes_against_threshold() {
+        let pane = Entity::from_raw_u32(1).unwrap();
+        let mut acc = TmuxWheelAccumulator::default();
+        // 0.4 cells is below the 0.5 threshold — no notch yet, remainder carried.
+        assert_eq!(consume_wheel_notches(&mut acc, pane, 0.4, 0.5), 0);
+        // +0.4 → 0.8 cells, crosses one threshold; 0.3 carries.
+        assert_eq!(consume_wheel_notches(&mut acc, pane, 0.4, 0.5), 1);
     }
 
     #[test]
-    fn collect_notches_clamps_fast_fling() {
-        let evs = [make_wheel_event(MouseScrollUnit::Line, 50.0)];
-        let notches = notches_from_events(&evs);
-        assert_eq!(notches.len(), MAX_NOTCHES_PER_FRAME);
-        assert!(notches.iter().all(|&up| up));
+    fn consume_notches_is_signed_for_direction() {
+        let pane = Entity::from_raw_u32(1).unwrap();
+        let mut acc = TmuxWheelAccumulator::default();
+        assert_eq!(consume_wheel_notches(&mut acc, pane, -1.5, 0.5), -3);
+    }
+
+    #[test]
+    fn consume_notches_resets_residual_on_pane_change() {
+        let a = Entity::from_raw_u32(1).unwrap();
+        let b = Entity::from_raw_u32(2).unwrap();
+        let mut acc = TmuxWheelAccumulator::default();
+        assert_eq!(consume_wheel_notches(&mut acc, a, 0.4, 0.5), 0);
+        // Switching panes drops the carried 0.4 cells; 0.4 alone is sub-threshold.
+        assert_eq!(consume_wheel_notches(&mut acc, b, 0.4, 0.5), 0);
+    }
+
+    #[test]
+    fn consume_notches_resets_residual_on_sign_flip() {
+        let pane = Entity::from_raw_u32(1).unwrap();
+        let mut acc = TmuxWheelAccumulator::default();
+        assert_eq!(consume_wheel_notches(&mut acc, pane, 0.4, 0.5), 0);
+        // A reversed direction discards the upward remainder, then 0.4 down is
+        // still sub-threshold.
+        assert_eq!(consume_wheel_notches(&mut acc, pane, -0.4, 0.5), 0);
     }
 
     #[test]
