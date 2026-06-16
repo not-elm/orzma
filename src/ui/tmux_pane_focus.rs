@@ -1,18 +1,20 @@
-//! Pane click-to-focus + dim: gives each tmux pane a `Button` click target
-//! with `FocusPolicy::Block`, sends `select-pane` on click, and dims every
-//! inactive pane at the renderer via `PaneDim` (a brightness multiplier the
-//! terminal shader applies) rather than an opaque overlay veil.
+//! Pane augmentation and dim: gives each tmux pane a `Button` click target
+//! with `FocusPolicy::Block` (load-bearing: stops pane clicks reaching webview
+//! surfaces), and dims every inactive pane at the renderer via `PaneDim` (a
+//! brightness multiplier the terminal shader applies) rather than an opaque
+//! overlay veil. `select-pane` on press is now owned by the tmux mouse
+//! gesture arbiter (`tmux_mouse::OzmuxTmuxMousePlugin`).
 
 use crate::configs::OzmuxConfigsResource;
-use crate::input::InputPhase;
 use crate::ui::workspace::inactive_dim_factor;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::material::PaneDim;
-use ozmux_tmux::{ActivePane, TmuxConnection, TmuxPane, TmuxProjectionSet, select_pane_command};
+use ozmux_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
 
-/// Registers pane click-to-focus and dim systems.
+/// Registers the pane augmentation (adds `Button` + `FocusPolicy::Block`) and
+/// dim systems. `select-pane` on press is handled by the gesture arbiter.
 pub struct OzmuxTmuxPaneFocusPlugin;
 
 impl Plugin for OzmuxTmuxPaneFocusPlugin {
@@ -21,7 +23,6 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
             Update,
             (
                 augment_tmux_pane.after(TmuxProjectionSet),
-                focus_pane_on_click.in_set(InputPhase::Dispatch),
                 sync_pane_dim.run_if(pane_active_state_changed),
             ),
         );
@@ -42,26 +43,6 @@ fn augment_tmux_pane(
 ) {
     for pane in panes.iter() {
         commands.entity(pane).insert((Button, FocusPolicy::Block));
-    }
-}
-
-/// Sends `select-pane -t %<id>` when the user presses a pane. Runs in
-/// `InputPhase::Dispatch`. No-ops when no live tmux client is connected.
-fn focus_pane_on_click(
-    panes: Query<(&Interaction, &TmuxPane), Changed<Interaction>>,
-    connection: NonSend<TmuxConnection>,
-) {
-    let Some(client) = connection.client() else {
-        return;
-    };
-    for (interaction, pane) in panes.iter() {
-        if *interaction != Interaction::Pressed {
-            continue;
-        }
-        let cmd = select_pane_command(pane.id);
-        if let Err(e) = client.handle().send(&cmd) {
-            tracing::warn!(?e, pane = pane.id.0, "select-pane send failed");
-        }
     }
 }
 
@@ -114,12 +95,6 @@ mod tests {
             xoff: 0,
             yoff: 0,
         }
-    }
-
-    #[test]
-    fn pane_press_maps_to_select_pane() {
-        use ozmux_tmux::select_pane_command;
-        assert_eq!(select_pane_command(PaneId(2)), "select-pane -t %2");
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! typed recursive cell tree, mirroring tmux's `layout-custom.c` grammar.
 
 use crate::error::{LayoutError, TmuxError, TmuxResult};
+use crate::event::PaneId;
 
 /// Orientation of a split cell, named after tmux's `{`/`[`/`<` delimiters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -103,6 +104,108 @@ impl WindowLayout {
     /// Returns `true` if the stored checksum matches a recomputation over `body`.
     pub fn verify(&self, body: &[u8]) -> bool {
         self.checksum == Self::recompute_checksum(body)
+    }
+}
+
+/// Orientation of a pane divider (the draggable boundary between split children).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DividerAxis {
+    /// A vertical line; dragging it horizontally resizes the left/right panes.
+    Vertical,
+    /// A horizontal line; dragging it vertically resizes the top/bottom panes.
+    Horizontal,
+}
+
+/// A draggable boundary between two adjacent children of a split, in cells.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Divider {
+    /// Orientation of the divider line.
+    pub axis: DividerAxis,
+    /// The pane to resize when dragging this divider (the left/top side).
+    pub primary: PaneId,
+    /// Cell coordinate of the divider line: column for `Vertical`, row for
+    /// `Horizontal`. Equals the left/top child's far edge.
+    pub pos: i32,
+    /// Start of the shared-edge span on the perpendicular axis (cells).
+    pub span_start: i32,
+    /// End (exclusive) of the shared-edge span on the perpendicular axis.
+    pub span_end: i32,
+}
+
+/// Computes the draggable dividers of a window layout from its split tree.
+pub fn dividers(layout: &WindowLayout) -> Vec<Divider> {
+    let mut out = Vec::new();
+    collect_dividers(&layout.root, &mut out);
+    out
+}
+
+fn collect_dividers(cell: &Cell, out: &mut Vec<Divider>) {
+    let Cell::Split { dir, children, .. } = cell else {
+        return;
+    };
+    match dir {
+        SplitDir::LeftRight | SplitDir::TopBottom => {
+            for pair in children.windows(2) {
+                let a = &pair[0];
+                let b = &pair[1];
+                let ad = a.dims();
+                let bd = b.dims();
+                let divider = match dir {
+                    SplitDir::LeftRight => {
+                        let pos = ad.xoff + ad.width as i32;
+                        let span_start = ad.yoff.max(bd.yoff);
+                        let span_end = (ad.yoff + ad.height as i32).min(bd.yoff + bd.height as i32);
+                        edge_leaf(a, pos, false).map(|primary| Divider {
+                            axis: DividerAxis::Vertical,
+                            primary,
+                            pos,
+                            span_start,
+                            span_end,
+                        })
+                    }
+                    SplitDir::TopBottom => {
+                        let pos = ad.yoff + ad.height as i32;
+                        let span_start = ad.xoff.max(bd.xoff);
+                        let span_end = (ad.xoff + ad.width as i32).min(bd.xoff + bd.width as i32);
+                        edge_leaf(a, pos, true).map(|primary| Divider {
+                            axis: DividerAxis::Horizontal,
+                            primary,
+                            pos,
+                            span_start,
+                            span_end,
+                        })
+                    }
+                    SplitDir::Floating => None,
+                };
+                if let Some(d) = divider {
+                    out.push(d);
+                }
+            }
+        }
+        SplitDir::Floating => {}
+    }
+    for child in children {
+        collect_dividers(child, out);
+    }
+}
+
+fn edge_leaf(cell: &Cell, edge: i32, horizontal: bool) -> Option<PaneId> {
+    match cell {
+        Cell::Leaf { dims, pane_id } => {
+            let far = if horizontal {
+                dims.yoff + dims.height as i32
+            } else {
+                dims.xoff + dims.width as i32
+            };
+            if far == edge {
+                pane_id.map(PaneId)
+            } else {
+                None
+            }
+        }
+        Cell::Split { children, .. } => {
+            children.iter().find_map(|c| edge_leaf(c, edge, horizontal))
+        }
     }
 }
 
@@ -323,6 +426,7 @@ fn parse_u32(bytes: &[u8], field: &'static str) -> TmuxResult<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::PaneId;
 
     fn p(s: &[u8]) -> WindowLayout {
         WindowLayout::parse(s).expect("should parse")
@@ -342,6 +446,92 @@ mod tests {
             },
             pane_id,
         }
+    }
+
+    fn pane_leaf(id: u32, width: u32, height: u32, xoff: i32, yoff: i32) -> Cell {
+        Cell::Leaf {
+            dims: CellDims {
+                width,
+                height,
+                xoff,
+                yoff,
+            },
+            pane_id: Some(id),
+        }
+    }
+
+    #[test]
+    fn single_pane_has_no_dividers() {
+        let layout = WindowLayout {
+            checksum: 0,
+            root: pane_leaf(1, 80, 24, 0, 0),
+        };
+        assert!(dividers(&layout).is_empty());
+    }
+
+    #[test]
+    fn left_right_split_yields_one_vertical_divider() {
+        let layout = WindowLayout {
+            checksum: 0,
+            root: Cell::Split {
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
+                dir: SplitDir::LeftRight,
+                children: vec![pane_leaf(1, 40, 24, 0, 0), pane_leaf(2, 39, 24, 41, 0)],
+            },
+        };
+        let ds = dividers(&layout);
+        assert_eq!(ds.len(), 1);
+        let d = ds[0];
+        assert_eq!(d.axis, DividerAxis::Vertical);
+        assert_eq!(d.primary, PaneId(1));
+        assert_eq!(d.pos, 40);
+        assert_eq!((d.span_start, d.span_end), (0, 24));
+    }
+
+    #[test]
+    fn top_bottom_split_yields_one_horizontal_divider() {
+        let layout = WindowLayout {
+            checksum: 0,
+            root: Cell::Split {
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
+                dir: SplitDir::TopBottom,
+                children: vec![pane_leaf(1, 80, 12, 0, 0), pane_leaf(2, 80, 11, 0, 13)],
+            },
+        };
+        let ds = dividers(&layout);
+        assert_eq!(ds.len(), 1);
+        assert_eq!(ds[0].axis, DividerAxis::Horizontal);
+        assert_eq!(ds[0].primary, PaneId(1));
+        assert_eq!(ds[0].pos, 12);
+        assert_eq!((ds[0].span_start, ds[0].span_end), (0, 80));
+    }
+
+    #[test]
+    fn floating_split_yields_no_dividers() {
+        let layout = WindowLayout {
+            checksum: 0,
+            root: Cell::Split {
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
+                dir: SplitDir::Floating,
+                children: vec![pane_leaf(1, 80, 24, 0, 0), pane_leaf(2, 40, 12, 0, 0)],
+            },
+        };
+        assert!(dividers(&layout).is_empty());
     }
 
     #[test]

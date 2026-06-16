@@ -36,6 +36,7 @@ pub(crate) mod tab_input;
 pub(crate) mod tab_label;
 pub mod terminal;
 pub(crate) mod tmux_dialog;
+pub(crate) mod tmux_divider_handle;
 pub(crate) mod tmux_pane_focus;
 pub(crate) mod tmux_window_bar;
 pub(crate) mod tmux_window_bar_input;

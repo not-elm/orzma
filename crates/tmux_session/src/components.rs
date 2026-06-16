@@ -2,7 +2,7 @@
 
 use bevy::prelude::Component;
 use bitflags::bitflags;
-use tmux_control_parser::{CellDims, PaneId, SessionId, WindowId};
+use tmux_control_parser::{CellDims, Divider, PaneId, SessionId, WindowId};
 
 /// The projected tmux session entity, carrying the session id and name.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -31,6 +31,10 @@ pub struct TmuxWindow {
     /// Window name.
     pub name: String,
 }
+
+/// The active window's draggable dividers, projected for the mouse arbiter.
+#[derive(Component, Debug, Clone, Default, PartialEq, Eq)]
+pub struct TmuxDividers(pub Vec<Divider>);
 
 bitflags! {
     /// tmux per-window status flags, projected from `#{window_raw_flags}`.
