@@ -23,6 +23,13 @@ use std::path::Path;
 #[derive(Resource, Clone)]
 pub struct TerminalUiFont(pub Handle<Font>);
 
+/// Strong handle to the bundled Nerd Font, used only for the window-bar
+/// powerline separator glyphs (U+E0B0 / U+E0B2). Independent of
+/// `TerminalUiFont` so a user font override (which may lack those glyphs)
+/// cannot turn the separators into tofu.
+#[derive(Resource, Clone)]
+pub struct PowerlineFont(pub Handle<Font>);
+
 /// Bevy plugin that wires `bridge_font_config` into Startup.
 pub struct FontBridgePlugin;
 
@@ -110,6 +117,9 @@ fn bridge_font_config(
 ) {
     let font: &FontConfig = &configs.font;
 
+    let powerline = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
+    commands.insert_resource(PowerlineFont(powerline.clone()));
+
     // Fast path: no override → use the renderer's default TerminalFonts
     // (already inserted by TerminalFontPlugin) and feed the same bundled
     // regular bytes to Assets<Font>. Skips ~52 MB of needless allocations
@@ -119,8 +129,7 @@ fn bridge_font_config(
         && font.italic_path.is_none()
         && font.bold_italic_path.is_none();
     if no_override {
-        let handle = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
-        commands.insert_resource(TerminalUiFont(handle));
+        commands.insert_resource(TerminalUiFont(powerline));
         return;
     }
 
@@ -456,6 +465,26 @@ mod tests {
         assert!(
             has_udev_face,
             "UDEVGothic35 must be registered in cosmic-text fontdb after Startup",
+        );
+    }
+
+    #[test]
+    fn powerline_font_resource_is_inserted_and_resolves() {
+        let (mut app, _guard, _env) = make_test_app();
+        app.update();
+
+        let handle = app
+            .world()
+            .get_resource::<PowerlineFont>()
+            .expect("PowerlineFont must be inserted at Startup")
+            .0
+            .clone();
+        assert!(
+            app.world()
+                .resource::<Assets<Font>>()
+                .get(&handle)
+                .is_some(),
+            "PowerlineFont handle must resolve to a Font asset"
         );
     }
 

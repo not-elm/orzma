@@ -11,6 +11,7 @@ publish.workspace = true
 tmux_control = { path = "../tmux_control" }
 tmux_control_parser = { path = "../tmux_control_parser" }
 bevy = { workspace = true }
+bitflags = { workspace = true }
 crossbeam-channel = "0.5"
 tracing = { workspace = true }
 
