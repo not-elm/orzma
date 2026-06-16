@@ -7,7 +7,6 @@ mod control_plane;
 mod font;
 mod inline_webview;
 mod input;
-mod multiplexer;
 mod osc_webview;
 mod system_set;
 mod theme;
@@ -31,10 +30,8 @@ use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
-use multiplexer::log::OzmuxLayoutLogPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
-use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
 use ozmux_webview_host::DynAssetRegistry;
 use tmux_copy_mode::OzmuxTmuxCopyModePlugin;
@@ -69,12 +66,10 @@ fn main() {
         .add_plugins((
             TerminalHandlePlugin,
             TerminalRendererPlugin,
-            MultiplexerPlugin,
             TmuxSessionPlugin,
             OzmuxTmuxPickerPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
-            OzmuxLayoutLogPlugin,
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,

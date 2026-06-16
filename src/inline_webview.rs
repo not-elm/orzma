@@ -645,12 +645,10 @@ mod tests {
     use bevy_cef::prelude::PreloadScripts;
     use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
     use ozma_tty_renderer::CellMetrics;
-    use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 
     fn make_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin)
             .init_resource::<DynamicRegistry>()
             .init_resource::<Assets<Image>>()
             .add_observer(on_osc_webview_request);
@@ -691,12 +689,7 @@ mod tests {
     }
 
     fn spawn_terminal(app: &mut App) -> Entity {
-        let surface = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_workspace(Some("t".into())).surface
-            })
-            .unwrap();
+        let surface = app.world_mut().spawn(Name::new("t")).id();
         app.world_mut().flush();
         surface
     }
