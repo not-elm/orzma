@@ -49,6 +49,9 @@ pub const SURFACE_TERMINAL: Color = Color::srgb(0.094, 0.094, 0.110);
 
 /// Pane border thickness.
 pub const PANE_BORDER_PX: f32 = 1.0;
+/// Gap in logical px between packed panes. The grey window container bleeds
+/// through this gap as the 1px divider line.
+pub const PANE_GAP_PX: f32 = 1.0;
 /// Camera clear color — shows through tmux's reserved-cell gaps between panes.
 /// Black matches the terminal background; retint here to recolor the gaps.
 pub const PANE_GAP: Color = Color::BLACK;
