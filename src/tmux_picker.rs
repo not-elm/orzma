@@ -12,7 +12,7 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use ozmux_tmux::{
     AttachTarget, ConnectionState, TmuxConnection, attach_or_create, select_window_command,
-    set_environment_command, set_environment_in_session_command, switch_client_command,
+    set_environment_in_session_command, switch_client_command,
 };
 use tmux_control::{SessionInfo, TmuxServer, WindowEntry};
 
@@ -32,7 +32,11 @@ impl Plugin for OzmuxTmuxPickerPlugin {
             .add_systems(Update, refresh_picker_on_open)
             .add_systems(
                 Update,
-                inject_session_ozmux_sock.run_if(resource_exists_and_changed::<ConnectionState>),
+                refresh_session_ozmux_sock.run_if(resource_exists_and_changed::<ConnectionState>),
+            )
+            .add_systems(
+                Last,
+                cleanup_session_ozmux_sock.run_if(on_message::<AppExit>),
             )
             .add_systems(
                 PostUpdate,
@@ -490,29 +494,100 @@ fn apply_attach(
     }
 }
 
-/// Sets `$OZMA_SOCK` in the freshly-connected session's tmux environment so
-/// panes created after attach inherit it. Gated to run on every
-/// [`ConnectionState`] change; the body acts only on the `Attached` transition.
+/// Refreshes `$OZMA_SOCK` to this ozmux's live control socket across the whole
+/// tmux server on attach: session-scoped on every existing session (overwriting
+/// any stale value a previously-exited ozmux left behind) plus the server-global
+/// environment so sessions created later inherit it. Gated to run on every
+/// [`ConnectionState`] change; the body acts only while `Attached`.
 ///
-/// `new-session` already injects `$OZMA_SOCK` via `-e` (covering its initial
-/// pane), but attaching to a pre-existing session cannot — its panes are spawned
-/// by an already-running server. This session-scoped `set-environment` closes
-/// that gap for panes opened after attach (already-running shells are
-/// unreachable). No-op when the control plane is down.
-fn inject_session_ozmux_sock(
+/// A pre-existing pane never inherited `$OZMA_SOCK` in its own process env, so
+/// `ratatui-ozma` recovers it at connect time via `tmux show-environment`; that
+/// recovery only works when the stored value points at the live socket. Writes
+/// go through one-shot `tmux` subprocesses (not the live `-CC` client) so they
+/// are independent of the client and land synchronously. No-op when the control
+/// plane is down.
+fn refresh_session_ozmux_sock(
     state: Res<ConnectionState>,
-    connection: NonSend<TmuxConnection>,
+    configs: Res<OzmuxConfigsResource>,
     control: Option<Res<ControlPlaneHandle>>,
 ) {
     if !matches!(*state, ConnectionState::Attached) {
         return;
     }
-    let (Some(handle), Some(client)) = (control, connection.client()) else {
+    let Some(handle) = control else {
         return;
     };
-    let cmd = set_environment_command("OZMA_SOCK", &handle.sock_path.to_string_lossy());
-    if let Err(e) = client.handle().send(&cmd) {
-        tracing::warn!(?e, "failed to set $OZMA_SOCK in tmux session environment");
+    let sock = handle.sock_path.to_string_lossy().into_owned();
+    let server = build_server(&configs);
+    let sessions = match server.list_sessions() {
+        Ok(sessions) => sessions,
+        Err(e) => {
+            tracing::warn!(?e, "failed to list sessions while refreshing $OZMA_SOCK");
+            return;
+        }
+    };
+    for session in &sessions {
+        if let Err(e) = server.run_oneshot(&[
+            "set-environment",
+            "-t",
+            session.name.as_str(),
+            "OZMA_SOCK",
+            sock.as_str(),
+        ]) {
+            tracing::warn!(
+                ?e,
+                session = session.name.as_str(),
+                "failed to set $OZMA_SOCK"
+            );
+        }
+    }
+    if let Err(e) = server.run_oneshot(&["set-environment", "-g", "OZMA_SOCK", sock.as_str()]) {
+        tracing::warn!(?e, "failed to set global $OZMA_SOCK");
+    }
+}
+
+/// On app exit, removes `$OZMA_SOCK` from the tmux server environment and deletes
+/// this process's control runtime dir so a pre-existing pane's `ratatui-ozma`
+/// cannot later resolve a dead socket path.
+///
+/// Gated by `run_if(on_message::<AppExit>)` so it runs only on the exit frame
+/// (window close and the in-`DefaultPlugins` `TerminalCtrlCHandlerPlugin` Ctrl-C
+/// path both emit `AppExit`). The env unset is best-effort via one-shot `tmux`
+/// subprocesses, which flush before the process exits — unlike a write over the
+/// `-CC` client, which races its teardown. The runtime dir is removed explicitly
+/// here rather than relying solely on [`crate::control_plane`]'s `RuntimeRoot`
+/// `Drop`, which can be skipped when noisy CEF teardown ends the process before
+/// the world is dropped. A hard kill (SIGKILL / un-handled SIGTERM) skips all of
+/// this; the next attach overwrites every value via [`refresh_session_ozmux_sock`].
+fn cleanup_session_ozmux_sock(
+    configs: Res<OzmuxConfigsResource>,
+    control: Option<Res<ControlPlaneHandle>>,
+) {
+    let Some(handle) = control else {
+        return;
+    };
+    let server = build_server(&configs);
+    if let Ok(sessions) = server.list_sessions() {
+        for session in &sessions {
+            let _ = server.run_oneshot(&[
+                "set-environment",
+                "-t",
+                session.name.as_str(),
+                "-u",
+                "OZMA_SOCK",
+            ]);
+        }
+    }
+    let _ = server.run_oneshot(&["set-environment", "-gu", "OZMA_SOCK"]);
+    // NOTE: remove the runtime root (`<temp>/<pid>/control`, = sock_path's
+    // grandparent) but NOT its `<pid>` parent — sibling webview runtime roots can
+    // live under the same pid dir, so `remove_dir_all` on it would delete theirs.
+    if let Some(runtime_root) = handle
+        .sock_path
+        .parent()
+        .and_then(|sock_dir| sock_dir.parent())
+    {
+        let _ = std::fs::remove_dir_all(runtime_root);
     }
 }
 

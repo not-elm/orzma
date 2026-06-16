@@ -192,6 +192,35 @@ impl TmuxServer {
         Ok(name)
     }
 
+    /// Runs a one-shot tmux command against this server (`tmux [socket] <args…>`,
+    /// plain subprocess, no control mode) and waits for it to finish.
+    ///
+    /// Used for fire-and-finish mutations whose effect must land before the
+    /// caller proceeds or exits — e.g. `set-environment` of `$OZMA_SOCK`, where
+    /// routing through the live `-CC` client would race the client's own
+    /// teardown at app exit (the buffered PTY write can be lost before tmux
+    /// forwards it). A blocking subprocess guarantees the server processed it.
+    /// `Ok(())` on a zero exit status; otherwise an error carrying tmux's stderr.
+    pub fn run_oneshot(&self, args: &[&str]) -> TmuxResult<()> {
+        let mut argv = self.socket_args();
+        argv.extend(args.iter().map(|s| s.to_string()));
+        let output = std::process::Command::new(&self.program)
+            .args(&argv)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .map_err(TmuxError::Spawn)?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let message = if message.is_empty() {
+            "tmux command failed".to_string()
+        } else {
+            message
+        };
+        Err(TmuxError::Spawn(std::io::Error::other(message)))
+    }
+
     /// The argv (after the program) for `create_detached_session`.
     fn create_detached_session_argv(&self) -> Vec<String> {
         let mut argv = self.socket_args();
@@ -938,5 +967,67 @@ mod tests {
 
         let _ = client.handle().send("kill-server");
         drop(client);
+    }
+
+    #[test]
+    #[ignore = "requires a real tmux binary"]
+    fn real_tmux_run_oneshot_sets_env_per_session_and_global() {
+        let socket = format!("ozmux-oneshot-{}", std::process::id());
+        let server = TmuxServer::new().socket_name(&socket);
+
+        server
+            .run_oneshot(&["new-session", "-d", "-s", "alpha"])
+            .expect("create session alpha");
+        server
+            .run_oneshot(&["new-session", "-d", "-s", "beta"])
+            .expect("create session beta");
+
+        // The exact writes refresh_session_ozmux_sock performs: per-session on
+        // every existing session, plus the server-global environment.
+        let sock = "/run/ozma/live.sock";
+        for session in ["alpha", "beta"] {
+            server
+                .run_oneshot(&["set-environment", "-t", session, "OZMA_SOCK", sock])
+                .unwrap_or_else(|e| panic!("set on {session}: {e}"));
+        }
+        server
+            .run_oneshot(&["set-environment", "-g", "OZMA_SOCK", sock])
+            .expect("set global");
+
+        let show = |args: &[&str]| -> String {
+            let out = std::process::Command::new("tmux")
+                .arg("-L")
+                .arg(&socket)
+                .args(args)
+                .output()
+                .expect("run tmux show-environment");
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        for session in ["alpha", "beta"] {
+            assert!(
+                show(&["show-environment", "-t", session, "OZMA_SOCK"])
+                    .contains(&format!("OZMA_SOCK={sock}")),
+                "session {session} must carry the live OZMA_SOCK"
+            );
+        }
+        assert!(
+            show(&["show-environment", "-g", "OZMA_SOCK"]).contains(&format!("OZMA_SOCK={sock}")),
+            "global env must carry the live OZMA_SOCK"
+        );
+
+        // The cleanup path: unset per-session + global, then confirm it is gone
+        // (a set value prints `OZMA_SOCK=…` on stdout; an unset one does not).
+        server
+            .run_oneshot(&["set-environment", "-t", "alpha", "-u", "OZMA_SOCK"])
+            .expect("unset on alpha");
+        server
+            .run_oneshot(&["set-environment", "-gu", "OZMA_SOCK"])
+            .expect("unset global");
+        assert!(
+            !show(&["show-environment", "-t", "alpha", "OZMA_SOCK"]).contains("OZMA_SOCK="),
+            "alpha OZMA_SOCK must be unset after cleanup"
+        );
+
+        let _ = server.run_oneshot(&["kill-server"]);
     }
 }

@@ -20,7 +20,7 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui_ozma::{Ozma, OzmaBackend, RpcError, Webview, WebviewHandle};
+use ratatui_ozma::{Ozma, OzmaBackend, OzmaError, RpcError, Webview, WebviewHandle};
 use std::io::stdout;
 use std::path::Path;
 use std::sync::mpsc;
@@ -50,8 +50,10 @@ fn run() -> anyhow::Result<()> {
     let doc = document::load(&path)?;
     let shared = Arc::new(Mutex::new(doc));
 
-    let ozma =
-        Ozma::connect().map_err(|e| anyhow::anyhow!("{e}. Run ozmd inside an ozmux pane."))?;
+    let ozma = Ozma::connect().map_err(|e| match e {
+        OzmaError::NotInPane(_) => anyhow::anyhow!("{e}. Run ozmd inside an ozmux pane."),
+        _ => anyhow::anyhow!("{e}"),
+    })?;
 
     let asset_dir = assets::materialize()?;
 
