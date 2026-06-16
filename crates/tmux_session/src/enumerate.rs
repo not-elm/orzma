@@ -1,5 +1,6 @@
 //! Parsing the `list-windows -F` reply used to enumerate windows on attach.
 
+use crate::components::WindowFlags;
 use crate::input::quote;
 use crate::keybindings::PromptKind;
 use bevy::prelude::Resource;
@@ -8,8 +9,8 @@ use tmux_control::CommandId;
 use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
 /// The `-F` format ozmux sends to enumerate windows. Tab-separated, with the
-/// free-text `window_name` LAST so a `splitn(6, '\t')` keeps it intact.
-pub const LIST_WINDOWS_FORMAT: &str = "#{window_active}\t#{window_id}\t#{window_index}\t#{window_layout}\t#{window_visible_layout}\t#{window_name}";
+/// free-text `window_name` LAST so a `splitn(7, '\t')` keeps it intact.
+pub const LIST_WINDOWS_FORMAT: &str = "#{window_active}\t#{window_id}\t#{window_index}\t#{window_layout}\t#{window_visible_layout}\t#{window_raw_flags}\t#{window_name}";
 
 /// One parsed row of the `list-windows` reply.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,13 +23,15 @@ pub struct WindowRow {
     pub index: u32,
     /// Window name.
     pub name: String,
+    /// tmux per-window flags (`#{window_raw_flags}`).
+    pub flags: WindowFlags,
     /// Parsed structural layout (panes + geometry).
     pub layout: WindowLayout,
 }
 
 /// Parses the lines of a `list-windows -F LIST_WINDOWS_FORMAT` reply.
 ///
-/// Each line is `active \t id \t index \t layout \t visible_layout \t name`.
+/// Each line is `active \t id \t index \t layout \t visible_layout \t raw_flags \t name`.
 /// The `visible_layout` field is currently ignored. Blank lines are skipped.
 /// Returns a descriptive `Err(String)` on a malformed row.
 pub fn parse_window_rows(lines: &[String]) -> Result<Vec<WindowRow>, String> {
@@ -43,7 +46,7 @@ pub fn parse_window_rows(lines: &[String]) -> Result<Vec<WindowRow>, String> {
 }
 
 fn parse_row(line: &str) -> Result<WindowRow, String> {
-    let mut fields = line.splitn(6, '\t');
+    let mut fields = line.splitn(7, '\t');
     let active = fields.next().is_some_and(|f| f == "1");
     let id = fields
         .next()
@@ -61,6 +64,11 @@ fn parse_row(line: &str) -> Result<WindowRow, String> {
     let _visible = fields
         .next()
         .ok_or_else(|| format!("missing visible layout in row: {line}"))?;
+    let flags = WindowFlags::parse(
+        fields
+            .next()
+            .ok_or_else(|| format!("missing flags in row: {line}"))?,
+    );
     let name = fields
         .next()
         .ok_or_else(|| format!("missing name in row: {line}"))?
@@ -70,6 +78,7 @@ fn parse_row(line: &str) -> Result<WindowRow, String> {
         active,
         index,
         name,
+        flags,
         layout,
     })
 }
@@ -109,6 +118,18 @@ pub(crate) fn active_pane_command() -> String {
 /// argument on whitespace).
 pub(crate) fn list_windows_command() -> String {
     format!("list-windows -F \"{LIST_WINDOWS_FORMAT}\"")
+}
+
+/// The name of the control-mode subscription that streams every window's
+/// `#{window_raw_flags}` back as `%subscription-changed`.
+pub const WINDOW_FLAGS_SUBSCRIPTION: &str = "ozmux-window-flags";
+
+/// Builds the control-mode command that subscribes this client to every
+/// window's `#{window_raw_flags}`. `@*` selects all windows, so tmux pushes a
+/// `%subscription-changed` whenever any window's flags change (coalesced to at
+/// most once per second).
+pub fn subscribe_window_flags_command() -> String {
+    format!("refresh-client -B {WINDOW_FLAGS_SUBSCRIPTION}:@*:#{{window_raw_flags}}")
 }
 
 /// Builds `set-environment <key> <value>` (session-scoped) to set an
@@ -331,7 +352,7 @@ mod tests {
 
     #[test]
     fn parses_one_active_window() {
-        let lines = vec!["1\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tmain".to_string()];
+        let lines = vec!["1\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\t\tmain".to_string()];
         let rows = parse_window_rows(&lines).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, WindowId(1));
@@ -343,8 +364,8 @@ mod tests {
     #[test]
     fn parses_multiple_windows_active_flag() {
         let lines = vec![
-            "0\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tone".to_string(),
-            "1\t@2\t1\tb25f,80x24,0,0,1\tb25f,80x24,0,0,1\ttwo".to_string(),
+            "0\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\t\tone".to_string(),
+            "1\t@2\t1\tb25f,80x24,0,0,1\tb25f,80x24,0,0,1\t*\ttwo".to_string(),
         ];
         let rows = parse_window_rows(&lines).unwrap();
         assert_eq!((rows[0].active, rows[1].active), (false, true));
@@ -354,14 +375,14 @@ mod tests {
     #[test]
     fn name_with_tabs_is_preserved_as_last_field() {
         let lines =
-            vec!["1\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tmy\tnamed\twin".to_string()];
+            vec!["1\t@1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\t\tmy\tnamed\twin".to_string()];
         let rows = parse_window_rows(&lines).unwrap();
         assert_eq!(rows[0].name, "my\tnamed\twin");
     }
 
     #[test]
     fn bad_window_id_errors() {
-        let lines = vec!["1\t1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\tx".to_string()];
+        let lines = vec!["1\t1\t0\tb25f,80x24,0,0,0\tb25f,80x24,0,0,0\t\tx".to_string()];
         assert!(parse_window_rows(&lines).is_err());
     }
 
@@ -398,8 +419,8 @@ mod tests {
 
     #[test]
     fn parse_row_captures_window_index() {
-        // Format order: active \t id \t index \t layout \t visible \t name
-        let line = "1\t@2\t3\tb25d,80x24,0,0,0\tb25d,80x24,0,0,0\tmy-win";
+        // Format order: active \t id \t index \t layout \t visible \t raw_flags \t name
+        let line = "1\t@2\t3\tb25d,80x24,0,0,0\tb25d,80x24,0,0,0\t\tmy-win";
         let rows = parse_window_rows(&[line.to_string()]).expect("parse");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].index, 3);
@@ -551,5 +572,31 @@ mod tests {
     #[test]
     fn mode_keys_query_reads_format() {
         assert_eq!(mode_keys_command(), "display-message -p '#{mode-keys}'");
+    }
+
+    #[test]
+    fn parse_row_reads_raw_flags_before_name() {
+        // active, id, index, layout, visible_layout, raw_flags, name
+        let line = "1\t@2\t0\tb25f,80x24,0,0,1\tb25f,80x24,0,0,1\t*Z\tmy editor".to_string();
+        let rows = parse_window_rows(&[line]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, WindowId(2));
+        assert!(rows[0].active);
+        assert_eq!(rows[0].name, "my editor");
+        assert_eq!(
+            rows[0].flags,
+            WindowFlags {
+                zoom: true,
+                ..WindowFlags::default()
+            }
+        );
+    }
+
+    #[test]
+    fn subscribe_window_flags_command_uses_all_windows_raw_flags() {
+        assert_eq!(
+            subscribe_window_flags_command(),
+            format!("refresh-client -B {WINDOW_FLAGS_SUBSCRIPTION}:@*:#{{window_raw_flags}}")
+        );
     }
 }

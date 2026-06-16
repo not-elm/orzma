@@ -595,7 +595,7 @@ mod tests {
                 id: CommandId(1),
                 number: 0,
                 ok: true,
-                output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\tmain".to_string()],
+                output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\t\tmain".to_string()],
             },
         )]));
         app.add_observer(|ev: On<TmuxWindowAdded>, log: Res<Log>| {
