@@ -1024,7 +1024,6 @@ mod tests {
                 .chain(),
         );
 
-        // Frame 1: emit once so first_emit flips to false (matching production state).
         app.update();
         let hits_after_first = app.world().resource::<SnapHits>().0;
         assert!(
@@ -1032,7 +1031,6 @@ mod tests {
             "first flush_emit must fire a FrameSnapshot (first_emit path)"
         );
 
-        // Now change pane dims so layout_tmux_panes will resize.
         app.world_mut()
             .entity_mut(entity)
             .get_mut::<TmuxPane>()
@@ -1044,8 +1042,6 @@ mod tests {
             yoff: 0,
         };
 
-        // Frame 2: layout_tmux_panes sees the dim change, calls resize_grid_only +
-        // emit_pending — must fire a NEW FrameSnapshot even though first_emit is now false.
         app.update();
         let hits_after_resize = app.world().resource::<SnapHits>().0;
 
