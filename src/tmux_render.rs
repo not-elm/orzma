@@ -185,7 +185,9 @@ pub(crate) struct DividerPixelRect {
     pub(crate) primary: PaneId,
     /// Logical-px leading edge of the 1px gap on the major axis.
     pub(crate) pos_px: f32,
+    /// Orthogonal-axis start of the divider line in logical px.
     pub(crate) span_start_px: f32,
+    /// Orthogonal-axis end of the divider line in logical px.
     pub(crate) span_end_px: f32,
 }
 
