@@ -24,6 +24,7 @@ use crate::input::mouse_buttons::phys_to_terminal_local;
 use crate::osc_webview::NonInteractive;
 use crate::tmux_copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
 use crate::tmux_picker::SessionPicker;
+use crate::tmux_render::{DividerPixelRect, PackedTmuxLayout};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
@@ -38,11 +39,11 @@ use bevy_cef_core::prelude::Browsers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_tmux::{
-    ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxDividers, TmuxPane,
+    ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxPane,
     resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
 };
 use std::time::Duration;
-use tmux_control_parser::{Divider, DividerAxis};
+use tmux_control_parser::DividerAxis;
 
 /// Bevy plugin that registers the tmux mouse gesture arbiter.
 pub(crate) struct OzmuxTmuxMousePlugin;
@@ -98,7 +99,7 @@ enum GestureState {
     },
     /// Dragging a divider to resize its primary pane.
     Resizing {
-        divider: Divider,
+        divider: DividerPixelRect,
         /// The primary pane's fixed near edge (xoff for vertical, yoff for horizontal), cells.
         near: i32,
         /// Last absolute size (cells) we issued a resize for.
@@ -174,39 +175,27 @@ pub(crate) fn tmux_pane_local_at(
     })
 }
 
-/// Returns the divider whose grab zone contains `cursor_phys` (physical px),
-/// given physical cell metrics and a tolerance in physical px. The grab zone is
-/// the divider's reserved gap cell (`[pos, pos+1)` on the major axis) expanded by
-/// `tol_phys` on each side, intersected with the divider's span on the
-/// perpendicular axis. This matches the visible handle bar (which fills the gap
-/// cell) so the handle, the resize grab, and the hover cursor coincide.
+/// Returns the divider whose grab zone contains `cursor` (logical px), given a
+/// tolerance in logical px. The grab zone is the 1px gap at `[pos_px, pos_px+1)`
+/// on the major axis expanded by `tol` on each side, intersected with the
+/// divider's span on the perpendicular axis.
 pub(crate) fn divider_at(
-    dividers: &[Divider],
-    cursor_phys: Vec2,
-    cell_w: f32,
-    cell_h: f32,
-    tol_phys: f32,
-) -> Option<Divider> {
+    dividers: &[DividerPixelRect],
+    cursor: Vec2,
+    tol: f32,
+) -> Option<DividerPixelRect> {
     dividers.iter().copied().find(|d| match d.axis {
         DividerAxis::Vertical => {
-            let gap0 = d.pos as f32 * cell_w;
-            let gap1 = (d.pos + 1) as f32 * cell_w;
-            let span0 = d.span_start as f32 * cell_h;
-            let span1 = d.span_end as f32 * cell_h;
-            cursor_phys.x >= gap0 - tol_phys
-                && cursor_phys.x <= gap1 + tol_phys
-                && cursor_phys.y >= span0
-                && cursor_phys.y < span1
+            cursor.x >= d.pos_px - tol
+                && cursor.x <= d.pos_px + 1.0 + tol
+                && cursor.y >= d.span_start_px
+                && cursor.y < d.span_end_px
         }
         DividerAxis::Horizontal => {
-            let gap0 = d.pos as f32 * cell_h;
-            let gap1 = (d.pos + 1) as f32 * cell_h;
-            let span0 = d.span_start as f32 * cell_w;
-            let span1 = d.span_end as f32 * cell_w;
-            cursor_phys.y >= gap0 - tol_phys
-                && cursor_phys.y <= gap1 + tol_phys
-                && cursor_phys.x >= span0
-                && cursor_phys.x < span1
+            cursor.y >= d.pos_px - tol
+                && cursor.y <= d.pos_px + 1.0 + tol
+                && cursor.x >= d.span_start_px
+                && cursor.x < d.span_end_px
         }
     })
 }
@@ -252,7 +241,7 @@ fn arbiter(
     mut inline_route: TmuxInlineRouteParams,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    dividers_q: Query<&TmuxDividers, With<ActiveWindow>>,
+    packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OzmuxConfigsResource>>,
     picker: Res<SessionPicker>,
@@ -297,10 +286,12 @@ fn arbiter(
             )
         })
         .unwrap_or((4.0, 4.0, 400, 8.0));
-    let tol_phys = grab_tol_logical * scale;
     let drag_threshold_phys = drag_threshold_logical * scale;
 
-    let dividers: &[Divider] = dividers_q.single().map(|d| d.0.as_slice()).unwrap_or(&[]);
+    let packed_dividers: &[DividerPixelRect] = packed_q
+        .single()
+        .map(|p| p.dividers.as_slice())
+        .unwrap_or(&[]);
 
     for ev in buttons.read() {
         if ev.button != bevy::input::mouse::MouseButton::Left {
@@ -333,8 +324,9 @@ fn arbiter(
                 // A divider whose primary pane has no projected geometry yet
                 // cannot be resized, so it falls through to a pane focus rather
                 // than entering Resizing with a bogus (0) baseline.
-                let resize =
-                    divider_at(dividers, cursor_phys, cell_w, cell_h, tol_phys).and_then(|d| {
+                let cursor_logical = cursor_phys / scale;
+                let resize = divider_at(packed_dividers, cursor_logical, grab_tol_logical)
+                    .and_then(|d| {
                         panes
                             .iter()
                             .find(|(_, p, _, _)| p.id == d.primary)
@@ -880,44 +872,40 @@ mod tests {
         assert_eq!(GestureState::default(), GestureState::Idle);
     }
 
-    fn vdiv(primary: u32, pos: i32, s: i32, e: i32) -> Divider {
-        Divider {
+    fn pixel_vdiv(pos: f32, span_start: f32, span_end: f32) -> DividerPixelRect {
+        DividerPixelRect {
             axis: DividerAxis::Vertical,
-            primary: PaneId(primary),
-            pos,
-            span_start: s,
-            span_end: e,
+            primary: PaneId(1),
+            pos_px: pos,
+            span_start_px: span_start,
+            span_end_px: span_end,
         }
     }
 
     #[test]
-    fn hit_test_grabs_vertical_divider_within_tolerance() {
-        let ds = [vdiv(1, 40, 0, 24)];
-        let hit = divider_at(&ds, Vec2::new(322.0, 100.0), 8.0, 16.0, 4.0);
+    fn pixel_hit_test_within_tolerance() {
+        let d = pixel_vdiv(320.0, 0.0, 384.0);
+        let hit = divider_at(&[d], Vec2::new(322.0, 100.0), 4.0);
         assert!(hit.is_some());
         assert_eq!(hit.unwrap().primary, PaneId(1));
     }
 
     #[test]
-    fn hit_test_misses_outside_tolerance() {
-        let ds = [vdiv(1, 40, 0, 24)];
-        assert!(divider_at(&ds, Vec2::new(360.0, 100.0), 8.0, 16.0, 4.0).is_none());
+    fn pixel_hit_test_outside_tolerance() {
+        let d = pixel_vdiv(320.0, 0.0, 384.0);
+        assert!(divider_at(&[d], Vec2::new(330.0, 100.0), 4.0).is_none());
     }
 
     #[test]
-    fn hit_test_misses_outside_span() {
-        let ds = [vdiv(1, 40, 0, 12)];
-        assert!(divider_at(&ds, Vec2::new(320.0, 208.0), 8.0, 16.0, 4.0).is_none());
+    fn pixel_hit_test_outside_span() {
+        let d = pixel_vdiv(320.0, 0.0, 192.0);
+        assert!(divider_at(&[d], Vec2::new(320.0, 200.0), 4.0).is_none());
     }
 
     #[test]
-    fn hit_test_grabs_far_side_of_gap() {
-        // Gap cell is column 40 = px [320, 328); the far side (x=327) is on the
-        // visible handle and must grab even though it is >tol from the gap's
-        // leading edge (320) — the zone spans the whole gap cell, not ±tol.
-        let ds = [vdiv(1, 40, 0, 24)];
-        let hit = divider_at(&ds, Vec2::new(327.0, 100.0), 8.0, 16.0, 4.0);
-        assert_eq!(hit.map(|d| d.primary), Some(PaneId(1)));
+    fn pixel_hit_test_far_side_of_tolerance() {
+        let d = pixel_vdiv(320.0, 0.0, 384.0);
+        assert!(divider_at(&[d], Vec2::new(324.0, 100.0), 4.0).is_some());
     }
 
     #[test]

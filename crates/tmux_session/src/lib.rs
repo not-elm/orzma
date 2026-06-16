@@ -21,7 +21,7 @@ mod select;
 mod state;
 
 pub use components::{
-    ActivePane, ActiveWindow, TmuxDividers, TmuxPane, TmuxSession, TmuxWindow, WindowFlags,
+    ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
 };
 pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
