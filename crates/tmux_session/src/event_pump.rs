@@ -1,10 +1,12 @@
 //! Draining, logging, and routing of tmux transport events: into
 //! `ConnectionState` and the global projection events the observers consume.
 
-use crate::enumerate::parse_window_rows;
+use crate::components::WindowFlags;
+use crate::enumerate::{WINDOW_FLAGS_SUBSCRIPTION, parse_window_rows};
 use crate::events::{
     TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxLayoutChanged, TmuxSessionChanged,
-    TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
+    TmuxWindowAdded, TmuxWindowClosed, TmuxWindowFlagsChanged, TmuxWindowRenamed,
+    TmuxWindowsRetained, pane_geoms,
 };
 use crate::keybindings::{KeyBinding, ModeKeys, parse_list_keys, parse_prefix};
 use crate::output::PaneOutput;
@@ -285,6 +287,42 @@ pub(crate) fn detect_session_switch(
     None
 }
 
+/// True when the batch contains a `%session-window-changed` — the session's
+/// current window changed (`next-window` / `previous-window` / `select-window`).
+///
+/// NOTE: tmux emits *only* `%session-window-changed` for such a switch, never a
+/// `%window-pane-changed`, so the caller must re-query the active pane
+/// (`active_pane_command`) to move `ActiveWindow`/`ActivePane`. Without that the
+/// switch never reaches the projection and the UI stays on the old window.
+pub(crate) fn detect_window_switch(events: &[TransportEvent]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            TransportEvent::Protocol(ClientEvent::Notification(
+                ControlEvent::SessionWindowChanged { .. }
+            ))
+        )
+    })
+}
+
+/// True when the batch contains a `%window-add` — a window was created
+/// (`new-window`).
+///
+/// NOTE: tmux does NOT emit a `%layout-change` for a freshly added window
+/// (verified against tmux 3.6a: `new-window` sends only `%window-add` +
+/// `%session-window-changed` + `%output`), so the new window's pane layout
+/// never arrives via notifications. The caller must re-enumerate
+/// (`list-windows`) to fetch the layout and project the pane; without it the
+/// new window has no pane entity and renders black.
+pub(crate) fn detect_window_added(events: &[TransportEvent]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::WindowAdd { .. }))
+        )
+    })
+}
+
 /// Parses an `@N %M` line into `(WindowId, PaneId)`.
 fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
     let mut parts = line.split_whitespace();
@@ -309,7 +347,7 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
                 name: String::new(),
             });
         }
-        ControlEvent::WindowClose { window } => {
+        ControlEvent::WindowClose { window } | ControlEvent::UnlinkedWindowClose { window } => {
             commands.trigger(TmuxWindowClosed { window: *window });
         }
         ControlEvent::WindowRenamed { window, name } => {
@@ -330,6 +368,17 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
                 pane: *pane,
             });
         }
+        ControlEvent::SubscriptionChanged {
+            name,
+            window: Some(window),
+            value,
+            ..
+        } if name == WINDOW_FLAGS_SUBSCRIPTION => {
+            commands.trigger(TmuxWindowFlagsChanged {
+                window: *window,
+                flags: WindowFlags::parse(value),
+            });
+        }
         _ => {}
     }
 }
@@ -348,6 +397,10 @@ fn trigger_seed(commands: &mut Commands, output: &[String]) {
             window: row.id,
             index: row.index,
             name: row.name.clone(),
+        });
+        commands.trigger(TmuxWindowFlagsChanged {
+            window: row.id,
+            flags: row.flags,
         });
         commands.trigger(TmuxLayoutChanged {
             window: row.id,
@@ -568,6 +621,74 @@ mod tests {
     }
 
     #[test]
+    fn detect_window_switch_flags_session_window_changed() {
+        use tmux_control_parser::{SessionId, WindowId};
+        let switched = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::SessionWindowChanged {
+                session: SessionId(1),
+                window: WindowId(4),
+            },
+        ))];
+        assert!(detect_window_switch(&switched));
+        assert!(!detect_window_switch(&[]));
+
+        let session_changed = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::SessionChanged {
+                session: SessionId(2),
+                name: "b".to_string(),
+            },
+        ))];
+        assert!(!detect_window_switch(&session_changed));
+    }
+
+    #[test]
+    fn detect_window_added_flags_window_add() {
+        use tmux_control_parser::WindowId;
+        let added = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::WindowAdd {
+                window: WindowId(7),
+            },
+        ))];
+        assert!(detect_window_added(&added));
+        assert!(!detect_window_added(&[]));
+
+        let closed = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::WindowClose {
+                window: WindowId(7),
+            },
+        ))];
+        assert!(!detect_window_added(&closed));
+    }
+
+    #[test]
+    fn unlinked_window_close_triggers_window_closed() {
+        use crate::events::TmuxWindowClosed;
+        use std::sync::{Arc, Mutex};
+        use tmux_control_parser::WindowId;
+
+        #[derive(Resource, Clone)]
+        struct Sink(Arc<Mutex<Vec<WindowId>>>);
+
+        let mut app = App::new();
+        let sink = Sink(Arc::new(Mutex::new(Vec::new())));
+        app.insert_resource(sink.clone());
+        app.add_observer(|ev: On<TmuxWindowClosed>, sink: Res<Sink>| {
+            sink.0.lock().unwrap().push(ev.window);
+        });
+        app.add_systems(Update, |mut commands: Commands| {
+            trigger_notification(
+                &mut commands,
+                &ControlEvent::UnlinkedWindowClose {
+                    window: WindowId(3),
+                },
+            );
+        });
+        app.update();
+
+        assert_eq!(*sink.0.lock().unwrap(), vec![WindowId(3)]);
+    }
+
+    #[test]
     fn seed_reply_triggers_per_row_events_then_retain() {
         use crate::events::{TmuxLayoutChanged, TmuxWindowAdded, TmuxWindowsRetained};
         use std::sync::{Arc, Mutex};
@@ -595,7 +716,7 @@ mod tests {
                 id: CommandId(1),
                 number: 0,
                 ok: true,
-                output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\tmain".to_string()],
+                output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\t\tmain".to_string()],
             },
         )]));
         app.add_observer(|ev: On<TmuxWindowAdded>, log: Res<Log>| {
@@ -689,5 +810,44 @@ mod tests {
         let mut pending = Some(CommandId(22));
         assert_eq!(take_mode_keys(&mut pending, &events), Some(ModeKeys::Emacs));
         assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn window_flags_subscription_triggers_flags_changed() {
+        use crate::components::WindowFlags;
+        use crate::enumerate::WINDOW_FLAGS_SUBSCRIPTION;
+        use crate::events::TmuxWindowFlagsChanged;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Resource, Default, Clone)]
+        struct Captured(Arc<Mutex<Vec<(WindowId, WindowFlags)>>>);
+
+        #[derive(Resource)]
+        struct Batch(Vec<TransportEvent>);
+
+        fn run(mut commands: Commands, mut pending: ResMut<EnumerationState>, batch: Res<Batch>) {
+            trigger_events(&mut commands, &mut pending.pending, &batch.0);
+        }
+
+        let line = format!("%subscription-changed {WINDOW_FLAGS_SUBSCRIPTION} $1 @2 0 - : *Z");
+        let notification = ControlEvent::parse(line.as_bytes()).unwrap();
+        let event = TransportEvent::Protocol(ClientEvent::Notification(notification));
+
+        let mut app = App::new();
+        app.init_resource::<Captured>();
+        app.init_resource::<EnumerationState>();
+        app.insert_resource(Batch(vec![event]));
+        app.add_observer(|ev: On<TmuxWindowFlagsChanged>, captured: Res<Captured>| {
+            captured.0.lock().unwrap().push((ev.window, ev.flags));
+        });
+        app.add_systems(Update, run);
+
+        let captured = app.world().resource::<Captured>().clone();
+        app.update();
+
+        assert_eq!(
+            *captured.0.lock().unwrap(),
+            vec![(WindowId(2), WindowFlags::ZOOM)]
+        );
     }
 }

@@ -1,11 +1,11 @@
 //! Observers that apply the global projection events to the ECS world, plus the
 //! tmux-id -> entity index they resolve through.
 
-use crate::components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow};
+use crate::components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, WindowFlags};
 use crate::events::{
     PaneGeom, TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxConnectionReset,
-    TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed,
-    TmuxWindowsRetained,
+    TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed,
+    TmuxWindowFlagsChanged, TmuxWindowRenamed, TmuxWindowsRetained,
 };
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -25,6 +25,7 @@ pub(crate) fn register_observers(app: &mut App) {
     app.add_observer(on_session_changed)
         .add_observer(on_window_added)
         .add_observer(on_window_renamed)
+        .add_observer(on_window_flags_changed)
         .add_observer(on_window_closed)
         .add_observer(on_layout_changed)
         .add_observer(on_active_pane_changed)
@@ -98,6 +99,23 @@ fn on_window_renamed(
         index: w.index,
         name: ev.name.clone(),
     });
+}
+
+fn on_window_flags_changed(
+    ev: On<TmuxWindowFlagsChanged>,
+    mut commands: Commands,
+    index: Res<TmuxProjection>,
+    flags: Query<&WindowFlags>,
+) {
+    let Some(&e) = index.windows.get(&ev.window) else {
+        return;
+    };
+    // NOTE: only insert when the value actually changes, so Changed<WindowFlags>
+    // fires on real changes (not every subscription tick).
+    if flags.get(e) == Ok(&ev.flags) {
+        return;
+    }
+    commands.entity(e).insert(ev.flags);
 }
 
 fn on_window_closed(
@@ -417,6 +435,46 @@ mod tests {
         let e = app.world().resource::<TmuxProjection>().session.unwrap();
         let s = app.world().get::<TmuxSession>(e).unwrap();
         assert_eq!((s.id, s.name.as_str()), (SessionId(7), "main"));
+    }
+
+    #[test]
+    fn window_flags_changed_inserts_flags_on_existing_window() {
+        use crate::components::WindowFlags;
+        use crate::events::TmuxWindowFlagsChanged;
+
+        let mut app = app();
+        app.world_mut().trigger(TmuxWindowAdded {
+            window: WindowId(1),
+            index: 0,
+            name: "w".into(),
+        });
+        app.world_mut().flush();
+        app.world_mut().trigger(TmuxWindowFlagsChanged {
+            window: WindowId(1),
+            flags: WindowFlags::BELL,
+        });
+        app.update();
+
+        let index = app.world().resource::<TmuxProjection>();
+        let e = index.windows[&WindowId(1)];
+        assert_eq!(
+            app.world().get::<WindowFlags>(e).copied(),
+            Some(WindowFlags::BELL)
+        );
+    }
+
+    #[test]
+    fn window_flags_changed_for_unknown_window_is_noop() {
+        use crate::components::WindowFlags;
+        use crate::events::TmuxWindowFlagsChanged;
+
+        let mut app = app();
+        app.world_mut().trigger(TmuxWindowFlagsChanged {
+            window: WindowId(99),
+            flags: WindowFlags::ZOOM,
+        });
+        app.update();
+        assert!(app.world().resource::<TmuxProjection>().windows.is_empty());
     }
 
     #[test]

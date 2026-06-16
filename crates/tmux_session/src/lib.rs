@@ -20,7 +20,7 @@ mod plugin;
 mod select;
 mod state;
 
-pub use components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow};
+pub use components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, WindowFlags};
 pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
 pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};

@@ -2,6 +2,7 @@
 //! payload carries only tmux-side ids (never an `Entity`); observers resolve
 //! ids to entities via the `TmuxProjection` index.
 
+use crate::components::WindowFlags;
 use bevy::prelude::Event;
 use tmux_control_parser::{Cell, CellDims, PaneId, SessionId, WindowId, WindowLayout};
 
@@ -44,6 +45,14 @@ pub(crate) struct TmuxWindowClosed {
 pub(crate) struct TmuxWindowRenamed {
     pub(crate) window: WindowId,
     pub(crate) name: String,
+}
+
+/// A window's `#{window_raw_flags}` changed — from a `%subscription-changed`
+/// notification or a seed row.
+#[derive(Event, Debug, Clone)]
+pub(crate) struct TmuxWindowFlagsChanged {
+    pub(crate) window: WindowId,
+    pub(crate) flags: WindowFlags,
 }
 
 /// `%layout-change` or a seed row: the window's full pane set.

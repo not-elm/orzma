@@ -4995,6 +4995,7 @@ name = "ozmux_tmux"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "bitflags 2.11.1",
  "crossbeam-channel",
  "tmux_control",
  "tmux_control_parser",

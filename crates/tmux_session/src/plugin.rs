@@ -6,11 +6,12 @@ use crate::connection::TmuxConnection;
 use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, active_pane_command, capture_pane_command, client_name_command,
-    list_windows_command, mode_keys_command,
+    list_windows_command, mode_keys_command, subscribe_window_flags_command,
 };
 use crate::event_pump::{
-    advance_state, detect_session_switch, drain_transport, take_active_pane, take_client_name,
-    take_keybindings, take_mode_keys, take_pane_captures, take_prefix_keys, trigger_events,
+    advance_state, detect_session_switch, detect_window_added, detect_window_switch,
+    drain_transport, take_active_pane, take_client_name, take_keybindings, take_mode_keys,
+    take_pane_captures, take_prefix_keys, trigger_events,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
@@ -124,6 +125,21 @@ fn drain_tmux_events(
             windows: Vec::new(),
         });
         send_session_enumeration(&mut enumeration, client);
+    } else if let Some(client) = connection.client() {
+        if detect_window_added(&events) {
+            match client.handle().send(&list_windows_command()) {
+                Ok(id) => enumeration.pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to re-enumerate on window-add"),
+            }
+        }
+        if detect_window_switch(&events) {
+            match client.handle().send(&active_pane_command()) {
+                Ok(id) => enumeration.active_pane_pending = Some(id),
+                Err(error) => {
+                    tracing::warn!(?error, "failed to re-query active pane on window switch")
+                }
+            }
+        }
     }
     if let Some(next) = advance_state(&state, &events) {
         *state = next;
@@ -242,6 +258,9 @@ fn send_session_enumeration(enumeration: &mut EnumerationState, client: &tmux_co
     match client.handle().send(&active_pane_command()) {
         Ok(id) => enumeration.active_pane_pending = Some(id),
         Err(error) => tracing::warn!(?error, "failed to send active-pane query"),
+    }
+    if let Err(error) = client.handle().send(&subscribe_window_flags_command()) {
+        tracing::warn!(?error, "failed to subscribe to window flags");
     }
 }
 
