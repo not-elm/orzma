@@ -139,6 +139,25 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
     (pointer_cell - near).max(1) as u32
 }
 
+/// Commands to move the tmux copy cursor from `cur` (visible col,row) to
+/// `target` (visible col,row). The row uses absolute `goto-line` (idempotent,
+/// drift-free); the column uses relative cursor motion. `history` and `scroll`
+/// are `CopyState.history_size` / `scroll_position` for the absolute mapping
+/// (`absolute_line = (history - scroll) + visible_row`).
+fn position_commands(cur: (u16, u16), target: (u16, u16), history: u32, scroll: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    let top = history as i32 - scroll as i32;
+    let target_line = (top + target.1 as i32).max(0);
+    out.push(format!("send-keys -X goto-line {target_line}"));
+    let dx = target.0 as i32 - cur.0 as i32;
+    if dx > 0 {
+        out.push(format!("send-keys -X -N {dx} cursor-right"));
+    } else if dx < 0 {
+        out.push(format!("send-keys -X -N {} cursor-left", -dx));
+    }
+    out
+}
+
 /// Interprets raw left-button messages into tmux `select-pane` or
 /// `resize-pane` commands.
 ///
@@ -356,6 +375,18 @@ mod tests {
     fn hit_test_misses_outside_span() {
         let ds = [vdiv(1, 40, 0, 12)];
         assert!(divider_at(&ds, Vec2::new(320.0, 208.0), 8.0, 16.0, 4.0).is_none());
+    }
+
+    #[test]
+    fn position_commands_use_goto_line_for_row_and_relative_for_column() {
+        let cmds = position_commands((2, 3), (5, 7), 100, 0);
+        assert_eq!(
+            cmds,
+            vec![
+                "send-keys -X goto-line 107".to_string(),
+                "send-keys -X -N 3 cursor-right".to_string(),
+            ]
+        );
     }
 
     #[test]
