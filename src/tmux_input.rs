@@ -170,9 +170,11 @@ fn forward_keys_to_tmux(
 
     // When an inline webview holds focus it owns the keyboard (bevy_cef routes
     // keystrokes to it); forwarding to tmux too would double-send. Ctrl+Shift+Esc
-    // releases focus back to the terminal. NOTE: in the current tmux backend the
-    // webview-focus machinery is old-multiplexer-driven, so FocusedWebview is
-    // usually None here; this handler is correct for when it is set.
+    // releases focus back to the terminal. NOTE: under the tmux backend
+    // `FocusedWebview` is live (set by the inline-click router, the control-plane
+    // `SetFocus` op, and the focus-preservation arm in `sync_focused_webview`),
+    // so this drain is load-bearing whenever an inline webview is focused —
+    // removing it would double-send keystrokes to the page and the pane.
     if focused_webview.0.is_some() {
         for ev in events.read() {
             if ev.state == ButtonState::Pressed

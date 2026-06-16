@@ -137,8 +137,7 @@ enum GestureState {
 pub(crate) struct TmuxMouseGesture {
     state: GestureState,
     click: ClickTracker,
-    /// The in-flight inline-webview press (mirrors native
-    /// `MouseSelectionState.inline_press`): the child a left press inside an
+    /// The in-flight inline-webview press: the child a left press inside an
     /// interactive inline rect was forwarded to, so the matching release's
     /// click-up routes to the SAME child even if the pointer drifted off-rect.
     inline_press: Option<Entity>,
@@ -709,7 +708,7 @@ struct TmuxInlineRouteParams<'w, 's> {
 
 /// Routes a left press/release through the inline-webview layer, returning
 /// `true` when the event was consumed and must NOT reach the tmux gesture
-/// pipeline. Mirrors native `route_inline_left_click`: a press inside an
+/// pipeline. A press inside an
 /// interactive rect sets `FocusedWebview`, issues the UNGATED `set_focus`
 /// BEFORE the gated `send_mouse_click` (CEF drops clicks to a browser with no
 /// `focused_frame()`, so the first click would otherwise be swallowed),
@@ -718,7 +717,7 @@ struct TmuxInlineRouteParams<'w, 's> {
 /// forwards the click-up to the recorded child (drift-tolerant) and clears.
 #[expect(
     clippy::too_many_arguments,
-    reason = "mirrors native route_inline_left_click signature"
+    reason = "inline routing needs the gesture state, route params, and pointer geometry"
 )]
 fn route_tmux_inline_left_click(
     gesture: &mut TmuxMouseGesture,
@@ -793,8 +792,7 @@ fn route_tmux_inline_left_click(
 
 /// Webview-local DIP for a release on `child`, WITHOUT containment (a pointer
 /// that drifted off the rect still produces a release position). `None` when
-/// the child/terminal/rect chain is gone. The tmux analog of native
-/// `inline_release_dip`.
+/// the child/terminal/rect chain is gone.
 fn tmux_inline_release_dip(
     route: &TmuxInlineRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -821,8 +819,7 @@ fn tmux_inline_release_dip(
 /// Forwards pointer motion over an interactive inline rect of a tmux pane to
 /// the child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
 /// whatever mouse buttons are held so the one system serves both hover and an
-/// in-rect drag. The tmux analog of native `forward_inline_mouse_moves`:
-/// `CursorMoved`-driven (one forward per frame, latest position), and
+/// in-rect drag. `CursorMoved`-driven (one forward per frame, latest position), and
 /// focus-gated inside `bevy_cef` so motion over an unfocused browser is
 /// dropped browser-side. `Browsers` is optional so CEF-less tests construct it.
 fn forward_tmux_inline_mouse_moves(

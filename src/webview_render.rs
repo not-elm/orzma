@@ -4,7 +4,7 @@
 //! emits to the registering program over the control socket.
 
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
-use crate::inline_webview::{InlineWebview, focused_inline_of};
+use crate::inline_webview::InlineWebview;
 use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;
@@ -81,19 +81,14 @@ impl Plugin for OzmuxWebviewRenderPlugin {
 /// CEF focus when `FocusedWebview` becomes `None`).
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
-/// inline webview child (`InlineWebview`) whose `ChildOf` parent is the
-/// active surface (the active `TmuxPane`), that inline focus stands (spec §7,
-/// single focus source) — this covers both the click-granted focus and the
-/// app-declared focus set via the control-plane `SetFocus` op, since both
-/// point `FocusedWebview` at an inline child of the owner surface. Without
-/// this arm the per-frame sync would map the active terminal surface to
-/// `None` and clobber an inline focus one frame after it was set. Every other
-/// case — a different pane becoming active, or the inline child despawning —
-/// keeps the drive-from-active-pane behavior above.
-///
-/// A second preservation arm keeps `FocusedWebview` while it points at an
-/// inline child of a live `TmuxPane` that is not the active pane; a despawned
-/// child falls through to the clear path below.
+/// inline webview child (`InlineWebview`) whose `ChildOf` parent is a live
+/// `TmuxPane` — active or not — that inline focus stands (spec §7, single
+/// focus source). This covers click-granted focus and the app-declared focus
+/// set via the control-plane `SetFocus` op, and means switching the active
+/// pane does NOT clear an inline webview's focus: the webview keeps keyboard
+/// focus until its child despawns (or focus moves off it), at which point the
+/// sync falls through to the clear path below, which maps the active terminal
+/// pane to `None`.
 pub(crate) fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
@@ -115,9 +110,6 @@ pub(crate) fn sync_focused_webview(
     }
 
     let active_surface = active_pane.iter().next();
-    if focused_inline_of(Some(&focused), &inline_parents, active_surface).is_some() {
-        return;
-    }
     let active = active_surface
         .filter(|surface| webviews.contains(*surface) && !non_interactive.contains(*surface));
     if focused.0 != active {

@@ -7,6 +7,7 @@
 //! `Window::ime_enabled` and `.ime_position`).
 
 use crate::inline_webview::{InlineWebview, focused_inline_of};
+use crate::input::InputPhase;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
@@ -27,14 +28,18 @@ use ozmux_tmux::{ActivePane, TmuxConnection, TmuxPane, send_bytes_command};
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
 /// (chained); both run in `InputPhase::Dispatch`, ahead of
-/// `InputPhase::FocusedKey` where keyboard forwarding will run in
-/// phase-3b.
+/// `InputPhase::FocusedKey` where `forward_keys_to_tmux` forwards keys to the
+/// active pane (and gates on `ImeState`, so IME must apply first).
 pub struct ImePlugin;
 
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ImeState>()
-            .add_systems(Update, (ime_policy_system, read_ime_events).chain());
+        app.init_resource::<ImeState>().add_systems(
+            Update,
+            (ime_policy_system, read_ime_events)
+                .chain()
+                .in_set(InputPhase::Dispatch),
+        );
     }
 }
 
