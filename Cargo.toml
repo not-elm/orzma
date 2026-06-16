@@ -37,6 +37,7 @@ ozmux_webview_host = { path = "crates/webview_host", features = ["cef"] }
 ozmux_multiplexer = { path = "crates/multiplexer" }
 ozmux_tmux = { path = "crates/tmux_session" }
 tmux_control = { path = "crates/tmux_control" }
+tmux_control_parser = { path = "crates/tmux_control_parser" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
@@ -45,7 +46,6 @@ url = "2"
 
 [dev-dependencies]
 tempfile = { workspace = true }
-tmux_control_parser = { path = "crates/tmux_control_parser" }
 
 [lints]
 workspace = true

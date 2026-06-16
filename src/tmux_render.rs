@@ -3,6 +3,7 @@
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
 use crate::osc_webview::OscWebviewGate;
+use crate::theme;
 use crate::ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
@@ -13,7 +14,7 @@ use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
-    ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
+    ActivePane, ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
     refresh_client_command,
 };
 use std::collections::HashMap;
@@ -32,6 +33,10 @@ pub struct OzmuxTmuxRenderPlugin;
 impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>();
+        // The camera clear color shows through tmux's reserved-cell gaps between
+        // panes (panes are opaque; the UI roots and pane container are
+        // transparent). Adjust `theme::PANE_GAP` to retint those gaps.
+        app.insert_resource(ClearColor(theme::PANE_GAP));
         app.add_systems(
             Update,
             (
@@ -40,6 +45,7 @@ impl Plugin for OzmuxTmuxRenderPlugin {
                 route_tmux_output.run_if(on_message::<PaneOutput>),
                 sync_active_window,
                 layout_tmux_panes,
+                sync_active_pane_outline,
             )
                 .chain()
                 .after(TmuxProjectionSet),
@@ -102,6 +108,7 @@ fn attach_tmux_pane_terminal(
                 position_type: PositionType::Absolute,
                 ..default()
             },
+            Outline::new(Val::Px(theme::PANE_BORDER_PX), Val::Px(0.0), theme::BORDER),
         ));
     }
 }
@@ -296,6 +303,18 @@ fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<Tm
     }
 }
 
+/// Recolors each pane's `Outline`: the accent color on the pane carrying
+/// `ActivePane`, the subtle border grey otherwise. Recoloring (not
+/// insert/remove) avoids ECS table moves on every active-pane change.
+fn sync_active_pane_outline(mut panes: Query<(Has<ActivePane>, &mut Outline), With<TmuxPane>>) {
+    for (active, mut outline) in panes.iter_mut() {
+        let want = if active { theme::ACCENT } else { theme::BORDER };
+        if outline.color != want {
+            outline.color = want;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,20 +337,6 @@ mod tests {
         assert_eq!(cells_for(807, 607, 8.0, 16.0), (100, 37));
     }
 
-    #[test]
-    fn pane_rect_scales_cell_dims_to_pixels() {
-        let dims = CellDims {
-            width: 10,
-            height: 4,
-            xoff: 2,
-            yoff: 1,
-        };
-        assert_eq!(
-            pane_rect(dims.xoff, dims.yoff, dims.width, dims.height, 8.0, 16.0),
-            (16.0, 16.0, 80.0, 64.0),
-        );
-    }
-
     fn dims() -> CellDims {
         CellDims {
             width: 20,
@@ -339,6 +344,46 @@ mod tests {
             xoff: 0,
             yoff: 0,
         }
+    }
+
+    #[test]
+    fn active_pane_outline_is_accent_inactive_is_grey() {
+        use bevy::prelude::*;
+        use ozmux_tmux::{ActivePane, TmuxPane};
+
+        let mut app = App::new();
+        app.add_systems(Update, sync_active_pane_outline);
+        let active = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: dims(),
+                },
+                ActivePane,
+                Outline::new(Val::Px(1.0), Val::Px(0.0), theme::BORDER),
+            ))
+            .id();
+        let inactive = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(2),
+                    dims: dims(),
+                },
+                Outline::new(Val::Px(1.0), Val::Px(0.0), theme::BORDER),
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            app.world().get::<Outline>(active).unwrap().color,
+            theme::ACCENT
+        );
+        assert_eq!(
+            app.world().get::<Outline>(inactive).unwrap().color,
+            theme::BORDER
+        );
     }
 
     #[test]
@@ -837,6 +882,20 @@ mod tests {
             hits_after_resize > hits_after_first,
             "resize must fire a fresh FrameSnapshot when first_emit is already false \
              (got {hits_after_resize} total, was {hits_after_first} before resize)",
+        );
+    }
+
+    #[test]
+    fn pane_rect_scales_cell_dims_to_pixels() {
+        let dims = CellDims {
+            width: 10,
+            height: 4,
+            xoff: 2,
+            yoff: 1,
+        };
+        assert_eq!(
+            pane_rect(dims.xoff, dims.yoff, dims.width, dims.height, 8.0, 16.0),
+            (16.0, 16.0, 80.0, 64.0),
         );
     }
 }
