@@ -143,10 +143,12 @@ fn pane_under_cursor(
 }
 
 /// Returns the divider whose grab zone contains `cursor_phys` (physical px),
-/// given physical cell metrics and a half-tolerance in physical px. The pointer
-/// must be within `tol_phys` of the divider line on the major axis and inside
-/// its span on the perpendicular axis.
-fn divider_at(
+/// given physical cell metrics and a tolerance in physical px. The grab zone is
+/// the divider's reserved gap cell (`[pos, pos+1)` on the major axis) expanded by
+/// `tol_phys` on each side, intersected with the divider's span on the
+/// perpendicular axis. This matches the visible handle bar (which fills the gap
+/// cell) so the handle, the resize grab, and the hover cursor coincide.
+pub(crate) fn divider_at(
     dividers: &[Divider],
     cursor_phys: Vec2,
     cell_w: f32,
@@ -155,18 +157,22 @@ fn divider_at(
 ) -> Option<Divider> {
     dividers.iter().copied().find(|d| match d.axis {
         DividerAxis::Vertical => {
-            let line = d.pos as f32 * cell_w;
+            let gap0 = d.pos as f32 * cell_w;
+            let gap1 = (d.pos + 1) as f32 * cell_w;
             let span0 = d.span_start as f32 * cell_h;
             let span1 = d.span_end as f32 * cell_h;
-            (cursor_phys.x - line).abs() <= tol_phys
+            cursor_phys.x >= gap0 - tol_phys
+                && cursor_phys.x <= gap1 + tol_phys
                 && cursor_phys.y >= span0
                 && cursor_phys.y < span1
         }
         DividerAxis::Horizontal => {
-            let line = d.pos as f32 * cell_h;
+            let gap0 = d.pos as f32 * cell_h;
+            let gap1 = (d.pos + 1) as f32 * cell_h;
             let span0 = d.span_start as f32 * cell_w;
             let span1 = d.span_end as f32 * cell_w;
-            (cursor_phys.y - line).abs() <= tol_phys
+            cursor_phys.y >= gap0 - tol_phys
+                && cursor_phys.y <= gap1 + tol_phys
                 && cursor_phys.x >= span0
                 && cursor_phys.x < span1
         }
@@ -668,6 +674,16 @@ mod tests {
     fn hit_test_misses_outside_span() {
         let ds = [vdiv(1, 40, 0, 12)];
         assert!(divider_at(&ds, Vec2::new(320.0, 208.0), 8.0, 16.0, 4.0).is_none());
+    }
+
+    #[test]
+    fn hit_test_grabs_far_side_of_gap() {
+        // Gap cell is column 40 = px [320, 328); the far side (x=327) is on the
+        // visible handle and must grab even though it is >tol from the gap's
+        // leading edge (320) — the zone spans the whole gap cell, not ±tol.
+        let ds = [vdiv(1, 40, 0, 24)];
+        let hit = divider_at(&ds, Vec2::new(327.0, 100.0), 8.0, 16.0, 4.0);
+        assert_eq!(hit.map(|d| d.primary), Some(PaneId(1)));
     }
 
     #[test]
