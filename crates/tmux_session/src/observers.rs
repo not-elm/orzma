@@ -528,5 +528,4 @@ mod tests {
             "window carries its layout tree after %layout-change",
         );
     }
-
 }

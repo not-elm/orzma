@@ -253,27 +253,50 @@ fn arbiter(
 ) {
     let Ok(window) = windows.single() else {
         buttons.clear();
+        // NOTE: no window means no cursor/scale to synthesize the CEF mouse-up,
+        // so just drop any in-flight inline press — leaving it set would let a
+        // later release act on a stale child.
+        gesture.inline_press = None;
         gesture.state = GestureState::Idle;
         return;
     };
+    let scale = window.scale_factor();
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let guard_cursor_phys = window.cursor_position().map(|c| c * scale);
     if !window.focused {
         buttons.clear();
+        release_inline_press(
+            &mut gesture,
+            &inline_route,
+            &panes,
+            guard_cursor_phys,
+            cell_w,
+            cell_h,
+            scale,
+        );
         gesture.state = GestureState::Idle;
         return;
     }
     // NOTE: a gesture behind a picker / copy-search prompt must not mutate
     // tmux. The focused-webview case is NOT drained here — the inline click
     // pre-step below owns focus (in-rect press keeps it, off-rect press
-    // releases it and drives tmux).
+    // releases it and drives tmux). An in-flight inline press IS released so
+    // the focused page does not stay logically pressed (no matching mouse-up).
     if picker.open || copy_prompt.open.is_some() {
         buttons.clear();
+        release_inline_press(
+            &mut gesture,
+            &inline_route,
+            &panes,
+            guard_cursor_phys,
+            cell_w,
+            cell_h,
+            scale,
+        );
         gesture.state = GestureState::Idle;
         return;
     }
-
-    let scale = window.scale_factor();
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
 
     let (grab_tol_logical, drag_threshold_logical, dbl_click_ms, click_drift) = configs
         .as_deref()
@@ -299,7 +322,8 @@ fn arbiter(
         }
         if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
             && let Some((terminal, local_phys)) = tmux_pane_local_at(&panes, cursor_phys)
-            && route_tmux_inline_left_click(
+        {
+            let consumed = route_tmux_inline_left_click(
                 &mut gesture,
                 &mut inline_route,
                 &panes,
@@ -310,9 +334,23 @@ fn arbiter(
                 cell_w,
                 cell_h,
                 scale,
-            )
-        {
-            continue;
+            );
+            if consumed {
+                // NOTE: a press that focused an inline webview must also make its
+                // host pane the tmux-active pane (the native path runs
+                // try_click_to_focus BEFORE inline routing for this reason).
+                // ActivePane is the keyboard/paste target, so it has to follow
+                // the pane the user clicked into — without this, after focus is
+                // released keystrokes route to the previously-active pane.
+                if ev.state == ButtonState::Pressed
+                    && let Ok((_, pane, _, _)) = panes.get(terminal)
+                    && let Some(client) = connection.client()
+                    && let Err(e) = client.handle().send(&select_pane_command(pane.id))
+                {
+                    tracing::warn!(?e, pane = pane.id.0, "inline-press select-pane send failed");
+                }
+                continue;
+            }
         }
         match ev.state {
             ButtonState::Pressed => {
@@ -661,6 +699,38 @@ struct TmuxInlineRouteParams<'w, 's> {
     inline_parents: Query<'w, 's, &'static ChildOf, With<InlineWebview>>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     browsers: Option<NonSend<'w, Browsers>>,
+}
+
+/// Releases an in-flight inline-webview press to CEF (mouse-up at the last
+/// cursor) and clears the marker. Called when an arbiter guard drains the
+/// queued release (modal open / window unfocused) so the focused web page is
+/// not left logically pressed with no matching mouse-up.
+fn release_inline_press(
+    gesture: &mut TmuxMouseGesture,
+    route: &TmuxInlineRouteParams,
+    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    cursor_phys: Option<Vec2>,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    scale: f32,
+) {
+    let Some(child) = gesture.inline_press.take() else {
+        return;
+    };
+    if let Some(cursor_phys) = cursor_phys
+        && let Some(browsers) = route.browsers.as_deref()
+        && let Some(dip) = tmux_inline_release_dip(
+            route,
+            panes,
+            child,
+            cursor_phys,
+            cell_w_phys,
+            cell_h_phys,
+            scale,
+        )
+    {
+        browsers.send_mouse_click(&child, dip, PointerButton::Primary, true);
+    }
 }
 
 /// Routes a left press/release through the inline-webview layer, returning
