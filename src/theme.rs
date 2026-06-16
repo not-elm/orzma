@@ -14,8 +14,6 @@ pub const PANEL: Color = Color::srgb(0.110, 0.118, 0.157);
 /// Tab bar background — distinctly darker than pane content so chrome
 /// reads separate from content.
 pub const TAB_BAR_BG: Color = Color::srgb(0.086, 0.094, 0.125);
-/// Active tab background — slightly lighter than the tab bar.
-pub const TAB_ACTIVE_BG: Color = Color::srgb(0.145, 0.157, 0.188);
 /// Pane border — cool blue-grey, intentionally subtle.
 pub const BORDER: Color = Color::srgb(0.333, 0.333, 0.333);
 /// Primary text color.
@@ -44,9 +42,6 @@ pub const DIVIDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
 /// Session-chooser title / footer font size.
 pub const PICKER_TITLE_FONT_SIZE_PX: f32 = 11.0;
 
-/// Terminal surface placeholder background.
-pub const SURFACE_TERMINAL: Color = Color::srgb(0.094, 0.094, 0.110);
-
 /// Pane border thickness.
 pub const PANE_BORDER_PX: f32 = 1.0;
 /// Gap in logical px between packed panes. The grey window container bleeds
@@ -55,20 +50,8 @@ pub const PANE_GAP_PX: f32 = 1.0;
 /// Camera clear color — shows through tmux's reserved-cell gaps between panes.
 /// Black matches the terminal background; retint here to recolor the gaps.
 pub const PANE_GAP: Color = Color::BLACK;
-/// Generic padding inside elements (status bar segments).
-pub const ELEMENT_PADDING_PX: f32 = 6.0;
 /// Horizontal padding inside a single tab.
 pub const TAB_PADDING_X_PX: f32 = 8.0;
-/// Top-corner radius applied to all pane tabs.
-pub const TAB_BORDER_RADIUS_PX: f32 = 4.0;
-/// Top indicator thickness on the active pane tab.
-pub const TAB_INDICATOR_PX: f32 = 2.0;
-pub const BORDER_PX: f32 = 1.0;
-/// Maximum width of a single pane tab. Long CWD paths are front-ellipsized
-/// to fit and hard-clipped at this width so a tab never spans the bar.
-pub const TAB_MAX_WIDTH_PX: f32 = 220.0;
-/// Character budget for a terminal tab's CWD label before front-ellipsis.
-pub const TAB_LABEL_MAX_CHARS: usize = 28;
 
 /// Background color of the copy-mode indicator chip. tmux-style bright
 /// yellow so the chip reads as a deliberate HUD element on top of the
@@ -81,8 +64,8 @@ pub const COPY_MODE_INDICATOR_FG: Color = Color::srgb(0.10, 0.10, 0.10);
 /// 20px default so the chip reads as a compact HUD label instead of
 /// competing with the terminal grid.
 pub const COPY_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
-/// Horizontal padding inside the copy-mode indicator chip. Tighter than
-/// `ELEMENT_PADDING_PX` because the chip's text is also smaller.
+/// Horizontal padding inside the copy-mode indicator chip. Kept tight
+/// because the chip's text is also smaller than the surrounding UI.
 pub const COPY_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
 
 pub const UI_FONT_SIZE: f32 = 12.0;

@@ -7,24 +7,21 @@ mod control_plane;
 mod font;
 mod inline_webview;
 mod input;
-mod multiplexer;
 mod osc_webview;
 mod system_set;
 mod theme;
 mod tmux_copy_mode;
 mod tmux_input;
 mod tmux_mouse;
+mod tmux_pane_hit;
 mod tmux_picker;
 mod tmux_render;
 mod ui;
 mod webview_render;
 
-use crate::clipboard::ClipboardActionPlugin;
 use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
-use crate::input::mouse_buttons::MouseButtonsInputPlugin;
-use crate::input::mouse_wheel::MouseWheelInputPlugin;
 use crate::osc_webview::OzmuxOscWebviewPlugin;
 use crate::webview_render::{OzmuxWebviewRenderPlugin, cef_plugin};
 use bevy::prelude::*;
@@ -33,10 +30,8 @@ use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
-use multiplexer::log::OzmuxLayoutLogPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
-use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
 use ozmux_webview_host::DynAssetRegistry;
 use tmux_copy_mode::OzmuxTmuxCopyModePlugin;
@@ -52,7 +47,6 @@ use ui::tmux_window_bar::OzmuxTmuxWindowBarPlugin;
 use ui::{
     OzmuxUiPlugin, confirm_prompt::ConfirmPromptPlugin, copy_mode::CopyModePlugin,
     copy_mode_indicator::CopyModeIndicatorPlugin, copy_search::CopyPromptPlugin,
-    tab_input::TabInteractionPlugin,
 };
 
 fn main() {
@@ -72,23 +66,19 @@ fn main() {
         .add_plugins((
             TerminalHandlePlugin,
             TerminalRendererPlugin,
-            MultiplexerPlugin,
             TmuxSessionPlugin,
             OzmuxTmuxPickerPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
-            OzmuxLayoutLogPlugin,
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
             OzmuxWebviewRenderPlugin,
             CopyModePlugin,
-            ClipboardActionPlugin,
             CopyModeIndicatorPlugin,
         ))
         .add_plugins(CopyPromptPlugin)
         .add_plugins(ConfirmPromptPlugin)
-        .add_plugins(TabInteractionPlugin)
         .add_plugins(TmuxDialogPlugin)
         .add_plugins(OzmuxTmuxRenderPlugin)
         .add_plugins(OzmuxTmuxInputPlugin)
@@ -98,8 +88,6 @@ fn main() {
         .add_plugins(OzmuxTmuxMousePlugin)
         .add_plugins(OzmuxTmuxDividerHandlePlugin)
         .add_plugins((
-            MouseWheelInputPlugin,
-            MouseButtonsInputPlugin,
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,

@@ -2,17 +2,8 @@
 //! the GUI can read and write text without holding the cross-platform
 //! handle directly. `build_paste_bytes` is the pure helper that turns
 //! clipboard text into the byte stream forwarded to the PTY.
-//! `ClipboardActionPlugin` wires the `CopyToClipboardActionEvent` /
-//! `PasteFromClipboardActionEvent` observers that bridge `Action::Copy` /
-//! `Action::Paste` to the focused terminal.
 
-use bevy::app::{App, Plugin};
-use bevy::ecs::entity::Entity;
-use bevy::ecs::event::EntityEvent;
-use bevy::ecs::observer::On;
 use bevy::ecs::resource::Resource;
-use bevy::ecs::system::{Query, ResMut};
-use ozma_tty_engine::{PtyHandle, TerminalHandle};
 
 /// Resource wrapping a lazily-initialized `arboard::Clipboard`.
 ///
@@ -164,117 +155,9 @@ pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     }
 }
 
-/// Request to copy the focused terminal's current selection to the
-/// system clipboard. Triggered by `Action::Copy`.
-#[derive(EntityEvent, Debug)]
-pub struct CopyToClipboardActionEvent {
-    /// Target Terminal Surface entity.
-    pub entity: Entity,
-}
-
-/// Request to paste the system clipboard into the focused terminal's
-/// PTY. Triggered by `Action::Paste`.
-#[derive(EntityEvent, Debug)]
-pub struct PasteFromClipboardActionEvent {
-    /// Target Terminal Surface entity.
-    pub entity: Entity,
-}
-
-/// Bevy Plugin wiring the clipboard copy/paste action observers.
-///
-/// The `Clipboard` resource itself is inserted by `CopyModePlugin`; this
-/// plugin only registers observers and must not re-insert it.
-pub struct ClipboardActionPlugin;
-
-impl Plugin for ClipboardActionPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_observer(on_copy_to_clipboard)
-            .add_observer(on_paste_from_clipboard);
-    }
-}
-
-/// Observer for `CopyToClipboardActionEvent`. Writes the target terminal's
-/// current selection to the system clipboard; no-ops on an empty
-/// selection or a missing `TerminalHandle` (e.g. a webview surface).
-fn on_copy_to_clipboard(
-    ev: On<CopyToClipboardActionEvent>,
-    mut clipboard: ResMut<Clipboard>,
-    handles: Query<&TerminalHandle>,
-) {
-    let Ok(handle) = handles.get(ev.entity) else {
-        return;
-    };
-    if let Some(text) = handle.selection_to_string()
-        && !text.is_empty()
-    {
-        clipboard.write(text);
-    }
-}
-
-/// Observer for `PasteFromClipboardActionEvent`. Reads the system clipboard
-/// and writes it to the target terminal's PTY, wrapping in bracketed
-/// paste markers when the terminal has bracketed paste enabled. No-ops
-/// on an empty clipboard or a missing `TerminalHandle`.
-fn on_paste_from_clipboard(
-    ev: On<PasteFromClipboardActionEvent>,
-    mut clipboard: ResMut<Clipboard>,
-    mut handles: Query<(&mut TerminalHandle, &mut PtyHandle)>,
-) {
-    let Ok((mut handle, mut pty)) = handles.get_mut(ev.entity) else {
-        return;
-    };
-    let Some(text) = clipboard.read().filter(|t| !t.is_empty()) else {
-        return;
-    };
-    let bracketed = handle.bracketed_paste_enabled();
-    let bytes = build_paste_bytes(&text, bracketed);
-    if let Err(err) = handle.write(&mut pty, &bytes) {
-        tracing::warn!(
-            target: "ozmux_gui::clipboard",
-            ?err,
-            "paste PTY write failed",
-        );
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn clipboard_action_plugin_builds_without_panic() {
-        use bevy::app::App;
-        let mut app = App::new();
-        app.insert_resource(Clipboard::new());
-        app.add_plugins(super::ClipboardActionPlugin);
-        app.update();
-    }
-
-    #[test]
-    fn copy_observer_noops_on_entity_without_handle() {
-        use bevy::app::App;
-        use bevy::ecs::entity::Entity;
-        let mut app = App::new();
-        app.insert_resource(Clipboard::new());
-        app.add_plugins(super::ClipboardActionPlugin);
-        let e: Entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .trigger(super::CopyToClipboardActionEvent { entity: e });
-        app.update();
-    }
-
-    #[test]
-    fn paste_observer_noops_on_entity_without_handle() {
-        use bevy::app::App;
-        use bevy::ecs::entity::Entity;
-        let mut app = App::new();
-        app.insert_resource(Clipboard::new());
-        app.add_plugins(super::ClipboardActionPlugin);
-        let e: Entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .trigger(super::PasteFromClipboardActionEvent { entity: e });
-        app.update();
-    }
 
     #[test]
     fn read_returns_none_when_inner_is_unavailable() {

@@ -338,16 +338,6 @@ fn place(
     }
 }
 
-fn first_pane_id(cell: &Cell) -> Option<PaneId> {
-    match cell {
-        Cell::Leaf {
-            pane_id: Some(id), ..
-        } => Some(PaneId(*id)),
-        Cell::Leaf { pane_id: None, .. } => None,
-        Cell::Split { children, .. } => children.iter().find_map(first_pane_id),
-    }
-}
-
 fn last_pane_id(cell: &Cell) -> Option<PaneId> {
     match cell {
         Cell::Leaf {

@@ -20,9 +20,11 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, inline_hit_at, inline_local_dip};
 use crate::input::InputPhase;
-use crate::input::mouse_buttons::phys_to_terminal_local;
+use crate::input::current_modifiers;
+use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::osc_webview::NonInteractive;
 use crate::tmux_copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
+use crate::tmux_pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys};
 use crate::tmux_picker::SessionPicker;
 use crate::tmux_render::{DividerPixelRect, PackedTmuxLayout};
 use crate::ui::copy_mode::CopyModeState;
@@ -38,6 +40,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
+use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxPane,
     resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
@@ -57,6 +60,24 @@ impl Plugin for OzmuxTmuxMousePlugin {
             forward_tmux_inline_mouse_moves.in_set(InputPhase::Hover),
         );
     }
+}
+
+/// Modal-input gate: the resources whose presence means another surface owns
+/// input and the arbiter must drain events without mutating tmux. The
+/// focused-webview case is NOT gated here — the inline click pre-step
+/// (`route_tmux_inline_left_click`) owns webview focus instead.
+#[derive(SystemParam)]
+struct ModalGate<'w> {
+    picker: Res<'w, SessionPicker>,
+    copy_prompt: Res<'w, CopyPrompt>,
+}
+
+/// Hyperlink-open inputs for the arbiter's Cmd/Ctrl-click branch, bundled to
+/// stay within Bevy's system-parameter limit.
+#[derive(SystemParam)]
+struct HyperlinkGate<'w, 's> {
+    grids: Query<'w, 's, &'static TerminalGrid>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
 }
 
 /// Word- vs line-granularity selection for a double/triple click.
@@ -117,8 +138,7 @@ enum GestureState {
 pub(crate) struct TmuxMouseGesture {
     state: GestureState,
     click: ClickTracker,
-    /// The in-flight inline-webview press (mirrors native
-    /// `MouseSelectionState.inline_press`): the child a left press inside an
+    /// The in-flight inline-webview press: the child a left press inside an
     /// interactive inline rect was forwarded to, so the matching release's
     /// click-up routes to the SAME child even if the pointer drifted off-rect.
     inline_press: Option<Entity>,
@@ -157,22 +177,6 @@ fn pane_under_cursor(
         .iter()
         .find(|(_, _, node, transform)| node.contains_point(**transform, cursor_phys))
         .map(|(entity, pane, _, _)| (entity, pane.id))
-}
-
-/// Resolves the `TmuxPane` terminal entity under `cursor_phys` (physical px)
-/// and the pointer in that pane's terminal-local physical px, or `None` when
-/// no pane covers the point. The tmux analog of native `resolve_pane_at_phys`.
-pub(crate) fn tmux_pane_local_at(
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    cursor_phys: Vec2,
-) -> Option<(Entity, Vec2)> {
-    panes.iter().find_map(|(entity, _, node, transform)| {
-        if !node.contains_point(*transform, cursor_phys) {
-            return None;
-        }
-        let local = phys_to_terminal_local(node, transform, cursor_phys)?;
-        Some((entity, local))
-    })
 }
 
 /// Returns the divider whose grab zone contains `cursor` (logical px), given a
@@ -241,16 +245,20 @@ fn arbiter(
     mut inline_route: TmuxInlineRouteParams,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    hyperlink: HyperlinkGate,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OzmuxConfigsResource>>,
-    picker: Res<SessionPicker>,
-    copy_prompt: Res<CopyPrompt>,
+    modals: ModalGate,
     copy_modes: Query<(), With<CopyModeState>>,
     snapshots: Query<&CopyModeSnapshot>,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    let ModalGate {
+        picker,
+        copy_prompt,
+    } = &modals;
     let Ok(window) = windows.single() else {
         buttons.clear();
         // NOTE: no window means no cursor/scale to synthesize the CEF mouse-up,
@@ -321,7 +329,7 @@ fn arbiter(
             continue;
         }
         if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
-            && let Some((terminal, local_phys)) = tmux_pane_local_at(&panes, cursor_phys)
+            && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
         {
             let consumed = route_tmux_inline_left_click(
                 &mut gesture,
@@ -337,11 +345,10 @@ fn arbiter(
             );
             if consumed {
                 // NOTE: a press that focused an inline webview must also make its
-                // host pane the tmux-active pane (the native path runs
-                // try_click_to_focus BEFORE inline routing for this reason).
-                // ActivePane is the keyboard/paste target, so it has to follow
-                // the pane the user clicked into — without this, after focus is
-                // released keystrokes route to the previously-active pane.
+                // host pane the tmux-active pane. ActivePane is the keyboard/paste
+                // target, so it has to follow the pane the user clicked into —
+                // without this, after focus is released keystrokes route to the
+                // previously-active pane.
                 if ev.state == ButtonState::Pressed
                     && let Ok((_, pane, _, _)) = panes.get(terminal)
                     && let Some(client) = connection.client()
@@ -358,6 +365,33 @@ fn arbiter(
                     continue;
                 };
                 let pane_under = pane_under_cursor(&panes, cursor_phys);
+                // NOTE: this open-check must run (and `continue`) before the
+                // divider / select-pane logic below — otherwise a
+                // modifier-click on a link would also focus/select the pane in
+                // the same press.
+                if let Some((pane_e, _pane_id)) = pane_under {
+                    let mods = current_modifiers(&hyperlink.keys);
+                    if link_modifier_held(&mods)
+                        && let Some((_, _, node, transform)) =
+                            panes.iter().find(|(e, _, _, _)| *e == pane_e)
+                        && let Some(local) = phys_to_pane_local(node, transform, cursor_phys)
+                        && let Ok(grid) = hyperlink.grids.get(pane_e)
+                    {
+                        let (col, row, _) =
+                            cell_at_local(local, cell_w, cell_h, grid.cols, grid.rows);
+                        if let Some(uri) = should_open_at(
+                            grid,
+                            row.saturating_sub(1) as u16,
+                            col.saturating_sub(1) as u16,
+                            ozma_tty_engine::MouseButtonKind::Left,
+                            ozma_tty_engine::ButtonEventKind::Press,
+                            true,
+                        ) {
+                            try_open_uri(uri.as_str());
+                            continue;
+                        }
+                    }
+                }
                 // Resolve a divider grab to its primary pane's near edge + size.
                 // A divider whose primary pane has no projected geometry yet
                 // cannot be resized, so it falls through to a pane focus rather
@@ -735,7 +769,7 @@ fn release_inline_press(
 
 /// Routes a left press/release through the inline-webview layer, returning
 /// `true` when the event was consumed and must NOT reach the tmux gesture
-/// pipeline. Mirrors native `route_inline_left_click`: a press inside an
+/// pipeline. A press inside an
 /// interactive rect sets `FocusedWebview`, issues the UNGATED `set_focus`
 /// BEFORE the gated `send_mouse_click` (CEF drops clicks to a browser with no
 /// `focused_frame()`, so the first click would otherwise be swallowed),
@@ -744,7 +778,7 @@ fn release_inline_press(
 /// forwards the click-up to the recorded child (drift-tolerant) and clears.
 #[expect(
     clippy::too_many_arguments,
-    reason = "mirrors native route_inline_left_click signature"
+    reason = "inline routing needs the gesture state, route params, and pointer geometry"
 )]
 fn route_tmux_inline_left_click(
     gesture: &mut TmuxMouseGesture,
@@ -819,8 +853,7 @@ fn route_tmux_inline_left_click(
 
 /// Webview-local DIP for a release on `child`, WITHOUT containment (a pointer
 /// that drifted off the rect still produces a release position). `None` when
-/// the child/terminal/rect chain is gone. The tmux analog of native
-/// `inline_release_dip`.
+/// the child/terminal/rect chain is gone.
 fn tmux_inline_release_dip(
     route: &TmuxInlineRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -832,7 +865,7 @@ fn tmux_inline_release_dip(
 ) -> Option<Vec2> {
     let terminal = route.inline_parents.get(child).ok()?.parent();
     let (_, _, node, transform) = panes.get(terminal).ok()?;
-    let local_phys = phys_to_terminal_local(node, transform, cursor_phys)?;
+    let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
     let (view, _) = route.inline.get(child).ok()?;
     inline_local_dip(
         route.overlay_rects.get(terminal).ok()?,
@@ -847,8 +880,7 @@ fn tmux_inline_release_dip(
 /// Forwards pointer motion over an interactive inline rect of a tmux pane to
 /// the child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
 /// whatever mouse buttons are held so the one system serves both hover and an
-/// in-rect drag. The tmux analog of native `forward_inline_mouse_moves`:
-/// `CursorMoved`-driven (one forward per frame, latest position), and
+/// in-rect drag. `CursorMoved`-driven (one forward per frame, latest position), and
 /// focus-gated inside `bevy_cef` so motion over an unfocused browser is
 /// dropped browser-side. `Browsers` is optional so CEF-less tests construct it.
 fn forward_tmux_inline_mouse_moves(
@@ -877,7 +909,7 @@ fn forward_tmux_inline_mouse_moves(
     let cursor_phys = moved.position * scale;
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let Some((terminal, local_phys)) = tmux_pane_local_at(&panes, cursor_phys) else {
+    let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys) else {
         return;
     };
     let Ok(overlays) = overlay_rects.get(terminal) else {
@@ -1057,6 +1089,7 @@ mod tests {
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
+        app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, arbiter);
         app.world_mut().spawn((
@@ -1130,6 +1163,7 @@ mod tests {
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
+        app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, arbiter);
 
@@ -1239,8 +1273,8 @@ mod tests {
                       children: Query<&Children>,
                       inline: Query<(&InlineWebview, Has<NonInteractive>)>,
                       overlays: Query<&TerminalOverlays>| {
-                    let (terminal, local) =
-                        tmux_pane_local_at(&panes, Vec2::new(40.0, 48.0)).unwrap();
+                    let (terminal, _pane_id, local) =
+                        tmux_pane_at_phys(&panes, Vec2::new(40.0, 48.0)).unwrap();
                     inline_hit_at(
                         &children,
                         &inline,
@@ -1274,8 +1308,8 @@ mod tests {
                  children: Query<&Children>,
                  inline: Query<(&InlineWebview, Has<NonInteractive>)>,
                  overlays: Query<&TerminalOverlays>| {
-                    let (terminal, local) =
-                        tmux_pane_local_at(&panes, Vec2::new(400.0, 400.0)).unwrap();
+                    let (terminal, _pane_id, local) =
+                        tmux_pane_at_phys(&panes, Vec2::new(400.0, 400.0)).unwrap();
                     inline_hit_at(
                         &children,
                         &inline,

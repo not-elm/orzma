@@ -4,13 +4,12 @@
 //! emits to the registering program over the control socket.
 
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
-use crate::inline_webview::{InlineWebview, focused_inline_of};
+use crate::inline_webview::InlineWebview;
 use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
-use ozmux_tmux::TmuxPane;
+use ozmux_tmux::{ActivePane, TmuxPane};
 use ozmux_webview_host::DynAssetRegistry;
 use ozmux_webview_host::dyn_scheme::custom_dyn_scheme;
 use serde_json::Value;
@@ -82,34 +81,27 @@ impl Plugin for OzmuxWebviewRenderPlugin {
 /// CEF focus when `FocusedWebview` becomes `None`).
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
-/// inline webview child (`InlineWebview`) whose `ChildOf` parent is the
-/// resolved active surface, that inline focus stands (spec §7, single focus
-/// source) — this covers both the click-granted focus and the app-declared
-/// focus set via the control-plane `SetFocus` op, since both point
-/// `FocusedWebview` at an inline child of the owner surface. Without this arm
-/// the per-frame sync would map the active terminal surface to `None` and
-/// clobber an inline focus one frame after it was set. Every other case — a
-/// different pane or surface becoming active, or the inline child despawning —
-/// keeps the drive-from-active-pane behavior above.
-///
-/// Under the tmux backend the active-surface resolution above is empty (the
-/// tmux projection populates `TmuxPane`, not the old multiplexer's
-/// active-pane chain), so `FocusedWebview` is click-driven there. A second
-/// preservation arm keeps it while it points at an inline child of a live
-/// `TmuxPane`; a despawned child falls through to the GC path below.
+/// inline webview child (`InlineWebview`) whose `ChildOf` parent is a live
+/// `TmuxPane` — active or not — that inline focus stands (spec §7, single
+/// focus source). This covers click-granted focus and the app-declared focus
+/// set via the control-plane `SetFocus` op, and means switching the active
+/// pane does NOT clear an inline webview's focus: the webview keeps keyboard
+/// focus until its child despawns (or focus moves off it), at which point the
+/// sync falls through to the clear path below, which maps the active terminal
+/// pane to `None`.
 pub(crate) fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
-    mux: MultiplexerCommands,
-    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
     tmux_panes: Query<(), With<TmuxPane>>,
 ) {
     // NOTE: a despawned inline child fails `inline_parents.get` here and so
-    // falls through to the old-mux path below, which clears it — that
-    // fall-through is the GC for tmux-pane inline focus; a later edit that
-    // short-circuits this arm before the despawn check would leak focus.
+    // falls through to the clear path below, which resolves to `None` and
+    // clears it — that fall-through is the GC for tmux-pane inline focus; a
+    // later edit that short-circuits this arm before the despawn check would
+    // leak focus.
     if let Some(child) = focused.0
         && let Ok(parent) = inline_parents.get(child)
         && tmux_panes.contains(parent.parent())
@@ -117,14 +109,7 @@ pub(crate) fn sync_focused_webview(
         return;
     }
 
-    let active_surface = attached_workspace
-        .iter()
-        .next()
-        .and_then(|workspace| mux.workspaces_active_pane(workspace))
-        .and_then(|pane| mux.panes_active_surface(pane));
-    if focused_inline_of(Some(&focused), &inline_parents, active_surface).is_some() {
-        return;
-    }
+    let active_surface = active_pane.iter().next();
     let active = active_surface
         .filter(|surface| webviews.contains(*surface) && !non_interactive.contains(*surface));
     if focused.0 != active {
@@ -226,7 +211,6 @@ fn log_webview_load_error(load: On<LoadError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::system::RunSystemOnce;
 
     #[test]
     fn focused_webview_follows_active_pane() {
@@ -234,71 +218,55 @@ mod tests {
         // so bevy_cef blurs the webview (releasing its DOM text area
         // and stopping keyboard from routing to it). When the webview pane is
         // active, its webview must be focused.
-        use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation};
+        use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
+        use tmux_control_parser::CellDims;
+
+        let dims = CellDims {
+            width: 80,
+            height: 24,
+            xoff: 0,
+            yoff: 0,
+        };
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        let (workspace, terminal_pane) = app
+        // The active TmuxPane IS the active surface. The webview pane carries a
+        // WebviewSource; the terminal pane does not.
+        let terminal_pane = app
             .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.workspace, o.pane)
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims,
             })
-            .unwrap();
-        app.world_mut().flush();
+            .id();
         let ext_pane = app
             .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane(terminal_pane, Side::After, SplitOrientation::Horizontal)
-                    .expect("split_pane")
-            })
-            .unwrap();
-        app.world_mut().flush();
-        let (terminal_surface, ext_surface) = app
-            .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| {
-                (
-                    mux.panes_active_surface(terminal_pane)
-                        .expect("terminal surface"),
-                    mux.panes_active_surface(ext_pane).expect("ext surface"),
-                )
-            })
-            .unwrap();
-        app.world_mut()
-            .entity_mut(workspace)
-            .insert(AttachedWorkspace);
+            .spawn((
+                TmuxPane {
+                    id: PaneId(2),
+                    dims,
+                },
+                WebviewSource::new("ozma-dyn://memo/index.html"),
+            ))
+            .id();
 
-        // The Surface entity IS its own host: the terminal surface carries no
-        // WebviewSource; the webview surface carries one.
-        let _ = terminal_surface;
-        app.world_mut()
-            .entity_mut(ext_surface)
-            .insert(WebviewSource::new("ozma-dyn://memo/index.html"));
-
-        let set_active = move |app: &mut App, pane: Entity| {
-            app.world_mut()
-                .run_system_once(move |mut mux: MultiplexerCommands| {
-                    mux.set_active_pane(workspace, pane)
-                        .expect("set_active_pane");
-                })
-                .unwrap();
-            app.world_mut().flush();
+        let set_active = move |app: &mut App, active: Entity, inactive: Entity| {
+            app.world_mut().entity_mut(active).insert(ActivePane);
+            app.world_mut().entity_mut(inactive).remove::<ActivePane>();
             app.update();
         };
 
-        set_active(&mut app, ext_pane);
+        set_active(&mut app, ext_pane, terminal_pane);
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
-            Some(ext_surface),
+            Some(ext_pane),
             "active webview pane must focus its webview"
         );
 
-        set_active(&mut app, terminal_pane);
+        set_active(&mut app, terminal_pane, ext_pane);
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             None,
@@ -319,54 +287,31 @@ mod tests {
     #[test]
     fn non_interactive_webview_surface_never_takes_keyboard_focus() {
         use crate::osc_webview::NonInteractive;
-        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation};
+        use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
+        use tmux_control_parser::CellDims;
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        let (workspace, _pane) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.workspace, o.pane)
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        let render_only_pane = app
-            .world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane(_pane, Side::After, SplitOrientation::Horizontal)
-                    .expect("split_pane")
-            })
-            .unwrap();
-        app.world_mut().flush();
-
-        let render_only_surface = app
-            .world_mut()
-            .run_system_once(move |mux: MultiplexerCommands| {
-                mux.panes_active_surface(render_only_pane)
-                    .expect("render-only surface")
-            })
-            .unwrap();
-        app.world_mut()
-            .entity_mut(workspace)
-            .insert(AttachedWorkspace);
-        app.world_mut().entity_mut(render_only_surface).insert((
+        // The active TmuxPane carries a NonInteractive WebviewSource: it must
+        // never be focused.
+        app.world_mut().spawn((
+            TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            },
+            ActivePane,
             WebviewSource::new("ozma-dyn://memo/index.html"),
             NonInteractive,
         ));
 
-        app.world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.set_active_pane(workspace, render_only_pane)
-                    .expect("set_active_pane");
-            })
-            .unwrap();
-        app.world_mut().flush();
         app.update();
 
         assert_eq!(
@@ -377,75 +322,12 @@ mod tests {
     }
 
     #[test]
-    fn sync_preserves_inline_focus_on_the_active_surface_and_clears_on_pane_switch() {
-        use bevy::ecs::system::RunSystemOnce;
-        use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin, Side, SplitOrientation};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        let (workspace, terminal_pane, terminal_surface) = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                let o = mux.create_workspace(Some("t".into()));
-                (o.workspace, o.pane, o.surface)
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.world_mut()
-            .entity_mut(workspace)
-            .insert(AttachedWorkspace);
-
-        let child = app
-            .world_mut()
-            .spawn((
-                ChildOf(terminal_surface),
-                InlineWebview {
-                    view_id: "inline-test".into(),
-                    instance_id: None,
-                    slot: 0,
-                },
-            ))
-            .id();
-        app.insert_resource(FocusedWebview(Some(child)));
-
-        app.update();
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(child),
-            "an inline-focused child of the ACTIVE terminal surface must survive the sync"
-        );
-
-        // Splitting promotes the fresh pane to active; the focused child's
-        // parent is no longer the active surface, so the preservation arm
-        // must NOT hold and the terminal-pane mapping (None) must win.
-        app.world_mut()
-            .run_system_once(move |mut mux: MultiplexerCommands| {
-                mux.split_pane(terminal_pane, Side::After, SplitOrientation::Horizontal)
-                    .expect("split_pane")
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "inline focus must clear once a different pane/surface becomes active"
-        );
-    }
-
-    #[test]
     fn tmux_pane_inline_focus_is_preserved() {
         use ozmux_tmux::{PaneId, TmuxPane};
         use tmux_control_parser::CellDims;
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(ozmux_multiplexer::MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
@@ -489,8 +371,7 @@ mod tests {
         use tmux_control_parser::CellDims;
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(ozmux_multiplexer::MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 

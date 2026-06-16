@@ -11,7 +11,7 @@ use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
 use crate::osc_webview::NonInteractive;
-use crate::tmux_mouse::tmux_pane_local_at;
+use crate::tmux_pane_hit::tmux_pane_at_phys;
 use crate::tmux_picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
@@ -170,10 +170,11 @@ fn forward_keys_to_tmux(
 
     // When an inline webview holds focus it owns the keyboard (bevy_cef routes
     // keystrokes to it); forwarding to tmux too would double-send. Ctrl+Shift+Esc
-    // releases focus back to the terminal. NOTE: under the tmux backend a click
-    // on an interactive inline webview sets FocusedWebview (via the mouse
-    // arbiter's inline route), so this guard is load-bearing — removing it would
-    // double-send keystrokes to both the webview and the tmux active pane.
+    // releases focus back to the terminal. NOTE: under the tmux backend
+    // `FocusedWebview` is live (set by the inline-click router, the control-plane
+    // `SetFocus` op, and the focus-preservation arm in `sync_focused_webview`),
+    // so this drain is load-bearing whenever an inline webview is focused —
+    // removing it would double-send keystrokes to the page and the pane.
     if focused_webview.0.is_some() {
         for ev in events.read() {
             if ev.state == ButtonState::Pressed
@@ -422,7 +423,7 @@ fn resolve_tmux_inline_wheel_target(
     cell_h_phys: f32,
     scale_factor: f32,
 ) -> Option<TmuxInlineWheelTarget> {
-    let (terminal, local_phys) = tmux_pane_local_at(&params.panes, cursor_phys)?;
+    let (terminal, _pane_id, local_phys) = tmux_pane_at_phys(&params.panes, cursor_phys)?;
     let focused_child = focused_inline_of(
         Some(&params.focused_webview),
         &params.inline_parents,
@@ -495,18 +496,14 @@ fn forward_wheel_to_tmux(
     let Ok(window) = windows.single() else {
         return;
     };
-    let scale = window.scale_factor();
-    // NOTE: the .max(0.5) clamp guards ONLY the cell_h_logical division; the
-    // hit-test cursor and the inline DIP use the raw scale_factor so wheel
-    // events land at the same in-page coordinate as the click/move paths.
-    let cell_h_logical = (metrics.metrics.line_height_phys.floor() / scale.max(0.5)).max(1.0);
+    let dpr = window.scale_factor().max(0.5);
+    let cell_h_logical = (metrics.metrics.line_height_phys.floor() / dpr).max(1.0);
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
-    let cursor_phys = window.cursor_position().map(|c| c * scale);
+    let cursor_phys = window.cursor_position().map(|c| c * dpr);
 
-    let target = cursor_phys.and_then(|c| {
-        resolve_tmux_inline_wheel_target(&inline, c, cell_w_phys, cell_h_phys, scale)
-    });
+    let target = cursor_phys
+        .and_then(|c| resolve_tmux_inline_wheel_target(&inline, c, cell_w_phys, cell_h_phys, dpr));
 
     let Some(delta_cells) = aggregate_tmux_wheel_cells(
         &mut wheel,

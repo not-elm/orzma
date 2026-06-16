@@ -6,27 +6,21 @@
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use crate::control_plane::{DynSource, DynamicRegistry, NormalizedChord, WebviewOwner};
-use crate::input::InputPhase;
-use crate::input::mouse_buttons::resolve_pane_at_phys;
 use crate::osc_webview::NonInteractive;
-use crate::ui::Slotted;
 use crate::webview_render::preload::build_dynamic_preload;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
-use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::ui_render::PreparedUiMaterial;
-use bevy::window::{CursorMoved, PrimaryWindow};
+use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{
     FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
-use bevy_cef_core::prelude::Browsers;
 use ozma_tty_engine::{AnchorMode, InlineAnchor, TerminalModeChanged};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
 use ozma_tty_renderer::schema::TerminalGrid;
-use ozmux_multiplexer::SurfaceMarker;
 
 /// The normalized passthrough chords for a mounted inline webview, copied from
 /// its registration. Read by the focused-key filter-fill and PTY-forward
@@ -69,11 +63,10 @@ pub(crate) struct InlinePlacement {
 }
 
 /// Registers the inline-webview runtime systems: the `WebviewSize` size sync
-/// (`Update`), the pointer-move forwarder that hands `CursorMoved` motion
-/// over interactive inline rects to CEF (spec §7, `InputPhase::Hover`), the
-/// per-frame projection that derives `TerminalOverlays` from inline-webview
-/// children (spec §5), and the render-world ordering edge that keeps webview
-/// GPU texture injection ahead of the terminal material's bind-group rebuild.
+/// (`Update`), the per-frame projection that derives `TerminalOverlays` from
+/// inline-webview children (spec §5), and the render-world ordering edge that
+/// keeps webview GPU texture injection ahead of the terminal material's
+/// bind-group rebuild.
 ///
 /// The projection is scheduled in `PostUpdate` before
 /// `TerminalMaterialSystems::UpdateMaterial`: grid state settles during
@@ -84,10 +77,7 @@ pub(crate) struct OzmuxInlineWebviewPlugin;
 
 impl Plugin for OzmuxInlineWebviewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<CursorMoved>();
-        app.init_resource::<ButtonInput<MouseButton>>();
         app.add_systems(Update, sync_inline_webview_size);
-        app.add_systems(Update, forward_inline_mouse_moves.in_set(InputPhase::Hover));
         app.add_systems(
             PostUpdate,
             project_inline_overlays.before(TerminalMaterialSystems::UpdateMaterial),
@@ -199,8 +189,8 @@ pub(crate) fn resolve_mount(
 /// `view_id` on this terminal, overlay-slot exhaustion.
 ///
 /// The parent (`ctx.terminal_surface`, the `OscWebviewRequest` target) is the
-/// multiplexer Surface entity itself: `finish_terminal_setup` inserts both
-/// `TerminalBundle` (`TerminalHandle`, which emits the OSC request) and
+/// `TmuxPane` entity itself: `tmux_render::attach_tmux_pane_terminal` inserts
+/// both the `TerminalHandle` (which emits the OSC request) and the
 /// `TerminalRenderBundle` (`TerminalGrid`) onto that one entity, so the
 /// `ChildOf` parent is also the entity `project_inline_overlays` reads grid
 /// state from.
@@ -551,63 +541,6 @@ fn sync_inline_webview_size(
     }
 }
 
-/// Forwards pointer motion over an interactive inline rect to the child's CEF
-/// browser as `send_mouse_move` in webview-local DIP (spec §7).
-///
-/// The attempt is focus-independent — `bevy_cef`'s `send_mouse_move` is gated
-/// on CEF's `focused_frame()` internally, so hovers over an unfocused browser
-/// are dropped browser-side, not here. Forwarding is driven by `CursorMoved`
-/// (at most one forward per frame, at the latest position), never by per-frame
-/// polling. `Browsers` is optional so CEF-less tests can construct the system;
-/// without it the resolution still runs but nothing is forwarded.
-fn forward_inline_mouse_moves(
-    mut cursor_msg: MessageReader<CursorMoved>,
-    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), (With<SurfaceMarker>, With<Slotted>)>,
-    children: Query<&Children>,
-    inline: Query<(&InlineWebview, Has<NonInteractive>)>,
-    overlay_rects: Query<&TerminalOverlays>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    metrics: Option<Res<TerminalCellMetricsResource>>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    browsers: Option<NonSend<Browsers>>,
-) {
-    let Some(moved) = cursor_msg.read().last() else {
-        return;
-    };
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let scale_factor = window.scale_factor();
-    let cursor_phys = moved.position * scale_factor;
-    let (cell_w_phys, cell_h_phys) = cell_size_phys(metrics.as_deref());
-    let Some((terminal, local_phys)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
-        return;
-    };
-    let Ok(overlays) = overlay_rects.get(terminal) else {
-        return;
-    };
-    let Some(hit) = inline_hit_at(
-        &children,
-        &inline,
-        overlays,
-        terminal,
-        local_phys,
-        cell_w_phys,
-        cell_h_phys,
-        scale_factor,
-    ) else {
-        return;
-    };
-    if let Some(browsers) = browsers.as_ref() {
-        browsers.send_mouse_move(
-            &hit.child,
-            mouse_buttons.get_pressed(),
-            hit.local_dip,
-            false,
-        );
-    }
-}
-
 /// The wire mode string `ozma_tty_engine`'s `mode_diff` emits for
 /// `TermMode::ALT_SCREEN`.
 const ALT_SCREEN_MODE: &str = "alt-screen";
@@ -710,12 +643,10 @@ mod tests {
     use bevy_cef::prelude::PreloadScripts;
     use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
     use ozma_tty_renderer::CellMetrics;
-    use ozmux_multiplexer::{MultiplexerCommands, MultiplexerPlugin};
 
     fn make_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin)
             .init_resource::<DynamicRegistry>()
             .init_resource::<Assets<Image>>()
             .add_observer(on_osc_webview_request);
@@ -756,12 +687,7 @@ mod tests {
     }
 
     fn spawn_terminal(app: &mut App) -> Entity {
-        let surface = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_workspace(Some("t".into())).surface
-            })
-            .unwrap();
+        let surface = app.world_mut().spawn(Name::new("t")).id();
         app.world_mut().flush();
         surface
     }
@@ -2044,57 +1970,6 @@ mod tests {
             .expect("dynamic mount must stamp WebviewOwner");
         assert_eq!(owner.connection_id, 42);
         assert_eq!(owner.handle, "HANDLE");
-    }
-
-    #[test]
-    fn move_forwarder_constructs_and_runs_without_cef() {
-        use bevy::math::DVec2;
-        use bevy::window::WindowResolution;
-
-        let mut app = make_test_app();
-        app.add_message::<CursorMoved>();
-        app.init_resource::<ButtonInput<MouseButton>>();
-        app.add_systems(Update, forward_inline_mouse_moves);
-
-        let terminal = app
-            .world_mut()
-            .spawn((
-                SurfaceMarker,
-                Slotted,
-                ComputedNode {
-                    size: Vec2::new(800.0, 600.0),
-                    ..ComputedNode::DEFAULT
-                },
-                UiGlobalTransform::from_xy(400.0, 300.0),
-                overlays_with(&[(0, IVec4::new(2, 3, 10, 40))]),
-            ))
-            .id();
-        spawn_hit_child(&mut app, terminal, 0, false);
-        let window = app
-            .world_mut()
-            .spawn((
-                Window {
-                    resolution: WindowResolution::new(800, 600),
-                    ..default()
-                },
-                PrimaryWindow,
-            ))
-            .id();
-        app.world_mut()
-            .get_mut::<Window>(window)
-            .unwrap()
-            .set_physical_cursor_position(Some(DVec2::new(100.0, 100.0)));
-
-        app.world_mut()
-            .resource_mut::<bevy::ecs::message::Messages<CursorMoved>>()
-            .write(CursorMoved {
-                window,
-                position: Vec2::new(100.0, 100.0),
-                delta: None,
-            });
-        // Without a Browsers NonSend resource the full resolution path runs
-        // and the forwarding is skipped — the system must not panic.
-        app.update();
     }
 
     #[test]

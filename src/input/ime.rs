@@ -3,11 +3,11 @@
 //! Provides `Composition` (a validated preedit snapshot), `ImeState`
 //! (the active-composition resource), `read_ime_events` (the Bevy
 //! system that drains `Ime` events and forwards `Ime::Commit` text to
-//! the attached terminal), and `ime_policy_system` (toggles
+//! the active tmux pane), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
 use crate::inline_webview::{InlineWebview, focused_inline_of};
-use crate::ui::TerminalSurfaceMarker;
+use crate::input::InputPhase;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
@@ -15,28 +15,31 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::{Commands, Query, Res, ResMut};
+use bevy::ecs::system::{NonSend, Query, Res, ResMut, Single};
 use bevy::math::Vec2;
 use bevy::prelude::Entity;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_tty_engine::{TerminalKey, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
-use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
+use ozmux_tmux::{ActivePane, TmuxConnection, TmuxPane, send_bytes_command};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
 /// (chained); both run in `InputPhase::Dispatch`, ahead of
-/// `InputPhase::FocusedKey` where keyboard forwarding will run in
-/// phase-3b.
+/// `InputPhase::FocusedKey` where `forward_keys_to_tmux` forwards keys to the
+/// active pane (and gates on `ImeState`, so IME must apply first).
 pub struct ImePlugin;
 
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ImeState>()
-            .add_systems(Update, (ime_policy_system, read_ime_events).chain());
+        app.init_resource::<ImeState>().add_systems(
+            Update,
+            (ime_policy_system, read_ime_events)
+                .chain()
+                .in_set(InputPhase::Dispatch),
+        );
     }
 }
 
@@ -112,7 +115,7 @@ impl ImeState {
 }
 
 /// Pure-function state machine: applies one `Ime` event to `state` and
-/// returns the text that should be committed to the PTY (only set on
+/// returns the text that should be committed to the active pane (only set on
 /// `Ime::Commit`).
 ///
 /// Keeping this pure makes the state transitions unit-testable without
@@ -140,20 +143,18 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// `PrimaryWindow.ime_enabled` and `.ime_position`.
 ///
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
-/// IME through bevy_cef's `Ime` → CEF bridge), OR the attached surface
-/// carries `TerminalSurfaceMarker` and does NOT have `CopyModeState`.
+/// IME through bevy_cef's `Ime` → CEF bridge), OR a tmux pane is active and
+/// that pane does NOT have `CopyModeState`.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
-/// window — computed from the attached terminal's `UiGlobalTransform`
+/// window — computed from the active pane's `UiGlobalTransform`
 /// translation + `TerminalGrid.cursor` × cell pitch, then divided by
 /// the window scale factor. When the focused webview is an INLINE child of
-/// the active surface, the anchor instead comes from that child's overlay
+/// the active pane, the anchor instead comes from that child's overlay
 /// rect origin (`inline_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
 pub(crate) fn ime_policy_system(
-    mux: MultiplexerCommands,
-    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    terminals: Query<(), With<TerminalSurfaceMarker>>,
+    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -167,6 +168,10 @@ pub(crate) fn ime_policy_system(
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
+    let active_surface = active_pane.map(|single| {
+        let (entity, _) = *single;
+        entity
+    });
 
     // NOTE: a focused CEF webview drives its own IME through bevy_cef's
     // `Ime` → CEF bridge. ozmux MUST keep `ime_enabled` true here, or
@@ -183,7 +188,6 @@ pub(crate) fn ime_policy_system(
         // plus the inline placement rect's origin — the SAME px conversion the
         // wheel/click hit-test uses (`inline_local_dip`'s `origin_phys`), so
         // composition appears at the inline rect, not the terminal cursor.
-        let active_surface = super::resolve_focused_terminal(&mux, &attached_workspace);
         if let Some(child) =
             focused_inline_of(Some(&focused_webview), &inline_parents, active_surface)
             && let Some(pos) = inline_ime_position(
@@ -212,16 +216,15 @@ pub(crate) fn ime_policy_system(
         return;
     }
 
-    let Some(entity) = super::resolve_focused_terminal(&mux, &attached_workspace) else {
+    let Some(entity) = active_surface else {
         if window.ime_enabled {
             window.ime_enabled = false;
         }
         return;
     };
 
-    let is_terminal = terminals.get(entity).is_ok();
     let in_copy_mode = copy_modes.get(entity).is_ok();
-    let desired = is_terminal && !in_copy_mode;
+    let desired = !in_copy_mode;
 
     if window.ime_enabled != desired {
         window.ime_enabled = desired;
@@ -272,51 +275,56 @@ pub(crate) fn ime_policy_system(
 }
 
 /// Drains `Ime` events, mutates `ImeState`, and forwards `Ime::Commit`
-/// text to the attached terminal — UNLESS an inline webview owns focus, in
-/// which case the commit-to-PTY write is suppressed (bevy_cef commits it to
+/// text to the active tmux pane — UNLESS an inline webview owns focus, in
+/// which case the commit-to-pane write is suppressed (bevy_cef commits it to
 /// the page; see spec §7).
 ///
-/// Modifiers are forced to `TerminalModifiers::default()` on commit:
-/// `crates/ozma_tty_engine/src/input_codec.rs::encode_key` converts
-/// `Text("a")` to control byte `0x01` when `ctrl` is held, which would
-/// silently corrupt a single-ASCII-letter IME commit (e.g., the
-/// macOS Character Viewer emoji path).
+/// The commit text is sent verbatim via `send_bytes_command`
+/// (`send-keys -H -t %<id> <hex…>`), which is byte-safe for UTF-8 multibyte
+/// commits — including the macOS Character Viewer emoji path — without any
+/// modifier interpretation.
 pub(crate) fn read_ime_events(
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
-    mut commands: Commands,
-    mux: MultiplexerCommands,
-    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    connection: NonSend<TmuxConnection>,
+    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
 ) {
-    let active_surface = super::resolve_focused_terminal(&mux, &attached_workspace);
+    let active = active_pane.map(|single| *single);
+    let active_surface = active.map(|(e, _)| e);
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
             // NOTE: Inline-focus commit suppression (spec §7): bevy_cef's own IME
             // systems independently consume the winit `Ime` events for the
             // focused webview, so ozmux must NOT also commit this text to the
-            // PTY — doing so double-delivers the composition (once to the page,
+            // pane — doing so double-delivers the composition (once to the page,
             // once to the terminal). The state machine above still ran, so
-            // `ImeState` stays consistent; only the PTY write is skipped.
+            // `ImeState` stays consistent; only the pane write is skipped.
             if focused_inline_of(Some(&focused_webview), &inline_parents, active_surface).is_some()
             {
                 continue;
             }
-            let Some(workspace) = attached_workspace.iter().next() else {
+            if commit_text.is_empty() {
+                continue;
+            }
+            let Some((_, pane)) = active else {
                 tracing::warn!(
                     target: "ozmux_gui::input::ime",
-                    "commit dropped: no attached terminal",
+                    "commit dropped: no active tmux pane",
                 );
                 continue;
             };
-            super::forward_to_active_terminal(
-                &mut commands,
-                &mux,
-                workspace,
-                TerminalKey::Text(commit_text),
-                TerminalModifiers::default(),
-            );
+            let Some(client) = connection.client() else {
+                continue;
+            };
+            let target = format!("%{}", pane.id.0);
+            if let Err(e) = client
+                .handle()
+                .send(&send_bytes_command(&target, commit_text.as_bytes()))
+            {
+                tracing::warn!(?e, "IME commit send failed");
+            }
         }
     }
 }
@@ -353,17 +361,15 @@ fn inline_ime_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::app::{App, Update};
+    use bevy::app::App;
     use bevy::ecs::entity::Entity;
-    use bevy::ecs::observer::On;
-    use bevy::ecs::resource::Resource;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::{MinimalPlugins, default};
     use bevy::window::{Ime, Window, WindowResolution};
-    use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
-    use ozmux_multiplexer::MultiplexerCommands;
-    use ozmux_multiplexer::{AttachedWorkspace, MultiplexerPlugin, WorkspaceMarker};
-    use std::sync::{Arc, Mutex};
+    use ozma_tty_renderer::CellMetrics;
+    use ozma_tty_renderer::prelude::{Cursor, TerminalGrid};
+    use ozmux_tmux::{ActivePane, PaneId, TmuxConnection, TmuxPane};
+    use tmux_control_parser::CellDims;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
@@ -542,38 +548,33 @@ mod tests {
         assert_eq!(c.caret(), None);
     }
 
-    #[derive(Resource, Default, Clone)]
-    struct CapturedKeys(Arc<Mutex<Vec<TerminalKeyInput>>>);
-
-    fn capture_key_input(ev: On<TerminalKeyInput>, captured: Res<CapturedKeys>) {
-        captured.0.lock().unwrap().push((*ev).clone());
-    }
-
-    fn build_app_with_attached_entity() -> (App, Entity) {
+    fn build_app_with_active_pane() -> (App, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin)
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
-        app.insert_resource(CapturedKeys::default());
-        app.add_observer(capture_key_input);
+        // No live tmux client: `TmuxConnection::client()` returns None, so the
+        // commit send is skipped. Tests assert the state-machine side effects
+        // and the absence of a panic on the active-pane / suppression paths.
+        app.insert_non_send_resource(TmuxConnection::default());
         app.add_message::<Ime>();
 
-        let outcome = app
+        let pane_entity = app
             .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_workspace(Some("default".into()))
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.world_mut()
-            .entity_mut(outcome.workspace)
-            .insert(AttachedWorkspace);
-
-        // The Surface entity IS its own host: `resolve_focused_terminal` /
-        // `forward_to_active_terminal` resolve directly to the active surface.
-        let term_entity = outcome.surface;
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 0,
+                        height: 0,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                ActivePane,
+            ))
+            .id();
 
         app.world_mut().spawn(Window {
             focused: true,
@@ -581,16 +582,13 @@ mod tests {
             ..default()
         });
 
-        (app, term_entity)
+        (app, pane_entity)
     }
 
     #[test]
     fn ime_stays_enabled_for_focused_webview() {
-        use ozma_tty_renderer::CellMetrics;
-
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
@@ -633,49 +631,10 @@ mod tests {
     }
 
     #[test]
-    fn commit_forwards_with_default_modifiers() {
-        let (mut app, term_entity) = build_app_with_attached_entity();
-
-        app.world_mut()
-            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
-            .write(Ime::Commit {
-                window: Entity::PLACEHOLDER,
-                value: "こんにちは".into(),
-            });
-
-        app.update();
-
-        let captured = app
-            .world()
-            .resource::<CapturedKeys>()
-            .0
-            .lock()
-            .unwrap()
-            .clone();
-        assert_eq!(captured.len(), 1, "expected exactly one TerminalKeyInput");
-        assert_eq!(captured[0].entity, term_entity);
-        assert!(
-            matches!(&captured[0].key, TerminalKey::Text(s) if s == "こんにちは"),
-            "key payload mismatch: {:?}",
-            captured[0].key,
-        );
-        assert_eq!(
-            captured[0].modifiers,
-            TerminalModifiers::default(),
-            "modifiers MUST be default — see input_codec.rs::encode_key ctrl path",
-        );
-    }
-
-    #[test]
-    fn ime_position_anchors_at_inline_rect_origin_for_focused_inline() {
-        use bevy::ui::{ComputedNode, UiGlobalTransform};
-        use ozma_tty_renderer::CellMetrics;
-        use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
-        use ozmux_multiplexer::AttachedWorkspace;
-
+    fn ime_enabled_for_active_tmux_pane() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(MultiplexerPlugin);
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
@@ -690,36 +649,134 @@ mod tests {
             phys_font_size: 12,
         });
 
-        let outcome = app
-            .world_mut()
-            .run_system_once(|mut mux: MultiplexerCommands| {
-                mux.create_workspace(Some("default".into()))
-            })
-            .unwrap();
-        app.world_mut().flush();
-        app.world_mut()
-            .entity_mut(outcome.workspace)
-            .insert(AttachedWorkspace);
-        let surface = outcome.surface;
+        app.world_mut().spawn((
+            TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 0,
+                    height: 0,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            },
+            ActivePane,
+            ComputedNode::default(),
+            UiGlobalTransform::default(),
+            TerminalGrid {
+                cursor: Some(Cursor::default()),
+                ..default()
+            },
+        ));
 
-        // Host node spans the window with no transform → top-left at (0, 0).
-        // Inline rect at rows 2.., cols 3.. → phys origin (24, 32) at 8x16 px.
+        // Window starts with IME OFF — the policy must turn it ON for the
+        // active tmux pane.
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ime_enabled: false,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+
+        app.world_mut().run_system_once(ime_policy_system).unwrap();
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Window, With<PrimaryWindow>>();
+        let enabled = q.single(app.world()).expect("primary window").ime_enabled;
+        assert!(
+            enabled,
+            "IME must be enabled while a tmux pane is active and not in copy mode"
+        );
+    }
+
+    #[test]
+    fn commit_consumes_state_with_active_pane() {
+        // The unit-test harness has no live tmux client, so the byte send is a
+        // no-op; this asserts the state-machine side effects (commit clears the
+        // composition) and that the active-pane commit path runs without panic.
+        let (mut app, _pane_entity) = build_app_with_active_pane();
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .write(Ime::Preedit {
+                window: Entity::PLACEHOLDER,
+                value: "こんに".into(),
+                cursor: Some((3, 3)),
+            });
+        app.update();
+        assert!(
+            app.world().resource::<ImeState>().is_composing(),
+            "preedit must set the composition",
+        );
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .write(Ime::Commit {
+                window: Entity::PLACEHOLDER,
+                value: "こんにちは".into(),
+            });
+        app.update();
+
+        assert!(
+            !app.world().resource::<ImeState>().is_composing(),
+            "commit must clear the composition",
+        );
+    }
+
+    #[test]
+    fn ime_position_anchors_at_inline_rect_origin_for_focused_inline() {
+        use ozma_tty_renderer::prelude::TerminalOverlays;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<FocusedWebview>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+
+        // The active pane node spans the window with no transform → top-left at
+        // (0, 0). Inline rect at rows 2.., cols 3.. → phys origin (24, 32) at
+        // 8x16 px.
         let mut overlays = TerminalOverlays::default();
         overlays.rects[0] = bevy::math::IVec4::new(2, 3, 10, 40);
-        app.world_mut().entity_mut(surface).insert((
-            crate::ui::TerminalSurfaceMarker,
-            ComputedNode {
-                size: Vec2::new(800.0, 600.0),
-                ..ComputedNode::DEFAULT
-            },
-            UiGlobalTransform::from_xy(400.0, 300.0),
-            TerminalGrid::default(),
-            overlays,
-        ));
+        let pane = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 0,
+                        height: 0,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                ActivePane,
+                ComputedNode {
+                    size: Vec2::new(800.0, 600.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(400.0, 300.0),
+                TerminalGrid::default(),
+                overlays,
+            ))
+            .id();
         let child = app
             .world_mut()
             .spawn((
-                ChildOf(surface),
+                ChildOf(pane),
                 InlineWebview {
                     view_id: "inline".into(),
                     instance_id: None,
@@ -757,14 +814,14 @@ mod tests {
     }
 
     #[test]
-    fn commit_suppressed_to_pty_while_inline_focused() {
-        let (mut app, term_entity) = build_app_with_attached_entity();
+    fn commit_suppressed_to_pane_while_inline_focused() {
+        let (mut app, pane_entity) = build_app_with_active_pane();
 
-        // Focus an inline child of the active surface.
+        // Focus an inline child of the active pane.
         let child = app
             .world_mut()
             .spawn((
-                ChildOf(term_entity),
+                ChildOf(pane_entity),
                 InlineWebview {
                     view_id: "inline".into(),
                     instance_id: None,
@@ -783,19 +840,8 @@ mod tests {
 
         app.update();
 
-        let captured = app
-            .world()
-            .resource::<CapturedKeys>()
-            .0
-            .lock()
-            .unwrap()
-            .clone();
-        assert!(
-            captured.is_empty(),
-            "an IME commit while inline-focused must NOT write to the PTY (bevy_cef commits it to the page); captured: {:?}",
-            captured,
-        );
-        // The composition state machine still ran: ImeState cleared on commit.
+        // The composition state machine still ran: ImeState cleared on commit,
+        // even though the inline-focus arm suppresses the pane write.
         assert!(
             !app.world().resource::<ImeState>().is_composing(),
             "the state machine must still consume the commit, leaving ImeState non-composing",
@@ -803,16 +849,10 @@ mod tests {
     }
 
     #[test]
-    fn commit_dropped_when_no_attached_terminal() {
-        let (mut app, _term_entity) = build_app_with_attached_entity();
-        let attached: Vec<Entity> = app
-            .world_mut()
-            .query_filtered::<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>()
-            .iter(app.world())
-            .collect();
-        for e in attached {
-            app.world_mut().despawn(e);
-        }
+    fn commit_dropped_when_no_active_pane() {
+        let (mut app, pane_entity) = build_app_with_active_pane();
+        // Remove the only active pane: the commit must be dropped (no target).
+        app.world_mut().despawn(pane_entity);
 
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<Ime>>()
@@ -823,16 +863,10 @@ mod tests {
 
         app.update();
 
-        let captured = app
-            .world()
-            .resource::<CapturedKeys>()
-            .0
-            .lock()
-            .unwrap()
-            .clone();
+        // The state machine still consumed the commit despite having no pane.
         assert!(
-            captured.is_empty(),
-            "commit should be dropped when no AttachedWorkspace"
+            !app.world().resource::<ImeState>().is_composing(),
+            "commit should clear the composition even when dropped",
         );
     }
 }
