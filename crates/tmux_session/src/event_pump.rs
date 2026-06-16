@@ -305,6 +305,24 @@ pub(crate) fn detect_window_switch(events: &[TransportEvent]) -> bool {
     })
 }
 
+/// True when the batch contains a `%window-add` — a window was created
+/// (`new-window`).
+///
+/// NOTE: tmux does NOT emit a `%layout-change` for a freshly added window
+/// (verified against tmux 3.6a: `new-window` sends only `%window-add` +
+/// `%session-window-changed` + `%output`), so the new window's pane layout
+/// never arrives via notifications. The caller must re-enumerate
+/// (`list-windows`) to fetch the layout and project the pane; without it the
+/// new window has no pane entity and renders black.
+pub(crate) fn detect_window_added(events: &[TransportEvent]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::WindowAdd { .. }))
+        )
+    })
+}
+
 /// Parses an `@N %M` line into `(WindowId, PaneId)`.
 fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
     let mut parts = line.split_whitespace();
@@ -621,6 +639,25 @@ mod tests {
             },
         ))];
         assert!(!detect_window_switch(&session_changed));
+    }
+
+    #[test]
+    fn detect_window_added_flags_window_add() {
+        use tmux_control_parser::WindowId;
+        let added = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::WindowAdd {
+                window: WindowId(7),
+            },
+        ))];
+        assert!(detect_window_added(&added));
+        assert!(!detect_window_added(&[]));
+
+        let closed = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::WindowClose {
+                window: WindowId(7),
+            },
+        ))];
+        assert!(!detect_window_added(&closed));
     }
 
     #[test]
