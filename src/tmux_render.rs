@@ -6,6 +6,7 @@ use crate::osc_webview::OscWebviewGate;
 use crate::theme;
 use crate::ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
+use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::{TerminalHandle, TerminalTitle};
@@ -15,11 +16,12 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActivePane, ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
-    refresh_client_command,
+    TmuxWindowLayout, refresh_client_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use tmux_control_parser::{Cell, DividerAxis, PaneId, SplitDir};
 
 #[derive(Resource, Default)]
 struct LastClientSize {
@@ -33,9 +35,6 @@ pub struct OzmuxTmuxRenderPlugin;
 impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>();
-        // The camera clear color shows through tmux's reserved-cell gaps between
-        // panes (panes are opaque; the UI roots and pane container are
-        // transparent). Adjust `theme::PANE_GAP` to retint those gaps.
         app.insert_resource(ClearColor(theme::PANE_GAP));
         app.add_systems(
             Update,
@@ -54,6 +53,31 @@ impl Plugin for OzmuxTmuxRenderPlugin {
     }
 }
 
+/// Pixel-space position of a 1px inter-pane gap. Positions are in logical px
+/// (the same coordinate space as Bevy `Node` rects).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct DividerPixelRect {
+    pub(crate) axis: DividerAxis,
+    /// Pane on the "before" side; used to identify the resize target.
+    pub(crate) primary: PaneId,
+    /// Logical-px leading edge of the 1px gap on the major axis.
+    pub(crate) pos_px: f32,
+    /// Orthogonal-axis start of the divider line in logical px.
+    pub(crate) span_start_px: f32,
+    /// Orthogonal-axis end of the divider line in logical px.
+    pub(crate) span_end_px: f32,
+}
+
+/// Pixel-space layout derived from a `TmuxWindowLayout` tree, stored on the
+/// window entity by `layout_tmux_panes`.
+#[derive(Component, Clone, Default, PartialEq)]
+pub(crate) struct PackedTmuxLayout {
+    pub(crate) panes: HashMap<PaneId, Rect>,
+    pub(crate) dividers: Vec<DividerPixelRect>,
+    /// Total available size in logical px (equals root cell dims × cell size).
+    pub(crate) bbox: Vec2,
+}
+
 fn attach_tmux_window_container(
     mut commands: Commands,
     windows: Query<Entity, (With<TmuxWindow>, Without<Node>)>,
@@ -65,12 +89,10 @@ fn attach_tmux_window_container(
     for window in windows.iter() {
         commands.entity(window).insert((
             Node {
-                display: Display::Flex,
                 position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
                 ..default()
             },
+            BackgroundColor(theme::BORDER),
             ChildOf(root),
         ));
     }
@@ -174,6 +196,158 @@ fn route_tmux_output(
     }
 }
 
+/// Computes packed pixel rects, 1px-gap divider positions, and the total bbox
+/// for a layout tree. Returns `(pane rects, dividers, bbox)`.
+///
+/// The last child in each split fills the remaining available space so no blank
+/// strip appears at window edges.
+fn collapse(
+    root: &Cell,
+    cell_w: f32,
+    cell_h: f32,
+    gap: f32,
+) -> (HashMap<PaneId, Rect>, Vec<DividerPixelRect>, Vec2) {
+    let dims = root.dims();
+    let available = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
+    let mut panes = HashMap::new();
+    let mut dividers = Vec::new();
+    place(
+        &mut panes,
+        &mut dividers,
+        root,
+        Vec2::ZERO,
+        available,
+        cell_w,
+        cell_h,
+        gap,
+    );
+    (panes, dividers, available)
+}
+
+fn place(
+    panes: &mut HashMap<PaneId, Rect>,
+    dividers: &mut Vec<DividerPixelRect>,
+    cell: &Cell,
+    origin: Vec2,
+    available: Vec2,
+    cell_w: f32,
+    cell_h: f32,
+    gap: f32,
+) -> Vec2 {
+    match cell {
+        Cell::Leaf { dims, pane_id } => {
+            let size = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
+            let node_size = Vec2::new(available.x.max(size.x), available.y.max(size.y));
+            if let Some(id) = pane_id {
+                panes.insert(
+                    PaneId(*id),
+                    Rect::from_corners(origin.round(), (origin + node_size).round()),
+                );
+            }
+            node_size
+        }
+        Cell::Split {
+            dir: SplitDir::LeftRight,
+            children,
+            ..
+        } => {
+            let last = children.len().saturating_sub(1);
+            let mut x = origin.x;
+            for (i, child) in children.iter().enumerate() {
+                let child_avail_w = if i == last {
+                    available.x - (x - origin.x)
+                } else {
+                    child.dims().width as f32 * cell_w
+                };
+                let csz = place(
+                    panes,
+                    dividers,
+                    child,
+                    Vec2::new(x, origin.y),
+                    Vec2::new(child_avail_w, available.y),
+                    cell_w,
+                    cell_h,
+                    gap,
+                );
+                x += csz.x;
+                if i < last {
+                    dividers.push(DividerPixelRect {
+                        axis: DividerAxis::Vertical,
+                        primary: last_pane_id(child).unwrap_or(PaneId(0)),
+                        pos_px: x,
+                        span_start_px: origin.y,
+                        span_end_px: origin.y + available.y,
+                    });
+                    x += gap;
+                }
+            }
+            Vec2::new(x - origin.x, available.y)
+        }
+        Cell::Split {
+            dir: SplitDir::TopBottom,
+            children,
+            ..
+        } => {
+            let last = children.len().saturating_sub(1);
+            let mut y = origin.y;
+            for (i, child) in children.iter().enumerate() {
+                let child_avail_h = if i == last {
+                    available.y - (y - origin.y)
+                } else {
+                    child.dims().height as f32 * cell_h
+                };
+                let csz = place(
+                    panes,
+                    dividers,
+                    child,
+                    Vec2::new(origin.x, y),
+                    Vec2::new(available.x, child_avail_h),
+                    cell_w,
+                    cell_h,
+                    gap,
+                );
+                y += csz.y;
+                if i < last {
+                    dividers.push(DividerPixelRect {
+                        axis: DividerAxis::Horizontal,
+                        primary: last_pane_id(child).unwrap_or(PaneId(0)),
+                        pos_px: y,
+                        span_start_px: origin.x,
+                        span_end_px: origin.x + available.x,
+                    });
+                    y += gap;
+                }
+            }
+            Vec2::new(available.x, y - origin.y)
+        }
+        Cell::Split {
+            dir: SplitDir::Floating,
+            children,
+            dims,
+        } => {
+            for child in children {
+                let d = child.dims();
+                let lit_origin = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
+                let lit_avail = Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
+                place(
+                    panes, dividers, child, lit_origin, lit_avail, cell_w, cell_h, gap,
+                );
+            }
+            Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h)
+        }
+    }
+}
+
+fn last_pane_id(cell: &Cell) -> Option<PaneId> {
+    match cell {
+        Cell::Leaf {
+            pane_id: Some(id), ..
+        } => Some(PaneId(*id)),
+        Cell::Leaf { pane_id: None, .. } => None,
+        Cell::Split { children, .. } => children.iter().rev().find_map(last_pane_id),
+    }
+}
+
 /// Converts tmux cell dims (`u32`) to an alacritty grid size, clamping into
 /// `1..=u16::MAX` so a pathological width/height cannot truncate to 0 (a 0-col
 /// `Term::resize` would panic).
@@ -182,31 +356,22 @@ fn grid_dims(width: u32, height: u32) -> (u16, u16) {
     (clamp(width), clamp(height))
 }
 
-fn pane_rect(
-    xoff: i32,
-    yoff: i32,
-    width: u32,
-    height: u32,
-    cell_w: f32,
-    cell_h: f32,
-) -> (f32, f32, f32, f32) {
-    (
-        xoff as f32 * cell_w,
-        yoff as f32 * cell_h,
-        width as f32 * cell_w,
-        height as f32 * cell_h,
-    )
-}
-
 fn layout_tmux_panes(
     mut commands: Commands,
-    mut panes: Query<(
-        Entity,
-        &TmuxPane,
-        &mut Node,
-        &mut TerminalHandle,
-        &mut TerminalGrid,
-    )>,
+    mut windows: Query<
+        (
+            Entity,
+            &TmuxWindowLayout,
+            &mut Node,
+            &Children,
+            Option<&PackedTmuxLayout>,
+        ),
+        With<TmuxWindow>,
+    >,
+    mut panes: Query<
+        (&TmuxPane, &mut Node, &mut TerminalHandle, &mut TerminalGrid),
+        Without<TmuxWindow>,
+    >,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -216,30 +381,54 @@ fn layout_tmux_panes(
     let dpr = window.scale_factor().max(0.5);
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
-    for (entity, pane, mut node, mut handle, mut grid) in panes.iter_mut() {
-        let d = pane.dims;
-        let (left, top, width, height) =
-            pane_rect(d.xoff, d.yoff, d.width, d.height, cell_w, cell_h);
+
+    for (window_entity, layout, mut container, children, maybe_packed) in windows.iter_mut() {
+        let (rects, dividers, bbox) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX);
+
         // NOTE: only write the Node fields when they actually change — writing
-        // through `Mut<Node>` every frame would mark the component changed and
-        // force a full UI relayout pass each tick even when nothing moved.
-        if node.left != Val::Px(left)
-            || node.top != Val::Px(top)
-            || node.width != Val::Px(width)
-            || node.height != Val::Px(height)
-        {
-            node.left = Val::Px(left);
-            node.top = Val::Px(top);
-            node.width = Val::Px(width);
-            node.height = Val::Px(height);
+        // through `Mut<Node>` every frame marks the component changed and forces
+        // a full UI relayout pass each tick even when nothing moved.
+        if container.width != Val::Px(bbox.x) || container.height != Val::Px(bbox.y) {
+            container.width = Val::Px(bbox.x);
+            container.height = Val::Px(bbox.y);
         }
-        let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
-        let (cur_cols, cur_rows, _) = handle.read_geometry();
-        if (cur_cols, cur_rows) != (cols, rows) {
-            handle.resize_grid_only(cols, rows);
-            grid.cols = cols;
-            grid.rows = rows;
-            handle.emit_pending(&mut commands, entity);
+
+        let packed_changed = maybe_packed
+            .is_none_or(|p| p.panes != rects || p.dividers != dividers || p.bbox != bbox);
+        if packed_changed {
+            commands.entity(window_entity).insert(PackedTmuxLayout {
+                panes: rects.clone(),
+                dividers: dividers.clone(),
+                bbox,
+            });
+        }
+
+        for child in children.iter() {
+            let Ok((pane, mut node, mut handle, mut grid)) = panes.get_mut(child) else {
+                continue;
+            };
+            let Some(rect) = rects.get(&pane.id) else {
+                continue;
+            };
+            let (left, top, width, height) = (rect.min.x, rect.min.y, rect.width(), rect.height());
+            if node.left != Val::Px(left)
+                || node.top != Val::Px(top)
+                || node.width != Val::Px(width)
+                || node.height != Val::Px(height)
+            {
+                node.left = Val::Px(left);
+                node.top = Val::Px(top);
+                node.width = Val::Px(width);
+                node.height = Val::Px(height);
+            }
+            let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
+            let (cur_cols, cur_rows, _) = handle.read_geometry();
+            if (cur_cols, cur_rows) != (cols, rows) {
+                handle.resize_grid_only(cols, rows);
+                grid.cols = cols;
+                grid.rows = rows;
+                handle.emit_pending(&mut commands, child);
+            }
         }
     }
 }
@@ -318,9 +507,10 @@ fn sync_active_pane_outline(mut panes: Query<(Has<ActivePane>, &mut Outline), Wi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::math::{Rect, Vec2};
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
-    use tmux_control_parser::{CellDims, PaneId};
+    use tmux_control_parser::{Cell, CellDims, SplitDir};
 
     #[test]
     fn rows_for_panes_reserves_one_row_for_the_bar() {
@@ -619,6 +809,22 @@ mod tests {
         };
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
+
+        use ozmux_tmux::{TmuxWindow, TmuxWindowLayout};
+        use tmux_control_parser::{WindowId, WindowLayout};
+
+        let window_e = app
+            .world_mut()
+            .spawn((
+                TmuxWindow {
+                    id: WindowId(1),
+                    index: 0,
+                    name: String::new(),
+                },
+                TmuxWindowLayout(WindowLayout::parse(b"0000,40x10,0,0,1").unwrap()),
+                Node::default(),
+            ))
+            .id();
         let entity = app
             .world_mut()
             .spawn((
@@ -634,6 +840,7 @@ mod tests {
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
                 TerminalGrid::default(),
+                ChildOf(window_e),
             ))
             .id();
 
@@ -811,7 +1018,22 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
 
+        use ozmux_tmux::{TmuxWindow, TmuxWindowLayout};
+        use tmux_control_parser::{WindowId, WindowLayout};
+
         let pane_id = PaneId(2);
+        let window_e = app
+            .world_mut()
+            .spawn((
+                TmuxWindow {
+                    id: WindowId(1),
+                    index: 0,
+                    name: String::new(),
+                },
+                TmuxWindowLayout(WindowLayout::parse(b"0000,20x5,0,0,2").unwrap()),
+                Node::default(),
+            ))
+            .id();
         let entity = app
             .world_mut()
             .spawn((
@@ -827,6 +1049,7 @@ mod tests {
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
                 TerminalGrid::default(),
+                ChildOf(window_e),
             ))
             .id();
 
@@ -844,7 +1067,6 @@ mod tests {
                 .chain(),
         );
 
-        // Frame 1: emit once so first_emit flips to false (matching production state).
         app.update();
         let hits_after_first = app.world().resource::<SnapHits>().0;
         assert!(
@@ -852,7 +1074,6 @@ mod tests {
             "first flush_emit must fire a FrameSnapshot (first_emit path)"
         );
 
-        // Now change pane dims so layout_tmux_panes will resize.
         app.world_mut()
             .entity_mut(entity)
             .get_mut::<TmuxPane>()
@@ -864,8 +1085,6 @@ mod tests {
             yoff: 0,
         };
 
-        // Frame 2: layout_tmux_panes sees the dim change, calls resize_grid_only +
-        // emit_pending — must fire a NEW FrameSnapshot even though first_emit is now false.
         app.update();
         let hits_after_resize = app.world().resource::<SnapHits>().0;
 
@@ -886,16 +1105,251 @@ mod tests {
     }
 
     #[test]
-    fn pane_rect_scales_cell_dims_to_pixels() {
-        let dims = CellDims {
-            width: 10,
-            height: 4,
-            xoff: 2,
-            yoff: 1,
+    fn collapse_single_pane_fills_available() {
+        let root = Cell::Leaf {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            pane_id: Some(0),
         };
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0);
         assert_eq!(
-            pane_rect(dims.xoff, dims.yoff, dims.width, dims.height, 8.0, 16.0),
-            (16.0, 16.0, 80.0, 64.0),
+            rects[&PaneId(0)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 384.0))
         );
+        assert_eq!(bbox, Vec2::new(640.0, 384.0));
+    }
+
+    #[test]
+    fn collapse_left_right_produces_one_px_gap() {
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                    pane_id: Some(2),
+                },
+            ],
+        };
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(
+            rects[&PaneId(1)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
+        );
+        assert_eq!(
+            rects[&PaneId(2)],
+            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 384.0)),
+        );
+        assert_eq!(bbox, Vec2::new(640.0, 384.0));
+        assert_eq!(dividers.len(), 1);
+        assert_eq!(dividers[0].axis, DividerAxis::Vertical);
+        assert!((dividers[0].pos_px - 320.0).abs() < 0.5);
+        assert_eq!(dividers[0].primary, PaneId(1));
+    }
+
+    #[test]
+    fn collapse_nested_split_fills_without_blank_strips() {
+        let right_child = Cell::Split {
+            dims: CellDims {
+                width: 39,
+                height: 24,
+                xoff: 41,
+                yoff: 0,
+            },
+            dir: SplitDir::TopBottom,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 39,
+                        height: 12,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                    pane_id: Some(2),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 39,
+                        height: 11,
+                        xoff: 41,
+                        yoff: 13,
+                    },
+                    pane_id: Some(3),
+                },
+            ],
+        };
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                right_child,
+            ],
+        };
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(
+            rects[&PaneId(1)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
+        );
+        assert_eq!(
+            rects[&PaneId(2)],
+            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 192.0)),
+        );
+        assert_eq!(
+            rects[&PaneId(3)],
+            Rect::from_corners(Vec2::new(321.0, 193.0), Vec2::new(640.0, 384.0)),
+        );
+        assert_eq!(bbox, Vec2::new(640.0, 384.0));
+    }
+
+    #[test]
+    fn collapse_compound_non_last_child_no_overlap() {
+        let inner_lr = Cell::Split {
+            dims: CellDims {
+                width: 40,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 20,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 19,
+                        height: 24,
+                        xoff: 21,
+                        yoff: 0,
+                    },
+                    pane_id: Some(2),
+                },
+            ],
+        };
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                inner_lr,
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                    pane_id: Some(3),
+                },
+            ],
+        };
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(
+            rects[&PaneId(1)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(160.0, 384.0))
+        );
+        assert_eq!(
+            rects[&PaneId(2)],
+            Rect::from_corners(Vec2::new(161.0, 0.0), Vec2::new(320.0, 384.0)),
+        );
+        assert_eq!(
+            rects[&PaneId(3)],
+            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 384.0)),
+        );
+        assert_eq!(bbox, Vec2::new(640.0, 384.0));
+        assert_eq!(dividers.len(), 2);
+        let outer = dividers
+            .iter()
+            .find(|d| (d.pos_px - 320.0).abs() < 0.5)
+            .unwrap();
+        assert_eq!(outer.axis, DividerAxis::Vertical);
+        assert_eq!(
+            outer.primary,
+            PaneId(2),
+            "outer divider primary must be the rightmost pane of the before-child",
+        );
+    }
+
+    #[test]
+    fn collapse_skips_leaf_without_pane_id() {
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: None,
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                    pane_id: Some(2),
+                },
+            ],
+        };
+        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(rects.len(), 1, "pane_id:None leaf is not placed");
+        assert!(rects.contains_key(&PaneId(2)));
     }
 }

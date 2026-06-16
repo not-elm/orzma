@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn empty_windows_retained_clears_windows_and_panes_keeps_session() {
         use crate::events::{
-            TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowsRetained, pane_geoms,
+            TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowsRetained,
         };
         use tmux_control_parser::{SessionId, WindowId, WindowLayout};
 
@@ -304,8 +304,7 @@ mod tests {
         });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&WindowLayout::parse(b"abcd,80x24,0,0,1").unwrap()),
-            dividers: vec![],
+            layout: WindowLayout::parse(b"abcd,80x24,0,0,1").unwrap(),
         });
         app.update();
         app.world_mut().trigger(TmuxWindowsRetained {
