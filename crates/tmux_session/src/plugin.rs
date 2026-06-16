@@ -9,8 +9,9 @@ use crate::enumerate::{
     list_windows_command, mode_keys_command, subscribe_window_flags_command,
 };
 use crate::event_pump::{
-    advance_state, detect_session_switch, drain_transport, take_active_pane, take_client_name,
-    take_keybindings, take_mode_keys, take_pane_captures, take_prefix_keys, trigger_events,
+    advance_state, detect_session_switch, detect_window_switch, drain_transport, take_active_pane,
+    take_client_name, take_keybindings, take_mode_keys, take_pane_captures, take_prefix_keys,
+    trigger_events,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
@@ -124,6 +125,15 @@ fn drain_tmux_events(
             windows: Vec::new(),
         });
         send_session_enumeration(&mut enumeration, client);
+    } else if detect_window_switch(&events)
+        && let Some(client) = connection.client()
+    {
+        match client.handle().send(&active_pane_command()) {
+            Ok(id) => enumeration.active_pane_pending = Some(id),
+            Err(error) => {
+                tracing::warn!(?error, "failed to re-query active pane on window switch")
+            }
+        }
     }
     if let Some(next) = advance_state(&state, &events) {
         *state = next;

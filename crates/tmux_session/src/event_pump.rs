@@ -287,6 +287,24 @@ pub(crate) fn detect_session_switch(
     None
 }
 
+/// True when the batch contains a `%session-window-changed` — the session's
+/// current window changed (`next-window` / `previous-window` / `select-window`).
+///
+/// NOTE: tmux emits *only* `%session-window-changed` for such a switch, never a
+/// `%window-pane-changed`, so the caller must re-query the active pane
+/// (`active_pane_command`) to move `ActiveWindow`/`ActivePane`. Without that the
+/// switch never reaches the projection and the UI stays on the old window.
+pub(crate) fn detect_window_switch(events: &[TransportEvent]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            TransportEvent::Protocol(ClientEvent::Notification(
+                ControlEvent::SessionWindowChanged { .. }
+            ))
+        )
+    })
+}
+
 /// Parses an `@N %M` line into `(WindowId, PaneId)`.
 fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
     let mut parts = line.split_whitespace();
@@ -582,6 +600,27 @@ mod tests {
             detect_session_switch(&client_changed, Some(SessionId(3))),
             None
         );
+    }
+
+    #[test]
+    fn detect_window_switch_flags_session_window_changed() {
+        use tmux_control_parser::{SessionId, WindowId};
+        let switched = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::SessionWindowChanged {
+                session: SessionId(1),
+                window: WindowId(4),
+            },
+        ))];
+        assert!(detect_window_switch(&switched));
+        assert!(!detect_window_switch(&[]));
+
+        let session_changed = vec![TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::SessionChanged {
+                session: SessionId(2),
+                name: "b".to_string(),
+            },
+        ))];
+        assert!(!detect_window_switch(&session_changed));
     }
 
     #[test]
