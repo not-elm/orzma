@@ -7,7 +7,9 @@ use crate::font::TerminalUiFont;
 use crate::theme;
 use bevy::app::{App, Plugin};
 use bevy::ecs::message::MessageReader;
-use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
+use bevy::ecs::schedule::common_conditions::{
+    resource_exists, resource_exists_and_changed, resource_removed,
+};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -15,36 +17,32 @@ use ozmux_tmux::TmuxConnection;
 
 const CONFIRM_Z: i32 = 330;
 
-/// Registers the confirm-prompt resource, input system, and render system.
+/// Registers the confirm-prompt input system and the show/hide render systems.
 pub(crate) struct ConfirmPromptPlugin;
 
 impl Plugin for ConfirmPromptPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ConfirmPrompt>()
-            .add_systems(Startup, spawn_confirm_ui)
+        app.add_systems(Startup, spawn_confirm_ui)
             .add_systems(
                 Update,
                 handle_confirm_input
                     .after(crate::input::InputPhase::FocusedKey)
-                    .run_if(|p: Res<ConfirmPrompt>| p.open.is_some()),
+                    .run_if(resource_exists::<ConfirmState>),
             )
             .add_systems(
                 PostUpdate,
-                sync_confirm_ui.run_if(resource_exists_and_changed::<ConfirmPrompt>),
+                (
+                    hide_confirm_ui.run_if(resource_removed::<ConfirmState>),
+                    show_confirm_ui.run_if(resource_exists_and_changed::<ConfirmState>),
+                ),
             );
     }
 }
 
-/// The active `confirm-before` prompt. Present while awaiting y/n; owns the
-/// keyboard like the copy-mode prompt and the session picker.
-#[derive(Resource, Default)]
-pub(crate) struct ConfirmPrompt {
-    /// The pending confirmation, if open.
-    pub(crate) open: Option<ConfirmState>,
-}
-
-/// A pending confirmation: the message to show and the tmux command to run on
-/// confirm.
+/// The active `confirm-before` prompt: the message to show and the tmux command
+/// to run on confirm. Present as a resource only while awaiting y/n; its
+/// existence owns the keyboard like the copy-mode prompt and the session picker.
+#[derive(Resource)]
 pub(crate) struct ConfirmState {
     /// Prompt text shown to the user (from `-p`, or a default).
     pub(crate) message: String,
@@ -182,34 +180,36 @@ fn spawn_confirm_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>
         });
 }
 
-fn sync_confirm_ui(
+fn hide_confirm_ui(mut bar: Query<&mut Node, With<ConfirmBar>>) {
+    if let Ok(mut node) = bar.single_mut() {
+        node.display = Display::None;
+    }
+}
+
+fn show_confirm_ui(
     mut bar: Query<&mut Node, With<ConfirmBar>>,
     mut texts: Query<&mut Text>,
-    confirm: Res<ConfirmPrompt>,
+    state: Res<ConfirmState>,
     children_query: Query<&Children, With<ConfirmBar>>,
 ) {
     let Ok(mut node) = bar.single_mut() else {
         return;
     };
-    match &confirm.open {
-        None => node.display = Display::None,
-        Some(state) => {
-            node.display = Display::Flex;
-            if let Ok(children) = children_query.single() {
-                for child in children.iter() {
-                    if let Ok(mut text) = texts.get_mut(child) {
-                        text.0 = state.message.clone();
-                    }
-                }
+    node.display = Display::Flex;
+    if let Ok(children) = children_query.single() {
+        for child in children.iter() {
+            if let Ok(mut text) = texts.get_mut(child) {
+                text.0 = state.message.clone();
             }
         }
     }
 }
 
 fn handle_confirm_input(
-    mut confirm: ResMut<ConfirmPrompt>,
+    mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
     mut armed: Local<bool>,
+    state: Res<ConfirmState>,
     connection: NonSend<TmuxConnection>,
 ) {
     // NOTE: the bound key that opened the prompt (e.g. M-t) is still in the
@@ -225,9 +225,6 @@ fn handle_confirm_input(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        let Some(state) = confirm.open.as_ref() else {
-            continue;
-        };
         match confirm_step(&ev.logical_key) {
             None => {}
             Some(ConfirmStep::Confirm) => {
@@ -236,12 +233,12 @@ fn handle_confirm_input(
                 {
                     tracing::warn!(?e, "confirm-before command send failed");
                 }
-                confirm.open = None;
+                commands.remove_resource::<ConfirmState>();
                 *armed = false;
                 break;
             }
             Some(ConfirmStep::Cancel) => {
-                confirm.open = None;
+                commands.remove_resource::<ConfirmState>();
                 *armed = false;
                 break;
             }
