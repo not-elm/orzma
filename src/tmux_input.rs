@@ -323,22 +323,33 @@ fn wheel_key_name(up: bool) -> &'static str {
     if up { "WheelUpPane" } else { "WheelDownPane" }
 }
 
-/// The fallback copy-mode scroll command used when the copy table does not bind
-/// the wheel key — ensures the wheel always scrolls while in copy mode.
-fn fallback_scroll_command(up: bool) -> String {
+/// Lines scrolled per wheel notch while in copy mode.
+const WHEEL_SCROLL_LINES: u32 = 3;
+
+/// Builds a pane-targeted copy-mode scroll command for one wheel notch:
+/// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down`.
+///
+/// ozmux drives copy-mode wheel scrolling with this single, targeted command
+/// rather than relaying tmux's copy-table `WheelUpPane`/`WheelDownPane`
+/// bindings, which are `select-pane \; send-keys …` sequences: relaying a
+/// sequence as one control-mode command makes tmux emit an extra reply block
+/// the protocol client cannot correlate (the `no pending command` storm).
+fn scroll_command(target: &str, up: bool, lines: u32) -> String {
     format!(
-        "send-keys -X {}",
+        "send-keys -X -t {target} -N {lines} {}",
         if up { "scroll-up" } else { "scroll-down" }
     )
 }
 
 /// Forwards mouse-wheel events to the active tmux pane.
 ///
-/// When the active pane is in copy mode each notch relays the copy table's
-/// `WheelUpPane`/`WheelDownPane` binding (falling back to `scroll-up`/
-/// `scroll-down` when unbound). When the active pane is not in copy mode each
-/// notch dispatches against the root/prefix tables; if the resolved command
-/// enters copy mode, `CopyModeState` is inserted on the pane entity.
+/// In copy mode each notch sends a single pane-targeted `scroll_command`
+/// (`send-keys -X -t %id scroll-up|scroll-down`) — ozmux owns wheel scrolling
+/// rather than relaying tmux's copy-table wheel bindings. Outside copy mode each
+/// notch dispatches the root/prefix tables: a `Forwarded::Run` (e.g. the default
+/// `WheelUpPane` `copy-mode -e` conditional) runs verbatim and, if it enters
+/// copy mode, inserts `CopyModeState`; a `Forwarded::Keys` for an unbound wheel
+/// key is dropped — a mouse-wheel key is never forwarded as literal pane input.
 fn forward_wheel_to_tmux(
     mut commands: Commands,
     mut wheel: MessageReader<MouseWheel>,
@@ -383,34 +394,26 @@ fn forward_wheel_to_tmux(
     let handle = client.handle();
 
     for up in notches {
-        let key = wheel_key_name(up);
         if in_copy_mode {
-            let cmd = match copy_mode_dispatch(&bindings, key) {
-                CopyAction::Relay(c) | CopyAction::Copy { command: c, .. } => c,
-                CopyAction::Exit(c) => {
-                    if let Err(e) = handle.send(&c) {
-                        tracing::warn!(?e, "copy-mode wheel relay send failed");
-                        break;
-                    }
-                    commands.entity(entity).remove::<CopyModeState>();
-                    continue;
-                }
-                CopyAction::Prompt { .. } | CopyAction::Ignore => fallback_scroll_command(up),
-            };
+            let cmd = scroll_command(&target, up, WHEEL_SCROLL_LINES);
             if let Err(e) = handle.send(&cmd) {
-                tracing::warn!(?e, "copy-mode wheel relay send failed");
+                tracing::warn!(?e, "copy-mode wheel scroll send failed");
                 break;
             }
         } else {
+            let key = wheel_key_name(up);
             let mut prefix = false;
             let actions = plan_forward(&mut prefix, &bindings, vec![key.to_string()]);
             for action in actions {
-                let enters = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
-                let cmd = match action {
-                    Forwarded::Run(command) => command,
-                    Forwarded::Keys(names) => send_pane_keys_command(&target, &names),
+                // NOTE: drop `Forwarded::Keys` — an unbound wheel key (e.g. the
+                // default root `WheelDownPane`) must never be sent as pane input,
+                // or tmux types the key name into the shell. Only run bound
+                // commands (e.g. the `WheelUpPane` copy-mode-entry conditional).
+                let Forwarded::Run(command) = action else {
+                    continue;
                 };
-                if let Err(e) = handle.send(&cmd) {
+                let enters = is_copy_mode_entry(&command);
+                if let Err(e) = handle.send(&command) {
                     tracing::warn!(?e, "tmux wheel forward send failed");
                     break;
                 }
@@ -494,13 +497,19 @@ mod tests {
     }
 
     #[test]
-    fn fallback_scroll_command_up() {
-        assert_eq!(fallback_scroll_command(true), "send-keys -X scroll-up");
+    fn scroll_command_up_is_targeted_and_repeated() {
+        assert_eq!(
+            scroll_command("%3", true, 3),
+            "send-keys -X -t %3 -N 3 scroll-up"
+        );
     }
 
     #[test]
-    fn fallback_scroll_command_down() {
-        assert_eq!(fallback_scroll_command(false), "send-keys -X scroll-down");
+    fn scroll_command_down_is_targeted_and_repeated() {
+        assert_eq!(
+            scroll_command("%3", false, 5),
+            "send-keys -X -t %3 -N 5 scroll-down"
+        );
     }
 
     fn make_wheel_event(unit: MouseScrollUnit, y: f32) -> MouseWheel {

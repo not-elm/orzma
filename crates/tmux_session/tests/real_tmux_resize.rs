@@ -13,9 +13,9 @@
 //! 4. `wheel_binding_enters_copy_mode` — tmux's default `WheelUpPane` if-shell
 //!    conditional enters copy mode on a plain pane (the premise behind
 //!    `is_copy_mode_entry` matching `copy-mode` inside the conditional).
-//! 5. `relayed_copy_mode_wheel_binding_scrolls` — the copy-mode `WheelUpPane`
-//!    binding (`select-pane \; send-keys -X -N 5 scroll-up`), with its `\;`
-//!    separator normalized to `;`, scrolls the copy-mode viewport.
+//! 5. `wheel_in_copy_mode_scrolls` — ozmux's direct pane-targeted
+//!    `send-keys -X -t %id -N <n> scroll-up` (what it now sends per wheel notch
+//!    in copy mode) scrolls the copy-mode viewport.
 //!
 //! Run with: `cargo test -p ozmux_tmux --test real_tmux_resize -- --ignored --test-threads=1`
 
@@ -458,17 +458,16 @@ fn wheel_binding_enters_copy_mode() {
     );
 }
 
-// ─── Test 5: the relayed copy-mode WheelUpPane binding scrolls ─────────────
+// ─── Test 5: ozmux's direct copy-mode wheel-scroll command scrolls ─────────
 
-/// Proves the wheel-in-copy-mode fix end to end: tmux's default copy-mode
-/// `WheelUpPane` binding is the command sequence `select-pane \; send-keys -X
-/// -N 5 scroll-up`. ozmux normalizes the `list-keys` `\;` separator to a bare
-/// `;` (see `keybindings::unescape_command_separators`) before relaying it;
-/// sent that way it must scroll the copy-mode viewport. A literal `\;` would
-/// fold `scroll-up` into `select-pane`'s arguments and never scroll.
+/// Proves the wheel-in-copy-mode fix end to end. ozmux no longer relays tmux's
+/// copy-mode `WheelUpPane` binding (a `select-pane \; send-keys …` sequence that
+/// desyncs the control protocol); instead it sends a single pane-targeted
+/// `send-keys -X -t %id -N <n> scroll-up` (`tmux_input::scroll_command`). That
+/// command must scroll the copy-mode viewport.
 #[test]
 #[ignore = "requires a real tmux binary and a controlling PTY"]
-fn relayed_copy_mode_wheel_binding_scrolls() {
+fn wheel_in_copy_mode_scrolls() {
     let (mut app, pane_id) = attach_and_wait_for_pane("wheelscroll");
     let target = format!("%{}", pane_id.0);
 
@@ -486,17 +485,16 @@ fn relayed_copy_mode_wheel_binding_scrolls() {
     assert!(entered.pane_in_mode, "must be in copy mode");
     assert_eq!(entered.scroll_position, 0, "copy mode starts at the tail");
 
-    // The relayed copy-mode WheelUpPane binding, with the `\;` normalized to `;`
-    // exactly as ozmux now stores + relays it.
-    send_cmd(&app, "select-pane ; send-keys -X -N 5 scroll-up");
+    // Exactly what ozmux now sends per wheel notch in copy mode.
+    send_cmd(&app, &format!("send-keys -X -t {target} -N 3 scroll-up"));
     std::thread::sleep(Duration::from_millis(250));
     let scrolled = read_copy_state_reply(&mut app, pane_id, Duration::from_secs(3))
         .and_then(|l| parse_copy_state(&l))
-        .expect("copy-state after the relayed wheel binding");
+        .expect("copy-state after the direct scroll command");
     teardown(&mut app);
     assert!(
         scrolled.scroll_position >= 1,
-        "the relayed copy-mode wheel binding must scroll the viewport; \
+        "ozmux's direct copy-mode scroll command must scroll the viewport; \
          scroll_position stayed at {}",
         scrolled.scroll_position
     );
