@@ -11,7 +11,7 @@ use crate::ui::tmux_window_bar_input::{switch_window_on_click, window_entry_hove
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{ActiveWindow, TmuxSession, TmuxWindow, WindowId};
+use ozmux_tmux::{ActiveWindow, TmuxSession, TmuxWindow, WindowFlags, WindowId};
 
 /// Marker on the tmux window bar root Node — the fixed-height Row mounted at the
 /// bottom of `UiRoot`. `spawn_window_bar` inserts it once; `rebuild_window_bar`
@@ -192,6 +192,46 @@ fn window_label(index: u32, name: &str) -> String {
     format!("{index}:{name}")
 }
 
+/// The (label, flag-suffix) text color pair for a window entry. Active entries
+/// use dark text on the accent fill; inactive entries are `MUTED`, with the
+/// flag suffix tinted `FLAG_WARN` when a bell or activity flag is set.
+fn entry_colors(is_active: bool, flags: WindowFlags) -> (Color, Color) {
+    if is_active {
+        (palette::BACKGROUND, palette::BACKGROUND)
+    } else if flags.bell || flags.activity {
+        (palette::MUTED, palette::FLAG_WARN)
+    } else {
+        (palette::MUTED, palette::MUTED)
+    }
+}
+
+/// The flag suffix appended after a window's `<index>:<name>`, e.g. `" Z!"`.
+/// Empty when no flags are set. `*` (current) and `-` (last) are not shown:
+/// "current" is conveyed by the accent pill.
+fn flag_suffix(flags: WindowFlags) -> String {
+    let mut chars = String::new();
+    if flags.zoom {
+        chars.push('Z');
+    }
+    if flags.bell {
+        chars.push('!');
+    }
+    if flags.activity {
+        chars.push('#');
+    }
+    if flags.silence {
+        chars.push('~');
+    }
+    if flags.marked {
+        chars.push('M');
+    }
+    if chars.is_empty() {
+        chars
+    } else {
+        format!(" {chars}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +256,68 @@ mod tests {
             },
             phys_font_size: 12,
         }
+    }
+
+    #[test]
+    fn flag_suffix_orders_and_space_prefixes() {
+        use ozmux_tmux::WindowFlags;
+        assert_eq!(flag_suffix(WindowFlags::default()), "");
+        assert_eq!(
+            flag_suffix(WindowFlags {
+                zoom: true,
+                bell: true,
+                ..WindowFlags::default()
+            }),
+            " Z!"
+        );
+        assert_eq!(
+            flag_suffix(WindowFlags {
+                activity: true,
+                silence: true,
+                marked: true,
+                ..WindowFlags::default()
+            }),
+            " #~M"
+        );
+    }
+
+    #[test]
+    fn entry_colors_active_is_dark_text() {
+        use ozmux_tmux::WindowFlags;
+        assert_eq!(
+            entry_colors(
+                true,
+                WindowFlags {
+                    bell: true,
+                    ..WindowFlags::default()
+                }
+            ),
+            (palette::BACKGROUND, palette::BACKGROUND)
+        );
+    }
+
+    #[test]
+    fn entry_colors_inactive_bell_or_activity_is_warn() {
+        use ozmux_tmux::WindowFlags;
+        assert_eq!(
+            entry_colors(
+                false,
+                WindowFlags {
+                    bell: true,
+                    ..WindowFlags::default()
+                }
+            ),
+            (palette::MUTED, palette::FLAG_WARN)
+        );
+    }
+
+    #[test]
+    fn entry_colors_inactive_plain_is_muted() {
+        use ozmux_tmux::WindowFlags;
+        assert_eq!(
+            entry_colors(false, WindowFlags::default()),
+            (palette::MUTED, palette::MUTED)
+        );
     }
 
     #[test]
