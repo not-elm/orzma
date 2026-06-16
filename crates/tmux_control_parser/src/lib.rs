@@ -4,7 +4,7 @@
 pub use crate::assembler::{BlockAssembler, Frame};
 pub use crate::error::{LayoutError, TmuxError, TmuxResult};
 pub use crate::event::{ControlEvent, PaneId, SessionId, WindowId};
-pub use crate::layout::{Cell, CellDims, SplitDir, WindowLayout};
+pub use crate::layout::{Cell, CellDims, Divider, DividerAxis, SplitDir, WindowLayout, dividers};
 
 pub mod assembler;
 pub mod error;
