@@ -6,7 +6,7 @@ use crate::connection::TmuxConnection;
 use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, active_pane_command, capture_pane_command, client_name_command,
-    list_windows_command, mode_keys_command,
+    list_windows_command, mode_keys_command, subscribe_window_flags_command,
 };
 use crate::event_pump::{
     advance_state, detect_session_switch, drain_transport, take_active_pane, take_client_name,
@@ -242,6 +242,9 @@ fn send_session_enumeration(enumeration: &mut EnumerationState, client: &tmux_co
     match client.handle().send(&active_pane_command()) {
         Ok(id) => enumeration.active_pane_pending = Some(id),
         Err(error) => tracing::warn!(?error, "failed to send active-pane query"),
+    }
+    if let Err(error) = client.handle().send(&subscribe_window_flags_command()) {
+        tracing::warn!(?error, "failed to subscribe to window flags");
     }
 }
 
