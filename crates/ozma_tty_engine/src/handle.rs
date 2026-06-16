@@ -658,7 +658,7 @@ impl TerminalHandle {
     /// Clipboard) and emits the corresponding `EntityEvent`s on this
     /// `entity`. Updates the supplied `TerminalTitle` Component as a
     /// side-effect of `Title` / `ResetTitle`.
-    pub(crate) fn drain_control_events(
+    pub fn drain_control_events(
         &self,
         commands: &mut Commands,
         entity: Entity,
