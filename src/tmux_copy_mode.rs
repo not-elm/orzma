@@ -441,7 +441,7 @@ pub(crate) fn cell_at_pane(
 /// Maps a window physical-pixel point to a node's local physical px with origin
 /// at the node's top-left corner. Mirrors `mouse_buttons::phys_to_terminal_local`
 /// (the affine inverse of `UiGlobalTransform` via `ComputedNode::normalize_point`).
-pub(crate) fn phys_to_pane_local(
+fn phys_to_pane_local(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
     cursor_phys: Vec2,

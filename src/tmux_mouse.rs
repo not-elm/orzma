@@ -5,9 +5,10 @@
 //! Divider-drag-to-resize is handled in the same state machine: a press within
 //! `divider_grab_tolerance_px` of a divider line enters `Resizing` state; each
 //! frame while held the pointer's major-axis cell coordinate is converted to an
-//! absolute target size and an `resize-pane -x/-y` command is sent when the
-//! target differs from the last-sent size and the prior resize has been
-//! confirmed by `%layout-change` (one-in-flight throttle).
+//! absolute target size and a `resize-pane -x/-y` command is sent whenever that
+//! target changes. The send is pointer-driven (not a reaction to
+//! `%layout-change`), so there is no resize feedback loop, and the absolute
+//! `-x/-y` form is idempotent so re-sends cannot accumulate drift.
 //!
 //! A press on a pane that drags past `drag_threshold_px` enters `Selecting`
 //! state: copy mode is auto-entered on the pane under the press, then the copy
@@ -29,11 +30,11 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use std::time::Duration;
 use ozmux_tmux::{
     ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxDividers, TmuxPane,
     resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
 };
+use std::time::Duration;
 use tmux_control_parser::{Divider, DividerAxis};
 
 /// Bevy plugin that registers the tmux mouse gesture arbiter.
@@ -91,8 +92,6 @@ enum GestureState {
         near: i32,
         /// Last absolute size (cells) we issued a resize for.
         last_sent: u32,
-        /// Resize commands emitted in the current frame (per-frame cap).
-        commands_this_frame: u32,
     },
 }
 
@@ -202,35 +201,6 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
     (pointer_cell - near).max(1) as u32
 }
 
-/// Commands to move the tmux copy cursor from `cur` (visible col,row) to
-/// `target` (visible col,row). The row uses absolute `goto-line` (idempotent,
-/// drift-free); the column uses relative cursor motion. `history` and `scroll`
-/// are `CopyState.history_size` / `scroll_position` for the absolute mapping
-/// (`absolute_line = (history - scroll) + visible_row`).
-// NOTE: kept for the real-tmux drag-select validation (plan Task 13); the
-// arbiter currently uses relative cursor_deltas. dead_code is allowed (not
-// expected) because the test build references it, so the lint only fires for
-// the non-test build.
-#[allow(dead_code)]
-fn position_commands(
-    cur: (u16, u16),
-    target: (u16, u16),
-    history: u32,
-    scroll: u32,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    let top = history as i32 - scroll as i32;
-    let target_line = (top + target.1 as i32).max(0);
-    out.push(format!("send-keys -X goto-line {target_line}"));
-    let dx = target.0 as i32 - cur.0 as i32;
-    if dx > 0 {
-        out.push(format!("send-keys -X -N {dx} cursor-right"));
-    } else if dx < 0 {
-        out.push(format!("send-keys -X -N {} cursor-left", -dx));
-    }
-    out
-}
-
 /// Interprets raw left-button messages into tmux `select-pane`, `resize-pane`,
 /// or copy-mode selection commands.
 ///
@@ -289,19 +259,17 @@ fn arbiter(
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    let (grab_tol_logical, max_resize_per_frame, drag_threshold_logical, dbl_click_ms, click_drift) =
-        configs
-            .as_deref()
-            .map(|c| {
-                (
-                    c.mouse.divider_grab_tolerance_px,
-                    c.mouse.max_resize_commands_per_frame,
-                    c.mouse.drag_threshold_px,
-                    c.mouse.double_click_timeout_ms,
-                    c.mouse.click_drift_px,
-                )
-            })
-            .unwrap_or((4.0, 4, 4.0, 400, 8.0));
+    let (grab_tol_logical, drag_threshold_logical, dbl_click_ms, click_drift) = configs
+        .as_deref()
+        .map(|c| {
+            (
+                c.mouse.divider_grab_tolerance_px,
+                c.mouse.drag_threshold_px,
+                c.mouse.double_click_timeout_ms,
+                c.mouse.click_drift_px,
+            )
+        })
+        .unwrap_or((4.0, 4.0, 400, 8.0));
     let tol_phys = grab_tol_logical * scale;
     let drag_threshold_phys = drag_threshold_logical * scale;
 
@@ -341,7 +309,6 @@ fn arbiter(
                             divider: d,
                             near,
                             last_sent,
-                            commands_this_frame: 0,
                         };
                     }
                     Press::Pane(pane_id) => {
@@ -354,10 +321,7 @@ fn arbiter(
                         let pane = pane_under.map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER);
                         let now = time.elapsed();
                         let cursor_logical = cursor_phys / scale;
-                        let click_cfg = (
-                            Duration::from_millis(dbl_click_ms as u64),
-                            click_drift,
-                        );
+                        let click_cfg = (Duration::from_millis(dbl_click_ms as u64), click_drift);
                         let count = gesture.click.register(now, cursor_logical, click_cfg);
                         gesture.state = GestureState::Pressed {
                             pane,
@@ -384,9 +348,7 @@ fn arbiter(
                                 );
                             } else {
                                 match handle.send(&show_buffer_command()) {
-                                    Ok(id) => {
-                                        queries.register(id, pane_id, CopyQueryKind::Buffer)
-                                    }
+                                    Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
                                     Err(e) => {
                                         tracing::warn!(
                                             ?e,
@@ -428,15 +390,9 @@ fn arbiter(
                         };
                         let cols = p.dims.width as u16;
                         let rows = p.dims.height as u16;
-                        let Some(cell) = cell_at_pane(
-                            node,
-                            transform,
-                            origin_phys,
-                            cell_w,
-                            cell_h,
-                            cols,
-                            rows,
-                        ) else {
+                        let Some(cell) =
+                            cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
+                        else {
                             break;
                         };
                         let kind = if click_count == 2 {
@@ -602,11 +558,8 @@ fn arbiter(
         divider,
         near,
         last_sent,
-        commands_this_frame,
     } = &mut gesture.state
     {
-        *commands_this_frame = 0;
-
         let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
             return;
         };
@@ -618,27 +571,13 @@ fn arbiter(
 
         let target = resize_target_size(*near, pointer_cell);
 
+        // The pointer drives the send (not `%layout-change`), so there is no
+        // resize feedback loop; emitting only on a new target cell yields at
+        // most one absolute (idempotent) resize per frame. We do NOT gate on
+        // the confirmed pane size catching up to `last_sent` — when tmux clamps
+        // a resize the size never reaches the request, and such a gate would
+        // wedge the drag for the rest of the gesture.
         if target == *last_sent {
-            return;
-        }
-
-        let current_size = panes
-            .iter()
-            .find(|(_, p, _, _)| p.id == divider.primary)
-            .map(|(_, p, _, _)| match divider.axis {
-                DividerAxis::Vertical => p.dims.width,
-                DividerAxis::Horizontal => p.dims.height,
-            });
-
-        let Some(current_size) = current_size else {
-            return;
-        };
-
-        if current_size != *last_sent {
-            return;
-        }
-
-        if *commands_this_frame >= max_resize_per_frame {
             return;
         }
 
@@ -657,7 +596,6 @@ fn arbiter(
         }
 
         *last_sent = target;
-        *commands_this_frame += 1;
     }
 }
 
@@ -749,36 +687,45 @@ mod tests {
     fn click_count_increments_within_timeout_and_drift() {
         let mut t = ClickTracker::default();
         let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg), 1);
-        assert_eq!(t.register(Duration::from_millis(200), Vec2::new(11.0, 11.0), cfg), 2);
-        assert_eq!(t.register(Duration::from_millis(350), Vec2::new(12.0, 10.0), cfg), 3);
+        assert_eq!(
+            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
+            1
+        );
+        assert_eq!(
+            t.register(Duration::from_millis(200), Vec2::new(11.0, 11.0), cfg),
+            2
+        );
+        assert_eq!(
+            t.register(Duration::from_millis(350), Vec2::new(12.0, 10.0), cfg),
+            3
+        );
     }
 
     #[test]
     fn click_count_resets_after_timeout() {
         let mut t = ClickTracker::default();
         let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg), 1);
-        assert_eq!(t.register(Duration::from_millis(500), Vec2::new(10.0, 10.0), cfg), 1);
+        assert_eq!(
+            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
+            1
+        );
+        assert_eq!(
+            t.register(Duration::from_millis(500), Vec2::new(10.0, 10.0), cfg),
+            1
+        );
     }
 
     #[test]
     fn click_count_resets_after_drift() {
         let mut t = ClickTracker::default();
         let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg), 1);
-        assert_eq!(t.register(Duration::from_millis(100), Vec2::new(40.0, 40.0), cfg), 1);
-    }
-
-    #[test]
-    fn position_commands_use_goto_line_for_row_and_relative_for_column() {
-        let cmds = position_commands((2, 3), (5, 7), 100, 0);
         assert_eq!(
-            cmds,
-            vec![
-                "send-keys -X goto-line 107".to_string(),
-                "send-keys -X -N 3 cursor-right".to_string(),
-            ]
+            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
+            1
+        );
+        assert_eq!(
+            t.register(Duration::from_millis(100), Vec2::new(40.0, 40.0), cfg),
+            1
         );
     }
 
