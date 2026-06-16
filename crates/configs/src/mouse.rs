@@ -68,6 +68,15 @@ pub struct MouseConfig {
     /// Linear decrement (ms per cell past the edge) applied to
     /// `autoscroll_base_period_ms`.
     pub autoscroll_step_ms: u32,
+    /// Pointer travel (logical px) before a left-press is treated as a drag
+    /// rather than a click. Below this, release fires a click (focus / word /
+    /// line); at or above it, the gesture becomes a resize or text drag.
+    pub drag_threshold_px: f32,
+    /// Half-width (logical px) of a pane divider's grab zone for resize.
+    pub divider_grab_tolerance_px: f32,
+    /// Per-frame cap on `resize-pane` commands emitted during a divider drag,
+    /// a backstop beneath the one-in-flight-resize throttle.
+    pub max_resize_commands_per_frame: u32,
 }
 
 impl Default for MouseConfig {
@@ -83,6 +92,9 @@ impl Default for MouseConfig {
             autoscroll_base_period_ms: 50,
             autoscroll_min_period_ms: 16,
             autoscroll_step_ms: 4,
+            drag_threshold_px: 4.0,
+            divider_grab_tolerance_px: 4.0,
+            max_resize_commands_per_frame: 4,
         }
     }
 }
@@ -101,6 +113,9 @@ pub(crate) struct MousePatch {
     pub(crate) autoscroll_base_period_ms: Option<u32>,
     pub(crate) autoscroll_min_period_ms: Option<u32>,
     pub(crate) autoscroll_step_ms: Option<u32>,
+    pub(crate) drag_threshold_px: Option<f32>,
+    pub(crate) divider_grab_tolerance_px: Option<f32>,
+    pub(crate) max_resize_commands_per_frame: Option<u32>,
 }
 
 impl MousePatch {
@@ -134,6 +149,15 @@ impl MousePatch {
         }
         if let Some(v) = self.autoscroll_step_ms {
             base.autoscroll_step_ms = v;
+        }
+        if let Some(v) = self.drag_threshold_px {
+            base.drag_threshold_px = v;
+        }
+        if let Some(v) = self.divider_grab_tolerance_px {
+            base.divider_grab_tolerance_px = v;
+        }
+        if let Some(v) = self.max_resize_commands_per_frame {
+            base.max_resize_commands_per_frame = v;
         }
         base
     }
@@ -203,5 +227,26 @@ mod tests {
         assert_eq!(patch.autoscroll_base_period_ms, Some(40));
         assert_eq!(patch.autoscroll_min_period_ms, Some(12));
         assert_eq!(patch.autoscroll_step_ms, Some(6));
+    }
+
+    #[test]
+    fn gesture_defaults_present() {
+        let cfg = MouseConfig::default();
+        assert_eq!(cfg.drag_threshold_px, 4.0);
+        assert_eq!(cfg.divider_grab_tolerance_px, 4.0);
+        assert_eq!(cfg.max_resize_commands_per_frame, 4);
+    }
+
+    #[test]
+    fn gesture_fields_parse_from_toml() {
+        let toml = r#"
+            drag_threshold_px = 6.0
+            divider_grab_tolerance_px = 5.0
+            max_resize_commands_per_frame = 8
+        "#;
+        let patch: MousePatch = toml::from_str(toml).unwrap();
+        assert_eq!(patch.drag_threshold_px, Some(6.0));
+        assert_eq!(patch.divider_grab_tolerance_px, Some(5.0));
+        assert_eq!(patch.max_resize_commands_per_frame, Some(8));
     }
 }
