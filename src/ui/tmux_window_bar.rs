@@ -52,13 +52,20 @@ pub(crate) struct WindowEntryActive(
 #[derive(Component)]
 struct SessionLabel;
 
-/// Wires the tmux window status bar: spawns the bar on Startup and rebuilds its
-/// children whenever the window set, active window, or session name changes.
+/// Wires the tmux window status bar: spawns the bar once after `UiRoot` exists
+/// and rebuilds its children whenever the window set, active window, or session
+/// name changes.
 pub struct OzmuxTmuxWindowBarPlugin;
 
 impl Plugin for OzmuxTmuxWindowBarPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_window_bar);
+        // NOTE: PostStartup, not Startup. `UiRoot` is spawned by `spawn_root_ui`
+        // (a different plugin) via deferred Commands in Startup; with no ordering
+        // edge between the two systems Bevy inserts no sync point, so a Startup
+        // `spawn_window_bar` queries `UiRoot` before that spawn flushes, finds
+        // nothing, and silently bails — the bar never mounts. PostStartup runs
+        // after Startup's command flush, when `UiRoot` is guaranteed to exist.
+        app.add_systems(PostStartup, spawn_window_bar);
         app.add_systems(Update, rebuild_window_bar.run_if(window_bar_dirty));
         app.add_systems(
             Update,
@@ -422,6 +429,32 @@ mod tests {
             },
             phys_font_size: 12,
         }
+    }
+
+    #[test]
+    fn bar_mounts_when_ui_root_is_spawned_in_startup() {
+        // Regression: UiRoot is created by another Startup system via deferred
+        // Commands. spawn_window_bar also ran in Startup, with no ordering edge,
+        // so it queried UiRoot before that spawn flushed and silently bailed —
+        // the bar never appeared. It must mount regardless of that race.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(metrics_fixture());
+        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
+        app.add_systems(Startup, |mut commands: Commands| {
+            commands.spawn((Node::default(), UiRoot));
+        });
+        app.add_plugins(OzmuxTmuxWindowBarPlugin);
+
+        app.update();
+
+        let world = app.world_mut();
+        let mut bar_q = world.query_filtered::<(), With<WindowBarRoot>>();
+        assert_eq!(
+            bar_q.iter(world).count(),
+            1,
+            "window bar root must mount even when UiRoot is spawned in Startup"
+        );
     }
 
     #[test]
