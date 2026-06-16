@@ -7,8 +7,9 @@
 
 use crate::control_plane::{DynSource, DynamicRegistry, NormalizedChord, WebviewOwner};
 use crate::input::InputPhase;
+use crate::input::mouse_buttons::resolve_pane_at_phys;
 use crate::osc_webview::NonInteractive;
-use crate::tmux_pane_hit::tmux_pane_at_phys;
+use crate::ui::Slotted;
 use crate::webview_render::preload::build_dynamic_preload;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -25,7 +26,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
 use ozma_tty_renderer::schema::TerminalGrid;
-use ozmux_tmux::TmuxPane;
+use ozmux_multiplexer::SurfaceMarker;
 
 /// The normalized passthrough chords for a mounted inline webview, copied from
 /// its registration. Read by the focused-key filter-fill and PTY-forward
@@ -561,7 +562,7 @@ fn sync_inline_webview_size(
 /// without it the resolution still runs but nothing is forwarded.
 fn forward_inline_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
-    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), (With<SurfaceMarker>, With<Slotted>)>,
     children: Query<&Children>,
     inline: Query<(&InlineWebview, Has<NonInteractive>)>,
     overlay_rects: Query<&TerminalOverlays>,
@@ -579,7 +580,7 @@ fn forward_inline_mouse_moves(
     let scale_factor = window.scale_factor();
     let cursor_phys = moved.position * scale_factor;
     let (cell_w_phys, cell_h_phys) = cell_size_phys(metrics.as_deref());
-    let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys) else {
+    let Some((terminal, local_phys)) = resolve_pane_at_phys(&hosts, cursor_phys) else {
         return;
     };
     let Ok(overlays) = overlay_rects.get(terminal) else {
@@ -2058,15 +2059,8 @@ mod tests {
         let terminal = app
             .world_mut()
             .spawn((
-                TmuxPane {
-                    id: ozmux_tmux::PaneId(0),
-                    dims: tmux_control_parser::CellDims {
-                        width: 80,
-                        height: 24,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
+                SurfaceMarker,
+                Slotted,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
                     ..ComputedNode::DEFAULT
