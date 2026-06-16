@@ -157,6 +157,40 @@ pub fn select_pane_command(id: PaneId) -> String {
     format!("select-pane -t %{}", id.0)
 }
 
+/// Relative resize direction for `resize-pane -L|-R|-U|-D`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResizeDir {
+    /// `-L` — move the pane's right edge leftward.
+    Left,
+    /// `-R` — move the pane's right edge rightward.
+    Right,
+    /// `-U` — move the pane's bottom edge upward.
+    Up,
+    /// `-D` — move the pane's bottom edge downward.
+    Down,
+}
+
+/// Builds `resize-pane -t %<id> -x <width>` (absolute, idempotent).
+pub fn resize_pane_x_command(id: PaneId, width: u32) -> String {
+    format!("resize-pane -t %{} -x {width}", id.0)
+}
+
+/// Builds `resize-pane -t %<id> -y <height>` (absolute, idempotent).
+pub fn resize_pane_y_command(id: PaneId, height: u32) -> String {
+    format!("resize-pane -t %{} -y {height}", id.0)
+}
+
+/// Builds `resize-pane -t %<id> -L|-R|-U|-D <n>` (relative fallback).
+pub fn resize_pane_rel_command(id: PaneId, dir: ResizeDir, n: u32) -> String {
+    let flag = match dir {
+        ResizeDir::Left => "-L",
+        ResizeDir::Right => "-R",
+        ResizeDir::Up => "-U",
+        ResizeDir::Down => "-D",
+    };
+    format!("resize-pane -t %{} {flag} {n}", id.0)
+}
+
 /// Builds `capture-pane -p -e -t %<id>` to fetch a pane's current visible
 /// content (with SGR escapes) as a command reply.
 ///
@@ -415,6 +449,20 @@ mod tests {
     #[test]
     fn select_pane_command_targets_at_id() {
         assert_eq!(select_pane_command(PaneId(3)), "select-pane -t %3");
+    }
+
+    #[test]
+    fn resize_pane_builders_format() {
+        assert_eq!(resize_pane_x_command(PaneId(3), 80), "resize-pane -t %3 -x 80");
+        assert_eq!(resize_pane_y_command(PaneId(3), 24), "resize-pane -t %3 -y 24");
+        assert_eq!(
+            resize_pane_rel_command(PaneId(3), ResizeDir::Left, 2),
+            "resize-pane -t %3 -L 2"
+        );
+        assert_eq!(
+            resize_pane_rel_command(PaneId(3), ResizeDir::Down, 1),
+            "resize-pane -t %3 -D 1"
+        );
     }
 
     #[test]
