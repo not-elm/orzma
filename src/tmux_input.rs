@@ -302,14 +302,20 @@ fn forward_keys_to_tmux(
     }
 }
 
-/// True when a resolved tmux command enters copy mode (`copy-mode`, with any
-/// flags). ozmux intercepts these to insert `CopyModeState` alongside running
-/// the command on tmux.
+/// True when a resolved tmux command can enter copy mode, so ozmux inserts
+/// `CopyModeState` alongside running it on tmux.
+///
+/// Matches a bare `copy-mode` token anywhere in the command, not just at the
+/// front: tmux's default mouse-wheel bindings enter copy mode through a
+/// conditional (e.g. `WheelUpPane` is
+/// `if-shell -F "…" { send-keys -M } { copy-mode -e }`), so a first-token check
+/// would miss them. A false positive — the conditional taking the non-copy-mode
+/// branch on an alt-screen / mouse-reporting pane — is harmless: the copy-mode
+/// refresh loop removes `CopyModeState` again on the first `#{pane_in_mode} == 0`
+/// state reply. The `copy-mode` token is matched whole-word, so quoted format
+/// strings and the `copy-mode-vi` table name do not trip it.
 fn is_copy_mode_entry(command: &str) -> bool {
-    command
-        .split_whitespace()
-        .next()
-        .is_some_and(|first| first == "copy-mode")
+    command.split_whitespace().any(|token| token == "copy-mode")
 }
 
 /// The tmux key name for one mouse-wheel notch in the given direction.
@@ -639,6 +645,20 @@ mod tests {
         assert!(is_copy_mode_entry("copy-mode -eu"));
         assert!(!is_copy_mode_entry("copy-selection"));
         assert!(!is_copy_mode_entry("new-window"));
+    }
+
+    #[test]
+    fn detects_copy_mode_entry_inside_wheel_conditional() {
+        // tmux's default `WheelUpPane` root binding enters copy mode through an
+        // if-shell conditional, not a leading `copy-mode` token. ozmux must still
+        // recognize the entry so it inserts `CopyModeState` (the refresh loop
+        // removes it again if the conditional took the send-keys branch).
+        assert!(is_copy_mode_entry(
+            "if-shell -F \"#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}\" { send-keys -M } { copy-mode -e }"
+        ));
+        // A wheel that only forwards a mouse event to the app is not an entry.
+        assert!(!is_copy_mode_entry("send-keys -M"));
+        assert!(!is_copy_mode_entry("send-keys -X scroll-up"));
     }
 
     fn m(shift: bool, super_: bool) -> KeyMods {

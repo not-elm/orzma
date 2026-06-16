@@ -10,6 +10,9 @@
 //!    whole word; the first-character behavior (tmux #1820) is documented in an
 //!    assertion that records the ACTUAL tmux 3.6b behavior; `select-line` selects
 //!    the whole line.
+//! 4. `wheel_binding_enters_copy_mode` — tmux's default `WheelUpPane` if-shell
+//!    conditional enters copy mode on a plain pane (the premise behind
+//!    `is_copy_mode_entry` matching `copy-mode` inside the conditional).
 //!
 //! Run with: `cargo test -p ozmux_tmux --test real_tmux_resize -- --ignored --test-threads=1`
 
@@ -408,5 +411,46 @@ fn select_word_and_line() {
         line_text.contains("alpha") && line_text.contains("beta") && line_text.contains("gamma"),
         "select-line must contain all three words 'alpha beta gamma'; got: {:?}",
         buf_line
+    );
+}
+
+// ─── Test 4: the WheelUpPane conditional binding enters copy mode ───────────
+
+/// Reproduces, end to end, what ozmux dispatches on a wheel-up over a normal
+/// pane: tmux's default `WheelUpPane` root binding is an `if-shell` conditional
+/// (`{ send-keys -M }` when the app wants the wheel, else `{ copy-mode -e }`).
+/// On a plain shell pane (not alt-screen, not in a mode, no mouse reporting) the
+/// conditional must take the `copy-mode -e` branch and enter copy mode. This is
+/// the premise behind `is_copy_mode_entry` recognizing `copy-mode` inside the
+/// conditional so ozmux inserts `CopyModeState`.
+#[test]
+#[ignore = "requires a real tmux binary and a controlling PTY"]
+fn wheel_binding_enters_copy_mode() {
+    let (mut app, pane_id) = attach_and_wait_for_pane("wheel");
+    let target = format!("%{}", pane_id.0);
+
+    // tmux's default WheelUpPane binding, targeted at the test pane. The `#{...}`
+    // braces are literal tmux format syntax, so build the string explicitly
+    // rather than through `format!` brace-escaping.
+    let mut binding = String::from("if-shell -F -t ");
+    binding.push_str(&target);
+    binding.push_str(
+        " \"#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}\" { send-keys -M -t ",
+    );
+    binding.push_str(&target);
+    binding.push_str(" } { copy-mode -e -t ");
+    binding.push_str(&target);
+    binding.push_str(" }");
+    send_cmd(&app, &binding);
+    std::thread::sleep(Duration::from_millis(200));
+
+    let state = read_copy_state_reply(&mut app, pane_id, Duration::from_secs(3))
+        .as_deref()
+        .and_then(parse_copy_state)
+        .expect("copy-state reply after the wheel binding");
+    teardown(&mut app);
+    assert!(
+        state.pane_in_mode,
+        "the WheelUpPane if-shell binding must enter copy mode on a plain pane",
     );
 }
