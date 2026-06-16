@@ -92,6 +92,11 @@ enum GestureState {
         near: i32,
         /// Last absolute size (cells) we issued a resize for.
         last_sent: u32,
+        /// Whether any `resize-pane` was actually sent (i.e. the pointer
+        /// dragged). A press that never drags is a click: on release it falls
+        /// back to focusing the pane under the cursor, because the grab zone
+        /// overlaps the adjacent pane bodies.
+        resized: bool,
     },
 }
 
@@ -123,14 +128,6 @@ impl ClickTracker {
         self.last = Some((now, pos, count));
         count
     }
-}
-
-/// What a left-press landed on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Press {
-    Divider(Divider),
-    Pane(PaneId),
-    None,
 }
 
 /// Returns the `(Entity, PaneId)` of the first `TmuxPane` whose `ComputedNode`
@@ -176,24 +173,6 @@ fn divider_at(
     })
 }
 
-/// Classifies a left-press into what it landed on. Dividers take precedence
-/// over panes: if `cursor_phys` is within the grab zone of a divider, returns
-/// `Press::Divider`; else returns `Press::Pane` if `pane_under` is `Some`,
-/// else `Press::None`.
-fn classify_press(
-    dividers: &[Divider],
-    pane_under: Option<PaneId>,
-    cursor_phys: Vec2,
-    cell_w: f32,
-    cell_h: f32,
-    tol_phys: f32,
-) -> Press {
-    if let Some(d) = divider_at(dividers, cursor_phys, cell_w, cell_h, tol_phys) {
-        return Press::Divider(d);
-    }
-    pane_under.map(Press::Pane).unwrap_or(Press::None)
-}
-
 /// New absolute size (cells) for a divider's primary pane given the pointer's
 /// cell coordinate on the major axis. The pane's near edge stays fixed; its far
 /// edge follows the pointer. Clamped to at least 1.
@@ -204,20 +183,23 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 /// Interprets raw left-button messages into tmux `select-pane`, `resize-pane`,
 /// or copy-mode selection commands.
 ///
-/// On each `Pressed` event the cursor's physical position is classified via
-/// `classify_press`: a divider hit enters `Resizing` state; a pane hit sends
-/// `select-pane` and enters `Pressed`; a miss leaves the state `Idle`. While
+/// On each `Pressed` event the cursor's physical position is hit-tested: a
+/// press within a divider's grab zone (whose primary pane has geometry) enters
+/// `Resizing`; otherwise the pane under the cursor is focused (`select-pane`)
+/// and the state becomes `Pressed`; a press over nothing leaves `Idle`. While
 /// `Pressed`, a pointer that drags past `drag_threshold_px` auto-enters tmux
 /// copy mode on the pressed pane and transitions to `Selecting`, which positions
 /// the copy cursor to the press cell, begins a selection, and extends it as the
 /// pointer moves (all pane-targeted via `send-keys -X -t %id`). Each frame while
 /// `Resizing` the pointer's major-axis cell coordinate is mapped to an absolute
-/// target size and sent as `resize-pane -x/-y` when the target differs from the
-/// last-sent size and the prior resize has been confirmed (one-in-flight
-/// throttle). On `Released` from `Selecting` the selection is copied and bridged
-/// to the clipboard; any other release returns the state to `Idle`. When the
-/// primary window is not focused, or a modal (picker / copy-search prompt /
-/// webview) owns input, queued events are drained and the state is reset.
+/// target size and sent as `resize-pane -x/-y` whenever the target changes; the
+/// send is pointer-driven (not a reaction to `%layout-change`) so there is no
+/// resize feedback loop. On `Released` from `Selecting` a begun selection is
+/// copied and bridged to the clipboard; a `Resizing` release that never dragged
+/// is treated as a click and focuses the pane under the cursor; any other
+/// release returns the state to `Idle`. When the primary window is not focused,
+/// or a modal (picker / copy-search prompt / webview) owns input, queued events
+/// are drained and the state is reset.
 fn arbiter(
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
@@ -285,58 +267,54 @@ fn arbiter(
                     continue;
                 };
                 let pane_under = pane_under_cursor(&panes, cursor_phys);
-                match classify_press(
-                    dividers,
-                    pane_under.map(|(_, id)| id),
-                    cursor_phys,
-                    cell_w,
-                    cell_h,
-                    tol_phys,
-                ) {
-                    Press::Divider(d) => {
-                        let (near, last_sent) = panes
+                // Resolve a divider grab to its primary pane's near edge + size.
+                // A divider whose primary pane has no projected geometry yet
+                // cannot be resized, so it falls through to a pane focus rather
+                // than entering Resizing with a bogus (0) baseline.
+                let resize =
+                    divider_at(dividers, cursor_phys, cell_w, cell_h, tol_phys).and_then(|d| {
+                        panes
                             .iter()
                             .find(|(_, p, _, _)| p.id == d.primary)
                             .map(|(_, p, _, _)| match d.axis {
-                                DividerAxis::Vertical => (p.dims.xoff, p.dims.width),
-                                DividerAxis::Horizontal => (p.dims.yoff, p.dims.height),
+                                DividerAxis::Vertical => (d, p.dims.xoff, p.dims.width),
+                                DividerAxis::Horizontal => (d, p.dims.yoff, p.dims.height),
                             })
-                            .unwrap_or_else(|| match d.axis {
-                                DividerAxis::Vertical => (0, 0),
-                                DividerAxis::Horizontal => (0, 0),
-                            });
-                        gesture.state = GestureState::Resizing {
-                            divider: d,
-                            near,
-                            last_sent,
-                        };
-                    }
-                    Press::Pane(pane_id) => {
-                        if let Some(client) = connection.client() {
-                            let cmd = select_pane_command(pane_id);
-                            if let Err(e) = client.handle().send(&cmd) {
-                                tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
-                            }
+                    });
+                if let Some((divider, near, last_sent)) = resize {
+                    gesture.state = GestureState::Resizing {
+                        divider,
+                        near,
+                        last_sent,
+                        resized: false,
+                    };
+                } else if let Some((pane, pane_id)) = pane_under {
+                    if let Some(client) = connection.client() {
+                        let cmd = select_pane_command(pane_id);
+                        if let Err(e) = client.handle().send(&cmd) {
+                            tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
                         }
-                        let pane = pane_under.map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER);
-                        let now = time.elapsed();
-                        let cursor_logical = cursor_phys / scale;
-                        let click_cfg = (Duration::from_millis(dbl_click_ms as u64), click_drift);
-                        let count = gesture.click.register(now, cursor_logical, click_cfg);
-                        gesture.state = GestureState::Pressed {
-                            pane,
-                            pane_id,
-                            origin_phys: cursor_phys,
-                            click_count: count,
-                        };
                     }
-                    Press::None => {}
+                    let now = time.elapsed();
+                    let cursor_logical = cursor_phys / scale;
+                    let click_cfg = (Duration::from_millis(dbl_click_ms as u64), click_drift);
+                    let count = gesture.click.register(now, cursor_logical, click_cfg);
+                    gesture.state = GestureState::Pressed {
+                        pane,
+                        pane_id,
+                        origin_phys: cursor_phys,
+                        click_count: count,
+                    };
                 }
             }
             ButtonState::Released => {
                 let prior = std::mem::replace(&mut gesture.state, GestureState::Idle);
                 match prior {
-                    GestureState::Selecting { pane_id, .. } => {
+                    // Only copy when a selection was actually begun. A drag that
+                    // released before the copy-mode snapshot arrived never sent
+                    // `begin-selection`; copying then would clobber the system
+                    // clipboard with the stale paste buffer.
+                    GestureState::Selecting { pane_id, begun, .. } if begun => {
                         if let Some(client) = connection.client() {
                             let handle = client.handle();
                             let copy = target_copy_cmd(pane_id, "send-keys -X copy-selection");
@@ -369,6 +347,19 @@ fn arbiter(
                         let Some(client) = connection.client() else {
                             break;
                         };
+                        // Resolve the click cell BEFORE entering copy mode, so a
+                        // failed lookup cannot leave the pane stuck in copy mode
+                        // with no PendingMultiSelect to drive (and exit) it.
+                        let Ok((_, p, node, transform)) = panes.get(pane) else {
+                            break;
+                        };
+                        let cols = p.dims.width as u16;
+                        let rows = p.dims.height as u16;
+                        let Some(cell) =
+                            cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
+                        else {
+                            break;
+                        };
                         if copy_modes.get(pane).is_err() {
                             if let Err(e) = client
                                 .handle()
@@ -383,18 +374,6 @@ fn arbiter(
                             }
                             commands.entity(pane).insert(CopyModeState);
                         }
-                        let Some((_, p, node, transform)) =
-                            panes.iter().find(|(e, _, _, _)| *e == pane)
-                        else {
-                            break;
-                        };
-                        let cols = p.dims.width as u16;
-                        let rows = p.dims.height as u16;
-                        let Some(cell) =
-                            cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
-                        else {
-                            break;
-                        };
                         let kind = if click_count == 2 {
                             MultiSelectKind::Word
                         } else {
@@ -406,6 +385,22 @@ fn arbiter(
                             cell,
                             kind,
                         };
+                    }
+                    // A divider press that never dragged is a click: the grab
+                    // zone overlaps the adjacent pane bodies, so focus the pane
+                    // under the cursor instead of silently doing nothing.
+                    GestureState::Resizing { resized, .. } if !resized => {
+                        if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
+                            && let Some((_, pane_id)) = pane_under_cursor(&panes, cursor_phys)
+                            && let Some(client) = connection.client()
+                            && let Err(e) = client.handle().send(&select_pane_command(pane_id))
+                        {
+                            tracing::warn!(
+                                ?e,
+                                pane = pane_id.0,
+                                "divider-click select-pane failed"
+                            );
+                        }
                     }
                     _ => {}
                 }
@@ -426,7 +421,7 @@ fn arbiter(
         if cursor_phys.distance(origin_phys) <= drag_threshold_phys {
             return;
         }
-        let Some((_, p, node, transform)) = panes.iter().find(|(e, _, _, _)| *e == pane) else {
+        let Ok((_, p, node, transform)) = panes.get(pane) else {
             gesture.state = GestureState::Idle;
             return;
         };
@@ -468,7 +463,7 @@ fn arbiter(
         last_target,
     } = &mut gesture.state
     {
-        let Some((_, p, node, transform)) = panes.iter().find(|(e, _, _, _)| *e == *pane) else {
+        let Ok((_, p, node, transform)) = panes.get(*pane) else {
             gesture.state = GestureState::Idle;
             return;
         };
@@ -528,10 +523,10 @@ fn arbiter(
         kind,
     } = gesture.state
     {
-        let Some((_, _, _, _)) = panes.iter().find(|(e, _, _, _)| *e == pane) else {
+        if panes.get(pane).is_err() {
             gesture.state = GestureState::Idle;
             return;
-        };
+        }
         let Ok(snapshot_cursor) = snapshots.get(pane).map(|s| (s.0.cursor_x, s.0.cursor_y)) else {
             return;
         };
@@ -558,6 +553,7 @@ fn arbiter(
         divider,
         near,
         last_sent,
+        resized,
     } = &mut gesture.state
     {
         let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
@@ -596,6 +592,7 @@ fn arbiter(
         }
 
         *last_sent = target;
+        *resized = true;
     }
 }
 
@@ -646,16 +643,6 @@ mod tests {
     fn vdiv(primary: u32, pos: i32, s: i32, e: i32) -> Divider {
         Divider {
             axis: DividerAxis::Vertical,
-            primary: PaneId(primary),
-            pos,
-            span_start: s,
-            span_end: e,
-        }
-    }
-
-    fn hdiv(primary: u32, pos: i32, s: i32, e: i32) -> Divider {
-        Divider {
-            axis: DividerAxis::Horizontal,
             primary: PaneId(primary),
             pos,
             span_start: s,
@@ -734,61 +721,6 @@ mod tests {
         assert_eq!(resize_target_size(0, 50), 50);
         assert_eq!(resize_target_size(10, 25), 15);
         assert_eq!(resize_target_size(0, 0), 1);
-    }
-
-    #[test]
-    fn classify_press_divider_takes_precedence_over_pane() {
-        let ds = [vdiv(1, 40, 0, 24)];
-        let result = classify_press(
-            &ds,
-            Some(PaneId(2)),
-            Vec2::new(322.0, 100.0),
-            8.0,
-            16.0,
-            4.0,
-        );
-        assert_eq!(result, Press::Divider(vdiv(1, 40, 0, 24)));
-    }
-
-    #[test]
-    fn classify_press_pane_when_no_divider_hit() {
-        let ds = [vdiv(1, 40, 0, 24)];
-        let result = classify_press(
-            &ds,
-            Some(PaneId(3)),
-            Vec2::new(100.0, 100.0),
-            8.0,
-            16.0,
-            4.0,
-        );
-        assert_eq!(result, Press::Pane(PaneId(3)));
-    }
-
-    #[test]
-    fn classify_press_none_when_both_miss() {
-        let result = classify_press(
-            &[],
-            Option::<PaneId>::None,
-            Vec2::new(0.0, 0.0),
-            8.0,
-            16.0,
-            4.0,
-        );
-        assert_eq!(result, Press::None);
-    }
-
-    #[test]
-    fn classify_press_horizontal_divider() {
-        let ds = [hdiv(5, 12, 0, 80)];
-        let result = classify_press(
-            &ds,
-            Some(PaneId(7)),
-            Vec2::new(200.0, 194.0),
-            8.0,
-            16.0,
-            4.0,
-        );
-        assert_eq!(result, Press::Divider(hdiv(5, 12, 0, 80)));
     }
 
     fn test_metrics() -> TerminalCellMetricsResource {
