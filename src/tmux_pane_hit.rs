@@ -76,7 +76,11 @@ mod tests {
     #[test]
     fn cell_at_local_is_one_indexed_and_clamped() {
         let (col, row, side) = cell_at_local(Vec2::new(0.0, 0.0), 10.0, 20.0, 80, 24);
-        assert_eq!((col, row), (1, 1), "origin maps to the 1-indexed top-left cell");
+        assert_eq!(
+            (col, row),
+            (1, 1),
+            "origin maps to the 1-indexed top-left cell"
+        );
         assert_eq!(side, Side::Left, "the left edge of a cell is the Left side");
 
         let (col, row, _) = cell_at_local(Vec2::new(10_000.0, 10_000.0), 10.0, 20.0, 80, 24);
