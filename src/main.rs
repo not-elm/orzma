@@ -47,8 +47,9 @@ use ui::tmux_dialog::TmuxDialogPlugin;
 use ui::tmux_pane_focus::OzmuxTmuxPaneFocusPlugin;
 use ui::tmux_window_bar::OzmuxTmuxWindowBarPlugin;
 use ui::{
-    OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
-    copy_search::CopyPromptPlugin, tab_input::TabInteractionPlugin,
+    OzmuxUiPlugin, confirm_prompt::ConfirmPromptPlugin, copy_mode::CopyModePlugin,
+    copy_mode_indicator::CopyModeIndicatorPlugin, copy_search::CopyPromptPlugin,
+    tab_input::TabInteractionPlugin,
 };
 
 fn main() {
@@ -83,6 +84,7 @@ fn main() {
             CopyModeIndicatorPlugin,
         ))
         .add_plugins(CopyPromptPlugin)
+        .add_plugins(ConfirmPromptPlugin)
         .add_plugins(TabInteractionPlugin)
         .add_plugins(TmuxDialogPlugin)
         .add_plugins(OzmuxTmuxRenderPlugin)

@@ -7,6 +7,7 @@
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::input::InputPhase;
 use crate::tmux_picker::SessionPicker;
+use crate::ui::confirm_prompt::{ConfirmPrompt, ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use bevy::input::ButtonState;
@@ -98,7 +99,7 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 fn forward_keys_to_tmux(
     mut commands: Commands,
     mut picker: ResMut<SessionPicker>,
-    mut copy_prompt: ResMut<CopyPrompt>,
+    (mut copy_prompt, mut confirm_prompt): (ResMut<CopyPrompt>, ResMut<ConfirmPrompt>),
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
@@ -124,6 +125,13 @@ fn forward_keys_to_tmux(
     // own system handles raw keys. Drain here so no key leaks to tmux or the
     // prefix state machine.
     if copy_prompt.open.is_some() {
+        *prefix_pending = false;
+        events.clear();
+        return;
+    }
+    // NOTE: while the confirm-before prompt is open it owns the keyboard; its own
+    // system reads the y/n answer. Drain here so no key leaks to tmux or the pane.
+    if confirm_prompt.open.is_some() {
         *prefix_pending = false;
         events.clear();
         return;
@@ -287,6 +295,15 @@ fn forward_keys_to_tmux(
     };
     let handle = client.handle();
     for action in actions {
+        if let Forwarded::Run(command) = &action
+            && let Some((message, inner)) = parse_confirm_before(command)
+        {
+            confirm_prompt.open = Some(ConfirmState {
+                message,
+                command: inner,
+            });
+            continue;
+        }
         let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
         let cmd = match action {
             Forwarded::Run(command) => command,

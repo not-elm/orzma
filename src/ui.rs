@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use std::path::PathBuf;
 
 pub(crate) mod chrome;
+pub(crate) mod confirm_prompt;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod copy_search;
