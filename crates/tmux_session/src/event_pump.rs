@@ -1,10 +1,12 @@
 //! Draining, logging, and routing of tmux transport events: into
 //! `ConnectionState` and the global projection events the observers consume.
 
-use crate::enumerate::parse_window_rows;
+use crate::components::WindowFlags;
+use crate::enumerate::{WINDOW_FLAGS_SUBSCRIPTION, parse_window_rows};
 use crate::events::{
     TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxLayoutChanged, TmuxSessionChanged,
-    TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
+    TmuxWindowAdded, TmuxWindowClosed, TmuxWindowFlagsChanged, TmuxWindowRenamed,
+    TmuxWindowsRetained, pane_geoms,
 };
 use crate::keybindings::{KeyBinding, ModeKeys, parse_list_keys, parse_prefix};
 use crate::output::PaneOutput;
@@ -330,6 +332,17 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
                 pane: *pane,
             });
         }
+        ControlEvent::SubscriptionChanged {
+            name,
+            window: Some(window),
+            value,
+            ..
+        } if name == WINDOW_FLAGS_SUBSCRIPTION => {
+            commands.trigger(TmuxWindowFlagsChanged {
+                window: *window,
+                flags: WindowFlags::parse(value),
+            });
+        }
         _ => {}
     }
 }
@@ -348,6 +361,10 @@ fn trigger_seed(commands: &mut Commands, output: &[String]) {
             window: row.id,
             index: row.index,
             name: row.name.clone(),
+        });
+        commands.trigger(TmuxWindowFlagsChanged {
+            window: row.id,
+            flags: row.flags,
         });
         commands.trigger(TmuxLayoutChanged {
             window: row.id,
@@ -689,5 +706,56 @@ mod tests {
         let mut pending = Some(CommandId(22));
         assert_eq!(take_mode_keys(&mut pending, &events), Some(ModeKeys::Emacs));
         assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn window_flags_subscription_triggers_flags_changed() {
+        use crate::components::WindowFlags;
+        use crate::enumerate::WINDOW_FLAGS_SUBSCRIPTION;
+        use crate::events::TmuxWindowFlagsChanged;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Resource, Default, Clone)]
+        struct Captured(Arc<Mutex<Vec<(WindowId, WindowFlags)>>>);
+
+        #[derive(Resource)]
+        struct Batch(Vec<TransportEvent>);
+
+        fn run(mut commands: Commands, mut pending: ResMut<EnumerationState>, batch: Res<Batch>) {
+            trigger_events(&mut commands, &mut pending.pending, &batch.0);
+        }
+
+        let line = format!(
+            "%subscription-changed {WINDOW_FLAGS_SUBSCRIPTION} $1 @2 0 - : *Z"
+        );
+        let notification = ControlEvent::parse(line.as_bytes()).unwrap();
+        let event = TransportEvent::Protocol(ClientEvent::Notification(notification));
+
+        let mut app = App::new();
+        app.init_resource::<Captured>();
+        app.init_resource::<EnumerationState>();
+        app.insert_resource(Batch(vec![event]));
+        app.add_observer(|ev: On<TmuxWindowFlagsChanged>, captured: Res<Captured>| {
+            captured
+                .0
+                .lock()
+                .unwrap()
+                .push((ev.window, ev.flags));
+        });
+        app.add_systems(Update, run);
+
+        let captured = app.world().resource::<Captured>().clone();
+        app.update();
+
+        assert_eq!(
+            *captured.0.lock().unwrap(),
+            vec![(
+                WindowId(2),
+                WindowFlags {
+                    zoom: true,
+                    ..WindowFlags::default()
+                }
+            )]
+        );
     }
 }
