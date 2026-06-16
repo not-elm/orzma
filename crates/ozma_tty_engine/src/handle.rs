@@ -303,6 +303,21 @@ impl TerminalHandle {
         self.emit(commands, entity);
     }
 
+    /// Forces a FULL repaint of the current `Term` state, emitting a snapshot
+    /// (never a delta).
+    ///
+    /// Stages `DirtyRows::Full` directly rather than reading `Term::damage()`,
+    /// so `decide_frame_kind` selects `Snapshot` and the renderer replaces the
+    /// whole grid. Used when the rendered grid holds foreign content the next
+    /// delta would paint over — e.g. switching a tmux pane back from the
+    /// capture-fed copy-mode view to its live handle on copy-mode exit: the live
+    /// `Term` is current (it was `advance`d throughout), but the grid still shows
+    /// the captured scrolled view, so a partial delta would garble it.
+    pub fn repaint_full(&mut self, commands: &mut Commands, entity: Entity) {
+        self.pending_damage = Some(DirtyRows::Full);
+        self.emit(commands, entity);
+    }
+
     /// Scrolls the visible viewport by `delta` lines and arms an
     /// emit. Positive `delta` moves backward into scrollback history;
     /// negative moves forward toward the live tail. Alacritty clamps
@@ -658,7 +673,7 @@ impl TerminalHandle {
     /// Clipboard) and emits the corresponding `EntityEvent`s on this
     /// `entity`. Updates the supplied `TerminalTitle` Component as a
     /// side-effect of `Title` / `ResetTitle`.
-    pub(crate) fn drain_control_events(
+    pub fn drain_control_events(
         &self,
         commands: &mut Commands,
         entity: Entity,
@@ -2662,6 +2677,69 @@ mod tests {
         h.resize_grid_only(40, 10);
         let (cols, rows, _) = h.read_geometry();
         assert_eq!((cols, rows), (40, 10));
+    }
+
+    #[test]
+    fn repaint_full_emits_snapshot_when_idle() {
+        use bevy::ecs::system::RunSystemOnce;
+        use bevy::prelude::*;
+        use ozma_tty_renderer::schema::{FrameDelta, FrameSnapshot};
+
+        #[derive(Resource, Default)]
+        struct Hits {
+            snapshots: u32,
+            deltas: u32,
+        }
+
+        let mut app = App::new();
+        app.init_resource::<Hits>();
+        app.add_observer(|_snap: On<FrameSnapshot>, mut hits: ResMut<Hits>| {
+            hits.snapshots += 1;
+        });
+        app.add_observer(|_delta: On<FrameDelta>, mut hits: ResMut<Hits>| {
+            hits.deltas += 1;
+        });
+        app.world_mut().spawn(TerminalHandle::detached(
+            20,
+            5,
+            Arc::new(AtomicBool::new(false)),
+        ));
+        // First emit (bootstrap snapshot), then drain damage so the handle is
+        // idle: a plain flush_emit now would be a no-op.
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
+                    for (entity, mut handle) in &mut q {
+                        handle.advance(b"hello");
+                        handle.flush_emit(&mut commands, entity);
+                        handle.flush_emit(&mut commands, entity);
+                    }
+                },
+            )
+            .unwrap();
+        app.update();
+        let baseline = app.world().resource::<Hits>().snapshots;
+
+        // repaint_full must fire a fresh snapshot (not a delta) even with no new
+        // Term damage staged.
+        app.world_mut()
+            .run_system_once(
+                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
+                    for (entity, mut handle) in &mut q {
+                        handle.repaint_full(&mut commands, entity);
+                    }
+                },
+            )
+            .unwrap();
+        app.update();
+
+        let hits = app.world().resource::<Hits>();
+        assert_eq!(
+            hits.snapshots,
+            baseline + 1,
+            "repaint_full fires exactly one fresh snapshot when idle",
+        );
+        assert_eq!(hits.deltas, 0, "repaint_full never emits a delta");
     }
 }
 

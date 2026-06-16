@@ -2,12 +2,13 @@
 //! GPU render bundle to each projected `TmuxPane`, then routes tmux `%output`
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
+use crate::osc_webview::OscWebviewGate;
 use crate::theme;
 use crate::ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_tty_engine::TerminalHandle;
+use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
@@ -85,14 +86,23 @@ fn attach_tmux_window_container(
 fn attach_tmux_pane_terminal(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
+    gate: Option<Res<OscWebviewGate>>,
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
 ) {
+    // NOTE: clone the SHARED OscWebviewGate so a tmux pane captures OSC 5379 when
+    // the feature is enabled; a fresh `false` atomic would leave inline-webview
+    // capture permanently off for tmux panes. The fallback is only reached in
+    // tests that do not install the gate resource.
+    let gate = gate
+        .map(|g| g.0.clone())
+        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     for (entity, pane) in panes.iter() {
         let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
-        let handle = TerminalHandle::detached(cols, rows, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(cols, rows, gate.clone());
         let material = materials.add(TerminalUiMaterial::default());
         commands.entity(entity).insert((
             handle,
+            TerminalTitle::default(),
             TerminalRenderBundle::new(material),
             Node {
                 position_type: PositionType::Absolute,
@@ -110,11 +120,21 @@ fn attach_tmux_pane_terminal(
 /// The per-pane alacritty handle is display-only: tmux is the real terminal and
 /// already answers the program's device queries (DSR/DA) itself. So this drains
 /// the handle's reply queue and discards it — see the `take_replies` `NOTE`.
+///
+/// While a pane is in copy mode the live bytes are still advanced (tmux keeps
+/// streaming `%output` — copy mode does not pause it), but the emit to the
+/// rendered grid is gated: the capture-fed refresh path
+/// (`OzmuxTmuxCopyModePlugin`) paints the scrolled view instead. On exit, the
+/// `OzmuxTmuxCopyModePlugin` `On<Remove, CopyModeState>` observer forces a full
+/// repaint of the live handle so the grid switches back from capture content
+/// (an idle pane emits no new `%output`, and a later delta would paint over the
+/// captured rows).
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
-    mut handles: Query<&mut TerminalHandle>,
+    mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle)>,
     panes: Query<(Entity, &TmuxPane)>,
+    copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
     let mut by_pane: HashMap<_, Vec<u8>> = HashMap::new();
     for msg in reader.read() {
@@ -128,11 +148,22 @@ fn route_tmux_output(
         let Some(&entity) = entity_of.get(&pane) else {
             continue;
         };
-        let Ok(mut handle) = handles.get_mut(entity) else {
+        let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
             continue;
         };
         handle.advance(&data);
-        handle.flush_emit(&mut commands, entity);
+        // NOTE: drain captured control frames — crucially the OSC 5379
+        // mount/unmount verbs — into observer triggers. The engine's own control
+        // drain runs only for PtyHandle-backed terminals; tmux panes have no
+        // PtyHandle, so without this call a pane program's inline-webview mount
+        // OSC is parsed and then silently dropped (no webview ever mounts).
+        handle.drain_control_events(&mut commands, entity, &mut title);
+        // While the pane is in copy mode, the copy-mode plugin paints the scrolled
+        // capture onto the grid; skip the live flush so a late %output delta does
+        // not overwrite it (the exit observer forces the full repaint on return).
+        if copy_modes.get(entity).is_err() {
+            handle.flush_emit(&mut commands, entity);
+        }
         // NOTE: drain and DISCARD — never forward these replies to tmux. The
         // handle is a display-only renderer; tmux already answered the program's
         // DSR/DA query. Injecting alacritty's duplicate answer via `send-keys -H`
@@ -406,6 +437,151 @@ mod tests {
         assert!(
             row0.starts_with("hi"),
             "rendered grid row 0 should start with 'hi', got {row0:?}",
+        );
+    }
+
+    #[test]
+    fn copy_mode_pane_advances_but_gates_the_emit() {
+        use crate::ui::copy_mode::CopyModeState;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_message::<PaneOutput>();
+        app.insert_non_send_resource(TmuxConnection::default());
+
+        let pane_id = PaneId(1);
+        let pane_entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: pane_id,
+                dims: dims(),
+            })
+            .id();
+
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
+        );
+
+        // Frame 1: attach the handle, then paint "hi" so there is a baseline grid.
+        app.update();
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"hi".to_vec(),
+            });
+        app.update();
+        let baseline: String = app
+            .world()
+            .get::<TerminalGrid>(pane_entity)
+            .expect("pane has a TerminalGrid")
+            .cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(baseline.starts_with("hi"), "baseline grid painted 'hi'");
+
+        // Enter copy mode, then deliver more output: the live handle must advance
+        // but the rendered grid must NOT change (emit gated).
+        app.world_mut()
+            .entity_mut(pane_entity)
+            .insert(CopyModeState);
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"\r\nXY".to_vec(),
+            });
+        app.update();
+        let gated: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            gated.starts_with("hi"),
+            "grid stays at the baseline while in copy mode, got {gated:?}",
+        );
+
+        // Exit copy mode and deliver one more (empty) output batch: now that the
+        // marker is gone, route_tmux_output emits, so the gated-but-advanced live
+        // content ("XY" on row 1) reaches the rendered grid.
+        app.world_mut()
+            .entity_mut(pane_entity)
+            .remove::<CopyModeState>();
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: Vec::new(),
+            });
+        app.update();
+        let resumed: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[1]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            resumed.starts_with("XY"),
+            "the live handle advanced under copy mode; after exit + emit row 1 shows 'XY', got {resumed:?}",
+        );
+    }
+
+    #[test]
+    fn mount_inline_osc_from_pane_triggers_webview_request() {
+        use ozma_tty_engine::OscWebviewRequest;
+
+        #[derive(Resource, Default)]
+        struct Seen(u32);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_message::<PaneOutput>();
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(true))));
+        app.init_resource::<Seen>();
+        app.add_observer(|_ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
+            seen.0 += 1;
+        });
+
+        let pane_id = PaneId(1);
+        app.world_mut().spawn(TmuxPane {
+            id: pane_id,
+            dims: dims(),
+        });
+
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
+        );
+
+        // Frame 1: attach the handle + TerminalTitle (no output yet).
+        app.update();
+
+        // Frame 2: deliver a mount-inline OSC and route it.
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"\x1b]5379;mount-inline;memo;3;10\x1b\\".to_vec(),
+            });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Seen>().0,
+            1,
+            "a mount-inline OSC from a tmux pane must trigger exactly one OscWebviewRequest",
         );
     }
 
