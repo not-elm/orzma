@@ -10,6 +10,7 @@ use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
 use ozmux_multiplexer::{AttachedWorkspace, MultiplexerCommands, WorkspaceMarker};
+use ozmux_tmux::TmuxPane;
 use ozmux_webview_host::DynAssetRegistry;
 use ozmux_webview_host::dyn_scheme::custom_dyn_scheme;
 use serde_json::Value;
@@ -90,6 +91,12 @@ impl Plugin for OzmuxWebviewRenderPlugin {
 /// clobber an inline focus one frame after it was set. Every other case — a
 /// different pane or surface becoming active, or the inline child despawning —
 /// keeps the drive-from-active-pane behavior above.
+///
+/// Under the tmux backend the active-surface resolution above is empty (the
+/// tmux projection populates `TmuxPane`, not the old multiplexer's
+/// active-pane chain), so `FocusedWebview` is click-driven there. A second
+/// preservation arm keeps it while it points at an inline child of a live
+/// `TmuxPane`; a despawned child falls through to the GC path below.
 pub(crate) fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     mux: MultiplexerCommands,
@@ -97,7 +104,19 @@ pub(crate) fn sync_focused_webview(
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    tmux_panes: Query<(), With<TmuxPane>>,
 ) {
+    // NOTE: a despawned inline child fails `inline_parents.get` here and so
+    // falls through to the old-mux path below, which clears it — that
+    // fall-through is the GC for tmux-pane inline focus; a later edit that
+    // short-circuits this arm before the despawn check would leak focus.
+    if let Some(child) = focused.0
+        && let Ok(parent) = inline_parents.get(child)
+        && tmux_panes.contains(parent.parent())
+    {
+        return;
+    }
+
     let active_surface = attached_workspace
         .iter()
         .next()
@@ -416,6 +435,97 @@ mod tests {
             app.world().resource::<FocusedWebview>().0,
             None,
             "inline focus must clear once a different pane/surface becomes active"
+        );
+    }
+
+    #[test]
+    fn tmux_pane_inline_focus_is_preserved() {
+        use ozmux_tmux::{PaneId, TmuxPane};
+        use tmux_control_parser::CellDims;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin);
+        app.init_resource::<FocusedWebview>();
+        app.add_systems(Update, sync_focused_webview);
+
+        let pane = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(pane),
+                InlineWebview {
+                    view_id: "v".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            Some(child),
+            "an inline child of a live TmuxPane must keep FocusedWebview across the per-frame sync",
+        );
+    }
+
+    #[test]
+    fn tmux_pane_inline_focus_is_gc_on_despawn() {
+        use ozmux_tmux::{PaneId, TmuxPane};
+        use tmux_control_parser::CellDims;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(ozmux_multiplexer::MultiplexerPlugin);
+        app.init_resource::<FocusedWebview>();
+        app.add_systems(Update, sync_focused_webview);
+
+        let pane = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((
+                ChildOf(pane),
+                InlineWebview {
+                    view_id: "v".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+            ))
+            .id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        app.world_mut().entity_mut(child).despawn();
+
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "a despawned inline child must be GC'd out of FocusedWebview",
         );
     }
 
