@@ -14,7 +14,7 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::{NonSend, Query, Res, ResMut};
+use bevy::ecs::system::{NonSend, Query, Res, ResMut, Single};
 use bevy::math::Vec2;
 use bevy::prelude::Entity;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -110,7 +110,7 @@ impl ImeState {
 }
 
 /// Pure-function state machine: applies one `Ime` event to `state` and
-/// returns the text that should be committed to the PTY (only set on
+/// returns the text that should be committed to the active pane (only set on
 /// `Ime::Commit`).
 ///
 /// Keeping this pure makes the state transitions unit-testable without
@@ -149,7 +149,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// rect origin (`inline_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
 pub(crate) fn ime_policy_system(
-    active_pane: Query<(Entity, &TmuxPane), With<ActivePane>>,
+    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -163,7 +163,10 @@ pub(crate) fn ime_policy_system(
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
-    let active_surface = active_pane.iter().next().map(|(e, _)| e);
+    let active_surface = active_pane.map(|single| {
+        let (entity, _) = *single;
+        entity
+    });
 
     // NOTE: a focused CEF webview drives its own IME through bevy_cef's
     // `Ime` → CEF bridge. ozmux MUST keep `ime_enabled` true here, or
@@ -279,11 +282,11 @@ pub(crate) fn read_ime_events(
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
     connection: NonSend<TmuxConnection>,
-    active_pane: Query<(Entity, &TmuxPane), With<ActivePane>>,
+    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
 ) {
-    let active = active_pane.iter().next();
+    let active = active_pane.map(|single| *single);
     let active_surface = active.map(|(e, _)| e);
     for event in events.read() {
         if let Some(commit_text) = apply_event(&mut state, event) {
