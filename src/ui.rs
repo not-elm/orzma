@@ -21,6 +21,7 @@ use std::path::PathBuf;
 pub(crate) mod chrome;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
+pub(crate) mod copy_search;
 pub(crate) mod ime_overlay;
 pub mod palette;
 pub mod root;

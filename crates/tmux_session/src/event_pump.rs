@@ -6,7 +6,7 @@ use crate::events::{
     TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxLayoutChanged, TmuxSessionChanged,
     TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
-use crate::keybindings::{KeyBinding, parse_list_keys, parse_prefix};
+use crate::keybindings::{KeyBinding, ModeKeys, parse_list_keys, parse_prefix};
 use crate::output::PaneOutput;
 use crate::state::{ConnectionState, next_state};
 use bevy::prelude::Commands;
@@ -224,6 +224,32 @@ pub(crate) fn take_prefix_keys(
                 );
             }
             tracing::warn!("prefix query command failed");
+            return None;
+        }
+    }
+    None
+}
+
+/// Returns the `ModeKeys` from a `CommandComplete` matching `pending`
+/// (parsing `#{mode-keys}`), clearing `pending`.
+pub(crate) fn take_mode_keys(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<ModeKeys> {
+    for event in events {
+        if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
+            && *pending == Some(*id)
+        {
+            *pending = None;
+            if *ok {
+                return Some(
+                    output
+                        .first()
+                        .map(|l| ModeKeys::parse(l))
+                        .unwrap_or_default(),
+                );
+            }
+            tracing::warn!("mode-keys query failed");
             return None;
         }
     }
@@ -636,6 +662,32 @@ mod tests {
         let mut pending = Some(CommandId(12));
         let got = take_prefix_keys(&mut pending, &events).expect("a parsed reply");
         assert_eq!(got, std::collections::HashSet::from(["C-b".to_string()]));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn take_mode_keys_parses_vi() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(21),
+            number: 0,
+            ok: true,
+            output: vec!["vi".to_string()],
+        })];
+        let mut pending = Some(CommandId(21));
+        assert_eq!(take_mode_keys(&mut pending, &events), Some(ModeKeys::Vi));
+        assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn take_mode_keys_defaults_emacs_on_other() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(22),
+            number: 0,
+            ok: true,
+            output: vec!["emacs".to_string()],
+        })];
+        let mut pending = Some(CommandId(22));
+        assert_eq!(take_mode_keys(&mut pending, &events), Some(ModeKeys::Emacs));
         assert_eq!(pending, None);
     }
 }

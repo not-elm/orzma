@@ -8,6 +8,7 @@
 mod components;
 mod connect;
 mod connection;
+mod copy_queries;
 mod enumerate;
 mod event_pump;
 mod events;
@@ -22,13 +23,17 @@ mod state;
 pub use components::{ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow};
 pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
+pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
-    LIST_WINDOWS_FORMAT, WindowRow, parse_window_rows, refresh_client_command, select_pane_command,
-    select_window_command, set_environment_command, set_environment_in_session_command,
-    switch_client_command,
+    CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, copy_mode_capture_command,
+    copy_state_query_command, parse_copy_state, parse_window_rows, prompt_command,
+    refresh_client_command, select_pane_command, select_window_command, set_environment_command,
+    set_environment_in_session_command, show_buffer_command, switch_client_command,
 };
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_pane_keys_command};
-pub use keybindings::{Forwarded, KeyBindings, plan_forward};
+pub use keybindings::{
+    CopyAction, Forwarded, KeyBindings, PromptKind, copy_mode_dispatch, plan_forward,
+};
 pub use output::PaneOutput;
 pub use plugin::{TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
 pub use select::{AttachTarget, select_attach_target};

@@ -3,13 +3,14 @@
 
 use crate::components::{TmuxPane, TmuxSession};
 use crate::connection::TmuxConnection;
+use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, active_pane_command, capture_pane_command, client_name_command,
-    list_windows_command,
+    list_windows_command, mode_keys_command,
 };
 use crate::event_pump::{
     advance_state, detect_session_switch, drain_transport, take_active_pane, take_client_name,
-    take_keybindings, take_pane_captures, take_prefix_keys, trigger_events,
+    take_keybindings, take_mode_keys, take_pane_captures, take_prefix_keys, trigger_events,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
@@ -42,9 +43,11 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<TmuxProjection>()
             .init_resource::<EnumerationState>()
             .init_resource::<KeyBindings>()
+            .init_resource::<CopyModeQueries>()
             .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
+            .add_message::<CopyModeReply>()
             .add_systems(Update, drain_tmux_events.in_set(TmuxProjectionSet))
             .add_systems(Update, request_pane_captures.after(TmuxProjectionSet));
     }
@@ -93,8 +96,10 @@ fn drain_tmux_events(
     mut state: ResMut<ConnectionState>,
     mut enumeration: ResMut<EnumerationState>,
     mut keybindings: ResMut<KeyBindings>,
+    mut copy_queries: ResMut<CopyModeQueries>,
     mut connection: NonSendMut<TmuxConnection>,
     mut pane_output: MessageWriter<PaneOutput>,
+    mut copy_replies: MessageWriter<CopyModeReply>,
     index: Res<TmuxProjection>,
     sessions: Query<&TmuxSession>,
 ) {
@@ -142,6 +147,18 @@ fn drain_tmux_events(
                 Ok(id) => enumeration.prefix_keys_pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to send prefix query"),
             }
+            match client.handle().send(&list_keys_command("copy-mode")) {
+                Ok(id) => enumeration.keys_copy_mode_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send list-keys -T copy-mode"),
+            }
+            match client.handle().send(&list_keys_command("copy-mode-vi")) {
+                Ok(id) => enumeration.keys_copy_mode_vi_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send list-keys -T copy-mode-vi"),
+            }
+            match client.handle().send(&mode_keys_command()) {
+                Ok(id) => enumeration.mode_keys_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send mode-keys query"),
+            }
         }
     }
     if events
@@ -156,7 +173,11 @@ fn drain_tmux_events(
         enumeration.keys_root_pending = None;
         enumeration.keys_prefix_pending = None;
         enumeration.prefix_keys_pending = None;
+        enumeration.keys_copy_mode_pending = None;
+        enumeration.keys_copy_mode_vi_pending = None;
+        enumeration.mode_keys_pending = None;
         keybindings.clear();
+        copy_queries.clear();
         commands.trigger(TmuxConnectionReset);
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
@@ -178,6 +199,20 @@ fn drain_tmux_events(
         }
         if let Some(keys) = take_prefix_keys(&mut enumeration.prefix_keys_pending, &events) {
             keybindings.set_prefix_keys(keys);
+        }
+        if let Some(bindings) = take_keybindings(&mut enumeration.keys_copy_mode_pending, &events) {
+            keybindings.install(bindings);
+        }
+        if let Some(bindings) =
+            take_keybindings(&mut enumeration.keys_copy_mode_vi_pending, &events)
+        {
+            keybindings.install(bindings);
+        }
+        if let Some(mode_keys) = take_mode_keys(&mut enumeration.mode_keys_pending, &events) {
+            keybindings.set_mode_keys(mode_keys);
+        }
+        for reply in drain_copy_replies(&mut copy_queries, &events) {
+            copy_replies.write(reply);
         }
         trigger_events(&mut commands, &mut enumeration.pending, &events);
     }

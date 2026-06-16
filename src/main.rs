@@ -11,6 +11,7 @@ mod multiplexer;
 mod osc_webview;
 mod system_set;
 mod theme;
+mod tmux_copy_mode;
 mod tmux_input;
 mod tmux_picker;
 mod tmux_render;
@@ -37,6 +38,7 @@ use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_multiplexer::MultiplexerPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
 use ozmux_webview_host::DynAssetRegistry;
+use tmux_copy_mode::OzmuxTmuxCopyModePlugin;
 use tmux_input::OzmuxTmuxInputPlugin;
 use tmux_picker::OzmuxTmuxPickerPlugin;
 use tmux_render::OzmuxTmuxRenderPlugin;
@@ -46,7 +48,7 @@ use ui::tmux_pane_focus::OzmuxTmuxPaneFocusPlugin;
 use ui::tmux_window_bar::OzmuxTmuxWindowBarPlugin;
 use ui::{
     OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
-    tab_input::TabInteractionPlugin,
+    copy_search::CopyPromptPlugin, tab_input::TabInteractionPlugin,
 };
 
 fn main() {
@@ -80,12 +82,14 @@ fn main() {
             ClipboardActionPlugin,
             CopyModeIndicatorPlugin,
         ))
+        .add_plugins(CopyPromptPlugin)
         .add_plugins(TabInteractionPlugin)
         .add_plugins(TmuxDialogPlugin)
         .add_plugins(OzmuxTmuxRenderPlugin)
         .add_plugins(OzmuxTmuxInputPlugin)
         .add_plugins(OzmuxTmuxWindowBarPlugin)
         .add_plugins(OzmuxTmuxPaneFocusPlugin)
+        .add_plugins(OzmuxTmuxCopyModePlugin)
         .add_plugins((
             MouseWheelInputPlugin,
             MouseButtonsInputPlugin,
