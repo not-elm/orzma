@@ -3,9 +3,8 @@
 //! also re-exports the pure predicates the mouse-buttons system calls
 //! during interception.
 
-use crate::input::mouse_buttons::{cell_at_local, resolve_pane_at_phys};
 use crate::input::{InputPhase, current_modifiers};
-use crate::ui::Slotted;
+use crate::tmux_pane_hit::{cell_at_local, tmux_pane_at_phys};
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -17,7 +16,7 @@ use bevy_cef::prelude::WebviewSource;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;
-use ozmux_multiplexer::SurfaceMarker;
+use ozmux_tmux::TmuxPane;
 
 /// Plugin: registers `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
 pub(crate) struct HyperlinkInputPlugin;
@@ -106,7 +105,7 @@ fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    hosts: Query<(Entity, &ComputedNode, &UiGlobalTransform), (With<SurfaceMarker>, With<Slotted>)>,
+    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     grids: Query<&TerminalGrid>,
     webview_hosts: Query<&WebviewSource>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -132,9 +131,9 @@ fn hyperlink_hover_and_cursor(
 
     hover.entity = None;
     hover.hyperlink_id = None;
-    let target = match resolve_pane_at_phys(&hosts, cursor_phys) {
+    let target = match tmux_pane_at_phys(&panes, cursor_phys) {
         None => HoverTarget::Default,
-        Some((entity, local)) => {
+        Some((entity, _pane_id, local)) => {
             if let Ok(grid) = grids.get(entity) {
                 let (col, row, _side) =
                     cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows);
@@ -443,6 +442,55 @@ mod tests {
                 modifier_held: false,
             }),
             Some(SystemCursorIcon::Text)
+        );
+    }
+
+    use ozma_tty_renderer::CellMetrics;
+
+    fn hover_test_metrics() -> TerminalCellMetricsResource {
+        TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        }
+    }
+
+    #[test]
+    fn hover_with_no_panes_leaves_entity_none_and_cursor_default() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<MouseMotion>();
+        app.init_resource::<HyperlinkHoverState>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(hover_test_metrics());
+        app.add_systems(Update, hyperlink_hover_and_cursor);
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(10.0, 10.0)));
+        let window_entity = app
+            .world_mut()
+            .spawn((
+                window,
+                PrimaryWindow,
+                CursorIcon::System(SystemCursorIcon::Pointer),
+            ))
+            .id();
+        app.world_mut().resource_mut::<HyperlinkHoverState>().entity = Some(window_entity);
+        app.update();
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(hover.entity, None);
+        assert_eq!(hover.hyperlink_id, None);
+        let icon = app.world().entity(window_entity).get::<CursorIcon>();
+        assert_eq!(
+            icon,
+            Some(&CursorIcon::System(SystemCursorIcon::Default)),
+            "with no pane under the cursor the decision is Default"
         );
     }
 }

@@ -19,7 +19,10 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
+use crate::input::current_modifiers;
+use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::tmux_copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
+use crate::tmux_pane_hit::cell_at_local;
 use crate::tmux_picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
@@ -30,6 +33,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxDividers, TmuxPane,
     resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
@@ -213,17 +217,18 @@ fn arbiter(
     mut queries: ResMut<CopyModeQueries>,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    grids: Query<&TerminalGrid>,
+    keys: Res<ButtonInput<KeyCode>>,
     dividers_q: Query<&TmuxDividers, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OzmuxConfigsResource>>,
-    picker: Res<SessionPicker>,
-    copy_prompt: Res<CopyPrompt>,
-    focused_webview: Res<FocusedWebview>,
+    modals: (Res<SessionPicker>, Res<CopyPrompt>, Res<FocusedWebview>),
     copy_modes: Query<(), With<CopyModeState>>,
     snapshots: Query<&CopyModeSnapshot>,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    let (picker, copy_prompt, focused_webview) = &modals;
     let Ok(window) = windows.single() else {
         buttons.clear();
         gesture.state = GestureState::Idle;
@@ -273,6 +278,32 @@ fn arbiter(
                     continue;
                 };
                 let pane_under = pane_under_cursor(&panes, cursor_phys);
+                // Cmd/Ctrl+click on an OSC-8 link opens it and consumes the
+                // press (no select-pane). Mirrors the old mouse_buttons path.
+                if let Some((pane_e, _pane_id)) = pane_under {
+                    let mods = current_modifiers(&keys);
+                    if link_modifier_held(&mods)
+                        && let Some((_, _, node, transform)) =
+                            panes.iter().find(|(e, _, _, _)| *e == pane_e)
+                        && let Some(local) =
+                            crate::tmux_pane_hit::phys_to_pane_local(node, transform, cursor_phys)
+                        && let Ok(grid) = grids.get(pane_e)
+                    {
+                        let (col, row, _) =
+                            cell_at_local(local, cell_w, cell_h, grid.cols, grid.rows);
+                        if let Some(uri) = should_open_at(
+                            grid,
+                            row.saturating_sub(1) as u16,
+                            col.saturating_sub(1) as u16,
+                            ozma_tty_engine::MouseButtonKind::Left,
+                            ozma_tty_engine::ButtonEventKind::Press,
+                            true,
+                        ) {
+                            try_open_uri(uri.as_str());
+                            continue;
+                        }
+                    }
+                }
                 // Resolve a divider grab to its primary pane's near edge + size.
                 // A divider whose primary pane has no projected geometry yet
                 // cannot be resized, so it falls through to a pane focus rather
@@ -765,6 +796,7 @@ mod tests {
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
+        app.init_resource::<ButtonInput<KeyCode>>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, arbiter);
         app.world_mut().spawn((
