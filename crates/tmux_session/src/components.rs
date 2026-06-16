@@ -2,7 +2,7 @@
 
 use bevy::prelude::Component;
 use bitflags::bitflags;
-use tmux_control_parser::{CellDims, Divider, PaneId, SessionId, WindowId};
+use tmux_control_parser::{CellDims, Divider, PaneId, SessionId, WindowId, WindowLayout};
 
 /// The projected tmux session entity, carrying the session id and name.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
@@ -73,6 +73,10 @@ impl WindowFlags {
         flags
     }
 }
+
+/// The window's full tmux layout tree, retained for tree-driven pane sizing.
+#[derive(Component, Debug, Clone)]
+pub struct TmuxWindowLayout(pub WindowLayout);
 
 /// A projected tmux pane entity.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

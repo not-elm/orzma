@@ -2,16 +2,17 @@
 //! tmux-id -> entity index they resolve through.
 
 use crate::components::{
-    ActivePane, ActiveWindow, TmuxDividers, TmuxPane, TmuxSession, TmuxWindow, WindowFlags,
+    ActivePane, ActiveWindow, TmuxDividers, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout,
+    WindowFlags,
 };
 use crate::events::{
     PaneGeom, TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxConnectionReset,
     TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed,
-    TmuxWindowFlagsChanged, TmuxWindowRenamed, TmuxWindowsRetained,
+    TmuxWindowFlagsChanged, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
-use tmux_control_parser::{PaneId, WindowId};
+use tmux_control_parser::{PaneId, WindowId, dividers};
 
 /// Maps tmux ids to their projected entities. Internal routing state only.
 #[derive(Resource, Default)]
@@ -133,11 +134,16 @@ fn on_layout_changed(
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
     active_panes: Query<Entity, With<ActivePane>>,
-    dividers: Query<&TmuxDividers>,
+    existing_dividers: Query<&TmuxDividers>,
 ) {
     let window = ensure_window(&mut commands, &mut index, ev.window);
 
-    let live: HashSet<PaneId> = ev.panes.iter().map(|p| p.id).collect();
+    commands
+        .entity(window)
+        .insert(TmuxWindowLayout(ev.layout.clone()));
+
+    let panes = pane_geoms(&ev.layout);
+    let live: HashSet<PaneId> = panes.iter().map(|p| p.id).collect();
     let stale: Vec<PaneId> = index
         .panes
         .iter()
@@ -149,19 +155,16 @@ fn on_layout_changed(
             commands.entity(e).despawn();
         }
     }
-
-    for geom in &ev.panes {
+    for geom in &panes {
         upsert_pane(&mut commands, &mut index, window, ev.window, geom);
     }
 
-    // NOTE: insert only when the divider set actually changed — `%layout-change`
-    // fires for events that leave dividers untouched (e.g. zoom), and an
-    // unconditional insert fires `Changed<TmuxDividers>` every time, churning the
-    // projected handle entities that reconcile against it.
-    if dividers.get(window).map_or(true, |d| d.0 != ev.dividers) {
-        commands
-            .entity(window)
-            .insert(TmuxDividers(ev.dividers.clone()));
+    // NOTE: insert only when the divider set actually changed — an unconditional
+    // insert fires `Changed<TmuxDividers>` every time, churning the projected
+    // handle entities that reconcile against it.
+    let divs = dividers(&ev.layout);
+    if existing_dividers.get(window).map_or(true, |d| d.0 != divs) {
+        commands.entity(window).insert(TmuxDividers(divs));
     }
 
     apply_pending_active_pane(&mut commands, &mut index, &active_panes);
@@ -308,8 +311,7 @@ fn set_marker<T: Component + Default>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::pane_geoms;
-    use tmux_control_parser::{SessionId, WindowLayout, dividers};
+    use tmux_control_parser::{SessionId, WindowLayout};
 
     fn app() -> App {
         let mut app = App::new();
@@ -332,8 +334,7 @@ mod tests {
         });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}")),
-            dividers: vec![],
+            layout: layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}"),
         });
         app.update();
 
@@ -360,8 +361,7 @@ mod tests {
 
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&layout(b"abcd,80x24,0,0,5")),
-            dividers: vec![],
+            layout: layout(b"abcd,80x24,0,0,5"),
         });
         app.update();
 
@@ -381,8 +381,7 @@ mod tests {
         });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&layout(b"abcd,80x24,0,0,9")),
-            dividers: vec![],
+            layout: layout(b"abcd,80x24,0,0,9"),
         });
         app.update();
         app.world_mut().trigger(TmuxWindowClosed {
@@ -507,8 +506,7 @@ mod tests {
         });
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&layout(b"abcd,80x24,0,0,1")),
-            dividers: vec![],
+            layout: layout(b"abcd,80x24,0,0,1"),
         });
         app.update();
         app.world_mut().trigger(TmuxConnectionReset);
@@ -519,13 +517,35 @@ mod tests {
     }
 
     #[test]
+    fn layout_change_attaches_window_layout_component() {
+        use crate::components::TmuxWindowLayout;
+        let mut app = app();
+        app.world_mut().trigger(TmuxWindowAdded {
+            window: WindowId(1),
+            index: 0,
+            name: "w".into(),
+        });
+        app.world_mut().trigger(TmuxLayoutChanged {
+            window: WindowId(1),
+            layout: layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}"),
+        });
+        app.update();
+
+        let index = app.world().resource::<TmuxProjection>();
+        let window_e = index.windows[&WindowId(1)];
+        assert!(
+            app.world().get::<TmuxWindowLayout>(window_e).is_some(),
+            "window carries its layout tree after %layout-change",
+        );
+    }
+
+    #[test]
     fn layout_changed_projects_dividers_onto_window_entity() {
         let mut app = app();
         let l = layout(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}");
         app.world_mut().trigger(TmuxLayoutChanged {
             window: WindowId(1),
-            panes: pane_geoms(&l),
-            dividers: dividers(&l),
+            layout: l,
         });
         app.update();
 
