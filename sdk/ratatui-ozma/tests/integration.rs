@@ -16,16 +16,23 @@ fn with_env(sock: &std::path::Path, f: impl FnOnce()) {
     // A panicking test poisons the lock; recover the guard so it doesn't cascade
     // and mask the test that actually failed.
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // NOTE: clear $TMUX so resolve prefers ONLY the injected $OZMA_SOCK. connect()
+    // now consults the tmux session env first; if the test process is itself run
+    // inside tmux (CI/dev in a pane), an ambient $TMUX would otherwise hijack
+    // resolution to the real server instead of this test's FakeServer.
+    let prev_tmux = std::env::var_os("TMUX");
     // SAFETY: ENV_LOCK serializes all callers; no other test thread touches these vars.
     unsafe {
         std::env::set_var("OZMA_SOCK", sock);
         std::env::set_var("OZMA_TOKEN", "test-token");
+        std::env::remove_var("TMUX");
     }
     f();
     unsafe {
         std::env::remove_var("OZMA_SOCK");
         std::env::remove_var("OZMA_TOKEN");
     }
+    set_or_remove("TMUX", prev_tmux);
 }
 
 #[derive(Clone)]
@@ -279,6 +286,164 @@ fn connect_resolves_ozma_sock_from_tmux_when_env_unset() {
     assert!(
         connected.is_ok(),
         "connect should resolve OZMA_SOCK via tmux show-environment: {:?}",
+        connected.err()
+    );
+}
+
+#[test]
+fn connect_reports_stale_socket_as_unavailable_not_io() {
+    // A stale $OZMA_SOCK (left in the tmux env by an exited ozmux) points at a
+    // removed control dir. connect must surface SocketUnavailable so the caller
+    // can tell the user to re-attach ozmux — not a bare Io error nor the
+    // misleading "not in a pane" hint (the user IS in a pane).
+    let dead = std::env::temp_dir().join(format!("ozma-dead-{}/control.sock", std::process::id()));
+    let _ = std::fs::remove_dir_all(dead.parent().unwrap());
+    with_env(&dead, || {
+        let connected = Ozma::connect();
+        assert!(
+            matches!(connected, Err(OzmaError::SocketUnavailable { .. })),
+            "a dead $OZMA_SOCK must report SocketUnavailable, got: {:?}",
+            connected.err()
+        );
+    });
+}
+
+#[test]
+#[ignore = "requires a real tmux binary"]
+fn connect_reports_stale_socket_resolved_from_tmux() {
+    // The exact user scenario: a pre-existing pane resolves OZMA_SOCK from the
+    // tmux session env, but the value is stale (the ozmux that set it has exited
+    // and its control dir is gone). The SDK must report SocketUnavailable.
+    let dead_sock = std::env::temp_dir()
+        .join(format!("ozma-stale-{}/control.sock", std::process::id()))
+        .to_string_lossy()
+        .into_owned();
+    let _ = std::fs::remove_dir_all(std::path::Path::new(&dead_sock).parent().unwrap());
+
+    let (_tmux, tmux_env) = tmux_with_ozma_sock("stale", &dead_sock);
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_sock = std::env::var_os("OZMA_SOCK");
+    let prev_token = std::env::var_os("OZMA_TOKEN");
+    let prev_tmux = std::env::var_os("TMUX");
+    // SAFETY: ENV_LOCK serializes all callers; no other test thread touches these vars.
+    unsafe {
+        std::env::remove_var("OZMA_SOCK");
+        std::env::set_var("OZMA_TOKEN", "stale-token");
+        std::env::set_var("TMUX", &tmux_env);
+    }
+
+    let connected = Ozma::connect();
+
+    set_or_remove("OZMA_SOCK", prev_sock);
+    set_or_remove("OZMA_TOKEN", prev_token);
+    set_or_remove("TMUX", prev_tmux);
+
+    assert!(
+        matches!(connected, Err(OzmaError::SocketUnavailable { .. })),
+        "a stale tmux-resolved sock must report SocketUnavailable, got: {:?}",
+        connected.err()
+    );
+}
+
+// Starts a private tmux server with OZMA_SOCK=`value` on a detached session and
+// returns the guard plus the `$TMUX` string a pane in that session would carry.
+fn tmux_with_ozma_sock(label: &str, value: &str) -> (TmuxServerGuard, String) {
+    let tmux_socket =
+        std::env::temp_dir().join(format!("ozma-{label}-{}.tmuxsock", std::process::id()));
+    let _ = std::fs::remove_file(&tmux_socket);
+    let tmux = TmuxServerGuard {
+        socket: tmux_socket.clone(),
+    };
+    let created = tmux.run(&["new-session", "-d", "-s", "ozmasess"]);
+    assert!(
+        created.status.success(),
+        "tmux new-session failed: {}",
+        String::from_utf8_lossy(&created.stderr)
+    );
+    let set = tmux.run(&["set-environment", "-t", "ozmasess", "OZMA_SOCK", value]);
+    assert!(
+        set.status.success(),
+        "set-environment failed: {}",
+        String::from_utf8_lossy(&set.stderr)
+    );
+    let field = |f: &str| {
+        let out = tmux.run(&["display-message", "-p", "-t", "ozmasess", f]);
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let sid = field("#{session_id}");
+    let sid = sid.trim_start_matches('$');
+    let pid = field("#{pid}");
+    (tmux, format!("{},{},{}", tmux_socket.display(), pid, sid))
+}
+
+#[test]
+#[ignore = "requires a real tmux binary"]
+fn connect_prefers_live_tmux_value_over_stale_env() {
+    // The reported bug: the pane inherited a STALE $OZMA_SOCK (an exited ozmux),
+    // while the attached ozmux refreshed the tmux session env to its LIVE socket.
+    // connect() must prefer/validate and reach the live socket, not the dead env.
+    let live = FakeServer::start("view-pref");
+    let live_sock = live.sock_path.to_string_lossy().into_owned();
+    let dead = std::env::temp_dir().join(format!("ozma-prefdead-{}/x.sock", std::process::id()));
+    let _ = std::fs::remove_dir_all(dead.parent().unwrap());
+    let (_tmux, tmux_env) = tmux_with_ozma_sock("pref", &live_sock);
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_sock = std::env::var_os("OZMA_SOCK");
+    let prev_token = std::env::var_os("OZMA_TOKEN");
+    let prev_tmux = std::env::var_os("TMUX");
+    // SAFETY: ENV_LOCK serializes all callers; no other test thread touches these vars.
+    unsafe {
+        std::env::set_var("OZMA_SOCK", &dead);
+        std::env::set_var("OZMA_TOKEN", "pref-token");
+        std::env::set_var("TMUX", &tmux_env);
+    }
+
+    let connected = Ozma::connect();
+
+    set_or_remove("OZMA_SOCK", prev_sock);
+    set_or_remove("OZMA_TOKEN", prev_token);
+    set_or_remove("TMUX", prev_tmux);
+
+    assert!(
+        connected.is_ok(),
+        "must reach the live tmux socket despite a stale $OZMA_SOCK, got: {:?}",
+        connected.err()
+    );
+}
+
+#[test]
+#[ignore = "requires a real tmux binary"]
+fn connect_falls_back_to_live_env_when_tmux_value_dead() {
+    // Inverse: the tmux session value is dead but the inherited $OZMA_SOCK is live.
+    // try-each must skip the dead tmux candidate and reach the live env one.
+    let live = FakeServer::start("view-envlive");
+    let live_sock = live.sock_path.to_string_lossy().into_owned();
+    let dead = std::env::temp_dir().join(format!("ozma-tmuxdead-{}/x.sock", std::process::id()));
+    let _ = std::fs::remove_dir_all(dead.parent().unwrap());
+    let (_tmux, tmux_env) = tmux_with_ozma_sock("tmuxdead", &dead.to_string_lossy());
+
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let prev_sock = std::env::var_os("OZMA_SOCK");
+    let prev_token = std::env::var_os("OZMA_TOKEN");
+    let prev_tmux = std::env::var_os("TMUX");
+    // SAFETY: ENV_LOCK serializes all callers; no other test thread touches these vars.
+    unsafe {
+        std::env::set_var("OZMA_SOCK", &live_sock);
+        std::env::set_var("OZMA_TOKEN", "envlive-token");
+        std::env::set_var("TMUX", &tmux_env);
+    }
+
+    let connected = Ozma::connect();
+
+    set_or_remove("OZMA_SOCK", prev_sock);
+    set_or_remove("OZMA_TOKEN", prev_token);
+    set_or_remove("TMUX", prev_tmux);
+
+    assert!(
+        connected.is_ok(),
+        "must fall back to the live $OZMA_SOCK when the tmux value is dead, got: {:?}",
         connected.err()
     );
 }

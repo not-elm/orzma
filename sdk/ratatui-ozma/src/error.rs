@@ -17,6 +17,24 @@ pub enum OzmaError {
     #[error("control-socket io error: {0}")]
     Io(#[from] std::io::Error),
 
+    /// The resolved control-socket path could not be reached — the file is gone
+    /// (`NotFound`) or nothing is listening on it (`ConnectionRefused`). This
+    /// means `$OZMA_SOCK` is stale: it points at a control socket whose ozmux has
+    /// exited. Distinct from [`OzmaError::Io`] so the caller can tell the user to
+    /// re-attach ozmux rather than print the misleading "not in a pane" hint.
+    #[error(
+        "control socket {path} is unavailable ({cause}); no ozmux is attached to this tmux session — attach ozmux and retry"
+    )]
+    SocketUnavailable {
+        /// The resolved socket path that could not be reached.
+        path: String,
+        /// The underlying connect error (`NotFound` / `ConnectionRefused`). Named
+        /// `cause`, not `source`: the message already renders it inline, and a
+        /// field literally named `source` would make `thiserror` also expose it
+        /// via `Error::source()`, double-printing it for chain-aware consumers.
+        cause: std::io::Error,
+    },
+
     /// The control plane rejected a `register` request.
     #[error("register rejected: {reason}")]
     Register {

@@ -8,7 +8,7 @@ use crate::webview::{SharedWriter, Webview, WebviewHandle};
 use crossbeam_channel::{Sender, bounded};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
@@ -104,18 +104,24 @@ impl Ozma {
     /// Connects to the ozma control socket, performs the `hello` handshake, and
     /// spawns the background reader thread.
     ///
-    /// The socket path is `$OZMA_SOCK` when present; otherwise — in a pane that
-    /// forked before ozma set it — it is recovered from tmux's session
-    /// environment via `$TMUX` and `show-environment`, so no shell-rc hook is
-    /// required (see `resolve_ozma_sock`).
+    /// The socket path is resolved from an ordered candidate list (see
+    /// [`resolve_ozma_sock_candidates`]): the tmux session environment first — ozmux
+    /// rewrites it on every attach, so it names the currently-attached ozmux — then
+    /// the inherited `$OZMA_SOCK`, which can be a stale snapshot from an ozmux that
+    /// has since exited (the pane forked while that value was live). `connect()`
+    /// tries each in order via [`connect_first_reachable`] and uses the first that is
+    /// actually reachable, so a stale candidate cannot shadow the live one.
     pub fn connect() -> OzmaResult<Self> {
-        let sock = resolve_ozma_sock().ok_or(OzmaError::NotInPane("OZMA_SOCK"))?;
+        let candidates = resolve_ozma_sock_candidates();
+        if candidates.is_empty() {
+            return Err(OzmaError::NotInPane("OZMA_SOCK"));
+        }
         let token = pane_identity(
             std::env::var("OZMA_TOKEN").ok(),
             std::env::var("TMUX_PANE").ok(),
         )
         .ok_or(OzmaError::NotInPane("OZMA_TOKEN or TMUX_PANE"))?;
-        let stream = UnixStream::connect(sock)?;
+        let stream = connect_first_reachable(&candidates)?;
         let writer: SharedWriter = Arc::new(Mutex::new(stream.try_clone()?));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
         let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
@@ -209,20 +215,37 @@ fn parse_show_environment<'a>(output: &'a str, key: &str) -> Option<&'a str> {
     output.lines().find_map(|line| line.strip_prefix(&prefix))
 }
 
-/// Resolves the control-socket path, falling back to tmux when the process did
-/// not inherit `$OZMA_SOCK`.
+/// The control-socket candidates to try, most-authoritative first.
 ///
-/// A pane that forked before ozma ran `set-environment` never received
-/// `$OZMA_SOCK`, and a running process's environment cannot be changed from
-/// outside. tmux does inject `$TMUX` into every pane, so reading the value back
-/// with `tmux -S <socket> show-environment OZMA_SOCK` recovers it without a
-/// shell-rc hook or `send-keys`. `None` when neither the env var nor a tmux
-/// lookup yields a value (outside tmux, or tmux unavailable / the variable
-/// unset on the session).
-fn resolve_ozma_sock() -> Option<String> {
-    if let Some(sock) = std::env::var("OZMA_SOCK").ok().filter(|s| !s.is_empty()) {
-        return Some(sock);
+/// The tmux session value (see [`resolve_from_tmux`]) comes first: ozmux rewrites
+/// it on every attach via `set-environment`, so it names the currently-attached
+/// ozmux. The inherited `$OZMA_SOCK` process env is second — it is the only source
+/// under the direct-PTY backend (no `$TMUX`), but in a tmux pane it can be a STALE
+/// snapshot from an ozmux that has since exited (the pane forked while that value
+/// was live), so it must not shadow the fresh tmux value. Deduped to avoid a
+/// redundant connect when the pane forked during the current ozmux (both equal).
+fn resolve_ozma_sock_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+    if let Some(sock) = resolve_from_tmux() {
+        candidates.push(sock);
     }
+    if let Some(sock) = std::env::var("OZMA_SOCK").ok().filter(|s| !s.is_empty())
+        && !candidates.contains(&sock)
+    {
+        candidates.push(sock);
+    }
+    candidates
+}
+
+/// Recovers `$OZMA_SOCK` from the tmux session environment via
+/// `tmux -S <socket> show-environment OZMA_SOCK`.
+///
+/// A pane that forked before ozma ran `set-environment` never inherited
+/// `$OZMA_SOCK`, and a running process's environment cannot be changed from
+/// outside; tmux injects `$TMUX` into every pane, so reading the value back
+/// recovers it without a shell-rc hook. `None` outside tmux, when tmux is
+/// unavailable, or when the variable is unset on the session.
+fn resolve_from_tmux() -> Option<String> {
     let tmux = std::env::var("TMUX").ok()?;
     let socket = socket_from_tmux(&tmux)?;
     let output = std::process::Command::new("tmux")
@@ -236,6 +259,31 @@ fn resolve_ozma_sock() -> Option<String> {
     parse_show_environment(&stdout, "OZMA_SOCK")
         .filter(|sock| !sock.is_empty())
         .map(str::to_owned)
+}
+
+/// Connects to the first reachable candidate, treating an unreachable one as a
+/// stale `$OZMA_SOCK` and moving on.
+///
+/// `NotFound` (the socket file is gone) and `ConnectionRefused` (the file exists
+/// but its ozmux has exited) mean a stale candidate — skip it. Any other IO error
+/// is surfaced as [`OzmaError::Io`]. When every candidate is stale, returns
+/// [`OzmaError::SocketUnavailable`] for the first (most-authoritative) one so the
+/// message points at the socket the caller most expected to reach.
+fn connect_first_reachable(candidates: &[String]) -> OzmaResult<UnixStream> {
+    let mut stale: Option<(String, std::io::Error)> = None;
+    for sock in candidates {
+        match UnixStream::connect(sock) {
+            Ok(stream) => return Ok(stream),
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => {
+                if stale.is_none() {
+                    stale = Some((sock.clone(), e));
+                }
+            }
+            Err(e) => return Err(OzmaError::Io(e)),
+        }
+    }
+    let (path, cause) = stale.expect("candidates is non-empty and every entry was stale");
+    Err(OzmaError::SocketUnavailable { path, cause })
 }
 
 /// Emits CUP + mount-inline for new/changed placements and unmount for vanished
