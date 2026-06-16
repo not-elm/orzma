@@ -313,9 +313,23 @@ fn parse_binding_line(line: &str) -> Option<KeyBinding> {
     Some(KeyBinding {
         table: table?,
         key: unescape_key(key_raw),
-        command: command.trim().to_string(),
+        command: unescape_command_separators(command.trim()),
         repeat,
     })
+}
+
+/// Converts tmux `list-keys`' escaped command-sequence separator (`\;`) back to
+/// the executable `;`.
+///
+/// A relayed binding that is a command sequence — e.g. the copy-mode
+/// `WheelUpPane` binding `select-pane \; send-keys -X -N 5 scroll-up` — is sent
+/// verbatim over the control connection. Left as `\;`, tmux folds the following
+/// command into the preceding command's arguments instead of running it as a
+/// separate command (so the wheel's `scroll-up` never executes). `list-keys`
+/// escapes only the separator this way; literal semicolons inside quoted
+/// arguments are printed bare, so replacing every `\;` is safe.
+fn unescape_command_separators(command: &str) -> String {
+    command.replace("\\;", ";")
 }
 
 /// Splits off the first whitespace-delimited token, returning it and the
@@ -451,14 +465,15 @@ mod tests {
     }
 
     #[test]
-    fn preserves_command_internal_spacing_and_semicolons() {
+    fn preserves_command_internal_spacing_and_normalizes_separators() {
+        // Internal spacing inside quoted args is preserved, but `list-keys`'
+        // escaped command-sequence separator `\;` is normalized to a bare `;`
+        // so the relayed command runs as a sequence rather than folding the
+        // second command into the first's arguments.
         let lines =
             vec![r#"bind-key -T root C-x   display-message "a  b" \; refresh-client"#.to_string()];
         let got = parse_list_keys(&lines);
-        assert_eq!(
-            got[0].command,
-            r#"display-message "a  b" \; refresh-client"#
-        );
+        assert_eq!(got[0].command, r#"display-message "a  b" ; refresh-client"#);
     }
 
     #[test]
@@ -601,6 +616,21 @@ mod tests {
         assert_eq!(got[0].table, Table::CopyMode);
         assert_eq!(got[0].key, "C-n");
         assert_eq!(got[0].command, "send-keys -X cursor-down");
+    }
+
+    #[test]
+    fn parses_command_sequence_binding_with_unescaped_separator() {
+        // tmux's default copy-mode WheelUpPane binding is a `\;` command
+        // sequence; the stored command must use a bare `;` so it runs as two
+        // commands when relayed (else `scroll-up` is folded into `select-pane`).
+        let lines = vec![
+            "bind-key -T copy-mode-vi WheelUpPane select-pane \\; send-keys -X -N 5 scroll-up"
+                .to_string(),
+        ];
+        let got = parse_list_keys(&lines);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].key, "WheelUpPane");
+        assert_eq!(got[0].command, "select-pane ; send-keys -X -N 5 scroll-up");
     }
 
     #[test]
