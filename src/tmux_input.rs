@@ -386,19 +386,23 @@ fn forward_wheel_to_tmux(
     };
     let (entity, pane) = *single;
     let target = format!("%{}", pane.id.0);
-    let in_copy_mode = copy_modes.get(entity).is_ok();
+    // NOTE: mutable so a multi-notch fling that enters copy mode on an early
+    // notch routes the remaining notches in the same frame to the scroll path.
+    // The `CopyModeState` insert is only deferred (Commands), so `copy_modes`
+    // would still read stale within this frame — track entry in this local.
+    let mut in_copy_mode = copy_modes.get(entity).is_ok();
 
     let Some(client) = connection.client() else {
         return;
     };
     let handle = client.handle();
 
-    for up in notches {
+    'notches: for up in notches {
         if in_copy_mode {
             let cmd = scroll_command(&target, up, WHEEL_SCROLL_LINES);
             if let Err(e) = handle.send(&cmd) {
                 tracing::warn!(?e, "copy-mode wheel scroll send failed");
-                break;
+                break 'notches;
             }
         } else {
             let key = wheel_key_name(up);
@@ -415,10 +419,11 @@ fn forward_wheel_to_tmux(
                 let enters = is_copy_mode_entry(&command);
                 if let Err(e) = handle.send(&command) {
                     tracing::warn!(?e, "tmux wheel forward send failed");
-                    break;
+                    break 'notches;
                 }
                 if enters {
                     commands.entity(entity).insert(CopyModeState);
+                    in_copy_mode = true;
                 }
             }
         }

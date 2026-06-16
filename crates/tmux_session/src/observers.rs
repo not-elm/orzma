@@ -115,6 +115,7 @@ fn on_layout_changed(
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
     active_panes: Query<Entity, With<ActivePane>>,
+    dividers: Query<&TmuxDividers>,
 ) {
     let window = ensure_window(&mut commands, &mut index, ev.window);
 
@@ -135,9 +136,15 @@ fn on_layout_changed(
         upsert_pane(&mut commands, &mut index, window, ev.window, geom);
     }
 
-    commands
-        .entity(window)
-        .insert(TmuxDividers(ev.dividers.clone()));
+    // NOTE: insert only when the divider set actually changed — `%layout-change`
+    // fires for events that leave dividers untouched (e.g. zoom), and an
+    // unconditional insert fires `Changed<TmuxDividers>` every time, churning the
+    // projected handle entities that reconcile against it.
+    if dividers.get(window).map_or(true, |d| d.0 != ev.dividers) {
+        commands
+            .entity(window)
+            .insert(TmuxDividers(ev.dividers.clone()));
+    }
 
     apply_pending_active_pane(&mut commands, &mut index, &active_panes);
 }
