@@ -214,7 +214,16 @@ fn collapse(
     let available = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
     let mut panes = HashMap::new();
     let mut dividers = Vec::new();
-    place(&mut panes, &mut dividers, root, Vec2::ZERO, available, cell_w, cell_h, gap);
+    place(
+        &mut panes,
+        &mut dividers,
+        root,
+        Vec2::ZERO,
+        available,
+        cell_w,
+        cell_h,
+        gap,
+    );
     (panes, dividers, available)
 }
 
@@ -240,7 +249,11 @@ fn place(
             }
             size
         }
-        Cell::Split { dir: SplitDir::LeftRight, children, .. } => {
+        Cell::Split {
+            dir: SplitDir::LeftRight,
+            children,
+            ..
+        } => {
             let last = children.len().saturating_sub(1);
             let mut x = origin.x;
             for (i, child) in children.iter().enumerate() {
@@ -250,10 +263,14 @@ fn place(
                     child.dims().width as f32 * cell_w
                 };
                 let csz = place(
-                    panes, dividers, child,
+                    panes,
+                    dividers,
+                    child,
                     Vec2::new(x, origin.y),
                     Vec2::new(child_avail_w, available.y),
-                    cell_w, cell_h, gap,
+                    cell_w,
+                    cell_h,
+                    gap,
                 );
                 x += csz.x;
                 if i < last {
@@ -269,7 +286,11 @@ fn place(
             }
             Vec2::new(x - origin.x, available.y)
         }
-        Cell::Split { dir: SplitDir::TopBottom, children, .. } => {
+        Cell::Split {
+            dir: SplitDir::TopBottom,
+            children,
+            ..
+        } => {
             let last = children.len().saturating_sub(1);
             let mut y = origin.y;
             for (i, child) in children.iter().enumerate() {
@@ -279,10 +300,14 @@ fn place(
                     child.dims().height as f32 * cell_h
                 };
                 let csz = place(
-                    panes, dividers, child,
+                    panes,
+                    dividers,
+                    child,
                     Vec2::new(origin.x, y),
                     Vec2::new(available.x, child_avail_h),
-                    cell_w, cell_h, gap,
+                    cell_w,
+                    cell_h,
+                    gap,
                 );
                 y += csz.y;
                 if i < last {
@@ -298,12 +323,18 @@ fn place(
             }
             Vec2::new(available.x, y - origin.y)
         }
-        Cell::Split { dir: SplitDir::Floating, children, dims } => {
+        Cell::Split {
+            dir: SplitDir::Floating,
+            children,
+            dims,
+        } => {
             for child in children {
                 let d = child.dims();
                 let lit_origin = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
                 let lit_avail = Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
-                place(panes, dividers, child, lit_origin, lit_avail, cell_w, cell_h, gap);
+                place(
+                    panes, dividers, child, lit_origin, lit_avail, cell_w, cell_h, gap,
+                );
             }
             Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h)
         }
@@ -312,7 +343,9 @@ fn place(
 
 fn first_pane_id(cell: &Cell) -> Option<PaneId> {
     match cell {
-        Cell::Leaf { pane_id: Some(id), .. } => Some(PaneId(*id)),
+        Cell::Leaf {
+            pane_id: Some(id), ..
+        } => Some(PaneId(*id)),
         Cell::Leaf { pane_id: None, .. } => None,
         Cell::Split { children, .. } => children.iter().find_map(first_pane_id),
     }
@@ -326,11 +359,16 @@ fn grid_dims(width: u32, height: u32) -> (u16, u16) {
     (clamp(width), clamp(height))
 }
 
-
 fn layout_tmux_panes(
     mut commands: Commands,
     mut windows: Query<
-        (Entity, &TmuxWindowLayout, &mut Node, &Children, Option<&PackedTmuxLayout>),
+        (
+            Entity,
+            &TmuxWindowLayout,
+            &mut Node,
+            &Children,
+            Option<&PackedTmuxLayout>,
+        ),
         With<TmuxWindow>,
     >,
     mut panes: Query<
@@ -358,13 +396,14 @@ fn layout_tmux_panes(
             container.height = Val::Px(bbox.y);
         }
 
-        let packed_changed = maybe_packed.map_or(true, |p| {
-            p.panes != rects || p.dividers != dividers || p.bbox != bbox
-        });
+        let packed_changed = maybe_packed
+            .is_none_or(|p| p.panes != rects || p.dividers != dividers || p.bbox != bbox);
         if packed_changed {
-            commands
-                .entity(window_entity)
-                .insert(PackedTmuxLayout { panes: rects.clone(), dividers: dividers.clone(), bbox });
+            commands.entity(window_entity).insert(PackedTmuxLayout {
+                panes: rects.clone(),
+                dividers: dividers.clone(),
+                bbox,
+            });
         }
 
         for child in children.iter() {
@@ -374,8 +413,7 @@ fn layout_tmux_panes(
             let Some(rect) = rects.get(&pane.id) else {
                 continue;
             };
-            let (left, top, width, height) =
-                (rect.min.x, rect.min.y, rect.width(), rect.height());
+            let (left, top, width, height) = (rect.min.x, rect.min.y, rect.width(), rect.height());
             if node.left != Val::Px(left)
                 || node.top != Val::Px(top)
                 || node.width != Val::Px(width)
@@ -781,7 +819,11 @@ mod tests {
         let window_e = app
             .world_mut()
             .spawn((
-                TmuxWindow { id: WindowId(1), index: 0, name: String::new() },
+                TmuxWindow {
+                    id: WindowId(1),
+                    index: 0,
+                    name: String::new(),
+                },
                 TmuxWindowLayout(WindowLayout::parse(b"0000,40x10,0,0,1").unwrap()),
                 Node::default(),
             ))
@@ -986,7 +1028,11 @@ mod tests {
         let window_e = app
             .world_mut()
             .spawn((
-                TmuxWindow { id: WindowId(1), index: 0, name: String::new() },
+                TmuxWindow {
+                    id: WindowId(1),
+                    index: 0,
+                    name: String::new(),
+                },
                 TmuxWindowLayout(WindowLayout::parse(b"0000,20x5,0,0,2").unwrap()),
                 Node::default(),
             ))
@@ -1064,32 +1110,58 @@ mod tests {
     #[test]
     fn collapse_single_pane_fills_available() {
         let root = Cell::Leaf {
-            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
             pane_id: Some(0),
         };
         let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0);
-        assert_eq!(rects[&PaneId(0)], Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 384.0)));
+        assert_eq!(
+            rects[&PaneId(0)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 384.0))
+        );
         assert_eq!(bbox, Vec2::new(640.0, 384.0));
     }
 
     #[test]
     fn collapse_left_right_produces_one_px_gap() {
         let root = Cell::Split {
-            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
             dir: SplitDir::LeftRight,
             children: vec![
                 Cell::Leaf {
-                    dims: CellDims { width: 40, height: 24, xoff: 0, yoff: 0 },
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
                     pane_id: Some(1),
                 },
                 Cell::Leaf {
-                    dims: CellDims { width: 39, height: 24, xoff: 41, yoff: 0 },
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
                     pane_id: Some(2),
                 },
             ],
         };
         let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0);
-        assert_eq!(rects[&PaneId(1)], Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0)));
+        assert_eq!(
+            rects[&PaneId(1)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
+        );
         assert_eq!(
             rects[&PaneId(2)],
             Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 384.0)),
@@ -1104,32 +1176,60 @@ mod tests {
     #[test]
     fn collapse_nested_split_fills_without_blank_strips() {
         let right_child = Cell::Split {
-            dims: CellDims { width: 39, height: 24, xoff: 41, yoff: 0 },
+            dims: CellDims {
+                width: 39,
+                height: 24,
+                xoff: 41,
+                yoff: 0,
+            },
             dir: SplitDir::TopBottom,
             children: vec![
                 Cell::Leaf {
-                    dims: CellDims { width: 39, height: 12, xoff: 41, yoff: 0 },
+                    dims: CellDims {
+                        width: 39,
+                        height: 12,
+                        xoff: 41,
+                        yoff: 0,
+                    },
                     pane_id: Some(2),
                 },
                 Cell::Leaf {
-                    dims: CellDims { width: 39, height: 11, xoff: 41, yoff: 13 },
+                    dims: CellDims {
+                        width: 39,
+                        height: 11,
+                        xoff: 41,
+                        yoff: 13,
+                    },
                     pane_id: Some(3),
                 },
             ],
         };
         let root = Cell::Split {
-            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
             dir: SplitDir::LeftRight,
             children: vec![
                 Cell::Leaf {
-                    dims: CellDims { width: 40, height: 24, xoff: 0, yoff: 0 },
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
                     pane_id: Some(1),
                 },
                 right_child,
             ],
         };
         let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0);
-        assert_eq!(rects[&PaneId(1)], Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0)));
+        assert_eq!(
+            rects[&PaneId(1)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
+        );
         assert_eq!(
             rects[&PaneId(2)],
             Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 192.0)),
@@ -1144,15 +1244,30 @@ mod tests {
     #[test]
     fn collapse_skips_leaf_without_pane_id() {
         let root = Cell::Split {
-            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
             dir: SplitDir::LeftRight,
             children: vec![
                 Cell::Leaf {
-                    dims: CellDims { width: 40, height: 24, xoff: 0, yoff: 0 },
+                    dims: CellDims {
+                        width: 40,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
                     pane_id: None,
                 },
                 Cell::Leaf {
-                    dims: CellDims { width: 39, height: 24, xoff: 41, yoff: 0 },
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
                     pane_id: Some(2),
                 },
             ],

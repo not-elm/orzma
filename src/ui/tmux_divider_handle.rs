@@ -45,10 +45,18 @@ struct DividerHandle {
 /// Logical-px rect `(left, top, width, height)` for a divider's handle node.
 fn handle_node_rect(d: &DividerPixelRect) -> (f32, f32, f32, f32) {
     match d.axis {
-        DividerAxis::Vertical => (d.pos_px, d.span_start_px, 1.0, d.span_end_px - d.span_start_px),
-        DividerAxis::Horizontal => {
-            (d.span_start_px, d.pos_px, d.span_end_px - d.span_start_px, 1.0)
-        }
+        DividerAxis::Vertical => (
+            d.pos_px,
+            d.span_start_px,
+            1.0,
+            d.span_end_px - d.span_start_px,
+        ),
+        DividerAxis::Horizontal => (
+            d.span_start_px,
+            d.pos_px,
+            d.span_end_px - d.span_start_px,
+            1.0,
+        ),
     }
 }
 
@@ -198,13 +206,11 @@ mod tests {
             "handles belong to the dividers' window",
         );
 
-        app.world_mut()
-            .entity_mut(window)
-            .insert(PackedTmuxLayout {
-                panes: HashMap::new(),
-                dividers: vec![vdiv(200.0)],
-                bbox: Vec2::new(640.0, 384.0),
-            });
+        app.world_mut().entity_mut(window).insert(PackedTmuxLayout {
+            panes: HashMap::new(),
+            dividers: vec![vdiv(200.0)],
+            bbox: Vec2::new(640.0, 384.0),
+        });
         app.update();
         assert_eq!(count(&mut app), 1, "reconciled to the new divider set");
 

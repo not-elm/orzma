@@ -269,8 +269,8 @@ fn arbiter(
                 // cannot be resized, so it falls through to a pane focus rather
                 // than entering Resizing with a bogus (0) baseline.
                 let cursor_logical = cursor_phys / scale;
-                let resize =
-                    divider_at(packed_dividers, cursor_logical, grab_tol_logical).and_then(|d| {
+                let resize = divider_at(packed_dividers, cursor_logical, grab_tol_logical)
+                    .and_then(|d| {
                         panes
                             .iter()
                             .find(|(_, p, _, _)| p.id == d.primary)
