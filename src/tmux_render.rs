@@ -35,9 +35,6 @@ pub struct OzmuxTmuxRenderPlugin;
 impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>();
-        // NOTE: the camera clear color bleeds through the 1px gaps between panes
-        // (panes are opaque; window containers are grey). Adjust `theme::PANE_GAP`
-        // to retint those gaps.
         app.insert_resource(ClearColor(theme::PANE_GAP));
         app.add_systems(
             Update,
@@ -240,14 +237,14 @@ fn place(
     match cell {
         Cell::Leaf { dims, pane_id } => {
             let size = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
+            let node_size = Vec2::new(available.x.max(size.x), available.y.max(size.y));
             if let Some(id) = pane_id {
-                let node_size = Vec2::new(available.x.max(size.x), available.y.max(size.y));
                 panes.insert(
                     PaneId(*id),
                     Rect::from_corners(origin.round(), (origin + node_size).round()),
                 );
             }
-            size
+            node_size
         }
         Cell::Split {
             dir: SplitDir::LeftRight,
@@ -276,7 +273,7 @@ fn place(
                 if i < last {
                     dividers.push(DividerPixelRect {
                         axis: DividerAxis::Vertical,
-                        primary: first_pane_id(child).unwrap_or(PaneId(0)),
+                        primary: last_pane_id(child).unwrap_or(PaneId(0)),
                         pos_px: x,
                         span_start_px: origin.y,
                         span_end_px: origin.y + available.y,
@@ -313,7 +310,7 @@ fn place(
                 if i < last {
                     dividers.push(DividerPixelRect {
                         axis: DividerAxis::Horizontal,
-                        primary: first_pane_id(child).unwrap_or(PaneId(0)),
+                        primary: last_pane_id(child).unwrap_or(PaneId(0)),
                         pos_px: y,
                         span_start_px: origin.x,
                         span_end_px: origin.x + available.x,
@@ -348,6 +345,16 @@ fn first_pane_id(cell: &Cell) -> Option<PaneId> {
         } => Some(PaneId(*id)),
         Cell::Leaf { pane_id: None, .. } => None,
         Cell::Split { children, .. } => children.iter().find_map(first_pane_id),
+    }
+}
+
+fn last_pane_id(cell: &Cell) -> Option<PaneId> {
+    match cell {
+        Cell::Leaf {
+            pane_id: Some(id), ..
+        } => Some(PaneId(*id)),
+        Cell::Leaf { pane_id: None, .. } => None,
+        Cell::Split { children, .. } => children.iter().rev().find_map(last_pane_id),
     }
 }
 
@@ -1239,6 +1246,82 @@ mod tests {
             Rect::from_corners(Vec2::new(321.0, 193.0), Vec2::new(640.0, 384.0)),
         );
         assert_eq!(bbox, Vec2::new(640.0, 384.0));
+    }
+
+    #[test]
+    fn collapse_compound_non_last_child_no_overlap() {
+        let inner_lr = Cell::Split {
+            dims: CellDims {
+                width: 40,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 20,
+                        height: 24,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 19,
+                        height: 24,
+                        xoff: 21,
+                        yoff: 0,
+                    },
+                    pane_id: Some(2),
+                },
+            ],
+        };
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 24,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                inner_lr,
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 39,
+                        height: 24,
+                        xoff: 41,
+                        yoff: 0,
+                    },
+                    pane_id: Some(3),
+                },
+            ],
+        };
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        assert_eq!(
+            rects[&PaneId(1)],
+            Rect::from_corners(Vec2::ZERO, Vec2::new(160.0, 384.0))
+        );
+        assert_eq!(
+            rects[&PaneId(2)],
+            Rect::from_corners(Vec2::new(161.0, 0.0), Vec2::new(320.0, 384.0)),
+        );
+        assert_eq!(
+            rects[&PaneId(3)],
+            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 384.0)),
+        );
+        assert_eq!(bbox, Vec2::new(640.0, 384.0));
+        assert_eq!(dividers.len(), 2);
+        let outer = dividers.iter().find(|d| (d.pos_px - 320.0).abs() < 0.5).unwrap();
+        assert_eq!(outer.axis, DividerAxis::Vertical);
+        assert_eq!(
+            outer.primary,
+            PaneId(2),
+            "outer divider primary must be the rightmost pane of the before-child",
+        );
     }
 
     #[test]
