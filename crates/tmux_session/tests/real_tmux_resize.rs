@@ -16,11 +16,11 @@
 use bevy::prelude::*;
 use crossbeam_channel::RecvTimeoutError;
 use ozmux_tmux::{
-    ConnectionState, PaneId, TmuxConnection, TmuxPane, TmuxSessionPlugin,
-    copy_state_query_command, parse_copy_state, resize_pane_x_command, show_buffer_command,
+    ConnectionState, PaneId, TmuxConnection, TmuxPane, TmuxSessionPlugin, copy_state_query_command,
+    parse_copy_state, resize_pane_x_command, show_buffer_command,
 };
 use std::time::{Duration, Instant};
-use tmux_control::{ClientEvent, TransportEvent, TmuxServer};
+use tmux_control::{ClientEvent, TmuxServer, TransportEvent};
 
 fn pump_until(app: &mut App, secs: u64, mut done: impl FnMut(&mut App) -> bool) -> bool {
     let deadline = Instant::now() + Duration::from_secs(secs);
@@ -242,7 +242,10 @@ fn copy_mode_drag_select() {
     let target = format!("%{}", pane_id.0);
 
     // Seed a known line so we have deterministic content to select.
-    send_cmd(&app, &format!("send-keys -t {target} -l -- 'echo OZMUX_SELECT_TEST'"));
+    send_cmd(
+        &app,
+        &format!("send-keys -t {target} -l -- 'echo OZMUX_SELECT_TEST'"),
+    );
     send_cmd(&app, &format!("send-keys -t {target} Enter"));
     // Give the shell time to execute and produce output.
     let _waited = pump_until(&mut app, 3, |_| false);
@@ -272,9 +275,7 @@ fn copy_mode_drag_select() {
     std::thread::sleep(Duration::from_millis(100));
 
     // Use search-forward to jump to the line with our known marker text.
-    let search_cmd = format!(
-        "send-keys -X -t {target} search-forward -- 'OZMUX_SELECT_TEST'"
-    );
+    let search_cmd = format!("send-keys -X -t {target} search-forward -- 'OZMUX_SELECT_TEST'");
     send_cmd(&app, &search_cmd);
     std::thread::sleep(Duration::from_millis(300));
 
@@ -310,7 +311,10 @@ fn select_word_and_line() {
     let target = format!("%{}", pane_id.0);
 
     // Seed deterministic three-word content on one line.
-    send_cmd(&app, &format!("send-keys -t {target} -l -- 'echo alpha beta gamma'"));
+    send_cmd(
+        &app,
+        &format!("send-keys -t {target} -l -- 'echo alpha beta gamma'"),
+    );
     send_cmd(&app, &format!("send-keys -t {target} Enter"));
     std::thread::sleep(Duration::from_millis(500));
 

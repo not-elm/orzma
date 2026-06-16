@@ -154,8 +154,7 @@ fn collect_dividers(cell: &Cell, out: &mut Vec<Divider>) {
                     SplitDir::LeftRight => {
                         let pos = ad.xoff + ad.width as i32;
                         let span_start = ad.yoff.max(bd.yoff);
-                        let span_end = (ad.yoff + ad.height as i32)
-                            .min(bd.yoff + bd.height as i32);
+                        let span_end = (ad.yoff + ad.height as i32).min(bd.yoff + bd.height as i32);
                         edge_leaf(a, pos, false).map(|primary| Divider {
                             axis: DividerAxis::Vertical,
                             primary,
@@ -167,8 +166,7 @@ fn collect_dividers(cell: &Cell, out: &mut Vec<Divider>) {
                     SplitDir::TopBottom => {
                         let pos = ad.yoff + ad.height as i32;
                         let span_start = ad.xoff.max(bd.xoff);
-                        let span_end = (ad.xoff + ad.width as i32)
-                            .min(bd.xoff + bd.width as i32);
+                        let span_end = (ad.xoff + ad.width as i32).min(bd.xoff + bd.width as i32);
                         edge_leaf(a, pos, true).map(|primary| Divider {
                             axis: DividerAxis::Horizontal,
                             primary,
@@ -199,7 +197,11 @@ fn edge_leaf(cell: &Cell, edge: i32, horizontal: bool) -> Option<PaneId> {
             } else {
                 dims.xoff + dims.width as i32
             };
-            if far == edge { pane_id.map(PaneId) } else { None }
+            if far == edge {
+                pane_id.map(PaneId)
+            } else {
+                None
+            }
         }
         Cell::Split { children, .. } => {
             children.iter().find_map(|c| edge_leaf(c, edge, horizontal))
@@ -448,14 +450,22 @@ mod tests {
 
     fn pane_leaf(id: u32, width: u32, height: u32, xoff: i32, yoff: i32) -> Cell {
         Cell::Leaf {
-            dims: CellDims { width, height, xoff, yoff },
+            dims: CellDims {
+                width,
+                height,
+                xoff,
+                yoff,
+            },
             pane_id: Some(id),
         }
     }
 
     #[test]
     fn single_pane_has_no_dividers() {
-        let layout = WindowLayout { checksum: 0, root: pane_leaf(1, 80, 24, 0, 0) };
+        let layout = WindowLayout {
+            checksum: 0,
+            root: pane_leaf(1, 80, 24, 0, 0),
+        };
         assert!(dividers(&layout).is_empty());
     }
 
@@ -464,7 +474,12 @@ mod tests {
         let layout = WindowLayout {
             checksum: 0,
             root: Cell::Split {
-                dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
                 dir: SplitDir::LeftRight,
                 children: vec![pane_leaf(1, 40, 24, 0, 0), pane_leaf(2, 39, 24, 41, 0)],
             },
@@ -483,7 +498,12 @@ mod tests {
         let layout = WindowLayout {
             checksum: 0,
             root: Cell::Split {
-                dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
                 dir: SplitDir::TopBottom,
                 children: vec![pane_leaf(1, 80, 12, 0, 0), pane_leaf(2, 80, 11, 0, 13)],
             },
@@ -501,7 +521,12 @@ mod tests {
         let layout = WindowLayout {
             checksum: 0,
             root: Cell::Split {
-                dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
                 dir: SplitDir::Floating,
                 children: vec![pane_leaf(1, 80, 24, 0, 0), pane_leaf(2, 40, 12, 0, 0)],
             },

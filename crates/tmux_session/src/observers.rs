@@ -1,7 +1,9 @@
 //! Observers that apply the global projection events to the ECS world, plus the
 //! tmux-id -> entity index they resolve through.
 
-use crate::components::{ActivePane, ActiveWindow, TmuxDividers, TmuxPane, TmuxSession, TmuxWindow};
+use crate::components::{
+    ActivePane, ActiveWindow, TmuxDividers, TmuxPane, TmuxSession, TmuxWindow,
+};
 use crate::events::{
     PaneGeom, TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxConnectionReset,
     TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed,
