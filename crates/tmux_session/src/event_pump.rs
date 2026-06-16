@@ -4,7 +4,7 @@
 use crate::enumerate::parse_window_rows;
 use crate::events::{
     TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxLayoutChanged, TmuxSessionChanged,
-    TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed, TmuxWindowsRetained,
+    TmuxWindowAdded, TmuxWindowClosed, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
 use crate::keybindings::{KeyBinding, parse_list_keys, parse_prefix};
 use crate::output::PaneOutput;
@@ -295,7 +295,7 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
         ControlEvent::LayoutChange { window, layout, .. } => {
             commands.trigger(TmuxLayoutChanged {
                 window: *window,
-                layout: layout.clone(),
+                panes: pane_geoms(layout),
             });
         }
         ControlEvent::WindowPaneChanged { window, pane } => {
@@ -325,7 +325,7 @@ fn trigger_seed(commands: &mut Commands, output: &[String]) {
         });
         commands.trigger(TmuxLayoutChanged {
             window: row.id,
-            layout: row.layout.clone(),
+            panes: pane_geoms(&row.layout),
         });
         if row.active {
             commands.trigger(TmuxActiveWindowChanged { window: row.id });

@@ -47,7 +47,6 @@ impl Plugin for TerminalMaterialPlugin {
             "shaders/terminal_ui_material.wgsl",
             Shader::from_wgsl
         );
-        app.init_resource::<TerminalBgPadding>();
         app.add_plugins(UiMaterialPlugin::<TerminalUiMaterial>::default())
             .add_plugins(state::TerminalMaterialStatePlugin)
             // NOTE: Scheduled in `PostUpdate` (not `Update`) so it runs after
@@ -117,21 +116,6 @@ pub struct PaneDim(pub f32);
 impl Default for PaneDim {
     fn default() -> Self {
         Self(1.0)
-    }
-}
-
-/// The color the terminal shader paints OUTSIDE the `grid_size * cell_size_px`
-/// rectangle — the padding between the grid and an over-sized host node.
-///
-/// Defaults to opaque black; a consumer (e.g. ozmux-gui, whose tmux panes are
-/// sized larger than their cell grid to fill split regions) overrides it with
-/// the terminal background so the padding shows no visible band.
-#[derive(Resource, Clone, Copy, Debug)]
-pub struct TerminalBgPadding(pub LinearRgba);
-
-impl Default for TerminalBgPadding {
-    fn default() -> Self {
-        Self(LinearRgba::BLACK)
     }
 }
 
@@ -453,7 +437,6 @@ fn update_terminal_material(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     hover: Res<HyperlinkHoverState>,
-    bg_padding: Res<TerminalBgPadding>,
 ) {
     // TODO: load font size from config.
 
@@ -575,12 +558,13 @@ fn update_terminal_material(
             state.initialized = true;
         }
 
-        // The color painted between the grid's bottom-right edge and the host
-        // UI node edge. Sourced from the `TerminalBgPadding` resource so a
-        // consumer can match it to the terminal background (ozmux-gui sizes
-        // tmux panes larger than their grid to fill split regions, and an
-        // opaque-black band there would be visible).
-        let bg_padding_color = Vec4::from_array(bg_padding.0.to_f32_array());
+        // NOTE: Tier 1 conservative default — bg_padding_color matches the
+        //       pre-Tier1 fallback (opaque black) so the strip between the
+        //       grid's bottom-right edge and the host UI node edge looks
+        //       identical to the previous "out-of-grid fragment = black"
+        //       behavior. Theme-aware bg-color sourcing is a follow-up.
+        // TODO: source from a theme / TerminalGrid::default_bg instead of opaque black.
+        let bg_padding_color = Vec4::new(0.0, 0.0, 0.0, 1.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),

@@ -5,22 +5,20 @@
 use crate::theme;
 use crate::ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
-use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::material::{TerminalBgPadding, TerminalUiMaterial};
+use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActivePane, ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
-    TmuxWindowLayout, refresh_client_command,
+    refresh_client_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tmux_control_parser::{Cell, PaneId, SplitDir};
 
 #[derive(Resource, Default)]
 struct LastClientSize {
@@ -34,10 +32,10 @@ pub struct OzmuxTmuxRenderPlugin;
 impl Plugin for OzmuxTmuxRenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>();
-        // Over-sized split-filling panes paint padding beyond their grid (see
-        // `layout_panes`). Match it to the terminal's default background so no
-        // band shows — `ozma_tty_engine` maps `NamedColor::Background` to black.
-        app.insert_resource(TerminalBgPadding(LinearRgba::BLACK));
+        // The camera clear color shows through tmux's reserved-cell gaps between
+        // panes (panes are opaque; the UI roots and pane container are
+        // transparent). Adjust `theme::PANE_GAP` to retint those gaps.
+        app.insert_resource(ClearColor(theme::PANE_GAP));
         app.add_systems(
             Update,
             (
@@ -66,10 +64,12 @@ fn attach_tmux_window_container(
     for window in windows.iter() {
         commands.entity(window).insert((
             Node {
+                display: Display::Flex,
                 position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
                 ..default()
             },
-            BackgroundColor(theme::BORDER),
             ChildOf(root),
         ));
     }
@@ -98,7 +98,7 @@ fn attach_tmux_pane_terminal(
                 position_type: PositionType::Absolute,
                 ..default()
             },
-            Outline::new(Val::Px(theme::PANE_BORDER_PX), Val::Px(0.0), Color::NONE),
+            Outline::new(Val::Px(theme::PANE_BORDER_PX), Val::Px(0.0), theme::BORDER),
         ));
     }
 }
@@ -151,138 +151,31 @@ fn grid_dims(width: u32, height: u32) -> (u16, u16) {
     (clamp(width), clamp(height))
 }
 
-/// The axis a split distributes its children along.
-#[derive(Clone, Copy)]
-enum Axis {
-    Horizontal,
-    Vertical,
-}
-
-/// Lays every pane in `root` into `rect` (logical px), filling it exactly. Each
-/// split distributes its rect among children in proportion to their tmux cell
-/// extent, separated by `gap`-px dividers, and children fill the cross axis —
-/// so sibling subtrees always align regardless of internal nesting (no
-/// reserved-separator height/width mismatch). Returns each pane's rect keyed by
-/// tmux pane id. A pane's rect is >= its cell content size; the small leftover
-/// renders as terminal-background padding inside the pane (see
-/// `TerminalBgPadding`).
-fn layout_panes(
-    root: &Cell,
-    rect: Rect,
+fn pane_rect(
+    xoff: i32,
+    yoff: i32,
+    width: u32,
+    height: u32,
     cell_w: f32,
     cell_h: f32,
-    gap: f32,
-) -> HashMap<PaneId, Rect> {
-    let mut out = HashMap::new();
-    place(&mut out, root, rect, cell_w, cell_h, gap);
-    out
-}
-
-/// Places `cell` into `rect`, recording leaf rects into `out`. The Floating arm
-/// diverges: popups are positioned at their absolute tmux `xoff`/`yoff` and
-/// sized to their cell content, floating over the layout rather than tiling.
-fn place(
-    out: &mut HashMap<PaneId, Rect>,
-    cell: &Cell,
-    rect: Rect,
-    cell_w: f32,
-    cell_h: f32,
-    gap: f32,
-) {
-    match cell {
-        Cell::Leaf { pane_id, .. } => {
-            if let Some(id) = pane_id {
-                out.insert(PaneId(*id), rect);
-            }
-        }
-        Cell::Split {
-            dir: SplitDir::LeftRight,
-            children,
-            ..
-        } => split_axis(out, children, rect, cell_w, cell_h, gap, Axis::Horizontal),
-        Cell::Split {
-            dir: SplitDir::TopBottom,
-            children,
-            ..
-        } => split_axis(out, children, rect, cell_w, cell_h, gap, Axis::Vertical),
-        Cell::Split {
-            dir: SplitDir::Floating,
-            children,
-            ..
-        } => {
-            for child in children {
-                let d = child.dims();
-                let min = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
-                let max = min + Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
-                place(
-                    out,
-                    child,
-                    Rect::from_corners(min, max),
-                    cell_w,
-                    cell_h,
-                    gap,
-                );
-            }
-        }
-    }
-}
-
-/// Distributes `rect` among `children` along `axis`, proportional to each
-/// child's tmux cell extent on that axis, with a `gap`-px divider between
-/// siblings. Children fill the cross axis. The last child absorbs rounding so
-/// the children exactly tile `rect` (no sub-pixel gap or overlap).
-fn split_axis(
-    out: &mut HashMap<PaneId, Rect>,
-    children: &[Cell],
-    rect: Rect,
-    cell_w: f32,
-    cell_h: f32,
-    gap: f32,
-    axis: Axis,
-) {
-    let n = children.len();
-    if n == 0 {
-        return;
-    }
-    let weight = |c: &Cell| match axis {
-        Axis::Horizontal => c.dims().width as f32,
-        Axis::Vertical => c.dims().height as f32,
-    };
-    let sum: f32 = children.iter().map(weight).sum::<f32>().max(1.0);
-    let (total, start, end) = match axis {
-        Axis::Horizontal => (rect.width(), rect.min.x, rect.max.x),
-        Axis::Vertical => (rect.height(), rect.min.y, rect.max.y),
-    };
-    let avail = (total - gap * (n - 1) as f32).max(0.0);
-    let mut pos = start;
-    for (i, child) in children.iter().enumerate() {
-        let extent = if i == n - 1 {
-            end - pos
-        } else {
-            (avail * weight(child) / sum).round()
-        };
-        let child_rect = match axis {
-            Axis::Horizontal => Rect::from_corners(
-                Vec2::new(pos, rect.min.y),
-                Vec2::new(pos + extent, rect.max.y),
-            ),
-            Axis::Vertical => Rect::from_corners(
-                Vec2::new(rect.min.x, pos),
-                Vec2::new(rect.max.x, pos + extent),
-            ),
-        };
-        place(out, child, child_rect, cell_w, cell_h, gap);
-        pos += extent + gap;
-    }
+) -> (f32, f32, f32, f32) {
+    (
+        xoff as f32 * cell_w,
+        yoff as f32 * cell_h,
+        width as f32 * cell_w,
+        height as f32 * cell_h,
+    )
 }
 
 fn layout_tmux_panes(
     mut commands: Commands,
-    mut windows: Query<(&TmuxWindowLayout, &mut Node, &Children), With<TmuxWindow>>,
-    mut panes: Query<
-        (&TmuxPane, &mut Node, &mut TerminalHandle, &mut TerminalGrid),
-        Without<TmuxWindow>,
-    >,
+    mut panes: Query<(
+        Entity,
+        &TmuxPane,
+        &mut Node,
+        &mut TerminalHandle,
+        &mut TerminalGrid,
+    )>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -290,72 +183,32 @@ fn layout_tmux_panes(
         return;
     };
     let dpr = window.scale_factor().max(0.5);
-    let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
-    let cell_w = cell_w_phys / dpr;
-    let cell_h = cell_h_phys / dpr;
-
-    // The pane area handed to tmux (cols × rows-1), in logical px — the same
-    // budget `sync_client_size` sends via `refresh-client`.
-    let (cols, total_rows) = cells_for(
-        window.resolution.physical_width(),
-        window.resolution.physical_height(),
-        cell_w_phys,
-        cell_h_phys,
-    );
-    let area_w = cols as f32 * cell_w;
-    let area_h = rows_for_panes(total_rows) as f32 * cell_h;
-
-    let root_rect = Rect::from_corners(Vec2::ZERO, Vec2::new(area_w, area_h));
-
-    for (layout, mut container, children) in windows.iter_mut() {
-        let rects = layout_panes(
-            &layout.0.root,
-            root_rect,
-            cell_w,
-            cell_h,
-            theme::PANE_GAP_PX,
-        );
-
-        // The grey container fills the full pane area; panes tile it exactly, so
-        // the only grey that shows is the 1px divider between split children.
-        if container.width != Val::Px(area_w) || container.height != Val::Px(area_h) {
-            container.width = Val::Px(area_w);
-            container.height = Val::Px(area_h);
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
+    for (entity, pane, mut node, mut handle, mut grid) in panes.iter_mut() {
+        let d = pane.dims;
+        let (left, top, width, height) =
+            pane_rect(d.xoff, d.yoff, d.width, d.height, cell_w, cell_h);
+        // NOTE: only write the Node fields when they actually change — writing
+        // through `Mut<Node>` every frame would mark the component changed and
+        // force a full UI relayout pass each tick even when nothing moved.
+        if node.left != Val::Px(left)
+            || node.top != Val::Px(top)
+            || node.width != Val::Px(width)
+            || node.height != Val::Px(height)
+        {
+            node.left = Val::Px(left);
+            node.top = Val::Px(top);
+            node.width = Val::Px(width);
+            node.height = Val::Px(height);
         }
-
-        for &child in children {
-            let Ok((pane, mut node, mut handle, mut grid)) = panes.get_mut(child) else {
-                continue;
-            };
-            let Some(rect) = rects.get(&pane.id) else {
-                continue;
-            };
-            let left = rect.min.x;
-            let top = rect.min.y;
-            let width = rect.width();
-            let height = rect.height();
-            // NOTE: only write the Node fields when they actually change — writing
-            // through `Mut<Node>` every frame would mark the component changed and
-            // force a full UI relayout pass each tick even when nothing moved.
-            if node.left != Val::Px(left)
-                || node.top != Val::Px(top)
-                || node.width != Val::Px(width)
-                || node.height != Val::Px(height)
-            {
-                node.left = Val::Px(left);
-                node.top = Val::Px(top);
-                node.width = Val::Px(width);
-                node.height = Val::Px(height);
-            }
-            let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
-            let (cur_cols, cur_rows, _) = handle.read_geometry();
-            if (cur_cols, cur_rows) != (cols, rows) {
-                handle.resize_grid_only(cols, rows);
-                grid.cols = cols;
-                grid.rows = rows;
-                handle.emit_pending(&mut commands, child);
-            }
+        let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
+        let (cur_cols, cur_rows, _) = handle.read_geometry();
+        if (cur_cols, cur_rows) != (cols, rows) {
+            handle.resize_grid_only(cols, rows);
+            grid.cols = cols;
+            grid.rows = rows;
+            handle.emit_pending(&mut commands, entity);
         }
     }
 }
@@ -420,11 +273,11 @@ fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<Tm
 }
 
 /// Recolors each pane's `Outline`: the accent color on the pane carrying
-/// `ActivePane`, transparent otherwise. Recoloring (not insert/remove) avoids
-/// ECS table moves on every active-pane change.
+/// `ActivePane`, the subtle border grey otherwise. Recoloring (not
+/// insert/remove) avoids ECS table moves on every active-pane change.
 fn sync_active_pane_outline(mut panes: Query<(Has<ActivePane>, &mut Outline), With<TmuxPane>>) {
     for (active, mut outline) in panes.iter_mut() {
-        let want = if active { theme::ACCENT } else { Color::NONE };
+        let want = if active { theme::ACCENT } else { theme::BORDER };
         if outline.color != want {
             outline.color = want;
         }
@@ -436,7 +289,7 @@ mod tests {
     use super::*;
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
-    use tmux_control_parser::CellDims;
+    use tmux_control_parser::{CellDims, PaneId};
 
     #[test]
     fn rows_for_panes_reserves_one_row_for_the_bar() {
@@ -463,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn active_pane_outline_is_accent_inactive_is_none() {
+    fn active_pane_outline_is_accent_inactive_is_grey() {
         use bevy::prelude::*;
         use ozmux_tmux::{ActivePane, TmuxPane};
 
@@ -477,7 +330,7 @@ mod tests {
                     dims: dims(),
                 },
                 ActivePane,
-                Outline::new(Val::Px(1.0), Val::Px(0.0), Color::NONE),
+                Outline::new(Val::Px(1.0), Val::Px(0.0), theme::BORDER),
             ))
             .id();
         let inactive = app
@@ -487,7 +340,7 @@ mod tests {
                     id: PaneId(2),
                     dims: dims(),
                 },
-                Outline::new(Val::Px(1.0), Val::Px(0.0), Color::NONE),
+                Outline::new(Val::Px(1.0), Val::Px(0.0), theme::BORDER),
             ))
             .id();
         app.update();
@@ -498,7 +351,7 @@ mod tests {
         );
         assert_eq!(
             app.world().get::<Outline>(inactive).unwrap().color,
-            Color::NONE
+            theme::BORDER
         );
     }
 
@@ -561,7 +414,6 @@ mod tests {
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
         use ozma_tty_renderer::schema::FrameSnapshot;
         use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
-        use tmux_control_parser::{WindowId, WindowLayout};
 
         #[derive(Resource, Default)]
         struct SnapHits(u32);
@@ -591,18 +443,6 @@ mod tests {
         };
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
-        let window_e = app
-            .world_mut()
-            .spawn((
-                TmuxWindow {
-                    id: WindowId(1),
-                    index: 0,
-                    name: String::new(),
-                },
-                TmuxWindowLayout(WindowLayout::parse(b"abcd,40x10,0,0,1").unwrap()),
-                Node::default(),
-            ))
-            .id();
         let entity = app
             .world_mut()
             .spawn((
@@ -618,7 +458,6 @@ mod tests {
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
                 TerminalGrid::default(),
-                ChildOf(window_e),
             ))
             .id();
 
@@ -637,123 +476,6 @@ mod tests {
         assert!(
             app.world().resource::<SnapHits>().0 >= 1,
             "resize emitted a FrameSnapshot (#1)",
-        );
-    }
-
-    #[test]
-    fn layout_packs_two_panes_and_sizes_container() {
-        use bevy::window::{PrimaryWindow, Window, WindowResolution};
-        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
-        use tmux_control_parser::{WindowId, WindowLayout};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(TerminalGridPlugin);
-        app.insert_resource(TerminalCellMetricsResource {
-            metrics: CellMetrics {
-                advance_phys: 8.0,
-                line_height_phys: 16.0,
-                ascent_phys: 13.0,
-                descent_phys: 3.0,
-                underline_position_phys: -1.0,
-                underline_thickness_phys: 1.0,
-                max_overflow_phys: 0.0,
-            },
-            phys_font_size: 16,
-        });
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        let window_e = app
-            .world_mut()
-            .spawn((
-                TmuxWindow {
-                    id: WindowId(1),
-                    index: 0,
-                    name: String::new(),
-                },
-                TmuxWindowLayout(
-                    WindowLayout::parse(b"abcd,80x24,0,0{40x24,0,0,1,39x24,41,0,2}").unwrap(),
-                ),
-                Node::default(),
-            ))
-            .id();
-        let pane1 = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 40,
-                        height: 24,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-                Node::default(),
-                TerminalHandle::detached(40, 24, Arc::new(AtomicBool::new(false))),
-                TerminalGrid::default(),
-                ChildOf(window_e),
-            ))
-            .id();
-        let pane2 = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(2),
-                    dims: CellDims {
-                        width: 39,
-                        height: 24,
-                        xoff: 41,
-                        yoff: 0,
-                    },
-                },
-                Node::default(),
-                TerminalHandle::detached(39, 24, Arc::new(AtomicBool::new(false))),
-                TerminalGrid::default(),
-                ChildOf(window_e),
-            ))
-            .id();
-
-        app.add_systems(Update, layout_tmux_panes);
-        app.update();
-
-        let container = app
-            .world()
-            .get::<Node>(window_e)
-            .expect("window container has a Node");
-        // Container fills the full pane area (cols 100 × cell_w 8 = 800;
-        // rows-1 = 36 × cell_h 16 = 576). Panes tile it exactly.
-        assert_eq!(
-            container.width,
-            Val::Px(800.0),
-            "container fills pane-area width"
-        );
-        assert_eq!(
-            container.height,
-            Val::Px(576.0),
-            "container fills pane-area height"
-        );
-
-        // weights 40,39 over avail 799 → 405, last absorbs remainder; 1px
-        // divider at x=405..406; both panes fill the full 576 height.
-        let p1 = app.world().get::<Node>(pane1).expect("pane1 has a Node");
-        assert_eq!(p1.left, Val::Px(0.0), "pane1 left");
-        assert_eq!(p1.top, Val::Px(0.0), "pane1 top");
-        assert_eq!(p1.width, Val::Px(405.0), "pane1 width");
-        assert_eq!(p1.height, Val::Px(576.0), "pane1 height");
-
-        let p2 = app.world().get::<Node>(pane2).expect("pane2 has a Node");
-        assert_eq!(p2.left, Val::Px(406.0), "pane2 left (405 + 1px divider)");
-        assert_eq!(p2.top, Val::Px(0.0), "pane2 top");
-        assert_eq!(p2.width, Val::Px(394.0), "pane2 width");
-        assert_eq!(
-            p2.height,
-            Val::Px(576.0),
-            "pane2 height (fills, aligned with pane1)"
         );
     }
 
@@ -883,7 +605,6 @@ mod tests {
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
         use ozma_tty_renderer::schema::FrameSnapshot;
         use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
-        use tmux_control_parser::{WindowId, WindowLayout};
 
         #[derive(Resource, Default)]
         struct SnapHits(u32);
@@ -914,18 +635,6 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
 
-        let window_e = app
-            .world_mut()
-            .spawn((
-                TmuxWindow {
-                    id: WindowId(1),
-                    index: 0,
-                    name: String::new(),
-                },
-                TmuxWindowLayout(WindowLayout::parse(b"abcd,20x5,0,0,2").unwrap()),
-                Node::default(),
-            ))
-            .id();
         let pane_id = PaneId(2);
         let entity = app
             .world_mut()
@@ -942,7 +651,6 @@ mod tests {
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
                 TerminalGrid::default(),
-                ChildOf(window_e),
             ))
             .id();
 
@@ -1001,181 +709,17 @@ mod tests {
         );
     }
 
-    fn rect(x0: f32, y0: f32, x1: f32, y1: f32) -> Rect {
-        Rect::from_corners(Vec2::new(x0, y0), Vec2::new(x1, y1))
-    }
-
     #[test]
-    fn layout_single_pane_fills_rect() {
-        let root = Cell::Leaf {
-            dims: CellDims {
-                width: 80,
-                height: 24,
-                xoff: 0,
-                yoff: 0,
-            },
-            pane_id: Some(0),
+    fn pane_rect_scales_cell_dims_to_pixels() {
+        let dims = CellDims {
+            width: 10,
+            height: 4,
+            xoff: 2,
+            yoff: 1,
         };
-        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
-        assert_eq!(rects[&PaneId(0)], rect(0.0, 0.0, 640.0, 384.0));
-    }
-
-    #[test]
-    fn layout_horizontal_split_fills_with_1px_divider() {
-        let root = Cell::Split {
-            dims: CellDims {
-                width: 80,
-                height: 24,
-                xoff: 0,
-                yoff: 0,
-            },
-            dir: SplitDir::LeftRight,
-            children: vec![
-                Cell::Leaf {
-                    dims: CellDims {
-                        width: 40,
-                        height: 24,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                    pane_id: Some(1),
-                },
-                Cell::Leaf {
-                    dims: CellDims {
-                        width: 39,
-                        height: 24,
-                        xoff: 41,
-                        yoff: 0,
-                    },
-                    pane_id: Some(2),
-                },
-            ],
-        };
-        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
-        // weights 40,39 over avail 639 → 324, last absorbs remainder (315);
-        // 1px divider at x=324..325; both panes fill the full height.
-        assert_eq!(rects[&PaneId(1)], rect(0.0, 0.0, 324.0, 384.0));
-        assert_eq!(rects[&PaneId(2)], rect(325.0, 0.0, 640.0, 384.0));
-    }
-
-    #[test]
-    fn layout_nested_split_columns_stay_aligned() {
-        // LeftRight[ pane1(40x24), TopBottom[ pane2(39x12), pane3(39x11) ] ]
-        let root = Cell::Split {
-            dims: CellDims {
-                width: 80,
-                height: 24,
-                xoff: 0,
-                yoff: 0,
-            },
-            dir: SplitDir::LeftRight,
-            children: vec![
-                Cell::Leaf {
-                    dims: CellDims {
-                        width: 40,
-                        height: 24,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                    pane_id: Some(1),
-                },
-                Cell::Split {
-                    dims: CellDims {
-                        width: 39,
-                        height: 24,
-                        xoff: 41,
-                        yoff: 0,
-                    },
-                    dir: SplitDir::TopBottom,
-                    children: vec![
-                        Cell::Leaf {
-                            dims: CellDims {
-                                width: 39,
-                                height: 12,
-                                xoff: 41,
-                                yoff: 0,
-                            },
-                            pane_id: Some(2),
-                        },
-                        Cell::Leaf {
-                            dims: CellDims {
-                                width: 39,
-                                height: 11,
-                                xoff: 41,
-                                yoff: 13,
-                            },
-                            pane_id: Some(3),
-                        },
-                    ],
-                },
-            ],
-        };
-        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
-        assert_eq!(rects[&PaneId(1)], rect(0.0, 0.0, 324.0, 384.0));
-        assert_eq!(rects[&PaneId(2)], rect(325.0, 0.0, 640.0, 200.0));
-        assert_eq!(rects[&PaneId(3)], rect(325.0, 201.0, 640.0, 384.0));
-        // The split column (panes 2+3) and the unsplit column (pane 1) both
-        // reach the bottom — no reserved-separator height mismatch.
-        assert_eq!(rects[&PaneId(1)].max.y, rects[&PaneId(3)].max.y);
-    }
-
-    #[test]
-    fn layout_skips_leaf_without_pane_id() {
-        let root = Cell::Split {
-            dims: CellDims {
-                width: 80,
-                height: 24,
-                xoff: 0,
-                yoff: 0,
-            },
-            dir: SplitDir::LeftRight,
-            children: vec![
-                Cell::Leaf {
-                    dims: CellDims {
-                        width: 40,
-                        height: 24,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                    pane_id: None,
-                },
-                Cell::Leaf {
-                    dims: CellDims {
-                        width: 39,
-                        height: 24,
-                        xoff: 41,
-                        yoff: 0,
-                    },
-                    pane_id: Some(2),
-                },
-            ],
-        };
-        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
-        assert_eq!(rects.len(), 1);
-        assert_eq!(rects[&PaneId(2)], rect(325.0, 0.0, 640.0, 384.0));
-    }
-
-    #[test]
-    fn layout_floating_uses_literal_offsets() {
-        let root = Cell::Split {
-            dims: CellDims {
-                width: 80,
-                height: 24,
-                xoff: 0,
-                yoff: 0,
-            },
-            dir: SplitDir::Floating,
-            children: vec![Cell::Leaf {
-                dims: CellDims {
-                    width: 10,
-                    height: 5,
-                    xoff: 4,
-                    yoff: 2,
-                },
-                pane_id: Some(7),
-            }],
-        };
-        let rects = layout_panes(&root, rect(0.0, 0.0, 640.0, 384.0), 8.0, 16.0, 1.0);
-        assert_eq!(rects[&PaneId(7)], rect(32.0, 32.0, 112.0, 112.0));
+        assert_eq!(
+            pane_rect(dims.xoff, dims.yoff, dims.width, dims.height, 8.0, 16.0),
+            (16.0, 16.0, 80.0, 64.0),
+        );
     }
 }

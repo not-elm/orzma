@@ -46,11 +46,11 @@ pub(crate) struct TmuxWindowRenamed {
     pub(crate) name: String,
 }
 
-/// `%layout-change` or a seed row: the window's full layout tree.
+/// `%layout-change` or a seed row: the window's full pane set.
 #[derive(Event, Debug, Clone)]
 pub(crate) struct TmuxLayoutChanged {
     pub(crate) window: WindowId,
-    pub(crate) layout: WindowLayout,
+    pub(crate) panes: Vec<PaneGeom>,
 }
 
 /// `%window-pane-changed`: the active pane (and its window).
