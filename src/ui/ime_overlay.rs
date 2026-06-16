@@ -8,7 +8,6 @@
 
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
-use crate::input::{resolve_focused_terminal, resolve_focused_terminal_readonly};
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -30,9 +29,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalFontInitSet;
 use ozma_tty_renderer::material::TerminalMaterialSystems;
 use ozma_tty_renderer::prelude::TerminalGrid;
-use ozmux_multiplexer::{
-    ActivePane, ActiveSurface, AttachedWorkspace, MultiplexerCommands, WorkspaceMarker,
-};
+use ozmux_tmux::{ActivePane, TmuxPane};
 use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -179,9 +176,7 @@ fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
 /// `ImeState`.
 pub(crate) fn position_ime_overlay(
     state: Res<ImeState>,
-    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
-    active_panes: Query<&ActivePane>,
-    active_surfaces: Query<&ActiveSurface>,
+    active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -224,9 +219,7 @@ pub(crate) fn position_ime_overlay(
     let Some(comp) = state.composition() else {
         return;
     };
-    let Some(entity) =
-        resolve_focused_terminal_readonly(&attached_workspace, &active_panes, &active_surfaces)
-    else {
+    let Some(entity) = active_pane.iter().next() else {
         return;
     };
     let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
@@ -315,18 +308,17 @@ pub(crate) fn position_ime_overlay(
 /// so the override takes effect in the same frame the IME caret
 /// appears (and clears the same frame composition ends).
 ///
-/// If `resolve_focused_terminal` returns `None` while composition is
-/// active (e.g., race window between focus loss and `Ime::Disabled`),
-/// every grid gets `suppress_cursor = false`. The safe default is
-/// "show cursors" rather than blanket-hide.
+/// If there is no active tmux pane while composition is active (e.g., a
+/// race window between focus loss and `Ime::Disabled`), every grid gets
+/// `suppress_cursor = false`. The safe default is "show cursors" rather
+/// than blanket-hide.
 fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
-    mux: MultiplexerCommands,
-    attached_workspace: Query<Entity, (With<WorkspaceMarker>, With<AttachedWorkspace>)>,
+    active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
     mut grids: Query<(Entity, &mut TerminalGrid)>,
 ) {
     let focused = if state.is_composing() {
-        resolve_focused_terminal(&mux, &attached_workspace)
+        active_pane.iter().next()
     } else {
         None
     };
@@ -433,6 +425,58 @@ fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::ime::apply_event;
+    use bevy::app::App;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::MinimalPlugins;
+    use bevy::window::Ime;
+    use ozmux_tmux::PaneId;
+    use tmux_control_parser::CellDims;
+
+    #[test]
+    fn suppresses_cursor_on_active_tmux_pane_while_composing() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let mut state = ImeState::default();
+        apply_event(
+            &mut state,
+            &Ime::Preedit {
+                window: Entity::from_bits(1),
+                value: "こんに".into(),
+                cursor: Some((3, 3)),
+            },
+        );
+        assert!(state.is_composing(), "preedit must set the composition");
+        app.insert_resource(state);
+
+        let pane = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 0,
+                        height: 0,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                ActivePane,
+                TerminalGrid::default(),
+            ))
+            .id();
+
+        app.world_mut()
+            .run_system_once(suppress_terminal_cursor_during_ime)
+            .unwrap();
+
+        let grid = app.world().get::<TerminalGrid>(pane).expect("grid");
+        assert!(
+            grid.suppress_cursor,
+            "the active tmux pane must suppress its cursor while composing"
+        );
+    }
 
     /// Builds a `CellMetrics` literal for tests. `CellMetrics` does not
     /// derive `Default`, so callers must provide every field; this
