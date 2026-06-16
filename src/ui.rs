@@ -1,11 +1,9 @@
 //! Bevy UI Plugin and shared UI markers. Spawns the singleton `UiRoot` /
 //! `WorkspaceUiRoot` Node tree (via `OzmuxUiRootPlugin`) that the tmux render
-//! layer attaches its window container under. The `HomeDir` resource lives
-//! here.
+//! layer attaches its window container under.
 
 use crate::ui::root::OzmuxUiRootPlugin;
 use bevy::prelude::*;
-use std::path::PathBuf;
 
 pub(crate) mod confirm_prompt;
 pub mod copy_mode;
@@ -33,18 +31,11 @@ pub struct UiRoot;
 #[derive(Component)]
 pub struct WorkspaceUiRoot;
 
-/// Resolved `$HOME` at startup (`None` if unset). Used to home-abbreviate
-/// terminal paths; the value matches the terminal spawner's `$HOME` fallback
-/// so the path agrees with where the shell started.
-#[derive(Resource)]
-pub(crate) struct HomeDir(pub(crate) Option<PathBuf>);
-
 /// Bevy Plugin spawning the singleton UI root Node tree.
 pub struct OzmuxUiPlugin;
 
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(HomeDir(std::env::var_os("HOME").map(PathBuf::from)))
-            .add_plugins(OzmuxUiRootPlugin);
+        app.add_plugins(OzmuxUiRootPlugin);
     }
 }

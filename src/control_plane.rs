@@ -282,11 +282,6 @@ impl ConnectionWriters {
     }
 }
 
-/// Mints a per-surface env token (same generator as handles).
-pub(crate) fn mint_token() -> String {
-    mint_id()
-}
-
 /// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded) and
 /// lowercased. The alphabet `a-z2-7` is a subset of the OSC `view_id` charset
 /// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount-inline;<id>`.

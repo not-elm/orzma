@@ -53,11 +53,11 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
     format!("[{offset}/{total}]")
 }
 
-/// Spawns a `CopyModeIndicator` chip as a child of every Surface host
+/// Spawns a `CopyModeIndicator` chip as a child of every pane host
 /// the first frame `TerminalHandle` is observed there. The
 /// `Added<TerminalHandle>` filter fires exactly once per host because
-/// `ui::terminal::finish_terminal_setup` is the only `TerminalHandle`
-/// inserter on Surface hosts.
+/// `tmux_render::attach_tmux_pane_terminal` is the only `TerminalHandle`
+/// inserter on `TmuxPane` hosts.
 // NOTE: A second reader of `Added<TerminalHandle>` would not violate
 // the "exactly one chip per host" property (Added fires per-system),
 // but introducing one is a smell — the constraint is documented as

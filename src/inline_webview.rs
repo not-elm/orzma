@@ -12,7 +12,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
 use bevy::ui_render::PreparedUiMaterial;
-use bevy::window::{CursorMoved, PrimaryWindow};
+use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{
     FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
 };
@@ -77,8 +77,6 @@ pub(crate) struct OzmuxInlineWebviewPlugin;
 
 impl Plugin for OzmuxInlineWebviewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<CursorMoved>();
-        app.init_resource::<ButtonInput<MouseButton>>();
         app.add_systems(Update, sync_inline_webview_size);
         app.add_systems(
             PostUpdate,
@@ -191,8 +189,8 @@ pub(crate) fn resolve_mount(
 /// `view_id` on this terminal, overlay-slot exhaustion.
 ///
 /// The parent (`ctx.terminal_surface`, the `OscWebviewRequest` target) is the
-/// multiplexer Surface entity itself: `finish_terminal_setup` inserts both
-/// `TerminalBundle` (`TerminalHandle`, which emits the OSC request) and
+/// `TmuxPane` entity itself: `tmux_render::attach_tmux_pane_terminal` inserts
+/// both the `TerminalHandle` (which emits the OSC request) and the
 /// `TerminalRenderBundle` (`TerminalGrid`) onto that one entity, so the
 /// `ChildOf` parent is also the entity `project_inline_overlays` reads grid
 /// state from.

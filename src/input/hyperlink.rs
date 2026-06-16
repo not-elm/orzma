@@ -57,8 +57,8 @@ pub(crate) fn try_open_uri(uri: &str) {
 
 /// Pure predicate: returns the URI of the cell at `(row, col)` when
 /// a `Press + Left + modifier_held` event arrives on a linked cell;
-/// otherwise `None`. Centralizes the interception decision so
-/// `dispatch_mouse_buttons` only has to check the return value.
+/// otherwise `None`. Centralizes the interception decision so the tmux
+/// mouse arbiter (`tmux_mouse::arbiter`) only has to check the return value.
 pub(crate) fn should_open_at(
     grid: &ozma_tty_renderer::schema::TerminalGrid,
     row: u16,
