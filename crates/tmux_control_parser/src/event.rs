@@ -92,12 +92,15 @@ pub enum ControlEvent {
     /// `%paste-buffer-deleted <name>`.
     PasteBufferDeleted { name: String },
     /// `%subscription-changed <name> <session> <window> <index> <pane> ... : <value>`.
+    /// The session/window/index/pane fields carry `-` for subscription scopes
+    /// that do not target them (the window scope `@*` sends `-` for pane; the
+    /// session scope sends `-` for all four), so each is `Option`.
     SubscriptionChanged {
         name: String,
-        session: SessionId,
-        window: WindowId,
-        window_index: i32,
-        pane: PaneId,
+        session: Option<SessionId>,
+        window: Option<WindowId>,
+        window_index: Option<i32>,
+        pane: Option<PaneId>,
         value: String,
     },
 
@@ -231,10 +234,11 @@ impl ControlEvent {
             }),
             b"%subscription-changed" => {
                 let name = fields.token("subscription-changed", "name")?;
-                let session = fields.session("subscription-changed")?;
-                let window = fields.window("subscription-changed")?;
-                let window_index = fields.int_field("subscription-changed", "window_index")?;
-                let pane = fields.pane("subscription-changed")?;
+                let session = fields.opt_session("subscription-changed")?;
+                let window = fields.opt_window("subscription-changed")?;
+                let window_index =
+                    fields.opt_int_field("subscription-changed", "window_index")?;
+                let pane = fields.opt_pane("subscription-changed")?;
                 let value = fields.skip_to_colon_value("subscription-changed")?;
                 Ok(ControlEvent::SubscriptionChanged {
                     name,
@@ -325,6 +329,53 @@ impl<'a> Fields<'a> {
             field: "session",
         })?;
         parse_id(bytes, b'$').map(SessionId)
+    }
+
+    fn opt_session(&mut self, event: &'static str) -> TmuxResult<Option<SessionId>> {
+        let bytes = self.next().ok_or(TmuxError::MissingField {
+            event,
+            field: "session",
+        })?;
+        if bytes == b"-" {
+            return Ok(None);
+        }
+        parse_id(bytes, b'$').map(|s| Some(SessionId(s)))
+    }
+
+    fn opt_window(&mut self, event: &'static str) -> TmuxResult<Option<WindowId>> {
+        let bytes = self.next().ok_or(TmuxError::MissingField {
+            event,
+            field: "window",
+        })?;
+        if bytes == b"-" {
+            return Ok(None);
+        }
+        parse_id(bytes, b'@').map(|w| Some(WindowId(w)))
+    }
+
+    fn opt_pane(&mut self, event: &'static str) -> TmuxResult<Option<PaneId>> {
+        let bytes = self.next().ok_or(TmuxError::MissingField {
+            event,
+            field: "pane",
+        })?;
+        if bytes == b"-" {
+            return Ok(None);
+        }
+        parse_id(bytes, b'%').map(|p| Some(PaneId(p)))
+    }
+
+    fn opt_int_field<T: core::str::FromStr>(
+        &mut self,
+        event: &'static str,
+        field: &'static str,
+    ) -> TmuxResult<Option<T>> {
+        let bytes = self
+            .next()
+            .ok_or(TmuxError::MissingField { event, field })?;
+        if bytes == b"-" {
+            return Ok(None);
+        }
+        int(bytes, field).map(Some)
     }
 
     fn layout(&mut self, event: &'static str, field: &'static str) -> TmuxResult<WindowLayout> {
@@ -701,18 +752,46 @@ mod tests {
     }
 
     #[test]
-    fn subscription_changed_documented_form() {
-        // TODO: verify against a live session — for session-scoped subscriptions the
-        // session/window/index/pane fields may be empty and require Option<>.
+    fn subscription_changed_pane_form_is_all_present() {
         assert_eq!(
             ev(b"%subscription-changed my-sub $1 @2 0 %3 : the-value"),
             ControlEvent::SubscriptionChanged {
                 name: "my-sub".to_string(),
-                session: SessionId(1),
-                window: WindowId(2),
-                window_index: 0,
-                pane: PaneId(3),
+                session: Some(SessionId(1)),
+                window: Some(WindowId(2)),
+                window_index: Some(0),
+                pane: Some(PaneId(3)),
                 value: "the-value".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn subscription_changed_window_form_has_dash_pane() {
+        assert_eq!(
+            ev(b"%subscription-changed wf $1 @2 0 - : *Z"),
+            ControlEvent::SubscriptionChanged {
+                name: "wf".to_string(),
+                session: Some(SessionId(1)),
+                window: Some(WindowId(2)),
+                window_index: Some(0),
+                pane: None,
+                value: "*Z".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn subscription_changed_session_form_is_all_dashes() {
+        assert_eq!(
+            ev(b"%subscription-changed s - - - - : v"),
+            ControlEvent::SubscriptionChanged {
+                name: "s".to_string(),
+                session: None,
+                window: None,
+                window_index: None,
+                pane: None,
+                value: "v".to_string(),
             }
         );
     }
