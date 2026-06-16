@@ -53,7 +53,6 @@ use ui::tmux_window_bar::OzmuxTmuxWindowBarPlugin;
 use ui::{
     OzmuxUiPlugin, confirm_prompt::ConfirmPromptPlugin, copy_mode::CopyModePlugin,
     copy_mode_indicator::CopyModeIndicatorPlugin, copy_search::CopyPromptPlugin,
-    tab_input::TabInteractionPlugin,
 };
 
 fn main() {
@@ -89,7 +88,6 @@ fn main() {
         ))
         .add_plugins(CopyPromptPlugin)
         .add_plugins(ConfirmPromptPlugin)
-        .add_plugins(TabInteractionPlugin)
         .add_plugins(TmuxDialogPlugin)
         .add_plugins(OzmuxTmuxRenderPlugin)
         .add_plugins(OzmuxTmuxInputPlugin)

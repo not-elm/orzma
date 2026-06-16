@@ -6,7 +6,6 @@
 //! gesture arbiter (`tmux_mouse::OzmuxTmuxMousePlugin`).
 
 use crate::configs::OzmuxConfigsResource;
-use crate::ui::workspace::inactive_dim_factor;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
@@ -77,6 +76,15 @@ fn sync_pane_dim(
         if current.map(|d| d.0) != Some(want) {
             commands.entity(entity).insert(PaneDim(want));
         }
+    }
+}
+
+/// Returns the brightness multiplier applied to inactive panes: the configured
+/// `inactive_pane.dim` when dimming is enabled, otherwise `1.0` (no dim).
+fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
+    match configs {
+        Some(cfg) if cfg.inactive_pane.enabled => cfg.inactive_pane.dim,
+        _ => 1.0,
     }
 }
 
