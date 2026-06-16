@@ -302,7 +302,10 @@ fn forward_keys_to_tmux(
                 message,
                 command: inner,
             });
-            continue;
+            // NOTE: the prompt now owns the keyboard — stop here so any further
+            // actions decoded from this same frame are NOT sent to tmux (that
+            // would bypass the confirmation the prompt is gating).
+            break;
         }
         let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
         let cmd = match action {

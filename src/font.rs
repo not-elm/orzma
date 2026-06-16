@@ -118,7 +118,7 @@ fn bridge_font_config(
     let font: &FontConfig = &configs.font;
 
     let powerline = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
-    commands.insert_resource(PowerlineFont(powerline));
+    commands.insert_resource(PowerlineFont(powerline.clone()));
 
     // Fast path: no override → use the renderer's default TerminalFonts
     // (already inserted by TerminalFontPlugin) and feed the same bundled
@@ -129,8 +129,7 @@ fn bridge_font_config(
         && font.italic_path.is_none()
         && font.bold_italic_path.is_none();
     if no_override {
-        let handle = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
-        commands.insert_resource(TerminalUiFont(handle));
+        commands.insert_resource(TerminalUiFont(powerline));
         return;
     }
 

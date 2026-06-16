@@ -52,6 +52,43 @@ pub(crate) struct ConfirmState {
     pub(crate) command: String,
 }
 
+/// Parses a `confirm-before [-by] [-c key] [-p prompt] [-t client] <command>`
+/// binding into `(message, inner command)`. Returns `None` if the command is
+/// not a `confirm-before` or has no inner command. The message defaults to
+/// `"<command>? (y/n)"` when `-p` is absent.
+pub(crate) fn parse_confirm_before(command: &str) -> Option<(String, String)> {
+    let tokens = tokenize(command);
+    let mut it = tokens.into_iter();
+    if it.next().as_deref() != Some("confirm-before") {
+        return None;
+    }
+    let mut message: Option<String> = None;
+    let mut inner: Vec<String> = Vec::new();
+    while let Some(tok) = it.next() {
+        match tok.as_str() {
+            "-p" => message = it.next(),
+            "-c" | "-t" => {
+                it.next();
+            }
+            "-b" => {}
+            // NOTE: `-y` means tmux auto-confirms (no modal), so returning None
+            // lets the command forward verbatim and tmux runs the inner command
+            // without a prompt — treating `-y` as a no-op would wrongly prompt.
+            "-y" => return None,
+            _ => {
+                inner.push(tok);
+                inner.extend(it.by_ref());
+            }
+        }
+    }
+    if inner.is_empty() {
+        return None;
+    }
+    let command = inner.join(" ");
+    let message = message.unwrap_or_else(|| format!("{command}? (y/n)"));
+    Some((message, command))
+}
+
 /// The effect of one key on an open confirm prompt.
 #[derive(Debug, PartialEq, Eq)]
 enum ConfirmStep {
@@ -72,39 +109,6 @@ fn confirm_step(key: &Key) -> Option<ConfirmStep> {
         },
         _ => None,
     }
-}
-
-/// Parses a `confirm-before [-by] [-c key] [-p prompt] [-t client] <command>`
-/// binding into `(message, inner command)`. Returns `None` if the command is
-/// not a `confirm-before` or has no inner command. The message defaults to
-/// `"<command>? (y/n)"` when `-p` is absent.
-pub(crate) fn parse_confirm_before(command: &str) -> Option<(String, String)> {
-    let tokens = tokenize(command);
-    let mut it = tokens.into_iter();
-    if it.next().as_deref() != Some("confirm-before") {
-        return None;
-    }
-    let mut message: Option<String> = None;
-    let mut inner: Vec<String> = Vec::new();
-    while let Some(tok) = it.next() {
-        match tok.as_str() {
-            "-p" => message = it.next(),
-            "-c" | "-t" => {
-                it.next();
-            }
-            "-b" | "-y" => {}
-            _ => {
-                inner.push(tok);
-                inner.extend(it.by_ref());
-            }
-        }
-    }
-    if inner.is_empty() {
-        return None;
-    }
-    let command = inner.join(" ");
-    let message = message.unwrap_or_else(|| format!("{command}? (y/n)"));
-    Some((message, command))
 }
 
 /// Splits a tmux command line into tokens, honoring single and double quotes

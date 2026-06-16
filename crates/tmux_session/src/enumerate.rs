@@ -122,13 +122,13 @@ pub(crate) fn list_windows_command() -> String {
 
 /// The name of the control-mode subscription that streams every window's
 /// `#{window_raw_flags}` back as `%subscription-changed`.
-pub const WINDOW_FLAGS_SUBSCRIPTION: &str = "ozmux-window-flags";
+pub(crate) const WINDOW_FLAGS_SUBSCRIPTION: &str = "ozmux-window-flags";
 
 /// Builds the control-mode command that subscribes this client to every
 /// window's `#{window_raw_flags}`. `@*` selects all windows, so tmux pushes a
 /// `%subscription-changed` whenever any window's flags change (coalesced to at
 /// most once per second).
-pub fn subscribe_window_flags_command() -> String {
+pub(crate) fn subscribe_window_flags_command() -> String {
     format!("refresh-client -B {WINDOW_FLAGS_SUBSCRIPTION}:@*:#{{window_raw_flags}}")
 }
 

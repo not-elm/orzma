@@ -124,12 +124,18 @@ fn window_bar_dirty(
     added_active: Query<(), Added<ActiveWindow>>,
     changed_session: Query<(), Changed<TmuxSession>>,
 ) -> bool {
+    // NOTE: drain both RemovedComponents readers up front, not inside the `||`
+    // chain — a short-circuit on an earlier `Changed`/`Added` term would leave
+    // the one-frame removal events unread, so they would re-fire (a stale,
+    // spurious rebuild) on the next frame.
+    let window_removed = removed_windows.read().next().is_some();
+    let active_removed = removed_active.read().next().is_some();
     !changed_windows.is_empty()
         || !changed_flags.is_empty()
         || !added_active.is_empty()
         || !changed_session.is_empty()
-        || removed_windows.read().next().is_some()
-        || removed_active.read().next().is_some()
+        || window_removed
+        || active_removed
 }
 
 /// Despawns the window bar's children and rebuilds the powerline layout: a
