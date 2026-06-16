@@ -29,6 +29,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_renderer::TerminalCellMetricsResource;
+use std::time::Duration;
 use ozmux_tmux::{
     ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxDividers, TmuxPane,
     resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
@@ -45,6 +46,13 @@ impl Plugin for OzmuxTmuxMousePlugin {
     }
 }
 
+/// Word- vs line-granularity selection for a double/triple click.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MultiSelectKind {
+    Word,
+    Line,
+}
+
 /// The current phase of a left-button gesture over a tmux pane.
 #[derive(Default, Debug, PartialEq)]
 enum GestureState {
@@ -58,6 +66,15 @@ enum GestureState {
         pane: Entity,
         pane_id: PaneId,
         origin_phys: Vec2,
+        click_count: u8,
+    },
+    /// A double/triple click awaiting its copy-mode snapshot before positioning
+    /// the copy cursor and selecting a word/line.
+    PendingMultiSelect {
+        pane: Entity,
+        pane_id: PaneId,
+        cell: (u16, u16),
+        kind: MultiSelectKind,
     },
     /// Selecting text in a pane via tmux copy-mode (entered on drag-start).
     Selecting {
@@ -83,6 +100,30 @@ enum GestureState {
 #[derive(Resource, Default)]
 pub(crate) struct TmuxMouseGesture {
     state: GestureState,
+    click: ClickTracker,
+}
+
+/// Tracks consecutive-click count using a timeout + positional drift gate.
+#[derive(Default)]
+struct ClickTracker {
+    last: Option<(Duration, Vec2, u8)>,
+}
+
+impl ClickTracker {
+    /// Registers a press at `now` / `pos` and returns the resulting click count
+    /// (1 = single, 2 = double, 3 = triple, capped at 3). `cfg` is
+    /// `(double_click_timeout, click_drift_px)` in logical units.
+    fn register(&mut self, now: Duration, pos: Vec2, cfg: (Duration, f32)) -> u8 {
+        let (timeout, drift) = cfg;
+        let count = match self.last {
+            Some((t, p, c)) if now.saturating_sub(t) <= timeout && p.distance(pos) <= drift => {
+                (c + 1).min(3)
+            }
+            _ => 1,
+        };
+        self.last = Some((now, pos, count));
+        count
+    }
 }
 
 /// What a left-press landed on.
@@ -222,6 +263,7 @@ fn arbiter(
     focused_webview: Res<FocusedWebview>,
     copy_modes: Query<(), With<CopyModeState>>,
     snapshots: Query<&CopyModeSnapshot>,
+    time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else {
@@ -247,16 +289,19 @@ fn arbiter(
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
 
-    let (grab_tol_logical, max_resize_per_frame, drag_threshold_logical) = configs
-        .as_deref()
-        .map(|c| {
-            (
-                c.mouse.divider_grab_tolerance_px,
-                c.mouse.max_resize_commands_per_frame,
-                c.mouse.drag_threshold_px,
-            )
-        })
-        .unwrap_or((4.0, 4, 4.0));
+    let (grab_tol_logical, max_resize_per_frame, drag_threshold_logical, dbl_click_ms, click_drift) =
+        configs
+            .as_deref()
+            .map(|c| {
+                (
+                    c.mouse.divider_grab_tolerance_px,
+                    c.mouse.max_resize_commands_per_frame,
+                    c.mouse.drag_threshold_px,
+                    c.mouse.double_click_timeout_ms,
+                    c.mouse.click_drift_px,
+                )
+            })
+            .unwrap_or((4.0, 4, 4.0, 400, 8.0));
     let tol_phys = grab_tol_logical * scale;
     let drag_threshold_phys = drag_threshold_logical * scale;
 
@@ -307,41 +352,107 @@ fn arbiter(
                             }
                         }
                         let pane = pane_under.map(|(e, _)| e).unwrap_or(Entity::PLACEHOLDER);
+                        let now = time.elapsed();
+                        let cursor_logical = cursor_phys / scale;
+                        let click_cfg = (
+                            Duration::from_millis(dbl_click_ms as u64),
+                            click_drift,
+                        );
+                        let count = gesture.click.register(now, cursor_logical, click_cfg);
                         gesture.state = GestureState::Pressed {
                             pane,
                             pane_id,
                             origin_phys: cursor_phys,
+                            click_count: count,
                         };
                     }
                     Press::None => {}
                 }
             }
             ButtonState::Released => {
-                if let GestureState::Selecting { pane_id, .. } = gesture.state
-                    && let Some(client) = connection.client()
-                {
-                    let handle = client.handle();
-                    let copy = target_copy_cmd(pane_id, "send-keys -X copy-selection");
-                    if let Err(e) = handle.send(&copy) {
-                        tracing::warn!(
-                            ?e,
-                            pane = pane_id.0,
-                            "drag-select copy-selection send failed"
-                        );
-                    } else {
-                        match handle.send(&show_buffer_command()) {
-                            Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
-                            Err(e) => {
+                let prior = std::mem::replace(&mut gesture.state, GestureState::Idle);
+                match prior {
+                    GestureState::Selecting { pane_id, .. } => {
+                        if let Some(client) = connection.client() {
+                            let handle = client.handle();
+                            let copy = target_copy_cmd(pane_id, "send-keys -X copy-selection");
+                            if let Err(e) = handle.send(&copy) {
                                 tracing::warn!(
                                     ?e,
                                     pane = pane_id.0,
-                                    "drag-select show-buffer send failed"
-                                )
+                                    "drag-select copy-selection send failed"
+                                );
+                            } else {
+                                match handle.send(&show_buffer_command()) {
+                                    Ok(id) => {
+                                        queries.register(id, pane_id, CopyQueryKind::Buffer)
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            ?e,
+                                            pane = pane_id.0,
+                                            "drag-select show-buffer send failed"
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
+                    GestureState::Pressed {
+                        pane,
+                        pane_id,
+                        origin_phys,
+                        click_count,
+                    } if click_count >= 2 => {
+                        let Some(client) = connection.client() else {
+                            break;
+                        };
+                        if copy_modes.get(pane).is_err() {
+                            if let Err(e) = client
+                                .handle()
+                                .send(&format!("copy-mode -t %{}", pane_id.0))
+                            {
+                                tracing::warn!(
+                                    ?e,
+                                    pane = pane_id.0,
+                                    "multi-click copy-mode entry send failed"
+                                );
+                                break;
+                            }
+                            commands.entity(pane).insert(CopyModeState);
+                        }
+                        let Some((_, p, node, transform)) =
+                            panes.iter().find(|(e, _, _, _)| *e == pane)
+                        else {
+                            break;
+                        };
+                        let cols = p.dims.width as u16;
+                        let rows = p.dims.height as u16;
+                        let Some(cell) = cell_at_pane(
+                            node,
+                            transform,
+                            origin_phys,
+                            cell_w,
+                            cell_h,
+                            cols,
+                            rows,
+                        ) else {
+                            break;
+                        };
+                        let kind = if click_count == 2 {
+                            MultiSelectKind::Word
+                        } else {
+                            MultiSelectKind::Line
+                        };
+                        gesture.state = GestureState::PendingMultiSelect {
+                            pane,
+                            pane_id,
+                            cell,
+                            kind,
+                        };
+                    }
+                    _ => {}
                 }
-                gesture.state = GestureState::Idle;
             }
         }
     }
@@ -350,6 +461,7 @@ fn arbiter(
         pane,
         pane_id,
         origin_phys,
+        ..
     } = gesture.state
     {
         let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
@@ -453,6 +565,39 @@ fn arbiter(
         return;
     }
 
+    if let GestureState::PendingMultiSelect {
+        pane,
+        pane_id,
+        cell,
+        kind,
+    } = gesture.state
+    {
+        let Some((_, _, _, _)) = panes.iter().find(|(e, _, _, _)| *e == pane) else {
+            gesture.state = GestureState::Idle;
+            return;
+        };
+        let Ok(snapshot_cursor) = snapshots.get(pane).map(|s| (s.0.cursor_x, s.0.cursor_y)) else {
+            return;
+        };
+        let Some(client) = connection.client() else {
+            return;
+        };
+        let handle = client.handle();
+        for cmd in multi_select_commands(kind, snapshot_cursor, cell, pane_id) {
+            if let Err(e) = handle.send(&cmd) {
+                tracing::warn!(?e, pane = pane_id.0, "multi-select cmd send failed");
+            }
+        }
+        match handle.send(&show_buffer_command()) {
+            Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
+            Err(e) => {
+                tracing::warn!(?e, pane = pane_id.0, "multi-select show-buffer send failed")
+            }
+        }
+        gesture.state = GestureState::Idle;
+        return;
+    }
+
     if let GestureState::Resizing {
         divider,
         near,
@@ -526,6 +671,28 @@ fn target_copy_cmd(pane: PaneId, cmd: &str) -> String {
     }
 }
 
+/// Pane-targeted copy-mode commands to position the copy cursor at `cell`
+/// (relative to the snapshot cursor) and select a word/line. Does NOT include
+/// `show-buffer` — the caller sends that separately to register the reply.
+fn multi_select_commands(
+    kind: MultiSelectKind,
+    snapshot_cursor: (u16, u16),
+    cell: (u16, u16),
+    pane: PaneId,
+) -> Vec<String> {
+    let mut out: Vec<String> = cursor_deltas(snapshot_cursor, cell)
+        .iter()
+        .map(|c| target_copy_cmd(pane, c))
+        .collect();
+    let select = match kind {
+        MultiSelectKind::Word => "send-keys -X select-word",
+        MultiSelectKind::Line => "send-keys -X select-line",
+    };
+    out.push(target_copy_cmd(pane, select));
+    out.push(target_copy_cmd(pane, "send-keys -X copy-selection"));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,6 +743,31 @@ mod tests {
     fn hit_test_misses_outside_span() {
         let ds = [vdiv(1, 40, 0, 12)];
         assert!(divider_at(&ds, Vec2::new(320.0, 208.0), 8.0, 16.0, 4.0).is_none());
+    }
+
+    #[test]
+    fn click_count_increments_within_timeout_and_drift() {
+        let mut t = ClickTracker::default();
+        let cfg = (Duration::from_millis(400), 8.0f32);
+        assert_eq!(t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg), 1);
+        assert_eq!(t.register(Duration::from_millis(200), Vec2::new(11.0, 11.0), cfg), 2);
+        assert_eq!(t.register(Duration::from_millis(350), Vec2::new(12.0, 10.0), cfg), 3);
+    }
+
+    #[test]
+    fn click_count_resets_after_timeout() {
+        let mut t = ClickTracker::default();
+        let cfg = (Duration::from_millis(400), 8.0f32);
+        assert_eq!(t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg), 1);
+        assert_eq!(t.register(Duration::from_millis(500), Vec2::new(10.0, 10.0), cfg), 1);
+    }
+
+    #[test]
+    fn click_count_resets_after_drift() {
+        let mut t = ClickTracker::default();
+        let cfg = (Duration::from_millis(400), 8.0f32);
+        assert_eq!(t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg), 1);
+        assert_eq!(t.register(Duration::from_millis(100), Vec2::new(40.0, 40.0), cfg), 1);
     }
 
     #[test]
@@ -698,6 +890,19 @@ mod tests {
         assert_eq!(
             app.world().resource::<TmuxMouseGesture>().state,
             GestureState::Idle
+        );
+    }
+
+    #[test]
+    fn multi_select_word_commands() {
+        let cmds = multi_select_commands(MultiSelectKind::Word, (0, 0), (3, 0), PaneId(2));
+        assert_eq!(
+            cmds,
+            vec![
+                "send-keys -X -t %2 -N 3 cursor-right".to_string(),
+                "send-keys -X -t %2 select-word".to_string(),
+                "send-keys -X -t %2 copy-selection".to_string(),
+            ]
         );
     }
 
