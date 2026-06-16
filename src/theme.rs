@@ -25,6 +25,16 @@ pub const MUTED: Color = Color::srgb(0.376, 0.408, 0.471);
 /// Active highlight (active workspace chip in status bar, active-pane top
 /// indicator on the active tab).
 pub const ACCENT: Color = Color::srgb(0.302, 0.561, 0.851);
+/// Session-block background in the window bar — neutral slate. Distinct from
+/// `PANEL` so the trailing powerline arrow reads, and from `ACCENT` so accent
+/// uniquely marks the active window.
+pub const SESSION_BG: Color = Color::srgb(0.200, 0.220, 0.282);
+/// Window-flag warning color (bell `!` / activity `#`) — amber.
+pub const FLAG_WARN: Color = Color::srgb(0.878, 0.690, 0.302);
+/// Powerline right-pointing filled separator glyph (Nerd Font U+E0B0).
+pub const POWERLINE_RIGHT: &str = "\u{e0b0}";
+/// Powerline left-pointing filled separator glyph (Nerd Font U+E0B2).
+pub const POWERLINE_LEFT: &str = "\u{e0b2}";
 /// Session-chooser selection bar — tmux choose-tree style amber.
 pub const SELECTION: Color = Color::srgb(0.847, 0.651, 0.341);
 /// Text on the SELECTION bar — near-black for contrast.
@@ -73,3 +83,14 @@ pub const COPY_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
 pub const COPY_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
 
 pub const UI_FONT_SIZE: f32 = 12.0;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn powerline_glyphs_are_the_nerd_font_code_points() {
+        assert_eq!(POWERLINE_RIGHT, "\u{e0b0}");
+        assert_eq!(POWERLINE_LEFT, "\u{e0b2}");
+    }
+}
