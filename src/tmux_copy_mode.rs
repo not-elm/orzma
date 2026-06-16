@@ -431,7 +431,7 @@ fn buffer_reply_to_text(lines: &[String]) -> String {
 /// one command: a positive horizontal delta emits `cursor-right`, negative
 /// `cursor-left`; a positive vertical delta emits `cursor-down`, negative
 /// `cursor-up`. A zero delta on an axis emits nothing.
-fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
+pub(crate) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
     let mut out = Vec::new();
     let (cx, cy) = (cur.0 as i32, cur.1 as i32);
     let (tx, ty) = (target.0 as i32, target.1 as i32);
@@ -455,7 +455,7 @@ fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
 /// the projection is degenerate (zero-area node). The point is clamped (not
 /// rejected) when it falls outside the pane so a drag that leaves the pane edge
 /// still extends the selection to the nearest cell.
-fn cell_at_pane(
+pub(crate) fn cell_at_pane(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
     cursor_phys: Vec2,
@@ -473,7 +473,7 @@ fn cell_at_pane(
 /// Maps a window physical-pixel point to a node's local physical px with origin
 /// at the node's top-left corner. Mirrors `mouse_buttons::phys_to_terminal_local`
 /// (the affine inverse of `UiGlobalTransform` via `ComputedNode::normalize_point`).
-fn phys_to_pane_local(
+pub(crate) fn phys_to_pane_local(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
     cursor_phys: Vec2,
