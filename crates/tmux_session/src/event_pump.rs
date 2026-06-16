@@ -347,7 +347,7 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
                 name: String::new(),
             });
         }
-        ControlEvent::WindowClose { window } => {
+        ControlEvent::WindowClose { window } | ControlEvent::UnlinkedWindowClose { window } => {
             commands.trigger(TmuxWindowClosed { window: *window });
         }
         ControlEvent::WindowRenamed { window, name } => {
@@ -658,6 +658,34 @@ mod tests {
             },
         ))];
         assert!(!detect_window_added(&closed));
+    }
+
+    #[test]
+    fn unlinked_window_close_triggers_window_closed() {
+        use crate::events::TmuxWindowClosed;
+        use std::sync::{Arc, Mutex};
+        use tmux_control_parser::WindowId;
+
+        #[derive(Resource, Clone)]
+        struct Sink(Arc<Mutex<Vec<WindowId>>>);
+
+        let mut app = App::new();
+        let sink = Sink(Arc::new(Mutex::new(Vec::new())));
+        app.insert_resource(sink.clone());
+        app.add_observer(|ev: On<TmuxWindowClosed>, sink: Res<Sink>| {
+            sink.0.lock().unwrap().push(ev.window);
+        });
+        app.add_systems(Update, |mut commands: Commands| {
+            trigger_notification(
+                &mut commands,
+                &ControlEvent::UnlinkedWindowClose {
+                    window: WindowId(3),
+                },
+            );
+        });
+        app.update();
+
+        assert_eq!(*sink.0.lock().unwrap(), vec![WindowId(3)]);
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::ui::tmux_window_bar_input::{switch_window_on_click, window_entry_hove
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{ActiveWindow, TmuxSession, TmuxWindow, WindowFlags, WindowId};
+use ozmux_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow, WindowFlags, WindowId};
 
 /// Marker on the tmux window bar root Node — the fixed-height Row mounted at the
 /// bottom of `UiRoot`. `spawn_window_bar` inserts it once; `rebuild_window_bar`
@@ -66,7 +66,18 @@ impl Plugin for OzmuxTmuxWindowBarPlugin {
         // nothing, and silently bails — the bar never mounts. PostStartup runs
         // after Startup's command flush, when `UiRoot` is guaranteed to exist.
         app.add_systems(PostStartup, spawn_window_bar);
-        app.add_systems(Update, rebuild_window_bar.run_if(window_bar_dirty));
+        // NOTE: after the projection drain. `window_bar_dirty` reads
+        // `RemovedComponents<TmuxWindow>` — one-frame events cleared at frame end.
+        // The drain despawns windows on close (`%window-close` /
+        // `%unlinked-window-close`); if the rebuild's run condition evaluated
+        // before the drain it would miss the removal (gone by the next frame) and
+        // a killed window's tab would linger in the bar.
+        app.add_systems(
+            Update,
+            rebuild_window_bar
+                .run_if(window_bar_dirty)
+                .after(TmuxProjectionSet),
+        );
         app.add_systems(
             Update,
             (
