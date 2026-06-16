@@ -481,7 +481,10 @@ mod tests {
             .0
             .clone();
         assert!(
-            app.world().resource::<Assets<Font>>().get(&handle).is_some(),
+            app.world()
+                .resource::<Assets<Font>>()
+                .get(&handle)
+                .is_some(),
             "PowerlineFont handle must resolve to a Font asset"
         );
     }

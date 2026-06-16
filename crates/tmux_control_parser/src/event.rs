@@ -236,8 +236,7 @@ impl ControlEvent {
                 let name = fields.token("subscription-changed", "name")?;
                 let session = fields.opt_session("subscription-changed")?;
                 let window = fields.opt_window("subscription-changed")?;
-                let window_index =
-                    fields.opt_int_field("subscription-changed", "window_index")?;
+                let window_index = fields.opt_int_field("subscription-changed", "window_index")?;
                 let pane = fields.opt_pane("subscription-changed")?;
                 let value = fields.skip_to_colon_value("subscription-changed")?;
                 Ok(ControlEvent::SubscriptionChanged {

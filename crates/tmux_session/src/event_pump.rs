@@ -725,9 +725,7 @@ mod tests {
             trigger_events(&mut commands, &mut pending.pending, &batch.0);
         }
 
-        let line = format!(
-            "%subscription-changed {WINDOW_FLAGS_SUBSCRIPTION} $1 @2 0 - : *Z"
-        );
+        let line = format!("%subscription-changed {WINDOW_FLAGS_SUBSCRIPTION} $1 @2 0 - : *Z");
         let notification = ControlEvent::parse(line.as_bytes()).unwrap();
         let event = TransportEvent::Protocol(ClientEvent::Notification(notification));
 
@@ -736,11 +734,7 @@ mod tests {
         app.init_resource::<EnumerationState>();
         app.insert_resource(Batch(vec![event]));
         app.add_observer(|ev: On<TmuxWindowFlagsChanged>, captured: Res<Captured>| {
-            captured
-                .0
-                .lock()
-                .unwrap()
-                .push((ev.window, ev.flags));
+            captured.0.lock().unwrap().push((ev.window, ev.flags));
         });
         app.add_systems(Update, run);
 

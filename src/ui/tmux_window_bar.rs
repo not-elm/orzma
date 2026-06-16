@@ -271,7 +271,15 @@ fn build_window_entry(
                 ChildOf(entry),
             ))
             .id();
-        spawn_entry_label(commands, fill, &label, &suffix, label_color, flag_color, font);
+        spawn_entry_label(
+            commands,
+            fill,
+            &label,
+            &suffix,
+            label_color,
+            flag_color,
+            font,
+        );
         commands.spawn((
             Text::new(theme::POWERLINE_RIGHT.to_string()),
             TextColor(palette::ACCENT),
@@ -293,7 +301,15 @@ fn build_window_entry(
                 ChildOf(entry),
             ))
             .id();
-        spawn_entry_label(commands, pad, &label, &suffix, label_color, flag_color, font);
+        spawn_entry_label(
+            commands,
+            pad,
+            &label,
+            &suffix,
+            label_color,
+            flag_color,
+            font,
+        );
     }
 }
 
