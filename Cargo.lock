@@ -4954,7 +4954,6 @@ dependencies = [
  "ozma_tty_engine",
  "ozma_tty_renderer",
  "ozmux_configs",
- "ozmux_multiplexer",
  "ozmux_tmux",
  "ozmux_webview_host",
  "serde",
@@ -4978,15 +4977,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml",
- "tracing",
-]
-
-[[package]]
-name = "ozmux_multiplexer"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "thiserror 2.0.18",
  "tracing",
 ]
 
