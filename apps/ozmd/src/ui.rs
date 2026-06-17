@@ -83,11 +83,7 @@ fn draw_body(
     } else {
         area
     };
-    frame.render_stateful_widget(
-        WebviewWidget::new(handle_id).fallback(Block::bordered().title("loading…")),
-        webview_area,
-        placements,
-    );
+    frame.render_stateful_widget(WebviewWidget::new(handle_id), webview_area, placements);
 }
 
 fn draw_outline(frame: &mut Frame<'_>, area: Rect, app: &App) {

@@ -150,6 +150,21 @@ impl ServerMsg {
     }
 }
 
+/// An outbound push notification sent from the control plane to a registered
+/// program over the control socket without being a reply to a request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub(crate) enum PushMsg {
+    /// Fired when the inline webview first composites (`active: true`) or is
+    /// unmounted after compositing (`active: false`).
+    Compositing {
+        /// The registered handle whose compositing state changed.
+        handle: String,
+        /// `true` when compositing starts; `false` when it stops.
+        active: bool,
+    },
+}
+
 fn default_true() -> bool {
     true
 }
@@ -353,6 +368,30 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&ServerMsg::err("invalid_root")).unwrap(),
             r#"{"ok":false,"error":"invalid_root"}"#
+        );
+    }
+
+    #[test]
+    fn serializes_compositing_start() {
+        let msg = PushMsg::Compositing {
+            handle: "abc123".into(),
+            active: true,
+        };
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"op":"compositing","handle":"abc123","active":true}"#
+        );
+    }
+
+    #[test]
+    fn serializes_compositing_stop() {
+        let msg = PushMsg::Compositing {
+            handle: "abc123".into(),
+            active: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&msg).unwrap(),
+            r#"{"op":"compositing","handle":"abc123","active":false}"#
         );
     }
 }
