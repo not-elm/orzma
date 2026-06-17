@@ -180,9 +180,9 @@ impl Default for TerminalOverlays {
 /// Field offsets in bytes. `max_overflow_phys` fills the 4-byte padding slot
 /// at offset 76 that encase would otherwise insert before `bg_padding_color`
 /// (Vec4 needs 16-byte alignment, lands at offset 80). `overlay_rects`
-/// (`array<vec4<i32>, 4>`) also needs 16-byte alignment, so encase pads
-/// 4 bytes after `dim` and lands it at offset 112 (total 176 bytes,
-/// 16-byte aligned):
+/// (`array<vec4<i32>, 4>`) also needs 16-byte alignment; `desaturate` fills the
+/// 4-byte slot encase would otherwise pad after `dim`, so `overlay_rects` lands
+/// at offset 112 (total 176 bytes, 16-byte aligned):
 ///
 /// | Offset | Field                       |
 /// |--------|-----------------------------|
@@ -206,6 +206,7 @@ impl Default for TerminalOverlays {
 /// | 96     | `hover_hyperlink_id`        |
 /// | 100    | `hover_active`              |
 /// | 104    | `dim`                       |
+/// | 108    | `desaturate`                |
 /// | 112    | `overlay_rects`             |
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
@@ -246,6 +247,11 @@ struct TerminalParams {
     /// hand-written `Default` below sets this to `1.0` so an un-updated
     /// material never renders dark (a derived `Default` would give `0.0`).
     dim: f32,
+    /// Per-pane desaturation toward Rec.709 luminance, applied to the final
+    /// fragment RGB after `dim`. `0.0` = full color (active / no-op); `1.0` =
+    /// fully grey. Fills the 4-byte slot encase previously padded after `dim`,
+    /// so the uniform stays 176 bytes. `Default` (below) sets this to `0.0`.
+    desaturate: f32,
     /// Slot-indexed inline-overlay rects `(row, col, rows, cols)` in cell
     /// coords; `row` may be negative; `rows == 0` = inactive slot sentinel.
     overlay_rects: [IVec4; OVERLAY_SLOTS],
@@ -274,6 +280,7 @@ impl Default for TerminalParams {
             hover_hyperlink_id: 0,
             hover_active: 0,
             dim: 1.0,
+            desaturate: 0.0,
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
         }
     }
@@ -304,6 +311,7 @@ impl TerminalParams {
         hover_hyperlink_id: u32,
         hover_active: u32,
         dim: f32,
+        desaturate: f32,
     ) -> Self {
         let cols = u32::from(grid.cols);
         let rows = u32::from(grid.rows);
@@ -345,6 +353,7 @@ impl TerminalParams {
             hover_hyperlink_id,
             hover_active,
             dim,
+            desaturate,
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
         }
     }
@@ -585,6 +594,7 @@ fn update_terminal_material(
                 hover_hyperlink_id,
                 hover_active,
                 dim,
+                0.0,
             );
             match overlays {
                 Some(o) => {
@@ -835,5 +845,33 @@ mod tests {
     #[test]
     fn terminal_params_uniform_size_includes_overlay_rects() {
         assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 176);
+    }
+
+    #[test]
+    fn terminal_params_default_desaturate_is_zero() {
+        assert_eq!(TerminalParams::default().desaturate, 0.0);
+    }
+
+    #[test]
+    fn terminal_params_field_offsets_are_pinned() {
+        // `dim` fills offset 104; `desaturate` fills the 4-byte pad encase
+        // previously inserted at 108; `overlay_rects` stays at 112 — so the
+        // uniform size is unchanged (176, asserted separately). Field indices
+        // are 0-based in declaration order.
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(19),
+            104,
+            "dim"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(20),
+            108,
+            "desaturate fills the former pad slot"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(21),
+            112,
+            "overlay_rects unchanged"
+        );
     }
 }

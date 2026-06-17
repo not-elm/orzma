@@ -26,6 +26,7 @@ struct TerminalParams {
     hover_hyperlink_id: u32,
     hover_active: u32,
     dim: f32,
+    desaturate: f32,
     overlay_rects: array<vec4<i32>, 4>,
 };
 
@@ -123,11 +124,16 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Pane-level dim: active pane => params.dim == 1.0 (no-op); inactive pane
-    // => params.dim < 1.0. RGB only; alpha is preserved so blending and the
-    // opaque-padding contract are unchanged. Composes with the per-cell SGR
-    // STYLE_DIM independently.
-    return vec4<f32>(color.rgb * params.dim, color.a);
+    // Pane-level treatment on the final composited color (terminal content +
+    // any inline-webview overlay): desaturate toward Rec.709 luminance, then
+    // multiply brightness. Active pane => desaturate == 0.0 && dim == 1.0
+    // (no-op). RGB only; alpha preserved so the opaque-padding and overlay
+    // premultiplied-blend contracts are unchanged. Composes with the per-cell
+    // SGR STYLE_DIM independently. Runs in LINEAR space (cells uploaded via
+    // to_linear, overlays linearized on read), where Rec.709 luma is correct.
+    let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let grey = mix(color.rgb, vec3<f32>(luma), params.desaturate);
+    return vec4<f32>(grey * params.dim, color.a);
 }
 
 // ============================================================================
