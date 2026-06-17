@@ -68,7 +68,7 @@ pub(crate) struct InlinePlacement {
 /// successful projection into `TerminalOverlays` and the `Compositing { active:
 /// true }` push notification has been sent. Prevents duplicate start
 /// notifications on subsequent frames where the same rect re-projects.
-#[derive(Component)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompositeNotified;
 
 /// Registers the inline-webview runtime systems: the `WebviewSize` size sync
@@ -586,10 +586,10 @@ fn project_inline_overlays(
         &InlineWebview,
         &InlinePlacement,
         &WebviewTextureTarget,
-        Option<&WebviewOwner>,
         Has<CompositeNotified>,
+        Option<&WebviewOwner>,
     )>,
-    writers: Option<Res<ConnectionWriters>>,
+    writers: Res<ConnectionWriters>,
 ) {
     for (terminal, grid, children, has_overlays) in &terminals {
         // NOTE: `grid.modes` refreshes only on snapshots (FrameDelta carries
@@ -603,7 +603,7 @@ fn project_inline_overlays(
         let mut has_inline_child = false;
         if let Some(kids) = children {
             for child in kids.iter() {
-                let Ok((view, placement, texture, owner, already_notified)) = inline.get(child)
+                let Ok((view, placement, texture, already_notified, owner)) = inline.get(child)
                 else {
                     continue;
                 };
@@ -647,7 +647,7 @@ fn project_inline_overlays(
                 overlays.textures[slot] = Some(texture.0.clone());
                 if !already_notified {
                     commands.entity(child).insert(CompositeNotified);
-                    if let (Some(owner), Some(writers)) = (owner, writers.as_deref()) {
+                    if let Some(owner) = owner {
                         let msg = serde_json::to_string(&PushMsg::Compositing {
                             handle: owner.handle.clone(),
                             active: true,
@@ -671,7 +671,7 @@ fn project_inline_overlays(
 fn on_placement_removed(
     event: On<Remove, InlinePlacement>,
     owners: Query<(&WebviewOwner, Has<CompositeNotified>)>,
-    writers: Option<Res<ConnectionWriters>>,
+    writers: Res<ConnectionWriters>,
 ) {
     let Ok((owner, notified)) = owners.get(event.entity) else {
         return;
@@ -679,9 +679,6 @@ fn on_placement_removed(
     if !notified {
         return;
     }
-    let Some(writers) = writers else {
-        return;
-    };
     let msg = serde_json::to_string(&PushMsg::Compositing {
         handle: owner.handle.clone(),
         active: false,
@@ -2205,8 +2202,8 @@ mod tests {
     fn compositing_writers(
         connection_id: u64,
     ) -> (ConnectionWriters, crossbeam_channel::Receiver<String>) {
-        use crossbeam_channel::unbounded;
-        let (tx, rx) = unbounded();
+        use crossbeam_channel::bounded;
+        let (tx, rx) = bounded(16);
         let writers = ConnectionWriters::default();
         writers.insert(connection_id, tx);
         (writers, rx)
@@ -2219,7 +2216,7 @@ mod tests {
         placement: InlinePlacement,
         connection_id: u64,
         handle: &str,
-    ) -> Handle<Image> {
+    ) -> Entity {
         let image_handle = app
             .world_mut()
             .resource_mut::<Assets<Image>>()
@@ -2237,17 +2234,17 @@ mod tests {
                 connection_id,
                 handle: handle.to_string(),
             },
-        ));
-        image_handle
+        ))
+        .id()
     }
 
     #[test]
-    fn compositing_start_sent_on_first_projection() {
+    fn first_projection_sends_compositing_start() {
         let mut app = make_test_app();
         let (writers, rx) = compositing_writers(1);
         app.insert_resource(writers);
         let terminal = app.world_mut().spawn(projection_grid(7)).id();
-        spawn_owned_projection_child(
+        let entity = spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
@@ -2263,6 +2260,10 @@ mod tests {
 
         project(&mut app);
 
+        assert!(
+            app.world().get::<CompositeNotified>(entity).is_some(),
+            "first successful projection must stamp CompositeNotified"
+        );
         let msg = rx
             .try_recv()
             .expect("compositing start must be sent after first projection");
@@ -2273,7 +2274,7 @@ mod tests {
     }
 
     #[test]
-    fn compositing_start_sent_only_once() {
+    fn second_projection_does_not_resend() {
         let mut app = make_test_app();
         let (writers, rx) = compositing_writers(1);
         app.insert_resource(writers);
@@ -2303,12 +2304,12 @@ mod tests {
     }
 
     #[test]
-    fn compositing_stop_sent_on_despawn() {
+    fn stop_observer_sends_compositing_stop_when_notified() {
         let mut app = make_test_app();
         let (writers, rx) = compositing_writers(1);
         app.insert_resource(writers);
         let terminal = app.world_mut().spawn(projection_grid(7)).id();
-        spawn_owned_projection_child(
+        let child = spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
@@ -2325,7 +2326,6 @@ mod tests {
         project(&mut app);
         let _ = rx.try_recv().expect("start notification must arrive");
 
-        let child = inline_children_of(&app, terminal)[0];
         app.world_mut().entity_mut(child).despawn();
         app.world_mut().flush();
 
@@ -2339,12 +2339,12 @@ mod tests {
     }
 
     #[test]
-    fn compositing_stop_not_sent_if_never_projected() {
+    fn stop_observer_does_not_send_when_not_notified() {
         let mut app = make_test_app();
         let (writers, rx) = compositing_writers(1);
         app.insert_resource(writers);
         let terminal = app.world_mut().spawn(projection_grid(6)).id();
-        spawn_owned_projection_child(
+        let child = spawn_owned_projection_child(
             &mut app,
             terminal,
             0,
@@ -2358,7 +2358,6 @@ mod tests {
             "myhandle",
         );
 
-        let child = inline_children_of(&app, terminal)[0];
         app.world_mut().entity_mut(child).despawn();
         app.world_mut().flush();
 
