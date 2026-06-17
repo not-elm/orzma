@@ -14,6 +14,7 @@ pub struct WebviewWidget<'a, W = WebviewDefaultPlaceholder> {
     handle: &'a str,
     fallback: W,
     focused: bool,
+    on_compositing_change: Option<Box<dyn Fn(bool) + 'a>>,
 }
 
 impl<'a> WebviewWidget<'a, WebviewDefaultPlaceholder> {
@@ -23,6 +24,7 @@ impl<'a> WebviewWidget<'a, WebviewDefaultPlaceholder> {
             handle,
             fallback: WebviewDefaultPlaceholder,
             focused: false,
+            on_compositing_change: None,
         }
     }
 }
@@ -34,7 +36,18 @@ impl<'a, W> WebviewWidget<'a, W> {
             handle: self.handle,
             fallback: widget,
             focused: self.focused,
+            on_compositing_change: self.on_compositing_change,
         }
+    }
+
+    /// Registers a callback invoked during [`StatefulWidget::render`] when a
+    /// compositing-state change for this handle is pending in the frame state.
+    ///
+    /// The callback receives `true` when the webview starts compositing (the
+    /// page is live and painting) and `false` when it stops.
+    pub fn on_compositing_change(mut self, f: impl Fn(bool) + 'a) -> Self {
+        self.on_compositing_change = Some(Box::new(f));
+        self
     }
 
     /// Marks the widget focused, a hint for drawing a focus frame/title around
@@ -68,6 +81,11 @@ impl<W: Widget> StatefulWidget for WebviewWidget<'_, W> {
         state.record(self.handle.to_owned(), area);
         if self.focused {
             state.set_focused(self.handle.to_owned());
+        }
+        if let Some(active) = state.take_compositing(self.handle) {
+            if let Some(cb) = &self.on_compositing_change {
+                cb(active);
+            }
         }
     }
 }
@@ -169,5 +187,118 @@ mod tests {
         let mut state = FramePlacements::default();
         WebviewWidget::new("v").render(area, &mut buf, &mut state);
         assert_eq!(state.focused_for_test(), None);
+    }
+
+    #[test]
+    fn on_compositing_change_fires_when_pending() {
+        use std::cell::Cell;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+        state.pending_compositing.insert("v".into(), true);
+
+        let fired = Cell::new(false);
+        let fired_val = Cell::new(false);
+        WebviewWidget::new("v")
+            .on_compositing_change(|active| {
+                fired.set(true);
+                fired_val.set(active);
+            })
+            .render(area, &mut buf, &mut state);
+
+        assert!(fired.get(), "callback should have fired");
+        assert!(fired_val.get(), "active should be true");
+    }
+
+    #[test]
+    fn on_compositing_change_not_fired_when_absent() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+
+        let fired = std::cell::Cell::new(false);
+        WebviewWidget::new("v")
+            .on_compositing_change(|_| fired.set(true))
+            .render(area, &mut buf, &mut state);
+
+        assert!(!fired.get(), "callback must not fire when no pending compositing");
+    }
+
+    #[test]
+    fn on_compositing_change_fires_false() {
+        use std::cell::Cell;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+        state.pending_compositing.insert("v".into(), false);
+
+        let fired_val = Cell::new(true);
+        WebviewWidget::new("v")
+            .on_compositing_change(|active| {
+                fired_val.set(active);
+            })
+            .render(area, &mut buf, &mut state);
+
+        assert!(!fired_val.get(), "active should be false");
+    }
+
+    #[test]
+    fn on_compositing_change_consumed_from_state() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+        state.pending_compositing.insert("v".into(), true);
+
+        WebviewWidget::new("v")
+            .on_compositing_change(|_| {})
+            .render(area, &mut buf, &mut state);
+
+        assert!(
+            state.pending_compositing_for_test().is_empty(),
+            "pending entry should be consumed after render"
+        );
+    }
+
+    #[test]
+    fn on_compositing_change_survives_fallback_builder() {
+        use ratatui::text::Text;
+        use std::cell::Cell;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 4,
+            height: 1,
+        };
+        let mut buf = Buffer::empty(area);
+        let mut state = FramePlacements::default();
+        state.pending_compositing.insert("v".into(), true);
+
+        let fired = Cell::new(false);
+        WebviewWidget::new("v")
+            .on_compositing_change(|_| fired.set(true))
+            .fallback(Text::raw("x"))
+            .render(area, &mut buf, &mut state);
+
+        assert!(fired.get(), "callback should survive .fallback() builder call");
     }
 }
