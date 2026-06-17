@@ -124,24 +124,32 @@ impl Webview {
 /// A registered webview handle: emit events to the page, read its id.
 #[derive(Clone, Debug)]
 pub struct WebviewHandle {
-    id: String,
+    id: Arc<Mutex<String>>,
     writer: SharedWriter,
 }
 
 impl PartialEq for WebviewHandle {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
+        self.id() == other.id()
     }
 }
 
 impl WebviewHandle {
     pub(crate) fn new(id: String, writer: SharedWriter) -> Self {
+        Self::new_shared(Arc::new(Mutex::new(id)), writer)
+    }
+
+    /// Creates a handle from a pre-existing shared ID slot.
+    ///
+    /// Used by the reconnect path (Task 5) so the reconnect thread can update
+    /// the ID in place while the caller retains an always-current view.
+    pub(crate) fn new_shared(id: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
         Self { id, writer }
     }
 
     /// Returns the opaque handle id minted by the control plane.
-    pub fn id(&self) -> &str {
-        &self.id
+    pub fn id(&self) -> String {
+        self.id.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Pushes an event to the currently-mounted page(s) of this handle.
@@ -149,7 +157,7 @@ impl WebviewHandle {
     /// Mount-scoped: a no-op (still `Ok`) when nothing is mounted.
     pub fn emit<T: Serialize>(&self, event: &str, payload: &T) -> OzmaResult<()> {
         let msg = ClientMsg::Emit {
-            handle: self.id.clone(),
+            handle: self.id(),
             event: event.to_owned(),
             payload: serde_json::to_value(payload)?,
         };
@@ -283,5 +291,16 @@ mod tests {
         let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
         assert_eq!(v["kind"], "url");
         assert_eq!(v["passthrough"][0]["key"], "h");
+    }
+
+    #[test]
+    fn id_reflects_slot_update() {
+        let slot = Arc::new(Mutex::new("old-id".to_owned()));
+        let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(a));
+        let handle = WebviewHandle::new_shared(slot.clone(), writer);
+        assert_eq!(handle.id(), "old-id");
+        *slot.lock().unwrap() = "new-id".to_owned();
+        assert_eq!(handle.id(), "new-id");
     }
 }

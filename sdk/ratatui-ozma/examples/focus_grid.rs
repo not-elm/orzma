@@ -184,14 +184,14 @@ fn draw(
     // webviews — calling it twice would drop the first placement.
     let mut frame = ozma.frame();
     f.render_stateful_widget(
-        WebviewWidget::new(ne.id())
+        WebviewWidget::new(&ne.id())
             .focused(focused == "ne")
             .fallback(focus_block("NE (webview)", focused == "ne")),
         ne_area,
         &mut *frame,
     );
     f.render_stateful_widget(
-        WebviewWidget::new(sw.id())
+        WebviewWidget::new(&sw.id())
             .focused(focused == "sw")
             .fallback(focus_block("SW (webview)", focused == "sw")),
         sw_area,

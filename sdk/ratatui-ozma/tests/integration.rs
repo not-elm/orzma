@@ -63,7 +63,7 @@ fn backend_draw_emits_mount_osc_and_focus_op() {
         {
             let mut scratch = Buffer::empty(Rect::new(0, 0, 80, 40));
             let mut frame = ozma.frame();
-            WebviewWidget::new(handle.id()).focused(true).render(
+            WebviewWidget::new(&handle.id()).focused(true).render(
                 Rect::new(2, 3, 48, 12),
                 &mut scratch,
                 &mut *frame,
