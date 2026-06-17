@@ -666,8 +666,8 @@ fn attempt_reconnect(
         let old = reg
             .handle_slot
             .lock()
-            .map(|g| g.clone())
-            .unwrap_or_default();
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         if let Ok(mut map) = handlers.lock() {
             map.remove(&old);
             map.insert(new_handle.clone(), reg.handlers.clone());

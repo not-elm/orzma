@@ -203,18 +203,13 @@ fn reconnect_updates_handle_id_and_reregisters() {
         let mut backend = OzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &ozma);
         Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
 
-        // Drop first server: _close_tx drops → shutdown watcher drops stream clone →
-        // client reader sees EOF → disconnected=true.
         drop(pair.first);
 
         std::thread::sleep(Duration::from_millis(200));
 
-        // Update $OZMA_SOCK so the reconnect thread finds the second server.
         // NOTE: ENV_LOCK is held by with_env, serializing all env var accesses.
         unsafe { std::env::set_var("OZMA_SOCK", &pair.second.sock_path) };
 
-        // Draw again: disconnected=true + last_attempt=None bypasses the 2s rate
-        // limit, fires reconnect_tx.try_send(), and the reconnect thread picks it up.
         Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
 
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
