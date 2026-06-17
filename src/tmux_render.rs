@@ -5,6 +5,7 @@
 use crate::osc_webview::OscWebviewGate;
 use crate::theme;
 use crate::ui::WorkspaceUiRoot;
+use crate::ui::tmux_pane_title::PaneTitleBar;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
@@ -108,13 +109,15 @@ fn attach_tmux_window_container(
     }
 }
 
-/// Attaches a detached `TerminalHandle`, a `TerminalRenderBundle`, and a
-/// placeholder absolute `Node` to each `TmuxPane` that lacks a
-/// `TerminalHandle`. Runs every frame but targets each pane exactly once.
-/// The grid is sized from the pane's projected `dims`. `ChildOf` is NOT set
+/// Attaches a detached `TerminalHandle` and a column-flex container `Node` to
+/// each `TmuxPane` that lacks a `TerminalHandle`. Spawns two children:
+/// a `PaneTitleBar` row (with a `Text` grandchild) and a `TerminalRenderBundle`
+/// child that owns the GPU grid. Records the child entity in `TerminalRenderRef`
+/// so `flush_emit` and observers target the right entity.
+///
+/// Runs every frame but targets each pane exactly once. `ChildOf` is NOT set
 /// here — the projection observers already establish the correct
-/// `ChildOf(window)` parent.
-/// `layout_tmux_panes` sets the real rect every frame.
+/// `ChildOf(window)` parent. `layout_tmux_panes` sets the real rect every frame.
 fn attach_tmux_pane_terminal(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -132,16 +135,60 @@ fn attach_tmux_pane_terminal(
         let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
         let handle = TerminalHandle::detached(cols, rows, gate.clone());
         let material = materials.add(TerminalUiMaterial::default());
+
         commands.entity(entity).insert((
             handle,
             TerminalTitle::default(),
-            TerminalRenderBundle::new(material),
             Node {
                 position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
                 ..default()
             },
             Outline::new(Val::Px(theme::PANE_BORDER_PX), Val::Px(0.0), theme::BORDER),
         ));
+
+        let title_bar = commands
+            .spawn((
+                PaneTitleBar,
+                Node {
+                    width: Val::Percent(100.0),
+                    padding: UiRect::axes(
+                        Val::Px(theme::TAB_PADDING_X_PX),
+                        Val::Px(0.0),
+                    ),
+                    align_items: AlignItems::Center,
+                    overflow: Overflow::clip_x(),
+                    ..default()
+                },
+                BackgroundColor(theme::PANEL),
+                ChildOf(entity),
+            ))
+            .id();
+        commands.spawn((
+            Text::new(""),
+            TextColor(theme::FOREGROUND),
+            TextFont {
+                font_size: theme::UI_FONT_SIZE,
+                ..default()
+            },
+            ChildOf(title_bar),
+        ));
+
+        let render_child = commands
+            .spawn((
+                TerminalRenderBundle::new(material),
+                Node {
+                    flex_grow: 1.0,
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+                ChildOf(entity),
+            ))
+            .id();
+
+        commands
+            .entity(entity)
+            .insert(TerminalRenderRef(render_child));
     }
 }
 
@@ -164,7 +211,7 @@ fn attach_tmux_pane_terminal(
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
-    mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle)>,
+    mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle, &TerminalRenderRef)>,
     panes: Query<(Entity, &TmuxPane)>,
     copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
@@ -180,7 +227,7 @@ fn route_tmux_output(
         let Some(&entity) = entity_of.get(&pane) else {
             continue;
         };
-        let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
+        let Ok((mut handle, mut title, render_ref)) = handles.get_mut(entity) else {
             continue;
         };
         handle.advance(&data);
@@ -194,7 +241,7 @@ fn route_tmux_output(
         // capture onto the grid; skip the live flush so a late %output delta does
         // not overwrite it (the exit observer forces the full repaint on return).
         if copy_modes.get(entity).is_err() {
-            handle.flush_emit(&mut commands, entity);
+            handle.flush_emit(&mut commands, render_ref.0);
         }
         // NOTE: drain and DISCARD — never forward these replies to tmux. The
         // handle is a display-only renderer; tmux already answered the program's
@@ -659,10 +706,14 @@ mod tests {
             });
         app.update();
 
+        let render_ref = app
+            .world()
+            .get::<TerminalRenderRef>(pane_entity)
+            .expect("pane has TerminalRenderRef");
         let grid = app
             .world()
-            .get::<TerminalGrid>(pane_entity)
-            .expect("pane has a TerminalGrid");
+            .get::<TerminalGrid>(render_ref.0)
+            .expect("render child has TerminalGrid");
         let row0: String = grid.cells[0].iter().map(|c| c.text.as_str()).collect();
         assert!(
             row0.starts_with("hi"),
@@ -708,14 +759,14 @@ mod tests {
                 data: b"hi".to_vec(),
             });
         app.update();
-        let baseline: String = app
-            .world()
-            .get::<TerminalGrid>(pane_entity)
-            .expect("pane has a TerminalGrid")
-            .cells[0]
-            .iter()
-            .map(|c| c.text.as_str())
-            .collect();
+        let baseline: String = {
+            let rr = app.world().get::<TerminalRenderRef>(pane_entity).unwrap();
+            app.world().get::<TerminalGrid>(rr.0).unwrap()
+        }
+        .cells[0]
+        .iter()
+        .map(|c| c.text.as_str())
+        .collect();
         assert!(baseline.starts_with("hi"), "baseline grid painted 'hi'");
 
         // Enter copy mode, then deliver more output: the live handle must advance
@@ -730,10 +781,14 @@ mod tests {
                 data: b"\r\nXY".to_vec(),
             });
         app.update();
-        let gated: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
-            .iter()
-            .map(|c| c.text.as_str())
-            .collect();
+        let gated: String = {
+            let rr = app.world().get::<TerminalRenderRef>(pane_entity).unwrap();
+            app.world().get::<TerminalGrid>(rr.0).unwrap()
+        }
+        .cells[0]
+        .iter()
+        .map(|c| c.text.as_str())
+        .collect();
         assert!(
             gated.starts_with("hi"),
             "grid stays at the baseline while in copy mode, got {gated:?}",
@@ -752,10 +807,14 @@ mod tests {
                 data: Vec::new(),
             });
         app.update();
-        let resumed: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[1]
-            .iter()
-            .map(|c| c.text.as_str())
-            .collect();
+        let resumed: String = {
+            let rr = app.world().get::<TerminalRenderRef>(pane_entity).unwrap();
+            app.world().get::<TerminalGrid>(rr.0).unwrap()
+        }
+        .cells[1]
+        .iter()
+        .map(|c| c.text.as_str())
+        .collect();
         assert!(
             resumed.starts_with("XY"),
             "the live handle advanced under copy mode; after exit + emit row 1 shows 'XY', got {resumed:?}",
