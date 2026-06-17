@@ -82,10 +82,10 @@ impl<W: Widget> StatefulWidget for WebviewWidget<'_, W> {
         if self.focused {
             state.set_focused(self.handle.to_owned());
         }
-        if let Some(active) = state.take_compositing(self.handle) {
-            if let Some(cb) = &self.on_compositing_change {
-                cb(active);
-            }
+        if let Some(active) = state.take_compositing(self.handle)
+            && let Some(cb) = &self.on_compositing_change
+        {
+            cb(active);
         }
     }
 }

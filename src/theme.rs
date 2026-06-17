@@ -32,6 +32,7 @@ pub const FLAG_WARN: Color = Color::srgb(0.878, 0.690, 0.302);
 /// Powerline right-pointing filled separator glyph (Nerd Font U+E0B0).
 pub const POWERLINE_RIGHT: &str = "\u{e0b0}";
 /// Powerline left-pointing filled separator glyph (Nerd Font U+E0B2).
+#[allow(dead_code)]
 pub const POWERLINE_LEFT: &str = "\u{e0b2}";
 /// Session-chooser selection bar — tmux choose-tree style amber.
 pub const SELECTION: Color = Color::srgb(0.847, 0.651, 0.341);
