@@ -135,18 +135,6 @@ impl PartialEq for WebviewHandle {
 }
 
 impl WebviewHandle {
-    pub(crate) fn new(id: String, writer: SharedWriter) -> Self {
-        Self::new_shared(Arc::new(Mutex::new(id)), writer)
-    }
-
-    /// Creates a handle from a pre-existing shared ID slot.
-    ///
-    /// Used by the reconnect path (Task 5) so the reconnect thread can update
-    /// the ID in place while the caller retains an always-current view.
-    pub(crate) fn new_shared(id: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
-        Self { id, writer }
-    }
-
     /// Returns the opaque handle id minted by the control plane.
     pub fn id(&self) -> String {
         self.id.lock().unwrap_or_else(|e| e.into_inner()).clone()
@@ -166,6 +154,16 @@ impl WebviewHandle {
         writeln!(w, "{line}")?;
         w.flush()?;
         Ok(())
+    }
+
+    /// Creates a handle from a pre-existing shared ID slot for callers that need
+    /// to share the ID slot across threads.
+    pub(crate) fn new_shared(id: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
+        Self { id, writer }
+    }
+
+    pub(crate) fn new(id: String, writer: SharedWriter) -> Self {
+        Self::new_shared(Arc::new(Mutex::new(id)), writer)
     }
 }
 
