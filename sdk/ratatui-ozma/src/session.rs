@@ -25,6 +25,7 @@ pub(crate) struct Placement {
 pub struct FramePlacements {
     placements: Vec<Placement>,
     focused: Option<String>,
+    pub(crate) pending_compositing: HashMap<String, bool>,
 }
 
 impl FramePlacements {
@@ -44,6 +45,11 @@ impl FramePlacements {
         self.focused = Some(handle);
     }
 
+    /// Removes and returns the buffered compositing state for `handle`, if any.
+    pub(crate) fn take_compositing(&mut self, handle: &str) -> Option<bool> {
+        self.pending_compositing.remove(handle)
+    }
+
     #[cfg(test)]
     pub(crate) fn placements_for_test(&self) -> &[Placement] {
         &self.placements
@@ -52,6 +58,11 @@ impl FramePlacements {
     #[cfg(test)]
     pub(crate) fn focused_for_test(&self) -> Option<&str> {
         self.focused.as_deref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_compositing_for_test(&self) -> &HashMap<String, bool> {
+        &self.pending_compositing
     }
 }
 
@@ -93,11 +104,14 @@ struct PendingRegister {
     handlers: Arc<HashMap<String, BoxedHandler>>,
 }
 
+type PendingCompositing = Arc<Mutex<HashMap<String, bool>>>;
+
 /// An ozmux session: owns the control-socket connection and reader thread.
 pub struct Ozma {
     writer: SharedWriter,
     pending: PendingRegisters,
     frame: Arc<Mutex<FramePlacements>>,
+    pending_compositing: PendingCompositing,
 }
 
 impl Ozma {
@@ -125,6 +139,7 @@ impl Ozma {
         let writer: SharedWriter = Arc::new(Mutex::new(stream.try_clone()?));
         let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
         let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
+        let pending_compositing: PendingCompositing = Arc::new(Mutex::new(HashMap::new()));
 
         {
             let line = serde_json::to_string(&ClientMsg::Hello { token })?;
@@ -133,12 +148,19 @@ impl Ozma {
             w.flush()?;
         }
 
-        spawn_reader(stream, writer.clone(), handlers.clone(), pending.clone());
+        spawn_reader(
+            stream,
+            writer.clone(),
+            handlers.clone(),
+            pending.clone(),
+            pending_compositing.clone(),
+        );
 
         Ok(Self {
             writer,
             pending,
             frame: Arc::new(Mutex::new(FramePlacements::default())),
+            pending_compositing,
         })
     }
 
@@ -173,10 +195,18 @@ impl Ozma {
     /// The returned guard derefs to [`FramePlacements`]; pass `&mut *ozma.frame()`
     /// as the widget state. Let it drop at the end of the `terminal.draw` closure
     /// so the [`crate::OzmaBackend`] can read the frame during that draw's flush.
+    /// Drains any pending compositing notifications from the reader thread into
+    /// the frame so widget code can read them via [`FramePlacements::take_compositing`].
     pub fn frame(&self) -> MutexGuard<'_, FramePlacements> {
         let mut frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
         frame.placements.clear();
         frame.focused = None;
+        frame.pending_compositing = std::mem::take(
+            &mut *self
+                .pending_compositing
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
         frame
     }
 
@@ -351,6 +381,7 @@ fn spawn_reader(
     writer: SharedWriter,
     handlers: HandlerRegistry,
     pending: PendingRegisters,
+    pending_compositing: PendingCompositing,
 ) {
     thread::spawn(move || {
         let mut reader = BufReader::new(stream);
@@ -365,13 +396,19 @@ fn spawn_reader(
             if trimmed.is_empty() {
                 continue;
             }
-            let is_call = serde_json::from_str::<serde_json::Value>(trimmed)
-                .ok()
-                .map(|v| v["op"] == "call")
-                .unwrap_or(false);
-            if is_call {
+            let parsed = serde_json::from_str::<serde_json::Value>(trimmed).ok();
+            let op = parsed.as_ref().and_then(|v| v["op"].as_str()).unwrap_or("");
+            if op == "call" {
                 if let Ok(call) = serde_json::from_str::<IncomingCall>(trimmed) {
                     dispatch_call(&writer, &handlers, call);
+                }
+            } else if op == "compositing" {
+                if let Some(v) = parsed.as_ref()
+                    && let Some(handle) = v["handle"].as_str()
+                    && let Some(active) = v["active"].as_bool()
+                    && let Ok(mut map) = pending_compositing.lock()
+                {
+                    map.insert(handle.to_owned(), active);
                 }
             } else if let Ok(reply) = serde_json::from_str::<RegisterReply>(trimmed)
                 && let Some(reg) = pending.lock().ok().and_then(|mut q| q.pop_front())
@@ -631,5 +668,136 @@ mod tests {
         assert_eq!(v["op"], "focus");
         assert_eq!(v["handle"], serde_json::Value::Null);
         assert_eq!(last, None);
+    }
+
+    #[test]
+    fn take_compositing_returns_and_removes_entry() {
+        let mut fp = FramePlacements::default();
+        fp.pending_compositing.insert("h1".into(), true);
+        assert_eq!(fp.take_compositing("h1"), Some(true));
+        assert!(fp.pending_compositing.is_empty());
+    }
+
+    #[test]
+    fn take_compositing_returns_none_when_absent() {
+        let mut fp = FramePlacements::default();
+        assert_eq!(fp.take_compositing("missing"), None);
+    }
+
+    #[test]
+    fn frame_drains_pending_compositing_each_call() {
+        let shared: Arc<Mutex<HashMap<String, bool>>> = Arc::new(Mutex::new(HashMap::new()));
+        shared.lock().unwrap().insert("h1".into(), true);
+
+        let frame_arc: Arc<Mutex<FramePlacements>> =
+            Arc::new(Mutex::new(FramePlacements::default()));
+
+        {
+            let mut fp = frame_arc.lock().unwrap_or_else(|e| e.into_inner());
+            fp.placements.clear();
+            fp.focused = None;
+            fp.pending_compositing = shared
+                .lock()
+                .map(|mut map| std::mem::take(&mut *map))
+                .unwrap_or_default();
+        }
+        {
+            let fp = frame_arc.lock().unwrap();
+            assert_eq!(fp.pending_compositing_for_test().len(), 1);
+        }
+        // Second drain: shared is now empty, so pending_compositing is cleared.
+        {
+            let mut fp = frame_arc.lock().unwrap_or_else(|e| e.into_inner());
+            fp.placements.clear();
+            fp.focused = None;
+            fp.pending_compositing = shared
+                .lock()
+                .map(|mut map| std::mem::take(&mut *map))
+                .unwrap_or_default();
+        }
+        {
+            let fp = frame_arc.lock().unwrap();
+            assert!(fp.pending_compositing_for_test().is_empty());
+        }
+    }
+
+    #[test]
+    fn reader_thread_inserts_compositing_into_shared_map() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("test.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+
+        let pending_compositing: Arc<Mutex<HashMap<String, bool>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
+
+        let client = UnixStream::connect(&sock_path).unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
+        let (server_conn, _) = listener.accept().unwrap();
+
+        spawn_reader(
+            client,
+            writer.clone(),
+            handlers,
+            pending,
+            pending_compositing.clone(),
+        );
+
+        use std::io::Write;
+        let mut server = server_conn;
+        writeln!(
+            server,
+            r#"{{"op":"compositing","handle":"h1","active":true}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let map = pending_compositing.lock().unwrap();
+        assert_eq!(map.get("h1"), Some(&true));
+    }
+
+    #[test]
+    fn reader_thread_updates_compositing_to_false() {
+        use std::os::unix::net::UnixListener;
+
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("test2.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+
+        let pending_compositing: Arc<Mutex<HashMap<String, bool>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
+
+        let client = UnixStream::connect(&sock_path).unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
+        let (server_conn, _) = listener.accept().unwrap();
+
+        spawn_reader(
+            client,
+            writer.clone(),
+            handlers,
+            pending,
+            pending_compositing.clone(),
+        );
+
+        use std::io::Write;
+        let mut server = server_conn;
+        writeln!(
+            server,
+            r#"{{"op":"compositing","handle":"h1","active":false}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let map = pending_compositing.lock().unwrap();
+        assert_eq!(map.get("h1"), Some(&false));
     }
 }
