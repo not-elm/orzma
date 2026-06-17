@@ -104,8 +104,10 @@ in the layout tree.
 
 ### `collapse()` Changes
 
-`collapse()` gains a `pane_title_h: f32` parameter. For a `Leaf` node, the pane
-rectangle height is extended by `pane_title_h`:
+`pane_title_h` is computed from `TerminalCellMetricsResource.line_height_phys` (the physical
+cell height) divided by the window DPR to get logical pixels — the same source as
+`bar_height_px()` in `tmux_window_bar.rs`. `collapse()` gains a `pane_title_h: f32`
+parameter. For a `Leaf` node, the pane rectangle height is extended by `pane_title_h`:
 
 ```
 node_size.y = dims.height × cell_h + pane_title_h
@@ -154,7 +156,7 @@ let title_bar = commands.spawn((
 commands.spawn((
     Text::new(""),
     TextColor(theme::FOREGROUND),
-    TextFont { font: ..., font_size: theme::UI_FONT_SIZE, ..default() },
+    TextFont { font_size: theme::UI_FONT_SIZE, ..default() },
     ChildOf(title_bar),
 ));
 
@@ -172,7 +174,13 @@ The `TmuxPane` entity keeps: `TmuxPane`, `TerminalHandle`, `TerminalTitle`, `Ter
 `Node` (container, Column flex), `Outline`.
 
 The `TerminalRenderChild` entity has: `TerminalGrid`, `MaterialNode<TerminalUiMaterial>`,
-`TerminalMaterialState` (auto-inserted by hook), `Node` (flex_grow).
+`TerminalMaterialState` (auto-inserted by hook), `PaneDim` (brightness), `Node` (flex_grow).
+
+**`PaneDim` migration**: `update_terminal_material` in `ozma_tty_renderer` queries `PaneDim`
+alongside `MaterialNode` on the same entity. Since `MaterialNode` moves to `TerminalRenderChild`,
+`PaneDim` must also move there. The `sync_pane_dim` system in `tmux_pane_focus.rs` currently
+inserts `PaneDim` on `TmuxPane` entities — it must be updated to insert `PaneDim` on the
+`TerminalRenderChild` entity instead (looked up via `TerminalRenderRef`).
 
 ### New Plugin: `OzmuxTmuxPaneTitlePlugin`
 
@@ -245,7 +253,7 @@ Font: same `TerminalUiFont` as the window bar.
 | `src/ui/tmux_pane_title.rs` | New file: `OzmuxTmuxPaneTitlePlugin`, `PaneTitleBar` component, `sync_pane_title_text`, `sync_pane_title_active` systems |
 | `src/ui.rs` | Module declaration for `tmux_pane_title` |
 | `src/main.rs` | Register `OzmuxTmuxPaneTitlePlugin` |
-| `src/ui/tmux_pane_focus.rs` | `augment_tmux_pane`: target `PaneTitleBar` entity for `FocusPolicy::Block` as well |
+| `src/ui/tmux_pane_focus.rs` | `augment_tmux_pane`: add `FocusPolicy::Block` to `PaneTitleBar` child; `sync_pane_dim`: insert `PaneDim` on `TerminalRenderChild` (via `TerminalRenderRef`) instead of on `TmuxPane` |
 | `src/tmux_render.rs` (tests) | Update `collapse` unit tests for `pane_title_h`; add `vertical_depth` unit tests |
 
 ## Edge Cases
