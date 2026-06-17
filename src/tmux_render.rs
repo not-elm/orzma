@@ -206,6 +206,7 @@ fn collapse(
     cell_w: f32,
     cell_h: f32,
     gap: f32,
+    pane_title_h: f32,
 ) -> (HashMap<PaneId, Rect>, Vec<DividerPixelRect>, Vec2) {
     let dims = root.dims();
     let available = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
@@ -220,8 +221,11 @@ fn collapse(
         cell_w,
         cell_h,
         gap,
+        pane_title_h,
     );
-    (panes, dividers, available)
+    let actual_h = panes.values().map(|r| r.max.y).fold(0.0f32, f32::max);
+    let bbox = Vec2::new(available.x, actual_h.max(available.y));
+    (panes, dividers, bbox)
 }
 
 fn place(
@@ -233,11 +237,14 @@ fn place(
     cell_w: f32,
     cell_h: f32,
     gap: f32,
+    pane_title_h: f32,
 ) -> Vec2 {
     match cell {
         Cell::Leaf { dims, pane_id } => {
-            let size = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
-            let node_size = Vec2::new(available.x.max(size.x), available.y.max(size.y));
+            let node_size = Vec2::new(
+                available.x.max(dims.width as f32 * cell_w),
+                available.y.max(dims.height as f32 * cell_h + pane_title_h),
+            );
             if let Some(id) = pane_id {
                 panes.insert(
                     PaneId(*id),
@@ -268,6 +275,7 @@ fn place(
                     cell_w,
                     cell_h,
                     gap,
+                    pane_title_h,
                 );
                 x += csz.x;
                 if i < last {
@@ -305,6 +313,7 @@ fn place(
                     cell_w,
                     cell_h,
                     gap,
+                    pane_title_h,
                 );
                 y += csz.y;
                 if i < last {
@@ -331,6 +340,7 @@ fn place(
                 let lit_avail = Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
                 place(
                     panes, dividers, child, lit_origin, lit_avail, cell_w, cell_h, gap,
+                    pane_title_h,
                 );
             }
             Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h)
@@ -403,7 +413,7 @@ fn layout_tmux_panes(
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
 
     for (window_entity, layout, mut container, children, maybe_packed) in windows.iter_mut() {
-        let (rects, dividers, bbox) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX);
+        let (rects, dividers, bbox) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX, 0.0);
 
         // NOTE: only write the Node fields when they actually change — writing
         // through `Mut<Node>` every frame marks the component changed and forces
@@ -1135,7 +1145,7 @@ mod tests {
             },
             pane_id: Some(0),
         };
-        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
         assert_eq!(
             rects[&PaneId(0)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 384.0))
@@ -1174,7 +1184,7 @@ mod tests {
                 },
             ],
         };
-        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
@@ -1242,7 +1252,7 @@ mod tests {
                 right_child,
             ],
         };
-        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
@@ -1310,7 +1320,7 @@ mod tests {
                 },
             ],
         };
-        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(160.0, 384.0))
@@ -1368,9 +1378,39 @@ mod tests {
                 },
             ],
         };
-        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
         assert_eq!(rects.len(), 1, "pane_id:None leaf is not placed");
         assert!(rects.contains_key(&PaneId(2)));
+    }
+
+    #[test]
+    fn collapse_with_title_h_adds_t_to_every_leaf() {
+        let root = Cell::Split {
+            dims: CellDims { width: 80, height: 22, xoff: 0, yoff: 0 },
+            dir: SplitDir::TopBottom,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims { width: 80, height: 11, xoff: 0, yoff: 0 },
+                    pane_id: Some(1),
+                },
+                Cell::Leaf {
+                    dims: CellDims { width: 80, height: 10, xoff: 0, yoff: 12 },
+                    pane_id: Some(2),
+                },
+            ],
+        };
+        // cell_h = 16.0, pane_title_h = 16.0, gap = 1.0
+        // pane1: dims.height*cell_h + pane_title_h = 11*16 + 16 = 192 px tall
+        // pane2: available.y - consumed = (22*16) - 192 - 1 = 352-192-1 = 159 available
+        //        max(159, 10*16+16) = max(159, 176) = 176 px tall
+        // pane2 starts at y = 192+1 = 193
+        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0, 16.0);
+        let r1 = rects[&PaneId(1)];
+        let r2 = rects[&PaneId(2)];
+        assert_eq!(r1, Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 192.0)));
+        assert_eq!(r2, Rect::from_corners(Vec2::new(0.0, 193.0), Vec2::new(640.0, 369.0)));
+        assert_eq!(r1.height(), 192.0, "11 rows + 1 title bar row = 192px");
+        assert_eq!(r2.height(), 176.0, "10 rows + 1 title bar row = 176px");
     }
 
     #[test]
