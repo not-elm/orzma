@@ -29,6 +29,7 @@ pub struct KeyboardConfig {
 /// Per-field-optional patch produced by parsing `[keyboard]` from
 /// `config.toml`. Missing keys fall through to the defaults.
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct KeyboardPatch {
     pub(crate) option_as_alt: Option<OptionAsAlt>,
 }
@@ -85,5 +86,14 @@ mod tests {
     fn rejects_unknown_value() {
         let err = toml::from_str::<KeyboardPatch>(r#"option_as_alt = "meta""#).err();
         assert!(err.is_some(), "unknown enum value must be a parse error");
+    }
+
+    #[test]
+    fn rejects_unknown_field() {
+        let err = toml::from_str::<KeyboardPatch>(r#"option_as_alt2 = "both""#).err();
+        assert!(
+            err.is_some(),
+            "a misspelled key in [keyboard] must be a parse error, not silently ignored"
+        );
     }
 }
