@@ -260,7 +260,7 @@ struct TerminalParams {
     dim: f32,
     /// Per-pane desaturation toward Rec.709 luminance, applied to the final
     /// fragment RGB after `dim`. `0.0` = full color (active / no-op); `1.0` =
-    /// fully grey. Fills the 4-byte slot encase previously padded after `dim`,
+    /// fully grey. Fills the 4-byte slot encase would otherwise pad after `dim`,
     /// so the uniform stays 176 bytes. `Default` (below) sets this to `0.0`.
     desaturate: f32,
     /// Slot-indexed inline-overlay rects `(row, col, rows, cols)` in cell
