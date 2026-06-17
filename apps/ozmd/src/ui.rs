@@ -83,11 +83,22 @@ fn draw_body(
     } else {
         area
     };
-    frame.render_stateful_widget(
-        WebviewWidget::new(handle_id).fallback(Block::bordered().title("loading…")),
-        webview_area,
-        placements,
-    );
+    if app.compositing() {
+        frame.render_stateful_widget(
+            WebviewWidget::new(handle_id)
+                .on_compositing_change(|active| app.set_compositing(active)),
+            webview_area,
+            placements,
+        );
+    } else {
+        frame.render_stateful_widget(
+            WebviewWidget::new(handle_id)
+                .fallback(Block::bordered().title("loading…"))
+                .on_compositing_change(|active| app.set_compositing(active)),
+            webview_area,
+            placements,
+        );
+    }
 }
 
 fn draw_outline(frame: &mut Frame<'_>, area: Rect, app: &App) {
