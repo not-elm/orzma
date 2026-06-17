@@ -81,8 +81,6 @@ pub(crate) enum ControlFrame {
     ResetTitle,
     Clipboard {
         content: String,
-        #[allow(dead_code)] // reserved for future correlation tracking
-        correlation_seq: Option<u32>,
     },
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
@@ -127,7 +125,6 @@ impl alacritty_terminal::event::EventListener for TermListener {
             Event::ClipboardStore(_clip, content) => {
                 let frame = ControlFrame::Clipboard {
                     content,
-                    correlation_seq: None,
                 };
                 if let Err(e) = self.control_tx.send(frame) {
                     tracing::warn!(?e, "control_tx send(Clipboard) failed");
