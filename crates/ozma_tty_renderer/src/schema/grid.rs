@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 /// A structure represents the layout structure of the terminal grid.
 /// Each terminal entity owns this component.
-#[derive(Component, Default)]
+#[derive(Component)]
 pub struct TerminalGrid {
     /// Visible column count.
     pub cols: u16,
@@ -43,6 +43,31 @@ pub struct TerminalGrid {
     /// carry ≤100 distinct hyperlinks (mirroring the server-side
     /// interner rationale).
     pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
+    /// Terminal default background color from `FrameSnapshot.default_bg`
+    /// (sourced from OSC 11). Raw `[r, g, b]` bytes; black when not set.
+    /// Used by the material system to fill padding pixels outside the grid.
+    pub default_bg: [u8; 3],
+}
+
+impl Default for TerminalGrid {
+    fn default() -> Self {
+        Self {
+            cols: 0,
+            rows: 0,
+            cells: Vec::new(),
+            cursor: None,
+            display_offset: 0,
+            history_size: 0,
+            history_base: 0,
+            last_seq: 0,
+            modes: Vec::new(),
+            vi_cursor: None,
+            selection: None,
+            suppress_cursor: false,
+            hyperlinks: Vec::new(),
+            default_bg: [0, 0, 0],
+        }
+    }
 }
 
 impl TerminalGrid {

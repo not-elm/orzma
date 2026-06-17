@@ -558,15 +558,11 @@ fn update_terminal_material(
             state.initialized = true;
         }
 
-        let bg_padding_color = grid
-            .cells
-            .last()
-            .and_then(|row| row.first())
-            .map(|cell| {
-                let c = cell.bg.to_linear();
-                Vec4::new(c.red, c.green, c.blue, c.alpha)
-            })
-            .unwrap_or(Vec4::new(0.0, 0.0, 0.0, 1.0));
+        let bg_padding_color = {
+            let [r, g, b] = grid.default_bg;
+            let c = Color::srgb_u8(r, g, b).to_linear();
+            Vec4::new(c.red, c.green, c.blue, 1.0)
+        };
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
