@@ -4,7 +4,7 @@ use crate::components::WindowFlags;
 use crate::input::quote;
 use crate::keybindings::PromptKind;
 use bevy::prelude::Resource;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tmux_control::CommandId;
 use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
@@ -198,6 +198,17 @@ pub(crate) fn capture_pane_command(id: PaneId) -> String {
     format!("capture-pane -p -e -t %{}", id.0)
 }
 
+/// Builds `display-message -p -t %<id> '#{cursor_x} #{cursor_y}'` to query the
+/// real cursor position of a pane.
+///
+/// Sent immediately after [`capture_pane_command`] for the same pane. Because
+/// tmux CC-mode replies are FIFO-ordered, this reply always arrives after the
+/// capture reply, so the capture content can be held until both are available and
+/// a cursor-positioning escape appended before the `PaneOutput` is emitted.
+pub(crate) fn cursor_query_command(id: PaneId) -> String {
+    format!("display-message -p -t %{} '#{{cursor_x}} #{{cursor_y}}'", id.0)
+}
+
 /// The tab-separated `display-message -F` format ozmux reads each refresh while
 /// a pane is in copy mode. Field order is fixed; `parse_copy_state` depends on it.
 const COPY_STATE_FORMAT: &str = "#{pane_in_mode}\t#{scroll_position}\t#{pane_height}\t#{history_size}\t#{copy_cursor_x}\t#{copy_cursor_y}\t#{selection_present}\t#{rectangle_toggle}\t#{selection_start_x}\t#{selection_start_y}\t#{selection_end_x}\t#{selection_end_y}";
@@ -348,6 +359,17 @@ pub(crate) struct EnumerationState {
     pub(crate) mode_keys_pending: Option<CommandId>,
     /// In-flight `capture-pane` commands → the pane each reply seeds.
     pub(crate) capture_pending: HashMap<CommandId, PaneId>,
+    /// In-flight cursor-position `display-message` queries → the pane.
+    ///
+    /// Replies arrive after the paired `capture-pane` reply (FIFO). When both
+    /// have been received the cursor-positioning escape is appended to the
+    /// captured content before the `PaneOutput` is emitted.
+    pub(crate) cursor_pending: HashMap<CommandId, PaneId>,
+    /// Panes whose cursor query is still in-flight; used for O(1) lookup when
+    /// the capture reply arrives to decide whether to cache or emit immediately.
+    pub(crate) panes_with_cursor_pending: HashSet<PaneId>,
+    /// Captured screen lines held while the cursor reply has not yet arrived.
+    pub(crate) capture_awaiting_cursor: HashMap<PaneId, Vec<String>>,
 }
 
 #[cfg(test)]
