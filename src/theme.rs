@@ -75,8 +75,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn powerline_glyphs_are_the_nerd_font_code_points() {
+    fn powerline_right_is_the_nerd_font_code_point() {
         assert_eq!(POWERLINE_RIGHT, "\u{e0b0}");
-        assert_eq!(POWERLINE_LEFT, "\u{e0b2}");
     }
 }

@@ -556,10 +556,6 @@ mod tests {
             "right chevron: {texts:?}"
         );
         assert!(
-            texts.iter().any(|t| t == theme::POWERLINE_RIGHT),
-            "right chevron: {texts:?}"
-        );
-        assert!(
             texts.iter().any(|t| t == " Z"),
             "zoom flag suffix: {texts:?}"
         );

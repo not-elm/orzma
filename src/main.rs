@@ -30,6 +30,7 @@ use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
+use input::option_as_alt::OptionAsAltPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_tmux::TmuxSessionPlugin;
@@ -93,6 +94,7 @@ fn main() {
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
+            OptionAsAltPlugin,
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),
