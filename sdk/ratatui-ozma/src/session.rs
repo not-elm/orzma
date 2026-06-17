@@ -3,13 +3,14 @@
 use crate::error::{OzmaError, OzmaResult};
 use crate::handler::BoxedHandler;
 use crate::osc::{clamp_dims, cursor_to, mount_inline, unmount_inline, valid_handle};
-use crate::protocol::{ClientMsg, IncomingCall, RegisterReply};
+use crate::protocol::{ClientMsg, IncomingCall, RegisterKind, RegisterReply};
 use crate::webview::{SharedWriter, Webview, WebviewHandle};
 use crossbeam_channel::{Sender, bounded};
 use ratatui::layout::Rect;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 
@@ -92,6 +93,11 @@ impl FlushState {
         let mut w = socket.lock()?;
         flush_focus(&mut *w, &mut self.last_focused, &frame.focused)
     }
+
+    pub(crate) fn reset(&mut self) {
+        self.last.clear();
+        self.last_focused = None;
+    }
 }
 
 type HandlerRegistry = Arc<Mutex<HashMap<String, Arc<HashMap<String, BoxedHandler>>>>>;
@@ -105,6 +111,20 @@ struct PendingRegister {
 }
 
 type PendingCompositing = Arc<Mutex<HashMap<String, bool>>>;
+
+/// A saved webview registration for replay on reconnect.
+struct Registration {
+    kind: RegisterKind,
+    handle_slot: Arc<Mutex<String>>,
+    handlers: Arc<HashMap<String, BoxedHandler>>,
+}
+
+/// The minimal shared state passed to [`OzmaBackend`] for reconnect signalling.
+pub(crate) struct ReconnectHandle {
+    pub(crate) disconnected: Arc<AtomicBool>,
+    pub(crate) generation: Arc<AtomicU64>,
+    pub(crate) reconnect_tx: Sender<()>,
+}
 
 /// An ozmux session: owns the control-socket connection and reader thread.
 pub struct Ozma {
@@ -577,6 +597,19 @@ mod tests {
     #[test]
     fn parse_show_environment_none_when_key_absent() {
         assert_eq!(parse_show_environment("OTHER=/x\n", "OZMA_SOCK"), None);
+    }
+
+    #[test]
+    fn flush_state_reset_clears_placements_and_focus() {
+        let mut state = FlushState::default();
+        state.last.insert("h1".into(), rect(0, 0, 10, 5));
+        state.last_focused = Some("h1".into());
+        state.reset();
+        assert!(state.last.is_empty(), "last should be empty after reset");
+        assert_eq!(
+            state.last_focused, None,
+            "last_focused should be None after reset"
+        );
     }
 
     #[test]
