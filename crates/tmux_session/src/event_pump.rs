@@ -118,16 +118,21 @@ pub(crate) fn take_client_name(
     None
 }
 
-/// Drains matching `capture-pane` replies from `events`, returning a
-/// [`PaneOutput`] seeding each captured pane's initial screen.
+/// Drains matching `capture-pane` replies from `events`.
 ///
-/// For every `CommandComplete` whose id is in `capture_pending`, the entry is
-/// removed and (on success) its body lines are joined with CRLF into VT bytes
-/// fed to the pane like ordinary `%output`. tmux `-CC` does not replay existing
-/// content on attach, so this seeds the first paint; the live `%output` stream
-/// keeps it current thereafter.
+/// For every `CommandComplete` whose id is in `capture_pending`:
+/// - If the pane has a cursor-position query in-flight (`panes_with_cursor_pending`),
+///   the captured lines are stored in `capture_awaiting_cursor` and emitted later
+///   by [`take_cursor_positions`] once the cursor reply arrives.
+/// - Otherwise the pane is emitted immediately as a [`PaneOutput`] (original
+///   behaviour when cursor querying is unavailable or already drained).
+///
+/// tmux `-CC` does not replay existing content on attach, so this seeds the
+/// first paint; the live `%output` stream keeps it current thereafter.
 pub(crate) fn take_pane_captures(
     capture_pending: &mut HashMap<CommandId, PaneId>,
+    capture_awaiting_cursor: &mut HashMap<PaneId, Vec<String>>,
+    panes_with_cursor_pending: &HashSet<PaneId>,
     events: &[TransportEvent],
 ) -> Vec<PaneOutput> {
     let mut out = Vec::new();
@@ -136,16 +141,64 @@ pub(crate) fn take_pane_captures(
             && let Some(pane) = capture_pending.remove(id)
         {
             if *ok {
-                out.push(PaneOutput {
-                    pane,
-                    data: capture_to_bytes(output),
-                });
+                if panes_with_cursor_pending.contains(&pane) {
+                    capture_awaiting_cursor.insert(pane, output.clone());
+                } else {
+                    out.push(PaneOutput {
+                        pane,
+                        data: capture_to_bytes(output),
+                    });
+                }
             } else {
                 tracing::warn!(pane = pane.0, "capture-pane command failed");
             }
         }
     }
     out
+}
+
+/// Drains matching cursor-position `display-message` replies from `events`,
+/// pairing each with its cached capture content and returning the combined
+/// [`PaneOutput`] with the real cursor position restored.
+///
+/// FIFO ordering guarantees the capture reply arrives before this cursor reply,
+/// so `capture_awaiting_cursor` should always contain the entry. If it does not
+/// (e.g. capture failed), the cursor reply is silently dropped.
+pub(crate) fn take_cursor_positions(
+    cursor_pending: &mut HashMap<CommandId, PaneId>,
+    panes_with_cursor_pending: &mut HashSet<PaneId>,
+    capture_awaiting_cursor: &mut HashMap<PaneId, Vec<String>>,
+    events: &[TransportEvent],
+) -> Vec<PaneOutput> {
+    let mut out = Vec::new();
+    for event in events {
+        if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
+            && let Some(pane) = cursor_pending.remove(id)
+        {
+            panes_with_cursor_pending.remove(&pane);
+            let Some(lines) = capture_awaiting_cursor.remove(&pane) else {
+                continue;
+            };
+            let (cx, cy) = if *ok {
+                parse_cursor_pos(output).unwrap_or((0, 0))
+            } else {
+                tracing::warn!(pane = pane.0, "cursor-position query failed");
+                (0, 0)
+            };
+            out.push(PaneOutput {
+                pane,
+                data: capture_to_bytes_with_cursor(&lines, cx, cy),
+            });
+        }
+    }
+    out
+}
+
+/// Parses a `'#{cursor_x} #{cursor_y}'` reply line into `(col, row)`.
+fn parse_cursor_pos(output: &[String]) -> Option<(u16, u16)> {
+    let line = output.first()?;
+    let (x, y) = line.trim().split_once(' ')?;
+    Some((x.parse().ok()?, y.parse().ok()?))
 }
 
 /// Joins `capture-pane -p -e` reply lines into VT bytes for seeding a pane's
@@ -156,6 +209,15 @@ pub(crate) fn take_pane_captures(
 fn capture_to_bytes(lines: &[String]) -> Vec<u8> {
     let mut bytes = b"\x1b[H\x1b[2J".to_vec();
     bytes.extend_from_slice(lines.join("\r\n").as_bytes());
+    bytes
+}
+
+/// Like [`capture_to_bytes`] but appends a CSI cursor-position escape (`ESC[row;colH`,
+/// 1-origin) so the rendered cursor matches the real tmux pane cursor after the
+/// snapshot is painted.
+fn capture_to_bytes_with_cursor(lines: &[String], cx: u16, cy: u16) -> Vec<u8> {
+    let mut bytes = capture_to_bytes(lines);
+    bytes.extend_from_slice(format!("\x1b[{};{}H", cy + 1, cx + 1).as_bytes());
     bytes
 }
 
@@ -478,7 +540,9 @@ mod tests {
             output: vec!["line one".to_string(), "line two".to_string()],
         })];
         let mut capture_pending = HashMap::from([(CommandId(5), PaneId(88))]);
-        let out = take_pane_captures(&mut capture_pending, &events);
+        let no_cursor_pending = HashSet::new();
+        let mut awaiting = HashMap::new();
+        let out = take_pane_captures(&mut capture_pending, &mut awaiting, &no_cursor_pending, &events);
         assert_eq!(
             out,
             vec![PaneOutput {
@@ -487,6 +551,7 @@ mod tests {
             }]
         );
         assert!(capture_pending.is_empty());
+        assert!(awaiting.is_empty());
     }
 
     #[test]
@@ -514,12 +579,57 @@ mod tests {
             output: vec![],
         })];
         let mut capture_pending = HashMap::from([(CommandId(5), PaneId(88))]);
-        let out = take_pane_captures(&mut capture_pending, &events);
+        let no_cursor_pending = HashSet::new();
+        let mut awaiting = HashMap::new();
+        let out = take_pane_captures(&mut capture_pending, &mut awaiting, &no_cursor_pending, &events);
         assert!(out.is_empty());
-        assert!(
-            capture_pending.is_empty(),
-            "failed capture is still cleared"
+        assert!(capture_pending.is_empty(), "failed capture is still cleared");
+        assert!(awaiting.is_empty(), "failed capture must not populate awaiting");
+    }
+
+    #[test]
+    fn take_pane_captures_caches_when_cursor_pending() {
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(5),
+            number: 0,
+            ok: true,
+            output: vec!["line one".to_string()],
+        })];
+        let mut capture_pending = HashMap::from([(CommandId(5), PaneId(88))]);
+        let cursor_pending = HashSet::from([PaneId(88)]);
+        let mut awaiting = HashMap::new();
+        let out = take_pane_captures(&mut capture_pending, &mut awaiting, &cursor_pending, &events);
+        assert!(out.is_empty(), "should cache, not emit");
+        assert_eq!(awaiting.get(&PaneId(88)), Some(&vec!["line one".to_string()]));
+    }
+
+    #[test]
+    fn take_cursor_positions_emits_with_cursor_escape() {
+        let cursor_event = TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id: CommandId(6),
+            number: 0,
+            ok: true,
+            output: vec!["3 5".to_string()],
+        });
+        let mut cursor_pending = HashMap::from([(CommandId(6), PaneId(88))]);
+        let mut panes_with_cursor = HashSet::from([PaneId(88)]);
+        let mut awaiting = HashMap::from([(PaneId(88), vec!["hello".to_string()])]);
+        let out = take_cursor_positions(
+            &mut cursor_pending,
+            &mut panes_with_cursor,
+            &mut awaiting,
+            &[cursor_event],
         );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].pane, PaneId(88));
+        // ESC[H ESC[2J + "hello" + ESC[6;4H  (cy=5→row 6, cx=3→col 4, 1-origin)
+        assert_eq!(
+            out[0].data,
+            b"\x1b[H\x1b[2Jhello\x1b[6;4H".to_vec()
+        );
+        assert!(cursor_pending.is_empty());
+        assert!(panes_with_cursor.is_empty());
+        assert!(awaiting.is_empty());
     }
 
     #[test]

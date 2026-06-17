@@ -6,12 +6,12 @@ use crate::connection::TmuxConnection;
 use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, active_pane_command, capture_pane_command, client_name_command,
-    list_windows_command, mode_keys_command, subscribe_window_flags_command,
+    cursor_query_command, list_windows_command, mode_keys_command, subscribe_window_flags_command,
 };
 use crate::event_pump::{
     advance_state, detect_session_switch, detect_window_added, detect_window_switch,
-    drain_transport, take_active_pane, take_client_name, take_keybindings, take_mode_keys,
-    take_pane_captures, take_prefix_keys, trigger_events,
+    drain_transport, take_active_pane, take_client_name, take_cursor_positions, take_keybindings,
+    take_mode_keys, take_pane_captures, take_prefix_keys, trigger_events,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
@@ -54,12 +54,13 @@ impl Plugin for TmuxSessionPlugin {
     }
 }
 
-/// Sends `capture-pane` once for each newly-projected pane so its current screen
-/// seeds the first paint. tmux `-CC` does not replay existing content on attach
-/// (it only streams new `%output`), so without this a quiescent pane stays blank
-/// until its program writes again. Gated on `Added<TmuxPane>` — runs once per
-/// pane. The reply is consumed by [`take_pane_captures`] and routed as
-/// `PaneOutput`.
+/// Sends `capture-pane` and a companion cursor-position `display-message` once
+/// for each newly-projected pane so its current screen seeds the first paint
+/// with the cursor at the correct position. tmux `-CC` does not replay existing
+/// content on attach (it only streams new `%output`), so without this a
+/// quiescent pane stays blank until its program writes again. Gated on
+/// `Added<TmuxPane>` — runs once per pane. Replies are consumed by
+/// [`take_pane_captures`] / [`take_cursor_positions`] and routed as `PaneOutput`.
 fn request_pane_captures(
     mut enumeration: ResMut<EnumerationState>,
     connection: NonSend<TmuxConnection>,
@@ -70,8 +71,17 @@ fn request_pane_captures(
     };
     for pane in new_panes.iter() {
         match client.handle().send(&capture_pane_command(pane.id)) {
-            Ok(id) => {
-                enumeration.capture_pending.insert(id, pane.id);
+            Ok(cap_id) => {
+                enumeration.capture_pending.insert(cap_id, pane.id);
+                match client.handle().send(&cursor_query_command(pane.id)) {
+                    Ok(cur_id) => {
+                        enumeration.cursor_pending.insert(cur_id, pane.id);
+                        enumeration.panes_with_cursor_pending.insert(pane.id);
+                    }
+                    Err(error) => {
+                        tracing::warn!(?error, pane = pane.id.0, "failed to send cursor query");
+                    }
+                }
             }
             Err(error) => {
                 tracing::warn!(?error, pane = pane.id.0, "failed to send capture-pane")
@@ -124,6 +134,10 @@ fn drain_tmux_events(
         commands.trigger(TmuxWindowsRetained {
             windows: Vec::new(),
         });
+        enumeration.capture_pending.clear();
+        enumeration.cursor_pending.clear();
+        enumeration.panes_with_cursor_pending.clear();
+        enumeration.capture_awaiting_cursor.clear();
         send_session_enumeration(&mut enumeration, client);
     } else if let Some(client) = connection.client() {
         if detect_window_added(&events) {
@@ -182,16 +196,7 @@ fn drain_tmux_events(
         .any(|event| matches!(event, TransportEvent::Closed { .. }))
     {
         connection.take();
-        enumeration.pending = None;
-        enumeration.client_name_pending = None;
-        enumeration.active_pane_pending = None;
-        enumeration.capture_pending.clear();
-        enumeration.keys_root_pending = None;
-        enumeration.keys_prefix_pending = None;
-        enumeration.prefix_keys_pending = None;
-        enumeration.keys_copy_mode_pending = None;
-        enumeration.keys_copy_mode_vi_pending = None;
-        enumeration.mode_keys_pending = None;
+        *enumeration = EnumerationState::default();
         keybindings.clear();
         copy_queries.clear();
         commands.trigger(TmuxConnectionReset);
@@ -204,7 +209,28 @@ fn drain_tmux_events(
         {
             commands.trigger(TmuxActivePaneChanged { window, pane });
         }
-        for output in take_pane_captures(&mut enumeration.capture_pending, &events) {
+        // NOTE: deref once so the borrow checker can see these as distinct
+        // field borrows rather than overlapping borrows through DerefMut.
+        // NOTE: take_pane_captures MUST run before take_cursor_positions: when
+        // both a capture reply and its paired cursor reply arrive in the same
+        // event batch, captures populates capture_awaiting_cursor first, then
+        // cursor_positions drains it. Swapping the calls silently drops cursor
+        // fixes on same-batch arrivals.
+        let e = &mut *enumeration;
+        for output in take_pane_captures(
+            &mut e.capture_pending,
+            &mut e.capture_awaiting_cursor,
+            &e.panes_with_cursor_pending,
+            &events,
+        ) {
+            pane_output.write(output);
+        }
+        for output in take_cursor_positions(
+            &mut e.cursor_pending,
+            &mut e.panes_with_cursor_pending,
+            &mut e.capture_awaiting_cursor,
+            &events,
+        ) {
             pane_output.write(output);
         }
         if let Some(bindings) = take_keybindings(&mut enumeration.keys_root_pending, &events) {
