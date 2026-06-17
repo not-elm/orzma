@@ -201,12 +201,12 @@ impl Ozma {
         let mut frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
         frame.placements.clear();
         frame.focused = None;
-        frame.pending_compositing = self
-            .pending_compositing
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .drain()
-            .collect();
+        frame.pending_compositing = std::mem::take(
+            &mut *self
+                .pending_compositing
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+        );
         frame
     }
 

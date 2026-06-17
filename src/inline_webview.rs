@@ -652,7 +652,7 @@ fn project_inline_overlays(
                             handle: owner.handle.clone(),
                             active: true,
                         })
-                        .unwrap();
+                        .expect("PushMsg serializes infallibly");
                         writers.send(owner.connection_id, msg);
                     }
                 }
@@ -683,7 +683,7 @@ fn on_placement_removed(
         handle: owner.handle.clone(),
         active: false,
     })
-    .unwrap();
+    .expect("PushMsg serializes infallibly");
     writers.send(owner.connection_id, msg);
 }
 
