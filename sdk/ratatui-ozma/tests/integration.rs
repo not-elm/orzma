@@ -186,6 +186,53 @@ fn panicking_handler_does_not_kill_reader() {
     });
 }
 
+#[test]
+fn reconnect_updates_handle_id_and_reregisters() {
+    use std::time::Duration;
+    let pair = support::ReconnectPair::start("view-rc1", "view-rc2");
+    with_env(&pair.first.sock_path.clone(), || {
+        let ozma = Ozma::connect().unwrap();
+        let handle = ozma.register(Webview::inline("<h1>rc</h1>")).unwrap();
+        assert_eq!(
+            handle.id(),
+            "view-rc1",
+            "initial registration must get first handle"
+        );
+
+        let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let mut backend = OzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &ozma);
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        // Drop first server: _close_tx drops → shutdown watcher drops stream clone →
+        // client reader sees EOF → disconnected=true.
+        drop(pair.first);
+
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Update $OZMA_SOCK so the reconnect thread finds the second server.
+        // NOTE: ENV_LOCK is held by with_env, serializing all env var accesses.
+        unsafe { std::env::set_var("OZMA_SOCK", &pair.second.sock_path) };
+
+        // Draw again: disconnected=true + last_attempt=None bypasses the 2s rate
+        // limit, fires reconnect_tx.try_send(), and the reconnect thread picks it up.
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while handle.id() == "view-rc1" {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reconnect did not complete within 5 seconds"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            handle.id(),
+            "view-rc2",
+            "handle ID must update to second server's handle after reconnect"
+        );
+    });
+}
+
 // A private tmux server for the gated fallback test: kills the server and
 // removes its socket on drop so a panicking assertion cannot leak it.
 struct TmuxServerGuard {

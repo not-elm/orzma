@@ -2221,21 +2221,22 @@ mod tests {
             .world_mut()
             .resource_mut::<Assets<Image>>()
             .add(Image::default());
-        app.world_mut().spawn((
-            ChildOf(terminal),
-            InlineWebview {
-                view_id: format!("view-{slot}"),
-                instance_id: None,
-                slot,
-            },
-            placement,
-            WebviewTextureTarget(image_handle.clone()),
-            WebviewOwner {
-                connection_id,
-                handle: handle.to_string(),
-            },
-        ))
-        .id()
+        app.world_mut()
+            .spawn((
+                ChildOf(terminal),
+                InlineWebview {
+                    view_id: format!("view-{slot}"),
+                    instance_id: None,
+                    slot,
+                },
+                placement,
+                WebviewTextureTarget(image_handle.clone()),
+                WebviewOwner {
+                    connection_id,
+                    handle: handle.to_string(),
+                },
+            ))
+            .id()
     }
 
     #[test]
