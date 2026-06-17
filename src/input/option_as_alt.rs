@@ -61,7 +61,10 @@ mod macos {
 
         #[test]
         fn maps_each_variant_to_winit() {
-            assert!(matches!(to_winit(OptionAsAlt::None), WinitOptionAsAlt::None));
+            assert!(matches!(
+                to_winit(OptionAsAlt::None),
+                WinitOptionAsAlt::None
+            ));
             assert!(matches!(
                 to_winit(OptionAsAlt::Left),
                 WinitOptionAsAlt::OnlyLeft
@@ -70,7 +73,10 @@ mod macos {
                 to_winit(OptionAsAlt::Right),
                 WinitOptionAsAlt::OnlyRight
             ));
-            assert!(matches!(to_winit(OptionAsAlt::Both), WinitOptionAsAlt::Both));
+            assert!(matches!(
+                to_winit(OptionAsAlt::Both),
+                WinitOptionAsAlt::Both
+            ));
         }
     }
 }
