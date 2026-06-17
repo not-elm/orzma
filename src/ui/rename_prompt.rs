@@ -279,8 +279,6 @@ fn command_prompt_inner(tokens: &[String]) -> Option<String> {
         }
         return Some(tokens[open + 1..close].join(" "));
     }
-    // No brace group: the template is the final token (flags consume their own
-    // values; a lone trailing token that is not a flag value is the template).
     let last = tokens.last()?;
     if last.starts_with('-') {
         return None;
@@ -408,15 +406,24 @@ mod tests {
     fn char_appends_and_continues() {
         let mut p = RenamePrompt::new(win_subject());
         p.text.clear();
-        assert_eq!(apply_rename_key(&mut p, &char_key("a")), RenameStep::Continue);
-        assert_eq!(apply_rename_key(&mut p, &char_key("b")), RenameStep::Continue);
+        assert_eq!(
+            apply_rename_key(&mut p, &char_key("a")),
+            RenameStep::Continue
+        );
+        assert_eq!(
+            apply_rename_key(&mut p, &char_key("b")),
+            RenameStep::Continue
+        );
         assert_eq!(p.text, "ab");
     }
 
     #[test]
     fn backspace_pops_last_char() {
         let mut p = RenamePrompt::new(win_subject());
-        assert_eq!(apply_rename_key(&mut p, &Key::Backspace), RenameStep::Continue);
+        assert_eq!(
+            apply_rename_key(&mut p, &Key::Backspace),
+            RenameStep::Continue
+        );
         assert_eq!(p.text, "nvi");
     }
 
@@ -552,7 +559,10 @@ mod tests {
 
     #[test]
     fn rejects_confirm_before() {
-        assert_eq!(parse_command_prompt_rename("confirm-before kill-window"), None);
+        assert_eq!(
+            parse_command_prompt_rename("confirm-before kill-window"),
+            None
+        );
     }
 
     #[test]
@@ -589,7 +599,8 @@ mod tests {
     #[test]
     fn open_frame_skips_the_opening_key() {
         let mut app = armed_skip_app();
-        app.world_mut().insert_resource(RenamePrompt::new(win_subject()));
+        app.world_mut()
+            .insert_resource(RenamePrompt::new(win_subject()));
         // The opening `,` is still in the shared buffer when the prompt opens.
         app.world_mut()
             .resource_mut::<Messages<KeyboardInput>>()
@@ -606,7 +617,8 @@ mod tests {
     #[test]
     fn escape_after_open_frame_removes_resource() {
         let mut app = armed_skip_app();
-        app.world_mut().insert_resource(RenamePrompt::new(win_subject()));
+        app.world_mut()
+            .insert_resource(RenamePrompt::new(win_subject()));
         // Open frame drains the opening key.
         app.world_mut()
             .resource_mut::<Messages<KeyboardInput>>()
