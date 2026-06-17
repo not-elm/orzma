@@ -544,6 +544,7 @@ fn forward_wheel_to_tmux(
     bindings: Res<KeyBindings>,
     picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
+    rename_prompt: Option<Res<RenamePrompt>>,
     configs: Res<OzmuxConfigsResource>,
     metrics: Res<TerminalCellMetricsResource>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
@@ -581,7 +582,7 @@ fn forward_wheel_to_tmux(
     // can't accumulate behind a modal / unfocused window and lurch on resume.
     // focused_webview is NOT a guard here — the pointer-gated target above owns
     // webview scrolling, so a focused webview must not steal terminal wheel.
-    if !window.focused || picker.open || copy_prompt.open.is_some() {
+    if !window.focused || picker.open || copy_prompt.open.is_some() || rename_prompt.is_some() {
         accumulator.residual_cells = 0.0;
         return;
     }

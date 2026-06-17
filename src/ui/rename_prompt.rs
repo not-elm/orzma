@@ -114,8 +114,7 @@ pub(crate) enum RenameKind {
 /// commas embedded in a single quoted prompt.
 pub(crate) fn parse_command_prompt_rename(command: &str) -> Option<RenameKind> {
     let tokens = tokenize(command);
-    let mut it = tokens.iter();
-    if it.next().map(String::as_str) != Some("command-prompt") {
+    if tokens.first().map(String::as_str) != Some("command-prompt") {
         return None;
     }
     let inner = command_prompt_inner(&tokens)?;
