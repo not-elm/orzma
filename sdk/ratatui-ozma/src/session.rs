@@ -25,7 +25,7 @@ pub(crate) struct Placement {
 pub struct FramePlacements {
     placements: Vec<Placement>,
     focused: Option<String>,
-    pending_compositing: HashMap<String, bool>,
+    pub(crate) pending_compositing: HashMap<String, bool>,
 }
 
 impl FramePlacements {
@@ -204,8 +204,9 @@ impl Ozma {
         frame.pending_compositing = self
             .pending_compositing
             .lock()
-            .map(|mut map| std::mem::take(&mut *map))
-            .unwrap_or_default();
+            .unwrap_or_else(|e| e.into_inner())
+            .drain()
+            .collect();
         frame
     }
 
