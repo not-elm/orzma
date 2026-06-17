@@ -158,14 +158,17 @@ impl ProtocolClient {
                     output: body,
                 })),
                 // NOTE: a reply block with no pending command means tmux emitted a
-                // command-output block this control client did not originate
-                // (observed on pane select in multi-pane sessions). Closing the
+                // command-output block this control client did not originate.
+                // Observed when `select-pane` changes focus in a multi-pane
+                // session, likely because `focus-events on` causes tmux to run
+                // an additional internal command (focus-in/focus-out delivery)
+                // that generates its own `%begin … %end` block. Closing the
                 // transport over it would tear down the whole projection (blank
-                // screen); warn and skip so the connection stays alive.
+                // screen); log at debug and skip so the connection stays alive.
                 None => {
-                    warn!(
+                    tracing::debug!(
                         number,
-                        "skipping tmux reply with no pending command; transport remains open"
+                        "skipping unsolicited tmux reply (no pending command); transport remains open"
                     );
                     Ok(None)
                 }
