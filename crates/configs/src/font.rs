@@ -101,7 +101,7 @@ impl FontPatch {
     /// (`*_path`) follow a DIFFERENT rule: each face's path is read from
     /// its own FacePatch only; no inheritance from `normal_path`. See the
     /// design doc (Approach summary item 6) for the rationale.
-    pub fn apply_to(self, base: FontConfig) -> FontConfig {
+    pub(crate) fn apply_to(self, base: FontConfig) -> FontConfig {
         let normal_face = self.normal;
         let bold_face = self.bold;
         let italic_face = self.italic;

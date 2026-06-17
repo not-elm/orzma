@@ -26,7 +26,7 @@ pub(crate) struct OscWebviewPatch {
 
 impl OscWebviewPatch {
     /// Applies this patch over `base`, keeping `base`'s value where unset.
-    pub fn apply_to(self, base: OscWebviewConfig) -> OscWebviewConfig {
+    pub(crate) fn apply_to(self, base: OscWebviewConfig) -> OscWebviewConfig {
         OscWebviewConfig {
             enabled: self.enabled.unwrap_or(base.enabled),
         }

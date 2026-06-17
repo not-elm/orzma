@@ -39,7 +39,7 @@ pub(crate) struct TmuxPatch {
 
 impl TmuxPatch {
     /// Applies this patch over `base`, keeping `base`'s value where unset.
-    pub fn apply_to(self, base: TmuxConfig) -> TmuxConfig {
+    pub(crate) fn apply_to(self, base: TmuxConfig) -> TmuxConfig {
         // NOTE: `auto_connect` is intentionally read-and-discarded (deprecated).
         let _ = self.auto_connect;
         TmuxConfig {
