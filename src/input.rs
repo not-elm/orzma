@@ -4,6 +4,7 @@
 
 pub(crate) mod hyperlink;
 pub(crate) mod ime;
+pub(crate) mod option_as_alt;
 
 use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;

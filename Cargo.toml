@@ -46,6 +46,9 @@ url = "2"
 [dev-dependencies]
 tempfile = { workspace = true }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+winit = "0.30"
+
 [lints]
 workspace = true
 
