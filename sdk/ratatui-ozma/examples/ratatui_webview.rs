@@ -89,7 +89,7 @@ fn run(
                 rows[0],
             );
             f.render_stateful_widget(
-                WebviewWidget::new(view.id())
+                WebviewWidget::new(&view.id())
                     .focused(web_focused)
                     .fallback(Block::bordered().title("loading…")),
                 rows[1],

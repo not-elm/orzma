@@ -44,7 +44,7 @@ pub(crate) enum ClientMsg {
 }
 
 /// The content variants of a `register` request.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub(crate) enum RegisterKind {
     /// A full inline HTML document.

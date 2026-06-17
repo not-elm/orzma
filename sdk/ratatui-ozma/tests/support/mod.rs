@@ -11,11 +11,16 @@ use std::thread;
 ///
 /// `start` is non-blocking: it binds the socket and spawns the accept/reader and
 /// writer threads, then returns immediately so the client can connect afterward.
+///
+/// Dropping a `FakeServer` closes the connection: the internal `_close_tx` drops,
+/// causing the shutdown-watcher thread to close the cloned stream, which makes the
+/// client's reader see EOF.
 pub struct FakeServer {
     pub sock_path: std::path::PathBuf,
     received: Receiver<Value>,
     to_client: Sender<Value>,
     _dir: tempfile::TempDir,
+    _close_tx: std::sync::mpsc::SyncSender<()>,
 }
 
 impl FakeServer {
@@ -28,6 +33,7 @@ impl FakeServer {
         let (to_client, client_rx) = mpsc::channel::<Value>();
         let reply_tx = to_client.clone();
         let handle = handle.to_owned();
+        let (close_tx, close_rx) = mpsc::sync_channel::<()>(0);
 
         thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -39,6 +45,16 @@ impl FakeServer {
                     }
                     let _ = write_half.flush();
                 }
+            });
+
+            // NOTE: dropping FakeServer drops _close_tx, which causes close_rx.recv()
+            // to return Err here; we then shut down the socket, which closes the
+            // connection from the server side and causes the client reader to see EOF
+            // regardless of how many dup'd fds are still open.
+            let stream_for_close = stream.try_clone().unwrap();
+            thread::spawn(move || {
+                let _ = close_rx.recv();
+                let _ = stream_for_close.shutdown(std::net::Shutdown::Both);
             });
 
             let mut reader = BufReader::new(stream);
@@ -64,6 +80,7 @@ impl FakeServer {
             received,
             to_client,
             _dir: dir,
+            _close_tx: close_tx,
         }
     }
 
@@ -76,6 +93,7 @@ impl FakeServer {
         let listener = UnixListener::bind(&sock_path).unwrap();
         let (_recv_tx, received) = mpsc::channel::<Value>();
         let (to_client, _client_rx) = mpsc::channel::<Value>();
+        let (close_tx, _close_rx) = mpsc::sync_channel::<()>(0);
 
         thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
@@ -99,6 +117,7 @@ impl FakeServer {
             received,
             to_client,
             _dir: dir,
+            _close_tx: close_tx,
         }
     }
 
@@ -114,6 +133,27 @@ impl FakeServer {
             if v["op"] != "hello" && v["op"] != "register" {
                 return v;
             }
+        }
+    }
+}
+
+/// A pair of fake servers for testing the reconnect path.
+///
+/// `first` accepts a client connection and auto-replies with `handle1`. Dropping
+/// `first` closes the connection from the server side — the client reader sees EOF
+/// and sets `disconnected=true`. `second` waits for the reconnect client and
+/// auto-replies with `handle2`.
+pub struct ReconnectPair {
+    pub first: FakeServer,
+    pub second: FakeServer,
+}
+
+impl ReconnectPair {
+    /// Starts two fake servers at separate temp paths and returns them as a pair.
+    pub fn start(handle1: &str, handle2: &str) -> Self {
+        Self {
+            first: FakeServer::start(handle1),
+            second: FakeServer::start(handle2),
         }
     }
 }

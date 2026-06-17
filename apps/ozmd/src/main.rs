@@ -157,7 +157,7 @@ fn event_loop(
                 f,
                 &mut ozma.frame(),
                 &state,
-                view.id(),
+                &view.id(),
                 &file_name,
                 live,
                 scroll_percent,

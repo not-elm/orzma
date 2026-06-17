@@ -63,7 +63,7 @@ fn backend_draw_emits_mount_osc_and_focus_op() {
         {
             let mut scratch = Buffer::empty(Rect::new(0, 0, 80, 40));
             let mut frame = ozma.frame();
-            WebviewWidget::new(handle.id()).focused(true).render(
+            WebviewWidget::new(&handle.id()).focused(true).render(
                 Rect::new(2, 3, 48, 12),
                 &mut scratch,
                 &mut *frame,
@@ -183,6 +183,48 @@ fn panicking_handler_does_not_kill_reader() {
         assert_eq!(ping["reqId"], "2");
         assert_eq!(ping["ok"], true);
         assert_eq!(ping["value"], "pong");
+    });
+}
+
+#[test]
+fn reconnect_updates_handle_id_and_reregisters() {
+    use std::time::Duration;
+    let pair = support::ReconnectPair::start("view-rc1", "view-rc2");
+    with_env(&pair.first.sock_path.clone(), || {
+        let ozma = Ozma::connect().unwrap();
+        let handle = ozma.register(Webview::inline("<h1>rc</h1>")).unwrap();
+        assert_eq!(
+            handle.id(),
+            "view-rc1",
+            "initial registration must get first handle"
+        );
+
+        let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let mut backend = OzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &ozma);
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        drop(pair.first);
+
+        std::thread::sleep(Duration::from_millis(200));
+
+        // NOTE: ENV_LOCK is held by with_env, serializing all env var accesses.
+        unsafe { std::env::set_var("OZMA_SOCK", &pair.second.sock_path) };
+
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while handle.id() == "view-rc1" {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reconnect did not complete within 5 seconds"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            handle.id(),
+            "view-rc2",
+            "handle ID must update to second server's handle after reconnect"
+        );
     });
 }
 
