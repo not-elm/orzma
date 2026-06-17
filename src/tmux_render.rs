@@ -456,9 +456,10 @@ fn layout_tmux_panes(
         With<TmuxWindow>,
     >,
     mut panes: Query<
-        (&TmuxPane, &mut Node, &mut TerminalHandle, &mut TerminalGrid),
+        (&TmuxPane, &mut Node, &mut TerminalHandle, &TerminalRenderRef),
         Without<TmuxWindow>,
     >,
+    mut grids: Query<&mut TerminalGrid>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -468,9 +469,11 @@ fn layout_tmux_panes(
     let dpr = window.scale_factor().max(0.5);
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
+    let pane_title_h = cell_h;
 
     for (window_entity, layout, mut container, children, maybe_packed) in windows.iter_mut() {
-        let (rects, dividers, bbox) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX, 0.0);
+        let (rects, dividers, bbox) =
+            collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX, pane_title_h);
 
         // NOTE: only write the Node fields when they actually change — writing
         // through `Mut<Node>` every frame marks the component changed and forces
@@ -491,13 +494,14 @@ fn layout_tmux_panes(
         }
 
         for child in children.iter() {
-            let Ok((pane, mut node, mut handle, mut grid)) = panes.get_mut(child) else {
+            let Ok((pane, mut node, mut handle, render_ref)) = panes.get_mut(child) else {
                 continue;
             };
             let Some(rect) = rects.get(&pane.id) else {
                 continue;
             };
-            let (left, top, width, height) = (rect.min.x, rect.min.y, rect.width(), rect.height());
+            let (left, top, width, height) =
+                (rect.min.x, rect.min.y, rect.width(), rect.height());
             if node.left != Val::Px(left)
                 || node.top != Val::Px(top)
                 || node.width != Val::Px(width)
@@ -512,9 +516,11 @@ fn layout_tmux_panes(
             let (cur_cols, cur_rows, _) = handle.read_geometry();
             if (cur_cols, cur_rows) != (cols, rows) {
                 handle.resize_grid_only(cols, rows);
-                grid.cols = cols;
-                grid.rows = rows;
-                handle.emit_pending(&mut commands, child);
+                if let Ok(mut grid) = grids.get_mut(render_ref.0) {
+                    grid.cols = cols;
+                    grid.rows = rows;
+                }
+                handle.emit_pending(&mut commands, render_ref.0);
             }
         }
     }
@@ -924,6 +930,7 @@ mod tests {
                 Node::default(),
             ))
             .id();
+        let render_child = app.world_mut().spawn(TerminalGrid::default()).id();
         let entity = app
             .world_mut()
             .spawn((
@@ -938,18 +945,19 @@ mod tests {
                 },
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
-                TerminalGrid::default(),
+                TerminalRenderRef(render_child),
                 ChildOf(window_e),
             ))
             .id();
+        let _ = entity;
 
         app.add_systems(Update, layout_tmux_panes);
         app.update();
 
         let grid = app
             .world()
-            .get::<TerminalGrid>(entity)
-            .expect("pane has a TerminalGrid");
+            .get::<TerminalGrid>(render_child)
+            .expect("render child has TerminalGrid");
         assert_eq!(
             (grid.cols, grid.rows),
             (40, 10),
@@ -1133,6 +1141,7 @@ mod tests {
                 Node::default(),
             ))
             .id();
+        let render_child = app.world_mut().spawn(TerminalGrid::default()).id();
         let entity = app
             .world_mut()
             .spawn((
@@ -1147,7 +1156,7 @@ mod tests {
                 },
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
-                TerminalGrid::default(),
+                TerminalRenderRef(render_child),
                 ChildOf(window_e),
             ))
             .id();
@@ -1155,10 +1164,11 @@ mod tests {
         app.add_systems(
             Update,
             (
-                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
-                    for (e, mut h) in q.iter_mut() {
+                |mut commands: Commands,
+                 mut q: Query<(Entity, &mut TerminalHandle, &TerminalRenderRef)>| {
+                    for (_, mut h, render_ref) in q.iter_mut() {
                         h.advance(b"x");
-                        h.flush_emit(&mut commands, e);
+                        h.flush_emit(&mut commands, render_ref.0);
                     }
                 },
                 layout_tmux_panes,
@@ -1189,8 +1199,8 @@ mod tests {
 
         let grid = app
             .world()
-            .get::<TerminalGrid>(entity)
-            .expect("pane has a TerminalGrid");
+            .get::<TerminalGrid>(render_child)
+            .expect("render child has TerminalGrid");
         assert_eq!(
             (grid.cols, grid.rows),
             (40, 10),
