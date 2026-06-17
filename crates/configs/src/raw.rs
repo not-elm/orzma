@@ -6,6 +6,7 @@ use crate::OzmuxConfigsError;
 use crate::OzmuxConfigsResult;
 use crate::font::FontPatch;
 use crate::inactive_pane::InactivePaneConfigPatch;
+use crate::keyboard::KeyboardPatch;
 use crate::mouse::MousePatch;
 use crate::osc_webview::OscWebviewPatch;
 use crate::shortcuts::Shortcuts;
@@ -22,6 +23,7 @@ pub(crate) struct RawConfigs {
     pub(crate) theme: Option<ThemePatch>,
     pub(crate) font: Option<FontPatch>,
     pub(crate) mouse: Option<MousePatch>,
+    pub(crate) keyboard: Option<KeyboardPatch>,
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
     pub(crate) osc_webview: Option<OscWebviewPatch>,
     pub(crate) tmux: Option<TmuxPatch>,
@@ -30,7 +32,7 @@ pub(crate) struct RawConfigs {
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `bindings` is full-replace when present.
-    /// The `theme`, `font`, `mouse`, `inactive_pane`, and `osc_webview`
+    /// The `theme`, `font`, `mouse`, `keyboard`, `inactive_pane`, and `osc_webview`
     /// sections use their respective `Patch::apply_to` for per-field merge.
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(shortcuts) = self.shortcuts {
@@ -44,6 +46,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.mouse {
             base.mouse = patch.apply_to(base.mouse);
+        }
+        if let Some(patch) = self.keyboard {
+            base.keyboard = patch.apply_to(base.keyboard);
         }
         if let Some(patch) = self.inactive_pane {
             base.inactive_pane = patch.apply_to(base.inactive_pane);
@@ -224,5 +229,26 @@ release-inline-focus = "Cmd+V"
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
         }
+    }
+
+    #[test]
+    fn keyboard_section_merges_from_toml() {
+        let toml_str = r#"
+[keyboard]
+option_as_alt = "both"
+"#;
+        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(
+            merged.keyboard.option_as_alt,
+            crate::keyboard::OptionAsAlt::Both
+        );
+    }
+
+    #[test]
+    fn missing_keyboard_section_uses_defaults() {
+        let raw: RawConfigs = toml::from_str("").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.keyboard, crate::keyboard::KeyboardConfig::default());
     }
 }

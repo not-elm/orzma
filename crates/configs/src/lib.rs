@@ -15,6 +15,7 @@ use std::path::Path;
 pub mod error;
 pub mod font;
 pub mod inactive_pane;
+pub mod keyboard;
 pub mod mouse;
 pub mod osc_webview;
 pub mod path;
@@ -34,6 +35,8 @@ pub struct OzmuxConfigs {
     pub font: FontConfig,
     /// Mouse-input configuration.
     pub mouse: mouse::MouseConfig,
+    /// Keyboard-input configuration (macOS Option-as-Meta).
+    pub keyboard: keyboard::KeyboardConfig,
     /// Inactive-pane dimming configuration.
     pub inactive_pane: InactivePaneConfig,
     /// OSC-driven webview configuration.

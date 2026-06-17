@@ -31,8 +31,6 @@ pub const SESSION_BG: Color = Color::srgb(0.200, 0.220, 0.282);
 pub const FLAG_WARN: Color = Color::srgb(0.878, 0.690, 0.302);
 /// Powerline right-pointing filled separator glyph (Nerd Font U+E0B0).
 pub const POWERLINE_RIGHT: &str = "\u{e0b0}";
-/// Powerline left-pointing filled separator glyph (Nerd Font U+E0B2).
-// pub const POWERLINE_LEFT: &str = "\u{e0b2}";
 /// Session-chooser selection bar — tmux choose-tree style amber.
 pub const SELECTION: Color = Color::srgb(0.847, 0.651, 0.341);
 /// Text on the SELECTION bar — near-black for contrast.
@@ -75,8 +73,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn powerline_glyphs_are_the_nerd_font_code_points() {
+    fn powerline_right_is_the_nerd_font_code_point() {
         assert_eq!(POWERLINE_RIGHT, "\u{e0b0}");
-        assert_eq!(POWERLINE_LEFT, "\u{e0b2}");
     }
 }
