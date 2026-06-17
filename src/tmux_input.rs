@@ -16,6 +16,7 @@ use crate::tmux_picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
+use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject, parse_command_prompt_rename};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -28,9 +29,10 @@ use bevy_cef_core::prelude::Browsers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_tmux::{
-    ActivePane, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings, KeyMods,
-    PromptKind, TmuxConnection, TmuxPane, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
-    send_bytes_command, send_pane_keys_command, show_buffer_command,
+    ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
+    KeyMods, PromptKind, TmuxConnection, TmuxPane, TmuxSession, TmuxWindow, bevy_key_to_tmux_name,
+    copy_mode_dispatch, plan_forward, send_bytes_command, send_pane_keys_command,
+    show_buffer_command,
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
@@ -110,7 +112,11 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 fn forward_keys_to_tmux(
     mut commands: Commands,
     mut picker: ResMut<SessionPicker>,
-    (mut copy_prompt, confirm_state): (ResMut<CopyPrompt>, Option<Res<ConfirmState>>),
+    (mut copy_prompt, confirm_state, rename): (
+        ResMut<CopyPrompt>,
+        Option<Res<ConfirmState>>,
+        RenameParams,
+    ),
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
@@ -143,6 +149,13 @@ fn forward_keys_to_tmux(
     // NOTE: while the confirm-before prompt is open it owns the keyboard; its own
     // system reads the y/n answer. Drain here so no key leaks to tmux or the pane.
     if confirm_state.is_some() {
+        *prefix_pending = false;
+        events.clear();
+        return;
+    }
+    // NOTE: while the rename prompt is open it owns the keyboard; its own system
+    // reads the typed text. Drain here so no key leaks to tmux or the pane.
+    if rename.prompt.is_some() {
         *prefix_pending = false;
         events.clear();
         return;
@@ -309,6 +322,15 @@ fn forward_keys_to_tmux(
     let handle = client.handle();
     for action in actions {
         if let Forwarded::Run(command) = &action
+            && let Some(kind) = parse_command_prompt_rename(command)
+            && let Some(subject) = resolve_rename_subject(kind, &rename)
+        {
+            commands.insert_resource(RenamePrompt::new(subject));
+            // NOTE: the prompt now owns the keyboard — stop here so no further
+            // actions from this frame are sent to tmux.
+            break;
+        }
+        if let Forwarded::Run(command) = &action
             && let Some((message, inner)) = parse_confirm_before(command)
         {
             commands.insert_resource(ConfirmState {
@@ -410,6 +432,39 @@ struct TmuxInlineWheelParams<'w, 's> {
     inline: Query<'w, 's, (&'static InlineWebview, Has<NonInteractive>)>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     browsers: Option<NonSend<'w, Browsers>>,
+}
+
+/// Rename-interception params bundled to stay within Bevy's system-parameter
+/// limit (`forward_keys_to_tmux` is already at 16 top-level params). `prompt`
+/// gates the keyboard while a rename is open; the queries resolve the target
+/// captured at prompt-open.
+#[derive(SystemParam)]
+struct RenameParams<'w, 's> {
+    prompt: Option<Res<'w, RenamePrompt>>,
+    active_window: Query<'w, 's, &'static TmuxWindow, With<ActiveWindow>>,
+    session: Query<'w, 's, &'static TmuxSession>,
+}
+
+/// Resolves the rename target (id + current name) from ECS for `kind`, or `None`
+/// when no active window / attached session exists (the binding then forwards
+/// verbatim, as before).
+fn resolve_rename_subject(kind: RenameKind, rename: &RenameParams) -> Option<RenameSubject> {
+    match kind {
+        RenameKind::Window => {
+            let w = rename.active_window.single().ok()?;
+            Some(RenameSubject::Window {
+                id: w.id,
+                current_name: w.name.clone(),
+            })
+        }
+        RenameKind::Session => {
+            let s = rename.session.single().ok()?;
+            Some(RenameSubject::Session {
+                id: s.id,
+                current_name: s.name.clone(),
+            })
+        }
+    }
 }
 
 /// Resolves the focused inline webview under the pointer, or `None` (the tmux
