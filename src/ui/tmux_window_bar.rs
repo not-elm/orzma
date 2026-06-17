@@ -294,16 +294,6 @@ fn build_window_entry(
             flag_color,
             font,
         );
-        commands.spawn((
-            Text::new(theme::POWERLINE_RIGHT.to_string()),
-            TextColor(palette::ACCENT),
-            TextFont {
-                font: pl_font.clone(),
-                font_size: theme::UI_FONT_SIZE,
-                ..default()
-            },
-            ChildOf(entry),
-        ));
     } else {
         let pad = commands
             .spawn((
@@ -325,6 +315,21 @@ fn build_window_entry(
             font,
         );
     }
+
+    // Always spawn the chevron so active and inactive entries share the same
+    // layout width. Transparent color when inactive preserves the space without
+    // painting the glyph.
+    let chevron_color = if active { palette::ACCENT } else { Color::NONE };
+    commands.spawn((
+        Text::new(theme::POWERLINE_RIGHT.to_string()),
+        TextColor(chevron_color),
+        TextFont {
+            font: pl_font.clone(),
+            font_size: theme::UI_FONT_SIZE,
+            ..default()
+        },
+        ChildOf(entry),
+    ));
 }
 
 /// Spawns the `<index>:<name>` label and, when non-empty, the flag suffix as a
