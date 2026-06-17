@@ -23,6 +23,8 @@ use url::Url;
 mod listener;
 mod protocol;
 
+pub(crate) use protocol::PushMsg;
+
 /// A passthrough chord normalized to host input types: a bevy `KeyCode` plus
 /// modifier booleans. Used to suppress CEF double-delivery and to match keys
 /// for PTY forwarding (design spec §E type normalization).

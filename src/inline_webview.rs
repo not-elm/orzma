@@ -5,7 +5,9 @@
 //! `OzmuxInlineWebviewPlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
-use crate::control_plane::{DynSource, DynamicRegistry, NormalizedChord, WebviewOwner};
+use crate::control_plane::{
+    ConnectionWriters, DynSource, DynamicRegistry, NormalizedChord, PushMsg, WebviewOwner,
+};
 use crate::osc_webview::NonInteractive;
 use crate::webview_render::preload::build_dynamic_preload;
 use bevy::ecs::system::SystemParam;
@@ -62,6 +64,13 @@ pub(crate) struct InlinePlacement {
     pub(crate) frame_seq: u32,
 }
 
+/// Marks a bridged inline webview entity after it has produced its first
+/// successful projection into `TerminalOverlays` and the `Compositing { active:
+/// true }` push notification has been sent. Prevents duplicate start
+/// notifications on subsequent frames where the same rect re-projects.
+#[derive(Component)]
+pub(crate) struct CompositeNotified;
+
 /// Registers the inline-webview runtime systems: the `WebviewSize` size sync
 /// (`Update`), the per-frame projection that derives `TerminalOverlays` from
 /// inline-webview children (spec §5), and the render-world ordering edge that
@@ -97,6 +106,7 @@ impl Plugin for OzmuxInlineWebviewPlugin {
             );
         }
         app.add_observer(despawn_fixed_screen_on_alt_exit);
+        app.add_observer(on_placement_removed);
     }
 }
 
@@ -572,7 +582,14 @@ fn project_inline_overlays(
         Option<&Children>,
         Has<TerminalOverlays>,
     )>,
-    inline: Query<(&InlineWebview, &InlinePlacement, &WebviewTextureTarget)>,
+    inline: Query<(
+        &InlineWebview,
+        &InlinePlacement,
+        &WebviewTextureTarget,
+        Option<&WebviewOwner>,
+        Has<CompositeNotified>,
+    )>,
+    writers: Option<Res<ConnectionWriters>>,
 ) {
     for (terminal, grid, children, has_overlays) in &terminals {
         // NOTE: `grid.modes` refreshes only on snapshots (FrameDelta carries
@@ -586,7 +603,8 @@ fn project_inline_overlays(
         let mut has_inline_child = false;
         if let Some(kids) = children {
             for child in kids.iter() {
-                let Ok((view, placement, texture)) = inline.get(child) else {
+                let Ok((view, placement, texture, owner, already_notified)) = inline.get(child)
+                else {
                     continue;
                 };
                 has_inline_child = true;
@@ -627,12 +645,49 @@ fn project_inline_overlays(
                     i32::from(placement.cols),
                 );
                 overlays.textures[slot] = Some(texture.0.clone());
+                if !already_notified {
+                    commands.entity(child).insert(CompositeNotified);
+                    if let (Some(owner), Some(writers)) = (owner, writers.as_deref()) {
+                        let msg = serde_json::to_string(&PushMsg::Compositing {
+                            handle: owner.handle.clone(),
+                            active: true,
+                        })
+                        .unwrap();
+                        writers.send(owner.connection_id, msg);
+                    }
+                }
             }
         }
         if has_inline_child || has_overlays {
             commands.entity(terminal).insert(overlays);
         }
     }
+}
+
+/// Sends a `Compositing { active: false }` push notification when a bridged
+/// inline webview entity is despawned after having been notified at least once
+/// (i.e., after its first successful projection). Entities that were never
+/// projected (never stamped `CompositeNotified`) are silently ignored.
+fn on_placement_removed(
+    event: On<Remove, InlinePlacement>,
+    owners: Query<(&WebviewOwner, Has<CompositeNotified>)>,
+    writers: Option<Res<ConnectionWriters>>,
+) {
+    let Ok((owner, notified)) = owners.get(event.entity) else {
+        return;
+    };
+    if !notified {
+        return;
+    }
+    let Some(writers) = writers else {
+        return;
+    };
+    let msg = serde_json::to_string(&PushMsg::Compositing {
+        handle: owner.handle.clone(),
+        active: false,
+    })
+    .unwrap();
+    writers.send(owner.connection_id, msg);
 }
 
 #[cfg(test)]
@@ -649,7 +704,9 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<DynamicRegistry>()
             .init_resource::<Assets<Image>>()
-            .add_observer(on_osc_webview_request);
+            .init_resource::<ConnectionWriters>()
+            .add_observer(on_osc_webview_request)
+            .add_observer(on_placement_removed);
         app
     }
 
@@ -2142,6 +2199,172 @@ mod tests {
                 connection_id: 1,
                 handle: "appv".into(),
             }),
+        );
+    }
+
+    fn compositing_writers(
+        connection_id: u64,
+    ) -> (ConnectionWriters, crossbeam_channel::Receiver<String>) {
+        use crossbeam_channel::unbounded;
+        let (tx, rx) = unbounded();
+        let writers = ConnectionWriters::default();
+        writers.insert(connection_id, tx);
+        (writers, rx)
+    }
+
+    fn spawn_owned_projection_child(
+        app: &mut App,
+        terminal: Entity,
+        slot: u8,
+        placement: InlinePlacement,
+        connection_id: u64,
+        handle: &str,
+    ) -> Handle<Image> {
+        let image_handle = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(Image::default());
+        app.world_mut().spawn((
+            ChildOf(terminal),
+            InlineWebview {
+                view_id: format!("view-{slot}"),
+                instance_id: None,
+                slot,
+            },
+            placement,
+            WebviewTextureTarget(image_handle.clone()),
+            WebviewOwner {
+                connection_id,
+                handle: handle.to_string(),
+            },
+        ));
+        image_handle
+    }
+
+    #[test]
+    fn compositing_start_sent_on_first_projection() {
+        let mut app = make_test_app();
+        let (writers, rx) = compositing_writers(1);
+        app.insert_resource(writers);
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        spawn_owned_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                rows: 10,
+                cols: 40,
+                frame_seq: 7,
+            },
+            1,
+            "myhandle",
+        );
+
+        project(&mut app);
+
+        let msg = rx
+            .try_recv()
+            .expect("compositing start must be sent after first projection");
+        assert_eq!(
+            msg,
+            r#"{"op":"compositing","handle":"myhandle","active":true}"#
+        );
+    }
+
+    #[test]
+    fn compositing_start_sent_only_once() {
+        let mut app = make_test_app();
+        let (writers, rx) = compositing_writers(1);
+        app.insert_resource(writers);
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        spawn_owned_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                rows: 10,
+                cols: 40,
+                frame_seq: 7,
+            },
+            1,
+            "myhandle",
+        );
+
+        project(&mut app);
+        let _ = rx.try_recv().expect("first projection must send start");
+
+        project(&mut app);
+        assert!(
+            rx.try_recv().is_err(),
+            "second projection must NOT send a duplicate start"
+        );
+    }
+
+    #[test]
+    fn compositing_stop_sent_on_despawn() {
+        let mut app = make_test_app();
+        let (writers, rx) = compositing_writers(1);
+        app.insert_resource(writers);
+        let terminal = app.world_mut().spawn(projection_grid(7)).id();
+        spawn_owned_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                rows: 10,
+                cols: 40,
+                frame_seq: 7,
+            },
+            1,
+            "myhandle",
+        );
+
+        project(&mut app);
+        let _ = rx.try_recv().expect("start notification must arrive");
+
+        let child = inline_children_of(&app, terminal)[0];
+        app.world_mut().entity_mut(child).despawn();
+        app.world_mut().flush();
+
+        let msg = rx
+            .try_recv()
+            .expect("compositing stop must be sent on despawn");
+        assert_eq!(
+            msg,
+            r#"{"op":"compositing","handle":"myhandle","active":false}"#
+        );
+    }
+
+    #[test]
+    fn compositing_stop_not_sent_if_never_projected() {
+        let mut app = make_test_app();
+        let (writers, rx) = compositing_writers(1);
+        app.insert_resource(writers);
+        let terminal = app.world_mut().spawn(projection_grid(6)).id();
+        spawn_owned_projection_child(
+            &mut app,
+            terminal,
+            0,
+            InlinePlacement {
+                anchor: AnchorMode::Scrollback { line: 42, col: 3 },
+                rows: 10,
+                cols: 40,
+                frame_seq: 7,
+            },
+            1,
+            "myhandle",
+        );
+
+        let child = inline_children_of(&app, terminal)[0];
+        app.world_mut().entity_mut(child).despawn();
+        app.world_mut().flush();
+
+        assert!(
+            rx.try_recv().is_err(),
+            "despawning a never-projected entity must NOT send a stop notification"
         );
     }
 }
