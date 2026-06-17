@@ -40,8 +40,6 @@ pub const DIVIDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
 /// Session-chooser title / footer font size.
 pub const PICKER_TITLE_FONT_SIZE_PX: f32 = 11.0;
 
-/// Pane border thickness.
-pub const PANE_BORDER_PX: f32 = 1.0;
 /// Gap in logical px between packed panes. The grey window container bleeds
 /// through this gap as the 1px divider line.
 pub const PANE_GAP_PX: f32 = 1.0;

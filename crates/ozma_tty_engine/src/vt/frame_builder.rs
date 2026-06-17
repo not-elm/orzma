@@ -13,6 +13,7 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::vte::ansi::NamedColor;
 use bevy::ecs::entity::Entity;
 use bevy::prelude::Color;
 use ozma_tty_renderer::prelude::{
@@ -53,6 +54,9 @@ pub(crate) fn build_snapshot<T>(
             runs: coalesce_row(term, y, interner, &mut hyperlinks_opt),
         })
         .collect();
+    let default_bg: [u8; 3] = term.colors()[NamedColor::Background]
+        .map(|rgb| [rgb.r, rgb.g, rgb.b])
+        .unwrap_or([0, 0, 0]);
     FrameSnapshot {
         entity,
         seq,
@@ -72,6 +76,7 @@ pub(crate) fn build_snapshot<T>(
         history_base,
         vi_cursor: extract_vi_cursor(term),
         selection: extract_selection_range(term),
+        default_bg,
     }
 }
 

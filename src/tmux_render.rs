@@ -15,7 +15,7 @@ use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
-    ActivePane, ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
+    ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
     TmuxWindowLayout, refresh_client_command,
 };
 use std::collections::HashMap;
@@ -44,7 +44,6 @@ impl Plugin for OzmuxTmuxRenderPlugin {
                 route_tmux_output.run_if(on_message::<PaneOutput>),
                 sync_active_window,
                 layout_tmux_panes,
-                sync_active_pane_outline,
             )
                 .chain()
                 .after(TmuxProjectionSet),
@@ -74,9 +73,21 @@ pub(crate) struct DividerPixelRect {
 pub(crate) struct PackedTmuxLayout {
     pub(crate) panes: HashMap<PaneId, Rect>,
     pub(crate) dividers: Vec<DividerPixelRect>,
-    /// Total available size in logical px (equals root cell dims × cell size).
+    /// Total layout bounding box in logical px. Width equals root cell width × cell_w.
+    /// Height equals the workspace height passed to `collapse()` — the full logical
+    /// pixel area available for panes (window height minus window bar, including slack).
     pub(crate) bbox: Vec2,
 }
+
+/// Links a `TmuxPane` container entity to its `TerminalRenderChild` (the entity
+/// that owns `TerminalGrid` and `MaterialNode<TerminalUiMaterial>`). Inserted by
+/// `attach_tmux_pane_terminal` alongside `TerminalHandle`.
+///
+/// Required because `flush_emit` / `emit_pending` must target the entity that
+/// carries `TerminalGrid` (where `apply_snapshot` / `apply_delta` observers look),
+/// and that entity is the child, not the `TmuxPane` container.
+#[derive(Component)]
+pub(crate) struct TerminalRenderRef(pub Entity);
 
 fn attach_tmux_window_container(
     mut commands: Commands,
@@ -98,13 +109,14 @@ fn attach_tmux_window_container(
     }
 }
 
-/// Attaches a detached `TerminalHandle`, a `TerminalRenderBundle`, and a
-/// placeholder absolute `Node` to each `TmuxPane` that lacks a
-/// `TerminalHandle`. Runs every frame but targets each pane exactly once.
-/// The grid is sized from the pane's projected `dims`. `ChildOf` is NOT set
+/// Attaches a detached `TerminalHandle` and a column-flex container `Node` to
+/// each `TmuxPane` that lacks a `TerminalHandle`. Spawns a `TerminalRenderBundle`
+/// child that owns the GPU grid and records it in `TerminalRenderRef` so
+/// `flush_emit` and observers target the right entity.
+///
+/// Runs every frame but targets each pane exactly once. `ChildOf` is NOT set
 /// here — the projection observers already establish the correct
-/// `ChildOf(window)` parent.
-/// `layout_tmux_panes` sets the real rect every frame.
+/// `ChildOf(window)` parent. `layout_tmux_panes` sets the real rect every frame.
 fn attach_tmux_pane_terminal(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -122,16 +134,32 @@ fn attach_tmux_pane_terminal(
         let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
         let handle = TerminalHandle::detached(cols, rows, gate.clone());
         let material = materials.add(TerminalUiMaterial::default());
+
         commands.entity(entity).insert((
             handle,
             TerminalTitle::default(),
-            TerminalRenderBundle::new(material),
             Node {
                 position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
                 ..default()
             },
-            Outline::new(Val::Px(theme::PANE_BORDER_PX), Val::Px(0.0), theme::BORDER),
         ));
+
+        let render_child = commands
+            .spawn((
+                TerminalRenderBundle::new(material),
+                Node {
+                    flex_grow: 1.0,
+                    width: Val::Percent(100.0),
+                    ..default()
+                },
+                ChildOf(entity),
+            ))
+            .id();
+
+        commands
+            .entity(entity)
+            .insert(TerminalRenderRef(render_child));
     }
 }
 
@@ -154,7 +182,7 @@ fn attach_tmux_pane_terminal(
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
-    mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle)>,
+    mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle, &TerminalRenderRef)>,
     panes: Query<(Entity, &TmuxPane)>,
     copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
@@ -170,7 +198,7 @@ fn route_tmux_output(
         let Some(&entity) = entity_of.get(&pane) else {
             continue;
         };
-        let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
+        let Ok((mut handle, mut title, render_ref)) = handles.get_mut(entity) else {
             continue;
         };
         handle.advance(&data);
@@ -180,11 +208,11 @@ fn route_tmux_output(
         // PtyHandle, so without this call a pane program's inline-webview mount
         // OSC is parsed and then silently dropped (no webview ever mounts).
         handle.drain_control_events(&mut commands, entity, &mut title);
-        // While the pane is in copy mode, the copy-mode plugin paints the scrolled
-        // capture onto the grid; skip the live flush so a late %output delta does
-        // not overwrite it (the exit observer forces the full repaint on return).
+        // NOTE: skip the live flush while in copy mode — `apply_copy_overlay` paints
+        // the captured scrollback onto the grid, and a late %output delta must not
+        // overwrite it. The exit observer forces a full repaint on return.
         if copy_modes.get(entity).is_err() {
-            handle.flush_emit(&mut commands, entity);
+            handle.flush_emit(&mut commands, render_ref.0);
         }
         // NOTE: drain and DISCARD — never forward these replies to tmux. The
         // handle is a display-only renderer; tmux already answered the program's
@@ -206,9 +234,11 @@ fn collapse(
     cell_w: f32,
     cell_h: f32,
     gap: f32,
+    pane_title_h: f32,
+    workspace_h: f32,
 ) -> (HashMap<PaneId, Rect>, Vec<DividerPixelRect>, Vec2) {
     let dims = root.dims();
-    let available = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
+    let available = Vec2::new(dims.width as f32 * cell_w, workspace_h);
     let mut panes = HashMap::new();
     let mut dividers = Vec::new();
     place(
@@ -220,8 +250,11 @@ fn collapse(
         cell_w,
         cell_h,
         gap,
+        pane_title_h,
     );
-    (panes, dividers, available)
+    let actual_h = panes.values().map(|r| r.max.y).fold(0.0f32, f32::max);
+    let bbox = Vec2::new(available.x, actual_h.max(available.y));
+    (panes, dividers, bbox)
 }
 
 fn place(
@@ -233,11 +266,14 @@ fn place(
     cell_w: f32,
     cell_h: f32,
     gap: f32,
+    pane_title_h: f32,
 ) -> Vec2 {
     match cell {
         Cell::Leaf { dims, pane_id } => {
-            let size = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
-            let node_size = Vec2::new(available.x.max(size.x), available.y.max(size.y));
+            let node_size = Vec2::new(
+                available.x.max(dims.width as f32 * cell_w),
+                available.y.max(dims.height as f32 * cell_h + pane_title_h),
+            );
             if let Some(id) = pane_id {
                 panes.insert(
                     PaneId(*id),
@@ -268,6 +304,7 @@ fn place(
                     cell_w,
                     cell_h,
                     gap,
+                    pane_title_h,
                 );
                 x += csz.x;
                 if i < last {
@@ -288,13 +325,22 @@ fn place(
             children,
             ..
         } => {
-            let last = children.len().saturating_sub(1);
+            let n = children.len();
+            let last = n.saturating_sub(1);
+            let gaps_total = last as f32 * gap;
+            let natural_h: f32 = children
+                .iter()
+                .map(|c| c.dims().height as f32 * cell_h + pane_title_h)
+                .sum();
+            let slack = (available.y - natural_h - gaps_total).max(0.0);
             let mut y = origin.y;
             for (i, child) in children.iter().enumerate() {
                 let child_avail_h = if i == last {
                     available.y - (y - origin.y)
                 } else {
-                    child.dims().height as f32 * cell_h
+                    let extra = (slack * (i + 1) as f32 / n as f32).round()
+                        - (slack * i as f32 / n as f32).round();
+                    child.dims().height as f32 * cell_h + pane_title_h + extra
                 };
                 let csz = place(
                     panes,
@@ -305,6 +351,7 @@ fn place(
                     cell_w,
                     cell_h,
                     gap,
+                    pane_title_h,
                 );
                 y += csz.y;
                 if i < last {
@@ -330,7 +377,15 @@ fn place(
                 let lit_origin = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
                 let lit_avail = Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
                 place(
-                    panes, dividers, child, lit_origin, lit_avail, cell_w, cell_h, gap,
+                    panes,
+                    dividers,
+                    child,
+                    lit_origin,
+                    lit_avail,
+                    cell_w,
+                    cell_h,
+                    gap,
+                    pane_title_h,
                 );
             }
             Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h)
@@ -369,9 +424,15 @@ fn layout_tmux_panes(
         With<TmuxWindow>,
     >,
     mut panes: Query<
-        (&TmuxPane, &mut Node, &mut TerminalHandle, &mut TerminalGrid),
+        (
+            &TmuxPane,
+            &mut Node,
+            &mut TerminalHandle,
+            &TerminalRenderRef,
+        ),
         Without<TmuxWindow>,
     >,
+    mut grids: Query<&mut TerminalGrid>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -381,9 +442,18 @@ fn layout_tmux_panes(
     let dpr = window.scale_factor().max(0.5);
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
+    let pane_title_h = 0.0_f32;
+    let workspace_h = (window.resolution.physical_height() as f32 / dpr - cell_h).max(cell_h);
 
     for (window_entity, layout, mut container, children, maybe_packed) in windows.iter_mut() {
-        let (rects, dividers, bbox) = collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX);
+        let (rects, dividers, bbox) = collapse(
+            &layout.0.root,
+            cell_w,
+            cell_h,
+            theme::PANE_GAP_PX,
+            pane_title_h,
+            workspace_h,
+        );
 
         // NOTE: only write the Node fields when they actually change — writing
         // through `Mut<Node>` every frame marks the component changed and forces
@@ -404,7 +474,7 @@ fn layout_tmux_panes(
         }
 
         for child in children.iter() {
-            let Ok((pane, mut node, mut handle, mut grid)) = panes.get_mut(child) else {
+            let Ok((pane, mut node, mut handle, render_ref)) = panes.get_mut(child) else {
                 continue;
             };
             let Some(rect) = rects.get(&pane.id) else {
@@ -425,9 +495,11 @@ fn layout_tmux_panes(
             let (cur_cols, cur_rows, _) = handle.read_geometry();
             if (cur_cols, cur_rows) != (cols, rows) {
                 handle.resize_grid_only(cols, rows);
-                grid.cols = cols;
-                grid.rows = rows;
-                handle.emit_pending(&mut commands, child);
+                if let Ok(mut grid) = grids.get_mut(render_ref.0) {
+                    grid.cols = cols;
+                    grid.rows = rows;
+                }
+                handle.emit_pending(&mut commands, render_ref.0);
             }
         }
     }
@@ -445,8 +517,7 @@ fn rows_for_panes(total_rows: u16) -> u16 {
 
 /// Sends `refresh-client -C <cols>,<rows>` to tmux so it lays out panes for
 /// the current window size. One row is reserved for the ozmux window status
-/// bar via [`rows_for_panes`], since tmux `-CC` does not reserve a status row.
-/// Results are deduped via [`LastClientSize`].
+/// bar via [`rows_for_panes`]. Results are deduped via [`LastClientSize`].
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
     connection: NonSend<TmuxConnection>,
@@ -492,18 +563,6 @@ fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<Tm
     }
 }
 
-/// Recolors each pane's `Outline`: the accent color on the pane carrying
-/// `ActivePane`, the subtle border grey otherwise. Recoloring (not
-/// insert/remove) avoids ECS table moves on every active-pane change.
-fn sync_active_pane_outline(mut panes: Query<(Has<ActivePane>, &mut Outline), With<TmuxPane>>) {
-    for (active, mut outline) in panes.iter_mut() {
-        let want = if active { theme::ACCENT } else { theme::BORDER };
-        if outline.color != want {
-            outline.color = want;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -534,46 +593,6 @@ mod tests {
             xoff: 0,
             yoff: 0,
         }
-    }
-
-    #[test]
-    fn active_pane_outline_is_accent_inactive_is_grey() {
-        use bevy::prelude::*;
-        use ozmux_tmux::{ActivePane, TmuxPane};
-
-        let mut app = App::new();
-        app.add_systems(Update, sync_active_pane_outline);
-        let active = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: dims(),
-                },
-                ActivePane,
-                Outline::new(Val::Px(1.0), Val::Px(0.0), theme::BORDER),
-            ))
-            .id();
-        let inactive = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(2),
-                    dims: dims(),
-                },
-                Outline::new(Val::Px(1.0), Val::Px(0.0), theme::BORDER),
-            ))
-            .id();
-        app.update();
-
-        assert_eq!(
-            app.world().get::<Outline>(active).unwrap().color,
-            theme::ACCENT
-        );
-        assert_eq!(
-            app.world().get::<Outline>(inactive).unwrap().color,
-            theme::BORDER
-        );
     }
 
     #[test]
@@ -619,10 +638,14 @@ mod tests {
             });
         app.update();
 
+        let render_ref = app
+            .world()
+            .get::<TerminalRenderRef>(pane_entity)
+            .expect("pane has TerminalRenderRef");
         let grid = app
             .world()
-            .get::<TerminalGrid>(pane_entity)
-            .expect("pane has a TerminalGrid");
+            .get::<TerminalGrid>(render_ref.0)
+            .expect("render child has TerminalGrid");
         let row0: String = grid.cells[0].iter().map(|c| c.text.as_str()).collect();
         assert!(
             row0.starts_with("hi"),
@@ -668,11 +691,11 @@ mod tests {
                 data: b"hi".to_vec(),
             });
         app.update();
-        let baseline: String = app
-            .world()
-            .get::<TerminalGrid>(pane_entity)
-            .expect("pane has a TerminalGrid")
-            .cells[0]
+        let baseline: String = {
+            let rr = app.world().get::<TerminalRenderRef>(pane_entity).unwrap();
+            app.world().get::<TerminalGrid>(rr.0).unwrap()
+        }
+        .cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -690,7 +713,11 @@ mod tests {
                 data: b"\r\nXY".to_vec(),
             });
         app.update();
-        let gated: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
+        let gated: String = {
+            let rr = app.world().get::<TerminalRenderRef>(pane_entity).unwrap();
+            app.world().get::<TerminalGrid>(rr.0).unwrap()
+        }
+        .cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -712,7 +739,11 @@ mod tests {
                 data: Vec::new(),
             });
         app.update();
-        let resumed: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[1]
+        let resumed: String = {
+            let rr = app.world().get::<TerminalRenderRef>(pane_entity).unwrap();
+            app.world().get::<TerminalGrid>(rr.0).unwrap()
+        }
+        .cells[1]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -825,32 +856,30 @@ mod tests {
                 Node::default(),
             ))
             .id();
-        let entity = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 40,
-                        height: 10,
-                        xoff: 0,
-                        yoff: 0,
-                    },
+        let render_child = app.world_mut().spawn(TerminalGrid::default()).id();
+        app.world_mut().spawn((
+            TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 40,
+                    height: 10,
+                    xoff: 0,
+                    yoff: 0,
                 },
-                Node::default(),
-                TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
-                TerminalGrid::default(),
-                ChildOf(window_e),
-            ))
-            .id();
+            },
+            Node::default(),
+            TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
+            TerminalRenderRef(render_child),
+            ChildOf(window_e),
+        ));
 
         app.add_systems(Update, layout_tmux_panes);
         app.update();
 
         let grid = app
             .world()
-            .get::<TerminalGrid>(entity)
-            .expect("pane has a TerminalGrid");
+            .get::<TerminalGrid>(render_child)
+            .expect("render child has TerminalGrid");
         assert_eq!(
             (grid.cols, grid.rows),
             (40, 10),
@@ -1034,6 +1063,7 @@ mod tests {
                 Node::default(),
             ))
             .id();
+        let render_child = app.world_mut().spawn(TerminalGrid::default()).id();
         let entity = app
             .world_mut()
             .spawn((
@@ -1048,7 +1078,7 @@ mod tests {
                 },
                 Node::default(),
                 TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
-                TerminalGrid::default(),
+                TerminalRenderRef(render_child),
                 ChildOf(window_e),
             ))
             .id();
@@ -1056,10 +1086,11 @@ mod tests {
         app.add_systems(
             Update,
             (
-                |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
-                    for (e, mut h) in q.iter_mut() {
+                |mut commands: Commands,
+                 mut q: Query<(Entity, &mut TerminalHandle, &TerminalRenderRef)>| {
+                    for (_, mut h, render_ref) in q.iter_mut() {
                         h.advance(b"x");
-                        h.flush_emit(&mut commands, e);
+                        h.flush_emit(&mut commands, render_ref.0);
                     }
                 },
                 layout_tmux_panes,
@@ -1090,8 +1121,8 @@ mod tests {
 
         let grid = app
             .world()
-            .get::<TerminalGrid>(entity)
-            .expect("pane has a TerminalGrid");
+            .get::<TerminalGrid>(render_child)
+            .expect("render child has TerminalGrid");
         assert_eq!(
             (grid.cols, grid.rows),
             (40, 10),
@@ -1115,7 +1146,7 @@ mod tests {
             },
             pane_id: Some(0),
         };
-        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(0)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 384.0))
@@ -1154,7 +1185,7 @@ mod tests {
                 },
             ],
         };
-        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
@@ -1222,18 +1253,21 @@ mod tests {
                 right_child,
             ],
         };
-        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        // pane_title_h=0, natural_h=192+176=368, gap=1, slack=384-368-1=15
+        // slack distributed: pane2 gets round(15/2)=8px, pane3 (last) gets remaining 7px
+        // pane2: 12*16+8=200, pane3: 384-200-1=183 (11*16+7=183)
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
         );
         assert_eq!(
             rects[&PaneId(2)],
-            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 192.0)),
+            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 200.0)),
         );
         assert_eq!(
             rects[&PaneId(3)],
-            Rect::from_corners(Vec2::new(321.0, 193.0), Vec2::new(640.0, 384.0)),
+            Rect::from_corners(Vec2::new(321.0, 201.0), Vec2::new(640.0, 384.0)),
         );
         assert_eq!(bbox, Vec2::new(640.0, 384.0));
     }
@@ -1290,7 +1324,7 @@ mod tests {
                 },
             ],
         };
-        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(160.0, 384.0))
@@ -1348,8 +1382,141 @@ mod tests {
                 },
             ],
         };
-        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0);
+        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(rects.len(), 1, "pane_id:None leaf is not placed");
         assert!(rects.contains_key(&PaneId(2)));
+    }
+
+    #[test]
+    fn collapse_with_title_h_adds_t_to_every_leaf() {
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 22,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::TopBottom,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 80,
+                        height: 11,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 80,
+                        height: 10,
+                        xoff: 0,
+                        yoff: 12,
+                    },
+                    pane_id: Some(2),
+                },
+            ],
+        };
+        // cell_h = 16.0, pane_title_h = 16.0, gap = 1.0, workspace_h = 22*16 = 352
+        // pane1: dims.height*cell_h + pane_title_h = 11*16 + 16 = 192 px tall
+        // pane2: available.y - consumed = 352 - 192 - 1 = 159 available
+        //        max(159, 10*16+16) = max(159, 176) = 176 px tall
+        // pane2 starts at y = 192+1 = 193
+        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0, 16.0, 352.0);
+        let r1 = rects[&PaneId(1)];
+        let r2 = rects[&PaneId(2)];
+        assert_eq!(r1, Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 192.0)));
+        assert_eq!(
+            r2,
+            Rect::from_corners(Vec2::new(0.0, 193.0), Vec2::new(640.0, 369.0))
+        );
+        assert_eq!(r1.height(), 192.0, "11 rows + 1 title bar row = 192px");
+        assert_eq!(r2.height(), 176.0, "10 rows + 1 title bar row = 176px");
+    }
+
+    #[test]
+    fn collapse_workspace_h_fills_slack() {
+        let root = Cell::Leaf {
+            dims: CellDims {
+                width: 20,
+                height: 5,
+                xoff: 0,
+                yoff: 0,
+            },
+            pane_id: Some(1),
+        };
+        // workspace_h = 5*16 + 16 (title) + 8 (slack) = 104px
+        let workspace_h = 5.0 * 16.0 + 16.0 + 8.0;
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 16.0, workspace_h);
+        assert_eq!(
+            rects[&PaneId(1)].height(),
+            workspace_h,
+            "pane fills workspace including slack"
+        );
+        assert_eq!(bbox.y, workspace_h, "bbox height equals workspace_h");
+    }
+
+    #[test]
+    fn collapse_slack_distributed_across_top_bottom_panes() {
+        let root = Cell::Split {
+            dims: CellDims {
+                width: 80,
+                height: 26,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::TopBottom,
+            children: vec![
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 80,
+                        height: 8,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 80,
+                        height: 8,
+                        xoff: 0,
+                        yoff: 9,
+                    },
+                    pane_id: Some(2),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 80,
+                        height: 8,
+                        xoff: 0,
+                        yoff: 18,
+                    },
+                    pane_id: Some(3),
+                },
+            ],
+        };
+        // cell_h=16, pane_title_h=16, gap=1
+        // natural_h = 3*(8*16+16) = 432, gaps = 2, slack = 6
+        // each pane gets 2px extra: 144+16+2 = 162? No: 8*16+16+2 = 146
+        // pane1: y=0..146, pane2: y=147..293, pane3: y=294..440
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 16.0, 440.0);
+        assert_eq!(
+            rects[&PaneId(1)].height(),
+            146.0,
+            "pane 1 gets its share of slack"
+        );
+        assert_eq!(
+            rects[&PaneId(2)].height(),
+            146.0,
+            "pane 2 gets its share of slack"
+        );
+        assert_eq!(
+            rects[&PaneId(3)].height(),
+            146.0,
+            "pane 3 gets its share of slack"
+        );
+        assert_eq!(bbox.y, 440.0, "bounding box matches workspace_h");
     }
 }

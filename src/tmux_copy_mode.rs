@@ -14,6 +14,7 @@
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
 use crate::clipboard::Clipboard;
+use crate::tmux_render::TerminalRenderRef;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -105,12 +106,13 @@ fn on_copy_mode_exit(
     ev: On<Remove, CopyModeState>,
     mut commands: Commands,
     mut refresh: ResMut<CopyRefreshState>,
-    mut live_handles: Query<&mut TerminalHandle>,
+    mut live_handles: Query<(&mut TerminalHandle, Option<&TerminalRenderRef>)>,
     panes: Query<&TmuxPane>,
 ) {
     let entity = ev.entity;
-    if let Ok(mut handle) = live_handles.get_mut(entity) {
-        handle.repaint_full(&mut commands, entity);
+    if let Ok((mut handle, maybe_ref)) = live_handles.get_mut(entity) {
+        let target = maybe_ref.map(|r| r.0).unwrap_or(entity);
+        handle.repaint_full(&mut commands, target);
     }
     commands
         .entity(entity)
@@ -174,13 +176,16 @@ fn consume_copy_reply(
     mut clipboard: ResMut<Clipboard>,
     mut render_handles: Query<&mut CopyRenderHandle>,
     connection: NonSend<TmuxConnection>,
-    panes: Query<(Entity, &TmuxPane)>,
+    panes: Query<(Entity, &TmuxPane, Option<&TerminalRenderRef>)>,
     copy_modes: Query<(), With<CopyModeState>>,
     snapshots: Query<&CopyModeSnapshot>,
 ) {
-    let entity_of: HashMap<PaneId, Entity> = panes.iter().map(|(e, p)| (p.id, e)).collect();
+    let entity_of: HashMap<PaneId, (Entity, Option<Entity>)> = panes
+        .iter()
+        .map(|(e, p, r)| (p.id, (e, r.map(|rr| rr.0))))
+        .collect();
     for reply in replies.read() {
-        let Some(&entity) = entity_of.get(&reply.pane) else {
+        let Some(&(entity, maybe_render)) = entity_of.get(&reply.pane) else {
             continue;
         };
         match reply.kind {
@@ -210,7 +215,14 @@ fn consume_copy_reply(
                 if copy_modes.get(entity).is_err() {
                     continue;
                 }
-                apply_capture_reply(&mut commands, &mut render_handles, entity, reply);
+                let render_target = maybe_render.unwrap_or(entity);
+                apply_capture_reply(
+                    &mut commands,
+                    &mut render_handles,
+                    entity,
+                    render_target,
+                    reply,
+                );
             }
             CopyQueryKind::Buffer => {
                 if reply.ok {
@@ -272,11 +284,14 @@ fn apply_state_reply(
 
 /// Handles a `Capture` reply: feeds the captured bytes into the pane's
 /// `CopyRenderHandle` (created/resized to the pane on demand) and emits, so the
-/// pane's `TerminalGrid` shows the scrolled copy-mode view.
+/// pane's `TerminalGrid` shows the scrolled copy-mode view. `pane_entity` holds
+/// `CopyRenderHandle`; `render_target` is the entity carrying `TerminalGrid`
+/// (the `TerminalRenderRef` child, or the pane itself in tests without one).
 fn apply_capture_reply(
     commands: &mut Commands,
     render_handles: &mut Query<&mut CopyRenderHandle>,
-    entity: Entity,
+    pane_entity: Entity,
+    render_target: Entity,
     reply: &CopyModeReply,
 ) {
     if !reply.ok {
@@ -284,19 +299,21 @@ fn apply_capture_reply(
     }
     let bytes = capture_to_bytes(&reply.output);
     let (cols, rows) = capture_dims(&reply.output);
-    if let Ok(mut render) = render_handles.get_mut(entity) {
+    if let Ok(mut render) = render_handles.get_mut(pane_entity) {
         let (cur_cols, cur_rows, _) = render.0.read_geometry();
         if (cur_cols, cur_rows) != (cols, rows) {
             render.0.resize_grid_only(cols, rows);
         }
         render.0.advance(&bytes);
-        render.0.flush_emit(commands, entity);
+        render.0.flush_emit(commands, render_target);
         return;
     }
     let mut handle = TerminalHandle::detached(cols, rows, Arc::new(AtomicBool::new(false)));
     handle.advance(&bytes);
-    handle.flush_emit(commands, entity);
-    commands.entity(entity).insert(CopyRenderHandle(handle));
+    handle.flush_emit(commands, render_target);
+    commands
+        .entity(pane_entity)
+        .insert(CopyRenderHandle(handle));
 }
 
 /// Joins `capture-pane -p -e` reply lines into VT bytes for the scratch handle:
@@ -323,6 +340,10 @@ fn capture_dims(lines: &[String]) -> (u16, u16) {
 /// `TerminalGrid`. Runs each frame while any pane has a `CopyModeSnapshot`,
 /// ordered after `consume_copy_reply`.
 ///
+/// `CopyModeSnapshot` lives on the `TmuxPane` entity; `TerminalGrid` lives on
+/// the `TerminalRenderRef` child. The two queries are split so each entity is
+/// addressed at the correct level.
+///
 /// # Ordering
 ///
 /// `flush_emit` (called by `consume_copy_reply`) clears `vi_cursor`/`selection`
@@ -333,8 +354,18 @@ fn capture_dims(lines: &[String]) -> (u16, u16) {
 // unconditionally marks the grid changed and triggers downstream repaint. If the
 // guard is removed the renderer will repaint every frame even in steady state,
 // defeating Bevy's change-detection optimizations for the glyph pipeline.
-fn apply_copy_overlay(mut grids: Query<(&mut TerminalGrid, &CopyModeSnapshot)>) {
-    for (mut grid, snapshot) in &mut grids {
+fn apply_copy_overlay(
+    mut grids: Query<&mut TerminalGrid>,
+    panes: Query<(&CopyModeSnapshot, Option<&TerminalRenderRef>)>,
+) {
+    for (snapshot, maybe_ref) in panes.iter() {
+        let render_entity = maybe_ref.map(|r| r.0);
+        let Some(target) = render_entity else {
+            continue;
+        };
+        let Ok(mut grid) = grids.get_mut(target) else {
+            continue;
+        };
         let (vi_cursor, selection) = build_overlay(&snapshot.0);
         let want_cursor = Some(vi_cursor);
         if grid.vi_cursor != want_cursor {
@@ -615,6 +646,7 @@ mod tests {
         app.add_plugins(OzmuxTmuxCopyModePlugin);
 
         let pane_id = PaneId(1);
+        let render_child = app.world_mut().spawn(TerminalGrid::default()).id();
         let entity = app
             .world_mut()
             .spawn((
@@ -628,7 +660,7 @@ mod tests {
                     },
                 },
                 TerminalHandle::detached(20, 3, Arc::new(AtomicBool::new(false))),
-                TerminalGrid::default(),
+                TerminalRenderRef(render_child),
                 CopyModeState,
             ))
             .id();
@@ -643,12 +675,12 @@ mod tests {
                     live.advance(b"LIVE");
                     let mut cap = TerminalHandle::detached(20, 3, Arc::new(AtomicBool::new(false)));
                     cap.advance(b"CAP");
-                    cap.flush_emit(&mut commands, entity);
+                    cap.flush_emit(&mut commands, render_child);
                 },
             )
             .unwrap();
         app.update();
-        let before: String = app.world().get::<TerminalGrid>(entity).unwrap().cells[0]
+        let before: String = app.world().get::<TerminalGrid>(render_child).unwrap().cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -677,7 +709,7 @@ mod tests {
         app.world_mut().entity_mut(entity).remove::<CopyModeState>();
         app.update();
 
-        let after: String = app.world().get::<TerminalGrid>(entity).unwrap().cells[0]
+        let after: String = app.world().get::<TerminalGrid>(render_child).unwrap().cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -1159,9 +1191,15 @@ mod tests {
 
         // Evaluate overlay assertions while still in copy mode.
         let snapshot_ok = got_snapshot;
-        let vi_cursor_present = app
+        let render_child_entity = app
             .world()
-            .get::<ozma_tty_renderer::schema::TerminalGrid>(pane_entity)
+            .get::<TerminalRenderRef>(pane_entity)
+            .map(|r| r.0);
+        let vi_cursor_present = render_child_entity
+            .and_then(|e| {
+                app.world()
+                    .get::<ozma_tty_renderer::schema::TerminalGrid>(e)
+            })
             .map(|g| g.vi_cursor.is_some())
             .unwrap_or(false);
         let selection_present = app
