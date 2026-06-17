@@ -340,6 +340,10 @@ fn capture_dims(lines: &[String]) -> (u16, u16) {
 /// `TerminalGrid`. Runs each frame while any pane has a `CopyModeSnapshot`,
 /// ordered after `consume_copy_reply`.
 ///
+/// `CopyModeSnapshot` lives on the `TmuxPane` entity; `TerminalGrid` lives on
+/// the `TerminalRenderRef` child. The two queries are split so each entity is
+/// addressed at the correct level.
+///
 /// # Ordering
 ///
 /// `flush_emit` (called by `consume_copy_reply`) clears `vi_cursor`/`selection`
@@ -350,9 +354,6 @@ fn capture_dims(lines: &[String]) -> (u16, u16) {
 // unconditionally marks the grid changed and triggers downstream repaint. If the
 // guard is removed the renderer will repaint every frame even in steady state,
 // defeating Bevy's change-detection optimizations for the glyph pipeline.
-// NOTE: `CopyModeSnapshot` lives on the `TmuxPane` entity while `TerminalGrid`
-// lives on the `TerminalRenderRef` child. The two queries are split so each
-// entity is addressed at the correct level.
 fn apply_copy_overlay(
     mut grids: Query<&mut TerminalGrid>,
     panes: Query<(&CopyModeSnapshot, Option<&TerminalRenderRef>)>,

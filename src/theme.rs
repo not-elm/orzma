@@ -31,8 +31,6 @@ pub const SESSION_BG: Color = Color::srgb(0.200, 0.220, 0.282);
 pub const FLAG_WARN: Color = Color::srgb(0.878, 0.690, 0.302);
 /// Powerline right-pointing filled separator glyph (Nerd Font U+E0B0).
 pub const POWERLINE_RIGHT: &str = "\u{e0b0}";
-/// Powerline left-pointing filled separator glyph (Nerd Font U+E0B2).
-pub const POWERLINE_LEFT: &str = "\u{e0b2}";
 /// Session-chooser selection bar — tmux choose-tree style amber.
 pub const SELECTION: Color = Color::srgb(0.847, 0.651, 0.341);
 /// Text on the SELECTION bar — near-black for contrast.
@@ -42,8 +40,6 @@ pub const DIVIDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
 /// Session-chooser title / footer font size.
 pub const PICKER_TITLE_FONT_SIZE_PX: f32 = 11.0;
 
-/// Pane border thickness.
-pub const PANE_BORDER_PX: f32 = 1.0;
 /// Gap in logical px between packed panes. The grey window container bleeds
 /// through this gap as the 1px divider line.
 pub const PANE_GAP_PX: f32 = 1.0;

@@ -15,7 +15,7 @@ use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
-    ActivePane, ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
+    ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
     TmuxWindowLayout, refresh_client_command,
 };
 use std::collections::HashMap;
@@ -110,10 +110,9 @@ fn attach_tmux_window_container(
 }
 
 /// Attaches a detached `TerminalHandle` and a column-flex container `Node` to
-/// each `TmuxPane` that lacks a `TerminalHandle`. Spawns two children:
-/// a `PaneTitleBar` row (with a `Text` grandchild) and a `TerminalRenderBundle`
-/// child that owns the GPU grid. Records the child entity in `TerminalRenderRef`
-/// so `flush_emit` and observers target the right entity.
+/// each `TmuxPane` that lacks a `TerminalHandle`. Spawns a `TerminalRenderBundle`
+/// child that owns the GPU grid and records it in `TerminalRenderRef` so
+/// `flush_emit` and observers target the right entity.
 ///
 /// Runs every frame but targets each pane exactly once. `ChildOf` is NOT set
 /// here — the projection observers already establish the correct
@@ -123,8 +122,6 @@ fn attach_tmux_pane_terminal(
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     gate: Option<Res<OscWebviewGate>>,
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
-    metrics: Option<Res<TerminalCellMetricsResource>>,
-    window: Query<&Window, With<PrimaryWindow>>,
 ) {
     // NOTE: clone the SHARED OscWebviewGate so a tmux pane captures OSC 5379 when
     // the feature is enabled; a fresh `false` atomic would leave inline-webview
@@ -211,9 +208,9 @@ fn route_tmux_output(
         // PtyHandle, so without this call a pane program's inline-webview mount
         // OSC is parsed and then silently dropped (no webview ever mounts).
         handle.drain_control_events(&mut commands, entity, &mut title);
-        // While the pane is in copy mode, the copy-mode plugin paints the scrolled
-        // capture onto the grid; skip the live flush so a late %output delta does
-        // not overwrite it (the exit observer forces the full repaint on return).
+        // NOTE: skip the live flush while in copy mode — `apply_copy_overlay` paints
+        // the captured scrollback onto the grid, and a late %output delta must not
+        // overwrite it. The exit observer forces a full repaint on return.
         if copy_modes.get(entity).is_err() {
             handle.flush_emit(&mut commands, render_ref.0);
         }
@@ -860,25 +857,21 @@ mod tests {
             ))
             .id();
         let render_child = app.world_mut().spawn(TerminalGrid::default()).id();
-        let entity = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 40,
-                        height: 10,
-                        xoff: 0,
-                        yoff: 0,
-                    },
+        app.world_mut().spawn((
+            TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 40,
+                    height: 10,
+                    xoff: 0,
+                    yoff: 0,
                 },
-                Node::default(),
-                TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
-                TerminalRenderRef(render_child),
-                ChildOf(window_e),
-            ))
-            .id();
-        let _ = entity;
+            },
+            Node::default(),
+            TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
+            TerminalRenderRef(render_child),
+            ChildOf(window_e),
+        ));
 
         app.add_systems(Update, layout_tmux_panes);
         app.update();
