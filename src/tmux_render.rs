@@ -123,7 +123,17 @@ fn attach_tmux_pane_terminal(
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     gate: Option<Res<OscWebviewGate>>,
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
+    window: Query<&Window, With<PrimaryWindow>>,
 ) {
+    let dpr = window
+        .single()
+        .map(|w| w.scale_factor().max(0.5))
+        .unwrap_or(1.0);
+    let pane_title_h = metrics
+        .as_ref()
+        .map(|m| m.metrics.line_height_phys.floor().max(1.0) / dpr)
+        .unwrap_or(0.0);
     // NOTE: clone the SHARED OscWebviewGate so a tmux pane captures OSC 5379 when
     // the feature is enabled; a fresh `false` atomic would leave inline-webview
     // capture permanently off for tmux panes. The fallback is only reached in
@@ -152,6 +162,7 @@ fn attach_tmux_pane_terminal(
                 PaneTitleBar,
                 Node {
                     width: Val::Percent(100.0),
+                    height: Val::Px(pane_title_h),
                     padding: UiRect::axes(
                         Val::Px(theme::TAB_PADDING_X_PX),
                         Val::Px(0.0),

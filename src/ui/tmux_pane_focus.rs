@@ -53,7 +53,7 @@ fn augment_tmux_pane(
 
 /// True when a pane's active state may have changed this frame: a new pane
 /// appeared, or the `ActivePane` marker was inserted/removed.
-fn pane_active_state_changed(
+pub(crate) fn pane_active_state_changed(
     mut removed_active: RemovedComponents<ActivePane>,
     added_panes: Query<(), Added<TmuxPane>>,
     added_active: Query<(), Added<ActivePane>>,

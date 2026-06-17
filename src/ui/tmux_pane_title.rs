@@ -1,6 +1,7 @@
 //! Per-pane title bar: `PaneTitleBar` marker and the plugin that keeps it in sync.
 
 use crate::theme;
+use crate::ui::tmux_pane_focus::pane_active_state_changed;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalTitle;
 use ozmux_tmux::{ActivePane, TmuxPane};
@@ -18,7 +19,10 @@ impl Plugin for OzmuxTmuxPaneTitlePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (sync_pane_title_text, sync_pane_title_active),
+            (
+                sync_pane_title_text,
+                sync_pane_title_active.run_if(pane_active_state_changed),
+            ),
         );
     }
 }
