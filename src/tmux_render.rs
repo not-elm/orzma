@@ -545,6 +545,7 @@ fn sync_client_size(
     connection: NonSend<TmuxConnection>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
+    active_layout: Query<&TmuxWindowLayout, With<ActiveWindow>>,
 ) {
     let Some(client) = connection.client() else {
         return;
@@ -561,6 +562,11 @@ fn sync_client_size(
         cell_h,
     );
     let rows = rows_for_panes(rows);
+    let depth = active_layout
+        .single()
+        .map(|l| vertical_depth(&l.0.root))
+        .unwrap_or(1) as u16;
+    let rows = rows.saturating_sub(depth).max(1);
     if (cols, rows) == (last.cols, last.rows) {
         return;
     }
@@ -607,6 +613,8 @@ mod tests {
 
     #[test]
     fn rows_for_panes_reserves_one_row_for_the_bar() {
+        // rows_for_panes reserves 1 row for the window bar.
+        // sync_client_size additionally subtracts vertical_depth for title bars.
         assert_eq!(rows_for_panes(24), 23);
         assert_eq!(rows_for_panes(1), 1); // never zero
         assert_eq!(rows_for_panes(2), 1);
