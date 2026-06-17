@@ -43,6 +43,10 @@ pub struct TerminalGrid {
     /// carry ≤100 distinct hyperlinks (mirroring the server-side
     /// interner rationale).
     pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
+    /// Terminal default background color from `FrameSnapshot.default_bg`
+    /// (sourced from OSC 11). Raw `[r, g, b]` bytes; black when not set.
+    /// Used by the material system to fill padding pixels outside the grid.
+    pub default_bg: [u8; 3],
 }
 
 impl TerminalGrid {

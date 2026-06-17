@@ -41,6 +41,10 @@ pub struct FrameSnapshot {
     /// Active selection range. Independent of vi cursor — survives motion.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<SelectionRange>,
+    /// Terminal default background color from `term.colors()[NamedColor::Background]`
+    /// (OSC 11). `[0, 0, 0]` when no override is present.
+    #[serde(default)]
+    pub default_bg: [u8; 3],
 }
 
 /// Differential update relative to the prior frame.

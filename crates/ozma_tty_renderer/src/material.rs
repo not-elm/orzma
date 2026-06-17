@@ -558,13 +558,11 @@ fn update_terminal_material(
             state.initialized = true;
         }
 
-        // NOTE: Tier 1 conservative default — bg_padding_color matches the
-        //       pre-Tier1 fallback (opaque black) so the strip between the
-        //       grid's bottom-right edge and the host UI node edge looks
-        //       identical to the previous "out-of-grid fragment = black"
-        //       behavior. Theme-aware bg-color sourcing is a follow-up.
-        // TODO: source from a theme / TerminalGrid::default_bg instead of opaque black.
-        let bg_padding_color = Vec4::new(0.0, 0.0, 0.0, 1.0);
+        let bg_padding_color = {
+            let [r, g, b] = grid.default_bg;
+            let c = Color::srgb_u8(r, g, b).to_linear();
+            Vec4::new(c.red, c.green, c.blue, 1.0)
+        };
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),

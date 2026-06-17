@@ -33,6 +33,7 @@ fn apply_snapshot(snap: On<FrameSnapshot>, mut terminals: Query<&mut TerminalGri
         .extend(snap.hyperlinks.iter().map(|h| (h.id, h.uri.clone())));
     grid.vi_cursor = snap.vi_cursor;
     grid.selection = snap.selection;
+    grid.default_bg = snap.default_bg;
     grid.cells = snap
         .rows_data
         .iter()
@@ -130,6 +131,7 @@ mod tests {
             history_base: 0,
             vi_cursor: None,
             selection: None,
+            default_bg: [0, 0, 0],
         });
         app.update();
         let grid = app.world().get::<TerminalGrid>(entity).unwrap();
@@ -158,6 +160,7 @@ mod tests {
             history_base: 3,
             vi_cursor: None,
             selection: None,
+            default_bg: [0, 0, 0],
         });
         app.update();
         let grid = app.world().get::<TerminalGrid>(entity).unwrap();
