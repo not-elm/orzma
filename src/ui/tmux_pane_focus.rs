@@ -6,7 +6,6 @@
 //! gesture arbiter (`tmux_mouse::OzmuxTmuxMousePlugin`).
 
 use crate::configs::OzmuxConfigsResource;
-use crate::tmux_render::TerminalRenderRef;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
@@ -58,30 +57,25 @@ fn pane_active_state_changed(
         || removed_active.read().next().is_some()
 }
 
-/// Sets each pane's [`PaneDim`] brightness on the `TerminalRenderChild` entity:
-/// `1.0` for the pane carrying `ActivePane` (or for all panes when no pane is
-/// active), the configured dim factor otherwise. Only inserts when the value
-/// changes. Panes without a `TerminalRenderRef` (not yet attached) are skipped.
+/// Sets each pane's [`PaneDim`] brightness on the `TmuxPane` entity (which owns
+/// the `TerminalGrid` / material): `1.0` for the pane carrying `ActivePane` (or
+/// for all panes when no pane is active), the configured dim factor otherwise.
+/// Only inserts when the value changes.
 fn sync_pane_dim(
     mut commands: Commands,
-    panes: Query<(Has<ActivePane>, Option<&TerminalRenderRef>), With<TmuxPane>>,
-    render_dims: Query<Option<&PaneDim>>,
+    panes: Query<(Entity, Has<ActivePane>, Option<&PaneDim>), With<TmuxPane>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
     let dim_factor = inactive_dim_factor(configs.as_deref());
-    let any_active = panes.iter().any(|(active, _)| active);
-    for (active, maybe_ref) in panes.iter() {
-        let Some(render_ref) = maybe_ref else {
-            continue;
-        };
+    let any_active = panes.iter().any(|(_, active, _)| active);
+    for (entity, active, current) in panes.iter() {
         let want = if active || !any_active {
             1.0
         } else {
             dim_factor
         };
-        let current = render_dims.get(render_ref.0).ok().flatten();
         if current.map(|d| d.0) != Some(want) {
-            commands.entity(render_ref.0).insert(PaneDim(want));
+            commands.entity(entity).insert(PaneDim(want));
         }
     }
 }
@@ -122,7 +116,6 @@ mod tests {
         app.insert_resource(OzmuxConfigsResource::default());
         let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
 
-        let rc1 = app.world_mut().spawn(()).id();
         let p1 = app
             .world_mut()
             .spawn((
@@ -132,11 +125,9 @@ mod tests {
                 },
                 h(),
                 ActivePane,
-                crate::tmux_render::TerminalRenderRef(rc1),
             ))
             .id();
 
-        let rc2 = app.world_mut().spawn(()).id();
         let p2 = app
             .world_mut()
             .spawn((
@@ -145,38 +136,27 @@ mod tests {
                     dims: dims(),
                 },
                 h(),
-                crate::tmux_render::TerminalRenderRef(rc2),
             ))
             .id();
 
         let dim = |app: &App, e| app.world().get::<PaneDim>(e).map(|d| d.0);
 
         app.update();
-        assert_eq!(
-            dim(&app, rc1),
-            Some(1.0),
-            "active pane render child full-bright"
-        );
-        assert_eq!(
-            dim(&app, rc2),
-            Some(0.5),
-            "inactive pane render child dimmed"
-        );
-        assert_eq!(dim(&app, p1), None);
-        assert_eq!(dim(&app, p2), None);
+        assert_eq!(dim(&app, p1), Some(1.0), "active pane full-bright");
+        assert_eq!(dim(&app, p2), Some(0.5), "inactive pane dimmed");
 
         // Move ActivePane to p2.
         app.world_mut().entity_mut(p1).remove::<ActivePane>();
         app.world_mut().entity_mut(p2).insert(ActivePane);
         app.update();
-        assert_eq!(dim(&app, rc1), Some(0.5));
-        assert_eq!(dim(&app, rc2), Some(1.0));
+        assert_eq!(dim(&app, p1), Some(0.5));
+        assert_eq!(dim(&app, p2), Some(1.0));
 
         // No active pane: both full-bright.
         app.world_mut().entity_mut(p2).remove::<ActivePane>();
         app.update();
-        assert_eq!(dim(&app, rc1), Some(1.0));
-        assert_eq!(dim(&app, rc2), Some(1.0));
+        assert_eq!(dim(&app, p1), Some(1.0));
+        assert_eq!(dim(&app, p2), Some(1.0));
     }
 
     #[test]
