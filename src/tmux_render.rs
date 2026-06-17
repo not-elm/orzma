@@ -78,6 +78,16 @@ pub(crate) struct PackedTmuxLayout {
     pub(crate) bbox: Vec2,
 }
 
+/// Links a `TmuxPane` container entity to its `TerminalRenderChild` (the entity
+/// that owns `TerminalGrid` and `MaterialNode<TerminalUiMaterial>`). Inserted by
+/// `attach_tmux_pane_terminal` alongside `TerminalHandle`.
+///
+/// Required because `flush_emit` / `emit_pending` must target the entity that
+/// carries `TerminalGrid` (where `apply_snapshot` / `apply_delta` observers look),
+/// and that entity is the child, not the `TmuxPane` container.
+#[derive(Component)]
+pub(crate) struct TerminalRenderRef(pub Entity);
+
 fn attach_tmux_window_container(
     mut commands: Commands,
     windows: Query<Entity, (With<TmuxWindow>, Without<Node>)>,
