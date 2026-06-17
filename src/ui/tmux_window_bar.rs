@@ -274,16 +274,6 @@ fn build_window_entry(
         .id();
 
     if active {
-        commands.spawn((
-            Text::new(theme::POWERLINE_LEFT.to_string()),
-            TextColor(palette::ACCENT),
-            TextFont {
-                font: pl_font.clone(),
-                font_size: theme::UI_FONT_SIZE,
-                ..default()
-            },
-            ChildOf(entry),
-        ));
         let fill = commands
             .spawn((
                 Node {

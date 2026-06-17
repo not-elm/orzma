@@ -542,7 +542,12 @@ mod tests {
         let mut capture_pending = HashMap::from([(CommandId(5), PaneId(88))]);
         let no_cursor_pending = HashSet::new();
         let mut awaiting = HashMap::new();
-        let out = take_pane_captures(&mut capture_pending, &mut awaiting, &no_cursor_pending, &events);
+        let out = take_pane_captures(
+            &mut capture_pending,
+            &mut awaiting,
+            &no_cursor_pending,
+            &events,
+        );
         assert_eq!(
             out,
             vec![PaneOutput {
@@ -581,10 +586,21 @@ mod tests {
         let mut capture_pending = HashMap::from([(CommandId(5), PaneId(88))]);
         let no_cursor_pending = HashSet::new();
         let mut awaiting = HashMap::new();
-        let out = take_pane_captures(&mut capture_pending, &mut awaiting, &no_cursor_pending, &events);
+        let out = take_pane_captures(
+            &mut capture_pending,
+            &mut awaiting,
+            &no_cursor_pending,
+            &events,
+        );
         assert!(out.is_empty());
-        assert!(capture_pending.is_empty(), "failed capture is still cleared");
-        assert!(awaiting.is_empty(), "failed capture must not populate awaiting");
+        assert!(
+            capture_pending.is_empty(),
+            "failed capture is still cleared"
+        );
+        assert!(
+            awaiting.is_empty(),
+            "failed capture must not populate awaiting"
+        );
     }
 
     #[test]
@@ -598,9 +614,17 @@ mod tests {
         let mut capture_pending = HashMap::from([(CommandId(5), PaneId(88))]);
         let cursor_pending = HashSet::from([PaneId(88)]);
         let mut awaiting = HashMap::new();
-        let out = take_pane_captures(&mut capture_pending, &mut awaiting, &cursor_pending, &events);
+        let out = take_pane_captures(
+            &mut capture_pending,
+            &mut awaiting,
+            &cursor_pending,
+            &events,
+        );
         assert!(out.is_empty(), "should cache, not emit");
-        assert_eq!(awaiting.get(&PaneId(88)), Some(&vec!["line one".to_string()]));
+        assert_eq!(
+            awaiting.get(&PaneId(88)),
+            Some(&vec!["line one".to_string()])
+        );
     }
 
     #[test]
@@ -623,10 +647,7 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].pane, PaneId(88));
         // ESC[H ESC[2J + "hello" + ESC[6;4H  (cy=5→row 6, cx=3→col 4, 1-origin)
-        assert_eq!(
-            out[0].data,
-            b"\x1b[H\x1b[2Jhello\x1b[6;4H".to_vec()
-        );
+        assert_eq!(out[0].data, b"\x1b[H\x1b[2Jhello\x1b[6;4H".to_vec());
         assert!(cursor_pending.is_empty());
         assert!(panes_with_cursor.is_empty());
         assert!(awaiting.is_empty());

@@ -123,9 +123,7 @@ impl alacritty_terminal::event::EventListener for TermListener {
                 }
             }
             Event::ClipboardStore(_clip, content) => {
-                let frame = ControlFrame::Clipboard {
-                    content,
-                };
+                let frame = ControlFrame::Clipboard { content };
                 if let Err(e) = self.control_tx.send(frame) {
                     tracing::warn!(?e, "control_tx send(Clipboard) failed");
                 }

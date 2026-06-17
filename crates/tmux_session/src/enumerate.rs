@@ -206,7 +206,10 @@ pub(crate) fn capture_pane_command(id: PaneId) -> String {
 /// capture reply, so the capture content can be held until both are available and
 /// a cursor-positioning escape appended before the `PaneOutput` is emitted.
 pub(crate) fn cursor_query_command(id: PaneId) -> String {
-    format!("display-message -p -t %{} '#{{cursor_x}} #{{cursor_y}}'", id.0)
+    format!(
+        "display-message -p -t %{} '#{{cursor_x}} #{{cursor_y}}'",
+        id.0
+    )
 }
 
 /// The tab-separated `display-message -F` format ozmux reads each refresh while
