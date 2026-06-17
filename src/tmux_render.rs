@@ -161,6 +161,7 @@ fn attach_tmux_pane_terminal(
                     ..default()
                 },
                 BackgroundColor(theme::PANEL),
+                Outline::new(Val::Px(2.0), Val::Px(0.0), Color::NONE),
                 ChildOf(entity),
             ))
             .id();

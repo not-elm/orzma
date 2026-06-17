@@ -43,6 +43,7 @@ use ui::ime_overlay::ImeOverlayPlugin;
 use ui::tmux_dialog::TmuxDialogPlugin;
 use ui::tmux_divider_handle::OzmuxTmuxDividerHandlePlugin;
 use ui::tmux_pane_focus::OzmuxTmuxPaneFocusPlugin;
+use ui::tmux_pane_title::OzmuxTmuxPaneTitlePlugin;
 use ui::tmux_window_bar::OzmuxTmuxWindowBarPlugin;
 use ui::{
     OzmuxUiPlugin, confirm_prompt::ConfirmPromptPlugin, copy_mode::CopyModePlugin,
@@ -84,6 +85,7 @@ fn main() {
         .add_plugins(OzmuxTmuxInputPlugin)
         .add_plugins(OzmuxTmuxWindowBarPlugin)
         .add_plugins(OzmuxTmuxPaneFocusPlugin)
+        .add_plugins(OzmuxTmuxPaneTitlePlugin)
         .add_plugins(OzmuxTmuxCopyModePlugin)
         .add_plugins(OzmuxTmuxMousePlugin)
         .add_plugins(OzmuxTmuxDividerHandlePlugin)

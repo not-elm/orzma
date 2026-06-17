@@ -7,6 +7,7 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::tmux_render::TerminalRenderRef;
+use crate::ui::tmux_pane_title::PaneTitleBar;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
@@ -40,9 +41,13 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
 fn augment_tmux_pane(
     mut commands: Commands,
     panes: Query<Entity, (With<TmuxPane>, With<TerminalHandle>, Without<Button>)>,
+    title_bars: Query<Entity, (With<PaneTitleBar>, Without<FocusPolicy>)>,
 ) {
     for pane in panes.iter() {
         commands.entity(pane).insert((Button, FocusPolicy::Block));
+    }
+    for bar in title_bars.iter() {
+        commands.entity(bar).insert(FocusPolicy::Block);
     }
 }
 
@@ -146,10 +151,8 @@ mod tests {
         let dim = |app: &App, e| app.world().get::<PaneDim>(e).map(|d| d.0);
 
         app.update();
-        // PaneDim is now on the render children, not on the pane entities.
         assert_eq!(dim(&app, rc1), Some(1.0), "active pane render child full-bright");
         assert_eq!(dim(&app, rc2), Some(0.5), "inactive pane render child dimmed");
-        // p1/p2 themselves no longer carry PaneDim.
         assert_eq!(dim(&app, p1), None);
         assert_eq!(dim(&app, p2), None);
 
