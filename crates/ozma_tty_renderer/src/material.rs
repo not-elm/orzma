@@ -106,16 +106,27 @@ impl TerminalUiMaterial {
     }
 }
 
-/// Per-pane brightness multiplier for the terminal renderer. The consumer
-/// (e.g. ozmux-gui) sets this on a terminal host from its active-pane state;
-/// `update_terminal_material` bakes it into the material's `dim` uniform
-/// each frame. An absent component is treated as `1.0` (full-bright / active).
-#[derive(Component, Clone, Copy, Debug)]
-pub struct PaneDim(pub f32);
+/// Per-pane inactive-pane treatment for the terminal renderer: brightness
+/// `dim` and desaturation `desaturate`, both applied in the fragment shader to
+/// the final composited color (terminal content + any inline-webview overlay).
+/// The consumer (e.g. ozmux-gui) sets this on a terminal host from its
+/// active-pane state; `update_terminal_material` bakes both into the uniform
+/// each frame. An absent component is treated as `{ dim: 1.0, desaturate: 0.0 }`
+/// (full-bright, full-color / active).
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct PaneInactiveStyle {
+    /// Brightness multiplier in `0.0..=1.0`; `1.0` = full-bright.
+    pub dim: f32,
+    /// Desaturation in `0.0..=1.0`; `0.0` = full color, `1.0` = grey.
+    pub desaturate: f32,
+}
 
-impl Default for PaneDim {
+impl Default for PaneInactiveStyle {
     fn default() -> Self {
-        Self(1.0)
+        Self {
+            dim: 1.0,
+            desaturate: 0.0,
+        }
     }
 }
 
@@ -438,7 +449,7 @@ fn update_terminal_material(
         &MaterialNode<TerminalUiMaterial>,
         &mut TerminalMaterialState,
         &TerminalGrid,
-        Option<&PaneDim>,
+        Option<&PaneInactiveStyle>,
         Option<&TerminalOverlays>,
     )>,
     fonts: Res<TerminalFonts>,
@@ -477,7 +488,7 @@ fn update_terminal_material(
     let dpr = window.scale_factor();
     let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
 
-    for (entity, handle, mut state, grid, pane_dim, overlays) in terminals.iter_mut() {
+    for (entity, handle, mut state, grid, pane_style, overlays) in terminals.iter_mut() {
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;
         let cols = grid.cols as u32;
         let rows = grid.rows as u32;
@@ -578,7 +589,9 @@ fn update_terminal_material(
             _ => (0, 0),
         };
 
-        let dim = pane_dim.map_or(1.0, |d| d.0).clamp(0.0, 1.0);
+        let (dim, desaturate) = pane_style.map_or((1.0, 0.0), |s| {
+            (s.dim.clamp(0.0, 1.0), s.desaturate.clamp(0.0, 1.0))
+        });
         if let Some(mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
                 grid,
@@ -594,7 +607,7 @@ fn update_terminal_material(
                 hover_hyperlink_id,
                 hover_active,
                 dim,
-                0.0,
+                desaturate,
             );
             match overlays {
                 Some(o) => {

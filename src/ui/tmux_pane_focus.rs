@@ -1,15 +1,15 @@
 //! Pane augmentation and dim: gives each tmux pane a `Button` click target
 //! with `FocusPolicy::Block` (load-bearing: stops pane clicks reaching webview
-//! surfaces), and dims every inactive pane at the renderer via `PaneDim` (a
-//! brightness multiplier the terminal shader applies) rather than an opaque
-//! overlay veil. `select-pane` on press is now owned by the tmux mouse
-//! gesture arbiter (`tmux_mouse::OzmuxTmuxMousePlugin`).
+//! surfaces), and dims and desaturates every inactive pane at the renderer via
+//! `PaneInactiveStyle` (brightness + grey-out the terminal shader applies)
+//! rather than an opaque overlay veil. `select-pane` on press is now owned by
+//! the tmux mouse gesture arbiter (`tmux_mouse::OzmuxTmuxMousePlugin`).
 
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
-use ozma_tty_renderer::material::PaneDim;
+use ozma_tty_renderer::material::PaneInactiveStyle;
 use ozmux_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
 
 /// Registers the pane augmentation (adds `Button` + `FocusPolicy::Block`) and
@@ -22,7 +22,7 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
             Update,
             (
                 augment_tmux_pane.after(TmuxProjectionSet),
-                sync_pane_dim.run_if(pane_active_state_changed),
+                sync_inactive_pane_style.run_if(pane_active_state_changed),
             ),
         );
     }
@@ -57,35 +57,40 @@ fn pane_active_state_changed(
         || removed_active.read().next().is_some()
 }
 
-/// Sets each pane's [`PaneDim`] brightness on the `TmuxPane` entity (which owns
-/// the `TerminalGrid` / material): `1.0` for the pane carrying `ActivePane` (or
-/// for all panes when no pane is active), the configured dim factor otherwise.
-/// Only inserts when the value changes.
-fn sync_pane_dim(
+/// Sets each pane's [`PaneInactiveStyle`] on the `TmuxPane` entity (which owns
+/// the `TerminalGrid` / material): the active pane (or every pane when none is
+/// active) gets the default no-op `{ dim: 1.0, desaturate: 0.0 }`; inactive
+/// panes get the configured `(dim, desaturate)`. Only inserts when the value
+/// changes. Gated by `pane_active_state_changed`, so it does not observe live
+/// config edits — a config reload re-applies on the next active-pane change.
+fn sync_inactive_pane_style(
     mut commands: Commands,
-    panes: Query<(Entity, Has<ActivePane>, Option<&PaneDim>), With<TmuxPane>>,
+    panes: Query<(Entity, Has<ActivePane>, Option<&PaneInactiveStyle>), With<TmuxPane>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
-    let dim_factor = inactive_dim_factor(configs.as_deref());
+    let (dim, desaturate) = inactive_style(configs.as_deref());
     let any_active = panes.iter().any(|(_, active, _)| active);
     for (entity, active, current) in panes.iter() {
         let want = if active || !any_active {
-            1.0
+            PaneInactiveStyle::default()
         } else {
-            dim_factor
+            PaneInactiveStyle { dim, desaturate }
         };
-        if current.map(|d| d.0) != Some(want) {
-            commands.entity(entity).insert(PaneDim(want));
+        if current.copied() != Some(want) {
+            commands.entity(entity).insert(want);
         }
     }
 }
 
-/// Returns the brightness multiplier applied to inactive panes: the configured
-/// `inactive_pane.dim` when dimming is enabled, otherwise `1.0` (no dim).
-fn inactive_dim_factor(configs: Option<&OzmuxConfigsResource>) -> f32 {
+/// Returns the `(dim, desaturate)` applied to inactive panes: the configured
+/// values when the inactive-pane treatment is enabled, otherwise the no-op
+/// `(1.0, 0.0)`.
+fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> (f32, f32) {
     match configs {
-        Some(cfg) if cfg.inactive_pane.enabled => cfg.inactive_pane.dim,
-        _ => 1.0,
+        Some(cfg) if cfg.inactive_pane.enabled => {
+            (cfg.inactive_pane.dim, cfg.inactive_pane.desaturate)
+        }
+        _ => (1.0, 0.0),
     }
 }
 
@@ -139,24 +144,85 @@ mod tests {
             ))
             .id();
 
-        let dim = |app: &App, e| app.world().get::<PaneDim>(e).map(|d| d.0);
+        let style = |app: &App, e| app.world().get::<PaneInactiveStyle>(e).copied();
 
         app.update();
-        assert_eq!(dim(&app, p1), Some(1.0), "active pane full-bright");
-        assert_eq!(dim(&app, p2), Some(0.5), "inactive pane dimmed");
+        assert_eq!(
+            style(&app, p1),
+            Some(PaneInactiveStyle::default()),
+            "active pane: full-bright, full-color"
+        );
+        assert_eq!(
+            style(&app, p2),
+            Some(PaneInactiveStyle {
+                dim: 0.5,
+                desaturate: 0.7
+            }),
+            "inactive pane: dimmed + desaturated"
+        );
 
         // Move ActivePane to p2.
         app.world_mut().entity_mut(p1).remove::<ActivePane>();
         app.world_mut().entity_mut(p2).insert(ActivePane);
         app.update();
-        assert_eq!(dim(&app, p1), Some(0.5));
-        assert_eq!(dim(&app, p2), Some(1.0));
+        assert_eq!(
+            style(&app, p1),
+            Some(PaneInactiveStyle {
+                dim: 0.5,
+                desaturate: 0.7
+            })
+        );
+        assert_eq!(style(&app, p2), Some(PaneInactiveStyle::default()));
 
-        // No active pane: both full-bright.
+        // No active pane: both full-bright, full-color.
         app.world_mut().entity_mut(p2).remove::<ActivePane>();
         app.update();
-        assert_eq!(dim(&app, p1), Some(1.0));
-        assert_eq!(dim(&app, p2), Some(1.0));
+        assert_eq!(style(&app, p1), Some(PaneInactiveStyle::default()));
+        assert_eq!(style(&app, p2), Some(PaneInactiveStyle::default()));
+    }
+
+    #[test]
+    fn disabled_config_leaves_every_pane_untreated() {
+        use ozmux_tmux::ActivePane;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
+        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
+        let mut configs = OzmuxConfigsResource::default();
+        configs.0.inactive_pane.enabled = false;
+        app.insert_resource(configs);
+        let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
+
+        let p1 = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: dims(),
+                },
+                h(),
+                ActivePane,
+            ))
+            .id();
+        let p2 = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(2),
+                    dims: dims(),
+                },
+                h(),
+            ))
+            .id();
+
+        app.update();
+        let style = |app: &App, e| app.world().get::<PaneInactiveStyle>(e).copied();
+        assert_eq!(style(&app, p1), Some(PaneInactiveStyle::default()));
+        assert_eq!(
+            style(&app, p2),
+            Some(PaneInactiveStyle::default()),
+            "enabled=false: inactive pane is untreated"
+        );
     }
 
     #[test]

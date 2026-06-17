@@ -20,7 +20,7 @@ pub mod prelude {
     pub use crate::TerminalRendererPlugin;
     pub use crate::bundle::TerminalRenderBundle;
     pub use crate::grid::TerminalGridPlugin;
-    pub use crate::material::{OVERLAY_SLOTS, PaneDim, TerminalOverlays};
+    pub use crate::material::{OVERLAY_SLOTS, PaneInactiveStyle, TerminalOverlays};
     pub use crate::schema::*;
 }
 
