@@ -25,9 +25,9 @@ impl Plugin for OzmuxTmuxPaneTitlePlugin {
 
 /// Updates the `Text` grandchild of each `PaneTitleBar` when `TerminalTitle` changes.
 fn sync_pane_title_text(
+    mut texts: Query<&mut Text>,
     changed: Query<(&TerminalTitle, &Children), (With<TmuxPane>, Changed<TerminalTitle>)>,
     bars: Query<&Children, With<PaneTitleBar>>,
-    mut texts: Query<&mut Text>,
 ) {
     for (title, pane_children) in changed.iter() {
         let Some(bar) = pane_children.iter().find(|c| bars.contains(*c)) else {
@@ -49,8 +49,8 @@ fn sync_pane_title_text(
 /// pane, `PANEL` + transparent outline otherwise. Write-guarded to avoid
 /// triggering a UI relayout on every frame.
 fn sync_pane_title_active(
-    panes: Query<(Has<ActivePane>, &Children), With<TmuxPane>>,
     mut bars: Query<(&mut BackgroundColor, &mut Outline), With<PaneTitleBar>>,
+    panes: Query<(Has<ActivePane>, &Children), With<TmuxPane>>,
 ) {
     for (active, children) in panes.iter() {
         for child in children.iter() {
