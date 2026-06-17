@@ -348,6 +348,26 @@ fn last_pane_id(cell: &Cell) -> Option<PaneId> {
     }
 }
 
+fn vertical_depth(cell: &Cell) -> u16 {
+    match cell {
+        Cell::Leaf { .. } => 1,
+        Cell::Split {
+            dir: SplitDir::LeftRight,
+            children,
+            ..
+        } => children.iter().map(vertical_depth).max().unwrap_or(1),
+        Cell::Split {
+            dir: SplitDir::TopBottom,
+            children,
+            ..
+        } => children.iter().map(vertical_depth).sum(),
+        Cell::Split {
+            dir: SplitDir::Floating,
+            ..
+        } => 1,
+    }
+}
+
 /// Converts tmux cell dims (`u32`) to an alacritty grid size, clamping into
 /// `1..=u16::MAX` so a pathological width/height cannot truncate to 0 (a 0-col
 /// `Term::resize` would panic).
@@ -1351,5 +1371,68 @@ mod tests {
         let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0);
         assert_eq!(rects.len(), 1, "pane_id:None leaf is not placed");
         assert!(rects.contains_key(&PaneId(2)));
+    }
+
+    #[test]
+    fn vertical_depth_leaf_is_one() {
+        let leaf = Cell::Leaf {
+            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+            pane_id: Some(1),
+        };
+        assert_eq!(vertical_depth(&leaf), 1);
+    }
+
+    #[test]
+    fn vertical_depth_left_right_is_max_of_children() {
+        let root = Cell::Split {
+            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+            dir: SplitDir::LeftRight,
+            children: vec![
+                Cell::Leaf { dims: CellDims { width: 40, height: 24, xoff: 0, yoff: 0 }, pane_id: Some(1) },
+                Cell::Split {
+                    dims: CellDims { width: 39, height: 24, xoff: 41, yoff: 0 },
+                    dir: SplitDir::TopBottom,
+                    children: vec![
+                        Cell::Leaf { dims: CellDims { width: 39, height: 12, xoff: 41, yoff: 0 }, pane_id: Some(2) },
+                        Cell::Leaf { dims: CellDims { width: 39, height: 11, xoff: 41, yoff: 13 }, pane_id: Some(3) },
+                    ],
+                },
+            ],
+        };
+        assert_eq!(vertical_depth(&root), 2, "LeftRight takes max: left=1, right=2");
+    }
+
+    #[test]
+    fn vertical_depth_top_bottom_is_sum_of_children() {
+        let root = Cell::Split {
+            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+            dir: SplitDir::TopBottom,
+            children: vec![
+                Cell::Leaf { dims: CellDims { width: 80, height: 12, xoff: 0, yoff: 0 }, pane_id: Some(1) },
+                Cell::Leaf { dims: CellDims { width: 80, height: 11, xoff: 0, yoff: 13 }, pane_id: Some(2) },
+            ],
+        };
+        assert_eq!(vertical_depth(&root), 2, "TopBottom: 1+1=2");
+    }
+
+    #[test]
+    fn vertical_depth_nested_top_bottom_sums_recursively() {
+        let inner = Cell::Split {
+            dims: CellDims { width: 80, height: 12, xoff: 0, yoff: 0 },
+            dir: SplitDir::TopBottom,
+            children: vec![
+                Cell::Leaf { dims: CellDims { width: 80, height: 6, xoff: 0, yoff: 0 }, pane_id: Some(2) },
+                Cell::Leaf { dims: CellDims { width: 80, height: 5, xoff: 0, yoff: 7 }, pane_id: Some(3) },
+            ],
+        };
+        let root = Cell::Split {
+            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
+            dir: SplitDir::TopBottom,
+            children: vec![
+                Cell::Leaf { dims: CellDims { width: 80, height: 11, xoff: 0, yoff: 0 }, pane_id: Some(1) },
+                inner,
+            ],
+        };
+        assert_eq!(vertical_depth(&root), 3, "TopBottom(Leaf, TopBottom(Leaf, Leaf)) = 1+2 = 3");
     }
 }
