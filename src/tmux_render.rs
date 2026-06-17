@@ -45,7 +45,6 @@ impl Plugin for OzmuxTmuxRenderPlugin {
                 route_tmux_output.run_if(on_message::<PaneOutput>),
                 sync_active_window,
                 layout_tmux_panes,
-                sync_active_pane_outline,
             )
                 .chain()
                 .after(TmuxProjectionSet),
@@ -75,7 +74,9 @@ pub(crate) struct DividerPixelRect {
 pub(crate) struct PackedTmuxLayout {
     pub(crate) panes: HashMap<PaneId, Rect>,
     pub(crate) dividers: Vec<DividerPixelRect>,
-    /// Total available size in logical px (equals root cell dims × cell size).
+    /// Total layout bounding box in logical px. Width equals root cell width × cell_w.
+    /// Height equals the workspace height passed to `collapse()` — the full logical
+    /// pixel area available for panes (window height minus window bar, including slack).
     pub(crate) bbox: Vec2,
 }
 
@@ -154,7 +155,6 @@ fn attach_tmux_pane_terminal(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-            Outline::new(Val::Px(theme::PANE_BORDER_PX), Val::Px(0.0), theme::BORDER),
         ));
 
         let title_bar = commands
@@ -276,9 +276,10 @@ fn collapse(
     cell_h: f32,
     gap: f32,
     pane_title_h: f32,
+    workspace_h: f32,
 ) -> (HashMap<PaneId, Rect>, Vec<DividerPixelRect>, Vec2) {
     let dims = root.dims();
-    let available = Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h);
+    let available = Vec2::new(dims.width as f32 * cell_w, workspace_h);
     let mut panes = HashMap::new();
     let mut dividers = Vec::new();
     place(
@@ -482,10 +483,11 @@ fn layout_tmux_panes(
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
     let pane_title_h = cell_h;
+    let workspace_h = (window.resolution.physical_height() as f32 / dpr - cell_h).max(cell_h);
 
     for (window_entity, layout, mut container, children, maybe_packed) in windows.iter_mut() {
         let (rects, dividers, bbox) =
-            collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX, pane_title_h);
+            collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX, pane_title_h, workspace_h);
 
         // NOTE: only write the Node fields when they actually change — writing
         // through `Mut<Node>` every frame marks the component changed and forces
@@ -603,18 +605,6 @@ fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<Tm
     }
 }
 
-/// Recolors each pane's `Outline`: the accent color on the pane carrying
-/// `ActivePane`, the subtle border grey otherwise. Recoloring (not
-/// insert/remove) avoids ECS table moves on every active-pane change.
-fn sync_active_pane_outline(mut panes: Query<(Has<ActivePane>, &mut Outline), With<TmuxPane>>) {
-    for (active, mut outline) in panes.iter_mut() {
-        let want = if active { theme::ACCENT } else { theme::BORDER };
-        if outline.color != want {
-            outline.color = want;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -647,46 +637,6 @@ mod tests {
             xoff: 0,
             yoff: 0,
         }
-    }
-
-    #[test]
-    fn active_pane_outline_is_accent_inactive_is_grey() {
-        use bevy::prelude::*;
-        use ozmux_tmux::{ActivePane, TmuxPane};
-
-        let mut app = App::new();
-        app.add_systems(Update, sync_active_pane_outline);
-        let active = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: dims(),
-                },
-                ActivePane,
-                Outline::new(Val::Px(1.0), Val::Px(0.0), theme::BORDER),
-            ))
-            .id();
-        let inactive = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(2),
-                    dims: dims(),
-                },
-                Outline::new(Val::Px(1.0), Val::Px(0.0), theme::BORDER),
-            ))
-            .id();
-        app.update();
-
-        assert_eq!(
-            app.world().get::<Outline>(active).unwrap().color,
-            theme::ACCENT
-        );
-        assert_eq!(
-            app.world().get::<Outline>(inactive).unwrap().color,
-            theme::BORDER
-        );
     }
 
     #[test]
@@ -1244,7 +1194,7 @@ mod tests {
             },
             pane_id: Some(0),
         };
-        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(0)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 384.0))
@@ -1283,7 +1233,7 @@ mod tests {
                 },
             ],
         };
-        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
@@ -1351,7 +1301,7 @@ mod tests {
                 right_child,
             ],
         };
-        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(320.0, 384.0))
@@ -1419,7 +1369,7 @@ mod tests {
                 },
             ],
         };
-        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
+        let (rects, dividers, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(1)],
             Rect::from_corners(Vec2::ZERO, Vec2::new(160.0, 384.0))
@@ -1477,7 +1427,7 @@ mod tests {
                 },
             ],
         };
-        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0, 0.0);
+        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(rects.len(), 1, "pane_id:None leaf is not placed");
         assert!(rects.contains_key(&PaneId(2)));
     }
@@ -1498,18 +1448,31 @@ mod tests {
                 },
             ],
         };
-        // cell_h = 16.0, pane_title_h = 16.0, gap = 1.0
+        // cell_h = 16.0, pane_title_h = 16.0, gap = 1.0, workspace_h = 22*16 = 352
         // pane1: dims.height*cell_h + pane_title_h = 11*16 + 16 = 192 px tall
-        // pane2: available.y - consumed = (22*16) - 192 - 1 = 352-192-1 = 159 available
+        // pane2: available.y - consumed = 352 - 192 - 1 = 159 available
         //        max(159, 10*16+16) = max(159, 176) = 176 px tall
         // pane2 starts at y = 192+1 = 193
-        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0, 16.0);
+        let (rects, _, _) = collapse(&root, 8.0, 16.0, 1.0, 16.0, 352.0);
         let r1 = rects[&PaneId(1)];
         let r2 = rects[&PaneId(2)];
         assert_eq!(r1, Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 192.0)));
         assert_eq!(r2, Rect::from_corners(Vec2::new(0.0, 193.0), Vec2::new(640.0, 369.0)));
         assert_eq!(r1.height(), 192.0, "11 rows + 1 title bar row = 192px");
         assert_eq!(r2.height(), 176.0, "10 rows + 1 title bar row = 176px");
+    }
+
+    #[test]
+    fn collapse_workspace_h_fills_slack() {
+        let root = Cell::Leaf {
+            dims: CellDims { width: 20, height: 5, xoff: 0, yoff: 0 },
+            pane_id: Some(1),
+        };
+        // workspace_h = 5*16 + 16 (title) + 8 (slack) = 104px
+        let workspace_h = 5.0 * 16.0 + 16.0 + 8.0;
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 16.0, workspace_h);
+        assert_eq!(rects[&PaneId(1)].height(), workspace_h, "pane fills workspace including slack");
+        assert_eq!(bbox.y, workspace_h, "bbox height equals workspace_h");
     }
 
     #[test]
