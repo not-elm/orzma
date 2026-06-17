@@ -21,17 +21,18 @@ impl Plugin for OptionAsAltPlugin {
 #[cfg(target_os = "macos")]
 mod macos {
     use crate::configs::OzmuxConfigsResource;
+    use bevy::ecs::system::NonSendMarker;
     use bevy::prelude::*;
     use bevy::window::PrimaryWindow;
-    use bevy::winit::WinitWindows;
+    use bevy::winit::WINIT_WINDOWS;
     use ozmux_configs::keyboard::OptionAsAlt;
     use winit::platform::macos::{OptionAsAlt as WinitOptionAsAlt, WindowExtMacOS};
 
     pub(super) fn apply_option_as_alt(
         mut done: Local<bool>,
         configs: Res<OzmuxConfigsResource>,
-        winit_windows: NonSend<WinitWindows>,
         primary: Query<Entity, With<PrimaryWindow>>,
+        _non_send_marker: NonSendMarker,
     ) {
         if *done {
             return;
@@ -39,11 +40,15 @@ mod macos {
         let Ok(entity) = primary.single() else {
             return;
         };
-        let Some(window) = winit_windows.get_window(entity) else {
-            return;
-        };
-        window.set_option_as_alt(to_winit(configs.keyboard.option_as_alt));
-        *done = true;
+        // NOTE: Bevy 0.18 keeps WinitWindows in a main-thread thread-local, not a world
+        // non-send resource (bevy ECS #17667 workaround). NonSendMarker pins this system
+        // to the main thread so the borrow sees the populated instance, not an empty one.
+        WINIT_WINDOWS.with_borrow(|winit_windows| {
+            if let Some(window) = winit_windows.get_window(entity) {
+                window.set_option_as_alt(to_winit(configs.keyboard.option_as_alt));
+                *done = true;
+            }
+        });
     }
 
     fn to_winit(mode: OptionAsAlt) -> WinitOptionAsAlt {
@@ -77,6 +82,16 @@ mod macos {
                 to_winit(OptionAsAlt::Both),
                 WinitOptionAsAlt::Both
             ));
+        }
+
+        #[test]
+        fn system_validates_and_runs_without_winit() {
+            let mut app = App::new();
+            app.add_plugins(MinimalPlugins);
+            app.init_resource::<crate::configs::OzmuxConfigsResource>();
+            app.world_mut().spawn(PrimaryWindow);
+            app.add_systems(Update, apply_option_as_alt);
+            app.update();
         }
     }
 }
