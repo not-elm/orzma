@@ -4,7 +4,6 @@
 use crate::keymap::{Action, Mode};
 use crate::outline::Heading;
 use crate::protocol::{ScrollAction, SearchDir};
-use std::cell::Cell;
 
 /// A side effect for `main.rs` to perform after `on_action`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,7 +35,6 @@ pub(crate) struct App {
     current_heading_index: Option<usize>,
     search_query: String,
     search_active: bool,
-    compositing: Cell<bool>,
 }
 
 impl App {
@@ -81,19 +79,6 @@ impl App {
     /// Whether a search is active (matches highlighted, awaiting clear).
     pub(crate) fn search_active(&self) -> bool {
         self.search_active
-    }
-
-    /// Whether the webview is currently compositing (the page is live and painting).
-    pub(crate) fn compositing(&self) -> bool {
-        self.compositing.get()
-    }
-
-    /// Updates whether the webview is compositing.
-    ///
-    /// Takes `&self` (not `&mut self`) so the draw closure can call this while
-    /// `app` is already borrowed immutably by the surrounding frame.
-    pub(crate) fn set_compositing(&self, active: bool) {
-        self.compositing.set(active);
     }
 
     /// Processes an [`Action`], returning the side effects to perform.
@@ -210,21 +195,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn compositing_defaults_to_false() {
-        let app = App::default();
-        assert!(!app.compositing());
-    }
-
-    #[test]
-    fn set_compositing_updates_via_shared_ref() {
-        let app = App::default();
-        app.set_compositing(true);
-        assert!(app.compositing());
-        app.set_compositing(false);
-        assert!(!app.compositing());
-    }
 
     fn app_with_outline(n: usize) -> App {
         let mut app = App::default();
