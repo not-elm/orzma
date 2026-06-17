@@ -70,7 +70,10 @@ impl FramePlacements {
 /// Last-emitted geometry per handle, for diff-driven flush.
 #[derive(Debug, Default)]
 pub(crate) struct FlushState {
+    #[cfg(test)]
     pub(crate) last: HashMap<String, Rect>,
+    #[cfg(not(test))]
+    last: HashMap<String, Rect>,
     last_focused: Option<String>,
 }
 
