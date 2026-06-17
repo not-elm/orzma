@@ -231,7 +231,10 @@ mod tests {
             .on_compositing_change(|_| fired.set(true))
             .render(area, &mut buf, &mut state);
 
-        assert!(!fired.get(), "callback must not fire when no pending compositing");
+        assert!(
+            !fired.get(),
+            "callback must not fire when no pending compositing"
+        );
     }
 
     #[test]
@@ -299,6 +302,9 @@ mod tests {
             .fallback(Text::raw("x"))
             .render(area, &mut buf, &mut state);
 
-        assert!(fired.get(), "callback should survive .fallback() builder call");
+        assert!(
+            fired.get(),
+            "callback should survive .fallback() builder call"
+        );
     }
 }

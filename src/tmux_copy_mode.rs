@@ -216,7 +216,13 @@ fn consume_copy_reply(
                     continue;
                 }
                 let render_target = maybe_render.unwrap_or(entity);
-                apply_capture_reply(&mut commands, &mut render_handles, entity, render_target, reply);
+                apply_capture_reply(
+                    &mut commands,
+                    &mut render_handles,
+                    entity,
+                    render_target,
+                    reply,
+                );
             }
             CopyQueryKind::Buffer => {
                 if reply.ok {
@@ -305,7 +311,9 @@ fn apply_capture_reply(
     let mut handle = TerminalHandle::detached(cols, rows, Arc::new(AtomicBool::new(false)));
     handle.advance(&bytes);
     handle.flush_emit(commands, render_target);
-    commands.entity(pane_entity).insert(CopyRenderHandle(handle));
+    commands
+        .entity(pane_entity)
+        .insert(CopyRenderHandle(handle));
 }
 
 /// Joins `capture-pane -p -e` reply lines into VT bytes for the scratch handle:
@@ -1187,7 +1195,10 @@ mod tests {
             .get::<TerminalRenderRef>(pane_entity)
             .map(|r| r.0);
         let vi_cursor_present = render_child_entity
-            .and_then(|e| app.world().get::<ozma_tty_renderer::schema::TerminalGrid>(e))
+            .and_then(|e| {
+                app.world()
+                    .get::<ozma_tty_renderer::schema::TerminalGrid>(e)
+            })
             .map(|g| g.vi_cursor.is_some())
             .unwrap_or(false);
         let selection_present = app

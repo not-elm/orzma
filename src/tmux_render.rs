@@ -5,7 +5,6 @@
 use crate::osc_webview::OscWebviewGate;
 use crate::theme;
 use crate::ui::WorkspaceUiRoot;
-use crate::ui::tmux_pane_title::PaneTitleBar;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
@@ -127,14 +126,6 @@ fn attach_tmux_pane_terminal(
     metrics: Option<Res<TerminalCellMetricsResource>>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let dpr = window
-        .single()
-        .map(|w| w.scale_factor().max(0.5))
-        .unwrap_or(1.0);
-    let pane_title_h = metrics
-        .as_ref()
-        .map(|m| m.metrics.line_height_phys.floor().max(1.0) / dpr)
-        .unwrap_or(0.0);
     // NOTE: clone the SHARED OscWebviewGate so a tmux pane captures OSC 5379 when
     // the feature is enabled; a fresh `false` atomic would leave inline-webview
     // capture permanently off for tmux panes. The fallback is only reached in
@@ -155,35 +146,6 @@ fn attach_tmux_pane_terminal(
                 flex_direction: FlexDirection::Column,
                 ..default()
             },
-        ));
-
-        let title_bar = commands
-            .spawn((
-                PaneTitleBar,
-                Node {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(pane_title_h),
-                    padding: UiRect::axes(
-                        Val::Px(theme::TAB_PADDING_X_PX),
-                        Val::Px(0.0),
-                    ),
-                    align_items: AlignItems::Center,
-                    overflow: Overflow::clip_x(),
-                    ..default()
-                },
-                BackgroundColor(theme::PANEL),
-                Outline::new(Val::Px(2.0), Val::Px(0.0), Color::NONE),
-                ChildOf(entity),
-            ))
-            .id();
-        commands.spawn((
-            Text::new(""),
-            TextColor(theme::FOREGROUND),
-            TextFont {
-                font_size: theme::UI_FONT_SIZE,
-                ..default()
-            },
-            ChildOf(title_bar),
         ));
 
         let render_child = commands
@@ -366,13 +328,22 @@ fn place(
             children,
             ..
         } => {
-            let last = children.len().saturating_sub(1);
+            let n = children.len();
+            let last = n.saturating_sub(1);
+            let gaps_total = last as f32 * gap;
+            let natural_h: f32 = children
+                .iter()
+                .map(|c| c.dims().height as f32 * cell_h + pane_title_h)
+                .sum();
+            let slack = (available.y - natural_h - gaps_total).max(0.0);
             let mut y = origin.y;
             for (i, child) in children.iter().enumerate() {
                 let child_avail_h = if i == last {
                     available.y - (y - origin.y)
                 } else {
-                    child.dims().height as f32 * cell_h
+                    let extra = (slack * (i + 1) as f32 / n as f32).round()
+                        - (slack * i as f32 / n as f32).round();
+                    child.dims().height as f32 * cell_h + pane_title_h + extra
                 };
                 let csz = place(
                     panes,
@@ -409,7 +380,14 @@ fn place(
                 let lit_origin = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
                 let lit_avail = Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
                 place(
-                    panes, dividers, child, lit_origin, lit_avail, cell_w, cell_h, gap,
+                    panes,
+                    dividers,
+                    child,
+                    lit_origin,
+                    lit_avail,
+                    cell_w,
+                    cell_h,
+                    gap,
                     pane_title_h,
                 );
             }
@@ -425,26 +403,6 @@ fn last_pane_id(cell: &Cell) -> Option<PaneId> {
         } => Some(PaneId(*id)),
         Cell::Leaf { pane_id: None, .. } => None,
         Cell::Split { children, .. } => children.iter().rev().find_map(last_pane_id),
-    }
-}
-
-fn vertical_depth(cell: &Cell) -> u16 {
-    match cell {
-        Cell::Leaf { .. } => 1,
-        Cell::Split {
-            dir: SplitDir::LeftRight,
-            children,
-            ..
-        } => children.iter().map(vertical_depth).max().unwrap_or(1),
-        Cell::Split {
-            dir: SplitDir::TopBottom,
-            children,
-            ..
-        } => children.iter().map(vertical_depth).sum(),
-        Cell::Split {
-            dir: SplitDir::Floating,
-            ..
-        } => 1,
     }
 }
 
@@ -469,7 +427,12 @@ fn layout_tmux_panes(
         With<TmuxWindow>,
     >,
     mut panes: Query<
-        (&TmuxPane, &mut Node, &mut TerminalHandle, &TerminalRenderRef),
+        (
+            &TmuxPane,
+            &mut Node,
+            &mut TerminalHandle,
+            &TerminalRenderRef,
+        ),
         Without<TmuxWindow>,
     >,
     mut grids: Query<&mut TerminalGrid>,
@@ -482,12 +445,18 @@ fn layout_tmux_panes(
     let dpr = window.scale_factor().max(0.5);
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0) / dpr;
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0) / dpr;
-    let pane_title_h = cell_h;
+    let pane_title_h = 0.0_f32;
     let workspace_h = (window.resolution.physical_height() as f32 / dpr - cell_h).max(cell_h);
 
     for (window_entity, layout, mut container, children, maybe_packed) in windows.iter_mut() {
-        let (rects, dividers, bbox) =
-            collapse(&layout.0.root, cell_w, cell_h, theme::PANE_GAP_PX, pane_title_h, workspace_h);
+        let (rects, dividers, bbox) = collapse(
+            &layout.0.root,
+            cell_w,
+            cell_h,
+            theme::PANE_GAP_PX,
+            pane_title_h,
+            workspace_h,
+        );
 
         // NOTE: only write the Node fields when they actually change — writing
         // through `Mut<Node>` every frame marks the component changed and forces
@@ -514,8 +483,7 @@ fn layout_tmux_panes(
             let Some(rect) = rects.get(&pane.id) else {
                 continue;
             };
-            let (left, top, width, height) =
-                (rect.min.x, rect.min.y, rect.width(), rect.height());
+            let (left, top, width, height) = (rect.min.x, rect.min.y, rect.width(), rect.height());
             if node.left != Val::Px(left)
                 || node.top != Val::Px(top)
                 || node.width != Val::Px(width)
@@ -552,14 +520,12 @@ fn rows_for_panes(total_rows: u16) -> u16 {
 
 /// Sends `refresh-client -C <cols>,<rows>` to tmux so it lays out panes for
 /// the current window size. One row is reserved for the ozmux window status
-/// bar via [`rows_for_panes`], since tmux `-CC` does not reserve a status row.
-/// Results are deduped via [`LastClientSize`].
+/// bar via [`rows_for_panes`]. Results are deduped via [`LastClientSize`].
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
     connection: NonSend<TmuxConnection>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
-    active_layout: Query<&TmuxWindowLayout, With<ActiveWindow>>,
 ) {
     let Some(client) = connection.client() else {
         return;
@@ -576,11 +542,6 @@ fn sync_client_size(
         cell_h,
     );
     let rows = rows_for_panes(rows);
-    let depth = active_layout
-        .single()
-        .map(|l| vertical_depth(&l.0.root))
-        .unwrap_or(1) as u16;
-    let rows = rows.saturating_sub(depth).max(1);
     if (cols, rows) == (last.cols, last.rows) {
         return;
     }
@@ -615,8 +576,6 @@ mod tests {
 
     #[test]
     fn rows_for_panes_reserves_one_row_for_the_bar() {
-        // rows_for_panes reserves 1 row for the window bar.
-        // sync_client_size additionally subtracts vertical_depth for title bars.
         assert_eq!(rows_for_panes(24), 23);
         assert_eq!(rows_for_panes(1), 1); // never zero
         assert_eq!(rows_for_panes(2), 1);
@@ -740,9 +699,9 @@ mod tests {
             app.world().get::<TerminalGrid>(rr.0).unwrap()
         }
         .cells[0]
-        .iter()
-        .map(|c| c.text.as_str())
-        .collect();
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
         assert!(baseline.starts_with("hi"), "baseline grid painted 'hi'");
 
         // Enter copy mode, then deliver more output: the live handle must advance
@@ -762,9 +721,9 @@ mod tests {
             app.world().get::<TerminalGrid>(rr.0).unwrap()
         }
         .cells[0]
-        .iter()
-        .map(|c| c.text.as_str())
-        .collect();
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
         assert!(
             gated.starts_with("hi"),
             "grid stays at the baseline while in copy mode, got {gated:?}",
@@ -788,9 +747,9 @@ mod tests {
             app.world().get::<TerminalGrid>(rr.0).unwrap()
         }
         .cells[1]
-        .iter()
-        .map(|c| c.text.as_str())
-        .collect();
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
         assert!(
             resumed.starts_with("XY"),
             "the live handle advanced under copy mode; after exit + emit row 1 shows 'XY', got {resumed:?}",
@@ -1301,6 +1260,9 @@ mod tests {
                 right_child,
             ],
         };
+        // pane_title_h=0, natural_h=192+176=368, gap=1, slack=384-368-1=15
+        // slack distributed: pane2 gets round(15/2)=8px, pane3 (last) gets remaining 7px
+        // pane2: 12*16+8=200, pane3: 384-200-1=183 (11*16+7=183)
         let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 0.0, 384.0);
         assert_eq!(
             rects[&PaneId(1)],
@@ -1308,11 +1270,11 @@ mod tests {
         );
         assert_eq!(
             rects[&PaneId(2)],
-            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 192.0)),
+            Rect::from_corners(Vec2::new(321.0, 0.0), Vec2::new(640.0, 200.0)),
         );
         assert_eq!(
             rects[&PaneId(3)],
-            Rect::from_corners(Vec2::new(321.0, 193.0), Vec2::new(640.0, 384.0)),
+            Rect::from_corners(Vec2::new(321.0, 201.0), Vec2::new(640.0, 384.0)),
         );
         assert_eq!(bbox, Vec2::new(640.0, 384.0));
     }
@@ -1435,15 +1397,30 @@ mod tests {
     #[test]
     fn collapse_with_title_h_adds_t_to_every_leaf() {
         let root = Cell::Split {
-            dims: CellDims { width: 80, height: 22, xoff: 0, yoff: 0 },
+            dims: CellDims {
+                width: 80,
+                height: 22,
+                xoff: 0,
+                yoff: 0,
+            },
             dir: SplitDir::TopBottom,
             children: vec![
                 Cell::Leaf {
-                    dims: CellDims { width: 80, height: 11, xoff: 0, yoff: 0 },
+                    dims: CellDims {
+                        width: 80,
+                        height: 11,
+                        xoff: 0,
+                        yoff: 0,
+                    },
                     pane_id: Some(1),
                 },
                 Cell::Leaf {
-                    dims: CellDims { width: 80, height: 10, xoff: 0, yoff: 12 },
+                    dims: CellDims {
+                        width: 80,
+                        height: 10,
+                        xoff: 0,
+                        yoff: 12,
+                    },
                     pane_id: Some(2),
                 },
             ],
@@ -1457,7 +1434,10 @@ mod tests {
         let r1 = rects[&PaneId(1)];
         let r2 = rects[&PaneId(2)];
         assert_eq!(r1, Rect::from_corners(Vec2::ZERO, Vec2::new(640.0, 192.0)));
-        assert_eq!(r2, Rect::from_corners(Vec2::new(0.0, 193.0), Vec2::new(640.0, 369.0)));
+        assert_eq!(
+            r2,
+            Rect::from_corners(Vec2::new(0.0, 193.0), Vec2::new(640.0, 369.0))
+        );
         assert_eq!(r1.height(), 192.0, "11 rows + 1 title bar row = 192px");
         assert_eq!(r2.height(), 176.0, "10 rows + 1 title bar row = 176px");
     }
@@ -1465,76 +1445,85 @@ mod tests {
     #[test]
     fn collapse_workspace_h_fills_slack() {
         let root = Cell::Leaf {
-            dims: CellDims { width: 20, height: 5, xoff: 0, yoff: 0 },
+            dims: CellDims {
+                width: 20,
+                height: 5,
+                xoff: 0,
+                yoff: 0,
+            },
             pane_id: Some(1),
         };
         // workspace_h = 5*16 + 16 (title) + 8 (slack) = 104px
         let workspace_h = 5.0 * 16.0 + 16.0 + 8.0;
         let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 16.0, workspace_h);
-        assert_eq!(rects[&PaneId(1)].height(), workspace_h, "pane fills workspace including slack");
+        assert_eq!(
+            rects[&PaneId(1)].height(),
+            workspace_h,
+            "pane fills workspace including slack"
+        );
         assert_eq!(bbox.y, workspace_h, "bbox height equals workspace_h");
     }
 
     #[test]
-    fn vertical_depth_leaf_is_one() {
-        let leaf = Cell::Leaf {
-            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
-            pane_id: Some(1),
-        };
-        assert_eq!(vertical_depth(&leaf), 1);
-    }
-
-    #[test]
-    fn vertical_depth_left_right_is_max_of_children() {
+    fn collapse_slack_distributed_across_top_bottom_panes() {
         let root = Cell::Split {
-            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
-            dir: SplitDir::LeftRight,
+            dims: CellDims {
+                width: 80,
+                height: 26,
+                xoff: 0,
+                yoff: 0,
+            },
+            dir: SplitDir::TopBottom,
             children: vec![
-                Cell::Leaf { dims: CellDims { width: 40, height: 24, xoff: 0, yoff: 0 }, pane_id: Some(1) },
-                Cell::Split {
-                    dims: CellDims { width: 39, height: 24, xoff: 41, yoff: 0 },
-                    dir: SplitDir::TopBottom,
-                    children: vec![
-                        Cell::Leaf { dims: CellDims { width: 39, height: 12, xoff: 41, yoff: 0 }, pane_id: Some(2) },
-                        Cell::Leaf { dims: CellDims { width: 39, height: 11, xoff: 41, yoff: 13 }, pane_id: Some(3) },
-                    ],
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 80,
+                        height: 8,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                    pane_id: Some(1),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 80,
+                        height: 8,
+                        xoff: 0,
+                        yoff: 9,
+                    },
+                    pane_id: Some(2),
+                },
+                Cell::Leaf {
+                    dims: CellDims {
+                        width: 80,
+                        height: 8,
+                        xoff: 0,
+                        yoff: 18,
+                    },
+                    pane_id: Some(3),
                 },
             ],
         };
-        assert_eq!(vertical_depth(&root), 2, "LeftRight takes max: left=1, right=2");
-    }
-
-    #[test]
-    fn vertical_depth_top_bottom_is_sum_of_children() {
-        let root = Cell::Split {
-            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
-            dir: SplitDir::TopBottom,
-            children: vec![
-                Cell::Leaf { dims: CellDims { width: 80, height: 12, xoff: 0, yoff: 0 }, pane_id: Some(1) },
-                Cell::Leaf { dims: CellDims { width: 80, height: 11, xoff: 0, yoff: 13 }, pane_id: Some(2) },
-            ],
-        };
-        assert_eq!(vertical_depth(&root), 2, "TopBottom: 1+1=2");
-    }
-
-    #[test]
-    fn vertical_depth_nested_top_bottom_sums_recursively() {
-        let inner = Cell::Split {
-            dims: CellDims { width: 80, height: 12, xoff: 0, yoff: 0 },
-            dir: SplitDir::TopBottom,
-            children: vec![
-                Cell::Leaf { dims: CellDims { width: 80, height: 6, xoff: 0, yoff: 0 }, pane_id: Some(2) },
-                Cell::Leaf { dims: CellDims { width: 80, height: 5, xoff: 0, yoff: 7 }, pane_id: Some(3) },
-            ],
-        };
-        let root = Cell::Split {
-            dims: CellDims { width: 80, height: 24, xoff: 0, yoff: 0 },
-            dir: SplitDir::TopBottom,
-            children: vec![
-                Cell::Leaf { dims: CellDims { width: 80, height: 11, xoff: 0, yoff: 0 }, pane_id: Some(1) },
-                inner,
-            ],
-        };
-        assert_eq!(vertical_depth(&root), 3, "TopBottom(Leaf, TopBottom(Leaf, Leaf)) = 1+2 = 3");
+        // cell_h=16, pane_title_h=16, gap=1
+        // natural_h = 3*(8*16+16) = 432, gaps = 2, slack = 6
+        // each pane gets 2px extra: 144+16+2 = 162? No: 8*16+16+2 = 146
+        // pane1: y=0..146, pane2: y=147..293, pane3: y=294..440
+        let (rects, _, bbox) = collapse(&root, 8.0, 16.0, 1.0, 16.0, 440.0);
+        assert_eq!(
+            rects[&PaneId(1)].height(),
+            146.0,
+            "pane 1 gets its share of slack"
+        );
+        assert_eq!(
+            rects[&PaneId(2)].height(),
+            146.0,
+            "pane 2 gets its share of slack"
+        );
+        assert_eq!(
+            rects[&PaneId(3)].height(),
+            146.0,
+            "pane 3 gets its share of slack"
+        );
+        assert_eq!(bbox.y, 440.0, "bounding box matches workspace_h");
     }
 }

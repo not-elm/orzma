@@ -7,7 +7,6 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::tmux_render::TerminalRenderRef;
-use crate::ui::tmux_pane_title::PaneTitleBar;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
 use ozma_tty_engine::TerminalHandle;
@@ -41,13 +40,9 @@ impl Plugin for OzmuxTmuxPaneFocusPlugin {
 fn augment_tmux_pane(
     mut commands: Commands,
     panes: Query<Entity, (With<TmuxPane>, With<TerminalHandle>, Without<Button>)>,
-    title_bars: Query<Entity, (With<PaneTitleBar>, Without<FocusPolicy>)>,
 ) {
     for pane in panes.iter() {
         commands.entity(pane).insert((Button, FocusPolicy::Block));
-    }
-    for bar in title_bars.iter() {
-        commands.entity(bar).insert(FocusPolicy::Block);
     }
 }
 
@@ -131,7 +126,10 @@ mod tests {
         let p1 = app
             .world_mut()
             .spawn((
-                TmuxPane { id: PaneId(1), dims: dims() },
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: dims(),
+                },
                 h(),
                 ActivePane,
                 crate::tmux_render::TerminalRenderRef(rc1),
@@ -142,7 +140,10 @@ mod tests {
         let p2 = app
             .world_mut()
             .spawn((
-                TmuxPane { id: PaneId(2), dims: dims() },
+                TmuxPane {
+                    id: PaneId(2),
+                    dims: dims(),
+                },
                 h(),
                 crate::tmux_render::TerminalRenderRef(rc2),
             ))
@@ -151,8 +152,16 @@ mod tests {
         let dim = |app: &App, e| app.world().get::<PaneDim>(e).map(|d| d.0);
 
         app.update();
-        assert_eq!(dim(&app, rc1), Some(1.0), "active pane render child full-bright");
-        assert_eq!(dim(&app, rc2), Some(0.5), "inactive pane render child dimmed");
+        assert_eq!(
+            dim(&app, rc1),
+            Some(1.0),
+            "active pane render child full-bright"
+        );
+        assert_eq!(
+            dim(&app, rc2),
+            Some(0.5),
+            "inactive pane render child dimmed"
+        );
         assert_eq!(dim(&app, p1), None);
         assert_eq!(dim(&app, p2), None);
 

@@ -10,10 +10,10 @@ use crate::vt::mode_diff::TRACKED_MODES;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::vte::ansi::NamedColor;
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::TermMode;
 use alacritty_terminal::term::cell::{Cell, Flags};
+use alacritty_terminal::vte::ansi::NamedColor;
 use bevy::ecs::entity::Entity;
 use bevy::prelude::Color;
 use ozma_tty_renderer::prelude::{
