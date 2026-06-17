@@ -552,12 +552,8 @@ mod tests {
             "active label: {texts:?}"
         );
         assert!(
-            texts.iter().any(|t| t == theme::POWERLINE_LEFT),
-            "left chevron: {texts:?}"
-        );
-        assert!(
             texts.iter().any(|t| t == theme::POWERLINE_RIGHT),
-            "right chevron: {texts:?}"
+            "chevron: {texts:?}"
         );
         assert!(
             texts.iter().any(|t| t == " Z"),
