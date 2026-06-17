@@ -396,7 +396,8 @@ fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
 fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
     match event {
         ControlEvent::SessionChanged { session, name }
-        | ControlEvent::ClientSessionChanged { session, name, .. } => {
+        | ControlEvent::ClientSessionChanged { session, name, .. }
+        | ControlEvent::SessionRenamed { session, name } => {
             commands.trigger(TmuxSessionChanged {
                 session: *session,
                 name: name.clone(),
@@ -941,6 +942,43 @@ mod tests {
         let mut pending = Some(CommandId(22));
         assert_eq!(take_mode_keys(&mut pending, &events), Some(ModeKeys::Emacs));
         assert_eq!(pending, None);
+    }
+
+    #[test]
+    fn session_renamed_maps_to_session_changed() {
+        use crate::events::TmuxSessionChanged;
+        use std::sync::{Arc, Mutex};
+        use tmux_control_parser::SessionId;
+
+        #[derive(Resource, Default, Clone)]
+        struct Captured(Arc<Mutex<Vec<(u32, String)>>>);
+
+        let mut app = App::new();
+        app.init_resource::<Captured>();
+        app.add_observer(|ev: On<TmuxSessionChanged>, captured: Res<Captured>| {
+            captured
+                .0
+                .lock()
+                .unwrap()
+                .push((ev.session.0, ev.name.clone()));
+        });
+        app.add_systems(Update, |mut commands: Commands| {
+            trigger_notification(
+                &mut commands,
+                &ControlEvent::SessionRenamed {
+                    session: SessionId(1),
+                    name: "renamed".to_string(),
+                },
+            );
+        });
+
+        let captured = app.world().resource::<Captured>().clone();
+        app.update();
+
+        assert_eq!(
+            *captured.0.lock().unwrap(),
+            vec![(1, "renamed".to_string())]
+        );
     }
 
     #[test]
