@@ -59,3 +59,43 @@ test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
 ## Commit
 
 `300ea7f` feat(ozmd): suppress loading fallback once webview composites
+
+---
+
+## Post-Landing: Clippy Fixes
+
+### Commit 1c868f6
+
+Two clippy warnings fixed to unblock `-D warnings` CI:
+
+**Fix 1 — `dead_code` on `POWERLINE_LEFT` in `src/theme.rs`**
+- File: `/Users/taiga/workspace/ozmux/wt/webview-lyfecycle/src/theme.rs` (line 35)
+- Issue: `pub const POWERLINE_LEFT` only referenced from `#[cfg(test)]` code, firing dead_code lint conditionally
+- Solution: Added `#[allow(dead_code)]` attribute immediately before the constant
+- Rationale: Using `#[allow]` instead of `#[expect]` because the lint fires conditionally (present in test builds, absent in production builds)
+
+**Fix 2 — `collapsible_if` in `sdk/ratatui-ozma/src/widget.rs`**
+- File: `/Users/taiga/workspace/ozmux/wt/webview-lyfecycle/sdk/ratatui-ozma/src/widget.rs` (lines 85-89)
+- Issue: Nested if-let pattern could be collapsed into a single let-chain
+- Solution: Collapsed nested if-let into single let-chain using Rust edition 2024 syntax:
+  ```rust
+  // Before:
+  if let Some(active) = state.take_compositing(self.handle) {
+      if let Some(cb) = &self.on_compositing_change {
+          cb(active);
+      }
+  }
+  
+  // After:
+  if let Some(active) = state.take_compositing(self.handle)
+      && let Some(cb) = &self.on_compositing_change
+  {
+      cb(active);
+  }
+  ```
+
+### Verification
+
+- `cargo clippy -p ozmux-gui -- -D warnings` — **PASS** (exits 0, 0 warnings)
+- `cargo clippy -p ratatui-ozma -- -D warnings` — **PASS** (exits 0, 0 warnings)
+- `cargo build` — **PASS** (exits 0)
