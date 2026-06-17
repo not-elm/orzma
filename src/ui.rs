@@ -9,6 +9,7 @@ pub(crate) mod confirm_prompt;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod copy_search;
+pub(crate) mod rename_prompt;
 pub(crate) mod ime_overlay;
 pub mod palette;
 pub mod root;
