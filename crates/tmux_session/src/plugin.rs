@@ -129,7 +129,7 @@ fn drain_tmux_events(
         .session
         .and_then(|e| sessions.get(e).ok())
         .map(|s| s.id);
-    if detect_session_switch(&events, current_session).is_some()
+    if detect_session_switch(&events, current_session, connection.client_name()).is_some()
         && let Some(client) = connection.client()
     {
         commands.trigger(TmuxWindowsRetained {
@@ -264,7 +264,7 @@ fn drain_tmux_events(
         for reply in drain_copy_replies(&mut copy_queries, &events) {
             copy_replies.write(reply);
         }
-        trigger_events(&mut commands, &mut enumeration.pending, &events);
+        trigger_events(&mut commands, &mut enumeration.pending, &events, connection.client_name());
     }
     // NOTE: runs after the Closed branch took the connection, so `client()` is
     // None there and this is a no-op — safe to re-arm only while still attached.
