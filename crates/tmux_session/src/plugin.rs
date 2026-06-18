@@ -285,7 +285,12 @@ fn drain_tmux_events(
         for reply in drain_copy_replies(&mut copy_queries, &events) {
             copy_replies.write(reply);
         }
-        trigger_events(&mut commands, &mut enumeration.pending, &events, connection.client_name());
+        trigger_events(
+            &mut commands,
+            &mut enumeration.pending,
+            &events,
+            connection.client_name(),
+        );
     }
     // NOTE: runs after the Closed branch took the connection, so `client()` is
     // None there and this is a no-op — safe to re-arm only while still attached.

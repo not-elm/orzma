@@ -373,11 +373,14 @@ pub(crate) fn detect_session_switch(
     let current = current?;
     for event in events {
         let next = match event {
+            TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::SessionChanged {
+                session,
+                ..
+            })) => *session,
             TransportEvent::Protocol(ClientEvent::Notification(
-                ControlEvent::SessionChanged { session, .. },
-            )) => *session,
-            TransportEvent::Protocol(ClientEvent::Notification(
-                ControlEvent::ClientSessionChanged { client, session, .. },
+                ControlEvent::ClientSessionChanged {
+                    client, session, ..
+                },
             )) => {
                 if own_client == Some(client.as_str()) {
                     *session
@@ -440,15 +443,18 @@ fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
 
 fn trigger_notification(commands: &mut Commands, own_client: Option<&str>, event: &ControlEvent) {
     match event {
-        ControlEvent::SessionChanged { session, name } | ControlEvent::SessionRenamed { session, name } => {
+        ControlEvent::SessionChanged { session, name }
+        | ControlEvent::SessionRenamed { session, name } => {
             commands.trigger(TmuxSessionChanged {
                 session: *session,
                 name: name.clone(),
             });
         }
-        ControlEvent::ClientSessionChanged { client, session, name }
-            if own_client == Some(client.as_str()) =>
-        {
+        ControlEvent::ClientSessionChanged {
+            client,
+            session,
+            name,
+        } if own_client == Some(client.as_str()) => {
             commands.trigger(TmuxSessionChanged {
                 session: *session,
                 name: name.clone(),
@@ -470,7 +476,11 @@ fn trigger_notification(commands: &mut Commands, own_client: Option<&str>, event
                 name: name.clone(),
             });
         }
-        ControlEvent::LayoutChange { window, visible_layout, .. } => {
+        ControlEvent::LayoutChange {
+            window,
+            visible_layout,
+            ..
+        } => {
             commands.trigger(TmuxLayoutChanged {
                 window: *window,
                 layout: visible_layout.clone(),
@@ -728,7 +738,10 @@ mod tests {
             ok: true,
             output: vec!["3.6a".to_string()],
         })];
-        assert_eq!(take_version(&mut pending, &events), Some("3.6a".to_string()));
+        assert_eq!(
+            take_version(&mut pending, &events),
+            Some("3.6a".to_string())
+        );
         assert_eq!(pending, None);
     }
 
@@ -784,11 +797,13 @@ mod tests {
     }
 
     fn client_session_changed(client: &str, session: SessionId) -> TransportEvent {
-        TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::ClientSessionChanged {
-            client: client.to_string(),
-            session,
-            name: "s".to_string(),
-        }))
+        TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::ClientSessionChanged {
+                client: client.to_string(),
+                session,
+                name: "s".to_string(),
+            },
+        ))
     }
 
     fn session_changed(session: SessionId) -> TransportEvent {

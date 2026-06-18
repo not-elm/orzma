@@ -228,7 +228,7 @@ fn foreign_shrink_observes_clamp() {
     assert!(
         observed_shrink,
         "the projected pane height must update after resize-window \
-         (expected height change via %%layout-change); \
+         (expected height change via %layout-change); \
          baseline={baseline_height} shrunk_target={shrunk_height} final={final_height}"
     );
     // tmux's `window-size latest` semantics clamp to the smallest connected

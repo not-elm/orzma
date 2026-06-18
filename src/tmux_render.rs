@@ -350,14 +350,7 @@ fn place(
                 let lit_origin = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
                 let lit_avail = Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
                 place(
-                    panes,
-                    dividers,
-                    child,
-                    lit_origin,
-                    lit_avail,
-                    cell_w,
-                    cell_h,
-                    gap,
+                    panes, dividers, child, lit_origin, lit_avail, cell_w, cell_h, gap,
                 );
             }
             Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h)
@@ -568,7 +561,12 @@ fn sync_client_size(
         }
         return;
     }
-    let cmd = pin_command(connection.supports_per_window_refresh(), tmux_window.id, cols, rows);
+    let cmd = pin_command(
+        connection.supports_per_window_refresh(),
+        tmux_window.id,
+        cols,
+        rows,
+    );
     // NOTE: only record the size as sent AFTER a successful send — otherwise a
     // transient send failure would poison the dedupe and permanently suppress
     // re-sending this size, leaving tmux stuck at the stale client dimensions.
@@ -630,11 +628,32 @@ mod tests {
         // First call: nothing pinned yet → send.
         assert!(reconcile_decision((80, 24), w, None, None, None, (0, 0)));
         // Active window changed → send.
-        assert!(reconcile_decision((80, 24), WindowId(2), None, None, Some(w), (80, 24)));
+        assert!(reconcile_decision(
+            (80, 24),
+            WindowId(2),
+            None,
+            None,
+            Some(w),
+            (80, 24)
+        ));
         // Desired size changed → send.
-        assert!(reconcile_decision((100, 30), w, None, None, Some(w), (80, 24)));
+        assert!(reconcile_decision(
+            (100, 30),
+            w,
+            None,
+            None,
+            Some(w),
+            (80, 24)
+        ));
         // Steady state, reported matches desired → skip.
-        assert!(!reconcile_decision((80, 24), w, Some((80, 24)), Some((80, 24)), Some(w), (80, 24)));
+        assert!(!reconcile_decision(
+            (80, 24),
+            w,
+            Some((80, 24)),
+            Some((80, 24)),
+            Some(w),
+            (80, 24)
+        ));
     }
 
     #[test]
@@ -642,10 +661,24 @@ mod tests {
         use ozmux_tmux::WindowId;
         let w = WindowId(1);
         // Foreign just shrank the window: reported drifted to a NEW value → send (recovery).
-        assert!(reconcile_decision((80, 24), w, Some((40, 12)), Some((80, 24)), Some(w), (80, 24)));
+        assert!(reconcile_decision(
+            (80, 24),
+            w,
+            Some((40, 12)),
+            Some((80, 24)),
+            Some(w),
+            (80, 24)
+        ));
         // tmux refuses to grow (smaller foreign holds w->latest): reported STUCK at the
         // same drifted value after our pin → skip (no resend spam, residual limitation).
-        assert!(!reconcile_decision((80, 24), w, Some((40, 12)), Some((40, 12)), Some(w), (80, 24)));
+        assert!(!reconcile_decision(
+            (80, 24),
+            w,
+            Some((40, 12)),
+            Some((40, 12)),
+            Some(w),
+            (80, 24)
+        ));
     }
 
     #[test]
@@ -764,11 +797,7 @@ mod tests {
                 data: b"hi".to_vec(),
             });
         app.update();
-        let baseline: String = app
-            .world()
-            .get::<TerminalGrid>(pane_entity)
-            .unwrap()
-            .cells[0]
+        let baseline: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -786,11 +815,7 @@ mod tests {
                 data: b"\r\nXY".to_vec(),
             });
         app.update();
-        let gated: String = app
-            .world()
-            .get::<TerminalGrid>(pane_entity)
-            .unwrap()
-            .cells[0]
+        let gated: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -812,11 +837,7 @@ mod tests {
                 data: Vec::new(),
             });
         app.update();
-        let resumed: String = app
-            .world()
-            .get::<TerminalGrid>(pane_entity)
-            .unwrap()
-            .cells[1]
+        let resumed: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[1]
             .iter()
             .map(|c| c.text.as_str())
             .collect();

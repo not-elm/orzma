@@ -136,7 +136,9 @@ pub(crate) fn version_supports_per_window_refresh(version: &str) -> bool {
 }
 
 fn parse_major_minor(version: &str) -> Option<(u32, u32)> {
-    let trimmed = version.trim().trim_start_matches(|c: char| !c.is_ascii_digit());
+    let trimmed = version
+        .trim()
+        .trim_start_matches(|c: char| !c.is_ascii_digit());
     let mut parts = trimmed.split('.');
     let major: u32 = parts.next()?.parse().ok()?;
     let minor_digits: String = parts
@@ -733,7 +735,11 @@ mod tests {
         let row = "1\t@1\t0\t0000,80x24,0,0,1\t0000,40x12,0,0,1\t*\tbash";
         let parsed = parse_window_rows(&[row.to_string()]).expect("row parses");
         let dims = parsed[0].layout.root.dims();
-        assert_eq!((dims.width, dims.height), (40, 12), "must use visible_layout");
+        assert_eq!(
+            (dims.width, dims.height),
+            (40, 12),
+            "must use visible_layout"
+        );
     }
 
     #[test]
@@ -742,7 +748,11 @@ mod tests {
         let row = "1\t@1\t0\t0000,80x24,0,0,1\t\t*\tbash";
         let parsed = parse_window_rows(&[row.to_string()]).expect("row parses");
         let dims = parsed[0].layout.root.dims();
-        assert_eq!((dims.width, dims.height), (80, 24), "fallback to window_layout");
+        assert_eq!(
+            (dims.width, dims.height),
+            (80, 24),
+            "fallback to window_layout"
+        );
     }
 
     #[test]
