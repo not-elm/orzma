@@ -95,6 +95,26 @@ pub fn refresh_client_command(cols: u16, rows: u16) -> String {
     format!("refresh-client -C {cols},{rows}")
 }
 
+/// Builds `refresh-client -C @<win>:<cols>x<rows>` — declares this control
+/// client's size for one specific window (tmux ≥ 3.4). Unlike the global
+/// `refresh-client -C W,H`, this sizes a single window without affecting the
+/// client's other windows.
+pub fn window_refresh_client_command(win: WindowId, cols: u16, rows: u16) -> String {
+    format!("refresh-client -C @{}:{cols}x{rows}", win.0)
+}
+
+/// Builds `resize-window -x <cols> -y <rows> -t @<win>` — the tmux < 3.4
+/// fallback for per-window sizing.
+///
+/// # Invariants
+///
+/// tmux sets the session's `window-size` option to `manual` as a side effect
+/// of `resize-window`; only used when the per-window `refresh-client -C` form
+/// is unavailable.
+pub fn resize_window_command(win: WindowId, cols: u16, rows: u16) -> String {
+    format!("resize-window -x {cols} -y {rows} -t @{}", win.0)
+}
+
 /// Builds `display-message -p '#{client_name}'` — prints the control
 /// client's name as a one-line command reply (correlated like `list-windows`).
 pub(crate) fn client_name_command() -> String {
@@ -693,6 +713,22 @@ mod tests {
         assert_eq!(
             rename_session_command(SessionId(3), ""),
             "rename-session -t $3 -- ''"
+        );
+    }
+
+    #[test]
+    fn window_refresh_client_command_uses_per_window_form() {
+        assert_eq!(
+            window_refresh_client_command(WindowId(2), 80, 24),
+            "refresh-client -C @2:80x24"
+        );
+    }
+
+    #[test]
+    fn resize_window_command_targets_window() {
+        assert_eq!(
+            resize_window_command(WindowId(2), 80, 24),
+            "resize-window -x 80 -y 24 -t @2"
         );
     }
 }
