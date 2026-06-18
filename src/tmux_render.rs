@@ -16,7 +16,8 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
-    TmuxWindowLayout, refresh_client_command,
+    TmuxWindowLayout, WindowId, refresh_client_command, resize_window_command,
+    window_refresh_client_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,6 +26,7 @@ use tmux_control_parser::{Cell, DividerAxis, PaneId, SplitDir};
 
 #[derive(Resource, Default)]
 struct LastClientSize {
+    window: Option<WindowId>,
     cols: u16,
     rows: u16,
 }
@@ -481,19 +483,35 @@ fn rows_for_panes(total_rows: u16) -> u16 {
     total_rows.saturating_sub(1).max(1)
 }
 
-/// Sends `refresh-client -C <cols>,<rows>` to tmux so it lays out panes for
-/// the current window size. One row is reserved for the ozmux window status
-/// bar via [`rows_for_panes`]. Results are deduped via [`LastClientSize`].
+/// Returns the size-declaration command for `win` based on the tmux per-window
+/// `refresh-client` capability. `None` (capability not yet known) falls back to
+/// the global `refresh-client -C W,H`.
+fn pin_command(per_window: Option<bool>, win: WindowId, cols: u16, rows: u16) -> String {
+    match per_window {
+        Some(true) => window_refresh_client_command(win, cols, rows),
+        Some(false) => resize_window_command(win, cols, rows),
+        None => refresh_client_command(cols, rows),
+    }
+}
+
+/// Pins the active tmux window to ozmux's cell size via per-window
+/// `refresh-client -C @win:WxH` (tmux ≥ 3.4) so a smaller foreign client cannot
+/// collapse it. One row is reserved for the ozmux status bar. Deduped on the
+/// (active window, size) pair via [`LastClientSize`].
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
     connection: NonSend<TmuxConnection>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
+    active: Query<&TmuxWindow, With<ActiveWindow>>,
 ) {
     let Some(client) = connection.client() else {
         return;
     };
     let Ok(window) = window.single() else {
+        return;
+    };
+    let Some(tmux_window) = active.iter().next() else {
         return;
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
@@ -505,18 +523,20 @@ fn sync_client_size(
         cell_h,
     );
     let rows = rows_for_panes(rows);
-    if (cols, rows) == (last.cols, last.rows) {
+    if last.window == Some(tmux_window.id) && (last.cols, last.rows) == (cols, rows) {
         return;
     }
+    let cmd = pin_command(connection.supports_per_window_refresh(), tmux_window.id, cols, rows);
     // NOTE: only record the size as sent AFTER a successful send — otherwise a
     // transient send failure would poison the dedupe and permanently suppress
     // re-sending this size, leaving tmux stuck at the stale client dimensions.
-    match client.handle().send(&refresh_client_command(cols, rows)) {
+    match client.handle().send(&cmd) {
         Ok(_) => {
+            last.window = Some(tmux_window.id);
             last.cols = cols;
             last.rows = rows;
         }
-        Err(e) => tracing::warn!(?e, cols, rows, "refresh-client send failed"),
+        Err(e) => tracing::warn!(?e, cols, rows, "window refresh-client send failed"),
     }
 }
 
@@ -536,6 +556,23 @@ mod tests {
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
     use tmux_control_parser::{Cell, CellDims, SplitDir};
+
+    #[test]
+    fn pin_command_selects_form_by_capability() {
+        use ozmux_tmux::WindowId;
+        assert_eq!(
+            pin_command(Some(true), WindowId(3), 80, 24),
+            "refresh-client -C @3:80x24"
+        );
+        assert_eq!(
+            pin_command(Some(false), WindowId(3), 80, 24),
+            "resize-window -x 80 -y 24 -t @3"
+        );
+        assert_eq!(
+            pin_command(None, WindowId(3), 80, 24),
+            "refresh-client -C 80,24"
+        );
+    }
 
     #[test]
     fn rows_for_panes_reserves_one_row_for_the_bar() {
