@@ -88,7 +88,7 @@ fn register_view(
     let state_tx = page_tx;
     let view = ozma.register(
         Webview::dir(asset_dir.path(), "index.html")
-            .interactive(false)
+            .interactive(true)
             .on("ready", move |(): ()| -> Result<Content, RpcError> {
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
                 Ok(content_of(&doc))
