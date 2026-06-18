@@ -8,14 +8,10 @@ mod font;
 mod inline_webview;
 mod input;
 mod osc_webview;
+mod picker;
 mod system_set;
 mod theme;
-mod tmux_copy_mode;
-mod tmux_input;
-mod tmux_mouse;
-mod tmux_pane_hit;
-mod tmux_picker;
-mod tmux_render;
+mod tmux;
 mod ui;
 mod webview_render;
 
@@ -33,18 +29,10 @@ use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
-use ozmux_tmux::TmuxSessionPlugin;
 use ozmux_webview_host::DynAssetRegistry;
-use tmux_copy_mode::OzmuxTmuxCopyModePlugin;
-use tmux_input::OzmuxTmuxInputPlugin;
-use tmux_mouse::OzmuxTmuxMousePlugin;
-use tmux_picker::OzmuxTmuxPickerPlugin;
-use tmux_render::OzmuxTmuxRenderPlugin;
+use picker::OzmuxPickerPlugin;
+use tmux::OzmuxTmuxPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
-use ui::tmux_dialog::TmuxDialogPlugin;
-use ui::tmux_divider_handle::OzmuxTmuxDividerHandlePlugin;
-use ui::tmux_pane_focus::OzmuxTmuxPaneFocusPlugin;
-use ui::tmux_window_bar::OzmuxTmuxWindowBarPlugin;
 use ui::{
     OzmuxUiPlugin, confirm_prompt::ConfirmPromptPlugin, copy_mode::CopyModePlugin,
     copy_mode_indicator::CopyModeIndicatorPlugin, copy_search::CopyPromptPlugin,
@@ -68,8 +56,8 @@ fn main() {
         .add_plugins((
             TerminalHandlePlugin,
             TerminalRendererPlugin,
-            TmuxSessionPlugin,
-            OzmuxTmuxPickerPlugin,
+            OzmuxTmuxPlugin,
+            OzmuxPickerPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxBootstrapPlugin,
@@ -82,14 +70,6 @@ fn main() {
         .add_plugins(CopyPromptPlugin)
         .add_plugins(ConfirmPromptPlugin)
         .add_plugins(RenamePromptPlugin)
-        .add_plugins(TmuxDialogPlugin)
-        .add_plugins(OzmuxTmuxRenderPlugin)
-        .add_plugins(OzmuxTmuxInputPlugin)
-        .add_plugins(OzmuxTmuxWindowBarPlugin)
-        .add_plugins(OzmuxTmuxPaneFocusPlugin)
-        .add_plugins(OzmuxTmuxCopyModePlugin)
-        .add_plugins(OzmuxTmuxMousePlugin)
-        .add_plugins(OzmuxTmuxDividerHandlePlugin)
         .add_plugins((
             HyperlinkInputPlugin,
             ImePlugin,

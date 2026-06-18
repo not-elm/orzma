@@ -98,6 +98,28 @@ Forbidden:
 
 Note on preludes: a module that *defines* a prelude (i.e., re-exports curated names for downstream consumers) may itself use `pub use foo::*;` inside its own definition. The rule above forbids glob imports in **consumer** code.
 
+Required — import, don't inline:
+
+- Prefer `use` imports over inline fully-qualified paths. If a type is used in a function signature or system body, it belongs in the `use` block at the top of the file, not written out inline as `some_crate::some_module::Type` at the call site.
+
+| Pattern | Example | Fix |
+| --- | --- | --- |
+| Inline path in signature / body | `fn f(x: foo::bar::Baz)` | Add `use foo::bar::Baz;` and write `fn f(x: Baz)` |
+| Inline path in `run_if` or type parameter | `.add_message::<bevy::window::WindowResized>()` | `use bevy::window::WindowResized;` then `.add_message::<WindowResized>()` |
+
+## Naming — Query parameters
+
+Bevy `Query` system parameters must not use a `_q` suffix. Use a descriptive noun instead:
+
+- Singular (`window`, `terminal`) when the query is expected to return one result and the system calls `.single()` / `.single_mut()`.
+- Plural (`windows`, `terminals`) when the query is iterated or used with `.get()` over an arbitrary entity.
+
+Forbidden:
+
+| Pattern | Example | Fix |
+| --- | --- | --- |
+| `_q` suffix on any `Query` parameter | `window_q: Query<&Window, …>` | `window: Query<&Window, …>` |
+
 ## Visibility — minimize scope
 
 Every item (functions, types, fields, modules, constants, traits) starts
@@ -389,6 +411,8 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Parameter ordering — mutable parameters declared before immutable ones in function signatures (see "Parameter ordering — mutable parameters first")
 - System optimization — whole-system resource change/added guards expressed as in-body early returns must be `run_if` run conditions instead (see "System optimization — gate with `run_if`, not in-body change checks")
 - Change detection — no manual `set_changed()` / `bypass_change_detection()`-then-`set_changed()` notification; mutate conditionally so normal `DerefMut` drives change detection (see "Change detection — let mutation drive it, don't force it manually")
+- Imports — no inline fully-qualified paths in signatures, bodies, or type parameters; add a `use` at the top instead (see "Imports — import, don't inline")
+- Naming — `Query` parameters must not use a `_q` suffix; use a descriptive singular or plural noun (see "Naming — Query parameters")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 

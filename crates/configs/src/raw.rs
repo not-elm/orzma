@@ -9,6 +9,7 @@ use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::keyboard::KeyboardPatch;
 use crate::mouse::MousePatch;
 use crate::osc_webview::OscWebviewPatch;
+use crate::ozma::OzmaPatch;
 use crate::shortcuts::Shortcuts;
 use crate::theme::ThemePatch;
 use crate::tmux::TmuxPatch;
@@ -27,6 +28,7 @@ pub(crate) struct RawConfigs {
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
     pub(crate) osc_webview: Option<OscWebviewPatch>,
     pub(crate) tmux: Option<TmuxPatch>,
+    pub(crate) ozma: Option<OzmaPatch>,
 }
 
 impl RawConfigs {
@@ -58,6 +60,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.tmux {
             base.tmux = patch.apply_to(base.tmux);
+        }
+        if let Some(patch) = self.ozma {
+            base.ozma = patch.apply_to(base.ozma);
         }
         base
     }

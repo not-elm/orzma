@@ -19,9 +19,9 @@ use tmux_control::{SessionInfo, TmuxServer, WindowEntry};
 const PICKER_Z: i32 = 310;
 
 /// Registers the session picker UI and keyboard handler.
-pub(crate) struct OzmuxTmuxPickerPlugin;
+pub(crate) struct OzmuxPickerPlugin;
 
-impl Plugin for OzmuxTmuxPickerPlugin {
+impl Plugin for OzmuxPickerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SessionPicker>()
             .add_systems(Startup, (list_sessions_into_picker, spawn_picker_ui))

@@ -6,14 +6,14 @@
 //! pane is already in copy mode, and enters copy mode when the wheel binding
 //! triggers a copy-mode entry command.
 
+use super::pane_hit::tmux_pane_at_phys;
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, PassthroughKeys, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::osc_webview::NonInteractive;
-use crate::tmux_pane_hit::tmux_pane_at_phys;
-use crate::tmux_picker::SessionPicker;
+use crate::picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
@@ -38,9 +38,9 @@ use ozmux_tmux::{
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
-pub struct OzmuxTmuxInputPlugin;
+pub(crate) struct InputPlugin;
 
-impl Plugin for OzmuxTmuxInputPlugin {
+impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxWheelAccumulator>().add_systems(
             Update,

@@ -31,9 +31,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 /// Wires the capture-driven copy-mode refresh systems after the projection chain.
-pub struct OzmuxTmuxCopyModePlugin;
+pub(crate) struct CopyModePlugin;
 
-impl Plugin for OzmuxTmuxCopyModePlugin {
+impl Plugin for CopyModePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<CopyRefreshState>();
         app.add_observer(on_copy_mode_exit);
@@ -618,7 +618,7 @@ mod tests {
         app.add_message::<CopyModeReply>();
         app.init_resource::<CopyModeQueries>();
         app.insert_non_send_resource(TmuxConnection::default());
-        app.add_plugins(OzmuxTmuxCopyModePlugin);
+        app.add_plugins(CopyModePlugin);
 
         let pane_id = PaneId(1);
         let entity = app
@@ -716,7 +716,7 @@ mod tests {
         app.add_message::<CopyModeReply>();
         app.init_resource::<CopyModeQueries>();
         app.insert_non_send_resource(TmuxConnection::default());
-        app.add_plugins(OzmuxTmuxCopyModePlugin);
+        app.add_plugins(CopyModePlugin);
 
         let pane_id = PaneId(7);
         let entity = app
@@ -836,8 +836,8 @@ mod tests {
         // those, no snapshot/capture forms and the view freezes (the original
         // "scroll movement doesn't work" bug). The integration test below masked
         // this by starting a selection first.
+        use super::super::render::RenderPlugin;
         use crate::clipboard::Clipboard;
-        use crate::tmux_render::OzmuxTmuxRenderPlugin;
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
         use ozma_tty_renderer::material::TerminalUiMaterial;
         use ozma_tty_renderer::prelude::TerminalGridPlugin;
@@ -875,8 +875,8 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
         app.insert_resource(Clipboard::new());
-        app.add_plugins(OzmuxTmuxRenderPlugin);
-        app.add_plugins(OzmuxTmuxCopyModePlugin);
+        app.add_plugins(RenderPlugin);
+        app.add_plugins(CopyModePlugin);
         app.world_mut()
             .get_non_send_resource_mut::<ozmux_tmux::TmuxConnection>()
             .expect("TmuxConnection")
@@ -1017,8 +1017,8 @@ mod tests {
     #[test]
     #[ignore = "requires a real tmux binary and a controlling PTY"]
     fn copy_mode_integration_drives_real_tmux() {
+        use super::super::render::RenderPlugin;
         use crate::clipboard::Clipboard;
-        use crate::tmux_render::OzmuxTmuxRenderPlugin;
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
         use ozma_tty_renderer::material::TerminalUiMaterial;
         use ozma_tty_renderer::prelude::TerminalGridPlugin;
@@ -1059,10 +1059,10 @@ mod tests {
         app.world_mut().spawn((window, PrimaryWindow));
         app.insert_resource(Clipboard::new());
 
-        // OzmuxTmuxRenderPlugin registers attach_tmux_pane_terminal,
+        // RenderPlugin registers attach_tmux_pane_terminal,
         // route_tmux_output, and layout_tmux_panes after TmuxProjectionSet.
-        app.add_plugins(OzmuxTmuxRenderPlugin);
-        app.add_plugins(OzmuxTmuxCopyModePlugin);
+        app.add_plugins(RenderPlugin);
+        app.add_plugins(CopyModePlugin);
 
         app.world_mut()
             .get_non_send_resource_mut::<ozmux_tmux::TmuxConnection>()
@@ -1119,7 +1119,7 @@ mod tests {
         handle
             .send(&format!("copy-mode -t {target}"))
             .expect("copy-mode");
-        // Insert CopyModeState so the OzmuxTmuxCopyModePlugin systems engage.
+        // Insert CopyModeState so the CopyModePlugin systems engage.
         app.world_mut()
             .entity_mut(pane_entity)
             .insert(CopyModeState);
@@ -1244,7 +1244,7 @@ mod tests {
         // --- Assertions (all collected above so cleanup always runs first).
         assert!(
             snapshot_ok,
-            "OzmuxTmuxCopyModePlugin must receive at least one CopyModeSnapshot \
+            "CopyModePlugin must receive at least one CopyModeSnapshot \
              (state→capture round-trip) within 5 s of entering copy mode"
         );
         assert!(

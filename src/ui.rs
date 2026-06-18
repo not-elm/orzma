@@ -13,11 +13,6 @@ pub(crate) mod ime_overlay;
 pub mod palette;
 pub(crate) mod rename_prompt;
 pub mod root;
-pub(crate) mod tmux_dialog;
-pub(crate) mod tmux_divider_handle;
-pub(crate) mod tmux_pane_focus;
-pub(crate) mod tmux_window_bar;
-pub(crate) mod tmux_window_bar_input;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup,
 /// never despawned. Hosts `WorkspaceUiRoot` (the tmux window container's
