@@ -20,6 +20,7 @@ use crate::vt::mode_diff::diff_mode;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::Line;
+use alacritty_terminal::index::Side as ASide;
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vte::ansi::Processor;
 use alacritty_terminal::vte::ansi::{Color as AColor, Rgb};
@@ -339,6 +340,29 @@ impl TerminalHandle {
         self.stage_full_damage_and_arm(coalescer);
     }
 
+    /// Scrolls the viewport by `delta` lines without requiring a `Coalescer`.
+    ///
+    /// Positive `delta` moves backward into scrollback history; negative moves
+    /// toward the live tail. The caller must call `flush_emit` after this to
+    /// push the new viewport to the renderer.
+    pub fn scroll_vt_only(&mut self, delta: i32) {
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
+    /// Snaps the viewport to the live tail without requiring a `Coalescer`.
+    ///
+    /// Returns `true` when the viewport was scrolled back and has now been
+    /// snapped to the live tail. Returns `false` (no-op) when already at the
+    /// bottom (`display_offset == 0`). The caller must call `flush_emit` when
+    /// `true` is returned to push the new viewport to the renderer.
+    pub fn snap_to_bottom_vt_only(&mut self) -> bool {
+        if self.is_at_bottom() {
+            return false;
+        }
+        self.term.scroll_display(Scroll::Bottom);
+        true
+    }
+
     /// Returns true when the viewport is pinned to the live tail
     /// (`display_offset == 0`). Used by the mouse-wheel input system
     /// to decide whether keyboard input or Esc should trigger a
@@ -352,6 +376,16 @@ impl TerminalHandle {
     /// alt-screen arrow translation, and host scrollback.
     pub fn current_modes(&self) -> alacritty_terminal::term::TermMode {
         *self.term.mode()
+    }
+
+    /// Returns `true` when the terminal is in alternate screen mode.
+    ///
+    /// Full-screen TUI apps (vim, htop, fzf, less) activate the alternate
+    /// screen via `\x1b[?1049h`; while they are active `TermMode::ALT_SCREEN`
+    /// is set and mouse-wheel events must be forwarded to tmux instead of
+    /// scrolling the local VT scrollback.
+    pub fn is_in_alt_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
     /// Enters vi (copy) mode. Idempotent — a second call while already
@@ -427,7 +461,6 @@ impl TerminalHandle {
         side: alacritty_terminal::index::Side,
         ty: alacritty_terminal::selection::SelectionType,
     ) {
-        use alacritty_terminal::index::Side as ASide;
         let line = viewport_row_to_line(&self.term, viewport_point.line.0);
         let anchor = alacritty_terminal::index::Point::new(line, viewport_point.column);
         let mut sel = alacritty_terminal::selection::Selection::new(ty, anchor, side);
@@ -523,6 +556,59 @@ impl TerminalHandle {
         self.term.selection = None;
         self.selection_anchor = None;
         self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Starts a selection at `viewport_point` without requiring a `Coalescer`.
+    ///
+    /// Mirrors `selection_start_at` but skips the coalescer arm. Used by tmux
+    /// pane drag handling, where no `Coalescer` component is present. The caller
+    /// must call `flush_emit` after this to push the selection to the renderer.
+    ///
+    /// Calls `update(anchor, opposite_side)` immediately after
+    /// `Selection::new` so `selection_to_string()` does not return `None`
+    /// for a freshly-anchored `Simple` / `Block` selection.
+    pub fn selection_start_at_vt_only(
+        &mut self,
+        viewport_point: alacritty_terminal::index::Point,
+        side: alacritty_terminal::index::Side,
+        ty: alacritty_terminal::selection::SelectionType,
+    ) {
+        let line = viewport_row_to_line(&self.term, viewport_point.line.0);
+        let anchor = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        let mut sel = alacritty_terminal::selection::Selection::new(ty, anchor, side);
+        let opposite = match side {
+            ASide::Left => ASide::Right,
+            ASide::Right => ASide::Left,
+        };
+        sel.update(anchor, opposite);
+        self.term.selection = Some(sel);
+        self.selection_anchor = Some(anchor);
+    }
+
+    /// Extends the active selection's moving end to `viewport_point` /
+    /// `side` without requiring a `Coalescer`. Same viewport-row → alacritty-Line
+    /// translation as `selection_start_at`. No-op (no panic, no state change)
+    /// when `Term::selection` is `None`. The caller must call `flush_emit`
+    /// after this to push the updated selection to the renderer.
+    pub fn selection_update_to_vt_only(
+        &mut self,
+        viewport_point: alacritty_terminal::index::Point,
+        side: alacritty_terminal::index::Side,
+    ) {
+        let line = viewport_row_to_line(&self.term, viewport_point.line.0);
+        let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        let Some(sel) = self.term.selection.as_mut() else {
+            return;
+        };
+        sel.update(point, side);
+    }
+
+    /// Drops the active selection without requiring a `Coalescer`.
+    /// The caller must call `flush_emit` after this to push the cleared
+    /// selection to the renderer.
+    pub fn selection_clear_vt_only(&mut self) {
+        self.term.selection = None;
+        self.selection_anchor = None;
     }
 
     /// Reads the active selection as a UTF-8 string via
@@ -1871,6 +1957,149 @@ mod tests {
     }
 
     #[test]
+    fn selection_start_at_vt_only_sets_selection() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        for _ in 0..5 {
+            h.advance(b"x\r\n");
+        }
+        assert!(h.selection_type().is_none(), "no selection initially");
+        let point = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(0),
+        );
+        h.selection_start_at_vt_only(
+            point,
+            alacritty_terminal::index::Side::Left,
+            alacritty_terminal::selection::SelectionType::Simple,
+        );
+        assert!(
+            h.selection_type().is_some(),
+            "selection_start_at_vt_only must set a selection"
+        );
+    }
+
+    #[test]
+    fn selection_update_to_vt_only_extends_selection() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        for _ in 0..5 {
+            h.advance(b"hello\r\n");
+        }
+        let start = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(0),
+        );
+        h.selection_start_at_vt_only(
+            start,
+            alacritty_terminal::index::Side::Left,
+            alacritty_terminal::selection::SelectionType::Simple,
+        );
+        let end = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(1),
+            alacritty_terminal::index::Column(4),
+        );
+        h.selection_update_to_vt_only(end, alacritty_terminal::index::Side::Right);
+        assert!(
+            h.selection_to_string().is_some(),
+            "selection_update_to_vt_only must yield a non-empty selection"
+        );
+    }
+
+    #[test]
+    fn selection_update_to_vt_only_is_noop_when_no_selection() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        let point = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(0),
+        );
+        // Must not panic when called with no active selection.
+        h.selection_update_to_vt_only(point, alacritty_terminal::index::Side::Right);
+        assert!(h.selection_type().is_none());
+    }
+
+    #[test]
+    fn selection_clear_vt_only_drops_selection() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        for _ in 0..5 {
+            h.advance(b"x\r\n");
+        }
+        let point = alacritty_terminal::index::Point::new(
+            alacritty_terminal::index::Line(0),
+            alacritty_terminal::index::Column(0),
+        );
+        h.selection_start_at_vt_only(
+            point,
+            alacritty_terminal::index::Side::Left,
+            alacritty_terminal::selection::SelectionType::Simple,
+        );
+        assert!(h.selection_type().is_some(), "precondition: selection set");
+        h.selection_clear_vt_only();
+        assert!(
+            h.selection_type().is_none(),
+            "selection_clear_vt_only must drop the selection"
+        );
+    }
+
+    #[test]
     fn vi_goto_moves_vi_cursor_in_vi_mode() {
         use crate::bundle::{SpawnOptions, TerminalBundle};
         use alacritty_terminal::index::{Column, Line, Point};
@@ -1929,6 +2158,94 @@ mod tests {
             !handle
                 .current_modes()
                 .contains(alacritty_terminal::term::TermMode::VI)
+        );
+    }
+
+    #[test]
+    fn scroll_vt_only_grows_display_offset() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        for _ in 0..30 {
+            h.advance(b"x\r\n");
+        }
+        assert_eq!(
+            h.term.grid().display_offset(),
+            0,
+            "precondition: at live tail"
+        );
+        h.scroll_vt_only(3);
+        assert!(
+            h.term.grid().display_offset() > 0,
+            "scroll_vt_only must grow display_offset"
+        );
+    }
+
+    #[test]
+    fn snap_to_bottom_vt_only_returns_true_and_snaps() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        for _ in 0..30 {
+            h.advance(b"x\r\n");
+        }
+        h.scroll_vt_only(3);
+        assert!(!h.is_at_bottom(), "precondition: must be scrolled back");
+        assert!(
+            h.snap_to_bottom_vt_only(),
+            "must return true when actually snapping"
+        );
+        assert!(h.is_at_bottom(), "must reach live tail after snap");
+    }
+
+    #[test]
+    fn snap_to_bottom_vt_only_returns_false_when_already_at_bottom() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(h.is_at_bottom(), "fresh handle is at live tail");
+        assert!(
+            !h.snap_to_bottom_vt_only(),
+            "must return false when already at bottom — nothing to snap"
         );
     }
 
