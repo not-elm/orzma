@@ -2,7 +2,7 @@
 
 use crate::spawn::OzmaTerminal;
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::window::{PrimaryWindow, WindowResized};
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 
@@ -11,7 +11,7 @@ pub(crate) struct LayoutPlugin;
 impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OzmaLastSize>()
-            .add_message::<bevy::window::WindowResized>()
+            .add_message::<WindowResized>()
             .add_systems(OnEnter(crate::AppMode::Ozma), reset_last_size)
             .add_systems(
                 Update,
@@ -21,7 +21,7 @@ impl Plugin for LayoutPlugin {
                     .run_if(
                         resource_exists_and_changed::<OzmaLastSize>
                             .or(resource_exists_and_changed::<TerminalCellMetricsResource>)
-                            .or(on_message::<bevy::window::WindowResized>),
+                            .or(on_message::<WindowResized>),
                     ),
             );
     }
@@ -37,17 +37,17 @@ fn reset_last_size(mut last_size: ResMut<OzmaLastSize>) {
 fn resize_to_window(
     mut commands: Commands,
     mut last_size: ResMut<OzmaLastSize>,
-    mut terminal_q: Query<
+    mut terminal: Query<
         (Entity, &mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
         With<OzmaTerminal>,
     >,
     metrics: Res<TerminalCellMetricsResource>,
-    window_q: Query<&Window, With<PrimaryWindow>>,
+    window: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok(window) = window_q.single() else {
+    let Ok(window) = window.single() else {
         return;
     };
-    let Ok((entity, mut handle, mut pty, mut coalescer)) = terminal_q.single_mut() else {
+    let Ok((entity, mut handle, mut pty, mut coalescer)) = terminal.single_mut() else {
         return;
     };
 

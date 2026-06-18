@@ -34,11 +34,11 @@ fn spawn_terminal(
     mut exit: MessageWriter<AppExit>,
     config: Res<OzmaModeConfig>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
-    window_q: Query<&Window, With<PrimaryWindow>>,
+    window: Query<&Window, With<PrimaryWindow>>,
 ) {
     let (cols, rows) = metrics
         .as_ref()
-        .zip(window_q.single().ok())
+        .zip(window.single().ok())
         .map(|(m, w)| {
             let cell_w = m.metrics.advance_phys.floor().max(1.0);
             let cell_h = m.metrics.line_height_phys.floor().max(1.0);
@@ -91,9 +91,9 @@ fn spawn_terminal(
 
 fn despawn_terminal(
     mut commands: Commands,
-    terminal_q: Query<Entity, With<OzmaTerminal>>,
+    terminals: Query<Entity, With<OzmaTerminal>>,
 ) {
-    for entity in terminal_q.iter() {
+    for entity in terminals.iter() {
         commands.entity(entity).despawn();
     }
 }

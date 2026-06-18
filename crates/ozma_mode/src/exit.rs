@@ -15,9 +15,9 @@ impl Plugin for ExitPlugin {
 fn on_child_exit(
     ev: On<TerminalChildExit>,
     mut exit: MessageWriter<AppExit>,
-    terminal_q: Query<(), With<OzmaTerminal>>,
+    terminals: Query<(), With<OzmaTerminal>>,
 ) {
-    if terminal_q.get(ev.event_target()).is_ok() {
+    if terminals.get(ev.event_target()).is_ok() {
         exit.write(AppExit::Success);
     }
 }
