@@ -118,8 +118,11 @@ Contents:
   enum to a physical `bevy::KeyCode`:
   - `Char('a'..='z')` → `KeyA..KeyZ`
   - `Char('0'..='9')` → `Digit0..Digit9`
-  - `Escape/Space/Enter/Tab/Backspace/ArrowUp/Down/Left/Right/Plus` → the
-    matching `KeyCode`
+  - `Escape/Space/Enter/Tab/Backspace/ArrowUp/Down/Left/Right` → the matching
+    `KeyCode`
+  - `Plus`: no dedicated physical `KeyCode` exists (`+` is Shift+Equal on US
+    layouts); it has no clean layout-stable mapping and is not used by any
+    default shortcut, so it resolves to `None` (skipped) in v1
   - anything else (e.g. `Key::Other`, unmapped punctuation) → `None`
 - `ResolvedShortcuts(Vec<ResolvedShortcut>)` Bevy `Resource`, where
   `ResolvedShortcut { keycode: KeyCode, modifiers: Modifiers, action: ShortcutAction }`.
@@ -223,7 +226,7 @@ config.toml
 `src/input/shortcuts.rs`:
 
 - `key_to_keycode`: `Char('v')→KeyV`, `Char('1')→Digit1`, `Escape→Escape`,
-  arrows, `Plus`; `Key::Other(..)` → `None`.
+  arrows; `Key::Plus` and `Key::Other(..)` → `None`.
 - `match_gui_action`: exact modifier equality (e.g. `Cmd+Q` does not match when
   Shift is also held); `Cmd+V` resolves to `Paste`; `ReleaseInlineFocus` is
   never returned.
