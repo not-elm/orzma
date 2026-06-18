@@ -72,32 +72,26 @@ impl InactivePaneConfigPatch {
         if let Some(v) = self.enabled {
             base.enabled = v;
         }
-        if let Some(v) = self.dim
-            && !v.is_nan()
-        {
-            base.dim = v.clamp(0.0, 1.0);
-        }
+        apply_unit(&mut base.dim, self.dim);
         if let Some(v) = self.tint_color
             && parse_hex_rgb(&v).is_some()
         {
             base.tint_color = v.to_ascii_lowercase();
         }
-        if let Some(v) = self.tint
-            && !v.is_nan()
-        {
-            base.tint = v.clamp(0.0, 1.0);
-        }
-        if let Some(v) = self.webview_dim
-            && !v.is_nan()
-        {
-            base.webview_dim = v.clamp(0.0, 1.0);
-        }
-        if let Some(v) = self.webview_desaturate
-            && !v.is_nan()
-        {
-            base.webview_desaturate = v.clamp(0.0, 1.0);
-        }
+        apply_unit(&mut base.tint, self.tint);
+        apply_unit(&mut base.webview_dim, self.webview_dim);
+        apply_unit(&mut base.webview_desaturate, self.webview_desaturate);
         base
+    }
+}
+
+/// Overwrites `dst` with `src` clamped to `0.0..=1.0`. A `None` or `NaN` `src`
+/// leaves `dst` unchanged (the base value is kept).
+fn apply_unit(dst: &mut f32, src: Option<f32>) {
+    if let Some(v) = src
+        && !v.is_nan()
+    {
+        *dst = v.clamp(0.0, 1.0);
     }
 }
 

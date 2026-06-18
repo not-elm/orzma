@@ -385,6 +385,17 @@ fn is_in_selection_uniform(
 // Inline-overlay compositing
 // ============================================================================
 
+// Applies the inactive-pane treatment to one overlay (webview) sample before it
+// blends over the background: desaturate toward Rec.709 luminance, then dim.
+// `s` is premultiplied-alpha and linear, so both are correct on `s.rgb`
+// (luma(a*c) = a*luma(c); a scalar multiply distributes through premultiply).
+// Active pane => overlay_dim == 1.0 && overlay_desaturate == 0.0 (no-op).
+fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
+    let luma = dot(s.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let desat = mix(s.rgb, vec3<f32>(luma), params.overlay_desaturate);
+    return vec4<f32>(desat * params.overlay_dim, s.a);
+}
+
 // Inline-overlay compositing (spec §6.2): samples each ACTIVE overlay slot
 // whose cell-rect contains this fragment and composites it OVER the cell
 // background. Source is premultiplied alpha (CEF convention, spec §6.3);
@@ -396,16 +407,6 @@ fn is_in_selection_uniform(
 // is partially scrolled above the viewport), so partial visibility never
 // distorts the image; grid-edge clipping is inherent because only in-grid
 // fragments reach paint_grid_cell.
-// Applies the inactive-pane treatment to one overlay (webview) sample before it
-// blends over the background: desaturate toward Rec.709 luminance, then dim.
-// `s` is premultiplied-alpha and linear, so both are correct on `s.rgb`
-// (luma(a*c) = a*luma(c); a scalar multiply distributes through premultiply).
-// Active pane => overlay_dim == 1.0 && overlay_desaturate == 0.0 (no-op).
-fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
-    let luma = dot(s.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let desat = mix(s.rgb, vec3<f32>(luma), params.overlay_desaturate);
-    return vec4<f32>(desat * params.overlay_dim, s.a);
-}
 
 fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     var color = base;
