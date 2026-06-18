@@ -1,21 +1,15 @@
 //! Mouse gesture arbiter for the tmux backend.
 //!
 //! Owns a single left-button state machine (`TmuxMouseGesture`) that reads raw
-//! `MouseButtonInput` messages and issues `select-pane` on a focused press.
-//! Divider-drag-to-resize is handled in the same state machine: a press within
-//! `divider_grab_tolerance_px` of a divider line enters `Resizing` state; each
-//! frame while held the pointer's major-axis cell coordinate is converted to an
-//! absolute target size and a `resize-pane -x/-y` command is sent whenever that
-//! target changes. The send is pointer-driven (not a reaction to
-//! `%layout-change`), so there is no resize feedback loop, and the absolute
-//! `-x/-y` form is idempotent so re-sends cannot accumulate drift.
-//!
-//! A press on a pane that drags past `drag_threshold_px` enters `Selecting`
-//! state: copy mode is auto-entered on the pane under the press, then the copy
-//! cursor is positioned to the press cell and a selection begun, extending as
-//! the pointer moves and copying to the clipboard (via the tmux paste buffer)
-//! on release. All copy-mode commands are pane-targeted (`send-keys -X -t %id`)
-//! so they act on the pressed pane regardless of the client's active pane.
+//! `MouseButtonInput` messages and issues `select-pane` on a focused press,
+//! or enters text-selection when a press drags past `drag_threshold_px`. When
+//! the pane is NOT in copy mode, drag starts a native VT selection on the
+//! `TerminalHandle` and multi-click (≥2) immediately selects a word/line and
+//! copies to clipboard; when already in copy mode, drag and multi-click use
+//! the existing tmux copy-mode path with pane-targeted `send-keys -X` commands.
+//! Divider-drag-to-resize is also here: a press within `divider_grab_tolerance_px`
+//! of a divider line enters `Resizing` state; the pointer's major-axis cell
+//! coordinate maps to an absolute target size sent as `resize-pane -x/-y`.
 
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
 use super::pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys};
@@ -39,8 +33,9 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_tty_engine::TerminalHandle;
-use ozma_tty_engine::{Column, Line, Point as APoint, SelectionType, Side as ASide};
+use ozma_tty_engine::{
+    Column, Line, Point as APoint, SelectionType, Side as ASide, TerminalHandle,
+};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_tty_renderer::schema::TerminalGrid;
@@ -238,25 +233,25 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 }
 
 /// Interprets raw left-button messages into tmux `select-pane`, `resize-pane`,
-/// or copy-mode selection commands.
+/// or selection commands.
 ///
 /// On each `Pressed` event the cursor's physical position is hit-tested: a
 /// press within a divider's grab zone (whose primary pane has geometry) enters
 /// `Resizing`; otherwise the pane under the cursor is focused (`select-pane`)
-/// and the state becomes `Pressed`; a press over nothing leaves `Idle`. While
-/// `Pressed`, a pointer that drags past `drag_threshold_px` auto-enters tmux
-/// copy mode on the pressed pane and transitions to `Selecting`, which positions
-/// the copy cursor to the press cell, begins a selection, and extends it as the
-/// pointer moves (all pane-targeted via `send-keys -X -t %id`). Each frame while
+/// and the state becomes `Pressed`. While `Pressed`, a pointer that drags past
+/// `drag_threshold_px` transitions to either `Selecting` (tmux copy-mode, when
+/// the pane is already in copy mode) or `SelectingVt` (native VT selection on
+/// the `TerminalHandle`, when not in copy mode). Multi-click (≥2) on a pane in
+/// copy mode enters `PendingMultiSelect` to wait for a copy-mode snapshot, then
+/// selects a word/line via copy-mode commands; on a pane NOT in copy mode, it
+/// immediately selects via VT and copies to clipboard. Each frame while
 /// `Resizing` the pointer's major-axis cell coordinate is mapped to an absolute
-/// target size and sent as `resize-pane -x/-y` whenever the target changes; the
-/// send is pointer-driven (not a reaction to `%layout-change`) so there is no
-/// resize feedback loop. On `Released` from `Selecting` a begun selection is
-/// copied and bridged to the clipboard; a `Resizing` release that never dragged
-/// is treated as a click and focuses the pane under the cursor; any other
-/// release returns the state to `Idle`. When the primary window is not focused,
-/// or a modal (picker / copy-search prompt) owns input, queued events are
-/// drained and the state is reset.
+/// target size and sent as `resize-pane -x/-y` whenever the target changes. On
+/// `Released` from `Selecting` a begun selection is copied to clipboard; from
+/// `SelectingVt` the VT selection persists; from `Resizing` that never dragged,
+/// the pane under the cursor is focused as a fallback click. When the primary
+/// window is not focused, or a modal (picker / copy-search prompt) owns input,
+/// queued events are drained and the state is reset.
 ///
 /// Each left press/release is first offered to the inline-webview layer
 /// (`route_tmux_inline_left_click`): a press inside an interactive inline rect
@@ -497,8 +492,9 @@ fn arbiter(
                         click_count,
                     } if click_count >= 2 => {
                         if copy_gate.copy_modes.get(pane).is_ok() {
-                            // Resolve the click cell BEFORE driving PendingMultiSelect, so a
-                            // failed lookup cannot leave the pane stuck with no handler.
+                            // NOTE: resolve the click cell before entering PendingMultiSelect —
+                            // a failed lookup here exits the match cleanly; once in PendingMultiSelect,
+                            // the state persists until a snapshot arrives (or the pane is destroyed).
                             let Ok((_, p, node, transform)) = panes.get(pane) else {
                                 break;
                             };
@@ -560,7 +556,9 @@ fn arbiter(
                         {
                             vt_select.clipboard.write(text);
                         }
-                        // Selection highlight intentionally persists after release.
+                        // NOTE: do not clear the VT selection on release — the highlight
+                        // persists so the user can see what was copied, and single-click
+                        // clears it explicitly in the Pressed branch below.
                     }
                     GestureState::Pressed {
                         pane, click_count, ..
