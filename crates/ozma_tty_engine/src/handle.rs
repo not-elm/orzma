@@ -342,8 +342,8 @@ impl TerminalHandle {
     /// Scrolls the viewport by `delta` lines without requiring a `Coalescer`.
     ///
     /// Positive `delta` moves backward into scrollback history; negative moves
-    /// toward the live tail. For display-only tmux panes: the caller must call
-    /// `flush_emit` after this to push the new viewport to the renderer.
+    /// toward the live tail. The caller must call `flush_emit` after this to
+    /// push the new viewport to the renderer.
     pub fn scroll_vt_only(&mut self, delta: i32) {
         self.term.scroll_display(Scroll::Delta(delta));
     }
@@ -2027,7 +2027,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let h = TerminalHandle::new(
+        let mut h = TerminalHandle::new(
             10,
             5,
             listener,
@@ -2037,7 +2037,6 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         );
         assert!(h.is_at_bottom(), "fresh handle is at live tail");
-        let mut h = h;
         assert!(
             !h.snap_to_bottom_vt_only(),
             "must return false when already at bottom — nothing to snap"

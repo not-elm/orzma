@@ -2,9 +2,9 @@
 //! Keyboard forwarding intercepts a fixed set of ozmux GUI chords and copy-mode
 //! entry commands. Mouse-wheel forwarding accumulates events into cell-deltas
 //! (so trackpad / high-resolution `Pixel` scrolling quantizes the same way the
-//! native terminal path does), drives tmux copy-mode scroll when the active
-//! pane is already in copy mode, and enters copy mode when the wheel binding
-//! triggers a copy-mode entry command.
+//! native terminal path does); outside copy mode the local VT scrollback is
+//! scrolled directly via `scroll_vt_only` + `flush_emit`; inside copy mode a
+//! targeted `send-keys -X scroll-up|scroll-down` is sent to tmux.
 
 use super::pane_hit::tmux_pane_at_phys;
 use crate::clipboard::{Clipboard, build_paste_bytes};

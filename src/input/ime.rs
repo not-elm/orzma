@@ -293,6 +293,7 @@ pub(crate) fn read_ime_events(
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    copy_modes: Query<(), With<CopyModeState>>,
 ) {
     let active = active_pane.map(|single| *single);
     let active_surface = active.map(|(e, _)| e);
@@ -318,7 +319,8 @@ pub(crate) fn read_ime_events(
                 );
                 continue;
             };
-            if let Ok(mut handle) = handles.get_mut(entity)
+            if !copy_modes.contains(entity)
+                && let Ok(mut handle) = handles.get_mut(entity)
                 && handle.snap_to_bottom_vt_only()
             {
                 handle.flush_emit(&mut commands, entity);
