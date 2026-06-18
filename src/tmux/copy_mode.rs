@@ -1119,7 +1119,7 @@ mod tests {
         handle
             .send(&format!("copy-mode -t {target}"))
             .expect("copy-mode");
-        // Insert CopyModeState so the OzmuxTmuxCopyModePlugin systems engage.
+        // Insert CopyModeState so the CopyModePlugin systems engage.
         app.world_mut()
             .entity_mut(pane_entity)
             .insert(CopyModeState);
