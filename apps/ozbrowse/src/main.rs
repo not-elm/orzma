@@ -100,6 +100,10 @@ fn event_loop(
                         view = register_view(ozma, app.url(), url_tx.clone())?;
                     }
                     Cmd::Scroll(action) => {
+                        // NOTE: best-effort for remote pages — arbitrary URLs have no
+                        // `window.ozma.on("scroll", …)` listener, so this emit is a no-op
+                        // unless the page explicitly handles it. Do not treat lack of
+                        // scroll response as a bug.
                         let _ = view.emit("scroll", &scroll_payload(action));
                     }
                 }
@@ -108,6 +112,9 @@ fn event_loop(
     }
 }
 
+// TODO: each call to register_view mints a new WebviewHandle registration that is never
+// unregistered — the old handle is dropped but the server-side entry persists because the
+// SDK has no unregister/Drop path yet. Fix this when the SDK exposes one.
 fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Result<WebviewHandle> {
     let view = ozma.register(
         Webview::url(url)

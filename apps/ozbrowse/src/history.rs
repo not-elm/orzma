@@ -35,14 +35,6 @@ impl History {
         self.back.push(current);
         Some(next)
     }
-
-    pub(crate) fn can_go_back(&self) -> bool {
-        !self.back.is_empty()
-    }
-
-    pub(crate) fn can_go_forward(&self) -> bool {
-        !self.forward.is_empty()
-    }
 }
 
 #[cfg(test)]
@@ -51,17 +43,16 @@ mod tests {
 
     #[test]
     fn new_history_is_empty() {
-        let h = History::new();
-        assert!(!h.can_go_back());
-        assert!(!h.can_go_forward());
+        let mut h = History::new();
+        assert_eq!(h.back("x".into()), None);
+        assert_eq!(h.forward("x".into()), None);
     }
 
     #[test]
     fn navigate_pushes_current_onto_back_and_clears_forward() {
         let mut h = History::new();
         h.navigate("a".into(), "b".into());
-        assert!(h.can_go_back());
-        assert!(!h.can_go_forward());
+        assert!(h.back("b".into()).is_some());
     }
 
     #[test]
@@ -89,8 +80,8 @@ mod tests {
         h.navigate("a".into(), "b".into()); // back=[a]
         let prev = h.back("b".into()).unwrap();
         assert_eq!(prev, "a");
-        assert!(!h.can_go_back());
-        assert!(h.can_go_forward());
+        assert_eq!(h.back("a".into()), None);
+        assert!(h.forward("a".into()).is_some());
     }
 
     #[test]
@@ -98,10 +89,9 @@ mod tests {
         let mut h = History::new();
         h.navigate("a".into(), "b".into()); // back=[a]
         h.back("b".into()); // forward=[b], back=[]
-        let next = h.forward("a".into()).unwrap();
+        let next = h.forward("a".into()).unwrap(); // back=[a], forward=[]
         assert_eq!(next, "b");
-        assert!(h.can_go_back());
-        assert!(!h.can_go_forward());
+        assert_eq!(h.forward("b".into()), None);
     }
 
     #[test]
@@ -109,9 +99,8 @@ mod tests {
         let mut h = History::new();
         h.navigate("a".into(), "b".into());
         h.back("b".into()); // forward=[b]
-        assert!(h.can_go_forward());
         h.navigate("a".into(), "c".into()); // clears forward
-        assert!(!h.can_go_forward());
+        assert_eq!(h.forward("c".into()), None);
     }
 
     #[test]
