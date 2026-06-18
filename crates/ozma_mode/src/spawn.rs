@@ -58,7 +58,19 @@ pub(crate) fn spawn_terminal(
     match TerminalBundle::spawn(opts) {
         Ok(bundle) => {
             let material = materials.add(TerminalUiMaterial::default());
-            commands.spawn((bundle, TerminalRenderBundle::new(material), OzmaTerminal));
+            commands.spawn((
+                bundle,
+                TerminalRenderBundle::new(material),
+                OzmaTerminal,
+                Node {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(0.0),
+                    top: Val::Px(0.0),
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+            ));
         }
         Err(e) => tracing::error!(?e, "failed to spawn ozma terminal"),
     }
