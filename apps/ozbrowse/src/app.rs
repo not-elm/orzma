@@ -28,12 +28,16 @@ pub(crate) enum ScrollAction {
 /// A side-effect for `main.rs` to perform after [`App::on_action`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Cmd {
-    /// Scroll the webview.
-    Scroll(ScrollAction),
     /// Navigate to the given URL.
     Navigate(String),
+    /// Navigate back in history.
+    HistoryBack,
+    /// Navigate forward in history.
+    HistoryForward,
     /// Reload the current page.
     Reload,
+    /// Scroll the webview.
+    Scroll(ScrollAction),
     /// Exit the app.
     Quit,
 }
@@ -98,25 +102,11 @@ impl App {
             Action::ScrollPageDown => vec![Cmd::Scroll(ScrollAction::PageDown)],
             Action::ScrollPageUp => vec![Cmd::Scroll(ScrollAction::PageUp)],
             Action::GoBottom => vec![Cmd::Scroll(ScrollAction::Bottom)],
-            Action::HistoryBack => {
-                if let Some(prev) = self.history.back(self.url.clone()) {
-                    self.url = prev.clone();
-                    vec![Cmd::Navigate(prev)]
-                } else {
-                    vec![]
-                }
-            }
-            Action::HistoryForward => {
-                if let Some(next) = self.history.forward(self.url.clone()) {
-                    self.url = next.clone();
-                    vec![Cmd::Navigate(next)]
-                } else {
-                    vec![]
-                }
-            }
+            Action::HistoryBack => vec![Cmd::HistoryBack],
+            Action::HistoryForward => vec![Cmd::HistoryForward],
             Action::OpenAddress => {
+                self.address_buf = self.url.clone();
                 self.mode = Mode::Address;
-                self.address_buf.clear();
                 vec![]
             }
             Action::AddressChar(c) => {
@@ -128,15 +118,12 @@ impl App {
                 vec![]
             }
             Action::AddressConfirm => {
-                let new_url = self.address_buf.clone();
+                let url = self.address_buf.trim().to_owned();
                 self.mode = Mode::Normal;
-                self.address_buf.clear();
-                if new_url.is_empty() {
+                if url.is_empty() || url == self.url {
                     vec![]
                 } else {
-                    let old = self.url.clone();
-                    self.url = self.history.navigate(old, new_url.clone());
-                    vec![Cmd::Navigate(new_url)]
+                    vec![Cmd::Navigate(url)]
                 }
             }
             Action::Escape => {
@@ -154,6 +141,37 @@ impl App {
             }
             Action::Ignore => vec![],
         }
+    }
+
+    /// Updates the current URL (called by main.rs when `urlChanged` fires from the page).
+    pub(crate) fn set_url(&mut self, url: String) {
+        self.url = url;
+    }
+
+    /// Called by main.rs for `Cmd::Navigate`: pushes current URL onto history, updates self.url.
+    /// Returns the URL to load.
+    pub(crate) fn navigate(&mut self, new_url: String) -> String {
+        let current = self.url.clone();
+        self.url = self.history.navigate(current, new_url);
+        self.url.clone()
+    }
+
+    /// Called by main.rs for `Cmd::HistoryBack`: pops from back stack, updates self.url.
+    /// Returns the URL to load, or None if already at the beginning.
+    pub(crate) fn go_back(&mut self) -> Option<String> {
+        let current = self.url.clone();
+        let prev = self.history.back(current)?;
+        self.url = prev.clone();
+        Some(prev)
+    }
+
+    /// Called by main.rs for `Cmd::HistoryForward`: pops from forward stack, updates self.url.
+    /// Returns the URL to load, or None if no forward history.
+    pub(crate) fn go_forward(&mut self) -> Option<String> {
+        let current = self.url.clone();
+        let next = self.history.forward(current)?;
+        self.url = next.clone();
+        Some(next)
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -214,49 +232,45 @@ mod tests {
     }
 
     #[test]
-    fn open_address_enters_address_mode_with_empty_buf() {
+    fn open_address_pre_fills_current_url_and_sets_address_mode() {
         let mut a = app();
-        a.on_action(Action::AddressChar('x'));
         a.on_action(Action::OpenAddress);
         assert_eq!(a.mode(), Mode::Address);
-        assert_eq!(a.address_buf(), "");
+        assert_eq!(a.address_buf(), "https://example.com");
     }
 
     #[test]
     fn address_char_and_backspace_edit_buf() {
         let mut a = app();
         a.on_action(Action::OpenAddress);
-        a.on_action(Action::AddressChar('h'));
-        a.on_action(Action::AddressChar('i'));
-        assert_eq!(a.address_buf(), "hi");
         a.on_action(Action::AddressBackspace);
-        assert_eq!(a.address_buf(), "h");
+        assert_eq!(a.address_buf(), "https://example.co");
+        a.on_action(Action::AddressChar('x'));
+        assert_eq!(a.address_buf(), "https://example.cox");
     }
 
     #[test]
     fn address_confirm_navigates_and_returns_to_normal() {
         let mut a = app();
         a.on_action(Action::OpenAddress);
-        a.on_action(Action::AddressChar('h'));
-        a.on_action(Action::AddressChar('t'));
-        a.on_action(Action::AddressChar('t'));
-        a.on_action(Action::AddressChar('p'));
-        a.on_action(Action::AddressChar('s'));
-        a.on_action(Action::AddressChar(':'));
-        a.on_action(Action::AddressChar('/'));
-        a.on_action(Action::AddressChar('/'));
-        a.on_action(Action::AddressChar('n'));
+        for _ in 0.."https://example.com".len() {
+            a.on_action(Action::AddressBackspace);
+        }
+        for c in "https://n".chars() {
+            a.on_action(Action::AddressChar(c));
+        }
         let cmds = a.on_action(Action::AddressConfirm);
         assert_eq!(cmds, vec![Cmd::Navigate("https://n".into())]);
         assert_eq!(a.mode(), Mode::Normal);
-        assert_eq!(a.url(), "https://n");
-        assert_eq!(a.address_buf(), "");
     }
 
     #[test]
     fn address_confirm_with_empty_buf_is_noop() {
         let mut a = app();
         a.on_action(Action::OpenAddress);
+        for _ in 0.."https://example.com".len() {
+            a.on_action(Action::AddressBackspace);
+        }
         let cmds = a.on_action(Action::AddressConfirm);
         assert_eq!(cmds, vec![]);
         assert_eq!(a.mode(), Mode::Normal);
@@ -274,45 +288,70 @@ mod tests {
     }
 
     #[test]
-    fn history_back_navigates_to_previous_url() {
+    fn history_back_forward_produce_commands() {
         let mut a = app();
-        a.on_action(Action::OpenAddress);
-        for c in "https://b.com".chars() {
-            a.on_action(Action::AddressChar(c));
-        }
-        a.on_action(Action::AddressConfirm);
-        let cmds = a.on_action(Action::HistoryBack);
-        assert_eq!(cmds, vec![Cmd::Navigate("https://example.com".into())]);
+        assert_eq!(a.on_action(Action::HistoryBack), vec![Cmd::HistoryBack]);
+        assert_eq!(a.on_action(Action::HistoryForward), vec![Cmd::HistoryForward]);
+    }
+
+    #[test]
+    fn go_back_with_empty_stack_returns_none() {
+        let mut a = app();
+        assert_eq!(a.go_back(), None);
         assert_eq!(a.url(), "https://example.com");
     }
 
     #[test]
-    fn history_back_with_empty_stack_is_noop() {
+    fn go_forward_with_empty_stack_returns_none() {
         let mut a = app();
-        let cmds = a.on_action(Action::HistoryBack);
-        assert_eq!(cmds, vec![]);
+        assert_eq!(a.go_forward(), None);
+    }
+
+    #[test]
+    fn go_back_navigates_to_previous_url() {
+        let mut a = app();
+        a.navigate("https://b.com".into());
+        let prev = a.go_back();
+        assert_eq!(prev, Some("https://example.com".into()));
         assert_eq!(a.url(), "https://example.com");
     }
 
     #[test]
-    fn history_forward_after_back_restores_url() {
+    fn go_forward_after_back_restores_url() {
         let mut a = app();
-        a.on_action(Action::OpenAddress);
-        for c in "https://b.com".chars() {
-            a.on_action(Action::AddressChar(c));
-        }
-        a.on_action(Action::AddressConfirm);
-        a.on_action(Action::HistoryBack);
-        let cmds = a.on_action(Action::HistoryForward);
-        assert_eq!(cmds, vec![Cmd::Navigate("https://b.com".into())]);
+        a.navigate("https://b.com".into());
+        a.go_back();
+        let next = a.go_forward();
+        assert_eq!(next, Some("https://b.com".into()));
         assert_eq!(a.url(), "https://b.com");
     }
 
     #[test]
-    fn history_forward_with_empty_stack_is_noop() {
+    fn address_confirm_with_same_url_is_noop() {
         let mut a = app();
-        let cmds = a.on_action(Action::HistoryForward);
+        a.on_action(Action::OpenAddress);
+        let cmds = a.on_action(Action::AddressConfirm);
         assert_eq!(cmds, vec![]);
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn navigate_updates_url_and_history() {
+        let mut a = app();
+        let url = a.navigate("https://rust-lang.org".into());
+        assert_eq!(url, "https://rust-lang.org");
+        assert_eq!(a.url(), "https://rust-lang.org");
+        let prev = a.go_back().unwrap();
+        assert_eq!(prev, "https://example.com");
+    }
+
+    #[test]
+    fn set_url_updates_url_without_touching_history() {
+        let mut a = app();
+        a.navigate("https://rust-lang.org".into());
+        a.set_url("https://docs.rs".into());
+        assert_eq!(a.url(), "https://docs.rs");
+        assert_eq!(a.go_back(), Some("https://example.com".into()));
     }
 
     #[test]
