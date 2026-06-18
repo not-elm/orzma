@@ -25,14 +25,16 @@ pub struct WindowRow {
     pub name: String,
     /// tmux per-window flags (`#{window_raw_flags}`).
     pub flags: WindowFlags,
-    /// Parsed structural layout (panes + geometry).
+    /// Parsed structural layout (panes + geometry). Sourced from
+    /// `window_visible_layout` when non-empty; falls back to `window_layout`.
     pub layout: WindowLayout,
 }
 
 /// Parses the lines of a `list-windows -F LIST_WINDOWS_FORMAT` reply.
 ///
 /// Each line is `active \t id \t index \t layout \t visible_layout \t raw_flags \t name`.
-/// The `visible_layout` field is currently ignored. Blank lines are skipped.
+/// When `visible_layout` is non-empty it is used for `WindowRow.layout`; otherwise
+/// `layout` is the fallback. Blank lines are skipped.
 /// Returns a descriptive `Err(String)` on a malformed row.
 pub fn parse_window_rows(lines: &[String]) -> Result<Vec<WindowRow>, String> {
     let mut rows = Vec::new();
@@ -59,11 +61,16 @@ fn parse_row(line: &str) -> Result<WindowRow, String> {
     let layout_field = fields
         .next()
         .ok_or_else(|| format!("missing layout in row: {line}"))?;
-    let layout = WindowLayout::parse(layout_field.as_bytes())
-        .map_err(|e| format!("bad layout in row {line}: {e}"))?;
-    let _visible = fields
+    let visible_field = fields
         .next()
         .ok_or_else(|| format!("missing visible layout in row: {line}"))?;
+    let chosen = if visible_field.trim().is_empty() {
+        layout_field
+    } else {
+        visible_field
+    };
+    let layout = WindowLayout::parse(chosen.as_bytes())
+        .map_err(|e| format!("bad layout in row {line}: {e}"))?;
     let flags = WindowFlags::parse(
         fields
             .next()
@@ -705,6 +712,26 @@ mod tests {
             subscribe_window_flags_command(),
             format!("refresh-client -B {WINDOW_FLAGS_SUBSCRIPTION}:@*:#{{window_raw_flags}}")
         );
+    }
+
+    #[test]
+    fn parse_row_prefers_visible_layout_when_present() {
+        // field order: active id index window_layout window_visible_layout flags name
+        // window_layout = 80x24, visible_layout = 40x12; must adopt visible dims.
+        // The parser is lenient about checksum mismatches — 0000 is accepted for both.
+        let row = "1\t@1\t0\t0000,80x24,0,0,1\t0000,40x12,0,0,1\t*\tbash";
+        let parsed = parse_window_rows(&[row.to_string()]).expect("row parses");
+        let dims = parsed[0].layout.root.dims();
+        assert_eq!((dims.width, dims.height), (40, 12), "must use visible_layout");
+    }
+
+    #[test]
+    fn parse_row_falls_back_to_window_layout_when_visible_empty() {
+        // visible_layout field is empty — must fall back to window_layout (80x24).
+        let row = "1\t@1\t0\t0000,80x24,0,0,1\t\t*\tbash";
+        let parsed = parse_window_rows(&[row.to_string()]).expect("row parses");
+        let dims = parsed[0].layout.root.dims();
+        assert_eq!((dims.width, dims.height), (80, 24), "fallback to window_layout");
     }
 
     #[test]

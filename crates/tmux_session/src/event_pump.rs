@@ -461,10 +461,10 @@ fn trigger_notification(commands: &mut Commands, own_client: Option<&str>, event
                 name: name.clone(),
             });
         }
-        ControlEvent::LayoutChange { window, layout, .. } => {
+        ControlEvent::LayoutChange { window, visible_layout, .. } => {
             commands.trigger(TmuxLayoutChanged {
                 window: *window,
-                layout: layout.clone(),
+                layout: visible_layout.clone(),
             });
         }
         ControlEvent::WindowPaneChanged { window, pane } => {
@@ -959,7 +959,7 @@ mod tests {
                 id: CommandId(1),
                 number: 0,
                 ok: true,
-                output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\t\tmain".to_string()],
+                output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\t0000,80x24,0,0,5\t\tmain".to_string()],
             },
         )]));
         app.add_observer(|ev: On<TmuxWindowAdded>, log: Res<Log>| {
