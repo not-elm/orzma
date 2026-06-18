@@ -185,8 +185,8 @@ fn forward_keys_to_tmux(
     };
 
     // When an inline webview holds focus it owns the keyboard (bevy_cef routes
-    // keystrokes to it); forwarding to tmux too would double-send. Ctrl+Shift+Esc
-    // releases focus back to the terminal. NOTE: under the tmux backend
+    // keystrokes to it); forwarding to tmux too would double-send. The configured
+    // release-inline-focus chord releases focus back to the terminal. NOTE: under the tmux backend
     // `FocusedWebview` is live (set by the inline-click router, the control-plane
     // `SetFocus` op, and the focus-preservation arm in `sync_focused_webview`),
     // so this drain is load-bearing whenever an inline webview is focused —
@@ -194,7 +194,7 @@ fn forward_keys_to_tmux(
     if focused_webview.0.is_some() {
         for ev in events.read() {
             if ev.state == ButtonState::Pressed
-                && resolved.is_release_inline_focus(ev.key_code, cfg_mods.clone())
+                && resolved.is_release_inline_focus(ev.key_code, cfg_mods)
             {
                 focused_webview.0 = None;
                 break;
@@ -217,13 +217,13 @@ fn forward_keys_to_tmux(
     };
 
     // Collect forwardable tmux key names in event order. Super-modified keys are
-    // handled as GUI chords (Paste/Quit/Picker) or swallowed; none reach tmux.
+    // matched against the configured ozmux shortcuts or swallowed; none reach tmux.
     let mut key_names: Vec<String> = Vec::new();
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        if let Some(action) = resolved.match_gui_action(ev.key_code, cfg_mods.clone()) {
+        if let Some(action) = resolved.match_gui_action(ev.key_code, cfg_mods) {
             // A GUI action abandons any pending tmux prefix sequence.
             *prefix_pending = false;
             match action {

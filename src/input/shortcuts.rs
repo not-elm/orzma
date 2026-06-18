@@ -57,7 +57,7 @@ pub(crate) fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut
         match key_to_keycode(&chord.key) {
             Some(keycode) => out.push(ResolvedShortcut {
                 keycode,
-                modifiers: chord.modifiers.clone(),
+                modifiers: chord.modifiers,
                 action,
             }),
             None => tracing::warn!(

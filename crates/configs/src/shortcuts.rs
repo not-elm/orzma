@@ -88,7 +88,9 @@ impl<'de> serde::Deserialize<'de> for Key {
 }
 
 /// Modifier flags accompanying a `Key`.
-#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Debug, Default)]
+#[derive(
+    Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy, Debug, Default,
+)]
 #[serde(default)]
 pub struct Modifiers {
     /// `Ctrl` is held.
