@@ -6,13 +6,13 @@
 //! pane is already in copy mode, and enters copy mode when the wheel binding
 //! triggers a copy-mode entry command.
 
+use super::pane_hit::tmux_pane_at_phys;
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::osc_webview::NonInteractive;
-use super::pane_hit::tmux_pane_at_phys;
 use crate::picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;

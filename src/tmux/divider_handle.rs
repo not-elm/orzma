@@ -8,11 +8,11 @@
 //! cursor all coincide, and sets a `ColResize` / `RowResize` cursor on the
 //! primary window while the pointer is over a divider.
 
+use super::mouse::divider_at;
+use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::theme;
-use super::mouse::divider_at;
-use super::render::{DividerPixelRect, PackedTmuxLayout};
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_tmux::{ActiveWindow, TmuxProjectionSet};
@@ -155,7 +155,7 @@ fn divider_hover_feedback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::render::{DividerPixelRect, PackedTmuxLayout};
+    use crate::tmux::render::{DividerPixelRect, PackedTmuxLayout};
     use bevy::math::Vec2;
     use std::collections::HashMap;
     use tmux_control_parser::{DividerAxis, PaneId};

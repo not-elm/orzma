@@ -1,7 +1,7 @@
 //! tmux window-bar interaction: click a window entry to `select-window`, and a
 //! pointer cursor while hovering an entry.
 
-use crate::ui::tmux_window_bar::WindowEntry;
+use crate::tmux::window_bar::WindowEntry;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_tmux::{TmuxConnection, select_window_command};

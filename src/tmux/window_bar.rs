@@ -2,12 +2,12 @@
 //! window list (`<index>:<name>`), with the active window highlighted and each
 //! entry clickable to `select-window`.
 
+use super::window_bar_input::{switch_window_on_click, window_entry_hover_cursor};
 use crate::font::{PowerlineFont, TerminalUiFont};
 use crate::input::InputPhase;
 use crate::theme;
 use crate::ui::UiRoot;
 use crate::ui::palette;
-use super::window_bar_input::{switch_window_on_click, window_entry_hover_cursor};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
 use ozma_tty_renderer::TerminalCellMetricsResource;

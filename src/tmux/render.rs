@@ -153,8 +153,8 @@ fn attach_tmux_pane_terminal(
 /// While a pane is in copy mode the live bytes are still advanced (tmux keeps
 /// streaming `%output` — copy mode does not pause it), but the emit to the
 /// rendered grid is gated: the capture-fed refresh path
-/// (`OzmuxTmuxCopyModePlugin`) paints the scrolled view instead. On exit, the
-/// `OzmuxTmuxCopyModePlugin` `On<Remove, CopyModeState>` observer forces a full
+/// (`CopyModePlugin`) paints the scrolled view instead. On exit, the
+/// `CopyModePlugin` `On<Remove, CopyModeState>` observer forces a full
 /// repaint of the live handle so the grid switches back from capture content
 /// (an idle pane emits no new `%output`, and a later delta would paint over the
 /// captured rows).
