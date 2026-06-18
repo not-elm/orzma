@@ -17,9 +17,9 @@ use ozmux_tmux::ConnectionState;
 const TMUX_DIALOG_Z: i32 = 300;
 
 /// Spawns and toggles the tmux error dialog overlay.
-pub(crate) struct TmuxDialogPlugin;
+pub(crate) struct DialogPlugin;
 
-impl Plugin for TmuxDialogPlugin {
+impl Plugin for DialogPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_tmux_dialog).add_systems(
             PostUpdate,
@@ -91,7 +91,7 @@ mod tests {
     fn dialog_shows_on_error_and_detached() {
         let mut app = App::new();
         app.init_resource::<ConnectionState>();
-        app.add_plugins(TmuxDialogPlugin);
+        app.add_plugins(DialogPlugin);
         app.update();
 
         fn backdrop_display(app: &mut App) -> Display {

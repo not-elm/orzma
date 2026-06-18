@@ -34,9 +34,9 @@ struct LastClientSize {
 }
 
 /// Wires the tmux pane render systems after the projection chain.
-pub struct OzmuxTmuxRenderPlugin;
+pub(crate) struct RenderPlugin;
 
-impl Plugin for OzmuxTmuxRenderPlugin {
+impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>();
         app.insert_resource(ClearColor(theme::PANE_GAP));

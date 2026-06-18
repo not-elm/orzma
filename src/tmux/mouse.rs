@@ -23,10 +23,10 @@ use crate::input::InputPhase;
 use crate::input::current_modifiers;
 use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::osc_webview::NonInteractive;
-use crate::tmux_copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
-use crate::tmux_pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys};
-use crate::tmux_picker::SessionPicker;
-use crate::tmux_render::{DividerPixelRect, PackedTmuxLayout};
+use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
+use super::pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys};
+use crate::picker::SessionPicker;
+use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
@@ -49,9 +49,9 @@ use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 
 /// Bevy plugin that registers the tmux mouse gesture arbiter.
-pub(crate) struct OzmuxTmuxMousePlugin;
+pub(crate) struct MousePlugin;
 
-impl Plugin for OzmuxTmuxMousePlugin {
+impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxMouseGesture>();
         app.add_systems(Update, arbiter.in_set(InputPhase::Dispatch));

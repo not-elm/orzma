@@ -7,7 +7,7 @@ use crate::input::InputPhase;
 use crate::theme;
 use crate::ui::UiRoot;
 use crate::ui::palette;
-use crate::ui::tmux_window_bar_input::{switch_window_on_click, window_entry_hover_cursor};
+use super::window_bar_input::{switch_window_on_click, window_entry_hover_cursor};
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
 use ozma_tty_renderer::TerminalCellMetricsResource;
@@ -55,9 +55,9 @@ struct SessionLabel;
 /// Wires the tmux window status bar: spawns the bar once after `UiRoot` exists
 /// and rebuilds its children whenever the window set, active window, or session
 /// name changes.
-pub struct OzmuxTmuxWindowBarPlugin;
+pub(crate) struct WindowBarPlugin;
 
-impl Plugin for OzmuxTmuxWindowBarPlugin {
+impl Plugin for WindowBarPlugin {
     fn build(&self, app: &mut App) {
         // NOTE: PostStartup, not Startup. `UiRoot` is spawned by `spawn_root_ui`
         // (a different plugin) via deferred Commands in Startup; with no ordering
@@ -456,7 +456,7 @@ mod tests {
         app.add_systems(Startup, |mut commands: Commands| {
             commands.spawn((Node::default(), UiRoot));
         });
-        app.add_plugins(OzmuxTmuxWindowBarPlugin);
+        app.add_plugins(WindowBarPlugin);
 
         app.update();
 
@@ -514,7 +514,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(OzmuxTmuxWindowBarPlugin);
+        app.add_plugins(WindowBarPlugin);
         app.insert_resource(metrics_fixture());
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.world_mut().spawn((Node::default(), UiRoot));
@@ -567,7 +567,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(OzmuxTmuxWindowBarPlugin);
+        app.add_plugins(WindowBarPlugin);
         app.insert_resource(metrics_fixture());
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.world_mut().spawn((Node::default(), UiRoot));

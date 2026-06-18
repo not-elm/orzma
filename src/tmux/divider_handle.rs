@@ -11,17 +11,17 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::theme;
-use crate::tmux_mouse::divider_at;
-use crate::tmux_render::{DividerPixelRect, PackedTmuxLayout};
+use super::mouse::divider_at;
+use super::render::{DividerPixelRect, PackedTmuxLayout};
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_tmux::{ActiveWindow, TmuxProjectionSet};
 use tmux_control_parser::DividerAxis;
 
 /// Registers the divider-handle visuals and the resize hover cursor.
-pub(crate) struct OzmuxTmuxDividerHandlePlugin;
+pub(crate) struct DividerHandlePlugin;
 
-impl Plugin for OzmuxTmuxDividerHandlePlugin {
+impl Plugin for DividerHandlePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
@@ -155,7 +155,7 @@ fn divider_hover_feedback(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tmux_render::{DividerPixelRect, PackedTmuxLayout};
+    use super::render::{DividerPixelRect, PackedTmuxLayout};
     use bevy::math::Vec2;
     use std::collections::HashMap;
     use tmux_control_parser::{DividerAxis, PaneId};
