@@ -836,8 +836,8 @@ mod tests {
         // those, no snapshot/capture forms and the view freezes (the original
         // "scroll movement doesn't work" bug). The integration test below masked
         // this by starting a selection first.
-        use crate::clipboard::Clipboard;
         use super::super::render::RenderPlugin;
+        use crate::clipboard::Clipboard;
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
         use ozma_tty_renderer::material::TerminalUiMaterial;
         use ozma_tty_renderer::prelude::TerminalGridPlugin;
@@ -1017,8 +1017,8 @@ mod tests {
     #[test]
     #[ignore = "requires a real tmux binary and a controlling PTY"]
     fn copy_mode_integration_drives_real_tmux() {
-        use crate::clipboard::Clipboard;
         use super::super::render::RenderPlugin;
+        use crate::clipboard::Clipboard;
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
         use ozma_tty_renderer::material::TerminalUiMaterial;
         use ozma_tty_renderer::prelude::TerminalGridPlugin;
