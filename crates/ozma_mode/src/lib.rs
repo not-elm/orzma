@@ -20,13 +20,6 @@ pub enum AppMode {
     Ozmux,
 }
 
-/// Internal resource storing the constructor-injected shell override.
-/// `None` means "fall back to `$SHELL` at spawn time".
-#[derive(Resource)]
-pub(crate) struct OzmaModeConfig {
-    pub(crate) shell: Option<String>,
-}
-
 /// Bevy plugin implementing Ozma mode: spawns a single PTY terminal on
 /// `OnEnter(AppMode::Ozma)`, resizes it to fill the window, and sends
 /// `AppExit` when the shell process exits.
@@ -71,6 +64,13 @@ impl Plugin for OzmaModePlugin {
             )
             .add_systems(OnExit(AppMode::Ozma), spawn::despawn_terminal);
     }
+}
+
+/// Internal resource storing the constructor-injected shell override.
+/// `None` means "fall back to `$SHELL` at spawn time".
+#[derive(Resource)]
+pub(crate) struct OzmaModeConfig {
+    pub(crate) shell: Option<String>,
 }
 
 #[cfg(test)]

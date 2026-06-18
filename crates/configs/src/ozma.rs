@@ -13,8 +13,7 @@ pub struct OzmaConfig {
 #[derive(Deserialize, Default, Clone, Debug)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct OzmaPatch {
-    /// Optional shell override.
-    pub shell: Option<String>,
+    shell: Option<String>,
 }
 
 impl OzmaPatch {

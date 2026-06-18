@@ -22,6 +22,7 @@ pub(crate) struct OzmaTerminal;
 pub(crate) fn spawn_terminal(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
+    mut exit: MessageWriter<AppExit>,
     config: Res<OzmaModeConfig>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
     window_q: Query<&Window, With<PrimaryWindow>>,
@@ -72,7 +73,10 @@ pub(crate) fn spawn_terminal(
                 },
             ));
         }
-        Err(e) => tracing::error!(?e, "failed to spawn ozma terminal"),
+        Err(e) => {
+            tracing::error!(?e, "failed to spawn ozma terminal");
+            exit.write(AppExit::Success);
+        }
     }
 }
 
@@ -86,14 +90,18 @@ pub(crate) fn despawn_terminal(
     }
 }
 
-fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
+pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
     let cols = ((w_px as f32 / cell_w).floor() as u16).max(1);
     let rows = ((h_px as f32 / cell_h).floor() as u16).max(1);
     (cols, rows)
 }
 
 fn resolve_shell(config: Option<&str>, env_shell: Option<&str>) -> String {
-    config.or(env_shell).unwrap_or("/bin/sh").to_string()
+    config
+        .filter(|s| !s.is_empty())
+        .or_else(|| env_shell.filter(|s| !s.is_empty()))
+        .unwrap_or("/bin/sh")
+        .to_string()
 }
 
 #[cfg(test)]

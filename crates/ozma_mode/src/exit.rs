@@ -1,20 +1,28 @@
 //! Child-process exit observer: sends `AppExit` when the shell quits.
 
+use crate::spawn::OzmaTerminal;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalChildExit;
 
 /// Observer fired when the PTY child process exits.
 ///
-/// Sends `AppExit::Success` regardless of the exit code — the user
-/// closed their shell, so the application should quit.
-pub(crate) fn on_child_exit(_ev: On<TerminalChildExit>, mut exit: MessageWriter<AppExit>) {
-    exit.write(AppExit::Success);
+/// Sends `AppExit::Success` only when the exiting terminal is the Ozma
+/// terminal — ignores exits from any other terminal entity in the world.
+pub(crate) fn on_child_exit(
+    ev: On<TerminalChildExit>,
+    mut exit: MessageWriter<AppExit>,
+    terminal_q: Query<(), With<OzmaTerminal>>,
+) {
+    if terminal_q.get(ev.event_target()).is_ok() {
+        exit.write(AppExit::Success);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use bevy::ecs::message::MessageReader;
+    use crate::spawn::OzmaTerminal;
     use ozma_tty_engine::TerminalChildExit;
 
     #[test]
@@ -34,7 +42,7 @@ mod tests {
         app.init_resource::<GotExit>();
         app.add_systems(Update, capture);
 
-        let entity = app.world_mut().spawn_empty().id();
+        let entity = app.world_mut().spawn(OzmaTerminal).id();
         app.world_mut().trigger(TerminalChildExit {
             entity,
             code: Some(0),

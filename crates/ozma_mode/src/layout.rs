@@ -9,7 +9,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 /// Tracks the last (cols, rows) sent to the terminal to guard against
 /// redundant resize calls.
 #[derive(Resource, Default)]
-pub(crate) struct OzmaLastSize(pub(crate) Option<(u16, u16)>);
+pub(crate) struct OzmaLastSize(Option<(u16, u16)>);
 
 /// Resets the cached terminal size on Ozma mode entry so `resize_to_window`
 /// fires on the first frame even when font metrics and window size are stable.
@@ -19,8 +19,8 @@ pub(crate) fn reset_last_size(mut last_size: ResMut<OzmaLastSize>) {
 
 /// Resizes the Ozma terminal to fill the primary window.
 ///
-/// Gated by `run_if` at registration — only runs on
-/// `TerminalCellMetricsResource` change or `WindowResized`.
+/// Gated by `run_if` at registration — only runs when `OzmaLastSize`,
+/// `TerminalCellMetricsResource`, or `WindowResized` changes.
 pub(crate) fn resize_to_window(
     mut commands: Commands,
     mut last_size: ResMut<OzmaLastSize>,
@@ -43,8 +43,12 @@ pub(crate) fn resize_to_window(
 
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let cols = ((window.resolution.physical_width() as f32 / cell_w).floor() as u16).max(1);
-    let rows = ((window.resolution.physical_height() as f32 / cell_h).floor() as u16).max(1);
+    let (cols, rows) = crate::spawn::cells_for(
+        window.resolution.physical_width(),
+        window.resolution.physical_height(),
+        cell_w,
+        cell_h,
+    );
 
     if last_size.0 == Some((cols, rows)) {
         return;
