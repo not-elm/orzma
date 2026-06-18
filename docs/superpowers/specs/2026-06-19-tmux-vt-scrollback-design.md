@@ -21,22 +21,10 @@ used by iTerm2 in tmux CC mode.
 | Wheel down (in copy mode) | `send-keys -X scroll-down` | `send-keys -X scroll-down` (unchanged) |
 | New `%output` arrives while scrolled back | n/a | Stay at current position (no auto-snap) |
 | Key press while scrolled back | n/a | Snap to live tail, then forward key |
-| Wheel scrolls to bottom | n/a | Remove `PaneScrolledBack` marker |
+
+No scrollback indicator is shown during VT scrollback (matching iTerm2 behavior).
 
 ## Architecture
-
-### New Component: `PaneScrolledBack`
-
-Location: `src/ui/copy_mode.rs` (alongside `CopyModeState`)
-
-```rust
-/// Marker: this pane's local VT viewport is scrolled above the live tail.
-#[derive(Component)]
-pub(crate) struct PaneScrolledBack;
-```
-
-Present on a pane entity when `display_offset > 0` in the local `TerminalHandle`.
-Removed when the viewport reaches the live tail (display_offset == 0).
 
 ### New `TerminalHandle` Methods
 
@@ -85,11 +73,6 @@ let Ok(mut handle) = handles.get_mut(entity) else { return; };
 let total_delta = if up { lines as i32 } else { -(lines as i32) };
 handle.scroll_vt_only(total_delta);
 handle.flush_emit(&mut commands, entity);
-if handle.is_at_bottom() {
-    commands.entity(entity).remove::<PaneScrolledBack>();
-} else {
-    commands.entity(entity).insert(PaneScrolledBack);
-}
 ```
 
 **Deleted (dead code after change):**
@@ -112,7 +95,6 @@ if let Some(entity) = active_entity
     && handle.snap_to_bottom_vt_only()
 {
     handle.flush_emit(&mut commands, entity);
-    commands.entity(entity).remove::<PaneScrolledBack>();
 }
 ```
 
@@ -129,42 +111,23 @@ if let Ok(mut handle) = handles.get_mut(active_entity)
     && handle.snap_to_bottom_vt_only()
 {
     handle.flush_emit(&mut commands, active_entity);
-    commands.entity(active_entity).remove::<PaneScrolledBack>();
 }
 ```
 
 Also add `mut handles: Query<&mut TerminalHandle>` to `read_ime_events`.
 
-### Scrollback Indicator Changes
-
-Location: `src/ui/copy_mode_indicator.rs`
-
-The `[offset/total]` chip is extended to show when `PaneScrolledBack` is present,
-in addition to the existing `CopyModeState` trigger.
-
-**`refresh_indicator` query:** `Or<(With<CopyModeState>, With<PaneScrolledBack>)>`
-
-**Run condition:**
-```rust
-.run_if(any_with_component::<CopyModeState>.or(any_with_component::<PaneScrolledBack>))
-```
-
-**Hide on exit:** Both `On<Remove, CopyModeState>` and `On<Remove, PaneScrolledBack>`
-observers check that the OTHER marker is also absent before hiding the chip.
-
 ## What Does NOT Change
 
 - `route_tmux_output` — no auto-scroll to bottom on new output (intentional: B option)
 - `CopyModePlugin` — capture-based rendering for tmux copy mode is unchanged
+- `CopyModeIndicatorPlugin` — unchanged; chip shows only during `CopyModeState`
 - Copy mode entry via keyboard shortcuts or drag-to-select — unchanged
-- `CopyModeState` semantics — unchanged; `PaneScrolledBack` is orthogonal
+- `CopyModeState` semantics — unchanged
 
 ## Files Changed
 
 | File | Change |
 |---|---|
 | `crates/ozma_tty_engine/src/handle.rs` | Add `scroll_vt_only`, `snap_to_bottom_vt_only` |
-| `src/ui/copy_mode.rs` | Add `PaneScrolledBack` component |
 | `src/tmux/input.rs` | Rework `forward_wheel_to_tmux`; update `forward_keys_to_tmux`; delete `wheel_key_name` |
 | `src/input/ime.rs` | Add snap-to-bottom before `send_bytes_command` in `read_ime_events` |
-| `src/ui/copy_mode_indicator.rs` | Extend to show for `PaneScrolledBack`; add hide observer |
