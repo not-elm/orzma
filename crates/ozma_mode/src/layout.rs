@@ -12,15 +12,53 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 pub(crate) struct OzmaLastSize(pub(crate) Option<(u16, u16)>);
 
 /// Resizes the Ozma terminal to fill the primary window.
+///
+/// Gated by `run_if` at registration — only runs on
+/// `TerminalCellMetricsResource` change or `WindowResized`.
 pub(crate) fn resize_to_window(
-    mut _commands: Commands,
-    mut _last_size: ResMut<OzmaLastSize>,
-    mut _terminal_q: Query<
+    mut commands: Commands,
+    mut last_size: ResMut<OzmaLastSize>,
+    mut terminal_q: Query<
         (Entity, &mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
         With<OzmaTerminal>,
     >,
-    _metrics: Option<Res<TerminalCellMetricsResource>>,
-    _window_q: Query<&Window, With<PrimaryWindow>>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
+    window_q: Query<&Window, With<PrimaryWindow>>,
 ) {
-    // TODO: implement in Task 5
+    let Some(metrics) = metrics else {
+        return;
+    };
+    let Ok(window) = window_q.single() else {
+        return;
+    };
+    let Ok((entity, mut handle, mut pty, mut coalescer)) = terminal_q.single_mut() else {
+        return;
+    };
+
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cols = ((window.resolution.physical_width() as f32 / cell_w).floor() as u16).max(1);
+    let rows = ((window.resolution.physical_height() as f32 / cell_h).floor() as u16).max(1);
+
+    if last_size.0 == Some((cols, rows)) {
+        return;
+    }
+
+    match handle.resize(&mut pty, &mut coalescer, cols, rows) {
+        Ok(()) => {
+            last_size.0 = Some((cols, rows));
+            handle.emit_pending(&mut commands, entity);
+        }
+        Err(e) => tracing::warn!(?e, cols, rows, "failed to resize ozma terminal"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn last_size_starts_none() {
+        assert!(OzmaLastSize::default().0.is_none());
+    }
 }
