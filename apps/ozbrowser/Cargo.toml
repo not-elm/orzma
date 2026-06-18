@@ -1,0 +1,22 @@
+[package]
+name = "ozbrowser"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "ozbrowser"
+path = "src/main.rs"
+
+[dependencies]
+ratatui-ozma = { path = "../../sdk/ratatui-ozma" }
+ratatui = "0.29"
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+crossbeam-channel = "0.5"
+
+[lints]
+workspace = true

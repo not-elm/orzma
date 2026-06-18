@@ -724,6 +724,12 @@ fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
         "x" => KeyCode::KeyX,
         "y" => KeyCode::KeyY,
         "z" => KeyCode::KeyZ,
+        "esc" => KeyCode::Escape,
+        " " => KeyCode::Space,
+        "down" => KeyCode::ArrowDown,
+        "up" => KeyCode::ArrowUp,
+        "pagedown" => KeyCode::PageDown,
+        "pageup" => KeyCode::PageUp,
         _ => return None,
     };
     let mut alt = false;
@@ -1807,6 +1813,29 @@ mod normalize_tests {
             })
             .is_none()
         );
+    }
+
+    #[test]
+    fn normalize_chord_maps_passthrough_keys() {
+        let cases: &[(&str, KeyCode)] = &[
+            ("esc", KeyCode::Escape),
+            (" ", KeyCode::Space),
+            ("down", KeyCode::ArrowDown),
+            ("up", KeyCode::ArrowUp),
+            ("pagedown", KeyCode::PageDown),
+            ("pageup", KeyCode::PageUp),
+        ];
+        for (key, expected) in cases {
+            let chord = normalize_chord(&HostKeyChord {
+                mods: vec![],
+                key: (*key).into(),
+            });
+            assert_eq!(
+                chord.map(|c| c.code),
+                Some(*expected),
+                "failed for key={key:?}"
+            );
+        }
     }
 }
 

@@ -162,9 +162,7 @@ impl WebviewHandle {
         Self { id, writer }
     }
 
-    pub(crate) fn new(id: String, writer: SharedWriter) -> Self {
-        Self::new_shared(Arc::new(Mutex::new(id)), writer)
-    }
+
 }
 
 #[cfg(test)]

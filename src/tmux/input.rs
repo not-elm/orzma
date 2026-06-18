@@ -9,7 +9,7 @@
 use super::pane_hit::tmux_pane_at_phys;
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
-use crate::inline_webview::{InlineWebview, focused_inline_of, inline_hit_at};
+use crate::inline_webview::{InlineWebview, PassthroughKeys, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::osc_webview::NonInteractive;
@@ -127,6 +127,7 @@ fn forward_keys_to_tmux(
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    passthrough_keys: Query<&PassthroughKeys>,
 ) {
     // NOTE: while the picker is open it owns the keyboard; forwarding would
     // leak picker-navigation keys to the active tmux pane. Drain (don't replay).
@@ -184,27 +185,6 @@ fn forward_keys_to_tmux(
         meta: mods.super_,
     };
 
-    // When an inline webview holds focus it owns the keyboard (bevy_cef routes
-    // keystrokes to it); forwarding to tmux too would double-send. The configured
-    // release-inline-focus chord releases focus back to the terminal. NOTE: under the tmux backend
-    // `FocusedWebview` is live (set by the inline-click router, the control-plane
-    // `SetFocus` op, and the focus-preservation arm in `sync_focused_webview`),
-    // so this drain is load-bearing whenever an inline webview is focused —
-    // removing it would double-send keystrokes to the page and the pane.
-    if focused_webview.0.is_some() {
-        for ev in events.read() {
-            if ev.state == ButtonState::Pressed
-                && resolved.is_release_inline_focus(ev.key_code, cfg_mods)
-            {
-                focused_webview.0 = None;
-                break;
-            }
-        }
-        *prefix_pending = false;
-        events.clear();
-        return;
-    }
-
     // The active pane (if any) is the forward/paste target. GUI chords below do
     // not need it (so quit/picker work before a pane is projected); tmux key
     // dispatch does.
@@ -215,6 +195,63 @@ fn forward_keys_to_tmux(
         }
         None => (None, None, None),
     };
+
+    // When an inline webview holds focus it owns the keyboard (bevy_cef routes
+    // keystrokes to it); forwarding to tmux too would double-send. The configured
+    // release-inline-focus chord releases focus back to the terminal. NOTE: under the tmux backend
+    // `FocusedWebview` is live (set by the inline-click router, the control-plane
+    // `SetFocus` op, and the focus-preservation arm in `sync_focused_webview`),
+    // so this drain is load-bearing whenever an inline webview is focused —
+    // removing it would double-send keystrokes to the page and the pane.
+    if let Some(focused_entity) = focused_webview.0 {
+        let pass_chords = passthrough_keys
+            .get(focused_entity)
+            .map(|pk| pk.0.as_slice())
+            .unwrap_or(&[]);
+
+        let mut pass_names: Vec<String> = Vec::new();
+        for ev in events.read() {
+            if ev.state != ButtonState::Pressed {
+                continue;
+            }
+            if resolved.is_release_inline_focus(ev.key_code, cfg_mods) {
+                focused_webview.0 = None;
+                break;
+            }
+            if !pass_chords.is_empty()
+                && pass_chords.iter().any(|c| {
+                    c.code == ev.key_code
+                        && c.ctrl == mods.ctrl
+                        && c.shift == mods.shift
+                        && c.alt == mods.alt
+                        && c.logo == mods.super_
+                })
+                && let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods) {
+                    pass_names.push(name);
+                }
+        }
+
+        if !pass_names.is_empty() {
+            let actions = plan_forward(&mut prefix_pending, &bindings, pass_names);
+            if let (Some(target), Some(client)) = (target.as_deref(), connection.client()) {
+                let handle = client.handle();
+                for action in actions {
+                    let cmd = match action {
+                        Forwarded::Run(cmd) => cmd,
+                        Forwarded::Keys(names) => send_pane_keys_command(target, &names),
+                    };
+                    if let Err(e) = handle.send(&cmd) {
+                        tracing::warn!(?e, "passthrough forward failed");
+                        break;
+                    }
+                }
+            }
+        }
+
+        *prefix_pending = false;
+        events.clear();
+        return;
+    }
 
     // Collect forwardable tmux key names in event order. Super-modified keys are
     // matched against the configured ozmux shortcuts or swallowed; none reach tmux.

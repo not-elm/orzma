@@ -75,4 +75,25 @@
   };
 
   Object.defineProperty(window, 'ozma', { value: Object.freeze(api), configurable: false, writable: false });
+
+  // NOTE: length > 1 means a page-specific handler is also registered (e.g. ozmd's);
+  // in that case this default bows out to avoid double-scrolling. For remote pages with
+  // no custom handler, this is the sole handler (length === 1) and it performs the scroll.
+  api.on('scroll', function (payload) {
+    if ((listeners.get('scroll') || []).length > 1) { return; }
+    var action = payload && payload.action;
+    var line = 60;
+    var page = window.innerHeight;
+    var max = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+    switch (action) {
+      case 'down':     window.scrollBy({ top: line });     break;
+      case 'up':       window.scrollBy({ top: -line });    break;
+      case 'halfDown': window.scrollBy({ top: page / 2 }); break;
+      case 'halfUp':   window.scrollBy({ top: -page / 2 }); break;
+      case 'pageDown': window.scrollBy({ top: page });     break;
+      case 'pageUp':   window.scrollBy({ top: -page });    break;
+      case 'top':      window.scrollTo({ top: 0 });        break;
+      case 'bottom':   window.scrollTo({ top: max });      break;
+    }
+  });
 })();
