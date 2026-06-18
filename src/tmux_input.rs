@@ -11,7 +11,6 @@ use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
-use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use crate::osc_webview::NonInteractive;
 use crate::tmux_pane_hit::tmux_pane_at_phys;
 use crate::tmux_picker::SessionPicker;
@@ -30,6 +29,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
+use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use ozmux_tmux::{
     ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
     KeyMods, PromptKind, TmuxConnection, TmuxPane, TmuxSession, TmuxWindow, bevy_key_to_tmux_name,
@@ -1036,5 +1036,4 @@ mod tests {
         assert!(!is_copy_mode_entry("send-keys -M"));
         assert!(!is_copy_mode_entry("send-keys -X scroll-up"));
     }
-
 }
