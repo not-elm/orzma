@@ -30,8 +30,9 @@ pub use enumerate::{
     CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, copy_mode_capture_command,
     copy_state_query_command, parse_copy_state, parse_window_rows, prompt_command,
     refresh_client_command, rename_session_command, rename_window_command, resize_pane_x_command,
-    resize_pane_y_command, select_pane_command, select_window_command, set_environment_command,
-    set_environment_in_session_command, show_buffer_command, switch_client_command,
+    resize_pane_y_command, resize_window_command, select_pane_command, select_window_command,
+    set_environment_command, set_environment_in_session_command, show_buffer_command,
+    switch_client_command, version_command, window_refresh_client_command,
 };
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_pane_keys_command};
 pub use keybindings::{

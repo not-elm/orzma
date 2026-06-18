@@ -16,7 +16,8 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
-    TmuxWindowLayout, refresh_client_command,
+    TmuxWindowLayout, WindowId, refresh_client_command, resize_window_command,
+    window_refresh_client_command,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -25,8 +26,11 @@ use tmux_control_parser::{Cell, DividerAxis, PaneId, SplitDir};
 
 #[derive(Resource, Default)]
 struct LastClientSize {
+    window: Option<WindowId>,
     cols: u16,
     rows: u16,
+    last_reported: Option<(u16, u16)>,
+    last_per_window: Option<bool>,
 }
 
 /// Wires the tmux pane render systems after the projection chain.
@@ -347,14 +351,7 @@ fn place(
                 let lit_origin = Vec2::new(d.xoff as f32 * cell_w, d.yoff as f32 * cell_h);
                 let lit_avail = Vec2::new(d.width as f32 * cell_w, d.height as f32 * cell_h);
                 place(
-                    panes,
-                    dividers,
-                    child,
-                    lit_origin,
-                    lit_avail,
-                    cell_w,
-                    cell_h,
-                    gap,
+                    panes, dividers, child, lit_origin, lit_avail, cell_w, cell_h, gap,
                 );
             }
             Vec2::new(dims.width as f32 * cell_w, dims.height as f32 * cell_h)
@@ -481,19 +478,57 @@ fn rows_for_panes(total_rows: u16) -> u16 {
     total_rows.saturating_sub(1).max(1)
 }
 
-/// Sends `refresh-client -C <cols>,<rows>` to tmux so it lays out panes for
-/// the current window size. One row is reserved for the ozmux window status
-/// bar via [`rows_for_panes`]. Results are deduped via [`LastClientSize`].
+/// Returns the size-declaration command for `win` based on the tmux per-window
+/// `refresh-client` capability. `None` (capability not yet known) falls back to
+/// the global `refresh-client -C W,H`.
+fn pin_command(per_window: Option<bool>, win: WindowId, cols: u16, rows: u16) -> String {
+    match per_window {
+        Some(true) => window_refresh_client_command(win, cols, rows),
+        Some(false) => resize_window_command(win, cols, rows),
+        None => refresh_client_command(cols, rows),
+    }
+}
+
+/// Decides whether to (re)send the active window's size pin.
+///
+/// Sends when the active window or desired size changed (normal dedupe), or
+/// when tmux's reported size drifted to a NEW value away from desired (foreign
+/// resize → recovery). Does NOT send when the reported size is stuck at the same
+/// drifted value after a pin — tmux is refusing to grow the window (a smaller
+/// foreign client holds `w->latest`), so resending would spin.
+fn reconcile_decision(
+    desired: (u16, u16),
+    active: WindowId,
+    reported: Option<(u16, u16)>,
+    prev_reported: Option<(u16, u16)>,
+    last_window: Option<WindowId>,
+    last_desired: (u16, u16),
+) -> bool {
+    let window_or_size_changed = last_window != Some(active) || last_desired != desired;
+    let drift = reported.is_some_and(|r| r != desired);
+    let reported_changed = reported != prev_reported;
+    window_or_size_changed || (drift && reported_changed)
+}
+
+/// Pins the active tmux window to ozmux's cell size via per-window
+/// `refresh-client -C @win:WxH` (tmux ≥ 3.4) so a smaller foreign client cannot
+/// collapse it. One row is reserved for the ozmux status bar. Uses
+/// [`reconcile_decision`] gated on [`LastClientSize`] to detect foreign-resize
+/// drift and recover without spinning when tmux refuses to grow the window.
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
     connection: NonSend<TmuxConnection>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
+    active: Query<(&TmuxWindow, Option<&TmuxWindowLayout>), With<ActiveWindow>>,
 ) {
     let Some(client) = connection.client() else {
         return;
     };
     let Ok(window) = window.single() else {
+        return;
+    };
+    let Ok((tmux_window, layout)) = active.single() else {
         return;
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
@@ -505,18 +540,52 @@ fn sync_client_size(
         cell_h,
     );
     let rows = rows_for_panes(rows);
-    if (cols, rows) == (last.cols, last.rows) {
+    let desired = (cols, rows);
+    let reported = layout.map(|l| {
+        let d = l.0.root.dims();
+        grid_dims(d.width, d.height)
+    });
+    let prev_reported = last.last_reported;
+    // NOTE: a capability change (None -> Some after the version reply) must force
+    // a re-pin even when window/size/reported are unchanged — otherwise the first
+    // pin sent with the global fallback (capability still unknown) is never
+    // upgraded to the per-window form, defeating multi-client isolation.
+    let per_window = connection.supports_per_window_refresh();
+    let capability_changed = last.last_per_window != per_window;
+    if !capability_changed
+        && !reconcile_decision(
+            desired,
+            tmux_window.id,
+            reported,
+            prev_reported,
+            last.window,
+            (last.cols, last.rows),
+        )
+    {
+        if last.last_reported != reported {
+            last.last_reported = reported;
+        }
         return;
     }
+    let cmd = pin_command(per_window, tmux_window.id, cols, rows);
     // NOTE: only record the size as sent AFTER a successful send — otherwise a
     // transient send failure would poison the dedupe and permanently suppress
     // re-sending this size, leaving tmux stuck at the stale client dimensions.
-    match client.handle().send(&refresh_client_command(cols, rows)) {
+    match client.handle().send(&cmd) {
         Ok(_) => {
+            last.window = Some(tmux_window.id);
             last.cols = cols;
             last.rows = rows;
+            last.last_per_window = per_window;
+            // NOTE: advance the observation only after a successful pin; a failed
+            // send must leave last_reported stale so the next tick re-detects the
+            // drift and retries — otherwise a failed recovery is permanently
+            // suppressed (reported_changed would be false next tick).
+            if last.last_reported != reported {
+                last.last_reported = reported;
+            }
         }
-        Err(e) => tracing::warn!(?e, cols, rows, "refresh-client send failed"),
+        Err(e) => tracing::warn!(?e, cols, rows, "window refresh-client send failed"),
     }
 }
 
@@ -536,6 +605,83 @@ mod tests {
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
     use tmux_control_parser::{Cell, CellDims, SplitDir};
+
+    #[test]
+    fn pin_command_selects_form_by_capability() {
+        use ozmux_tmux::WindowId;
+        assert_eq!(
+            pin_command(Some(true), WindowId(3), 80, 24),
+            "refresh-client -C @3:80x24"
+        );
+        assert_eq!(
+            pin_command(Some(false), WindowId(3), 80, 24),
+            "resize-window -x 80 -y 24 -t @3"
+        );
+        assert_eq!(
+            pin_command(None, WindowId(3), 80, 24),
+            "refresh-client -C 80,24"
+        );
+    }
+
+    #[test]
+    fn reconcile_sends_on_first_call_and_on_changes() {
+        use ozmux_tmux::WindowId;
+        let w = WindowId(1);
+        // First call: nothing pinned yet → send.
+        assert!(reconcile_decision((80, 24), w, None, None, None, (0, 0)));
+        // Active window changed → send.
+        assert!(reconcile_decision(
+            (80, 24),
+            WindowId(2),
+            None,
+            None,
+            Some(w),
+            (80, 24)
+        ));
+        // Desired size changed → send.
+        assert!(reconcile_decision(
+            (100, 30),
+            w,
+            None,
+            None,
+            Some(w),
+            (80, 24)
+        ));
+        // Steady state, reported matches desired → skip.
+        assert!(!reconcile_decision(
+            (80, 24),
+            w,
+            Some((80, 24)),
+            Some((80, 24)),
+            Some(w),
+            (80, 24)
+        ));
+    }
+
+    #[test]
+    fn reconcile_recovers_on_foreign_drift_but_does_not_spin() {
+        use ozmux_tmux::WindowId;
+        let w = WindowId(1);
+        // Foreign just shrank the window: reported drifted to a NEW value → send (recovery).
+        assert!(reconcile_decision(
+            (80, 24),
+            w,
+            Some((40, 12)),
+            Some((80, 24)),
+            Some(w),
+            (80, 24)
+        ));
+        // tmux refuses to grow (smaller foreign holds w->latest): reported STUCK at the
+        // same drifted value after our pin → skip (no resend spam, residual limitation).
+        assert!(!reconcile_decision(
+            (80, 24),
+            w,
+            Some((40, 12)),
+            Some((40, 12)),
+            Some(w),
+            (80, 24)
+        ));
+    }
 
     #[test]
     fn rows_for_panes_reserves_one_row_for_the_bar() {
@@ -653,11 +799,7 @@ mod tests {
                 data: b"hi".to_vec(),
             });
         app.update();
-        let baseline: String = app
-            .world()
-            .get::<TerminalGrid>(pane_entity)
-            .unwrap()
-            .cells[0]
+        let baseline: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -675,11 +817,7 @@ mod tests {
                 data: b"\r\nXY".to_vec(),
             });
         app.update();
-        let gated: String = app
-            .world()
-            .get::<TerminalGrid>(pane_entity)
-            .unwrap()
-            .cells[0]
+        let gated: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
@@ -701,11 +839,7 @@ mod tests {
                 data: Vec::new(),
             });
         app.update();
-        let resumed: String = app
-            .world()
-            .get::<TerminalGrid>(pane_entity)
-            .unwrap()
-            .cells[1]
+        let resumed: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[1]
             .iter()
             .map(|c| c.text.as_str())
             .collect();

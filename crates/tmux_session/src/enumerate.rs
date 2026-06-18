@@ -25,14 +25,16 @@ pub struct WindowRow {
     pub name: String,
     /// tmux per-window flags (`#{window_raw_flags}`).
     pub flags: WindowFlags,
-    /// Parsed structural layout (panes + geometry).
+    /// Parsed structural layout (panes + geometry). Sourced from
+    /// `window_visible_layout` when non-empty; falls back to `window_layout`.
     pub layout: WindowLayout,
 }
 
 /// Parses the lines of a `list-windows -F LIST_WINDOWS_FORMAT` reply.
 ///
 /// Each line is `active \t id \t index \t layout \t visible_layout \t raw_flags \t name`.
-/// The `visible_layout` field is currently ignored. Blank lines are skipped.
+/// When `visible_layout` is non-empty it is used for `WindowRow.layout`; otherwise
+/// `layout` is the fallback. Blank lines are skipped.
 /// Returns a descriptive `Err(String)` on a malformed row.
 pub fn parse_window_rows(lines: &[String]) -> Result<Vec<WindowRow>, String> {
     let mut rows = Vec::new();
@@ -59,11 +61,16 @@ fn parse_row(line: &str) -> Result<WindowRow, String> {
     let layout_field = fields
         .next()
         .ok_or_else(|| format!("missing layout in row: {line}"))?;
-    let layout = WindowLayout::parse(layout_field.as_bytes())
-        .map_err(|e| format!("bad layout in row {line}: {e}"))?;
-    let _visible = fields
+    let visible_field = fields
         .next()
         .ok_or_else(|| format!("missing visible layout in row: {line}"))?;
+    let chosen = if visible_field.trim().is_empty() {
+        layout_field
+    } else {
+        visible_field
+    };
+    let layout = WindowLayout::parse(chosen.as_bytes())
+        .map_err(|e| format!("bad layout in row {line}: {e}"))?;
     let flags = WindowFlags::parse(
         fields
             .next()
@@ -93,6 +100,54 @@ fn parse_window_id(field: &str) -> Option<WindowId> {
 /// variant, which Phase 2b does not use.
 pub fn refresh_client_command(cols: u16, rows: u16) -> String {
     format!("refresh-client -C {cols},{rows}")
+}
+
+/// Builds `refresh-client -C @<win>:<cols>x<rows>` — declares this control
+/// client's size for one specific window (tmux ≥ 3.4). Unlike the global
+/// `refresh-client -C W,H`, this sizes a single window without affecting the
+/// client's other windows.
+pub fn window_refresh_client_command(win: WindowId, cols: u16, rows: u16) -> String {
+    format!("refresh-client -C @{}:{cols}x{rows}", win.0)
+}
+
+/// Builds `resize-window -x <cols> -y <rows> -t @<win>` — the tmux < 3.4
+/// fallback for per-window sizing.
+///
+/// # Invariants
+///
+/// tmux sets the session's `window-size` option to `manual` as a side effect
+/// of `resize-window`; only used when the per-window `refresh-client -C` form
+/// is unavailable.
+pub fn resize_window_command(win: WindowId, cols: u16, rows: u16) -> String {
+    format!("resize-window -x {cols} -y {rows} -t @{}", win.0)
+}
+
+/// Builds `display-message -p '#{version}'` — prints the tmux server version
+/// (e.g. `3.6a`) as a one-line command reply.
+pub fn version_command() -> String {
+    "display-message -p '#{version}'".to_string()
+}
+
+/// Returns whether `version` supports per-window `refresh-client -C @win:WxH`
+/// (tmux ≥ 3.4). Parses leniently: the leading `major.minor`, tolerating a
+/// `next-` prefix and a trailing letter suffix like `3.6a`.
+pub(crate) fn version_supports_per_window_refresh(version: &str) -> bool {
+    parse_major_minor(version).is_some_and(|mm| mm >= (3, 4))
+}
+
+fn parse_major_minor(version: &str) -> Option<(u32, u32)> {
+    let trimmed = version
+        .trim()
+        .trim_start_matches(|c: char| !c.is_ascii_digit());
+    let mut parts = trimmed.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor_digits: String = parts
+        .next()?
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let minor: u32 = minor_digits.parse().ok()?;
+    Some((major, minor))
 }
 
 /// Builds `display-message -p '#{client_name}'` — prints the control
@@ -356,6 +411,13 @@ pub fn show_buffer_command() -> String {
     "show-buffer".to_string()
 }
 
+/// Builds `show-options -wqv -t @<win> aggressive-resize` — reads the per-window
+/// `aggressive-resize` option value (`on`/`off`/empty). `-q` suppresses errors,
+/// `-v` prints only the value.
+pub(crate) fn aggressive_resize_command(win: WindowId) -> String {
+    format!("show-options -wqv -t @{} aggressive-resize", win.0)
+}
+
 /// Tracks the in-flight `list-windows` enumeration command so its reply can
 /// be correlated by [`CommandId`] and seeded into the projection.
 #[derive(Resource, Default)]
@@ -364,6 +426,8 @@ pub(crate) struct EnumerationState {
     pub(crate) pending: Option<CommandId>,
     /// The id of the in-flight `display-message` client-name query, if any.
     pub(crate) client_name_pending: Option<CommandId>,
+    /// The id of the in-flight `display-message` version query, if any.
+    pub(crate) version_pending: Option<CommandId>,
     /// The id of the in-flight `display-message` active-pane query, if any.
     pub(crate) active_pane_pending: Option<CommandId>,
     /// The id of the in-flight `list-keys -T root` command, if any.
@@ -378,6 +442,10 @@ pub(crate) struct EnumerationState {
     pub(crate) keys_copy_mode_vi_pending: Option<CommandId>,
     /// In-flight `#{mode-keys}` query, if any.
     pub(crate) mode_keys_pending: Option<CommandId>,
+    /// The id of the in-flight `aggressive-resize` option query, if any.
+    pub(crate) aggressive_resize_pending: Option<CommandId>,
+    /// Whether the one-time aggressive-resize option check has completed.
+    pub(crate) aggressive_resize_checked: bool,
     /// In-flight `capture-pane` commands → the pane each reply seeds.
     pub(crate) capture_pending: HashMap<CommandId, PaneId>,
     /// In-flight cursor-position `display-message` queries → the pane.
@@ -660,6 +728,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_row_prefers_visible_layout_when_present() {
+        // field order: active id index window_layout window_visible_layout flags name
+        // window_layout = 80x24, visible_layout = 40x12; must adopt visible dims.
+        // The parser is lenient about checksum mismatches — 0000 is accepted for both.
+        let row = "1\t@1\t0\t0000,80x24,0,0,1\t0000,40x12,0,0,1\t*\tbash";
+        let parsed = parse_window_rows(&[row.to_string()]).expect("row parses");
+        let dims = parsed[0].layout.root.dims();
+        assert_eq!(
+            (dims.width, dims.height),
+            (40, 12),
+            "must use visible_layout"
+        );
+    }
+
+    #[test]
+    fn parse_row_falls_back_to_window_layout_when_visible_empty() {
+        // visible_layout field is empty — must fall back to window_layout (80x24).
+        let row = "1\t@1\t0\t0000,80x24,0,0,1\t\t*\tbash";
+        let parsed = parse_window_rows(&[row.to_string()]).expect("row parses");
+        let dims = parsed[0].layout.root.dims();
+        assert_eq!(
+            (dims.width, dims.height),
+            (80, 24),
+            "fallback to window_layout"
+        );
+    }
+
+    #[test]
     fn rename_window_command_targets_at_id_and_quotes_name() {
         assert_eq!(
             rename_window_command(WindowId(2), "editor"),
@@ -694,5 +790,44 @@ mod tests {
             rename_session_command(SessionId(3), ""),
             "rename-session -t $3 -- ''"
         );
+    }
+
+    #[test]
+    fn window_refresh_client_command_uses_per_window_form() {
+        assert_eq!(
+            window_refresh_client_command(WindowId(2), 80, 24),
+            "refresh-client -C @2:80x24"
+        );
+    }
+
+    #[test]
+    fn resize_window_command_targets_window() {
+        assert_eq!(
+            resize_window_command(WindowId(2), 80, 24),
+            "resize-window -x 80 -y 24 -t @2"
+        );
+    }
+
+    #[test]
+    fn aggressive_resize_command_targets_window() {
+        assert_eq!(
+            aggressive_resize_command(WindowId(1)),
+            "show-options -wqv -t @1 aggressive-resize"
+        );
+    }
+
+    #[test]
+    fn version_supports_per_window_refresh_is_lenient_about_suffixes() {
+        assert!(version_supports_per_window_refresh("3.6a"));
+        assert!(version_supports_per_window_refresh("3.4"));
+        assert!(version_supports_per_window_refresh("next-3.7"));
+        assert!(!version_supports_per_window_refresh("3.3"));
+        assert!(!version_supports_per_window_refresh("2.9"));
+        assert!(!version_supports_per_window_refresh("garbage"));
+    }
+
+    #[test]
+    fn version_command_has_expected_format() {
+        assert_eq!(version_command(), "display-message -p '#{version}'");
     }
 }

@@ -62,15 +62,17 @@ pub(crate) fn advance_state(
 /// `TmuxWindowAdded` + `TmuxLayoutChanged` (+ `TmuxActiveWindowChanged` for the
 /// active row), followed by one `TmuxWindowsRetained` prune. Untracked events
 /// (e.g. `%output`) are ignored here (routed separately as `PaneOutput`).
+/// `own_client` gates `%client-session-changed` — see [`detect_session_switch`].
 pub(crate) fn trigger_events(
     commands: &mut Commands,
     pending: &mut Option<CommandId>,
     events: &[TransportEvent],
+    own_client: Option<&str>,
 ) {
     for event in events {
         match event {
             TransportEvent::Protocol(ClientEvent::Notification(notification)) => {
-                trigger_notification(commands, notification);
+                trigger_notification(commands, own_client, notification);
             }
             TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. })
                 if *pending == Some(*id) =>
@@ -87,16 +89,13 @@ pub(crate) fn trigger_events(
     }
 }
 
-/// Returns the client name from a `CommandComplete` whose id matches
-/// `pending` (first non-empty trimmed output line), and clears `pending`.
-///
-/// Iterates `events` and looks for `CommandComplete { ok: true, .. }` whose
-/// id equals `*pending`. On a match the first non-empty trimmed output line is
-/// returned and `*pending` is set to `None`. Returns `None` when no matching
-/// event exists in the batch or the output is blank.
-pub(crate) fn take_client_name(
+/// Returns the first non-empty trimmed output line of the `CommandComplete`
+/// whose id matches `pending`, clearing `pending`. `what` labels the warning
+/// logged when the command failed.
+fn take_reply_line(
     pending: &mut Option<CommandId>,
     events: &[TransportEvent],
+    what: &str,
 ) -> Option<String> {
     for event in events {
         if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
@@ -109,13 +108,44 @@ pub(crate) fn take_client_name(
                     .map(|line| line.trim())
                     .find(|line| !line.is_empty())
                     .map(str::to_owned);
-            } else {
-                tracing::warn!("client-name query command failed");
-                return None;
             }
+            tracing::warn!("{what} query command failed");
+            return None;
         }
     }
     None
+}
+
+/// Returns the client name from a `CommandComplete` whose id matches
+/// `pending` (first non-empty trimmed output line), and clears `pending`.
+///
+/// Iterates `events` and looks for `CommandComplete { ok: true, .. }` whose
+/// id equals `*pending`. On a match the first non-empty trimmed output line is
+/// returned and `*pending` is set to `None`. Returns `None` when no matching
+/// event exists in the batch or the output is blank.
+pub(crate) fn take_client_name(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<String> {
+    take_reply_line(pending, events, "client-name")
+}
+
+/// Returns the tmux server version from a `CommandComplete` whose id matches
+/// `pending` (first non-empty trimmed output line), and clears `pending`.
+pub(crate) fn take_version(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<String> {
+    take_reply_line(pending, events, "version")
+}
+
+/// Returns the `aggressive-resize` option value from a `CommandComplete` whose
+/// id matches `pending` (first non-empty trimmed output line), and clears `pending`.
+pub(crate) fn take_aggressive_resize(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<String> {
+    take_reply_line(pending, events, "aggressive-resize")
 }
 
 /// Drains matching `capture-pane` replies from `events`.
@@ -325,6 +355,12 @@ pub(crate) fn take_mode_keys(
 /// first attach (`current == None`) or when the id is unchanged, so the initial
 /// enumeration is not duplicated and only an actual switch triggers a rebuild.
 ///
+/// `%session-changed` and `%session-renamed` are always treated as a switch.
+/// `%client-session-changed` is only treated as a switch when its `client`
+/// field equals `own_client`; if `own_client` is `None` (not yet known),
+/// `%client-session-changed` is ignored to avoid spurious teardown from
+/// foreign-client events arriving before the own client name is resolved.
+///
 /// The switch decision lives here (driven from the per-frame drain) rather than
 /// in the `on_session_changed` observer, because the teardown + re-enumeration
 /// it triggers need the event batch and the live `NonSend` client, which an
@@ -332,14 +368,26 @@ pub(crate) fn take_mode_keys(
 pub(crate) fn detect_session_switch(
     events: &[TransportEvent],
     current: Option<SessionId>,
+    own_client: Option<&str>,
 ) -> Option<SessionId> {
     let current = current?;
     for event in events {
         let next = match event {
+            TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::SessionChanged {
+                session,
+                ..
+            })) => *session,
             TransportEvent::Protocol(ClientEvent::Notification(
-                ControlEvent::SessionChanged { session, .. }
-                | ControlEvent::ClientSessionChanged { session, .. },
-            )) => *session,
+                ControlEvent::ClientSessionChanged {
+                    client, session, ..
+                },
+            )) => {
+                if own_client == Some(client.as_str()) {
+                    *session
+                } else {
+                    continue;
+                }
+            }
             _ => continue,
         };
         if next != current {
@@ -399,11 +447,20 @@ fn parse_active_pane(line: &str) -> Option<(WindowId, PaneId)> {
     Some((WindowId(window), PaneId(pane)))
 }
 
-fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
+fn trigger_notification(commands: &mut Commands, own_client: Option<&str>, event: &ControlEvent) {
     match event {
         ControlEvent::SessionChanged { session, name }
-        | ControlEvent::ClientSessionChanged { session, name, .. }
         | ControlEvent::SessionRenamed { session, name } => {
+            commands.trigger(TmuxSessionChanged {
+                session: *session,
+                name: name.clone(),
+            });
+        }
+        ControlEvent::ClientSessionChanged {
+            client,
+            session,
+            name,
+        } if own_client == Some(client.as_str()) => {
             commands.trigger(TmuxSessionChanged {
                 session: *session,
                 name: name.clone(),
@@ -425,10 +482,14 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
                 name: name.clone(),
             });
         }
-        ControlEvent::LayoutChange { window, layout, .. } => {
+        ControlEvent::LayoutChange {
+            window,
+            visible_layout,
+            ..
+        } => {
             commands.trigger(TmuxLayoutChanged {
                 window: *window,
-                layout: layout.clone(),
+                layout: visible_layout.clone(),
             });
         }
         ControlEvent::WindowPaneChanged { window, pane } => {
@@ -506,7 +567,7 @@ mod tests {
     use bevy::prelude::*;
     use crossbeam_channel::unbounded;
     use tmux_control::{CommandId, ControlEvent};
-    use tmux_control_parser::WindowId;
+    use tmux_control_parser::{SessionId, WindowId};
 
     fn window_add(id: u32) -> TransportEvent {
         TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::WindowAdd {
@@ -675,6 +736,23 @@ mod tests {
     }
 
     #[test]
+    fn take_version_extracts_first_line() {
+        let id = CommandId(7);
+        let mut pending = Some(id);
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id,
+            number: 0,
+            ok: true,
+            output: vec!["3.6a".to_string()],
+        })];
+        assert_eq!(
+            take_version(&mut pending, &events),
+            Some("3.6a".to_string())
+        );
+        assert_eq!(pending, None);
+    }
+
+    #[test]
     fn take_client_name_trims_whitespace_from_output() {
         let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
             id: CommandId(3),
@@ -702,7 +780,7 @@ mod tests {
         struct Batch(Vec<TransportEvent>);
 
         fn run(mut commands: Commands, mut pending: ResMut<EnumerationState>, batch: Res<Batch>) {
-            trigger_events(&mut commands, &mut pending.pending, &batch.0);
+            trigger_events(&mut commands, &mut pending.pending, &batch.0, Some("main"));
         }
 
         let mut app = App::new();
@@ -725,6 +803,59 @@ mod tests {
         assert_eq!(*seen.0.lock().unwrap(), vec![(9, "beta".to_string())]);
     }
 
+    fn client_session_changed(client: &str, session: SessionId) -> TransportEvent {
+        TransportEvent::Protocol(ClientEvent::Notification(
+            ControlEvent::ClientSessionChanged {
+                client: client.to_string(),
+                session,
+                name: "s".to_string(),
+            },
+        ))
+    }
+
+    fn session_changed(session: SessionId) -> TransportEvent {
+        TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::SessionChanged {
+            session,
+            name: "s".to_string(),
+        }))
+    }
+
+    #[test]
+    fn foreign_client_session_changed_is_ignored() {
+        let events = vec![client_session_changed("other-client", SessionId(9))];
+        assert_eq!(
+            detect_session_switch(&events, Some(SessionId(1)), Some("ozmux-0")),
+            None
+        );
+    }
+
+    #[test]
+    fn own_client_session_changed_is_a_switch() {
+        let events = vec![client_session_changed("ozmux-0", SessionId(9))];
+        assert_eq!(
+            detect_session_switch(&events, Some(SessionId(1)), Some("ozmux-0")),
+            Some(SessionId(9))
+        );
+    }
+
+    #[test]
+    fn client_session_changed_ignored_when_own_name_unknown() {
+        let events = vec![client_session_changed("ozmux-0", SessionId(9))];
+        assert_eq!(
+            detect_session_switch(&events, Some(SessionId(1)), None),
+            None
+        );
+    }
+
+    #[test]
+    fn plain_session_changed_is_a_switch_regardless_of_name() {
+        let events = vec![session_changed(SessionId(9))];
+        assert_eq!(
+            detect_session_switch(&events, Some(SessionId(1)), None),
+            Some(SessionId(9))
+        );
+    }
+
     #[test]
     fn detect_session_switch_reports_new_id_only_on_change() {
         use tmux_control_parser::SessionId;
@@ -734,13 +865,16 @@ mod tests {
                 name: "b".to_string(),
             },
         ))];
-        assert_eq!(detect_session_switch(&changed, None), None);
-        assert_eq!(detect_session_switch(&changed, Some(SessionId(2))), None);
+        assert_eq!(detect_session_switch(&changed, None, None), None);
         assert_eq!(
-            detect_session_switch(&changed, Some(SessionId(1))),
+            detect_session_switch(&changed, Some(SessionId(2)), None),
+            None
+        );
+        assert_eq!(
+            detect_session_switch(&changed, Some(SessionId(1)), None),
             Some(SessionId(2))
         );
-        assert_eq!(detect_session_switch(&[], Some(SessionId(1))), None);
+        assert_eq!(detect_session_switch(&[], Some(SessionId(1)), None), None);
 
         let client_changed = vec![TransportEvent::Protocol(ClientEvent::Notification(
             ControlEvent::ClientSessionChanged {
@@ -750,11 +884,11 @@ mod tests {
             },
         ))];
         assert_eq!(
-            detect_session_switch(&client_changed, Some(SessionId(1))),
+            detect_session_switch(&client_changed, Some(SessionId(1)), Some("main")),
             Some(SessionId(3))
         );
         assert_eq!(
-            detect_session_switch(&client_changed, Some(SessionId(3))),
+            detect_session_switch(&client_changed, Some(SessionId(3)), Some("main")),
             None
         );
     }
@@ -822,6 +956,7 @@ mod tests {
         app.add_systems(Update, |mut commands: Commands| {
             trigger_notification(
                 &mut commands,
+                None,
                 &ControlEvent::UnlinkedWindowClose {
                     window: WindowId(3),
                 },
@@ -848,7 +983,7 @@ mod tests {
             mut enumeration: ResMut<EnumerationState>,
             batch: Res<Batch>,
         ) {
-            trigger_events(&mut commands, &mut enumeration.pending, &batch.0);
+            trigger_events(&mut commands, &mut enumeration.pending, &batch.0, None);
         }
 
         let mut app = App::new();
@@ -860,7 +995,7 @@ mod tests {
                 id: CommandId(1),
                 number: 0,
                 ok: true,
-                output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\tx\t\tmain".to_string()],
+                output: vec!["1\t@1\t0\tabcd,80x24,0,0,5\t0000,80x24,0,0,5\t\tmain".to_string()],
             },
         )]));
         app.add_observer(|ev: On<TmuxWindowAdded>, log: Res<Log>| {
@@ -977,6 +1112,7 @@ mod tests {
         app.add_systems(Update, |mut commands: Commands| {
             trigger_notification(
                 &mut commands,
+                None,
                 &ControlEvent::SessionRenamed {
                     session: SessionId(1),
                     name: "renamed".to_string(),
@@ -1007,7 +1143,7 @@ mod tests {
         struct Batch(Vec<TransportEvent>);
 
         fn run(mut commands: Commands, mut pending: ResMut<EnumerationState>, batch: Res<Batch>) {
-            trigger_events(&mut commands, &mut pending.pending, &batch.0);
+            trigger_events(&mut commands, &mut pending.pending, &batch.0, None);
         }
 
         let line = format!("%subscription-changed {WINDOW_FLAGS_SUBSCRIPTION} $1 @2 0 - : *Z");
