@@ -115,6 +115,32 @@ pub fn resize_window_command(win: WindowId, cols: u16, rows: u16) -> String {
     format!("resize-window -x {cols} -y {rows} -t @{}", win.0)
 }
 
+/// Builds `display-message -p '#{version}'` — prints the tmux server version
+/// (e.g. `3.6a`) as a one-line command reply.
+pub fn version_command() -> String {
+    "display-message -p '#{version}'".to_string()
+}
+
+/// Returns whether `version` supports per-window `refresh-client -C @win:WxH`
+/// (tmux ≥ 3.4). Parses leniently: the leading `major.minor`, tolerating a
+/// `next-` prefix and a trailing letter suffix like `3.6a`.
+pub(crate) fn version_supports_per_window_refresh(version: &str) -> bool {
+    parse_major_minor(version).is_some_and(|mm| mm >= (3, 4))
+}
+
+fn parse_major_minor(version: &str) -> Option<(u32, u32)> {
+    let trimmed = version.trim().trim_start_matches(|c: char| !c.is_ascii_digit());
+    let mut parts = trimmed.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor_digits: String = parts
+        .next()?
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    let minor: u32 = minor_digits.parse().ok()?;
+    Some((major, minor))
+}
+
 /// Builds `display-message -p '#{client_name}'` — prints the control
 /// client's name as a one-line command reply (correlated like `list-windows`).
 pub(crate) fn client_name_command() -> String {
@@ -384,6 +410,8 @@ pub(crate) struct EnumerationState {
     pub(crate) pending: Option<CommandId>,
     /// The id of the in-flight `display-message` client-name query, if any.
     pub(crate) client_name_pending: Option<CommandId>,
+    /// The id of the in-flight `display-message` version query, if any.
+    pub(crate) version_pending: Option<CommandId>,
     /// The id of the in-flight `display-message` active-pane query, if any.
     pub(crate) active_pane_pending: Option<CommandId>,
     /// The id of the in-flight `list-keys -T root` command, if any.
@@ -730,5 +758,20 @@ mod tests {
             resize_window_command(WindowId(2), 80, 24),
             "resize-window -x 80 -y 24 -t @2"
         );
+    }
+
+    #[test]
+    fn version_supports_per_window_refresh_is_lenient_about_suffixes() {
+        assert!(version_supports_per_window_refresh("3.6a"));
+        assert!(version_supports_per_window_refresh("3.4"));
+        assert!(version_supports_per_window_refresh("next-3.7"));
+        assert!(!version_supports_per_window_refresh("3.3"));
+        assert!(!version_supports_per_window_refresh("2.9"));
+        assert!(!version_supports_per_window_refresh("garbage"));
+    }
+
+    #[test]
+    fn version_command_has_expected_format() {
+        assert_eq!(version_command(), "display-message -p '#{version}'");
     }
 }

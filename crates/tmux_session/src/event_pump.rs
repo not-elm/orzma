@@ -87,16 +87,13 @@ pub(crate) fn trigger_events(
     }
 }
 
-/// Returns the client name from a `CommandComplete` whose id matches
-/// `pending` (first non-empty trimmed output line), and clears `pending`.
-///
-/// Iterates `events` and looks for `CommandComplete { ok: true, .. }` whose
-/// id equals `*pending`. On a match the first non-empty trimmed output line is
-/// returned and `*pending` is set to `None`. Returns `None` when no matching
-/// event exists in the batch or the output is blank.
-pub(crate) fn take_client_name(
+/// Returns the first non-empty trimmed output line of the `CommandComplete`
+/// whose id matches `pending`, clearing `pending`. `what` labels the warning
+/// logged when the command failed.
+fn take_reply_line(
     pending: &mut Option<CommandId>,
     events: &[TransportEvent],
+    what: &str,
 ) -> Option<String> {
     for event in events {
         if let TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) = event
@@ -109,13 +106,35 @@ pub(crate) fn take_client_name(
                     .map(|line| line.trim())
                     .find(|line| !line.is_empty())
                     .map(str::to_owned);
-            } else {
-                tracing::warn!("client-name query command failed");
-                return None;
             }
+            tracing::warn!("{what} query command failed");
+            return None;
         }
     }
     None
+}
+
+/// Returns the client name from a `CommandComplete` whose id matches
+/// `pending` (first non-empty trimmed output line), and clears `pending`.
+///
+/// Iterates `events` and looks for `CommandComplete { ok: true, .. }` whose
+/// id equals `*pending`. On a match the first non-empty trimmed output line is
+/// returned and `*pending` is set to `None`. Returns `None` when no matching
+/// event exists in the batch or the output is blank.
+pub(crate) fn take_client_name(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<String> {
+    take_reply_line(pending, events, "client-name")
+}
+
+/// Returns the tmux server version from a `CommandComplete` whose id matches
+/// `pending` (first non-empty trimmed output line), and clears `pending`.
+pub(crate) fn take_version(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<String> {
+    take_reply_line(pending, events, "version")
 }
 
 /// Drains matching `capture-pane` replies from `events`.
@@ -665,6 +684,20 @@ mod tests {
         let mut pending = Some(CommandId(7));
         assert_eq!(take_client_name(&mut pending, &events), None);
         assert_eq!(pending, Some(CommandId(7)));
+    }
+
+    #[test]
+    fn take_version_extracts_first_line() {
+        let id = CommandId(7);
+        let mut pending = Some(id);
+        let events = vec![TransportEvent::Protocol(ClientEvent::CommandComplete {
+            id,
+            number: 0,
+            ok: true,
+            output: vec!["3.6a".to_string()],
+        })];
+        assert_eq!(take_version(&mut pending, &events), Some("3.6a".to_string()));
+        assert_eq!(pending, None);
     }
 
     #[test]

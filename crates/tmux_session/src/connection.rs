@@ -12,6 +12,7 @@ use tmux_control::TmuxClient;
 pub struct TmuxConnection {
     client: Option<TmuxClient>,
     client_name: Option<String>,
+    per_window_refresh: Option<bool>,
 }
 
 impl TmuxConnection {
@@ -27,9 +28,11 @@ impl TmuxConnection {
 
     /// Removes and returns the live client, leaving the connection empty.
     ///
-    /// Also clears the cached client name so a fresh reconnect re-queries it.
+    /// Also clears the cached client name and capability flags so a fresh
+    /// reconnect re-queries them.
     pub fn take(&mut self) -> Option<TmuxClient> {
         self.client_name = None;
+        self.per_window_refresh = None;
         self.client.take()
     }
 
@@ -39,8 +42,20 @@ impl TmuxConnection {
         self.client_name.as_deref()
     }
 
+    /// Returns whether the attached tmux supports per-window `refresh-client`,
+    /// or `None` if the version query has not completed yet.
+    pub fn supports_per_window_refresh(&self) -> Option<bool> {
+        self.per_window_refresh
+    }
+
     /// Caches the control client name returned by the `display-message` query.
     pub(crate) fn set_client_name(&mut self, name: String) {
         self.client_name = Some(name);
+    }
+
+    /// Caches the per-window `refresh-client` capability derived from the tmux
+    /// version reply.
+    pub(crate) fn set_per_window_refresh(&mut self, supported: bool) {
+        self.per_window_refresh = Some(supported);
     }
 }

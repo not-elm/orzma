@@ -7,11 +7,12 @@ use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, active_pane_command, capture_pane_command, client_name_command,
     cursor_query_command, list_windows_command, mode_keys_command, subscribe_window_flags_command,
+    version_command, version_supports_per_window_refresh,
 };
 use crate::event_pump::{
     advance_state, detect_session_switch, detect_window_added, detect_window_switch,
     drain_transport, take_active_pane, take_client_name, take_cursor_positions, take_keybindings,
-    take_mode_keys, take_pane_captures, take_prefix_keys, trigger_events,
+    take_mode_keys, take_pane_captures, take_prefix_keys, take_version, trigger_events,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
@@ -189,6 +190,10 @@ fn drain_tmux_events(
                 Ok(id) => enumeration.mode_keys_pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to send mode-keys query"),
             }
+            match client.handle().send(&version_command()) {
+                Ok(id) => enumeration.version_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to send version query"),
+            }
         }
     }
     if events
@@ -203,6 +208,9 @@ fn drain_tmux_events(
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
             connection.set_client_name(name);
+        }
+        if let Some(version) = take_version(&mut enumeration.version_pending, &events) {
+            connection.set_per_window_refresh(version_supports_per_window_refresh(&version));
         }
         if let Some((window, pane)) =
             take_active_pane(&mut enumeration.active_pane_pending, &events)
