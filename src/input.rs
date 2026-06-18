@@ -30,16 +30,18 @@ pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(
-            Update,
-            (
-                InputPhase::Hover,
-                InputPhase::Dispatch,
-                InputPhase::FocusedKey,
-            )
-                .chain()
-                .in_set(OzmuxSystems::Input),
-        );
+        app.init_resource::<shortcuts::ResolvedShortcuts>()
+            .add_systems(Startup, shortcuts::build_resolved_shortcuts)
+            .configure_sets(
+                Update,
+                (
+                    InputPhase::Hover,
+                    InputPhase::Dispatch,
+                    InputPhase::FocusedKey,
+                )
+                    .chain()
+                    .in_set(OzmuxSystems::Input),
+            );
     }
 }
 

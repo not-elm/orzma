@@ -5,6 +5,7 @@
 
 use bevy::prelude::*;
 use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
+use crate::configs::OzmuxConfigsResource;
 
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
 /// the exact modifier set required, and the action to run.
@@ -67,6 +68,17 @@ pub(crate) fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut
         }
     }
     out
+}
+
+/// `Startup` system: resolves the configured shortcut bindings into
+/// `ResolvedShortcuts`, replacing the empty default inserted at plugin build.
+pub(crate) fn build_resolved_shortcuts(
+    mut commands: Commands,
+    configs: Res<OzmuxConfigsResource>,
+) {
+    commands.insert_resource(ResolvedShortcuts(resolve_from_bindings(
+        &configs.shortcuts.bindings,
+    )));
 }
 
 /// Maps a config logical `Key` to the physical `KeyCode` ozmux matches on.

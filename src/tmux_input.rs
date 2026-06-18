@@ -10,6 +10,8 @@ use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
+use crate::input::shortcuts::ResolvedShortcuts;
+use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use crate::osc_webview::NonInteractive;
 use crate::tmux_pane_hit::tmux_pane_at_phys;
 use crate::tmux_picker::SessionPicker;
@@ -52,14 +54,6 @@ impl Plugin for OzmuxTmuxInputPlugin {
             ),
         );
     }
-}
-
-/// A GUI-level chord ozmux handles itself (never forwarded to tmux).
-enum GuiChord {
-    OpenPicker,
-    Quit,
-    Paste,
-    Other,
 }
 
 const PASTE_CHUNK_BYTES: usize = 256;
@@ -124,9 +118,12 @@ fn forward_keys_to_tmux(
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
     connection: NonSend<TmuxConnection>,
-    keys: Res<ButtonInput<KeyCode>>,
-    ime: Res<crate::input::ime::ImeState>,
-    bindings: Res<KeyBindings>,
+    (keys, ime, bindings, resolved): (
+        Res<ButtonInput<KeyCode>>,
+        Res<crate::input::ime::ImeState>,
+        Res<KeyBindings>,
+        Res<ResolvedShortcuts>,
+    ),
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -180,6 +177,12 @@ fn forward_keys_to_tmux(
         shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
         super_: keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight),
     };
+    let cfg_mods = Modifiers {
+        ctrl: mods.ctrl,
+        shift: mods.shift,
+        alt: mods.alt,
+        meta: mods.super_,
+    };
 
     // When an inline webview holds focus it owns the keyboard (bevy_cef routes
     // keystrokes to it); forwarding to tmux too would double-send. Ctrl+Shift+Esc
@@ -191,9 +194,7 @@ fn forward_keys_to_tmux(
     if focused_webview.0.is_some() {
         for ev in events.read() {
             if ev.state == ButtonState::Pressed
-                && ev.key_code == KeyCode::Escape
-                && mods.ctrl
-                && mods.shift
+                && resolved.is_release_inline_focus(ev.key_code, cfg_mods.clone())
             {
                 focused_webview.0 = None;
                 break;
@@ -222,15 +223,15 @@ fn forward_keys_to_tmux(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        if let Some(chord) = gui_chord(&ev.key_code, mods) {
+        if let Some(action) = resolved.match_gui_action(ev.key_code, cfg_mods.clone()) {
             // A GUI action abandons any pending tmux prefix sequence.
             *prefix_pending = false;
-            match chord {
-                GuiChord::OpenPicker => picker.open = true,
-                GuiChord::Quit => {
+            match action {
+                ShortcutAction::OpenPicker => picker.open = true,
+                ShortcutAction::Quit => {
                     exit.write(AppExit::Success);
                 }
-                GuiChord::Paste => {
+                ShortcutAction::Paste => {
                     let Some(text) = clipboard.read() else {
                         continue;
                     };
@@ -249,8 +250,14 @@ fn forward_keys_to_tmux(
                         }
                     }
                 }
-                GuiChord::Other => {}
+                ShortcutAction::ReleaseInlineFocus => {}
             }
+            continue;
+        }
+        // Any Cmd/Super-modified key that matched no ozmux shortcut is swallowed:
+        // tmux/PTY has no Super modifier, so it must never be forwarded.
+        if mods.super_ {
+            *prefix_pending = false;
             continue;
         }
         if let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods) {
@@ -716,25 +723,6 @@ fn consume_wheel_notches(
     notches
 }
 
-/// Classifies a key event as a GUI chord (matched on physical `key_code` + the
-/// `Super`/Cmd modifier — layout-stable). Any other `Super`-modified key is
-/// swallowed (`Other`) so it is never forwarded (tmux has no Super modifier).
-fn gui_chord(key_code: &KeyCode, mods: KeyMods) -> Option<GuiChord> {
-    if !mods.super_ {
-        return None;
-    }
-    if mods.shift && *key_code == KeyCode::KeyP {
-        return Some(GuiChord::OpenPicker);
-    }
-    if !mods.shift && *key_code == KeyCode::KeyQ {
-        return Some(GuiChord::Quit);
-    }
-    if !mods.shift && *key_code == KeyCode::KeyV {
-        return Some(GuiChord::Paste);
-    }
-    Some(GuiChord::Other)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1049,53 +1037,4 @@ mod tests {
         assert!(!is_copy_mode_entry("send-keys -X scroll-up"));
     }
 
-    fn m(shift: bool, super_: bool) -> KeyMods {
-        KeyMods {
-            ctrl: false,
-            alt: false,
-            shift,
-            super_,
-        }
-    }
-
-    #[test]
-    fn cmd_shift_p_opens_picker() {
-        assert!(matches!(
-            gui_chord(&KeyCode::KeyP, m(true, true)),
-            Some(GuiChord::OpenPicker)
-        ));
-    }
-
-    #[test]
-    fn cmd_q_quits() {
-        assert!(matches!(
-            gui_chord(&KeyCode::KeyQ, m(false, true)),
-            Some(GuiChord::Quit)
-        ));
-    }
-
-    #[test]
-    fn cmd_v_is_paste() {
-        assert!(matches!(
-            gui_chord(&KeyCode::KeyV, m(false, true)),
-            Some(GuiChord::Paste)
-        ));
-        assert!(matches!(
-            gui_chord(&KeyCode::KeyV, m(true, true)),
-            Some(GuiChord::Other)
-        ));
-    }
-
-    #[test]
-    fn other_super_chord_is_swallowed() {
-        assert!(matches!(
-            gui_chord(&KeyCode::KeyH, m(false, true)),
-            Some(GuiChord::Other)
-        ));
-    }
-
-    #[test]
-    fn non_super_key_is_not_a_chord() {
-        assert!(gui_chord(&KeyCode::KeyA, m(false, false)).is_none());
-    }
 }
