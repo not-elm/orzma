@@ -167,6 +167,14 @@ fn on_active_pane_changed(
     active_windows: Query<Entity, With<ActiveWindow>>,
     active_panes: Query<Entity, With<ActivePane>>,
 ) {
+    // NOTE: tmux broadcasts %window-pane-changed to ALL control clients
+    // server-wide (no session guard), so a foreign client's pane focus in
+    // another session must not spawn a phantom window here. Only the trusted
+    // own-session active-pane query reply (from_notification == false) may seed
+    // a window; an unknown window from a live notification is foreign — ignore it.
+    if ev.from_notification && !index.windows.contains_key(&ev.window) {
+        return;
+    }
     let window = ensure_window(&mut commands, &mut index, ev.window);
     set_marker::<ActiveWindow>(&mut commands, &active_windows, window);
 
@@ -342,6 +350,7 @@ mod tests {
         app.world_mut().trigger(TmuxActivePaneChanged {
             window: WindowId(1),
             pane: PaneId(5),
+            from_notification: false,
         });
         app.update();
         assert_eq!(
@@ -359,6 +368,36 @@ mod tests {
         assert_eq!(index.pending_active_pane, None);
         let (pane_e, _) = index.panes[&PaneId(5)];
         assert!(app.world().get::<ActivePane>(pane_e).is_some());
+    }
+
+    #[test]
+    fn foreign_notification_active_pane_does_not_spawn_window() {
+        let mut app = app();
+        // A live %window-pane-changed (from_notification: true) for a window not
+        // in this session's projection is foreign (tmux broadcasts it
+        // server-wide) and must be ignored: no phantom window, no ActiveWindow
+        // hijack, no pending active pane.
+        app.world_mut().trigger(TmuxActivePaneChanged {
+            window: WindowId(7),
+            pane: PaneId(3),
+            from_notification: true,
+        });
+        app.update();
+
+        let index = app.world().resource::<TmuxProjection>();
+        assert!(
+            index.windows.is_empty(),
+            "foreign notification must not spawn a window"
+        );
+        assert_eq!(index.pending_active_pane, None);
+        let mut active = app
+            .world_mut()
+            .query_filtered::<Entity, With<ActiveWindow>>();
+        assert_eq!(
+            active.iter(app.world()).count(),
+            0,
+            "foreign notification must not set the ActiveWindow marker"
+        );
     }
 
     #[test]

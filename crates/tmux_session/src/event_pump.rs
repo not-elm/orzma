@@ -349,20 +349,26 @@ pub(crate) fn detect_session_switch(
     None
 }
 
-/// True when the batch contains a `%session-window-changed` — the session's
-/// current window changed (`next-window` / `previous-window` / `select-window`).
+/// True when the batch contains a `%session-window-changed` for `current` — the
+/// own session's current window changed (`next-window` / `previous-window` /
+/// `select-window`). tmux broadcasts `%session-window-changed` to every control
+/// client server-wide, so a foreign session's switch (or `current == None`)
+/// returns false and does not trigger a needless active-pane re-query.
 ///
 /// NOTE: tmux emits *only* `%session-window-changed` for such a switch, never a
 /// `%window-pane-changed`, so the caller must re-query the active pane
 /// (`active_pane_command`) to move `ActiveWindow`/`ActivePane`. Without that the
 /// switch never reaches the projection and the UI stays on the old window.
-pub(crate) fn detect_window_switch(events: &[TransportEvent]) -> bool {
+pub(crate) fn detect_window_switch(events: &[TransportEvent], current: Option<SessionId>) -> bool {
+    let Some(current) = current else {
+        return false;
+    };
     events.iter().any(|event| {
         matches!(
             event,
             TransportEvent::Protocol(ClientEvent::Notification(
-                ControlEvent::SessionWindowChanged { .. }
-            ))
+                ControlEvent::SessionWindowChanged { session, .. }
+            )) if *session == current
         )
     })
 }
@@ -429,6 +435,7 @@ fn trigger_notification(commands: &mut Commands, event: &ControlEvent) {
             commands.trigger(TmuxActivePaneChanged {
                 window: *window,
                 pane: *pane,
+                from_notification: true,
             });
         }
         ControlEvent::SubscriptionChanged {
@@ -753,7 +760,7 @@ mod tests {
     }
 
     #[test]
-    fn detect_window_switch_flags_session_window_changed() {
+    fn detect_window_switch_flags_own_session_window_changed() {
         use tmux_control_parser::{SessionId, WindowId};
         let switched = vec![TransportEvent::Protocol(ClientEvent::Notification(
             ControlEvent::SessionWindowChanged {
@@ -761,8 +768,13 @@ mod tests {
                 window: WindowId(4),
             },
         ))];
-        assert!(detect_window_switch(&switched));
-        assert!(!detect_window_switch(&[]));
+        // Own session's window switch is detected.
+        assert!(detect_window_switch(&switched, Some(SessionId(1))));
+        // A foreign session's broadcast %session-window-changed is ignored.
+        assert!(!detect_window_switch(&switched, Some(SessionId(2))));
+        // No current session yet → nothing to switch.
+        assert!(!detect_window_switch(&switched, None));
+        assert!(!detect_window_switch(&[], Some(SessionId(1))));
 
         let session_changed = vec![TransportEvent::Protocol(ClientEvent::Notification(
             ControlEvent::SessionChanged {
@@ -770,7 +782,7 @@ mod tests {
                 name: "b".to_string(),
             },
         ))];
-        assert!(!detect_window_switch(&session_changed));
+        assert!(!detect_window_switch(&session_changed, Some(SessionId(2))));
     }
 
     #[test]

@@ -67,6 +67,11 @@ pub(crate) struct TmuxLayoutChanged {
 pub(crate) struct TmuxActivePaneChanged {
     pub(crate) window: WindowId,
     pub(crate) pane: PaneId,
+    /// True when sourced from a live `%window-pane-changed` notification (which
+    /// tmux broadcasts to every control client server-wide, possibly for a
+    /// foreign session); false when from the trusted own-session
+    /// `active_pane_command` reply.
+    pub(crate) from_notification: bool,
 }
 
 /// A seed row's active flag: this window is the active one.
