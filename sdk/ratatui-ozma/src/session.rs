@@ -135,12 +135,10 @@ pub struct Ozma {
     pending: PendingRegisters,
     frame: Arc<Mutex<FramePlacements>>,
     pending_compositing: PendingCompositing,
-    handlers: HandlerRegistry,
     disconnected: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     registrations: Arc<Mutex<Vec<Registration>>>,
     reconnect_tx: crossbeam_channel::Sender<()>,
-    token: String,
 }
 
 impl Ozma {
@@ -222,12 +220,10 @@ impl Ozma {
             pending,
             frame: Arc::new(Mutex::new(FramePlacements::default())),
             pending_compositing,
-            handlers,
             disconnected,
             generation,
             registrations,
             reconnect_tx,
-            token,
         })
     }
 

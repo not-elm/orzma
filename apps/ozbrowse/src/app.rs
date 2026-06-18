@@ -205,20 +205,44 @@ mod tests {
     #[test]
     fn scroll_actions_produce_scroll_cmds() {
         let mut a = app();
-        assert_eq!(a.on_action(Action::ScrollLineDown), vec![Cmd::Scroll(ScrollAction::Down)]);
-        assert_eq!(a.on_action(Action::ScrollLineUp), vec![Cmd::Scroll(ScrollAction::Up)]);
-        assert_eq!(a.on_action(Action::ScrollHalfDown), vec![Cmd::Scroll(ScrollAction::HalfDown)]);
-        assert_eq!(a.on_action(Action::ScrollHalfUp), vec![Cmd::Scroll(ScrollAction::HalfUp)]);
-        assert_eq!(a.on_action(Action::ScrollPageDown), vec![Cmd::Scroll(ScrollAction::PageDown)]);
-        assert_eq!(a.on_action(Action::ScrollPageUp), vec![Cmd::Scroll(ScrollAction::PageUp)]);
-        assert_eq!(a.on_action(Action::GoBottom), vec![Cmd::Scroll(ScrollAction::Bottom)]);
+        assert_eq!(
+            a.on_action(Action::ScrollLineDown),
+            vec![Cmd::Scroll(ScrollAction::Down)]
+        );
+        assert_eq!(
+            a.on_action(Action::ScrollLineUp),
+            vec![Cmd::Scroll(ScrollAction::Up)]
+        );
+        assert_eq!(
+            a.on_action(Action::ScrollHalfDown),
+            vec![Cmd::Scroll(ScrollAction::HalfDown)]
+        );
+        assert_eq!(
+            a.on_action(Action::ScrollHalfUp),
+            vec![Cmd::Scroll(ScrollAction::HalfUp)]
+        );
+        assert_eq!(
+            a.on_action(Action::ScrollPageDown),
+            vec![Cmd::Scroll(ScrollAction::PageDown)]
+        );
+        assert_eq!(
+            a.on_action(Action::ScrollPageUp),
+            vec![Cmd::Scroll(ScrollAction::PageUp)]
+        );
+        assert_eq!(
+            a.on_action(Action::GoBottom),
+            vec![Cmd::Scroll(ScrollAction::Bottom)]
+        );
     }
 
     #[test]
     fn gg_chord_scrolls_to_top() {
         let mut a = app();
         assert_eq!(a.on_action(Action::Prefix('g')), vec![]);
-        assert_eq!(a.on_action(Action::Prefix('g')), vec![Cmd::Scroll(ScrollAction::Top)]);
+        assert_eq!(
+            a.on_action(Action::Prefix('g')),
+            vec![Cmd::Scroll(ScrollAction::Top)]
+        );
     }
 
     #[test]
@@ -291,7 +315,10 @@ mod tests {
     fn history_back_forward_produce_commands() {
         let mut a = app();
         assert_eq!(a.on_action(Action::HistoryBack), vec![Cmd::HistoryBack]);
-        assert_eq!(a.on_action(Action::HistoryForward), vec![Cmd::HistoryForward]);
+        assert_eq!(
+            a.on_action(Action::HistoryForward),
+            vec![Cmd::HistoryForward]
+        );
     }
 
     #[test]

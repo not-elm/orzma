@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(f.area());
                 f.render_widget(Paragraph::new("remote url demo · q to quit"), rows[0]);
                 f.render_stateful_widget(
-                    WebviewWidget::new(&view.id()).fallback(Block::bordered().title("loading…")),
+                    WebviewWidget::new(view.id()).fallback(Block::bordered().title("loading…")),
                     rows[1],
                     &mut *ozma.frame(),
                 );

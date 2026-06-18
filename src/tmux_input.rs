@@ -226,11 +226,9 @@ fn forward_keys_to_tmux(
                         && c.alt == mods.alt
                         && c.logo == mods.super_
                 })
-            {
-                if let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods) {
+                && let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods) {
                     pass_names.push(name);
                 }
-            }
         }
 
         if !pass_names.is_empty() {
