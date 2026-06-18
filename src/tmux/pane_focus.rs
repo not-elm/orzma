@@ -4,7 +4,7 @@
 //! every inactive pane at the renderer via `PaneInactiveStyle` (the terminal
 //! shader blends inactive backgrounds toward a configured grey). `select-pane`
 //! on press is owned by the tmux mouse gesture arbiter
-//! (`tmux_mouse::OzmuxTmuxMousePlugin`).
+//! (`mouse::MousePlugin`).
 
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
@@ -15,9 +15,9 @@ use ozmux_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
 
 /// Registers the pane augmentation (adds `Button` + `FocusPolicy::Block`) and
 /// dim systems. `select-pane` on press is handled by the gesture arbiter.
-pub struct OzmuxTmuxPaneFocusPlugin;
+pub(crate) struct PaneFocusPlugin;
 
-impl Plugin for OzmuxTmuxPaneFocusPlugin {
+impl Plugin for PaneFocusPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
@@ -125,7 +125,7 @@ mod tests {
         use ozmux_tmux::ActivePane;
 
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
+        app.add_plugins((MinimalPlugins, PaneFocusPlugin));
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.insert_resource(OzmuxConfigsResource::default());
         let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
@@ -195,7 +195,7 @@ mod tests {
         use ozmux_tmux::ActivePane;
 
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
+        app.add_plugins((MinimalPlugins, PaneFocusPlugin));
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         let mut configs = OzmuxConfigsResource::default();
         configs.0.inactive_pane.enabled = false;
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn augment_adds_button_and_focus_block_no_overlay() {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, OzmuxTmuxPaneFocusPlugin));
+        app.add_plugins((MinimalPlugins, PaneFocusPlugin));
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         let pane = app
             .world_mut()
