@@ -83,8 +83,11 @@ fn draw_help_modal(frame: &mut Frame<'_>) {
         Line::from(""),
         Line::from("  Esc / q        close help"),
     ];
+    let style = Style::default().bg(Color::Black).fg(Color::White);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title(" Help — ozbrowse ")),
+        Paragraph::new(lines)
+            .style(style)
+            .block(Block::bordered().title(" Help — ozbrowse ").style(style)),
         area,
     );
 }
