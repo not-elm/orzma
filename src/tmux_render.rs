@@ -30,6 +30,7 @@ struct LastClientSize {
     cols: u16,
     rows: u16,
     last_reported: Option<(u16, u16)>,
+    last_per_window: Option<bool>,
 }
 
 /// Wires the tmux pane render systems after the projection chain.
@@ -542,31 +543,31 @@ fn sync_client_size(
     let desired = (cols, rows);
     let reported = layout.map(|l| {
         let d = l.0.root.dims();
-        (
-            d.width.clamp(1, u16::MAX as u32) as u16,
-            d.height.clamp(1, u16::MAX as u32) as u16,
-        )
+        grid_dims(d.width, d.height)
     });
     let prev_reported = last.last_reported;
-    if !reconcile_decision(
-        desired,
-        tmux_window.id,
-        reported,
-        prev_reported,
-        last.window,
-        (last.cols, last.rows),
-    ) {
+    // NOTE: a capability change (None -> Some after the version reply) must force
+    // a re-pin even when window/size/reported are unchanged — otherwise the first
+    // pin sent with the global fallback (capability still unknown) is never
+    // upgraded to the per-window form, defeating multi-client isolation.
+    let per_window = connection.supports_per_window_refresh();
+    let capability_changed = last.last_per_window != per_window;
+    if !capability_changed
+        && !reconcile_decision(
+            desired,
+            tmux_window.id,
+            reported,
+            prev_reported,
+            last.window,
+            (last.cols, last.rows),
+        )
+    {
         if last.last_reported != reported {
             last.last_reported = reported;
         }
         return;
     }
-    let cmd = pin_command(
-        connection.supports_per_window_refresh(),
-        tmux_window.id,
-        cols,
-        rows,
-    );
+    let cmd = pin_command(per_window, tmux_window.id, cols, rows);
     // NOTE: only record the size as sent AFTER a successful send — otherwise a
     // transient send failure would poison the dedupe and permanently suppress
     // re-sending this size, leaving tmux stuck at the stale client dimensions.
@@ -575,6 +576,7 @@ fn sync_client_size(
             last.window = Some(tmux_window.id);
             last.cols = cols;
             last.rows = rows;
+            last.last_per_window = per_window;
             // NOTE: advance the observation only after a successful pin; a failed
             // send must leave last_reported stale so the next tick re-detects the
             // drift and retries — otherwise a failed recovery is permanently

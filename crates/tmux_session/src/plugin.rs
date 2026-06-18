@@ -140,6 +140,11 @@ fn drain_tmux_events(
         enumeration.cursor_pending.clear();
         enumeration.panes_with_cursor_pending.clear();
         enumeration.capture_awaiting_cursor.clear();
+        // NOTE: aggressive-resize is a per-window option, so the switched-to
+        // session must be re-checked — clear the one-shot guard or its `on`
+        // setting would go undetected after a switch.
+        enumeration.aggressive_resize_checked = false;
+        enumeration.aggressive_resize_pending = None;
         send_session_enumeration(&mut enumeration, client);
     } else if let Some(client) = connection.client() {
         if detect_window_added(&events) {
