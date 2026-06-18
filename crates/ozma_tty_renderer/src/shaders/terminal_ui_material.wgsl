@@ -28,6 +28,8 @@ struct TerminalParams {
     dim: f32,
     inactive_tint: vec4<f32>,
     overlay_rects: array<vec4<i32>, 4>,
+    overlay_dim: f32,
+    overlay_desaturate: f32,
 };
 
 struct Cell {
@@ -394,6 +396,17 @@ fn is_in_selection_uniform(
 // is partially scrolled above the viewport), so partial visibility never
 // distorts the image; grid-edge clipping is inherent because only in-grid
 // fragments reach paint_grid_cell.
+// Applies the inactive-pane treatment to one overlay (webview) sample before it
+// blends over the background: desaturate toward Rec.709 luminance, then dim.
+// `s` is premultiplied-alpha and linear, so both are correct on `s.rgb`
+// (luma(a*c) = a*luma(c); a scalar multiply distributes through premultiply).
+// Active pane => overlay_dim == 1.0 && overlay_desaturate == 0.0 (no-op).
+fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
+    let luma = dot(s.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let desat = mix(s.rgb, vec3<f32>(luma), params.overlay_desaturate);
+    return vec4<f32>(desat * params.overlay_dim, s.a);
+}
+
 fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     var color = base;
     let p_px = vec2<f32>(f32(hit.col), f32(hit.row)) * params.cell_size_px + hit.in_cell_px;
@@ -403,28 +416,28 @@ fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     {
         let uv = overlay_uv(params.overlay_rects[0], p_px, hit);
         if uv.x >= 0.0 {
-            let s = textureSampleLevel(overlay0_tex, overlay0_samp, uv, 0.0);
+            let s = treat_overlay(textureSampleLevel(overlay0_tex, overlay0_samp, uv, 0.0));
             color = blend_premultiplied_over(color, s);
         }
     }
     {
         let uv = overlay_uv(params.overlay_rects[1], p_px, hit);
         if uv.x >= 0.0 {
-            let s = textureSampleLevel(overlay1_tex, overlay1_samp, uv, 0.0);
+            let s = treat_overlay(textureSampleLevel(overlay1_tex, overlay1_samp, uv, 0.0));
             color = blend_premultiplied_over(color, s);
         }
     }
     {
         let uv = overlay_uv(params.overlay_rects[2], p_px, hit);
         if uv.x >= 0.0 {
-            let s = textureSampleLevel(overlay2_tex, overlay2_samp, uv, 0.0);
+            let s = treat_overlay(textureSampleLevel(overlay2_tex, overlay2_samp, uv, 0.0));
             color = blend_premultiplied_over(color, s);
         }
     }
     {
         let uv = overlay_uv(params.overlay_rects[3], p_px, hit);
         if uv.x >= 0.0 {
-            let s = textureSampleLevel(overlay3_tex, overlay3_samp, uv, 0.0);
+            let s = treat_overlay(textureSampleLevel(overlay3_tex, overlay3_samp, uv, 0.0));
             color = blend_premultiplied_over(color, s);
         }
     }

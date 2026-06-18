@@ -121,6 +121,12 @@ pub struct PaneInactiveStyle {
     /// Background tint: rgb = target color (linear), `a` = blend amount in
     /// `0.0..=1.0` (`0.0` = no tint / active).
     pub tint: Vec4,
+    /// Inline-overlay (webview) brightness multiplier in `0.0..=1.0`; `1.0` =
+    /// full-bright. Applied to overlay samples only, independent of `tint`.
+    pub overlay_dim: f32,
+    /// Inline-overlay (webview) desaturation in `0.0..=1.0`; `0.0` = full color,
+    /// `1.0` = grey.
+    pub overlay_desaturate: f32,
 }
 
 impl Default for PaneInactiveStyle {
@@ -128,6 +134,8 @@ impl Default for PaneInactiveStyle {
         Self {
             dim: 1.0,
             tint: Vec4::ZERO,
+            overlay_dim: 1.0,
+            overlay_desaturate: 0.0,
         }
     }
 }
@@ -195,7 +203,8 @@ impl Default for TerminalOverlays {
 /// (Vec4 needs 16-byte alignment, lands at offset 80). `inactive_tint` is also
 /// a Vec4 (16-byte alignment), so encase pads the 4 bytes after `dim` and lands
 /// it at offset 112; `overlay_rects` (`array<vec4<i32>, 4>`) follows at offset
-/// 128 (total 192 bytes, 16-byte aligned):
+/// 128. The trailing `overlay_dim` / `overlay_desaturate` scalars sit at 192/196
+/// and the struct rounds up to its 16-byte alignment (total 208 bytes):
 ///
 /// | Offset | Field                       |
 /// |--------|-----------------------------|
@@ -221,6 +230,8 @@ impl Default for TerminalOverlays {
 /// | 104    | `dim`                       |
 /// | 112    | `inactive_tint`             |
 /// | 128    | `overlay_rects`             |
+/// | 192    | `overlay_dim`               |
+/// | 196    | `overlay_desaturate`        |
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -269,6 +280,12 @@ struct TerminalParams {
     /// Slot-indexed inline-overlay rects `(row, col, rows, cols)` in cell
     /// coords; `row` may be negative; `rows == 0` = inactive slot sentinel.
     overlay_rects: [IVec4; OVERLAY_SLOTS],
+    /// Inline-overlay (webview) brightness multiplier applied to overlay samples
+    /// before they blend over the background. `1.0` = active / no-op.
+    overlay_dim: f32,
+    /// Inline-overlay (webview) desaturation toward Rec.709 luminance applied to
+    /// overlay samples. `0.0` = active / no-op.
+    overlay_desaturate: f32,
 }
 
 impl Default for TerminalParams {
@@ -296,6 +313,8 @@ impl Default for TerminalParams {
             dim: 1.0,
             inactive_tint: Vec4::ZERO,
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
+            overlay_dim: 1.0,
+            overlay_desaturate: 0.0,
         }
     }
 }
@@ -326,6 +345,8 @@ impl TerminalParams {
         hover_active: u32,
         dim: f32,
         inactive_tint: Vec4,
+        overlay_dim: f32,
+        overlay_desaturate: f32,
     ) -> Self {
         let cols = u32::from(grid.cols);
         let rows = u32::from(grid.rows);
@@ -369,6 +390,8 @@ impl TerminalParams {
             dim,
             inactive_tint,
             overlay_rects: [IVec4::ZERO; OVERLAY_SLOTS],
+            overlay_dim,
+            overlay_desaturate,
         }
     }
 }
@@ -592,12 +615,15 @@ fn update_terminal_material(
             _ => (0, 0),
         };
 
-        let (dim, inactive_tint) = pane_style.map_or((1.0, Vec4::ZERO), |s| {
-            (
-                s.dim.clamp(0.0, 1.0),
-                s.tint.with_w(s.tint.w.clamp(0.0, 1.0)),
-            )
-        });
+        let (dim, inactive_tint, overlay_dim, overlay_desaturate) =
+            pane_style.map_or((1.0, Vec4::ZERO, 1.0, 0.0), |s| {
+                (
+                    s.dim.clamp(0.0, 1.0),
+                    s.tint.with_w(s.tint.w.clamp(0.0, 1.0)),
+                    s.overlay_dim.clamp(0.0, 1.0),
+                    s.overlay_desaturate.clamp(0.0, 1.0),
+                )
+            });
         if let Some(mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
                 grid,
@@ -614,6 +640,8 @@ fn update_terminal_material(
                 hover_active,
                 dim,
                 inactive_tint,
+                overlay_dim,
+                overlay_desaturate,
             );
             match overlays {
                 Some(o) => {
@@ -863,20 +891,24 @@ mod tests {
 
     #[test]
     fn terminal_params_uniform_size_includes_overlay_rects() {
-        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 192);
+        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 208);
     }
 
     #[test]
-    fn terminal_params_default_inactive_tint_is_zero() {
-        assert_eq!(TerminalParams::default().inactive_tint, Vec4::ZERO);
+    fn terminal_params_default_inactive_treatment_is_noop() {
+        let p = TerminalParams::default();
+        assert_eq!(p.inactive_tint, Vec4::ZERO);
+        assert_eq!(p.overlay_dim, 1.0);
+        assert_eq!(p.overlay_desaturate, 0.0);
     }
 
     #[test]
     fn terminal_params_field_offsets_are_pinned() {
         // `dim` is at offset 104; `inactive_tint` (a Vec4, 16-byte aligned)
         // lands at 112 after encase pads the 4 bytes following `dim`;
-        // `overlay_rects` follows at 128 (total 192 bytes). Field indices are
-        // 0-based in declaration order.
+        // `overlay_rects` follows at 128; the trailing scalars `overlay_dim` /
+        // `overlay_desaturate` sit at 192/196 (total 208 bytes). Field indices
+        // are 0-based in declaration order.
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(19),
             104,
@@ -891,6 +923,16 @@ mod tests {
             <TerminalParams as ShaderType>::METADATA.offset(21),
             128,
             "overlay_rects after inactive_tint"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(22),
+            192,
+            "overlay_dim after overlay_rects"
+        );
+        assert_eq!(
+            <TerminalParams as ShaderType>::METADATA.offset(23),
+            196,
+            "overlay_desaturate after overlay_dim"
         );
     }
 }

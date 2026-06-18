@@ -23,6 +23,14 @@ pub struct InactivePaneConfig {
     /// `1.0` replaces it with `tint_color`. Only the background is tinted; text
     /// and overlays are untouched.
     pub tint: f32,
+    /// Inactive-webview brightness multiplier in `0.0..=1.0` (lower = darker);
+    /// `1.0` leaves brightness untouched. Applied to inline-webview overlays
+    /// only, so the background tint can stay background-only.
+    pub webview_dim: f32,
+    /// Inactive-webview desaturation in `0.0..=1.0`: `0.0` keeps full color,
+    /// `1.0` is fully grey. Applied to inline-webview overlays alongside
+    /// `webview_dim`.
+    pub webview_desaturate: f32,
 }
 
 impl Default for InactivePaneConfig {
@@ -32,6 +40,8 @@ impl Default for InactivePaneConfig {
             dim: 1.0,
             tint_color: "#3a3b45".to_string(),
             tint: 0.85,
+            webview_dim: 0.55,
+            webview_desaturate: 0.6,
         }
     }
 }
@@ -53,6 +63,8 @@ pub(crate) struct InactivePaneConfigPatch {
     pub(crate) dim: Option<f32>,
     pub(crate) tint_color: Option<String>,
     pub(crate) tint: Option<f32>,
+    pub(crate) webview_dim: Option<f32>,
+    pub(crate) webview_desaturate: Option<f32>,
 }
 
 impl InactivePaneConfigPatch {
@@ -74,6 +86,16 @@ impl InactivePaneConfigPatch {
             && !v.is_nan()
         {
             base.tint = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = self.webview_dim
+            && !v.is_nan()
+        {
+            base.webview_dim = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = self.webview_desaturate
+            && !v.is_nan()
+        {
+            base.webview_desaturate = v.clamp(0.0, 1.0);
         }
         base
     }
@@ -107,6 +129,8 @@ mod tests {
         assert_eq!(cfg.tint_color, "#3a3b45");
         assert_eq!(cfg.tint, 0.85);
         assert_eq!(cfg.tint_color_rgb(), (0x3a, 0x3b, 0x45));
+        assert_eq!(cfg.webview_dim, 0.55);
+        assert_eq!(cfg.webview_desaturate, 0.6);
     }
 
     #[test]
@@ -173,6 +197,31 @@ mod tests {
     }
 
     #[test]
+    fn webview_fields_clamp_into_unit_range() {
+        let merged = InactivePaneConfigPatch {
+            webview_dim: Some(4.0),
+            webview_desaturate: Some(-1.0),
+            ..Default::default()
+        }
+        .apply_to(InactivePaneConfig::default());
+        assert_eq!(merged.webview_dim, 1.0);
+        assert_eq!(merged.webview_desaturate, 0.0);
+    }
+
+    #[test]
+    fn nan_webview_fields_are_rejected_and_keep_base() {
+        let patch: InactivePaneConfigPatch =
+            toml::from_str("webview_dim = nan\nwebview_desaturate = nan").unwrap();
+        let merged = patch.apply_to(InactivePaneConfig::default());
+        assert_eq!(merged.webview_dim, 0.55, "NaN webview_dim falls back");
+        assert_eq!(
+            merged.webview_desaturate, 0.6,
+            "NaN webview_desaturate falls back"
+        );
+        assert!(merged.webview_dim.is_finite() && merged.webview_desaturate.is_finite());
+    }
+
+    #[test]
     fn invalid_tint_color_falls_back_to_base() {
         let merged = InactivePaneConfigPatch {
             tint_color: Some("not-a-color".to_string()),
@@ -213,13 +262,16 @@ mod tests {
 
     #[test]
     fn patch_parses_from_toml() {
-        let patch: InactivePaneConfigPatch =
-            toml::from_str("enabled = false\ndim = 0.3\ntint_color = \"#112233\"\ntint = 0.9")
-                .unwrap();
+        let patch: InactivePaneConfigPatch = toml::from_str(
+            "enabled = false\ndim = 0.3\ntint_color = \"#112233\"\ntint = 0.9\nwebview_dim = 0.4\nwebview_desaturate = 0.7",
+        )
+        .unwrap();
         assert_eq!(patch.enabled, Some(false));
         assert_eq!(patch.dim, Some(0.3));
         assert_eq!(patch.tint_color.as_deref(), Some("#112233"));
         assert_eq!(patch.tint, Some(0.9));
+        assert_eq!(patch.webview_dim, Some(0.4));
+        assert_eq!(patch.webview_desaturate, Some(0.7));
     }
 
     #[test]

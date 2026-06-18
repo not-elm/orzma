@@ -60,22 +60,22 @@ fn pane_active_state_changed(
 
 /// Sets each pane's [`PaneInactiveStyle`] on the `TmuxPane` entity (which owns
 /// the `TerminalGrid` / material): the active pane (or every pane when none is
-/// active) gets the default no-op `{ dim: 1.0, tint: ZERO }`; inactive panes get
-/// the configured `(dim, tint)`. Only inserts when the value changes. Gated by
-/// `pane_active_state_changed`, so it does not observe live config edits — a
-/// config reload re-applies on the next active-pane change.
+/// active) gets the default no-op; inactive panes get the configured style
+/// (background tint + overlay dim/desaturate). Only inserts when the value
+/// changes. Gated by `pane_active_state_changed`, so it does not observe live
+/// config edits — a config reload re-applies on the next active-pane change.
 fn sync_inactive_pane_style(
     mut commands: Commands,
     panes: Query<(Entity, Has<ActivePane>, Option<&PaneInactiveStyle>), With<TmuxPane>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
-    let (dim, tint) = inactive_style(configs.as_deref());
+    let inactive = inactive_style(configs.as_deref());
     let any_active = panes.iter().any(|(_, active, _)| active);
     for (entity, active, current) in panes.iter() {
         let want = if active || !any_active {
             PaneInactiveStyle::default()
         } else {
-            PaneInactiveStyle { dim, tint }
+            inactive
         };
         if current.copied() != Some(want) {
             commands.entity(entity).insert(want);
@@ -83,21 +83,23 @@ fn sync_inactive_pane_style(
     }
 }
 
-/// Returns the `(dim, tint)` applied to inactive panes when the treatment is
-/// enabled: the configured brightness and a background-tint `Vec4` (rgb in
-/// LINEAR space, `w` = blend amount). Disabled or absent config yields the
-/// no-op `(1.0, Vec4::ZERO)`.
-fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> (f32, Vec4) {
+/// Returns the [`PaneInactiveStyle`] applied to inactive panes when the
+/// treatment is enabled: background tint (`tint_color` linearized + `tint`
+/// amount) and the inline-webview overlay treatment (`webview_dim` /
+/// `webview_desaturate`). Disabled or absent config yields the no-op default.
+fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> PaneInactiveStyle {
     match configs {
         Some(cfg) if cfg.inactive_pane.enabled => {
             let (r, g, b) = cfg.inactive_pane.tint_color_rgb();
             let lin = Color::srgb_u8(r, g, b).to_linear();
-            (
-                cfg.inactive_pane.dim,
-                Vec4::new(lin.red, lin.green, lin.blue, cfg.inactive_pane.tint),
-            )
+            PaneInactiveStyle {
+                dim: cfg.inactive_pane.dim,
+                tint: Vec4::new(lin.red, lin.green, lin.blue, cfg.inactive_pane.tint),
+                overlay_dim: cfg.inactive_pane.webview_dim,
+                overlay_desaturate: cfg.inactive_pane.webview_desaturate,
+            }
         }
-        _ => (1.0, Vec4::ZERO),
+        _ => PaneInactiveStyle::default(),
     }
 }
 
@@ -153,11 +155,13 @@ mod tests {
 
         let style = |app: &App, e| app.world().get::<PaneInactiveStyle>(e).copied();
         // Expected inactive value from the default config (#3a3b45 @ 0.85,
-        // dim 1.0), built the same way as the production `inactive_style`.
+        // dim 1.0, webview 0.55/0.6), built the same way as `inactive_style`.
         let lin = Color::srgb_u8(0x3a, 0x3b, 0x45).to_linear();
         let inactive = PaneInactiveStyle {
             dim: 1.0,
             tint: Vec4::new(lin.red, lin.green, lin.blue, 0.85),
+            overlay_dim: 0.55,
+            overlay_desaturate: 0.6,
         };
 
         app.update();
