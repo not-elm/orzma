@@ -101,3 +101,50 @@ All 4 new tests pass; all 56 existing tests continue to pass. No regressions.
 ## Next Steps
 
 These three methods are ready for use by the drag-select arbiter (Task 1 of the drag-select feature). The arbiter can now call these methods directly and invoke `flush_emit` once per frame, eliminating the coalescer indirection for interactive selection.
+
+## Fix Report
+
+### Issues Fixed
+
+**FIX 1 — Hoisted inline `use` statements to file-level imports.**
+Both `selection_start_at` and `selection_start_at_vt_only` had `use alacritty_terminal::index::Side as ASide;` inside their function bodies, violating the project rule forbidding `use` inside non-test functions. Added `use alacritty_terminal::index::Side as ASide;` to the top-level use block (after the existing `use alacritty_terminal::index::Line;` import) and removed both inline declarations.
+
+**FIX 2 — Rewrote 4 tests to use `TerminalHandle::new` with explicit channels.**
+The original tests used `TerminalBundle::spawn` (a higher-level API requiring a real PTY). Replaced all 4 tests with the brief's prescribed harness using `crossbeam_channel::unbounded`, `TermListener`, and `TerminalHandle::new(10, 5, ...)`. Test names now match the brief exactly:
+- `selection_start_at_vt_only_sets_selection`
+- `selection_update_to_vt_only_extends_selection`
+- `selection_update_to_vt_only_is_noop_when_no_selection`
+- `selection_clear_vt_only_drops_selection`
+
+**FIX 3 — Collapsed redundant double-check in `selection_update_to_vt_only`.**
+Replaced the `is_none() { return; }` guard followed by `if let Some(sel) = ...` with a single `let Some(sel) = self.term.selection.as_mut() else { return; };` pattern. The immutable check and `viewport_row_to_line` call are sequenced before the mutable borrow to avoid borrow-checker conflicts.
+
+**FIX 4 — Fixed doc comment first lines to third-person singular.**
+- `selection_start_at_vt_only`: was "Start a selection..." → "Starts a selection at `viewport_point` without requiring a `Coalescer`." with the brief's prescribed "Mirrors `selection_start_at` but skips the coalescer arm" framing.
+- `selection_update_to_vt_only`: was "Extend the active selection..." → "Extends the active selection..."
+- `selection_clear_vt_only`: already "Drops" — no change needed.
+
+**FIX 5 — Replaced `handle.term.selection.is_some()` with `handle.selection_type().is_some()`.**
+The `selection_clear_vt_only_drops_selection` test now uses the public accessor instead of accessing the internal `term.selection` field directly.
+
+**FIX 6 — Reverted out-of-scope cosmetic changes.**
+- `sdk/ratatui-ozma/src/webview.rs`: restored the two blank lines after `new_shared` closing brace that the implementer removed.
+- `apps/ozbrowser/src/main.rs`: reverted via `git checkout HEAD~1 --` — restores the compact single-line struct-literal style for the `pass` array and the chained `ozma.register(...)` call.
+
+### Test Results
+
+```
+cargo test -p ozma_tty_engine
+test result: ok. 221 passed; 0 failed; 0 ignored; 0 measured
+```
+
+4 new tests + 217 prior tests all pass. No regressions.
+
+### Build
+
+```
+cargo build
+Finished `dev` profile [unoptimized + debuginfo]
+```
+
+Workspace compiles clean.
