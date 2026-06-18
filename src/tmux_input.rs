@@ -254,8 +254,8 @@ fn forward_keys_to_tmux(
             }
             continue;
         }
-        // Any Cmd/Super-modified key that matched no ozmux shortcut is swallowed:
-        // tmux/PTY has no Super modifier, so it must never be forwarded.
+        // NOTE: tmux/PTY has no Super modifier, so a Cmd-modified key that
+        // matched no ozmux shortcut must be swallowed here, never forwarded.
         if mods.super_ {
             *prefix_pending = false;
             continue;

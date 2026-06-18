@@ -503,8 +503,8 @@ impl Bindings {
 }
 
 /// Shortcut actions reachable under forward-only key routing. tmux owns the
-/// pane/window operations now, so only the two ozmux-local actions remain.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+/// pane/window operations now; these are the ozmux-local GUI actions.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ShortcutAction {
     /// Paste the system clipboard into the active terminal.

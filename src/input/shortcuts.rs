@@ -10,16 +10,16 @@ use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAc
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
 /// the exact modifier set required, and the action to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ResolvedShortcut {
-    pub(crate) keycode: KeyCode,
-    pub(crate) modifiers: Modifiers,
-    pub(crate) action: ShortcutAction,
+struct ResolvedShortcut {
+    keycode: KeyCode,
+    modifiers: Modifiers,
+    action: ShortcutAction,
 }
 
 /// The startup-resolved ozmux shortcut table. Built once from
 /// `OzmuxConfigsResource`; consumed by the tmux keyboard dispatcher.
 #[derive(Resource, Default, Debug, Clone)]
-pub(crate) struct ResolvedShortcuts(pub(crate) Vec<ResolvedShortcut>);
+pub(crate) struct ResolvedShortcuts(Vec<ResolvedShortcut>);
 
 impl ResolvedShortcuts {
     /// Returns the GUI action bound to `(keycode, mods)`, if any. Excludes
@@ -32,9 +32,12 @@ impl ResolvedShortcuts {
     ) -> Option<ShortcutAction> {
         self.0
             .iter()
-            .filter(|s| s.action != ShortcutAction::ReleaseInlineFocus)
-            .find(|s| s.keycode == keycode && s.modifiers == mods)
-            .map(|s| s.action.clone())
+            .find(|s| {
+                s.action != ShortcutAction::ReleaseInlineFocus
+                    && s.keycode == keycode
+                    && s.modifiers == mods
+            })
+            .map(|s| s.action)
     }
 
     /// True when `(keycode, mods)` matches the configured release-inline-focus
@@ -50,7 +53,7 @@ impl ResolvedShortcuts {
 
 /// Resolves every bound chord in `bindings` to a `ResolvedShortcut`, skipping
 /// (with a warning) any chord whose logical key has no physical `KeyCode`.
-pub(crate) fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut> {
+fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut> {
     let mut out = Vec::new();
     for (label, bound, action) in bindings.iter() {
         let Some(chord) = bound else { continue };
@@ -72,10 +75,16 @@ pub(crate) fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut
 
 /// `Startup` system: resolves the configured shortcut bindings into
 /// `ResolvedShortcuts`, replacing the empty default inserted at plugin build.
-pub(crate) fn build_resolved_shortcuts(mut commands: Commands, configs: Res<OzmuxConfigsResource>) {
-    commands.insert_resource(ResolvedShortcuts(resolve_from_bindings(
-        &configs.shortcuts.bindings,
-    )));
+///
+/// Writes through `ResMut` (an immediate change, unlike a deferred
+/// `Commands::insert_resource`) so the table is populated the moment this
+/// system runs, with no window in which a same-schedule reader could observe
+/// the empty default.
+pub(crate) fn build_resolved_shortcuts(
+    mut resolved: ResMut<ResolvedShortcuts>,
+    configs: Res<OzmuxConfigsResource>,
+) {
+    resolved.0 = resolve_from_bindings(&configs.shortcuts.bindings);
 }
 
 /// Maps a config logical `Key` to the physical `KeyCode` ozmux matches on.
