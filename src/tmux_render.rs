@@ -29,6 +29,7 @@ struct LastClientSize {
     window: Option<WindowId>,
     cols: u16,
     rows: u16,
+    last_reported: Option<(u16, u16)>,
 }
 
 /// Wires the tmux pane render systems after the projection chain.
@@ -494,16 +495,38 @@ fn pin_command(per_window: Option<bool>, win: WindowId, cols: u16, rows: u16) ->
     }
 }
 
+/// Decides whether to (re)send the active window's size pin.
+///
+/// Sends when the active window or desired size changed (normal dedupe), or
+/// when tmux's reported size drifted to a NEW value away from desired (foreign
+/// resize → recovery). Does NOT send when the reported size is stuck at the same
+/// drifted value after a pin — tmux is refusing to grow the window (a smaller
+/// foreign client holds `w->latest`), so resending would spin.
+fn reconcile_decision(
+    desired: (u16, u16),
+    active: WindowId,
+    reported: Option<(u16, u16)>,
+    prev_reported: Option<(u16, u16)>,
+    last_window: Option<WindowId>,
+    last_desired: (u16, u16),
+) -> bool {
+    let window_or_size_changed = last_window != Some(active) || last_desired != desired;
+    let drift = reported.is_some_and(|r| r != desired);
+    let reported_changed = reported != prev_reported;
+    window_or_size_changed || (drift && reported_changed)
+}
+
 /// Pins the active tmux window to ozmux's cell size via per-window
 /// `refresh-client -C @win:WxH` (tmux ≥ 3.4) so a smaller foreign client cannot
-/// collapse it. One row is reserved for the ozmux status bar. Deduped on the
-/// (active window, size) pair via [`LastClientSize`].
+/// collapse it. One row is reserved for the ozmux status bar. Uses
+/// [`reconcile_decision`] gated on [`LastClientSize`] to detect foreign-resize
+/// drift and recover without spinning when tmux refuses to grow the window.
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
     connection: NonSend<TmuxConnection>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
-    active: Query<&TmuxWindow, With<ActiveWindow>>,
+    active: Query<(&TmuxWindow, Option<&TmuxWindowLayout>), With<ActiveWindow>>,
 ) {
     let Some(client) = connection.client() else {
         return;
@@ -511,7 +534,7 @@ fn sync_client_size(
     let Ok(window) = window.single() else {
         return;
     };
-    let Ok(tmux_window) = active.single() else {
+    let Ok((tmux_window, layout)) = active.single() else {
         return;
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
@@ -523,7 +546,26 @@ fn sync_client_size(
         cell_h,
     );
     let rows = rows_for_panes(rows);
-    if last.window == Some(tmux_window.id) && (last.cols, last.rows) == (cols, rows) {
+    let desired = (cols, rows);
+    let reported = layout.map(|l| {
+        let d = l.0.root.dims();
+        (
+            d.width.clamp(1, u16::MAX as u32) as u16,
+            d.height.clamp(1, u16::MAX as u32) as u16,
+        )
+    });
+    let prev_reported = last.last_reported;
+    if last.last_reported != reported {
+        last.last_reported = reported;
+    }
+    if !reconcile_decision(
+        desired,
+        tmux_window.id,
+        reported,
+        prev_reported,
+        last.window,
+        (last.cols, last.rows),
+    ) {
         return;
     }
     let cmd = pin_command(connection.supports_per_window_refresh(), tmux_window.id, cols, rows);
@@ -572,6 +614,31 @@ mod tests {
             pin_command(None, WindowId(3), 80, 24),
             "refresh-client -C 80,24"
         );
+    }
+
+    #[test]
+    fn reconcile_sends_on_first_call_and_on_changes() {
+        use ozmux_tmux::WindowId;
+        let w = WindowId(1);
+        // First call: nothing pinned yet → send.
+        assert!(reconcile_decision((80, 24), w, None, None, None, (0, 0)));
+        // Active window changed → send.
+        assert!(reconcile_decision((80, 24), WindowId(2), None, None, Some(w), (80, 24)));
+        // Desired size changed → send.
+        assert!(reconcile_decision((100, 30), w, None, None, Some(w), (80, 24)));
+        // Steady state, reported matches desired → skip.
+        assert!(!reconcile_decision((80, 24), w, Some((80, 24)), Some((80, 24)), Some(w), (80, 24)));
+    }
+
+    #[test]
+    fn reconcile_recovers_on_foreign_drift_but_does_not_spin() {
+        use ozmux_tmux::WindowId;
+        let w = WindowId(1);
+        // Foreign just shrank the window: reported drifted to a NEW value → send (recovery).
+        assert!(reconcile_decision((80, 24), w, Some((40, 12)), Some((80, 24)), Some(w), (80, 24)));
+        // tmux refuses to grow (smaller foreign holds w->latest): reported STUCK at the
+        // same drifted value after our pin → skip (no resend spam, residual limitation).
+        assert!(!reconcile_decision((80, 24), w, Some((40, 12)), Some((40, 12)), Some(w), (80, 24)));
     }
 
     #[test]
