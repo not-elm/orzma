@@ -4888,6 +4888,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozma_mode"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "ozma_tty_engine",
+ "ozma_tty_renderer",
+ "ozmux_configs",
+ "tracing",
+]
+
+[[package]]
 name = "ozma_tty_engine"
 version = "0.1.0"
 dependencies = [
