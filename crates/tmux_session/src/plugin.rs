@@ -153,7 +153,7 @@ fn drain_tmux_events(
                 Err(error) => tracing::warn!(?error, "failed to re-enumerate on window-add"),
             }
         }
-        if detect_window_switch(&events) {
+        if detect_window_switch(&events, current_session) {
             match client.handle().send(&active_pane_command()) {
                 Ok(id) => enumeration.active_pane_pending = Some(id),
                 Err(error) => {
@@ -221,7 +221,11 @@ fn drain_tmux_events(
         if let Some((window, pane)) =
             take_active_pane(&mut enumeration.active_pane_pending, &events)
         {
-            commands.trigger(TmuxActivePaneChanged { window, pane });
+            commands.trigger(TmuxActivePaneChanged {
+                window,
+                pane,
+                from_notification: false,
+            });
             if !enumeration.aggressive_resize_checked
                 && enumeration.aggressive_resize_pending.is_none()
                 && let Some(client) = connection.client()
