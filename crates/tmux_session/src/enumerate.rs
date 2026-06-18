@@ -6,7 +6,7 @@ use crate::keybindings::PromptKind;
 use bevy::prelude::Resource;
 use std::collections::{HashMap, HashSet};
 use tmux_control::CommandId;
-use tmux_control_parser::{PaneId, WindowId, WindowLayout};
+use tmux_control_parser::{PaneId, SessionId, WindowId, WindowLayout};
 
 /// The `-F` format ozmux sends to enumerate windows. Tab-separated, with the
 /// free-text `window_name` LAST so a `splitn(7, '\t')` keeps it intact.
@@ -171,6 +171,24 @@ pub fn switch_client_command(name: &str) -> String {
 /// Builds `select-window -t @<id>` to switch the client's active window.
 pub fn select_window_command(id: WindowId) -> String {
     format!("select-window -t @{}", id.0)
+}
+
+/// Builds `rename-window -t @<id> -- <name>` (name tmux-quoted). The `--` guards
+/// names that begin with `-`; an explicit target id avoids renaming the wrong
+/// window if the current window changes between prompt-open and submit.
+pub fn rename_window_command(id: WindowId, name: &str) -> String {
+    rename_command("rename-window", '@', id.0, name)
+}
+
+/// Builds `rename-session -t $<id> -- <name>` (name tmux-quoted). The explicit
+/// target id avoids renaming the wrong session if the attached session changes
+/// between prompt-open and submit.
+pub fn rename_session_command(id: SessionId, name: &str) -> String {
+    rename_command("rename-session", '$', id.0, name)
+}
+
+fn rename_command(verb: &str, sigil: char, id: u32, name: &str) -> String {
+    format!("{verb} -t {sigil}{id} -- {}", quote(name))
 }
 
 /// Builds `select-pane -t %<id>` to focus a pane.
@@ -638,6 +656,43 @@ mod tests {
         assert_eq!(
             subscribe_window_flags_command(),
             format!("refresh-client -B {WINDOW_FLAGS_SUBSCRIPTION}:@*:#{{window_raw_flags}}")
+        );
+    }
+
+    #[test]
+    fn rename_window_command_targets_at_id_and_quotes_name() {
+        assert_eq!(
+            rename_window_command(WindowId(2), "editor"),
+            "rename-window -t @2 -- editor"
+        );
+        assert_eq!(
+            rename_window_command(WindowId(2), "my editor"),
+            "rename-window -t @2 -- 'my editor'"
+        );
+        assert_eq!(
+            rename_window_command(WindowId(2), ""),
+            "rename-window -t @2 -- ''"
+        );
+        assert_eq!(
+            rename_window_command(WindowId(7), "it's"),
+            r"rename-window -t @7 -- 'it'\''s'"
+        );
+    }
+
+    #[test]
+    fn rename_session_command_targets_dollar_id_and_quotes_name() {
+        use tmux_control_parser::SessionId;
+        assert_eq!(
+            rename_session_command(SessionId(0), "work"),
+            "rename-session -t $0 -- work"
+        );
+        assert_eq!(
+            rename_session_command(SessionId(3), "my work"),
+            "rename-session -t $3 -- 'my work'"
+        );
+        assert_eq!(
+            rename_session_command(SessionId(3), ""),
+            "rename-session -t $3 -- ''"
         );
     }
 }

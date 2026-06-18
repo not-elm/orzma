@@ -11,6 +11,7 @@ pub mod copy_mode_indicator;
 pub(crate) mod copy_search;
 pub(crate) mod ime_overlay;
 pub mod palette;
+pub(crate) mod rename_prompt;
 pub mod root;
 pub(crate) mod tmux_dialog;
 pub(crate) mod tmux_divider_handle;
