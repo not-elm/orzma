@@ -4,7 +4,7 @@
 //! during interception.
 
 use crate::input::{InputPhase, current_modifiers};
-use crate::tmux_pane_hit::{cell_at_local, tmux_pane_at_phys};
+use crate::tmux::pane_hit::{cell_at_local, tmux_pane_at_phys};
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
