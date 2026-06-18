@@ -17,8 +17,8 @@ used by iTerm2 in tmux CC mode.
 |---|---|---|
 | Wheel up (not in copy mode) | tmux `WheelUpPane` → enters copy mode | Scroll local VT scrollback up |
 | Wheel down (not in copy mode) | tmux `WheelDownPane` (usually no-op) | Scroll local VT scrollback down |
-| Wheel up (in copy mode) | `send-keys -X scroll-up` | Scroll local VT scrollback up |
-| Wheel down (in copy mode) | `send-keys -X scroll-down` | Scroll local VT scrollback down |
+| Wheel up (in copy mode) | `send-keys -X scroll-up` | `send-keys -X scroll-up` (unchanged) |
+| Wheel down (in copy mode) | `send-keys -X scroll-down` | `send-keys -X scroll-down` (unchanged) |
 | New `%output` arrives while scrolled back | n/a | Stay at current position (no auto-snap) |
 | Key press while scrolled back | n/a | Snap to live tail, then forward key |
 | Wheel scrolls to bottom | n/a | Remove `PaneScrolledBack` marker |
@@ -65,16 +65,25 @@ by the tmux wheel handler where no `Coalescer` component is present on pane enti
 
 Location: `src/tmux/input.rs`
 
-**Removed params:** `bindings: Res<KeyBindings>`, `copy_modes: Query<(), With<CopyModeState>>`  
+**Removed params:** `bindings: Res<KeyBindings>`  
+**Kept param:** `copy_modes: Query<(), With<CopyModeState>>` (guards against the copy-mode renderer conflict)  
 **Added param:** `mut handles: Query<&mut TerminalHandle>`
 
-The entire tmux-binding dispatch loop (`plan_forward` / `WheelUpPane` / `scroll_command`)
-is replaced with direct VT scroll per notch:
+When `CopyModeState` is present, the copy-mode capture renderer owns the grid;
+calling `flush_emit` on the live handle would fight it. VT scrollback therefore
+applies only when NOT in copy mode. The per-notch loop is also collapsed — with
+no per-notch branching, a single `scroll_vt_only(total_delta)` + one `flush_emit`
+is equivalent:
 
 ```rust
+if copy_modes.contains(entity) {
+    let key = if up { "scroll-up" } else { "scroll-down" };
+    mux.plan(scroll_command(pane_id, key, lines));
+    return;
+}
 let Ok(mut handle) = handles.get_mut(entity) else { return; };
-let delta = if up { lines as i32 } else { -(lines as i32) };
-handle.scroll_vt_only(delta);
+let total_delta = if up { lines as i32 } else { -(lines as i32) };
+handle.scroll_vt_only(total_delta);
 handle.flush_emit(&mut commands, entity);
 if handle.is_at_bottom() {
     commands.entity(entity).remove::<PaneScrolledBack>();
@@ -83,12 +92,11 @@ if handle.is_at_bottom() {
 }
 ```
 
-The `in_copy_mode` branch is eliminated — VT scrollback applies regardless of copy
-mode state.
-
 **Deleted (dead code after change):**
-- `scroll_command()` function
-- `wheel_key_name()` function
+- `wheel_key_name()` function (only used for the `WheelUpPane`/`WheelDownPane` binding dispatch, now removed)
+
+**Not deleted:**
+- `scroll_command()` function (still used for the copy-mode tmux scroll path above)
 
 ### `forward_keys_to_tmux` Changes
 
@@ -107,6 +115,25 @@ if let Some(entity) = active_entity
     commands.entity(entity).remove::<PaneScrolledBack>();
 }
 ```
+
+### IME Commit Path
+
+Location: `src/input/ime.rs`
+
+The IME commit path (`read_ime_events`) sends text via `send_bytes_command`,
+bypassing `forward_keys_to_tmux`. Add the same snap-to-bottom logic before
+the commit is forwarded:
+
+```rust
+if let Ok(mut handle) = handles.get_mut(active_entity)
+    && handle.snap_to_bottom_vt_only()
+{
+    handle.flush_emit(&mut commands, active_entity);
+    commands.entity(active_entity).remove::<PaneScrolledBack>();
+}
+```
+
+Also add `mut handles: Query<&mut TerminalHandle>` to `read_ime_events`.
 
 ### Scrollback Indicator Changes
 
@@ -138,5 +165,6 @@ observers check that the OTHER marker is also absent before hiding the chip.
 |---|---|
 | `crates/ozma_tty_engine/src/handle.rs` | Add `scroll_vt_only`, `snap_to_bottom_vt_only` |
 | `src/ui/copy_mode.rs` | Add `PaneScrolledBack` component |
-| `src/tmux/input.rs` | Rework `forward_wheel_to_tmux`; update `forward_keys_to_tmux`; delete `scroll_command`, `wheel_key_name` |
+| `src/tmux/input.rs` | Rework `forward_wheel_to_tmux`; update `forward_keys_to_tmux`; delete `wheel_key_name` |
+| `src/input/ime.rs` | Add snap-to-bottom before `send_bytes_command` in `read_ime_events` |
 | `src/ui/copy_mode_indicator.rs` | Extend to show for `PaneScrolledBack`; add hide observer |
