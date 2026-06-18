@@ -15,12 +15,13 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::{NonSend, Query, Res, ResMut, Single};
+use bevy::ecs::system::{Commands, NonSend, Query, Res, ResMut, Single};
 use bevy::math::Vec2;
 use bevy::prelude::Entity;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
+use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozmux_tmux::{ActivePane, TmuxConnection, TmuxPane, send_bytes_command};
@@ -284,8 +285,10 @@ pub(crate) fn ime_policy_system(
 /// commits — including the macOS Character Viewer emoji path — without any
 /// modifier interpretation.
 pub(crate) fn read_ime_events(
+    mut commands: Commands,
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
+    mut handles: Query<&mut TerminalHandle>,
     connection: NonSend<TmuxConnection>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
@@ -308,13 +311,18 @@ pub(crate) fn read_ime_events(
             if commit_text.is_empty() {
                 continue;
             }
-            let Some((_, pane)) = active else {
+            let Some((entity, pane)) = active else {
                 tracing::warn!(
                     target: "ozmux_gui::input::ime",
                     "commit dropped: no active tmux pane",
                 );
                 continue;
             };
+            if let Ok(mut handle) = handles.get_mut(entity)
+                && handle.snap_to_bottom_vt_only()
+            {
+                handle.flush_emit(&mut commands, entity);
+            }
             let Some(client) = connection.client() else {
                 continue;
             };
