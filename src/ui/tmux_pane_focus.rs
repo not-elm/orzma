@@ -1,9 +1,10 @@
-//! Pane augmentation and dim: gives each tmux pane a `Button` click target
-//! with `FocusPolicy::Block` (load-bearing: stops pane clicks reaching webview
-//! surfaces), and dims and desaturates every inactive pane at the renderer via
-//! `PaneInactiveStyle` (brightness + grey-out the terminal shader applies)
-//! rather than an opaque overlay veil. `select-pane` on press is now owned by
-//! the tmux mouse gesture arbiter (`tmux_mouse::OzmuxTmuxMousePlugin`).
+//! Pane augmentation and inactive-pane styling: gives each tmux pane a `Button`
+//! click target with `FocusPolicy::Block` (load-bearing: stops pane clicks
+//! reaching webview surfaces), and tints the background of (and optionally dims)
+//! every inactive pane at the renderer via `PaneInactiveStyle` (the terminal
+//! shader blends inactive backgrounds toward a configured grey). `select-pane`
+//! on press is owned by the tmux mouse gesture arbiter
+//! (`tmux_mouse::OzmuxTmuxMousePlugin`).
 
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
@@ -59,22 +60,22 @@ fn pane_active_state_changed(
 
 /// Sets each pane's [`PaneInactiveStyle`] on the `TmuxPane` entity (which owns
 /// the `TerminalGrid` / material): the active pane (or every pane when none is
-/// active) gets the default no-op `{ dim: 1.0, desaturate: 0.0 }`; inactive
-/// panes get the configured `(dim, desaturate)`. Only inserts when the value
-/// changes. Gated by `pane_active_state_changed`, so it does not observe live
-/// config edits — a config reload re-applies on the next active-pane change.
+/// active) gets the default no-op `{ dim: 1.0, tint: ZERO }`; inactive panes get
+/// the configured `(dim, tint)`. Only inserts when the value changes. Gated by
+/// `pane_active_state_changed`, so it does not observe live config edits — a
+/// config reload re-applies on the next active-pane change.
 fn sync_inactive_pane_style(
     mut commands: Commands,
     panes: Query<(Entity, Has<ActivePane>, Option<&PaneInactiveStyle>), With<TmuxPane>>,
     configs: Option<Res<OzmuxConfigsResource>>,
 ) {
-    let (dim, desaturate) = inactive_style(configs.as_deref());
+    let (dim, tint) = inactive_style(configs.as_deref());
     let any_active = panes.iter().any(|(_, active, _)| active);
     for (entity, active, current) in panes.iter() {
         let want = if active || !any_active {
             PaneInactiveStyle::default()
         } else {
-            PaneInactiveStyle { dim, desaturate }
+            PaneInactiveStyle { dim, tint }
         };
         if current.copied() != Some(want) {
             commands.entity(entity).insert(want);
@@ -82,15 +83,21 @@ fn sync_inactive_pane_style(
     }
 }
 
-/// Returns the `(dim, desaturate)` applied to inactive panes: the configured
-/// values when the inactive-pane treatment is enabled, otherwise the no-op
-/// `(1.0, 0.0)`.
-fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> (f32, f32) {
+/// Returns the `(dim, tint)` applied to inactive panes when the treatment is
+/// enabled: the configured brightness and a background-tint `Vec4` (rgb in
+/// LINEAR space, `w` = blend amount). Disabled or absent config yields the
+/// no-op `(1.0, Vec4::ZERO)`.
+fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> (f32, Vec4) {
     match configs {
         Some(cfg) if cfg.inactive_pane.enabled => {
-            (cfg.inactive_pane.dim, cfg.inactive_pane.desaturate)
+            let (r, g, b) = cfg.inactive_pane.tint_color_rgb();
+            let lin = Color::srgb_u8(r, g, b).to_linear();
+            (
+                cfg.inactive_pane.dim,
+                Vec4::new(lin.red, lin.green, lin.blue, cfg.inactive_pane.tint),
+            )
         }
-        _ => (1.0, 0.0),
+        _ => (1.0, Vec4::ZERO),
     }
 }
 
@@ -145,36 +152,34 @@ mod tests {
             .id();
 
         let style = |app: &App, e| app.world().get::<PaneInactiveStyle>(e).copied();
+        // Expected inactive value from the default config (#3a3b45 @ 0.85,
+        // dim 1.0), built the same way as the production `inactive_style`.
+        let lin = Color::srgb_u8(0x3a, 0x3b, 0x45).to_linear();
+        let inactive = PaneInactiveStyle {
+            dim: 1.0,
+            tint: Vec4::new(lin.red, lin.green, lin.blue, 0.85),
+        };
 
         app.update();
         assert_eq!(
             style(&app, p1),
             Some(PaneInactiveStyle::default()),
-            "active pane: full-bright, full-color"
+            "active pane: untinted, full-bright"
         );
         assert_eq!(
             style(&app, p2),
-            Some(PaneInactiveStyle {
-                dim: 0.5,
-                desaturate: 0.7
-            }),
-            "inactive pane: dimmed + desaturated"
+            Some(inactive),
+            "inactive pane: background-tinted"
         );
 
         // Move ActivePane to p2.
         app.world_mut().entity_mut(p1).remove::<ActivePane>();
         app.world_mut().entity_mut(p2).insert(ActivePane);
         app.update();
-        assert_eq!(
-            style(&app, p1),
-            Some(PaneInactiveStyle {
-                dim: 0.5,
-                desaturate: 0.7
-            })
-        );
+        assert_eq!(style(&app, p1), Some(inactive));
         assert_eq!(style(&app, p2), Some(PaneInactiveStyle::default()));
 
-        // No active pane: both full-bright, full-color.
+        // No active pane: both untinted.
         app.world_mut().entity_mut(p2).remove::<ActivePane>();
         app.update();
         assert_eq!(style(&app, p1), Some(PaneInactiveStyle::default()));
