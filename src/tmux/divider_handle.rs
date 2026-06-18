@@ -154,8 +154,8 @@ fn divider_hover_feedback(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::render::{DividerPixelRect, PackedTmuxLayout};
+    use super::*;
     use bevy::math::Vec2;
     use std::collections::HashMap;
     use tmux_control_parser::{DividerAxis, PaneId};
