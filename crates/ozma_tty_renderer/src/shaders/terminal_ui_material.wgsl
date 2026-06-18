@@ -26,7 +26,10 @@ struct TerminalParams {
     hover_hyperlink_id: u32,
     hover_active: u32,
     dim: f32,
+    inactive_tint: vec4<f32>,
     overlay_rects: array<vec4<i32>, 4>,
+    overlay_dim: f32,
+    overlay_desaturate: f32,
 };
 
 struct Cell {
@@ -100,12 +103,23 @@ const GLYPH_NONE: u32 = 0xFFFFFFFFu;
 // Fragment entrypoint
 // ============================================================================
 
+// Blends a BACKGROUND color toward the inactive-pane tint target. `rgb`
+// blends toward `params.inactive_tint.rgb` by `params.inactive_tint.a`; alpha
+// is preserved. Active pane => `inactive_tint.a == 0.0` (no-op). Applied only
+// at background-establishment points (before glyphs/overlays paint), so text
+// and inline-webview overlays keep their full color. Runs in LINEAR space —
+// `inactive_tint.rgb` is uploaded pre-linearized by the host.
+fn tint_bg(c: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(mix(c.rgb, params.inactive_tint.rgb, params.inactive_tint.a), c.a);
+}
+
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
     // Out-of-grid fragments (degenerate grid, or the right/bottom padding
     // strip) fall back to bg_padding_color so the surrounding band blends
-    // with the terminal background instead of opaque black.
-    let fallback = params.bg_padding_color;
+    // with the terminal background instead of opaque black. The padding is a
+    // background region, so it receives the inactive-pane tint too.
+    let fallback = tint_bg(params.bg_padding_color);
 
     var color: vec4<f32>;
     if params.grid_size.x == 0u || params.grid_size.y == 0u {
@@ -123,10 +137,11 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Pane-level dim: active pane => params.dim == 1.0 (no-op); inactive pane
-    // => params.dim < 1.0. RGB only; alpha is preserved so blending and the
-    // opaque-padding contract are unchanged. Composes with the per-cell SGR
-    // STYLE_DIM independently.
+    // Pane-level brightness: active pane => params.dim == 1.0 (no-op); inactive
+    // pane => params.dim <= 1.0. RGB only; alpha is preserved so blending and
+    // the opaque-padding contract are unchanged. The inactive-pane background
+    // tint is applied earlier (tint_bg, at the background stage). Composes with
+    // the per-cell SGR STYLE_DIM independently.
     return vec4<f32>(color.rgb * params.dim, color.a);
 }
 
@@ -139,7 +154,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 // cursor → selection.
 fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
     let colors = resolve_cell_colors(hit.cell);
-    var color = colors.bg;
+    var color = tint_bg(colors.bg);
     color = paint_inline_overlays(hit, color);
     color = paint_primary_glyph(hit, colors.fg, color);
     color = paint_left_overdraw(hit, color);
@@ -180,7 +195,7 @@ fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
         p_px.y - f32(row) * params.cell_size_px.y,
     );
     let colors = resolve_cell_colors(strip_cell);
-    var color = colors.bg;
+    var color = tint_bg(colors.bg);
     // NOTE: paint_cell_glyph (NOT paint_primary_glyph). strip_local.x is
     // in [cell_pitch.x, cell_pitch.x + max_overflow_phys) — already in
     // the right-half coordinate space of any STYLE_WIDE_RIGHT_HALF wide
@@ -370,6 +385,17 @@ fn is_in_selection_uniform(
 // Inline-overlay compositing
 // ============================================================================
 
+// Applies the inactive-pane treatment to one overlay (webview) sample before it
+// blends over the background: desaturate toward Rec.709 luminance, then dim.
+// `s` is premultiplied-alpha and linear, so both are correct on `s.rgb`
+// (luma(a*c) = a*luma(c); a scalar multiply distributes through premultiply).
+// Active pane => overlay_dim == 1.0 && overlay_desaturate == 0.0 (no-op).
+fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
+    let luma = dot(s.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let desat = mix(s.rgb, vec3<f32>(luma), params.overlay_desaturate);
+    return vec4<f32>(desat * params.overlay_dim, s.a);
+}
+
 // Inline-overlay compositing (spec §6.2): samples each ACTIVE overlay slot
 // whose cell-rect contains this fragment and composites it OVER the cell
 // background. Source is premultiplied alpha (CEF convention, spec §6.3);
@@ -381,6 +407,7 @@ fn is_in_selection_uniform(
 // is partially scrolled above the viewport), so partial visibility never
 // distorts the image; grid-edge clipping is inherent because only in-grid
 // fragments reach paint_grid_cell.
+
 fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     var color = base;
     let p_px = vec2<f32>(f32(hit.col), f32(hit.row)) * params.cell_size_px + hit.in_cell_px;
@@ -390,28 +417,28 @@ fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     {
         let uv = overlay_uv(params.overlay_rects[0], p_px, hit);
         if uv.x >= 0.0 {
-            let s = textureSampleLevel(overlay0_tex, overlay0_samp, uv, 0.0);
+            let s = treat_overlay(textureSampleLevel(overlay0_tex, overlay0_samp, uv, 0.0));
             color = blend_premultiplied_over(color, s);
         }
     }
     {
         let uv = overlay_uv(params.overlay_rects[1], p_px, hit);
         if uv.x >= 0.0 {
-            let s = textureSampleLevel(overlay1_tex, overlay1_samp, uv, 0.0);
+            let s = treat_overlay(textureSampleLevel(overlay1_tex, overlay1_samp, uv, 0.0));
             color = blend_premultiplied_over(color, s);
         }
     }
     {
         let uv = overlay_uv(params.overlay_rects[2], p_px, hit);
         if uv.x >= 0.0 {
-            let s = textureSampleLevel(overlay2_tex, overlay2_samp, uv, 0.0);
+            let s = treat_overlay(textureSampleLevel(overlay2_tex, overlay2_samp, uv, 0.0));
             color = blend_premultiplied_over(color, s);
         }
     }
     {
         let uv = overlay_uv(params.overlay_rects[3], p_px, hit);
         if uv.x >= 0.0 {
-            let s = textureSampleLevel(overlay3_tex, overlay3_samp, uv, 0.0);
+            let s = treat_overlay(textureSampleLevel(overlay3_tex, overlay3_samp, uv, 0.0));
             color = blend_premultiplied_over(color, s);
         }
     }

@@ -150,16 +150,18 @@ resize-pane-down = "Cmd+Shift+J"
 
     #[test]
     fn inactive_pane_section_merges_and_clamps() {
-        let toml_str = r#"
+        let toml_str = r##"
 [inactive_pane]
 enabled = false
-opacity = 2.0
-"#;
+tint = 2.0
+tint_color = "#102030"
+"##;
         let raw: RawConfigs = toml::from_str(toml_str).unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert!(!merged.inactive_pane.enabled);
-        assert_eq!(merged.inactive_pane.opacity, 1.0, "opacity clamps to 1.0");
-        assert_eq!(merged.inactive_pane.color, "#000000", "color keeps default");
+        assert_eq!(merged.inactive_pane.tint, 1.0, "tint clamps to 1.0");
+        assert_eq!(merged.inactive_pane.tint_color, "#102030");
+        assert_eq!(merged.inactive_pane.dim, 1.0, "dim keeps default");
     }
 
     #[test]
