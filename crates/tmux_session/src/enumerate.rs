@@ -442,6 +442,8 @@ pub(crate) struct EnumerationState {
     pub(crate) mode_keys_pending: Option<CommandId>,
     /// The id of the in-flight `aggressive-resize` option query, if any.
     pub(crate) aggressive_resize_pending: Option<CommandId>,
+    /// Whether the one-time aggressive-resize option check has completed.
+    pub(crate) aggressive_resize_checked: bool,
     /// In-flight `capture-pane` commands → the pane each reply seeds.
     pub(crate) capture_pending: HashMap<CommandId, PaneId>,
     /// In-flight cursor-position `display-message` queries → the pane.

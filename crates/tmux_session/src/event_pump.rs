@@ -140,7 +140,7 @@ pub(crate) fn take_version(
 }
 
 /// Returns the `aggressive-resize` option value from a `CommandComplete` whose
-/// id matches `pending` (first non-empty trimmed output line), clearing `pending`.
+/// id matches `pending` (first non-empty trimmed output line), and clears `pending`.
 pub(crate) fn take_aggressive_resize(
     pending: &mut Option<CommandId>,
     events: &[TransportEvent],

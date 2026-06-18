@@ -217,7 +217,8 @@ fn drain_tmux_events(
             take_active_pane(&mut enumeration.active_pane_pending, &events)
         {
             commands.trigger(TmuxActivePaneChanged { window, pane });
-            if enumeration.aggressive_resize_pending.is_none()
+            if !enumeration.aggressive_resize_checked
+                && enumeration.aggressive_resize_pending.is_none()
                 && let Some(client) = connection.client()
             {
                 match client.handle().send(&aggressive_resize_command(window)) {
@@ -226,13 +227,16 @@ fn drain_tmux_events(
                 }
             }
         }
-        if let Some(value) = take_aggressive_resize(&mut enumeration.aggressive_resize_pending, &events)
-            && value.trim() == "on"
+        if let Some(value) =
+            take_aggressive_resize(&mut enumeration.aggressive_resize_pending, &events)
         {
-            tracing::warn!(
-                "tmux 'aggressive-resize on' is incompatible with control-mode integration; \
-                 windows may resize unexpectedly"
-            );
+            enumeration.aggressive_resize_checked = true;
+            if value.trim() == "on" {
+                tracing::warn!(
+                    "tmux 'aggressive-resize on' is incompatible with control-mode integration; \
+                     windows may resize unexpectedly"
+                );
+            }
         }
         // NOTE: deref once so the borrow checker can see these as distinct
         // field borrows rather than overlapping borrows through DerefMut.
