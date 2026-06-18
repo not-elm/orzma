@@ -53,7 +53,10 @@ impl Plugin for OzmaModePlugin {
                 shell: self.config_shell.clone(),
             })
             .add_observer(exit::on_child_exit)
-            .add_systems(OnEnter(AppMode::Ozma), spawn::spawn_terminal)
+            .add_systems(
+                OnEnter(AppMode::Ozma),
+                (spawn::spawn_terminal, layout::reset_last_size),
+            )
             .add_systems(
                 Update,
                 layout::resize_to_window

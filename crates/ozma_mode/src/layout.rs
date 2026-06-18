@@ -11,6 +11,12 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 #[derive(Resource, Default)]
 pub(crate) struct OzmaLastSize(pub(crate) Option<(u16, u16)>);
 
+/// Resets the cached terminal size on Ozma mode entry so `resize_to_window`
+/// fires on the first frame even when font metrics and window size are stable.
+pub(crate) fn reset_last_size(mut last_size: ResMut<OzmaLastSize>) {
+    last_size.0 = None;
+}
+
 /// Resizes the Ozma terminal to fill the primary window.
 ///
 /// Gated by `run_if` at registration — only runs on
