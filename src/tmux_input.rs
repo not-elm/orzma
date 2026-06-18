@@ -16,9 +16,7 @@ use crate::tmux_picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
-use crate::ui::rename_prompt::{
-    RenameKind, RenamePrompt, RenameSubject, parse_command_prompt_rename,
-};
+use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -324,7 +322,7 @@ fn forward_keys_to_tmux(
     let handle = client.handle();
     for action in actions {
         if let Forwarded::Run(command) = &action
-            && let Some(kind) = parse_command_prompt_rename(command)
+            && let Some(kind) = RenameKind::parse(command)
             && let Some(subject) = resolve_rename_subject(kind, &rename)
         {
             commands.insert_resource(RenamePrompt::new(subject));
