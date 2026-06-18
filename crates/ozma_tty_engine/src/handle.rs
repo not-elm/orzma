@@ -378,6 +378,16 @@ impl TerminalHandle {
         *self.term.mode()
     }
 
+    /// Returns `true` when the terminal is in alternate screen mode.
+    ///
+    /// Full-screen TUI apps (vim, htop, fzf, less) activate the alternate
+    /// screen via `\x1b[?1049h`; while they are active `TermMode::ALT_SCREEN`
+    /// is set and mouse-wheel events must be forwarded to tmux instead of
+    /// scrolling the local VT scrollback.
+    pub fn is_in_alt_screen(&self) -> bool {
+        self.term.mode().contains(TermMode::ALT_SCREEN)
+    }
+
     /// Enters vi (copy) mode. Idempotent — a second call while already
     /// in vi mode is a no-op rather than a toggle-off. Schedules a Full
     /// damage emit so the renderer observes the new mode (`Term::toggle_vi_mode`

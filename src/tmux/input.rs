@@ -659,6 +659,13 @@ fn forward_wheel_to_tmux(
         let Ok(mut handle) = handles.get_mut(entity) else {
             return;
         };
+        if handle.is_in_alt_screen() {
+            let cmd = scroll_command(&target, up, total_lines);
+            if let Err(e) = tmux.send(&cmd) {
+                tracing::warn!(?e, "alt-screen wheel scroll send failed");
+            }
+            return;
+        }
         let total_delta = if up {
             total_lines as i32
         } else {
