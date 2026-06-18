@@ -511,7 +511,7 @@ fn sync_client_size(
     let Ok(window) = window.single() else {
         return;
     };
-    let Some(tmux_window) = active.iter().next() else {
+    let Ok(tmux_window) = active.single() else {
         return;
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
