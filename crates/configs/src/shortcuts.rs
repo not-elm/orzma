@@ -385,6 +385,12 @@ pub struct Bindings {
     /// Releases keyboard focus from a focused inline webview back to the terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub release_inline_focus: Option<KeyChord>,
+    /// Opens the tmux session/window picker overlay.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub open_picker: Option<KeyChord>,
+    /// Quits the ozmux application.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub quit: Option<KeyChord>,
     /// Deprecated and ignored: this binding was removed when surface/copy
     /// actions were dropped for the tmux backend. Accepted so existing
     /// configs carrying it still parse under `deny_unknown_fields`. Remove
@@ -442,6 +448,8 @@ impl Default for Bindings {
             focus_workspace_next: None,
             paste: Some(parse_default_chord("Cmd+V")),
             release_inline_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
+            open_picker: Some(parse_default_chord("Cmd+Shift+P")),
+            quit: Some(parse_default_chord("Cmd+Q")),
             close_surface: None,
             new_terminal_surface: None,
             focus_surface_prev: None,
@@ -467,6 +475,8 @@ impl Bindings {
                 &self.release_inline_focus,
                 ShortcutAction::ReleaseInlineFocus,
             ),
+            ("open-picker", &self.open_picker, ShortcutAction::OpenPicker),
+            ("quit", &self.quit, ShortcutAction::Quit),
         ]
         .into_iter()
     }
@@ -499,6 +509,10 @@ pub enum ShortcutAction {
     Paste,
     /// Releases keyboard focus from a focused inline webview back to the terminal.
     ReleaseInlineFocus,
+    /// Opens the tmux session/window picker overlay.
+    OpenPicker,
+    /// Quits the ozmux application.
+    Quit,
 }
 
 #[cfg(test)]
@@ -713,6 +727,8 @@ mod tests {
         let b = Bindings::default();
         assert!(b.paste.is_some());
         assert!(b.release_inline_focus.is_some());
+        assert!(b.open_picker.is_some());
+        assert!(b.quit.is_some());
     }
 
     #[test]
@@ -751,9 +767,9 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_2_entries() {
+    fn iter_yields_4_entries() {
         let b = Bindings::default();
-        assert_eq!(b.iter().count(), 2);
+        assert_eq!(b.iter().count(), 4);
     }
 
     #[test]
@@ -762,7 +778,7 @@ mod tests {
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Deprecated fields carry
         // `skip_serializing`, so only the active bindings appear here.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"open-picker":{"key":"p","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}}}}"#;
         assert_eq!(json, expected);
     }
 
@@ -771,6 +787,24 @@ mod tests {
         let b = Bindings::default();
         let chord = b.paste.as_ref().unwrap();
         assert_eq!(chord.key, Key::Char('v'));
+        assert!(chord.modifiers.meta);
+        assert!(!chord.modifiers.ctrl && !chord.modifiers.shift && !chord.modifiers.alt);
+    }
+
+    #[test]
+    fn bindings_default_open_picker_is_cmd_shift_p() {
+        let b = Bindings::default();
+        let chord = b.open_picker.as_ref().unwrap();
+        assert_eq!(chord.key, Key::Char('p'));
+        assert!(chord.modifiers.meta && chord.modifiers.shift);
+        assert!(!chord.modifiers.ctrl && !chord.modifiers.alt);
+    }
+
+    #[test]
+    fn bindings_default_quit_is_cmd_q() {
+        let b = Bindings::default();
+        let chord = b.quit.as_ref().unwrap();
+        assert_eq!(chord.key, Key::Char('q'));
         assert!(chord.modifiers.meta);
         assert!(!chord.modifiers.ctrl && !chord.modifiers.shift && !chord.modifiers.alt);
     }
@@ -802,7 +836,7 @@ copy = \"Cmd+C\"
         let parsed: Shortcuts = toml::from_str(toml).expect("deprecated keys must still parse");
         assert_eq!(
             parsed.bindings.iter().count(),
-            2,
+            4,
             "ignored keys must not enter the active set"
         );
     }
