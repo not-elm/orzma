@@ -3,6 +3,7 @@
 mod app;
 mod history;
 mod keymap;
+mod ui;
 
 fn main() {
     eprintln!("ozbrowse: not yet implemented");
