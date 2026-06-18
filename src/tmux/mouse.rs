@@ -286,6 +286,12 @@ fn arbiter(
         // so just drop any in-flight inline press — leaving it set would let a
         // later release act on a stale child.
         gesture.inline_press = None;
+        if let GestureState::SelectingVt { pane, .. } = gesture.state {
+            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
+                handle.selection_clear_vt_only();
+                handle.flush_emit(&mut commands, pane);
+            }
+        }
         gesture.state = GestureState::Idle;
         return;
     };
@@ -304,6 +310,12 @@ fn arbiter(
             cell_h,
             scale,
         );
+        if let GestureState::SelectingVt { pane, .. } = gesture.state {
+            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
+                handle.selection_clear_vt_only();
+                handle.flush_emit(&mut commands, pane);
+            }
+        }
         gesture.state = GestureState::Idle;
         return;
     }
@@ -323,6 +335,12 @@ fn arbiter(
             cell_h,
             scale,
         );
+        if let GestureState::SelectingVt { pane, .. } = gesture.state {
+            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
+                handle.selection_clear_vt_only();
+                handle.flush_emit(&mut commands, pane);
+            }
+        }
         gesture.state = GestureState::Idle;
         return;
     }
@@ -544,6 +562,8 @@ fn arbiter(
                                     handle.selection_start_at_vt_only(point, a_side, ty);
                                     if let Some(text) = handle.selection_to_string() {
                                         vt_select.clipboard.write(text);
+                                    } else {
+                                        handle.selection_clear_vt_only();
                                     }
                                     handle.flush_emit(&mut commands, pane);
                                 }
@@ -633,11 +653,13 @@ fn arbiter(
             if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
                 handle.selection_start_at_vt_only(point, a_side, SelectionType::Simple);
                 handle.flush_emit(&mut commands, pane);
+                gesture.state = GestureState::SelectingVt {
+                    pane,
+                    last_target: Some((col, row)),
+                };
+            } else {
+                gesture.state = GestureState::Idle;
             }
-            gesture.state = GestureState::SelectingVt {
-                pane,
-                last_target: Some((col, row)),
-            };
         }
         return;
     }
@@ -1070,7 +1092,7 @@ fn cell_and_side(local: Vec2, cell_w: f32, cell_h: f32, cols: u16, rows: u16) ->
     let row_f = (local.y / cell_h).max(0.0);
     let col = (col_f.floor() as u16).min(cols.saturating_sub(1));
     let row = (row_f.floor() as u16).min(rows.saturating_sub(1));
-    let side = if col_f - col_f.floor() < 0.5 {
+    let side = if col_f - (col as f32) < 0.5 {
         ASide::Left
     } else {
         ASide::Right

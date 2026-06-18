@@ -249,6 +249,12 @@ fn forward_keys_to_tmux(
                     }
                 }
             }
+            if let Some(entity) = active_entity
+                && let Ok(mut handle) = handles.get_mut(entity)
+                && handle.snap_to_bottom_vt_only()
+            {
+                handle.flush_emit(&mut commands, entity);
+            }
         }
 
         *prefix_pending = false;
@@ -282,6 +288,12 @@ fn forward_keys_to_tmux(
                     else {
                         continue;
                     };
+                    if let Some(entity) = active_entity
+                        && let Ok(mut handle) = handles.get_mut(entity)
+                        && handle.snap_to_bottom_vt_only()
+                    {
+                        handle.flush_emit(&mut commands, entity);
+                    }
                     let bytes = build_paste_bytes(&text, false);
                     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
                         if let Err(e) = client.handle().send(&send_bytes_command(target, chunk)) {
@@ -442,6 +454,19 @@ fn scroll_command(target: &str, up: bool, lines: u32) -> String {
     format!(
         "send-keys -X -t {target} -N {lines} {}",
         if up { "scroll-up" } else { "scroll-down" }
+    )
+}
+
+/// Builds a pane-targeted key-send command for scrolling an alt-screen pane:
+/// `send-keys -t %<id> -N <lines> Up|Down`.
+///
+/// Alt-screen panes are NOT in tmux copy mode, so `-X` (copy-mode command flag)
+/// is invalid. Instead, cursor Up/Down keys are forwarded directly to the
+/// running application, which interprets them as scroll events.
+fn alt_screen_scroll_command(target: &str, up: bool, lines: u32) -> String {
+    format!(
+        "send-keys -t {target} -N {lines} {}",
+        if up { "Up" } else { "Down" }
     )
 }
 
@@ -660,17 +685,14 @@ fn forward_wheel_to_tmux(
             return;
         };
         if handle.is_in_alt_screen() {
-            let cmd = scroll_command(&target, up, total_lines);
+            let cmd = alt_screen_scroll_command(&target, up, total_lines);
             if let Err(e) = tmux.send(&cmd) {
                 tracing::warn!(?e, "alt-screen wheel scroll send failed");
             }
             return;
         }
-        let total_delta = if up {
-            total_lines as i32
-        } else {
-            -(total_lines as i32)
-        };
+        let total_lines_i32 = total_lines.min(i32::MAX as u32) as i32;
+        let total_delta = if up { total_lines_i32 } else { -total_lines_i32 };
         handle.scroll_vt_only(total_delta);
         handle.flush_emit(&mut commands, entity);
     }
