@@ -4870,7 +4870,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ozbrowse"
+name = "ozbrowser"
 version = "0.1.0"
 dependencies = [
  "anyhow",

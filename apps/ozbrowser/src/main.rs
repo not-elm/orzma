@@ -1,4 +1,4 @@
-//! ozbrowse — a TUI browser for remote URLs in ozmux panes.
+//! ozbrowser — a TUI browser for remote URLs in ozmux panes.
 
 mod app;
 mod history;
@@ -20,7 +20,7 @@ use std::time::Duration;
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("ozbrowse: {e}");
+        eprintln!("ozbrowser: {e}");
         std::process::exit(1);
     }
 }
@@ -28,11 +28,11 @@ fn main() {
 fn run() -> anyhow::Result<()> {
     let initial_url = std::env::args()
         .nth(1)
-        .ok_or_else(|| anyhow::anyhow!("usage: ozbrowse <url>"))?;
+        .ok_or_else(|| anyhow::anyhow!("usage: ozbrowser <url>"))?;
 
     let ozma = Ozma::connect().map_err(|e| match e {
         OzmaError::NotInPane(_) => {
-            anyhow::anyhow!("{e}. Run ozbrowse inside an ozmux pane.")
+            anyhow::anyhow!("{e}. Run ozbrowser inside an ozmux pane.")
         }
         _ => anyhow::anyhow!("{e}"),
     })?;

@@ -88,7 +88,7 @@ fn draw_help_modal(frame: &mut Frame<'_>) {
     frame.render_widget(
         Paragraph::new(lines)
             .style(style)
-            .block(Block::bordered().title(" Help — ozbrowse ").style(style)),
+            .block(Block::bordered().title(" Help — ozbrowser ").style(style)),
         area,
     );
 }

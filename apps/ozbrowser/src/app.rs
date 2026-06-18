@@ -1,4 +1,4 @@
-//! App state machine for ozbrowse. `on_action` is the single entry point;
+//! App state machine for ozbrowser. `on_action` is the single entry point;
 //! it returns the [`Cmd`] side-effects for `main.rs` to execute.
 
 use crate::history::History;
@@ -42,7 +42,7 @@ pub(crate) enum Cmd {
     Quit,
 }
 
-/// Whole-app state for ozbrowse.
+/// Whole-app state for ozbrowser.
 #[derive(Debug)]
 pub(crate) struct App {
     mode: Mode,
