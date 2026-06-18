@@ -116,13 +116,33 @@ fn event_loop(
 // unregistered — the old handle is dropped but the server-side entry persists because the
 // SDK has no unregister/Drop path yet. Fix this when the SDK exposes one.
 fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Result<WebviewHandle> {
+    let pass = [
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Esc },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Char('j') },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Down },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Char('k') },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Up },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Char(' ') },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::PageDown },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::PageUp },
+        KeyChord { mods: KeyModifiers::CONTROL, code: KeyCode::Char('d') },
+        KeyChord { mods: KeyModifiers::CONTROL, code: KeyCode::Char('u') },
+        KeyChord { mods: KeyModifiers::CONTROL, code: KeyCode::Char('f') },
+        KeyChord { mods: KeyModifiers::CONTROL, code: KeyCode::Char('b') },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Char('g') },
+        KeyChord { mods: KeyModifiers::SHIFT,   code: KeyCode::Char('g') },
+        KeyChord { mods: KeyModifiers::SHIFT,   code: KeyCode::Char('h') },
+        KeyChord { mods: KeyModifiers::SHIFT,   code: KeyCode::Char('l') },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Char('o') },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Char('r') },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Char('i') },
+        KeyChord { mods: KeyModifiers::NONE,    code: KeyCode::Char('q') },
+        KeyChord { mods: KeyModifiers::CONTROL, code: KeyCode::Char('c') },
+    ];
     let view = ozma.register(
         Webview::url(url)
             .interactive(true)
-            .passthrough([KeyChord {
-                mods: KeyModifiers::NONE,
-                code: KeyCode::Esc,
-            }])
+            .passthrough(pass)
             .on(
                 "urlChanged",
                 move |args: serde_json::Value| -> Result<(), RpcError> {
