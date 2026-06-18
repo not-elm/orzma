@@ -339,6 +339,29 @@ impl TerminalHandle {
         self.stage_full_damage_and_arm(coalescer);
     }
 
+    /// Scrolls the viewport by `delta` lines without requiring a `Coalescer`.
+    ///
+    /// Positive `delta` moves backward into scrollback history; negative moves
+    /// toward the live tail. For display-only tmux panes: the caller must call
+    /// `flush_emit` after this to push the new viewport to the renderer.
+    pub fn scroll_vt_only(&mut self, delta: i32) {
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
+    /// Snaps the viewport to the live tail without requiring a `Coalescer`.
+    ///
+    /// Returns `true` when the viewport was scrolled back and has now been
+    /// snapped to the live tail. Returns `false` (no-op) when already at the
+    /// bottom (`display_offset == 0`). The caller must call `flush_emit` when
+    /// `true` is returned to push the new viewport to the renderer.
+    pub fn snap_to_bottom_vt_only(&mut self) -> bool {
+        if self.is_at_bottom() {
+            return false;
+        }
+        self.term.scroll_display(Scroll::Bottom);
+        true
+    }
+
     /// Returns true when the viewport is pinned to the live tail
     /// (`display_offset == 0`). Used by the mouse-wheel input system
     /// to decide whether keyboard input or Esc should trigger a
@@ -1929,6 +1952,95 @@ mod tests {
             !handle
                 .current_modes()
                 .contains(alacritty_terminal::term::TermMode::VI)
+        );
+    }
+
+    #[test]
+    fn scroll_vt_only_grows_display_offset() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        for _ in 0..30 {
+            h.advance(b"x\r\n");
+        }
+        assert_eq!(
+            h.term.grid().display_offset(),
+            0,
+            "precondition: at live tail"
+        );
+        h.scroll_vt_only(3);
+        assert!(
+            h.term.grid().display_offset() > 0,
+            "scroll_vt_only must grow display_offset"
+        );
+    }
+
+    #[test]
+    fn snap_to_bottom_vt_only_returns_true_and_snaps() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        for _ in 0..30 {
+            h.advance(b"x\r\n");
+        }
+        h.scroll_vt_only(3);
+        assert!(!h.is_at_bottom(), "precondition: must be scrolled back");
+        assert!(
+            h.snap_to_bottom_vt_only(),
+            "must return true when actually snapping"
+        );
+        assert!(h.is_at_bottom(), "must reach live tail after snap");
+    }
+
+    #[test]
+    fn snap_to_bottom_vt_only_returns_false_when_already_at_bottom() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        assert!(h.is_at_bottom(), "fresh handle is at live tail");
+        let mut h = h;
+        assert!(
+            !h.snap_to_bottom_vt_only(),
+            "must return false when already at bottom — nothing to snap"
         );
     }
 
