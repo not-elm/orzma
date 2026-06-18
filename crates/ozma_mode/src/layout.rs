@@ -17,11 +17,10 @@ impl Plugin for LayoutPlugin {
                 Update,
                 resize_to_window
                     .run_if(in_state(crate::AppMode::Ozma))
+                    .run_if(resource_exists::<TerminalCellMetricsResource>)
                     .run_if(
                         resource_exists_and_changed::<OzmaLastSize>
-                            .or(resource_exists_and_changed::<
-                                ozma_tty_renderer::TerminalCellMetricsResource,
-                            >)
+                            .or(resource_exists_and_changed::<TerminalCellMetricsResource>)
                             .or(on_message::<bevy::window::WindowResized>),
                     ),
             );
@@ -42,12 +41,9 @@ fn resize_to_window(
         (Entity, &mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
         With<OzmaTerminal>,
     >,
-    metrics: Option<Res<TerminalCellMetricsResource>>,
+    metrics: Res<TerminalCellMetricsResource>,
     window_q: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Some(metrics) = metrics else {
-        return;
-    };
     let Ok(window) = window_q.single() else {
         return;
     };
