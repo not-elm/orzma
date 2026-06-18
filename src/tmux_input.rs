@@ -187,8 +187,7 @@ fn forward_keys_to_tmux(
 
     // The active pane (if any) is the forward/paste target. GUI chords below do
     // not need it (so quit/picker work before a pane is projected); tmux key
-    // dispatch does. Resolved here (before the webview drain gate) so passthrough
-    // forwarding inside the gate can reach `target`.
+    // dispatch does.
     let (active_entity, active_pane_id, target) = match active_pane {
         Some(single) => {
             let (entity, pane) = *single;
@@ -204,14 +203,12 @@ fn forward_keys_to_tmux(
     // `SetFocus` op, and the focus-preservation arm in `sync_focused_webview`),
     // so this drain is load-bearing whenever an inline webview is focused —
     // removing it would double-send keystrokes to the page and the pane.
-    if focused_webview.0.is_some() {
-        let focused_entity = focused_webview.0.unwrap();
+    if let Some(focused_entity) = focused_webview.0 {
         let pass_chords = passthrough_keys
             .get(focused_entity)
             .map(|pk| pk.0.as_slice())
             .unwrap_or(&[]);
 
-        let mut released = false;
         let mut pass_names: Vec<String> = Vec::new();
         for ev in events.read() {
             if ev.state != ButtonState::Pressed {
@@ -219,7 +216,6 @@ fn forward_keys_to_tmux(
             }
             if resolved.is_release_inline_focus(ev.key_code, cfg_mods) {
                 focused_webview.0 = None;
-                released = true;
                 break;
             }
             if !pass_chords.is_empty()
@@ -237,7 +233,7 @@ fn forward_keys_to_tmux(
             }
         }
 
-        if !released && !pass_names.is_empty() {
+        if !pass_names.is_empty() {
             let actions = plan_forward(&mut prefix_pending, &bindings, pass_names);
             if let (Some(target), Some(client)) = (target.as_deref(), connection.client()) {
                 let handle = client.handle();

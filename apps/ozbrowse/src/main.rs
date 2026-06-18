@@ -100,10 +100,6 @@ fn event_loop(
                         view = register_view(ozma, app.url(), url_tx.clone())?;
                     }
                     Cmd::Scroll(action) => {
-                        // NOTE: best-effort for remote pages — arbitrary URLs have no
-                        // `window.ozma.on("scroll", …)` listener, so this emit is a no-op
-                        // unless the page explicitly handles it. Do not treat lack of
-                        // scroll response as a bug.
                         let _ = view.emit("scroll", &scroll_payload(action));
                     }
                 }
@@ -146,9 +142,6 @@ fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Resu
             .on(
                 "urlChanged",
                 move |args: serde_json::Value| -> Result<(), RpcError> {
-                    // NOTE: This fires only on full navigations registered by the ozmux host. In-page
-                    // navigation via the History API (pushState/replaceState) on remote pages is silent —
-                    // the status bar URL will lag on single-page apps.
                     if let Some(u) = args["url"].as_str() {
                         let _ = url_tx.send(u.to_owned());
                     }

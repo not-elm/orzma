@@ -46,6 +46,7 @@ pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
             _ => Action::Ignore,
         },
         Mode::Address => match key.code {
+            KeyCode::Char('c') if ctrl => Action::Quit,
             KeyCode::Esc => Action::Escape,
             KeyCode::Enter => Action::AddressConfirm,
             KeyCode::Backspace => Action::AddressBackspace,
@@ -53,6 +54,7 @@ pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
             _ => Action::Ignore,
         },
         Mode::Help => match key.code {
+            KeyCode::Char('c') if ctrl => Action::Quit,
             KeyCode::Esc => Action::Escape,
             KeyCode::Char('q') => Action::Escape,
             _ => Action::Ignore,
@@ -103,16 +105,28 @@ mod tests {
     #[test]
     fn normal_scroll_keys() {
         assert_eq!(map(Mode::Normal, key('j')), Action::ScrollLineDown);
-        assert_eq!(map(Mode::Normal, special(KeyCode::Down)), Action::ScrollLineDown);
+        assert_eq!(
+            map(Mode::Normal, special(KeyCode::Down)),
+            Action::ScrollLineDown
+        );
         assert_eq!(map(Mode::Normal, key('k')), Action::ScrollLineUp);
-        assert_eq!(map(Mode::Normal, special(KeyCode::Up)), Action::ScrollLineUp);
+        assert_eq!(
+            map(Mode::Normal, special(KeyCode::Up)),
+            Action::ScrollLineUp
+        );
         assert_eq!(map(Mode::Normal, ctrl('d')), Action::ScrollHalfDown);
         assert_eq!(map(Mode::Normal, key(' ')), Action::ScrollHalfDown);
         assert_eq!(map(Mode::Normal, ctrl('u')), Action::ScrollHalfUp);
         assert_eq!(map(Mode::Normal, ctrl('f')), Action::ScrollPageDown);
-        assert_eq!(map(Mode::Normal, special(KeyCode::PageDown)), Action::ScrollPageDown);
+        assert_eq!(
+            map(Mode::Normal, special(KeyCode::PageDown)),
+            Action::ScrollPageDown
+        );
         assert_eq!(map(Mode::Normal, ctrl('b')), Action::ScrollPageUp);
-        assert_eq!(map(Mode::Normal, special(KeyCode::PageUp)), Action::ScrollPageUp);
+        assert_eq!(
+            map(Mode::Normal, special(KeyCode::PageUp)),
+            Action::ScrollPageUp
+        );
     }
 
     #[test]
@@ -147,8 +161,14 @@ mod tests {
     fn address_mode_keys() {
         assert_eq!(map(Mode::Address, key('h')), Action::AddressChar('h'));
         assert_eq!(map(Mode::Address, key('/')), Action::AddressChar('/'));
-        assert_eq!(map(Mode::Address, special(KeyCode::Backspace)), Action::AddressBackspace);
-        assert_eq!(map(Mode::Address, special(KeyCode::Enter)), Action::AddressConfirm);
+        assert_eq!(
+            map(Mode::Address, special(KeyCode::Backspace)),
+            Action::AddressBackspace
+        );
+        assert_eq!(
+            map(Mode::Address, special(KeyCode::Enter)),
+            Action::AddressConfirm
+        );
         assert_eq!(map(Mode::Address, special(KeyCode::Esc)), Action::Escape);
     }
 

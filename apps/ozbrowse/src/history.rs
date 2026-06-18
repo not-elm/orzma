@@ -77,7 +77,7 @@ mod tests {
     #[test]
     fn back_pops_from_back_and_pushes_to_forward() {
         let mut h = History::new();
-        h.navigate("a".into(), "b".into()); // back=[a]
+        h.navigate("a".into(), "b".into());
         let prev = h.back("b".into()).unwrap();
         assert_eq!(prev, "a");
         assert_eq!(h.back("a".into()), None);
@@ -87,9 +87,9 @@ mod tests {
     #[test]
     fn forward_pops_from_forward_and_pushes_to_back() {
         let mut h = History::new();
-        h.navigate("a".into(), "b".into()); // back=[a]
-        h.back("b".into()); // forward=[b], back=[]
-        let next = h.forward("a".into()).unwrap(); // back=[a], forward=[]
+        h.navigate("a".into(), "b".into());
+        h.back("b".into());
+        let next = h.forward("a".into()).unwrap();
         assert_eq!(next, "b");
         assert_eq!(h.forward("b".into()), None);
     }
@@ -98,8 +98,8 @@ mod tests {
     fn navigate_after_back_clears_forward() {
         let mut h = History::new();
         h.navigate("a".into(), "b".into());
-        h.back("b".into()); // forward=[b]
-        h.navigate("a".into(), "c".into()); // clears forward
+        h.back("b".into());
+        h.navigate("a".into(), "c".into());
         assert_eq!(h.forward("c".into()), None);
     }
 
