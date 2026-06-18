@@ -6,7 +6,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Clear, Paragraph};
+use ratatui::widgets::{Block, Paragraph};
 use ratatui_ozma::{FramePlacements, WebviewWidget};
 
 /// Draws the whole frame: status/address bar (1 row) + webview, with help modal overlay.
@@ -26,16 +26,15 @@ pub(crate) fn draw(
         _ => draw_status_bar(frame, chunks[0], app),
     }
 
-    if app.mode() != Mode::Help {
-        frame.render_stateful_widget(
-            WebviewWidget::new(handle_id).focused(app.mode() == Mode::Insert),
-            chunks[1],
-            placements,
-        );
-        return;
-    }
+    frame.render_stateful_widget(
+        WebviewWidget::new(handle_id).focused(app.mode() == Mode::Insert),
+        chunks[1],
+        placements,
+    );
 
-    draw_help_modal(frame);
+    if app.mode() == Mode::Help {
+        draw_help_modal(frame);
+    }
 }
 
 fn draw_status_bar(frame: &mut Frame<'_>, area: Rect, app: &App) {
@@ -62,7 +61,6 @@ fn draw_address_bar(frame: &mut Frame<'_>, area: Rect, app: &App) {
 
 fn draw_help_modal(frame: &mut Frame<'_>) {
     let area = centered_rect(62, 85, frame.area());
-    frame.render_widget(Clear, area);
     let lines = vec![
         Line::from("  Normal Mode Shortcuts"),
         Line::from(""),
