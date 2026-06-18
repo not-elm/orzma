@@ -108,8 +108,6 @@ fn max_pane_height(app: &mut App) -> Option<u32> {
         .max()
 }
 
-// ─── Test 1: foreign session creation does not tear down ozmux's projection ──
-
 /// A second tmux session on the same server must NOT cause ozmux to tear down
 /// its window/pane projection.
 ///
@@ -142,15 +140,13 @@ fn foreign_session_change_keeps_projection() {
         .unwrap()
         .handle();
 
-    // Create a second session on the same tmux server (detached, so it does not
-    // take over the control connection).  tmux will emit a `%session-created`
-    // and, if any other client were attached, `%client-session-changed` for
-    // those clients.  The ozmux control connection itself is NOT switched.
+    // NOTE: `-d` keeps the foreign session detached so it does not take over the
+    // control connection; the ozmux client is never switched, so any teardown
+    // observed below would be a spurious foreign-event regression.
     handle
         .send("new-session -d -s ozmux-mc-foreign")
         .expect("new-session -d -s foreign");
 
-    // Pump for 2 s to let any spurious teardown propagate.
     let _ = pump_until(&mut app, 2, |_| false);
 
     let post_windows = window_count(&mut app);
@@ -169,8 +165,6 @@ fn foreign_session_change_keeps_projection() {
          created; baseline={baseline_panes} after={post_panes}"
     );
 }
-
-// ─── Test 2: resize-window shrink is observed via %layout-change ───────────
 
 /// Drives `resize-window -y N -t @<active>` and asserts that the projected pane
 /// height updates via the resulting `%layout-change`.
@@ -194,13 +188,11 @@ fn foreign_session_change_keeps_projection() {
 fn foreign_shrink_observes_clamp() {
     let mut app = attach_and_wait("shrink");
 
-    // Let the projection settle before taking the baseline height.
     let _ = pump_until(&mut app, 1, |_| false);
 
     let baseline_height = max_pane_height(&mut app).expect("a projected pane with height");
     let win_id = active_window_id(&mut app).expect("an active window");
 
-    // Shrink the active window to a height well below the baseline.
     let shrunk_height: u32 = 8;
     assert!(
         baseline_height > shrunk_height,
@@ -221,11 +213,13 @@ fn foreign_shrink_observes_clamp() {
         ))
         .expect("resize-window");
 
-    // Pump until the projected pane height reflects the shrink.
+    // Pump until the projected pane height drops STRICTLY below the baseline.
     // tmux emits a `%layout-change` after `resize-window`; the projection should
-    // update within a few seconds.
+    // update within a few seconds. The strict `<` is load-bearing: `<=` is true
+    // at the baseline before any `%layout-change` lands, so it would return on
+    // the first iteration and pass even if the projection never updated.
     let observed_shrink = pump_until(&mut app, 5, |app| {
-        max_pane_height(app).is_some_and(|h| h <= baseline_height)
+        max_pane_height(app).is_some_and(|h| h < baseline_height)
     });
 
     let final_height = max_pane_height(&mut app).unwrap_or(0);
