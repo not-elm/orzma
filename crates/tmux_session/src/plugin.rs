@@ -5,14 +5,15 @@ use crate::components::{TmuxPane, TmuxSession};
 use crate::connection::TmuxConnection;
 use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
-    EnumerationState, active_pane_command, capture_pane_command, client_name_command,
-    cursor_query_command, list_windows_command, mode_keys_command, subscribe_window_flags_command,
-    version_command, version_supports_per_window_refresh,
+    EnumerationState, active_pane_command, aggressive_resize_command, capture_pane_command,
+    client_name_command, cursor_query_command, list_windows_command, mode_keys_command,
+    subscribe_window_flags_command, version_command, version_supports_per_window_refresh,
 };
 use crate::event_pump::{
     advance_state, detect_session_switch, detect_window_added, detect_window_switch,
-    drain_transport, take_active_pane, take_client_name, take_cursor_positions, take_keybindings,
-    take_mode_keys, take_pane_captures, take_prefix_keys, take_version, trigger_events,
+    drain_transport, take_active_pane, take_aggressive_resize, take_client_name,
+    take_cursor_positions, take_keybindings, take_mode_keys, take_pane_captures, take_prefix_keys,
+    take_version, trigger_events,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
@@ -216,6 +217,22 @@ fn drain_tmux_events(
             take_active_pane(&mut enumeration.active_pane_pending, &events)
         {
             commands.trigger(TmuxActivePaneChanged { window, pane });
+            if enumeration.aggressive_resize_pending.is_none()
+                && let Some(client) = connection.client()
+            {
+                match client.handle().send(&aggressive_resize_command(window)) {
+                    Ok(id) => enumeration.aggressive_resize_pending = Some(id),
+                    Err(error) => tracing::warn!(?error, "failed to query aggressive-resize"),
+                }
+            }
+        }
+        if let Some(value) = take_aggressive_resize(&mut enumeration.aggressive_resize_pending, &events)
+            && value.trim() == "on"
+        {
+            tracing::warn!(
+                "tmux 'aggressive-resize on' is incompatible with control-mode integration; \
+                 windows may resize unexpectedly"
+            );
         }
         // NOTE: deref once so the borrow checker can see these as distinct
         // field borrows rather than overlapping borrows through DerefMut.

@@ -139,6 +139,15 @@ pub(crate) fn take_version(
     take_reply_line(pending, events, "version")
 }
 
+/// Returns the `aggressive-resize` option value from a `CommandComplete` whose
+/// id matches `pending` (first non-empty trimmed output line), clearing `pending`.
+pub(crate) fn take_aggressive_resize(
+    pending: &mut Option<CommandId>,
+    events: &[TransportEvent],
+) -> Option<String> {
+    take_reply_line(pending, events, "aggressive-resize")
+}
+
 /// Drains matching `capture-pane` replies from `events`.
 ///
 /// For every `CommandComplete` whose id is in `capture_pending`:

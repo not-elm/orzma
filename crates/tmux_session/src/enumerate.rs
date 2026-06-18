@@ -409,6 +409,13 @@ pub fn show_buffer_command() -> String {
     "show-buffer".to_string()
 }
 
+/// Builds `show-options -wqv -t @<win> aggressive-resize` — reads the per-window
+/// `aggressive-resize` option value (`on`/`off`/empty). `-q` suppresses errors,
+/// `-v` prints only the value.
+pub(crate) fn aggressive_resize_command(win: WindowId) -> String {
+    format!("show-options -wqv -t @{} aggressive-resize", win.0)
+}
+
 /// Tracks the in-flight `list-windows` enumeration command so its reply can
 /// be correlated by [`CommandId`] and seeded into the projection.
 #[derive(Resource, Default)]
@@ -433,6 +440,8 @@ pub(crate) struct EnumerationState {
     pub(crate) keys_copy_mode_vi_pending: Option<CommandId>,
     /// In-flight `#{mode-keys}` query, if any.
     pub(crate) mode_keys_pending: Option<CommandId>,
+    /// The id of the in-flight `aggressive-resize` option query, if any.
+    pub(crate) aggressive_resize_pending: Option<CommandId>,
     /// In-flight `capture-pane` commands → the pane each reply seeds.
     pub(crate) capture_pending: HashMap<CommandId, PaneId>,
     /// In-flight cursor-position `display-message` queries → the pane.
@@ -784,6 +793,14 @@ mod tests {
         assert_eq!(
             resize_window_command(WindowId(2), 80, 24),
             "resize-window -x 80 -y 24 -t @2"
+        );
+    }
+
+    #[test]
+    fn aggressive_resize_command_targets_window() {
+        assert_eq!(
+            aggressive_resize_command(WindowId(1)),
+            "show-options -wqv -t @1 aggressive-resize"
         );
     }
 
