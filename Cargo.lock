@@ -4888,6 +4888,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozbrowse"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "ratatui",
+ "ratatui-ozma",
+ "serde_json",
+]
+
+[[package]]
 name = "ozma_tty_engine"
 version = "0.1.0"
 dependencies = [

@@ -1,6 +1,7 @@
 //! URL navigation history: back and forward stacks.
 
 /// Tracks visited URLs as two stacks so the user can navigate back and forward.
+#[derive(Debug)]
 pub(crate) struct History {
     back: Vec<String>,
     forward: Vec<String>,
