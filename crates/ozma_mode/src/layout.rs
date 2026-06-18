@@ -6,22 +6,36 @@ use bevy::window::PrimaryWindow;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 
-/// Tracks the last (cols, rows) sent to the terminal to guard against
-/// redundant resize calls.
-#[derive(Resource, Default)]
-pub(crate) struct OzmaLastSize(Option<(u16, u16)>);
+pub(crate) struct LayoutPlugin;
 
-/// Resets the cached terminal size on Ozma mode entry so `resize_to_window`
-/// fires on the first frame even when font metrics and window size are stable.
-pub(crate) fn reset_last_size(mut last_size: ResMut<OzmaLastSize>) {
+impl Plugin for LayoutPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<OzmaLastSize>()
+            .add_message::<bevy::window::WindowResized>()
+            .add_systems(OnEnter(crate::AppMode::Ozma), reset_last_size)
+            .add_systems(
+                Update,
+                resize_to_window
+                    .run_if(in_state(crate::AppMode::Ozma))
+                    .run_if(
+                        resource_exists_and_changed::<OzmaLastSize>
+                            .or(resource_exists_and_changed::<
+                                ozma_tty_renderer::TerminalCellMetricsResource,
+                            >)
+                            .or(on_message::<bevy::window::WindowResized>),
+                    ),
+            );
+    }
+}
+
+#[derive(Resource, Default)]
+struct OzmaLastSize(Option<(u16, u16)>);
+
+fn reset_last_size(mut last_size: ResMut<OzmaLastSize>) {
     last_size.0 = None;
 }
 
-/// Resizes the Ozma terminal to fill the primary window.
-///
-/// Gated by `run_if` at registration — only runs when `OzmaLastSize`,
-/// `TerminalCellMetricsResource`, or `WindowResized` changes.
-pub(crate) fn resize_to_window(
+fn resize_to_window(
     mut commands: Commands,
     mut last_size: ResMut<OzmaLastSize>,
     mut terminal_q: Query<

@@ -40,29 +40,10 @@ impl OzmaModePlugin {
 impl Plugin for OzmaModePlugin {
     fn build(&self, app: &mut App) {
         app.init_state::<AppMode>()
-            .init_resource::<layout::OzmaLastSize>()
-            .add_message::<bevy::window::WindowResized>()
             .insert_resource(OzmaModeConfig {
                 shell: self.config_shell.clone(),
             })
-            .add_observer(exit::on_child_exit)
-            .add_systems(
-                OnEnter(AppMode::Ozma),
-                (spawn::spawn_terminal, layout::reset_last_size),
-            )
-            .add_systems(
-                Update,
-                layout::resize_to_window
-                    .run_if(in_state(AppMode::Ozma))
-                    .run_if(
-                        resource_exists_and_changed::<layout::OzmaLastSize>
-                            .or(resource_exists_and_changed::<
-                                ozma_tty_renderer::TerminalCellMetricsResource,
-                            >)
-                            .or(on_message::<bevy::window::WindowResized>),
-                    ),
-            )
-            .add_systems(OnExit(AppMode::Ozma), spawn::despawn_terminal);
+            .add_plugins((exit::ExitPlugin, layout::LayoutPlugin, spawn::SpawnPlugin));
     }
 }
 

@@ -4,11 +4,15 @@ use crate::spawn::OzmaTerminal;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalChildExit;
 
-/// Observer fired when the PTY child process exits.
-///
-/// Sends `AppExit::Success` only when the exiting terminal is the Ozma
-/// terminal — ignores exits from any other terminal entity in the world.
-pub(crate) fn on_child_exit(
+pub(crate) struct ExitPlugin;
+
+impl Plugin for ExitPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(on_child_exit);
+    }
+}
+
+fn on_child_exit(
     ev: On<TerminalChildExit>,
     mut exit: MessageWriter<AppExit>,
     terminal_q: Query<(), With<OzmaTerminal>>,

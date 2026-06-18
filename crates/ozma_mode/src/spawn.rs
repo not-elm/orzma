@@ -13,13 +13,22 @@ use std::sync::atomic::AtomicBool;
 #[derive(Component)]
 pub(crate) struct OzmaTerminal;
 
-/// Spawns the Ozma PTY terminal on `OnEnter(AppMode::Ozma)`.
-///
-/// Reads `OzmaModeConfig.shell` for the configured shell override;
-/// falls back to `$SHELL` then `/bin/sh`. Initial terminal dimensions
-/// are derived from the primary window and font metrics if available,
-/// otherwise default to 80×24.
-pub(crate) fn spawn_terminal(
+pub(crate) struct SpawnPlugin;
+
+impl Plugin for SpawnPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(OnEnter(crate::AppMode::Ozma), spawn_terminal)
+            .add_systems(OnExit(crate::AppMode::Ozma), despawn_terminal);
+    }
+}
+
+pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
+    let cols = ((w_px as f32 / cell_w).floor() as u16).max(1);
+    let rows = ((h_px as f32 / cell_h).floor() as u16).max(1);
+    (cols, rows)
+}
+
+fn spawn_terminal(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     mut exit: MessageWriter<AppExit>,
@@ -80,20 +89,13 @@ pub(crate) fn spawn_terminal(
     }
 }
 
-/// Despawns the Ozma terminal on `OnExit(AppMode::Ozma)`.
-pub(crate) fn despawn_terminal(
+fn despawn_terminal(
     mut commands: Commands,
     terminal_q: Query<Entity, With<OzmaTerminal>>,
 ) {
     for entity in terminal_q.iter() {
         commands.entity(entity).despawn();
     }
-}
-
-pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
-    let cols = ((w_px as f32 / cell_w).floor() as u16).max(1);
-    let rows = ((h_px as f32 / cell_h).floor() as u16).max(1);
-    (cols, rows)
 }
 
 fn resolve_shell(config: Option<&str>, env_shell: Option<&str>) -> String {
