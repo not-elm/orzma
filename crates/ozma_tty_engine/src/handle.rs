@@ -585,9 +585,6 @@ impl TerminalHandle {
         viewport_point: alacritty_terminal::index::Point,
         side: alacritty_terminal::index::Side,
     ) {
-        if self.term.selection.is_none() {
-            return;
-        }
         let line = viewport_row_to_line(&self.term, viewport_point.line.0);
         let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
         let Some(sel) = self.term.selection.as_mut() else {
