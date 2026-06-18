@@ -555,9 +555,6 @@ fn sync_client_size(
         )
     });
     let prev_reported = last.last_reported;
-    if last.last_reported != reported {
-        last.last_reported = reported;
-    }
     if !reconcile_decision(
         desired,
         tmux_window.id,
@@ -566,6 +563,9 @@ fn sync_client_size(
         last.window,
         (last.cols, last.rows),
     ) {
+        if last.last_reported != reported {
+            last.last_reported = reported;
+        }
         return;
     }
     let cmd = pin_command(connection.supports_per_window_refresh(), tmux_window.id, cols, rows);
@@ -577,6 +577,13 @@ fn sync_client_size(
             last.window = Some(tmux_window.id);
             last.cols = cols;
             last.rows = rows;
+            // NOTE: advance the observation only after a successful pin; a failed
+            // send must leave last_reported stale so the next tick re-detects the
+            // drift and retries — otherwise a failed recovery is permanently
+            // suppressed (reported_changed would be false next tick).
+            if last.last_reported != reported {
+                last.last_reported = reported;
+            }
         }
         Err(e) => tracing::warn!(?e, cols, rows, "window refresh-client send failed"),
     }
