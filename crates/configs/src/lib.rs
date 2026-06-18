@@ -18,6 +18,7 @@ pub mod inactive_pane;
 pub mod keyboard;
 pub mod mouse;
 pub mod osc_webview;
+pub mod ozma;
 pub mod path;
 mod raw;
 pub mod shortcuts;
@@ -43,6 +44,8 @@ pub struct OzmuxConfigs {
     pub osc_webview: OscWebviewConfig,
     /// tmux backend configuration.
     pub tmux: tmux::TmuxConfig,
+    /// Ozma single-terminal mode configuration.
+    pub ozma: ozma::OzmaConfig,
 }
 
 impl OzmuxConfigs {
