@@ -73,15 +73,20 @@ impl Plugin for OzmaModePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::asset::AssetPlugin;
+    use ozma_tty_renderer::material::TerminalUiMaterial;
 
     #[test]
     fn plugin_registers_state_and_defaults_to_ozma() {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
+            AssetPlugin::default(),
             bevy::state::app::StatesPlugin,
             OzmaModePlugin::new(None),
         ));
+        app.world_mut()
+            .init_resource::<bevy::asset::Assets<TerminalUiMaterial>>();
         app.update();
         assert_eq!(
             app.world().resource::<State<AppMode>>().get(),

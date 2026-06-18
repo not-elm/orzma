@@ -1,10 +1,10 @@
 //! Window-fill resize system for the Ozma terminal.
 
+use crate::spawn::OzmaTerminal;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use crate::spawn::OzmaTerminal;
 
 /// Tracks the last (cols, rows) sent to the terminal to guard against
 /// redundant resize calls.
