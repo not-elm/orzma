@@ -25,8 +25,8 @@ fn on_child_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::ecs::message::MessageReader;
     use crate::spawn::OzmaTerminal;
+    use bevy::ecs::message::MessageReader;
     use ozma_tty_engine::TerminalChildExit;
 
     #[test]

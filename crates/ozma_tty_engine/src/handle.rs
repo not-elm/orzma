@@ -548,6 +548,61 @@ impl TerminalHandle {
         self.stage_full_damage_and_arm(coalescer);
     }
 
+    /// Start a selection of `ty` anchored at `viewport_point` with
+    /// `side` without requiring a `Coalescer`. Same viewport-row → alacritty-Line
+    /// translation as `selection_start_at`. The caller must call `flush_emit`
+    /// after this to push the new selection to the renderer.
+    ///
+    /// Calls `update(anchor, opposite_side)` immediately after
+    /// `Selection::new` so `selection_to_string()` does not return `None`
+    /// for a freshly-anchored `Simple` / `Block` selection.
+    pub fn selection_start_at_vt_only(
+        &mut self,
+        viewport_point: alacritty_terminal::index::Point,
+        side: alacritty_terminal::index::Side,
+        ty: alacritty_terminal::selection::SelectionType,
+    ) {
+        use alacritty_terminal::index::Side as ASide;
+        let line = viewport_row_to_line(&self.term, viewport_point.line.0);
+        let anchor = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        let mut sel = alacritty_terminal::selection::Selection::new(ty, anchor, side);
+        let opposite = match side {
+            ASide::Left => ASide::Right,
+            ASide::Right => ASide::Left,
+        };
+        sel.update(anchor, opposite);
+        self.term.selection = Some(sel);
+        self.selection_anchor = Some(anchor);
+    }
+
+    /// Extend the active selection's moving end to `viewport_point` /
+    /// `side` without requiring a `Coalescer`. Same viewport-row → alacritty-Line
+    /// translation as `selection_start_at`. No-op (no panic, no state change)
+    /// when `Term::selection` is `None`. The caller must call `flush_emit`
+    /// after this to push the updated selection to the renderer.
+    pub fn selection_update_to_vt_only(
+        &mut self,
+        viewport_point: alacritty_terminal::index::Point,
+        side: alacritty_terminal::index::Side,
+    ) {
+        if self.term.selection.is_none() {
+            return;
+        }
+        let line = viewport_row_to_line(&self.term, viewport_point.line.0);
+        let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        if let Some(sel) = self.term.selection.as_mut() {
+            sel.update(point, side);
+        }
+    }
+
+    /// Drops the active selection without requiring a `Coalescer`.
+    /// The caller must call `flush_emit` after this to push the cleared
+    /// selection to the renderer.
+    pub fn selection_clear_vt_only(&mut self) {
+        self.term.selection = None;
+        self.selection_anchor = None;
+    }
+
     /// Reads the active selection as a UTF-8 string via
     /// `Term::selection_to_string`. Returns `None` when no selection is
     /// set or the selection is empty.
@@ -1891,6 +1946,119 @@ mod tests {
         // leave Term::selection as None.
         handle.selection_update_to(&mut coalescer, Point::new(Line(0), Column(5)), Side::Right);
         assert!(handle.selection_type().is_none());
+    }
+
+    #[test]
+    fn selection_start_at_vt_only_creates_selection_without_coalescer() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::SelectionType;
+
+        let opts = SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
+        };
+        let TerminalBundle {
+            mut handle,
+            ..
+        } = TerminalBundle::spawn(opts).expect("spawn");
+
+        let point = Point::new(Line(5), Column(10));
+        handle.selection_start_at_vt_only(point, Side::Left, SelectionType::Simple);
+
+        assert_eq!(handle.selection_type(), Some(SelectionType::Simple));
+        assert!(handle.selection_to_string().is_some());
+    }
+
+    #[test]
+    fn selection_update_to_vt_only_extends_selection_without_coalescer() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::SelectionType;
+
+        let opts = SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
+        };
+        let TerminalBundle {
+            mut handle,
+            ..
+        } = TerminalBundle::spawn(opts).expect("spawn");
+
+        handle.selection_start_at_vt_only(
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+            SelectionType::Simple,
+        );
+        handle.selection_update_to_vt_only(
+            Point::new(Line(0), Column(10)),
+            Side::Right,
+        );
+
+        // The selection must still be active after update.
+        assert_eq!(handle.selection_type(), Some(SelectionType::Simple));
+        assert!(handle.selection_to_string().is_some());
+    }
+
+    #[test]
+    fn selection_update_to_vt_only_no_op_when_no_selection() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+
+        let opts = SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
+        };
+        let TerminalBundle {
+            mut handle,
+            ..
+        } = TerminalBundle::spawn(opts).expect("spawn");
+
+        // No selection_start_at_vt_only — update_to must not panic and must
+        // leave Term::selection as None.
+        handle.selection_update_to_vt_only(Point::new(Line(0), Column(5)), Side::Right);
+        assert!(handle.selection_type().is_none());
+    }
+
+    #[test]
+    fn selection_clear_vt_only_drops_selection_without_coalescer() {
+        use crate::bundle::{SpawnOptions, TerminalBundle};
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::SelectionType;
+
+        let opts = SpawnOptions {
+            cols: 80,
+            rows: 24,
+            shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            cwd: None,
+            env: Vec::new(),
+            osc_webview_gate: Arc::new(AtomicBool::new(false)),
+        };
+        let TerminalBundle {
+            mut handle,
+            ..
+        } = TerminalBundle::spawn(opts).expect("spawn");
+
+        handle.selection_start_at_vt_only(
+            Point::new(Line(0), Column(0)),
+            Side::Left,
+            SelectionType::Simple,
+        );
+        assert!(handle.term.selection.is_some());
+        handle.selection_clear_vt_only();
+        assert!(handle.term.selection.is_none());
     }
 
     #[test]

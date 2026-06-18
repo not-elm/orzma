@@ -161,8 +161,6 @@ impl WebviewHandle {
     pub(crate) fn new_shared(id: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
         Self { id, writer }
     }
-
-
 }
 
 #[cfg(test)]
