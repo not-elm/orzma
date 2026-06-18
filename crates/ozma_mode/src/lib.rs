@@ -4,6 +4,7 @@ mod exit;
 mod layout;
 mod spawn;
 
+use crate::{exit::ExitPlugin, layout::LayoutPlugin, spawn::SpawnPlugin};
 use bevy::prelude::*;
 
 /// Application mode. `Ozma` is the default (single PTY, no tmux).
@@ -43,7 +44,7 @@ impl Plugin for OzmaModePlugin {
             .insert_resource(OzmaModeConfig {
                 shell: self.config_shell.clone(),
             })
-            .add_plugins((exit::ExitPlugin, layout::LayoutPlugin, spawn::SpawnPlugin));
+            .add_plugins((ExitPlugin, LayoutPlugin, SpawnPlugin));
     }
 }
 
