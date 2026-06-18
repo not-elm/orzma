@@ -83,7 +83,7 @@ mod divider_handle;
 mod input;
 mod mouse;
 mod pane_focus;
-mod pane_hit;
+pub(crate) mod pane_hit;
 mod render;
 mod window_bar;
 mod window_bar_input;
@@ -94,6 +94,7 @@ use dialog::DialogPlugin;
 use divider_handle::DividerHandlePlugin;
 use input::InputPlugin;
 use mouse::MousePlugin;
+use ozmux_tmux::TmuxSessionPlugin;
 use pane_focus::PaneFocusPlugin;
 use render::RenderPlugin;
 use window_bar::WindowBarPlugin;
@@ -104,6 +105,7 @@ pub struct OzmuxTmuxPlugin;
 impl Plugin for OzmuxTmuxPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
+            TmuxSessionPlugin,
             RenderPlugin,
             InputPlugin,
             MousePlugin,
@@ -143,16 +145,16 @@ prefix and narrow to `pub(crate)`:
 `mod` declarations: **18 → 14** (six `tmux_*` mods removed, replaced by
 `mod tmux;` and `mod picker;`).
 
-`.add_plugins()` calls: the seven individual singleton calls that existed only
+`.add_plugins()` calls: the eight individual singleton tmux calls that existed only
 to bypass Bevy's 12-tuple limit are replaced by one entry in the main tuple:
 
 ```rust
-// before: 7 separate .add_plugins() calls for tmux sub-plugins
-// after: one entry
+// before: 8 separate .add_plugins() calls for tmux sub-plugins
+// after: one entry (TmuxSessionPlugin now lives inside OzmuxTmuxPlugin)
 .add_plugins((
     TerminalHandlePlugin,
     TerminalRendererPlugin,
-    OzmuxTmuxPlugin,       // entire tmux feature
+    OzmuxTmuxPlugin,       // entire tmux feature (includes TmuxSessionPlugin)
     OzmuxPickerPlugin,     // bootstrap chooser, separate lifecycle
     OzmuxConfigsPlugin,
     FontBridgePlugin,
@@ -167,17 +169,31 @@ to bypass Bevy's 12-tuple limit are replaced by one entry in the main tuple:
 
 ## Import Path Changes
 
-Within the moved files, `crate::` paths update as follows:
+Within the moved files, `crate::` paths update as follows.
+Intra-`tmux/` sibling references use `super::` rather than the full `crate::tmux::` path.
 
-| Before | After |
+### Intra-`tmux/` paths (become `super::` after the move)
+
+| Before | After (in moved file) |
 |---|---|
-| `crate::tmux_render::PackedTmuxLayout` | `crate::tmux::render::PackedTmuxLayout` |
-| `crate::tmux_mouse::divider_at` | `crate::tmux::mouse::divider_at` |
-| `crate::tmux_pane_hit::tmux_pane_at_phys` | `crate::tmux::pane_hit::tmux_pane_at_phys` |
-| `crate::ui::tmux_window_bar_input::…` | `crate::tmux::window_bar_input::…` |
+| `crate::tmux_render::{PackedTmuxLayout, DividerPixelRect}` | `super::render::{PackedTmuxLayout, DividerPixelRect}` |
+| `crate::tmux_mouse::divider_at` | `super::mouse::divider_at` |
+| `crate::tmux_pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys}` | `super::pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys}` |
+| `crate::tmux_copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas}` | `super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas}` |
+| `crate::tmux_render::OzmuxTmuxRenderPlugin` (test-only) | `super::render::RenderPlugin` |
+| `crate::ui::tmux_window_bar_input::…` | `super::window_bar_input::…` |
 
-Intra-`tmux/` references (sibling-to-sibling) use `super::` rather than the
-full `crate::tmux::` path.
+### Cross-boundary paths (become `crate::picker::` or `crate::tmux::`)
+
+| Before | After | Affected file(s) |
+|---|---|---|
+| `crate::tmux_picker::SessionPicker` | `crate::picker::SessionPicker` | `tmux/mouse.rs`, `tmux/input.rs` |
+
+### External callers (files NOT moving, but referencing tmux modules)
+
+| File | Before | After |
+|---|---|---|
+| `src/input/hyperlink.rs` | `crate::tmux_pane_hit::{cell_at_local, tmux_pane_at_phys}` | `crate::tmux::pane_hit::{cell_at_local, tmux_pane_at_phys}` |
 
 ## `src/ui.rs` Changes
 
