@@ -7,7 +7,7 @@ mod input;
 mod mouse;
 mod pane_focus;
 pub(crate) mod pane_hit;
-pub(crate) mod render;
+mod render;
 mod window_bar;
 mod window_bar_input;
 
