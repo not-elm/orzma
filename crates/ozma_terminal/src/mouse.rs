@@ -73,7 +73,7 @@ pub struct OzmaTerminalMouseSet;
 
 /// Phase of an in-progress left-drag: `Armed` after a single-click press (no
 /// selection started yet), `Started` once the pointer crossed into another cell.
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code, reason = "constructed by decide_button (Task 3)"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DragPhase {
     /// The button is held but the pointer has not left the origin cell.
@@ -84,7 +84,7 @@ pub(crate) enum DragPhase {
 
 /// An in-progress button gesture: the held button, the selection anchor, and the
 /// last cell a drag reached (dedup + lazy materialization).
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code, reason = "fields read by decide_button and drag dispatch systems (Task 3)"))]
 pub(crate) struct DragGesture {
     /// Which mouse button is being held.
     pub(crate) button: MouseButtonKind,
@@ -104,24 +104,23 @@ pub(crate) struct DragGesture {
 #[derive(Resource, Default)]
 pub(crate) struct OzmaMouseGesture {
     /// Consecutive-click counter for multi-click detection.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by button dispatch systems (Task 6)"))]
     pub(crate) click: ClickTracker,
     /// In-progress button gesture, or `None` when idle.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by button dispatch systems (Task 6)"))]
     pub(crate) drag: Option<DragGesture>,
 }
 
 /// Consecutive-click counter using a timeout + positional-drift gate.
 #[derive(Default)]
 pub(crate) struct ClickTracker {
-    #[allow(dead_code)]
     last: Option<(Duration, Vec2, u8)>,
 }
 
 impl ClickTracker {
     /// Registers a press at `now` / logical `pos`, returning the click count
     /// (1..=3). `cfg` is `(timeout, drift_px)`.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code, reason = "called by button dispatch systems (Task 3)"))]
     pub(crate) fn register(&mut self, now: Duration, pos: Vec2, cfg: (Duration, f32)) -> u8 {
         let (timeout, drift) = cfg;
         let count = match self.last {
@@ -137,7 +136,6 @@ impl ClickTracker {
 
 /// 1-indexed `(CellCoord, Side)` of the cell at pane-local physical `local`,
 /// clamped to `1..=cols` × `1..=rows`. `Side` is `Left` in the left half.
-#[allow(dead_code)]
 pub(crate) fn cell_at_local(
     local: Vec2,
     cell_w: f32,
@@ -159,7 +157,7 @@ pub(crate) fn cell_at_local(
 
 /// Resolves the window-space physical cursor to a cell on the terminal node, or
 /// `None` when the cursor is outside the node.
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by cursor hit-test systems (Task 6)"))]
 pub(crate) fn cell_at_cursor(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
@@ -177,13 +175,13 @@ pub(crate) fn cell_at_cursor(
 
 /// Converts a 1-indexed protocol `CellCoord` into the engine's viewport-relative
 /// selection `Point` (row 0 = top of viewport; the engine translates for scroll).
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by selection dispatch systems (Task 6)"))]
 pub(crate) fn to_viewport_point(cell: CellCoord) -> Point {
     Point::new(Line(cell.row as i32 - 1), Column(cell.col as usize - 1))
 }
 
 /// Builds `ProtocolModifiers` from the held keys.
-#[allow(dead_code)]
+#[cfg_attr(not(test), expect(dead_code, reason = "called by button and wheel dispatch systems (Task 6)"))]
 pub(crate) fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
     let m = current_terminal_modifiers(keys);
     ProtocolModifiers {
