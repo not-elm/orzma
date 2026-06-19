@@ -76,26 +76,6 @@ impl OzmaTerminalBundle {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into OzmaTerminalPlugin by the binary spawn-switchover task (Task 7), which removes this expectation"
-    )
-)]
-/// Bevy observer that injects a `TerminalRenderBundle` whenever `OzmaTerminal`
-/// is added to an entity, allocating the GPU material on demand.
-pub(crate) fn on_add_inject_render(
-    ev: On<Add, OzmaTerminal>,
-    mut commands: Commands,
-    mut materials: ResMut<Assets<TerminalUiMaterial>>,
-) {
-    let material = materials.add(TerminalUiMaterial::default());
-    commands
-        .entity(ev.event_target())
-        .insert(TerminalRenderBundle::new(material));
-}
-
 /// Computes terminal dimensions in cells from physical pixel size.
 ///
 /// Returns `(cols, rows)`, each clamped to a minimum of 1.
@@ -112,6 +92,26 @@ pub fn resolve_shell(config: Option<&str>, env_shell: Option<&str>) -> String {
         .or_else(|| env_shell.filter(|s| !s.is_empty()))
         .unwrap_or("/bin/sh")
         .to_string()
+}
+
+/// Bevy observer that injects a `TerminalRenderBundle` whenever `OzmaTerminal`
+/// is added to an entity, allocating the GPU material on demand.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into OzmaTerminalPlugin by the binary spawn-switchover task (Task 7), which removes this expectation"
+    )
+)]
+pub(crate) fn on_add_inject_render(
+    ev: On<Add, OzmaTerminal>,
+    mut commands: Commands,
+    mut materials: ResMut<Assets<TerminalUiMaterial>>,
+) {
+    let material = materials.add(TerminalUiMaterial::default());
+    commands
+        .entity(ev.event_target())
+        .insert(TerminalRenderBundle::new(material));
 }
 
 #[cfg(test)]
