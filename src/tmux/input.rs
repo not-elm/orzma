@@ -27,6 +27,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use ozma_mode::AppMode;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
@@ -47,6 +48,7 @@ impl Plugin for InputPlugin {
             (
                 forward_keys_to_tmux
                     .in_set(InputPhase::FocusedKey)
+                    .run_if(in_state(AppMode::Ozmux))
                     .run_if(on_message::<KeyboardInput>),
                 forward_wheel_to_tmux
                     .in_set(InputPhase::Dispatch)
