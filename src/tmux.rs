@@ -11,13 +11,13 @@ mod render;
 mod window_bar;
 mod window_bar_input;
 
+use crate::ozma::AppMode;
 use bevy::prelude::*;
 use copy_mode::CopyModePlugin;
 use dialog::DialogPlugin;
 use divider_handle::DividerHandlePlugin;
 use input::InputPlugin;
 use mouse::MousePlugin;
-use ozma_mode::AppMode;
 use ozmux_tmux::{
     TmuxConnection, TmuxConnectionClosed, TmuxConnectionReset, TmuxPresence, TmuxSessionPlugin,
 };
@@ -63,10 +63,7 @@ fn on_enter_ozmux(mut commands: Commands) {
     commands.insert_resource(TmuxPresence);
 }
 
-fn on_exit_ozmux(
-    mut commands: Commands,
-    mut connection: NonSendMut<TmuxConnection>,
-) {
+fn on_exit_ozmux(mut commands: Commands, mut connection: NonSendMut<TmuxConnection>) {
     if let Some(client) = connection.client() {
         let _ = client.handle().send("detach-client");
     }

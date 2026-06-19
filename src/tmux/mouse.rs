@@ -293,11 +293,11 @@ fn arbiter(
         // so just drop any in-flight inline press — leaving it set would let a
         // later release act on a stale child.
         gesture.inline_press = None;
-        if let GestureState::SelectingVt { pane, .. } = gesture.state {
-            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
-                handle.selection_clear_vt_only();
-                handle.flush_emit(&mut commands, pane);
-            }
+        if let GestureState::SelectingVt { pane, .. } = gesture.state
+            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
+        {
+            handle.selection_clear_vt_only();
+            handle.flush_emit(&mut commands, pane);
         }
         gesture.state = GestureState::Idle;
         return;
@@ -317,11 +317,11 @@ fn arbiter(
             cell_h,
             scale,
         );
-        if let GestureState::SelectingVt { pane, .. } = gesture.state {
-            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
-                handle.selection_clear_vt_only();
-                handle.flush_emit(&mut commands, pane);
-            }
+        if let GestureState::SelectingVt { pane, .. } = gesture.state
+            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
+        {
+            handle.selection_clear_vt_only();
+            handle.flush_emit(&mut commands, pane);
         }
         gesture.state = GestureState::Idle;
         return;
@@ -342,11 +342,11 @@ fn arbiter(
             cell_h,
             scale,
         );
-        if let GestureState::SelectingVt { pane, .. } = gesture.state {
-            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
-                handle.selection_clear_vt_only();
-                handle.flush_emit(&mut commands, pane);
-            }
+        if let GestureState::SelectingVt { pane, .. } = gesture.state
+            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
+        {
+            handle.selection_clear_vt_only();
+            handle.flush_emit(&mut commands, pane);
         }
         gesture.state = GestureState::Idle;
         return;

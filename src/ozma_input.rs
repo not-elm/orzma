@@ -9,14 +9,17 @@ use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::input::InputPhase;
 use crate::input::ime::ImeState;
 use crate::input::shortcuts::ResolvedShortcuts;
+use crate::ozma::AppMode;
 use crate::picker::SessionPicker;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_mode::{AppMode, OzmaTerminal};
-use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
+use ozma_terminal::OzmaTerminal;
+use ozma_tty_engine::{
+    Coalescer, PtyHandle, TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers,
+};
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 
 /// Registers keyboard and paste forwarding for `AppMode::Ozma`.
@@ -65,13 +68,10 @@ fn forward_keys_to_ozma(
     }
 
     let mods = Modifiers {
-        ctrl: bevy_keys.pressed(KeyCode::ControlLeft)
-            || bevy_keys.pressed(KeyCode::ControlRight),
-        shift: bevy_keys.pressed(KeyCode::ShiftLeft)
-            || bevy_keys.pressed(KeyCode::ShiftRight),
+        ctrl: bevy_keys.pressed(KeyCode::ControlLeft) || bevy_keys.pressed(KeyCode::ControlRight),
+        shift: bevy_keys.pressed(KeyCode::ShiftLeft) || bevy_keys.pressed(KeyCode::ShiftRight),
         alt: bevy_keys.pressed(KeyCode::AltLeft) || bevy_keys.pressed(KeyCode::AltRight),
-        meta: bevy_keys.pressed(KeyCode::SuperLeft)
-            || bevy_keys.pressed(KeyCode::SuperRight),
+        meta: bevy_keys.pressed(KeyCode::SuperLeft) || bevy_keys.pressed(KeyCode::SuperRight),
     };
     let term_mods = TerminalModifiers {
         ctrl: mods.ctrl,
@@ -117,8 +117,7 @@ fn forward_keys_to_ozma(
                     if text.is_empty() {
                         continue;
                     }
-                    let Ok((_, mut handle, mut pty, mut coalescer)) =
-                        ozma_terminal.single_mut()
+                    let Ok((_, mut handle, mut pty, mut coalescer)) = ozma_terminal.single_mut()
                     else {
                         continue;
                     };
@@ -208,10 +207,7 @@ mod tests {
             bevy_key_to_terminal_key(&Key::Backspace),
             Some(TerminalKey::Backspace)
         );
-        assert_eq!(
-            bevy_key_to_terminal_key(&Key::Tab),
-            Some(TerminalKey::Tab)
-        );
+        assert_eq!(bevy_key_to_terminal_key(&Key::Tab), Some(TerminalKey::Tab));
         assert_eq!(
             bevy_key_to_terminal_key(&Key::Escape),
             Some(TerminalKey::Escape)
@@ -244,10 +240,7 @@ mod tests {
             bevy_key_to_terminal_key(&Key::Home),
             Some(TerminalKey::Home)
         );
-        assert_eq!(
-            bevy_key_to_terminal_key(&Key::End),
-            Some(TerminalKey::End)
-        );
+        assert_eq!(bevy_key_to_terminal_key(&Key::End), Some(TerminalKey::End));
         assert_eq!(
             bevy_key_to_terminal_key(&Key::PageUp),
             Some(TerminalKey::PageUp)

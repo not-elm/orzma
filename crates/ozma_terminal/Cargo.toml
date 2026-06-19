@@ -1,5 +1,5 @@
 [package]
-name = "ozma_mode"
+name = "ozma_terminal"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,7 @@ publish.workspace = true
 bevy              = { workspace = true }
 ozma_tty_engine   = { path = "../ozma_tty_engine" }
 ozma_tty_renderer = { path = "../ozma_tty_renderer" }
-ozmux_configs     = { path = "../configs" }
 tracing           = { workspace = true }
-anyhow            = { workspace = true }
 
 [lints]
 workspace = true

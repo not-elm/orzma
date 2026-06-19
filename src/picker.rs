@@ -3,6 +3,7 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::control_plane::ControlPlaneHandle;
+use crate::ozma::AppMode;
 use crate::theme;
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::message::MessageReader;
@@ -10,7 +11,6 @@ use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
-use ozma_mode::AppMode;
 use ozmux_configs::StartupMode;
 use ozmux_tmux::{
     AttachTarget, ConnectionState, TmuxConnection, attach_or_create, select_attach_target,

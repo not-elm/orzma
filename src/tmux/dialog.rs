@@ -1,5 +1,6 @@
 //! A modal overlay shown when the tmux backend reports an error.
 
+use crate::ozma::AppMode;
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -12,7 +13,6 @@ use bevy::ui::widget::Text;
 use bevy::ui::{
     AlignItems, BackgroundColor, Display, GlobalZIndex, JustifyContent, Node, PositionType, Val,
 };
-use ozma_mode::AppMode;
 use ozmux_tmux::ConnectionState;
 
 const TMUX_DIALOG_Z: i32 = 300;

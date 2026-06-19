@@ -1,9 +1,8 @@
-//! Terminal spawn and despawn for Ozma mode.
+//! AppMode state enum and the Ozma single-terminal lifecycle plugin.
 
-use crate::AppMode;
-use crate::OzmaModeConfig;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
+use ozma_terminal::{OzmaTerminal, OzmaTerminalConfig, cells_for, resolve_shell};
 use ozma_tty_engine::{SpawnOptions, TerminalBundle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::material::TerminalUiMaterial;
@@ -11,33 +10,36 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// Marker component identifying the single Ozma-mode terminal entity.
+/// Application mode. `Ozma` is the default (single PTY, no tmux).
+/// `Ozmux` activates the tmux multiplexer backend.
+#[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub(crate) enum AppMode {
+    /// Single PTY terminal, Alacritty VT emulation, no tmux.
+    #[default]
+    Ozma,
+    /// tmux backend, multiplexer layout.
+    Ozmux,
+}
+
+/// Bevy plugin that registers the `AppMode::Ozma` spawn/despawn lifecycle.
 ///
-/// Exactly one entity carries this marker while `AppMode::Ozma` is active.
-/// Spawned by `OnEnter(AppMode::Ozma)` and despawned on `OnExit(AppMode::Ozma)`.
-#[derive(Component)]
-pub struct OzmaTerminal;
+/// Spawns one `OzmaTerminal` entity on `OnEnter(AppMode::Ozma)` and
+/// despawns it on `OnExit(AppMode::Ozma)`. Requires `AppMode` to be
+/// inserted via `App::insert_state` before this plugin runs.
+pub(crate) struct OzmaModePlugin;
 
-pub(crate) struct SpawnPlugin;
-
-impl Plugin for SpawnPlugin {
+impl Plugin for OzmaModePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppMode::Ozma), spawn_terminal)
             .add_systems(OnExit(AppMode::Ozma), despawn_terminal);
     }
 }
 
-pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
-    let cols = ((w_px as f32 / cell_w).floor() as u16).max(1);
-    let rows = ((h_px as f32 / cell_h).floor() as u16).max(1);
-    (cols, rows)
-}
-
 fn spawn_terminal(
     mut commands: Commands,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
     mut exit: MessageWriter<AppExit>,
-    config: Res<OzmaModeConfig>,
+    config: Res<OzmaTerminalConfig>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -97,43 +99,5 @@ fn spawn_terminal(
 fn despawn_terminal(mut commands: Commands, terminals: Query<Entity, With<OzmaTerminal>>) {
     for entity in terminals.iter() {
         commands.entity(entity).despawn();
-    }
-}
-
-fn resolve_shell(config: Option<&str>, env_shell: Option<&str>) -> String {
-    config
-        .filter(|s| !s.is_empty())
-        .or_else(|| env_shell.filter(|s| !s.is_empty()))
-        .unwrap_or("/bin/sh")
-        .to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shell_resolution_uses_config() {
-        assert_eq!(
-            resolve_shell(Some("/bin/fish"), Some("/bin/zsh")),
-            "/bin/fish"
-        );
-    }
-
-    #[test]
-    fn shell_resolution_falls_back_to_env() {
-        assert_eq!(resolve_shell(None, Some("/bin/zsh")), "/bin/zsh");
-    }
-
-    #[test]
-    fn shell_resolution_falls_back_to_sh() {
-        assert_eq!(resolve_shell(None, None), "/bin/sh");
-    }
-
-    #[test]
-    fn cells_for_divides_and_floors() {
-        assert_eq!(cells_for(800, 600, 8.0, 16.0), (100, 37));
-        assert_eq!(cells_for(0, 0, 8.0, 16.0), (1, 1));
-        assert_eq!(cells_for(807, 607, 8.0, 16.0), (100, 37));
     }
 }
