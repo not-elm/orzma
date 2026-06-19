@@ -22,9 +22,10 @@
   main.rs → OzmaModePlugin::new(shell, initial_AppMode)
     ↓
   AppMode::Ozma  → OzmaModePlugin の OnEnter(Ozma) が単一ターミナルを spawn
-  AppMode::Ozmux → OzmuxTmuxPlugin の OnEnter(Ozmux) がtmux接続 + TmuxPresence insert
-                       └─ AutoAttachOnStartup なし → ピッカー表示
-                       └─ AutoAttachOnStartup あり → 最後のセッションへ自動アタッチ
+  AppMode::Ozmux → OzmuxTmuxPlugin の OnEnter(Ozmux) が TmuxPresence insert + ピッカー/auto-attach を判定
+                       └─ StartupMode::Ozmux → SessionPicker.open = true でピッカー表示
+                             ユーザーが選択 → picker の handle_picker_input が attach_or_create を呼ぶ
+                       └─ StartupMode::AutoAttach → select_attach_target() で最善セッションを選び attach_or_create を直接呼ぶ
 
 [デタッチ時]
   detach-session ショートカット → NextState(AppMode::Ozma)
@@ -49,18 +50,15 @@
 ### 新規ファイル `crates/configs/src/startup.rs`
 
 ```rust
+#[derive(Deserialize, Default, Debug, Clone, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
 pub enum StartupMode {
-    Ozma,       // default
-    Ozmux,      // セッションピッカーを表示
-    AutoAttach, // 最後のtmuxセッションへ自動アタッチ
-}
-
-impl Default for StartupMode {
-    fn default() -> Self { Self::Ozma }
+    #[default]
+    Ozma,
+    Ozmux,
+    AutoAttach,
 }
 ```
-
-`StartupMode` は `serde::Deserialize` を実装し、文字列 `"ozma"` / `"ozmux"` / `"auto-attach"` を受け付ける。
 
 ### `OzmuxConfigs` への追加
 
@@ -116,7 +114,7 @@ app.insert_state(self.initial_mode.clone())
 | `Ozmux` | `AppMode::Ozmux` |
 | `AutoAttach` | `AppMode::Ozmux` |
 
-`AutoAttach` か否かの区別は `AutoAttachOnStartup` マーカーリソース（`main.rs` で insert）が担う。
+`AutoAttach` か否かの区別は `on_enter_ozmux` 内で `Res<OzmuxConfigsResource>` から `startup_mode` を直接読んで判定する。マーカーリソースは導入しない。
 
 ---
 
@@ -138,28 +136,30 @@ fn on_enter_ozmux(mut commands: Commands, ...) {
 }
 
 // OnExit(AppMode::Ozmux)
-fn on_exit_ozmux(mut commands: Commands, connection: NonSend<TmuxConnection>, sessions: Query<Entity, With<TmuxSession>>, ...) {
+fn on_exit_ozmux(mut commands: Commands, mut connection: NonSendMut<TmuxConnection>, ...) {
     if let Some(client) = connection.client() {
-        let _ = client.handle().send(&DetachClientCommand);
+        let _ = client.handle().send("detach-client");
     }
-    connection.close();
+    connection.take();
     commands.remove_resource::<TmuxPresence>();
-    for entity in sessions.iter() {
-        commands.entity(entity).despawn_recursive();
-    }
+    // TmuxConnectionReset を trigger して既存の on_connection_reset observer がクリーンアップを担う
+    // (TmuxConnectionReset は ozmux_tmux から pub 再エクスポートが必要)
+    commands.trigger(TmuxConnectionReset);
 }
 ```
 
 `src/tmux/` 配下の UI サブプラグイン群（render, input, mouse, window_bar, copy_mode 等）の全 Update システムに `.run_if(in_state(AppMode::Ozmux))` を追加する。
 
+**注意:** `src/picker.rs`、`src/tmux/dialog.rs`、`src/tmux/window_bar.rs` には `Startup` / `PostStartup` スケジュールのシステムがある。これらは `run_if(in_state(AppMode::Ozmux))` を付けるか、`OnEnter(AppMode::Ozmux)` に移動する（Section 4 参照）。
+
 ---
 
 ## Section 4: ピッカー統合 (`src/picker.rs`)
 
-- `list_sessions_into_picker` / `spawn_picker_ui` を `Startup` から `OnEnter(AppMode::Ozmux)` に移動
-- `on_enter_ozmux` 内で `AutoAttachOnStartup` リソースの有無を確認：
-  - **あり** → ピッカーを表示せず直接 `attach_or_create` を呼ぶ
-  - **なし** → 従来通りピッカーを表示してユーザーが選択
+- `list_sessions_into_picker` / `spawn_picker_ui` を `Startup` から `OnEnter(AppMode::Ozmux)` に移動（重複エンティティを防ぐため再スポーンせず `SessionPicker.open` フラグで表示を制御）
+- `on_enter_ozmux` 内で `Res<OzmuxConfigsResource>` から `startup_mode` を直接読んで分岐：
+  - **`StartupMode::Ozmux`** → `SessionPicker.open = true` でピッカー表示。ユーザーが選択後に `handle_picker_input` が `attach_or_create` を呼ぶ
+  - **`StartupMode::AutoAttach`** → `select_attach_target(server.list_sessions())` で最善セッションを選び直接 `attach_or_create` を呼ぶ
 
 ---
 
@@ -168,26 +168,26 @@ fn on_exit_ozmux(mut commands: Commands, connection: NonSend<TmuxConnection>, se
 ### `crates/configs/src/shortcuts.rs` への追加
 
 ```rust
-pub detach_session: Option<ShortcutBinding>,  // デフォルト: 未設定（ユーザーが任意で設定）
+// Bindings 構造体に追加
+pub detach_session: Option<KeyChord>,  // デフォルト: 未設定
+
+// ShortcutAction enum に追加
+DetachSession,
 ```
 
-### 処理系（`src/tmux/detach.rs` または `src/input/` 内）
+処理は `src/input/shortcuts.rs` の既存ディスパッチパスに `ShortcutAction::DetachSession` ブランチとして追加する。独立した keyboard reader システムは追加しない。
+
+### 処理系（`src/input/shortcuts.rs` の既存ディスパッチに追加）
 
 ```rust
-// AppMode::Ozmux のときのみ動作
-fn handle_detach_shortcut(
-    mut next_state: ResMut<NextState<AppMode>>,
-    configs: Res<OzmuxConfigsResource>,
-    keys: ...,
-) {
-    if shortcut_triggered(&configs.shortcuts.bindings.detach_session, &keys) {
-        next_state.set(AppMode::Ozma);
-        // OnExit(AppMode::Ozmux) が自動的に切断・クリーンアップを担う
-    }
+// 既存の shortcut dispatch ブランチに追加
+ShortcutAction::DetachSession => {
+    next_state.set(AppMode::Ozma);
+    // OnExit(AppMode::Ozmux) が自動的に切断・クリーンアップを担う
 }
 ```
 
-`.run_if(in_state(AppMode::Ozmux))` でゲートする。
+`.run_if(in_state(AppMode::Ozmux))` でゲートする（既存ディスパッチシステムごとゲートするか、ブランチ内でガードする）。
 
 ---
 
@@ -205,5 +205,7 @@ fn handle_detach_shortcut(
 | `src/tmux.rs` | `on_enter_ozmux` / `on_exit_ozmux` 追加 |
 | `src/tmux/*.rs` | UI システムに `run_if(in_state(AppMode::Ozmux))` 追加 |
 | `src/picker.rs` | `Startup` → `OnEnter(AppMode::Ozmux)` 移動、auto-attach 分岐 |
-| `src/input/` or `src/tmux/detach.rs` | デタッチショートカット処理系 |
+| `src/input/shortcuts.rs` | `ShortcutAction::DetachSession` バリアント追加、ディスパッチブランチ追加 |
 | `Cargo.toml` (root) | `ozma_mode = { path = "crates/ozma_mode" }` 追加 |
+| `crates/tmux_session/src/events.rs` | `TmuxConnectionReset` を `pub` に昇格し `lib.rs` から再エクスポート |
+| `crates/ozma_mode/src/lib.rs` (test) | `OzmaModePlugin::new(None, AppMode::Ozma)` に更新 |
