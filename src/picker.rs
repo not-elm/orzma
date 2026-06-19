@@ -10,9 +10,11 @@ use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
+use ozma_mode::AppMode;
+use ozmux_configs::StartupMode;
 use ozmux_tmux::{
-    AttachTarget, ConnectionState, TmuxConnection, attach_or_create, select_window_command,
-    set_environment_in_session_command, switch_client_command,
+    AttachTarget, ConnectionState, TmuxConnection, attach_or_create, select_attach_target,
+    select_window_command, set_environment_in_session_command, switch_client_command,
 };
 use tmux_control::{SessionInfo, TmuxServer, WindowEntry};
 
@@ -24,15 +26,20 @@ pub(crate) struct OzmuxPickerPlugin;
 impl Plugin for OzmuxPickerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SessionPicker>()
-            .add_systems(Startup, (list_sessions_into_picker, spawn_picker_ui))
+            .add_systems(Startup, spawn_picker_ui)
+            .add_systems(OnEnter(AppMode::Ozmux), on_enter_ozmux_picker)
             .add_systems(
                 Update,
-                handle_picker_input.after(crate::input::InputPhase::FocusedKey),
+                handle_picker_input
+                    .after(crate::input::InputPhase::FocusedKey)
+                    .in_set(crate::tmux::OzmuxActiveSet),
             )
-            .add_systems(Update, refresh_picker_on_open)
+            .add_systems(Update, refresh_picker_on_open.in_set(crate::tmux::OzmuxActiveSet))
             .add_systems(
                 Update,
-                refresh_session_ozmux_sock.run_if(resource_exists_and_changed::<ConnectionState>),
+                refresh_session_ozmux_sock
+                    .run_if(resource_exists_and_changed::<ConnectionState>)
+                    .in_set(crate::tmux::OzmuxActiveSet),
             )
             .add_systems(
                 Last,
@@ -40,7 +47,9 @@ impl Plugin for OzmuxPickerPlugin {
             )
             .add_systems(
                 PostUpdate,
-                sync_picker_ui.run_if(resource_exists_and_changed::<SessionPicker>),
+                sync_picker_ui
+                    .run_if(resource_exists_and_changed::<SessionPicker>)
+                    .run_if(in_state(AppMode::Ozmux)),
             );
     }
 }
@@ -125,23 +134,57 @@ fn refresh_picker_on_open(mut picker: ResMut<SessionPicker>, configs: Res<OzmuxC
     }
 }
 
-fn list_sessions_into_picker(
+fn on_enter_ozmux_picker(
+    mut connection: NonSendMut<TmuxConnection>,
     mut picker: ResMut<SessionPicker>,
     mut state: ResMut<ConnectionState>,
     configs: Res<OzmuxConfigsResource>,
+    control: Option<Res<ControlPlaneHandle>>,
 ) {
-    let server = build_server(&configs);
-    match server.list_sessions() {
-        Ok(sessions) => {
-            picker.sessions = sessions;
-            picker.selected = 0;
-            picker.open = true;
+    match &configs.startup_mode {
+        StartupMode::Ozmux => {
+            let server = build_server(&configs);
+            match server.list_sessions() {
+                Ok(sessions) => {
+                    picker.sessions = sessions;
+                    picker.selected = 0;
+                    picker.open = true;
+                }
+                Err(e) => {
+                    *state = ConnectionState::Error {
+                        reason: format!("tmux unavailable: {e}"),
+                    };
+                }
+            }
         }
-        Err(e) => {
-            *state = ConnectionState::Error {
-                reason: format!("tmux unavailable: {e}"),
-            };
+        StartupMode::AutoAttach => {
+            let mut server = build_server(&configs);
+            if let Some(handle) = &control {
+                server = server.env("OZMA_SOCK", &handle.sock_path.to_string_lossy());
+            }
+            match server.list_sessions() {
+                Ok(sessions) => {
+                    let target = select_attach_target(&sessions);
+                    match attach_or_create(&server, &target) {
+                        Ok(client) => {
+                            connection.set(client);
+                            *state = ConnectionState::Connecting;
+                        }
+                        Err(e) => {
+                            *state = ConnectionState::Error {
+                                reason: format!("auto-attach failed: {e}"),
+                            };
+                        }
+                    }
+                }
+                Err(e) => {
+                    *state = ConnectionState::Error {
+                        reason: format!("tmux unavailable: {e}"),
+                    };
+                }
+            }
         }
+        StartupMode::Ozma => {}
     }
 }
 
