@@ -9,9 +9,12 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// Marker component identifying the single Ozma terminal entity.
+/// Marker component identifying the single Ozma-mode terminal entity.
+///
+/// Exactly one entity carries this marker while `AppMode::Ozma` is active.
+/// Spawned by `OnEnter(AppMode::Ozma)` and despawned on `OnExit(AppMode::Ozma)`.
 #[derive(Component)]
-pub(crate) struct OzmaTerminal;
+pub struct OzmaTerminal;
 
 pub(crate) struct SpawnPlugin;
 

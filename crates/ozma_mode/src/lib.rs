@@ -4,6 +4,7 @@ mod exit;
 mod layout;
 mod spawn;
 
+pub use spawn::OzmaTerminal;
 use crate::{exit::ExitPlugin, layout::LayoutPlugin, spawn::SpawnPlugin};
 use bevy::prelude::*;
 
