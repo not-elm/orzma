@@ -22,7 +22,8 @@ use std::time::Duration;
 
 use crate::clipboard::Clipboard;
 use crate::hyperlink::{hyperlink_hover_cursor, link_modifier_held, try_open_uri};
-use crate::input::current_terminal_modifiers;
+use crate::input::{InputDisabled, current_terminal_modifiers};
+use crate::spawn::OzmaTerminal;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
 /// Crate-local mirror of the host config enum (the crate must not depend on
@@ -337,7 +338,7 @@ pub(crate) fn dispatch_mouse_buttons(
     mut buttons: MessageReader<MouseButtonInput>,
     mut terminal: Query<
         (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
-        (With<crate::spawn::OzmaTerminal>, Without<crate::input::InputDisabled>),
+        (With<OzmaTerminal>, Without<InputDisabled>),
     >,
     mut clipboard: ResMut<Clipboard>,
     cfg: Res<OzmaMouseConfig>,
@@ -414,7 +415,7 @@ pub(crate) fn dispatch_mouse_wheel(
     mut wheel: MessageReader<MouseWheel>,
     mut terminal: Query<
         (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
-        (With<crate::spawn::OzmaTerminal>, Without<crate::input::InputDisabled>),
+        (With<OzmaTerminal>, Without<InputDisabled>),
     >,
     mut clipboard: ResMut<Clipboard>,
     cfg: Res<OzmaMouseConfig>,
@@ -561,9 +562,6 @@ mod tests {
     use super::*;
     use bevy::input::mouse::{MouseButton, MouseButtonInput};
     use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind};
-
-    use crate::input::InputDisabled;
-    use crate::spawn::OzmaTerminal;
 
     #[test]
     fn input_disabled_terminal_drains_without_arming_a_gesture() {
