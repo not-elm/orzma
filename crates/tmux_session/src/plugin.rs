@@ -23,8 +23,8 @@ use crate::state::ConnectionState;
 use bevy::prelude::*;
 use tmux_control::TransportEvent;
 
-/// Present (inserted at plugin build) whenever the tmux backend is active, so
-/// consumers can gate "tmux mode" from frame 0 — before any `%session-changed`.
+/// Marker resource inserted when the tmux backend is active. Drain systems are
+/// gated on its presence; insert it to activate tmux mode, remove it to idle.
 #[derive(Resource, Default)]
 pub struct TmuxPresence;
 
@@ -47,12 +47,21 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<EnumerationState>()
             .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
-            .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
             .add_message::<CopyModeReply>()
-            .add_systems(Update, drain_tmux_events.in_set(TmuxProjectionSet))
-            .add_systems(Update, request_pane_captures.after(TmuxProjectionSet));
+            .add_systems(
+                Update,
+                drain_tmux_events
+                    .in_set(TmuxProjectionSet)
+                    .run_if(resource_exists::<TmuxPresence>),
+            )
+            .add_systems(
+                Update,
+                request_pane_captures
+                    .after(TmuxProjectionSet)
+                    .run_if(resource_exists::<TmuxPresence>),
+            );
     }
 }
 

@@ -86,9 +86,9 @@ pub(crate) struct TmuxWindowsRetained {
     pub(crate) windows: Vec<WindowId>,
 }
 
-/// Transport `Closed`: tear the whole projection down.
+/// Triggers a full teardown of the tmux ECS projection when the transport closes.
 #[derive(Event, Debug, Clone)]
-pub(crate) struct TmuxConnectionReset;
+pub struct TmuxConnectionReset;
 
 /// Flattens a window layout tree into its panes, in layout order. Leaves with
 /// no id (a layout-grammar artifact) are skipped.
