@@ -60,6 +60,7 @@ mod tests {
     #[test]
     fn cells_for_divides_and_floors() {
         assert_eq!(cells_for(800, 600, 8.0, 16.0), (100, 37));
+        assert_eq!(cells_for(1, 1, 8.0, 16.0), (1, 1));
         assert_eq!(cells_for(0, 0, 8.0, 16.0), (1, 1));
         assert_eq!(cells_for(807, 607, 8.0, 16.0), (100, 37));
     }

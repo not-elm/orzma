@@ -25,7 +25,9 @@ pub(crate) enum AppMode {
 ///
 /// Spawns one `OzmaTerminal` entity on `OnEnter(AppMode::Ozma)` and
 /// despawns it on `OnExit(AppMode::Ozma)`. Requires `AppMode` to be
-/// inserted via `App::insert_state` before this plugin runs.
+/// inserted via `App::insert_state` before this plugin runs, and
+/// `OzmaTerminalPlugin` must be added first (it inserts `OzmaTerminalConfig`
+/// that `spawn_terminal` reads).
 pub(crate) struct OzmaModePlugin;
 
 impl Plugin for OzmaModePlugin {

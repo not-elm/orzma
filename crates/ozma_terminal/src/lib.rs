@@ -39,7 +39,6 @@ mod tests {
         app.add_plugins((
             MinimalPlugins,
             AssetPlugin::default(),
-            bevy::state::app::StatesPlugin,
             OzmaTerminalPlugin {
                 config_shell: Some("/bin/fish".into()),
             },
