@@ -156,6 +156,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// rect origin (`inline_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
 pub(crate) fn ime_policy_system(
+    mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
@@ -165,7 +166,6 @@ pub(crate) fn ime_policy_system(
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
     inline_slots: Query<&InlineWebview>,
     overlays: Query<&TerminalOverlays>,
-    mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     current_mode: Res<State<AppMode>>,
     ozma_terminal: Query<(), With<OzmaTerminal>>,
 ) {

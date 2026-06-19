@@ -218,9 +218,6 @@ fn drain_tmux_events(
         .any(|event| matches!(event, TransportEvent::Closed { .. }))
     {
         connection.take();
-        *enumeration = EnumerationState::default();
-        keybindings.clear();
-        copy_queries.clear();
         commands.trigger(TmuxConnectionReset);
         commands.trigger(TmuxConnectionClosed);
     } else {
