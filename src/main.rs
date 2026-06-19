@@ -1,7 +1,6 @@
 //! ozmux Bevy GUI entry point.
 
 mod bootstrap;
-mod clipboard;
 mod configs;
 mod control_plane;
 mod font;

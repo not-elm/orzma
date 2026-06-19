@@ -5,7 +5,6 @@
 //! as `TerminalKeyInput` entity events; paste is written directly to the PTY
 //! via `TerminalHandle::write`.
 
-use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::input::InputPhase;
 use crate::input::ime::ImeState;
 use crate::input::shortcuts::ResolvedShortcuts;
@@ -17,6 +16,7 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use ozma_terminal::OzmaTerminal;
+use ozma_terminal::{Clipboard, build_paste_bytes};
 use ozma_tty_engine::{
     Coalescer, PtyHandle, TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers,
 };

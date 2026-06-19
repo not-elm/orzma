@@ -1,7 +1,5 @@
-//! Clipboard Bevy Resource. Wraps `arboard::Clipboard` so the rest of
-//! the GUI can read and write text without holding the cross-platform
-//! handle directly. `build_paste_bytes` is the pure helper that turns
-//! clipboard text into the byte stream forwarded to the PTY.
+//! Clipboard Bevy Resource wrapping `arboard::Clipboard`, plus `build_paste_bytes`,
+//! the pure helper that turns clipboard text into the PTY byte stream.
 
 use bevy::ecs::resource::Resource;
 
@@ -98,22 +96,10 @@ impl Clipboard {
     }
 }
 
-/// Constructs the byte sequence that `TerminalHandle::write` should
-/// send to the PTY for a paste of `text`.
-///
-/// - `bracketed = true`: strips every occurrence of the four
-///   bracketed-paste marker forms — 7-bit `\x1b[200~` / `\x1b[201~`
-///   and 8-bit C1 `\x9b200~` / `\x9b201~` — in a fixed-point loop,
-///   then wraps the sanitized body in `\x1b[200~` ... `\x1b[201~`.
-///   The loop is required because removing one marker can re-expose
-///   another (e.g. `\x1b[\x1b[201~201~` → `\x1b[201~`). Closes the
-///   kitty-CVE class documented in kitty commit 668f6fa and
-///   Alacritty issue #800.
-/// - `bracketed = false`: walks `text` once and normalizes line
-///   endings so shells receive a `\r` for each line. `\r\n` collapses
-///   to `\r`, lone `\n` becomes `\r`, and existing `\r` bytes pass
-///   through unchanged. Matches the xterm / iTerm2 paste convention.
-pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+/// Constructs the byte sequence that `TerminalHandle::write` should send to
+/// the PTY for a paste of `text`. See the module docs for the bracketed vs.
+/// unbracketed normalization rules.
+pub fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
         let mut body = text.to_owned();
         loop {

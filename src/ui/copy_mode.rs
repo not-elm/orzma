@@ -5,13 +5,13 @@
 //! toggle predicate reads `TerminalHandle::selection_type()` to
 //! decide between "start new selection of kind X" and "clear existing".
 
-use crate::clipboard::Clipboard;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
+use ozma_terminal::Clipboard;
 use ozma_tty_engine::{Coalescer, TerminalHandle};
 
 /// Bevy Plugin: registers the two observers and inserts the global

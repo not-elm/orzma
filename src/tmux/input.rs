@@ -7,7 +7,6 @@
 //! targeted `send-keys -X scroll-up|scroll-down` is sent to tmux.
 
 use super::pane_hit::tmux_pane_at_phys;
-use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, PassthroughKeys, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
@@ -28,6 +27,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use ozma_terminal::{Clipboard, build_paste_bytes};
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;

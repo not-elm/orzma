@@ -14,7 +14,6 @@
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
 use super::pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys};
 use super::render::{DividerPixelRect, PackedTmuxLayout};
-use crate::clipboard::Clipboard;
 use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, inline_hit_at, inline_local_dip};
 use crate::input::InputPhase;
@@ -33,6 +32,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use ozma_terminal::Clipboard;
 use ozma_tty_engine::{
     Column, Line, Point as APoint, SelectionType, Side as ASide, TerminalHandle,
 };

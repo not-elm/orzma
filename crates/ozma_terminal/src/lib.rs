@@ -1,11 +1,13 @@
 //! Ozma standalone VT terminal component: Bevy plugin and shared types.
 
+mod clipboard;
 mod exit;
 mod layout;
 mod spawn;
 
 use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 use bevy::prelude::*;
+pub use clipboard::{Clipboard, build_paste_bytes};
 pub use spawn::{OzmaTerminal, OzmaTerminalConfig, cells_for, resolve_shell};
 
 /// Bevy plugin that registers the Ozma VT terminal subsystems.
