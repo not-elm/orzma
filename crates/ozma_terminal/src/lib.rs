@@ -39,7 +39,13 @@ impl Plugin for OzmaTerminalPlugin {
         app.insert_resource(OzmaTerminalConfig {
             shell: self.config_shell.clone(),
         })
-        .add_plugins((ExitPlugin, LayoutPlugin, OzmaActionPlugin, OzmaInputPlugin, OzmaMousePlugin))
+        .add_plugins((
+            ExitPlugin,
+            LayoutPlugin,
+            OzmaActionPlugin,
+            OzmaInputPlugin,
+            OzmaMousePlugin,
+        ))
         .add_observer(on_add_inject_render);
     }
 }

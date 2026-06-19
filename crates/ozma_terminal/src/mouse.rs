@@ -201,7 +201,11 @@ pub(crate) enum MouseEffect {
     /// Write these bytes to the PTY.
     Write(Vec<u8>),
     /// Start a new local selection at `point`.
-    SelStart { point: Point, side: Side, ty: SelectionType },
+    SelStart {
+        point: Point,
+        side: Side,
+        ty: SelectionType,
+    },
     /// Extend the current selection's moving end to `point`.
     SelUpdate { point: Point, side: Side },
     /// Clear any active local selection.
@@ -259,7 +263,11 @@ pub(crate) fn decide_button(
                 phase: DragPhase::Started,
                 last_cell: cell,
             });
-            vec![MouseEffect::SelStart { point: to_viewport_point(cell), side, ty }]
+            vec![MouseEffect::SelStart {
+                point: to_viewport_point(cell),
+                side,
+                ty,
+            }]
         }
         ButtonAction::UpdateLocalSelection { cell, side } => update_selection(gesture, cell, side),
         ButtonAction::ClearLocalSelection => {
@@ -269,9 +277,7 @@ pub(crate) fn decide_button(
     };
 
     if evt.kind == ButtonEventKind::Release && evt.button == MouseButtonKind::Left {
-        if effects.is_empty()
-            && matches!(&gesture.drag, Some(d) if d.phase == DragPhase::Started)
-        {
+        if effects.is_empty() && matches!(&gesture.drag, Some(d) if d.phase == DragPhase::Started) {
             effects.push(MouseEffect::Copy);
         }
         gesture.drag = None;
@@ -337,7 +343,14 @@ pub(crate) fn dispatch_mouse_buttons(
     mut gesture: ResMut<OzmaMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
     mut terminal: Query<
-        (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
+        (
+            &mut TerminalHandle,
+            &mut PtyHandle,
+            &mut Coalescer,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &TerminalGrid,
+        ),
         (With<OzmaTerminal>, Without<InputDisabled>),
     >,
     mut clipboard: ResMut<Clipboard>,
@@ -347,7 +360,8 @@ pub(crate) fn dispatch_mouse_buttons(
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok((mut handle, mut pty, mut coalescer, node, transform, grid)) = terminal.single_mut() else {
+    let Ok((mut handle, mut pty, mut coalescer, node, transform, grid)) = terminal.single_mut()
+    else {
         buttons.clear();
         gesture.drag = None;
         return;
@@ -374,36 +388,108 @@ pub(crate) fn dispatch_mouse_buttons(
     let modifier_held = link_modifier_held(&mods);
 
     for ev in buttons.read() {
-        let Some(button) = map_button(ev.button) else { continue };
-        let Some((cell, side)) = cell_at_cursor(node, transform, cursor_phys, cell_w, cell_h, grid.cols, grid.rows) else { continue };
+        let Some(button) = map_button(ev.button) else {
+            continue;
+        };
+        let Some((cell, side)) = cell_at_cursor(
+            node,
+            transform,
+            cursor_phys,
+            cell_w,
+            cell_h,
+            grid.cols,
+            grid.rows,
+        ) else {
+            continue;
+        };
         let kind = match ev.state {
             ButtonState::Pressed => ButtonEventKind::Press,
             ButtonState::Released => ButtonEventKind::Release,
         };
         let click_count = if kind == ButtonEventKind::Press {
-            gesture.click.register(time.elapsed(), cursor_phys / scale, (cfg.double_click_timeout, cfg.click_drift_px))
+            gesture.click.register(
+                time.elapsed(),
+                cursor_phys / scale,
+                (cfg.double_click_timeout, cfg.click_drift_px),
+            )
         } else {
             1
         };
-        let link_at_cell = (kind == ButtonEventKind::Press && button == MouseButtonKind::Left && modifier_held)
-            .then(|| grid.hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16).map(|(_id, uri)| uri.as_str().to_string()))
-            .flatten();
-        let evt = ButtonEvent { kind, button, cell, side, click_count };
-        let effects = decide_button(&mut gesture, modes, evt, mods, modifier_held, link_at_cell, &cfg.buttons);
+        let link_at_cell =
+            (kind == ButtonEventKind::Press && button == MouseButtonKind::Left && modifier_held)
+                .then(|| {
+                    grid.hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16)
+                        .map(|(_id, uri)| uri.as_str().to_string())
+                })
+                .flatten();
+        let evt = ButtonEvent {
+            kind,
+            button,
+            cell,
+            side,
+            click_count,
+        };
+        let effects = decide_button(
+            &mut gesture,
+            modes,
+            evt,
+            mods,
+            modifier_held,
+            link_at_cell,
+            &cfg.buttons,
+        );
         for effect in effects {
-            apply_effect(&mut handle, &mut pty, &mut coalescer, &mut clipboard, effect);
+            apply_effect(
+                &mut handle,
+                &mut pty,
+                &mut coalescer,
+                &mut clipboard,
+                effect,
+            );
         }
     }
 
     if gesture.drag.is_some()
-        && let Some((cell, side)) = cell_at_cursor(node, transform, cursor_phys, cell_w, cell_h, grid.cols, grid.rows)
+        && let Some((cell, side)) = cell_at_cursor(
+            node,
+            transform,
+            cursor_phys,
+            cell_w,
+            cell_h,
+            grid.cols,
+            grid.rows,
+        )
         && gesture.drag.as_ref().is_some_and(|d| d.last_cell != cell)
     {
-        let button = gesture.drag.as_ref().map(|d| d.button).unwrap_or(MouseButtonKind::Left);
-        let evt = ButtonEvent { kind: ButtonEventKind::Drag, button, cell, side, click_count: 1 };
-        let effects = decide_button(&mut gesture, modes, evt, mods, modifier_held, None, &cfg.buttons);
+        let button = gesture
+            .drag
+            .as_ref()
+            .map(|d| d.button)
+            .unwrap_or(MouseButtonKind::Left);
+        let evt = ButtonEvent {
+            kind: ButtonEventKind::Drag,
+            button,
+            cell,
+            side,
+            click_count: 1,
+        };
+        let effects = decide_button(
+            &mut gesture,
+            modes,
+            evt,
+            mods,
+            modifier_held,
+            None,
+            &cfg.buttons,
+        );
         for effect in effects {
-            apply_effect(&mut handle, &mut pty, &mut coalescer, &mut clipboard, effect);
+            apply_effect(
+                &mut handle,
+                &mut pty,
+                &mut coalescer,
+                &mut clipboard,
+                effect,
+            );
         }
     }
 }
@@ -414,7 +500,14 @@ pub(crate) fn dispatch_mouse_wheel(
     mut gesture_acc: ResMut<WheelAccumulator>,
     mut wheel: MessageReader<MouseWheel>,
     mut terminal: Query<
-        (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
+        (
+            &mut TerminalHandle,
+            &mut PtyHandle,
+            &mut Coalescer,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &TerminalGrid,
+        ),
         (With<OzmaTerminal>, Without<InputDisabled>),
     >,
     mut clipboard: ResMut<Clipboard>,
@@ -423,12 +516,19 @@ pub(crate) fn dispatch_mouse_wheel(
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok((mut handle, mut pty, mut coalescer, node, transform, grid)) = terminal.single_mut() else {
+    let Ok((mut handle, mut pty, mut coalescer, node, transform, grid)) = terminal.single_mut()
+    else {
         wheel.clear();
         return;
     };
-    let Ok(window) = windows.single() else { wheel.clear(); return };
-    if !window.focused { wheel.clear(); return }
+    let Ok(window) = windows.single() else {
+        wheel.clear();
+        return;
+    };
+    if !window.focused {
+        wheel.clear();
+        return;
+    }
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
 
@@ -456,7 +556,13 @@ pub(crate) fn dispatch_mouse_wheel(
         fine: fine_held(cfg.fine_modifier, &m),
     };
     for effect in decide_wheel(handle.current_modes(), notches, cell, mods, &cfg.wheel) {
-        apply_effect(&mut handle, &mut pty, &mut coalescer, &mut clipboard, effect);
+        apply_effect(
+            &mut handle,
+            &mut pty,
+            &mut coalescer,
+            &mut clipboard,
+            effect,
+        );
     }
 }
 
@@ -491,8 +597,12 @@ fn apply_effect(
                 tracing::warn!(?e, "ozma mouse pty write failed");
             }
         }
-        MouseEffect::SelStart { point, side, ty } => handle.selection_start_at(coalescer, point, side, ty),
-        MouseEffect::SelUpdate { point, side } => handle.selection_update_to(coalescer, point, side),
+        MouseEffect::SelStart { point, side, ty } => {
+            handle.selection_start_at(coalescer, point, side, ty)
+        }
+        MouseEffect::SelUpdate { point, side } => {
+            handle.selection_update_to(coalescer, point, side)
+        }
         MouseEffect::SelClear => handle.selection_clear(coalescer),
         MouseEffect::Copy => {
             if let Some(text) = handle.selection_to_string() {
@@ -505,7 +615,11 @@ fn apply_effect(
 }
 
 /// Lazily materializes an armed selection on the first cell change, then extends.
-fn update_selection(gesture: &mut OzmaMouseGesture, cell: CellCoord, side: Side) -> Vec<MouseEffect> {
+fn update_selection(
+    gesture: &mut OzmaMouseGesture,
+    cell: CellCoord,
+    side: Side,
+) -> Vec<MouseEffect> {
     let Some(drag) = gesture.drag.as_mut() else {
         return Vec::new();
     };
@@ -520,13 +634,23 @@ fn update_selection(gesture: &mut OzmaMouseGesture, cell: CellCoord, side: Side)
             drag.phase = DragPhase::Started;
             drag.last_cell = cell;
             vec![
-                MouseEffect::SelStart { point: to_viewport_point(origin), side: origin_side, ty },
-                MouseEffect::SelUpdate { point: to_viewport_point(cell), side },
+                MouseEffect::SelStart {
+                    point: to_viewport_point(origin),
+                    side: origin_side,
+                    ty,
+                },
+                MouseEffect::SelUpdate {
+                    point: to_viewport_point(cell),
+                    side,
+                },
             ]
         }
         DragPhase::Started => {
             drag.last_cell = cell;
-            vec![MouseEffect::SelUpdate { point: to_viewport_point(cell), side }]
+            vec![MouseEffect::SelUpdate {
+                point: to_viewport_point(cell),
+                side,
+            }]
         }
     }
 }
@@ -552,7 +676,11 @@ impl Plugin for OzmaMousePlugin {
                 Update,
                 (dispatch_mouse_buttons, dispatch_mouse_wheel)
                     .in_set(OzmaTerminalMouseSet)
-                    .run_if(on_message::<MouseButtonInput>.or(on_message::<CursorMoved>).or(on_message::<MouseWheel>)),
+                    .run_if(
+                        on_message::<MouseButtonInput>
+                            .or(on_message::<CursorMoved>)
+                            .or(on_message::<MouseWheel>),
+                    ),
             );
     }
 }
@@ -575,10 +703,20 @@ mod tests {
             .insert_resource(test_metrics())
             .add_systems(Update, dispatch_mouse_buttons);
         app.world_mut().spawn((OzmaTerminal, InputDisabled));
-        app.world_mut().spawn((Window { focused: true, ..default() }, PrimaryWindow));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<MouseButtonInput>>()
-            .write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Pressed, window: Entity::PLACEHOLDER });
+            .write(MouseButtonInput {
+                button: MouseButton::Left,
+                state: ButtonState::Pressed,
+                window: Entity::PLACEHOLDER,
+            });
         app.update();
         assert!(app.world().resource::<OzmaMouseGesture>().drag.is_none());
     }
@@ -587,8 +725,13 @@ mod tests {
         use ozma_tty_renderer::CellMetrics;
         TerminalCellMetricsResource {
             metrics: CellMetrics {
-                advance_phys: 8.0, line_height_phys: 16.0, ascent_phys: 12.0, descent_phys: 4.0,
-                underline_position_phys: -2.0, underline_thickness_phys: 1.0, max_overflow_phys: 0.0,
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
             },
             phys_font_size: 16,
         }
@@ -607,33 +750,116 @@ mod tests {
     #[test]
     fn local_single_press_arms_drag_and_clears() {
         let mut g = OzmaMouseGesture::default();
-        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1),
-            ProtocolModifiers::default(), false, None, &ButtonConfig { max_protocol_events_per_frame: 8 });
+        let fx = decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &ButtonConfig {
+                max_protocol_events_per_frame: 8,
+            },
+        );
         assert_eq!(fx, vec![MouseEffect::SelClear]);
-        assert!(matches!(g.drag, Some(DragGesture { phase: DragPhase::Armed, .. })));
+        assert!(matches!(
+            g.drag,
+            Some(DragGesture {
+                phase: DragPhase::Armed,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn local_drag_materializes_then_extends() {
         let mut g = OzmaMouseGesture::default();
-        let cfg = ButtonConfig { max_protocol_events_per_frame: 8 };
-        decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
-        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Drag, 7, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
-        assert_eq!(fx, vec![
-            MouseEffect::SelStart { point: to_viewport_point(CellCoord { col: 5, row: 5 }), side: Side::Left, ty: SelectionType::Simple },
-            MouseEffect::SelUpdate { point: to_viewport_point(CellCoord { col: 7, row: 5 }), side: Side::Left },
-        ]);
-        let fx2 = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Drag, 9, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
-        assert_eq!(fx2, vec![MouseEffect::SelUpdate { point: to_viewport_point(CellCoord { col: 9, row: 5 }), side: Side::Left }]);
+        let cfg = ButtonConfig {
+            max_protocol_events_per_frame: 8,
+        };
+        decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        let fx = decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Drag, 7, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        assert_eq!(
+            fx,
+            vec![
+                MouseEffect::SelStart {
+                    point: to_viewport_point(CellCoord { col: 5, row: 5 }),
+                    side: Side::Left,
+                    ty: SelectionType::Simple
+                },
+                MouseEffect::SelUpdate {
+                    point: to_viewport_point(CellCoord { col: 7, row: 5 }),
+                    side: Side::Left
+                },
+            ]
+        );
+        let fx2 = decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Drag, 9, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        assert_eq!(
+            fx2,
+            vec![MouseEffect::SelUpdate {
+                point: to_viewport_point(CellCoord { col: 9, row: 5 }),
+                side: Side::Left
+            }]
+        );
     }
 
     #[test]
     fn release_after_drag_copies() {
         let mut g = OzmaMouseGesture::default();
-        let cfg = ButtonConfig { max_protocol_events_per_frame: 8 };
-        decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
-        decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Drag, 7, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
-        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Release, 7, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        let cfg = ButtonConfig {
+            max_protocol_events_per_frame: 8,
+        };
+        decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Drag, 7, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        let fx = decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Release, 7, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
         assert_eq!(fx, vec![MouseEffect::Copy]);
         assert!(g.drag.is_none());
     }
@@ -641,9 +867,27 @@ mod tests {
     #[test]
     fn release_after_bare_click_does_not_copy() {
         let mut g = OzmaMouseGesture::default();
-        let cfg = ButtonConfig { max_protocol_events_per_frame: 8 };
-        decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
-        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Release, 5, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        let cfg = ButtonConfig {
+            max_protocol_events_per_frame: 8,
+        };
+        decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        let fx = decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Release, 5, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
         assert_eq!(fx, vec![]);
         assert!(g.drag.is_none());
     }
@@ -651,35 +895,98 @@ mod tests {
     #[test]
     fn double_click_starts_word_selection() {
         let mut g = OzmaMouseGesture::default();
-        let cfg = ButtonConfig { max_protocol_events_per_frame: 8 };
-        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 2), ProtocolModifiers::default(), false, None, &cfg);
-        assert_eq!(fx, vec![MouseEffect::SelStart { point: to_viewport_point(CellCoord { col: 5, row: 5 }), side: Side::Left, ty: SelectionType::Semantic }]);
+        let cfg = ButtonConfig {
+            max_protocol_events_per_frame: 8,
+        };
+        let fx = decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Press, 5, 5, 2),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        assert_eq!(
+            fx,
+            vec![MouseEffect::SelStart {
+                point: to_viewport_point(CellCoord { col: 5, row: 5 }),
+                side: Side::Left,
+                ty: SelectionType::Semantic
+            }]
+        );
     }
 
     #[test]
     fn app_capture_press_forwards_sgr_bytes() {
         let mut g = OzmaMouseGesture::default();
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
-        let fx = decide_button(&mut g, modes, ev(ButtonEventKind::Press, 5, 5, 1), ProtocolModifiers::default(), false, None, &ButtonConfig { max_protocol_events_per_frame: 8 });
-        assert_eq!(fx, vec![MouseEffect::SelClear, MouseEffect::Write(b"\x1b[<0;5;5M".to_vec())]);
+        let fx = decide_button(
+            &mut g,
+            modes,
+            ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &ButtonConfig {
+                max_protocol_events_per_frame: 8,
+            },
+        );
+        assert_eq!(
+            fx,
+            vec![
+                MouseEffect::SelClear,
+                MouseEffect::Write(b"\x1b[<0;5;5M".to_vec())
+            ]
+        );
     }
 
     #[test]
     fn shift_bypass_selects_even_when_captured() {
         let mut g = OzmaMouseGesture::default();
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
-        let mods = ProtocolModifiers { shift: true, ..Default::default() };
-        let fx = decide_button(&mut g, modes, ev(ButtonEventKind::Press, 5, 5, 1), mods, false, None, &ButtonConfig { max_protocol_events_per_frame: 8 });
+        let mods = ProtocolModifiers {
+            shift: true,
+            ..Default::default()
+        };
+        let fx = decide_button(
+            &mut g,
+            modes,
+            ev(ButtonEventKind::Press, 5, 5, 1),
+            mods,
+            false,
+            None,
+            &ButtonConfig {
+                max_protocol_events_per_frame: 8,
+            },
+        );
         assert_eq!(fx, vec![MouseEffect::SelClear]);
-        assert!(matches!(g.drag, Some(DragGesture { phase: DragPhase::Armed, .. })));
+        assert!(matches!(
+            g.drag,
+            Some(DragGesture {
+                phase: DragPhase::Armed,
+                ..
+            })
+        ));
     }
 
     #[test]
     fn cmd_click_on_link_opens_and_consumes() {
         let mut g = OzmaMouseGesture::default();
-        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1),
-            ProtocolModifiers { meta: true, ..Default::default() }, true, Some("https://example.com".into()),
-            &ButtonConfig { max_protocol_events_per_frame: 8 });
+        let fx = decide_button(
+            &mut g,
+            TermMode::empty(),
+            ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers {
+                meta: true,
+                ..Default::default()
+            },
+            true,
+            Some("https://example.com".into()),
+            &ButtonConfig {
+                max_protocol_events_per_frame: 8,
+            },
+        );
         assert_eq!(fx, vec![MouseEffect::OpenUri("https://example.com".into())]);
         assert!(g.drag.is_none(), "a link-open press must not arm a drag");
     }
@@ -687,10 +994,16 @@ mod tests {
     #[test]
     fn default_config_sets_button_cap_explicitly() {
         let cfg = OzmaMouseConfig::default();
-        assert_eq!(cfg.buttons.max_protocol_events_per_frame, 8, "must NOT be ButtonConfig::default()'s 0");
+        assert_eq!(
+            cfg.buttons.max_protocol_events_per_frame, 8,
+            "must NOT be ButtonConfig::default()'s 0"
+        );
         assert_eq!(cfg.wheel.max_protocol_events_per_frame, 8);
         assert_eq!(cfg.cells_per_notch, 0.5);
-        assert_eq!(cfg.double_click_timeout, std::time::Duration::from_millis(400));
+        assert_eq!(
+            cfg.double_click_timeout,
+            std::time::Duration::from_millis(400)
+        );
         assert_eq!(cfg.click_drift_px, 8.0);
         assert_eq!(cfg.fine_modifier, FineModifier::Alt);
     }
@@ -718,10 +1031,38 @@ mod tests {
     fn click_tracker_counts_within_timeout_and_drift() {
         let mut t = ClickTracker::default();
         let cfg = (std::time::Duration::from_millis(400), 8.0f32);
-        assert_eq!(t.register(std::time::Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg), 1);
-        assert_eq!(t.register(std::time::Duration::from_millis(200), Vec2::new(11.0, 11.0), cfg), 2);
-        assert_eq!(t.register(std::time::Duration::from_millis(350), Vec2::new(12.0, 10.0), cfg), 3);
-        assert_eq!(t.register(std::time::Duration::from_millis(900), Vec2::new(12.0, 10.0), cfg), 1);
+        assert_eq!(
+            t.register(
+                std::time::Duration::from_millis(0),
+                Vec2::new(10.0, 10.0),
+                cfg
+            ),
+            1
+        );
+        assert_eq!(
+            t.register(
+                std::time::Duration::from_millis(200),
+                Vec2::new(11.0, 11.0),
+                cfg
+            ),
+            2
+        );
+        assert_eq!(
+            t.register(
+                std::time::Duration::from_millis(350),
+                Vec2::new(12.0, 10.0),
+                cfg
+            ),
+            3
+        );
+        assert_eq!(
+            t.register(
+                std::time::Duration::from_millis(900),
+                Vec2::new(12.0, 10.0),
+                cfg
+            ),
+            1
+        );
     }
 
     #[test]
@@ -804,14 +1145,26 @@ mod tests {
     #[test]
     fn scrollback_up_returns_positive_viewport_scroll() {
         // Bevy +y (wheel up) → caller negates → engine notches negative → into history.
-        let fx = decide_wheel(TermMode::empty(), -1, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &WheelConfig::default());
+        let fx = decide_wheel(
+            TermMode::empty(),
+            -1,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &WheelConfig::default(),
+        );
         assert_eq!(fx, vec![MouseEffect::Scroll(3)]);
     }
 
     #[test]
     fn app_capture_wheel_forwards_bytes() {
         let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
-        let fx = decide_wheel(modes, -1, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &WheelConfig::default());
+        let fx = decide_wheel(
+            modes,
+            -1,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &WheelConfig::default(),
+        );
         assert!(matches!(fx.as_slice(), [MouseEffect::Write(b)] if !b.is_empty()));
     }
 }

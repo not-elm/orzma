@@ -64,7 +64,12 @@ pub(crate) fn hyperlink_hover_cursor(
 ) {
     let modifier_held = link_modifier_held(&{
         let m = current_terminal_modifiers(&keys);
-        ProtocolModifiers { shift: m.shift, ctrl: m.ctrl, alt: m.alt, meta: m.meta }
+        ProtocolModifiers {
+            shift: m.shift,
+            ctrl: m.ctrl,
+            alt: m.alt,
+            meta: m.meta,
+        }
     });
     hover.entity = None;
     hover.hyperlink_id = None;
@@ -100,9 +105,15 @@ fn resolve_hover(
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let Some((cell, _side)) =
-        cell_at_cursor(node, transform, cursor_phys, cell_w, cell_h, grid.cols, grid.rows)
-    else {
+    let Some((cell, _side)) = cell_at_cursor(
+        node,
+        transform,
+        cursor_phys,
+        cell_w,
+        cell_h,
+        grid.cols,
+        grid.rows,
+    ) else {
         return SystemCursorIcon::Default;
     };
     let id = grid
@@ -134,6 +145,9 @@ mod tests {
         assert_eq!(cursor_decision(true, true, true), SystemCursorIcon::Pointer);
         assert_eq!(cursor_decision(true, false, true), SystemCursorIcon::Text);
         assert_eq!(cursor_decision(false, true, true), SystemCursorIcon::Text);
-        assert_eq!(cursor_decision(false, false, false), SystemCursorIcon::Default);
+        assert_eq!(
+            cursor_decision(false, false, false),
+            SystemCursorIcon::Default
+        );
     }
 }

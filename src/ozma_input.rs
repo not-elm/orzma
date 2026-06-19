@@ -14,7 +14,7 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{InputDisabled, OzmaTerminal, OzmaTerminalInputSet};
+use ozma_terminal::{InputDisabled, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet};
 use ozmux_configs::shortcuts::ShortcutAction;
 
 /// Registers the host-side input systems for `AppMode::Ozma`.
@@ -26,6 +26,7 @@ impl Plugin for OzmaHostInputPlugin {
             Update,
             maintain_input_disabled
                 .before(OzmaTerminalInputSet)
+                .before(OzmaTerminalMouseSet)
                 .run_if(in_state(AppMode::Ozma)),
         )
         .add_systems(
