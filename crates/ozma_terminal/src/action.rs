@@ -20,7 +20,7 @@ pub(crate) struct OzmaActionPlugin;
 
 impl Plugin for OzmaActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_paste);
+        app.init_resource::<Clipboard>().add_observer(on_paste);
     }
 }
 
@@ -56,7 +56,6 @@ mod tests {
     fn paste_action_on_entity_without_terminal_does_not_panic() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_resource(Clipboard::new())
             .add_plugins(OzmaActionPlugin);
         let entity = app.world_mut().spawn_empty().id();
         app.world_mut().trigger(PasteAction { entity });
