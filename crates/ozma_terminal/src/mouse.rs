@@ -4,13 +4,14 @@
 //! `ButtonAction` / `WheelAction` routers, applying the result to the
 //! `TerminalHandle` / `Clipboard`. Gated per entity by `InputDisabled`.
 
-use bevy::input::mouse::{MouseButtonInput, MouseWheel};
+use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::CursorMoved;
 use ozma_tty_engine::{
     ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
-    MouseButtonKind, Point, ProtocolModifiers, SelectionType, Side, TermMode, WheelConfig,
+    MouseButtonKind, Point, ProtocolModifiers, SelectionType, Side, TermMode, WheelAction,
+    WheelConfig, WheelModifiers,
 };
 use std::time::Duration;
 
@@ -205,7 +206,6 @@ pub(crate) enum MouseEffect {
     /// Copy the current selection to the clipboard.
     Copy,
     /// Scroll the viewport by `i32` lines (negative = up).
-    #[expect(dead_code, reason = "emitted by wheel dispatch systems (Task 6)")]
     Scroll(i32),
     /// Open the given URI in the host browser / handler.
     OpenUri(String),
@@ -275,6 +275,65 @@ pub(crate) fn decide_button(
         gesture.drag = None;
     }
     effects
+}
+
+/// Carries the sub-notch wheel remainder across frames.
+#[derive(Resource, Default)]
+pub(crate) struct WheelAccumulator {
+    residual_cells: f32,
+}
+
+/// Cells of scroll for one wheel event: `Line` units count directly, `Pixel`
+/// units divide by the cell height. Positive = wheel-up (toward older lines).
+#[cfg_attr(not(test), expect(dead_code, reason = "called by wheel dispatch system (Task 6)"))]
+pub(crate) fn wheel_delta_cells(unit: MouseScrollUnit, y: f32, cell_h: f32) -> f32 {
+    match unit {
+        MouseScrollUnit::Line => y,
+        MouseScrollUnit::Pixel => y / cell_h.max(1.0),
+    }
+}
+
+/// Adds `delta_cells` to the accumulator and returns whole notches to emit
+/// (positive = up/older), carrying the remainder. Resets on a sign flip and
+/// caps the contributing delta to one notch to avoid a burst in the new direction.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by wheel dispatch system (Task 6)"))]
+pub(crate) fn accumulate_notches(
+    acc: &mut WheelAccumulator,
+    delta_cells: f32,
+    cells_per_notch: f32,
+) -> i32 {
+    let threshold = cells_per_notch.max(f32::EPSILON);
+    let effective_delta = if acc.residual_cells != 0.0
+        && acc.residual_cells.signum() != delta_cells.signum()
+    {
+        acc.residual_cells = 0.0;
+        delta_cells.signum() * delta_cells.abs().min(threshold)
+    } else {
+        delta_cells
+    };
+    acc.residual_cells += effective_delta;
+    let notches = (acc.residual_cells / threshold).trunc() as i32;
+    if notches != 0 {
+        acc.residual_cells -= notches as f32 * threshold;
+    }
+    notches
+}
+
+/// Pure wheel decision. `notches` is in the engine convention (negative =
+/// up/older); callers negate the Bevy-derived up-positive value before calling.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by wheel dispatch system (Task 6)"))]
+pub(crate) fn decide_wheel(
+    modes: TermMode,
+    notches: i32,
+    cell: CellCoord,
+    mods: WheelModifiers,
+    cfg: &WheelConfig,
+) -> Vec<MouseEffect> {
+    match WheelAction::route(modes, notches, cell, mods, cfg) {
+        WheelAction::Noop => Vec::new(),
+        WheelAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
+        WheelAction::ScrollViewport(lines) => vec![MouseEffect::Scroll(lines)],
+    }
 }
 
 /// Lazily materializes an armed selection on the first cell change, then extends.
@@ -513,5 +572,33 @@ mod tests {
         let mut t = g.click;
         let cfg = (Duration::from_millis(400), 8.0f32);
         assert_eq!(t.register(Duration::from_millis(0), Vec2::ZERO, cfg), 1);
+    }
+
+    #[test]
+    fn line_delta_is_direct_pixel_divides_by_cell_height() {
+        assert_eq!(wheel_delta_cells(MouseScrollUnit::Line, 2.0, 16.0), 2.0);
+        assert_eq!(wheel_delta_cells(MouseScrollUnit::Pixel, 32.0, 16.0), 2.0);
+    }
+
+    #[test]
+    fn accumulator_emits_on_threshold_and_carries_remainder() {
+        let mut acc = WheelAccumulator::default();
+        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
+        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1);
+        assert_eq!(accumulate_notches(&mut acc, -1.0, 0.5), -1);
+    }
+
+    #[test]
+    fn scrollback_up_returns_positive_viewport_scroll() {
+        // Bevy +y (wheel up) → caller negates → engine notches negative → into history.
+        let fx = decide_wheel(TermMode::empty(), -1, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &WheelConfig::default());
+        assert_eq!(fx, vec![MouseEffect::Scroll(3)]);
+    }
+
+    #[test]
+    fn app_capture_wheel_forwards_bytes() {
+        let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        let fx = decide_wheel(modes, -1, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &WheelConfig::default());
+        assert!(matches!(fx.as_slice(), [MouseEffect::Write(b)] if !b.is_empty()));
     }
 }
