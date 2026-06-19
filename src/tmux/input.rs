@@ -27,6 +27,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use ozma_mode::AppMode;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
@@ -118,6 +119,7 @@ fn forward_keys_to_tmux(
     mut focused_webview: ResMut<FocusedWebview>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
+    mut next_mode: ResMut<NextState<AppMode>>,
     connection: NonSend<TmuxConnection>,
     (keys, ime, bindings, resolved): (
         Res<ButtonInput<KeyCode>>,
@@ -252,7 +254,9 @@ fn forward_keys_to_tmux(
                     }
                 }
                 ShortcutAction::ReleaseInlineFocus => {}
-                ShortcutAction::DetachSession => {}
+                ShortcutAction::DetachSession => {
+                    next_mode.set(AppMode::Ozma);
+                }
             }
             continue;
         }
