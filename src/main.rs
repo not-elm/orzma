@@ -43,9 +43,12 @@ use ui::{
 
 fn main() {
     let pre_configs = ozmux_configs::OzmuxConfigs::load_blocking().unwrap_or_default();
+    // NOTE: Always start in AppMode::Ozmux so Startup deferred commands
+    // (e.g. init_atlas_image inserting AtlasImage) are flushed before any
+    // OnEnter(AppMode::Ozma) fires. on_enter_ozmux_picker handles
+    // StartupMode::Ozma by immediately transitioning to AppMode::Ozma.
     let initial_mode = match pre_configs.startup_mode {
-        StartupMode::Ozma => AppMode::Ozma,
-        StartupMode::Ozmux | StartupMode::AutoAttach => AppMode::Ozmux,
+        StartupMode::Ozma | StartupMode::Ozmux | StartupMode::AutoAttach => AppMode::Ozmux,
     };
     let dyn_registry = DynAssetRegistry::default();
     App::new()

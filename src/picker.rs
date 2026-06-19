@@ -138,10 +138,14 @@ fn on_enter_ozmux_picker(
     mut connection: NonSendMut<TmuxConnection>,
     mut picker: ResMut<SessionPicker>,
     mut state: ResMut<ConnectionState>,
+    mut next_mode: ResMut<NextState<AppMode>>,
     configs: Res<OzmuxConfigsResource>,
     control: Option<Res<ControlPlaneHandle>>,
 ) {
     match &configs.startup_mode {
+        StartupMode::Ozma => {
+            next_mode.set(AppMode::Ozma);
+        }
         StartupMode::Ozmux => {
             let server = build_server(&configs);
             match server.list_sessions() {
@@ -184,7 +188,6 @@ fn on_enter_ozmux_picker(
                 }
             }
         }
-        StartupMode::Ozma => {}
     }
 }
 
