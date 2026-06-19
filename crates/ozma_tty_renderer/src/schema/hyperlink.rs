@@ -41,3 +41,50 @@ impl HyperlinkUri {
         &self.0
     }
 }
+
+const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
+
+/// Returns `true` when `uri` carries a scheme on the v1 allowlist
+/// (`http`, `https`, `mailto`, `ftp`), case-insensitive.
+pub fn is_allowed(uri: &str) -> bool {
+    scheme_of(uri)
+        .map(|s| s.to_ascii_lowercase())
+        .is_some_and(|s| ALLOWED_SCHEMES.contains(&s.as_str()))
+}
+
+/// Parses an RFC 3986 scheme: first byte ALPHA, continuation
+/// ALPHA / DIGIT / `+` / `-` / `.`. Returns `None` for malformed input.
+fn scheme_of(uri: &str) -> Option<&str> {
+    let (scheme, _) = uri.split_once(':')?;
+    let mut bytes = scheme.bytes();
+    let first = bytes.next()?;
+    if !first.is_ascii_alphabetic() {
+        return None;
+    }
+    if !bytes.all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
+        return None;
+    }
+    Some(scheme)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_allowed_accepts_canonical_schemes_case_insensitive() {
+        assert!(is_allowed("http://example.com"));
+        assert!(is_allowed("HTTPS://example.com"));
+        assert!(is_allowed("Mailto:foo@example"));
+        assert!(is_allowed("ftp://example.com"));
+    }
+
+    #[test]
+    fn is_allowed_rejects_dangerous_or_unknown_schemes() {
+        assert!(!is_allowed("javascript:alert(1)"));
+        assert!(!is_allowed("file:///etc/passwd"));
+        assert!(!is_allowed("data:text/html,<script>"));
+        assert!(!is_allowed(""));
+        assert!(!is_allowed("no-colon-here"));
+    }
+}
