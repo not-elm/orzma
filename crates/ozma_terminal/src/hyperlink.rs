@@ -86,7 +86,7 @@ fn resolve_hover(
         (Entity, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
         (With<OzmaTerminal>, Without<InputDisabled>),
     >,
-    metrics: &Res<TerminalCellMetricsResource>,
+    metrics: &TerminalCellMetricsResource,
     windows: &Query<&Window, With<PrimaryWindow>>,
     modifier_held: bool,
 ) -> SystemCursorIcon {
