@@ -13,7 +13,10 @@ pub use action::PasteAction;
 use bevy::prelude::*;
 pub use clipboard::{Clipboard, build_paste_bytes};
 pub use input::{InputDisabled, OzmaTerminalInputSet, ReservedChord, TerminalInputBindings};
-pub use spawn::{OzmaTerminal, OzmaTerminalConfig, cells_for, resolve_shell};
+pub use spawn::{
+    OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
+    resolve_shell,
+};
 
 /// Bevy plugin that registers the Ozma VT terminal subsystems.
 ///

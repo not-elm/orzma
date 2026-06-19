@@ -4884,6 +4884,7 @@ dependencies = [
 name = "ozma_terminal"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "arboard",
  "bevy",
  "ozma_tty_engine",
