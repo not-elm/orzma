@@ -5,6 +5,7 @@
 
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
+use ozma_terminal::{ReservedChord, TerminalInputBindings};
 use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
 
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
@@ -49,6 +50,32 @@ impl ResolvedShortcuts {
                 && s.modifiers == mods
         })
     }
+
+    /// Derives the crate's `TerminalInputBindings` from the resolved table:
+    /// the Paste chord becomes `paste`; every other resolved chord becomes a
+    /// `reserved` entry the crate dispatcher skips for the host to handle.
+    pub(crate) fn input_bindings(&self) -> TerminalInputBindings {
+        let mut paste = None;
+        let mut reserved = Vec::new();
+        for s in &self.0 {
+            let chord = ReservedChord {
+                key_code: s.keycode,
+                ctrl: s.modifiers.ctrl,
+                shift: s.modifiers.shift,
+                alt: s.modifiers.alt,
+                meta: s.modifiers.meta,
+            };
+            if s.action == ShortcutAction::Paste {
+                paste = Some(chord);
+            } else {
+                reserved.push(chord);
+            }
+        }
+        TerminalInputBindings {
+            paste: paste.unwrap_or_else(|| TerminalInputBindings::default().paste),
+            reserved,
+        }
+    }
 }
 
 /// Resolves every bound chord in `bindings` to a `ResolvedShortcut`, skipping
@@ -85,6 +112,13 @@ pub(crate) fn build_resolved_shortcuts(
     configs: Res<OzmuxConfigsResource>,
 ) {
     resolved.0 = resolve_from_bindings(&configs.shortcuts.bindings);
+}
+
+/// `Startup` system: inserts `TerminalInputBindings` derived from the resolved
+/// shortcut table, replacing the crate default. Runs after
+/// `build_resolved_shortcuts`.
+pub(crate) fn populate_input_bindings(mut commands: Commands, resolved: Res<ResolvedShortcuts>) {
+    commands.insert_resource(resolved.input_bindings());
 }
 
 /// Maps a config logical `Key` to the physical `KeyCode` ozmux matches on.
@@ -244,5 +278,24 @@ mod tests {
         let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
         assert!(r.is_release_inline_focus(KeyCode::Escape, mods(true, true, false, false)));
         assert!(!r.is_release_inline_focus(KeyCode::KeyV, mods(false, false, false, true)));
+    }
+
+    #[test]
+    fn input_bindings_excludes_paste_from_reserved() {
+        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let b = r.input_bindings();
+        assert_eq!(b.paste.key_code, KeyCode::KeyV);
+        assert!(b.paste.meta && !b.paste.ctrl && !b.paste.shift && !b.paste.alt);
+        assert_eq!(
+            b.reserved.len(),
+            4,
+            "Quit, OpenPicker, ReleaseInlineFocus, DetachSession"
+        );
+        assert!(
+            !b.reserved
+                .iter()
+                .any(|c| c.key_code == KeyCode::KeyV && c.meta),
+            "the paste chord must not appear in reserved",
+        );
     }
 }

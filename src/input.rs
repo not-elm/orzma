@@ -31,7 +31,14 @@ pub struct OzmuxShortcutPlugin;
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<shortcuts::ResolvedShortcuts>()
-            .add_systems(Startup, shortcuts::build_resolved_shortcuts)
+            .add_systems(
+                Startup,
+                (
+                    shortcuts::build_resolved_shortcuts,
+                    shortcuts::populate_input_bindings,
+                )
+                    .chain(),
+            )
             .configure_sets(
                 Update,
                 (
