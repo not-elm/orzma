@@ -70,33 +70,21 @@ impl Default for TerminalInputBindings {
 pub struct OzmaTerminalInputSet;
 
 /// Registers `TerminalInputBindings` and the default keyboard dispatcher.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "unused until the binary input-switchover task adds OzmaInputPlugin to the app; that task makes it live and this expectation unfulfilled, forcing its removal"
-    )
-)]
 pub(crate) struct OzmaInputPlugin;
 
 impl Plugin for OzmaInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TerminalInputBindings>().add_systems(
-            Update,
-            dispatch_input
-                .in_set(OzmaTerminalInputSet)
-                .run_if(on_message::<KeyboardInput>),
-        );
+        app.init_resource::<TerminalInputBindings>()
+            .add_message::<KeyboardInput>()
+            .add_systems(
+                Update,
+                dispatch_input
+                    .in_set(OzmaTerminalInputSet)
+                    .run_if(on_message::<KeyboardInput>),
+            );
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "reachable only through OzmaInputPlugin, unused until the binary input-switchover task adds the plugin to the app; that task makes it live and this expectation unfulfilled, forcing its removal"
-    )
-)]
 fn dispatch_input(
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,

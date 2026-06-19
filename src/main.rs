@@ -29,7 +29,7 @@ use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
-use ozma_input::OzmaInputPlugin;
+use ozma_input::OzmaHostInputPlugin;
 use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
@@ -93,7 +93,7 @@ fn main() {
             ImePlugin,
             ImeOverlayPlugin,
             OptionAsAltPlugin,
-            OzmaInputPlugin,
+            OzmaHostInputPlugin,
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),
