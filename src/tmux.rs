@@ -34,21 +34,21 @@ pub struct OzmuxTmuxPlugin;
 
 impl Plugin for OzmuxTmuxPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, OzmuxActiveSet.run_if(in_state(AppMode::Ozmux)));
-        app.add_systems(OnEnter(AppMode::Ozmux), on_enter_ozmux);
-        app.add_systems(OnExit(AppMode::Ozmux), on_exit_ozmux);
-        app.add_observer(on_tmux_connection_closed);
-        app.add_plugins((
-            TmuxSessionPlugin,
-            RenderPlugin,
-            InputPlugin,
-            MousePlugin,
-            CopyModePlugin,
-            WindowBarPlugin,
-            DialogPlugin,
-            DividerHandlePlugin,
-            PaneFocusPlugin,
-        ));
+        app.configure_sets(Update, OzmuxActiveSet.run_if(in_state(AppMode::Ozmux)))
+            .add_systems(OnEnter(AppMode::Ozmux), on_enter_ozmux)
+            .add_systems(OnExit(AppMode::Ozmux), on_exit_ozmux)
+            .add_observer(on_tmux_connection_closed)
+            .add_plugins((
+                TmuxSessionPlugin,
+                RenderPlugin,
+                InputPlugin,
+                MousePlugin,
+                CopyModePlugin,
+                WindowBarPlugin,
+                DialogPlugin,
+                DividerHandlePlugin,
+                PaneFocusPlugin,
+            ));
     }
 }
 
