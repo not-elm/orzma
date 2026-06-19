@@ -90,9 +90,9 @@ fn dispatch_input(
     mut events: MessageReader<KeyboardInput>,
     bindings: Res<TerminalInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
-    terminals: Query<Entity, (With<OzmaTerminal>, Without<InputDisabled>)>,
+    terminal: Query<Entity, (With<OzmaTerminal>, Without<InputDisabled>)>,
 ) {
-    let Ok(entity) = terminals.single() else {
+    let Ok(entity) = terminal.single() else {
         events.clear();
         return;
     };

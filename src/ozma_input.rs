@@ -4,9 +4,9 @@
 //! OpenPicker, DetachSession, ReleaseInlineFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
-use crate::input::InputPhase;
 use crate::input::ime::ImeState;
 use crate::input::shortcuts::ResolvedShortcuts;
+use crate::input::{InputPhase, current_modifiers};
 use crate::ozma::AppMode;
 use crate::picker::SessionPicker;
 use bevy::input::ButtonState;
@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use ozma_terminal::{InputDisabled, OzmaTerminal, OzmaTerminalInputSet};
-use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
+use ozmux_configs::shortcuts::ShortcutAction;
 
 /// Registers the host-side input systems for `AppMode::Ozma`.
 pub(crate) struct OzmaHostInputPlugin;
@@ -117,15 +117,6 @@ fn should_disable_input(
 
 fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutAction) -> bool {
     webview_focused && action != ShortcutAction::ReleaseInlineFocus
-}
-
-fn current_modifiers(keys: &ButtonInput<KeyCode>) -> Modifiers {
-    Modifiers {
-        ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
-        shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        alt: keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight),
-        meta: keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight),
-    }
 }
 
 #[cfg(test)]
