@@ -294,24 +294,19 @@ pub(crate) fn wheel_delta_cells(unit: MouseScrollUnit, y: f32, cell_h: f32) -> f
 }
 
 /// Adds `delta_cells` to the accumulator and returns whole notches to emit
-/// (positive = up/older), carrying the remainder. Resets on a sign flip and
-/// caps the contributing delta to one notch to avoid a burst in the new direction.
+/// (positive = up/older), carrying the remainder. Resets the residual on a
+/// sign flip, then processes the new delta at full magnitude.
 #[cfg_attr(not(test), expect(dead_code, reason = "called by wheel dispatch system (Task 6)"))]
 pub(crate) fn accumulate_notches(
     acc: &mut WheelAccumulator,
     delta_cells: f32,
     cells_per_notch: f32,
 ) -> i32 {
-    let threshold = cells_per_notch.max(f32::EPSILON);
-    let effective_delta = if acc.residual_cells != 0.0
-        && acc.residual_cells.signum() != delta_cells.signum()
-    {
+    if acc.residual_cells != 0.0 && acc.residual_cells.signum() != delta_cells.signum() {
         acc.residual_cells = 0.0;
-        delta_cells.signum() * delta_cells.abs().min(threshold)
-    } else {
-        delta_cells
-    };
-    acc.residual_cells += effective_delta;
+    }
+    let threshold = cells_per_notch.max(f32::EPSILON);
+    acc.residual_cells += delta_cells;
     let notches = (acc.residual_cells / threshold).trunc() as i32;
     if notches != 0 {
         acc.residual_cells -= notches as f32 * threshold;
@@ -585,7 +580,7 @@ mod tests {
         let mut acc = WheelAccumulator::default();
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1);
-        assert_eq!(accumulate_notches(&mut acc, -1.0, 0.5), -1);
+        assert_eq!(accumulate_notches(&mut acc, -1.0, 0.5), -2);
     }
 
     #[test]
