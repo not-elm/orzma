@@ -84,6 +84,8 @@ mod tests {
         assert!(!is_allowed("javascript:alert(1)"));
         assert!(!is_allowed("file:///etc/passwd"));
         assert!(!is_allowed("data:text/html,<script>"));
+        assert!(!is_allowed("vscode://"));
+        assert!(!is_allowed("vscode://example.com"));
         assert!(!is_allowed(""));
         assert!(!is_allowed("no-colon-here"));
     }

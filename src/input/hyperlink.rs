@@ -1,7 +1,8 @@
-//! OSC 8 hyperlink hover detection, cursor-icon control, scheme
-//! allowlist, and Cmd+click activation. The plugin registered here
-//! also re-exports the pure predicates the mouse-buttons system calls
-//! during interception.
+//! OSC 8 hyperlink hover detection, cursor-icon control, and Cmd+click
+//! activation. Scheme validation is delegated to
+//! `ozma_tty_renderer::schema::is_allowed` (this module does not own the
+//! allowlist). The plugin registered here also re-exports the pure
+//! predicates the mouse-buttons system calls during interception.
 
 use crate::input::{InputPhase, current_modifiers};
 use crate::tmux::pane_hit::{cell_at_local, tmux_pane_at_phys};

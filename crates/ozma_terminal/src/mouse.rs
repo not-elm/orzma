@@ -90,11 +90,9 @@ pub(crate) enum DragPhase {
     Started,
 }
 
-/// An in-progress button gesture: the held button, the selection anchor, and the
-/// last cell a drag reached (dedup + lazy materialization).
+/// An in-progress local-selection gesture: the selection anchor, the granularity,
+/// and the drag phase (drives lazy materialization of the selection).
 pub(crate) struct DragGesture {
-    /// Which mouse button is being held.
-    pub(crate) button: MouseButtonKind,
     /// The cell where the gesture originated.
     pub(crate) origin: CellCoord,
     /// The half of the origin cell where the gesture started.
@@ -103,7 +101,14 @@ pub(crate) struct DragGesture {
     pub(crate) ty: SelectionType,
     /// Current phase of the drag.
     pub(crate) phase: DragPhase,
-    /// The last cell the drag endpoint was updated to (for dedup).
+}
+
+/// A held mouse button and the last cell a drag was synthesized for. Tracked
+/// for BOTH local selection and app-forward drags — the forward path never sets
+/// `drag`, so drag-motion synthesis must not depend on it.
+#[derive(Clone, Copy)]
+pub(crate) struct HeldPointer {
+    pub(crate) button: MouseButtonKind,
     pub(crate) last_cell: CellCoord,
 }
 
@@ -112,8 +117,10 @@ pub(crate) struct DragGesture {
 pub(crate) struct OzmaMouseGesture {
     /// Consecutive-click counter for multi-click detection.
     pub(crate) click: ClickTracker,
-    /// In-progress button gesture, or `None` when idle.
+    /// In-progress local-selection gesture, or `None` when idle.
     pub(crate) drag: Option<DragGesture>,
+    /// Held button + last drag cell, for both local and app-forward drags.
+    pub(crate) held: Option<HeldPointer>,
 }
 
 /// Consecutive-click counter using a timeout + positional-drift gate.
@@ -245,23 +252,19 @@ pub(crate) fn decide_button(
         ButtonAction::ClearAndWriteToPty(b) => vec![MouseEffect::SelClear, MouseEffect::Write(b)],
         ButtonAction::ArmDrag { ty, cell, side } => {
             gesture.drag = Some(DragGesture {
-                button: evt.button,
                 origin: cell,
                 side,
                 ty,
                 phase: DragPhase::Armed,
-                last_cell: cell,
             });
             vec![MouseEffect::SelClear]
         }
         ButtonAction::StartLocalSelection { ty, cell, side } => {
             gesture.drag = Some(DragGesture {
-                button: evt.button,
                 origin: cell,
                 side,
                 ty,
                 phase: DragPhase::Started,
-                last_cell: cell,
             });
             vec![MouseEffect::SelStart {
                 point: to_viewport_point(cell),
@@ -364,16 +367,19 @@ pub(crate) fn dispatch_mouse_buttons(
     else {
         buttons.clear();
         gesture.drag = None;
+        gesture.held = None;
         return;
     };
     let Ok(window) = windows.single() else {
         buttons.clear();
         gesture.drag = None;
+        gesture.held = None;
         return;
     };
     if !window.focused {
         buttons.clear();
         gesture.drag = None;
+        gesture.held = None;
         return;
     }
     let Some(cursor_phys) = window.cursor_position().map(|c| c * window.scale_factor()) else {
@@ -438,6 +444,7 @@ pub(crate) fn dispatch_mouse_buttons(
             link_at_cell,
             &cfg.buttons,
         );
+        let opened = matches!(effects.as_slice(), [MouseEffect::OpenUri(_)]);
         for effect in effects {
             apply_effect(
                 &mut handle,
@@ -447,9 +454,19 @@ pub(crate) fn dispatch_mouse_buttons(
                 effect,
             );
         }
+        match kind {
+            ButtonEventKind::Press if !opened => {
+                gesture.held = Some(HeldPointer {
+                    button,
+                    last_cell: cell,
+                });
+            }
+            ButtonEventKind::Release => gesture.held = None,
+            _ => {}
+        }
     }
 
-    if gesture.drag.is_some()
+    if let Some(held) = gesture.held
         && let Some((cell, side)) = cell_at_cursor(
             node,
             transform,
@@ -459,13 +476,9 @@ pub(crate) fn dispatch_mouse_buttons(
             grid.cols,
             grid.rows,
         )
-        && gesture.drag.as_ref().is_some_and(|d| d.last_cell != cell)
+        && held.last_cell != cell
     {
-        let button = gesture
-            .drag
-            .as_ref()
-            .map(|d| d.button)
-            .unwrap_or(MouseButtonKind::Left);
+        let button = held.button;
         let evt = ButtonEvent {
             kind: ButtonEventKind::Drag,
             button,
@@ -490,6 +503,9 @@ pub(crate) fn dispatch_mouse_buttons(
                 &mut clipboard,
                 effect,
             );
+        }
+        if let Some(h) = gesture.held.as_mut() {
+            h.last_cell = cell;
         }
     }
 }
@@ -632,7 +648,6 @@ fn update_selection(
             let ty = drag.ty;
             let origin_side = drag.side;
             drag.phase = DragPhase::Started;
-            drag.last_cell = cell;
             vec![
                 MouseEffect::SelStart {
                     point: to_viewport_point(origin),
@@ -646,7 +661,6 @@ fn update_selection(
             ]
         }
         DragPhase::Started => {
-            drag.last_cell = cell;
             vec![MouseEffect::SelUpdate {
                 point: to_viewport_point(cell),
                 side,
@@ -942,6 +956,37 @@ mod tests {
     }
 
     #[test]
+    fn app_capture_drag_forwards_motion_bytes() {
+        let mut g = OzmaMouseGesture::default();
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let cfg = ButtonConfig {
+            max_protocol_events_per_frame: 8,
+        };
+        decide_button(
+            &mut g,
+            modes,
+            ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        let fx = decide_button(
+            &mut g,
+            modes,
+            ev(ButtonEventKind::Drag, 6, 5, 1),
+            ProtocolModifiers::default(),
+            false,
+            None,
+            &cfg,
+        );
+        assert!(
+            matches!(fx.as_slice(), [MouseEffect::Write(b)] if b.starts_with(b"\x1b[<32;")),
+            "a drag under app capture must forward a motion report (SGR cb motion bit 32), got {fx:?}"
+        );
+    }
+
+    #[test]
     fn shift_bypass_selects_even_when_captured() {
         let mut g = OzmaMouseGesture::default();
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
@@ -1096,27 +1141,21 @@ mod tests {
     #[test]
     fn drag_gesture_phase_transitions() {
         let armed = DragGesture {
-            button: MouseButtonKind::Left,
             origin: CellCoord { col: 1, row: 1 },
             side: Side::Left,
             ty: SelectionType::Simple,
             phase: DragPhase::Armed,
-            last_cell: CellCoord { col: 1, row: 1 },
         };
         assert_eq!(armed.phase, DragPhase::Armed);
-        assert_eq!(armed.button, MouseButtonKind::Left);
         assert_eq!((armed.origin.col, armed.origin.row), (1, 1));
         assert_eq!(armed.side, Side::Left);
         assert_eq!(armed.ty, SelectionType::Simple);
-        assert_eq!((armed.last_cell.col, armed.last_cell.row), (1, 1));
 
         let started = DragGesture {
             phase: DragPhase::Started,
-            last_cell: CellCoord { col: 3, row: 2 },
             ..armed
         };
         assert_eq!(started.phase, DragPhase::Started);
-        assert_eq!((started.last_cell.col, started.last_cell.row), (3, 2));
     }
 
     #[test]

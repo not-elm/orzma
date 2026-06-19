@@ -4887,6 +4887,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "bevy",
+ "open",
  "ozma_tty_engine",
  "ozma_tty_renderer",
  "tracing",

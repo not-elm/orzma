@@ -9,6 +9,7 @@ use ozma_terminal::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputB
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
+use std::time::Duration;
 
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
 /// the exact modifier set required, and the action to run.
@@ -136,7 +137,7 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
             max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
         },
         cells_per_notch: mc.cells_per_notch,
-        double_click_timeout: std::time::Duration::from_millis(mc.double_click_timeout_ms as u64),
+        double_click_timeout: Duration::from_millis(mc.double_click_timeout_ms as u64),
         click_drift_px: mc.click_drift_px,
         fine_modifier: match mc.fine_modifier {
             CfgFineModifier::Shift => FineModifier::Shift,
