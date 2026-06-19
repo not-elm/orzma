@@ -32,6 +32,7 @@ use ozma_input::OzmaInputPlugin;
 use ozma_mode::OzmaModePlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
+use ozmux_configs::OzmuxConfigs;
 use ozmux_webview_host::DynAssetRegistry;
 use picker::OzmuxPickerPlugin;
 use tmux::OzmuxTmuxPlugin;
@@ -43,7 +44,7 @@ use ui::{
 };
 
 fn main() {
-    let pre_configs = ozmux_configs::OzmuxConfigs::load_blocking().unwrap_or_default();
+    let pre_configs = OzmuxConfigs::load_blocking().unwrap_or_default();
     let dyn_registry = DynAssetRegistry::default();
     App::new()
         .add_plugins((
