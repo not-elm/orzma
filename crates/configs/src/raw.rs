@@ -11,6 +11,7 @@ use crate::mouse::MousePatch;
 use crate::osc_webview::OscWebviewPatch;
 use crate::ozma::OzmaPatch;
 use crate::shortcuts::Shortcuts;
+use crate::startup::StartupMode;
 use crate::theme::ThemePatch;
 use crate::tmux::TmuxPatch;
 use serde::Deserialize;
@@ -29,6 +30,7 @@ pub(crate) struct RawConfigs {
     pub(crate) osc_webview: Option<OscWebviewPatch>,
     pub(crate) tmux: Option<TmuxPatch>,
     pub(crate) ozma: Option<OzmaPatch>,
+    pub(crate) startup_mode: Option<StartupMode>,
 }
 
 impl RawConfigs {
@@ -63,6 +65,9 @@ impl RawConfigs {
         }
         if let Some(patch) = self.ozma {
             base.ozma = patch.apply_to(base.ozma);
+        }
+        if let Some(m) = self.startup_mode {
+            base.startup_mode = m;
         }
         base
     }
@@ -236,6 +241,32 @@ release-inline-focus = "Cmd+V"
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
         }
+    }
+
+    #[test]
+    fn startup_mode_defaults_to_ozma() {
+        let raw: RawConfigs = toml::from_str("").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.startup_mode, crate::startup::StartupMode::Ozma);
+    }
+
+    #[test]
+    fn startup_mode_auto_attach_parses() {
+        let raw: RawConfigs = toml::from_str(r#"startup_mode = "auto-attach""#).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.startup_mode, crate::startup::StartupMode::AutoAttach);
+    }
+
+    #[test]
+    fn startup_mode_ozmux_parses() {
+        let raw: RawConfigs = toml::from_str(r#"startup_mode = "ozmux""#).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.startup_mode, crate::startup::StartupMode::Ozmux);
+    }
+
+    #[test]
+    fn unknown_startup_mode_is_rejected() {
+        assert!(toml::from_str::<RawConfigs>(r#"startup_mode = "invalid""#).is_err());
     }
 
     #[test]
