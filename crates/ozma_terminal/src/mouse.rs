@@ -225,6 +225,18 @@ pub(crate) enum MouseEffect {
     OpenUri(String),
 }
 
+/// Carries a gather system's decided mouse effects to the apply observer, so the
+/// dispatch systems stay read-only on the terminal and all mutation lives in one
+/// place (`on_terminal_mouse_effects`), mirroring `PasteAction` / `on_paste`.
+#[derive(EntityEvent, Debug, Clone)]
+pub(crate) struct TerminalMouseEffects {
+    /// The terminal entity to apply the effects to.
+    #[event_target]
+    pub(crate) entity: Entity,
+    /// The decided effects, applied in order.
+    pub(crate) effects: Vec<MouseEffect>,
+}
+
 /// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
 /// click state) and returns the effects to apply. A Cmd/Ctrl-click on a linked
 /// cell opens the URL and consumes the event; otherwise the engine's
@@ -346,28 +358,26 @@ pub(crate) fn decide_wheel(
 /// and drag state, drives `decide_button`, and applies the effects. Skips the
 /// `OzmaTerminal` while it carries `InputDisabled`.
 pub(crate) fn dispatch_mouse_buttons(
+    mut commands: Commands,
     mut gesture: ResMut<OzmaMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
-    mut terminal: Query<
+    terminal: Query<
         (
-            &mut TerminalHandle,
-            &mut PtyHandle,
-            &mut Coalescer,
+            Entity,
+            &TerminalHandle,
             &ComputedNode,
             &UiGlobalTransform,
             &TerminalGrid,
         ),
         (With<OzmaTerminal>, Without<InputDisabled>),
     >,
-    mut clipboard: ResMut<Clipboard>,
     cfg: Res<OzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok((mut handle, mut pty, mut coalescer, node, transform, grid)) = terminal.single_mut()
-    else {
+    let Ok((entity, handle, node, transform, grid)) = terminal.single() else {
         buttons.clear();
         gesture.drag = None;
         gesture.held = None;
@@ -392,85 +402,47 @@ pub(crate) fn dispatch_mouse_buttons(
         gesture.held = None;
         return;
     };
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let ctx = CellContext {
+        node,
+        transform,
+        grid,
+        cell_w: metrics.metrics.advance_phys.floor().max(1.0),
+        cell_h: metrics.metrics.line_height_phys.floor().max(1.0),
+    };
     let modes = handle.current_modes();
     let mods = protocol_mods(&keys);
     let modifier_held = link_modifier_held(&mods);
 
+    let mut effects: Vec<MouseEffect> = Vec::new();
     for ev in buttons.read() {
-        let Some(button) = map_button(ev.button) else {
-            continue;
-        };
-        let kind = match ev.state {
-            ButtonState::Pressed => ButtonEventKind::Press,
-            ButtonState::Released => ButtonEventKind::Release,
-        };
-        // NOTE: a release with the cursor off the terminal node must still be
-        // processed (via the last tracked cell) — otherwise `held`/`drag` stick
-        // and later cursor motion replays stale selection / forward reports.
-        let release_fallback = (kind == ButtonEventKind::Release)
-            .then(|| gesture.held.map(|h| (h.last_cell, Side::Left)))
-            .flatten();
-        let Some((cell, side)) = cell_at_cursor(
-            node,
-            transform,
+        let Some((evt, link)) = resolve_button_event(
+            &mut gesture,
+            &ctx,
+            ev,
             cursor_phys,
-            cell_w,
-            cell_h,
-            grid.cols,
-            grid.rows,
-        )
-        .or(release_fallback) else {
+            scale,
+            modifier_held,
+            time.elapsed(),
+            &cfg,
+        ) else {
             continue;
         };
-        let click_count = if kind == ButtonEventKind::Press {
-            gesture.click.register(
-                time.elapsed(),
-                cursor_phys / scale,
-                (cfg.double_click_timeout, cfg.click_drift_px),
-            )
-        } else {
-            1
-        };
-        let link_at_cell =
-            (kind == ButtonEventKind::Press && button == MouseButtonKind::Left && modifier_held)
-                .then(|| {
-                    grid.hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16)
-                        .map(|(_id, uri)| uri.as_str().to_string())
-                })
-                .flatten();
-        let evt = ButtonEvent {
-            kind,
-            button,
-            cell,
-            side,
-            click_count,
-        };
-        let effects = decide_button(
+        let decided = decide_button(
             &mut gesture,
             modes,
             evt,
             mods,
             modifier_held,
-            link_at_cell,
+            link,
             &cfg.buttons,
         );
-        let opened = matches!(effects.as_slice(), [MouseEffect::OpenUri(_)]);
-        for effect in effects {
-            apply_effect(
-                &mut handle,
-                &mut pty,
-                &mut coalescer,
-                &mut clipboard,
-                effect,
-            );
-        }
-        match kind {
+        let opened = matches!(decided.as_slice(), [MouseEffect::OpenUri(_)]);
+        effects.extend(decided);
+        match evt.kind {
             ButtonEventKind::Press if !opened => {
                 gesture.held = Some(HeldPointer {
-                    button,
-                    last_cell: cell,
+                    button: evt.button,
+                    last_cell: evt.cell,
                 });
             }
             ButtonEventKind::Release => gesture.held = None,
@@ -478,74 +450,48 @@ pub(crate) fn dispatch_mouse_buttons(
         }
     }
 
-    if let Some(held) = gesture.held
-        && let Some((cell, side)) = cell_at_cursor(
-            node,
-            transform,
-            cursor_phys,
-            cell_w,
-            cell_h,
-            grid.cols,
-            grid.rows,
-        )
-        && held.last_cell != cell
-    {
-        let button = held.button;
-        let evt = ButtonEvent {
-            kind: ButtonEventKind::Drag,
-            button,
-            cell,
-            side,
-            click_count: 1,
-        };
-        let effects = decide_button(
-            &mut gesture,
-            modes,
-            evt,
-            mods,
-            modifier_held,
-            None,
-            &cfg.buttons,
-        );
-        for effect in effects {
-            apply_effect(
-                &mut handle,
-                &mut pty,
-                &mut coalescer,
-                &mut clipboard,
-                effect,
-            );
-        }
+    if let Some((drag_effects, new_cell)) = synthesize_drag(
+        &mut gesture,
+        &ctx,
+        cursor_phys,
+        modes,
+        mods,
+        modifier_held,
+        &cfg.buttons,
+    ) {
+        effects.extend(drag_effects);
         if let Some(h) = gesture.held.as_mut() {
-            h.last_cell = cell;
+            h.last_cell = new_cell;
         }
+    }
+
+    if !effects.is_empty() {
+        commands.trigger(TerminalMouseEffects { entity, effects });
     }
 }
 
-/// The crate's wheel dispatcher: accumulates notches, drives `decide_wheel`,
-/// applies the result.
+/// The crate's wheel dispatcher: accumulates notches, drives `decide_wheel`, and
+/// triggers `TerminalMouseEffects` for the apply observer.
 pub(crate) fn dispatch_mouse_wheel(
+    mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,
     mut wheel: MessageReader<MouseWheel>,
-    mut terminal: Query<
+    terminal: Query<
         (
-            &mut TerminalHandle,
-            &mut PtyHandle,
-            &mut Coalescer,
+            Entity,
+            &TerminalHandle,
             &ComputedNode,
             &UiGlobalTransform,
             &TerminalGrid,
         ),
         (With<OzmaTerminal>, Without<InputDisabled>),
     >,
-    mut clipboard: ResMut<Clipboard>,
     cfg: Res<OzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok((mut handle, mut pty, mut coalescer, node, transform, grid)) = terminal.single_mut()
-    else {
+    let Ok((entity, handle, node, transform, grid)) = terminal.single() else {
         wheel.clear();
         return;
     };
@@ -557,13 +503,18 @@ pub(crate) fn dispatch_mouse_wheel(
         wheel.clear();
         return;
     }
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let ctx = CellContext {
+        node,
+        transform,
+        grid,
+        cell_w: metrics.metrics.advance_phys.floor().max(1.0),
+        cell_h: metrics.metrics.line_height_phys.floor().max(1.0),
+    };
 
-    let mut delta_cells = 0.0f32;
-    for ev in wheel.read() {
-        delta_cells += wheel_delta_cells(ev.unit, ev.y, cell_h);
-    }
+    let delta_cells: f32 = wheel
+        .read()
+        .map(|ev| wheel_delta_cells(ev.unit, ev.y, ctx.cell_h))
+        .sum();
     let raw = accumulate_notches(&mut gesture_acc, delta_cells, cfg.cells_per_notch);
     if raw == 0 {
         return;
@@ -573,24 +524,131 @@ pub(crate) fn dispatch_mouse_wheel(
     let cell = window
         .cursor_position()
         .map(|c| c * window.scale_factor())
-        .and_then(|p| cell_at_cursor(node, transform, p, cell_w, cell_h, grid.cols, grid.rows))
+        .and_then(|p| ctx.hit(p))
         .map(|(cell, _)| cell)
         .unwrap_or(CellCoord { col: 1, row: 1 });
-    let m = current_terminal_modifiers(&keys);
-    let mods = WheelModifiers {
+    let mods = build_wheel_modifiers(&keys, &cfg);
+    let effects = decide_wheel(handle.current_modes(), notches, cell, mods, &cfg.wheel);
+    if !effects.is_empty() {
+        commands.trigger(TerminalMouseEffects { entity, effects });
+    }
+}
+
+/// Read-only hit-test context for one gather run: the terminal node geometry,
+/// cell pitch, and grid dimensions — so helpers resolve a cursor to a cell
+/// without re-threading seven arguments.
+struct CellContext<'a> {
+    node: &'a ComputedNode,
+    transform: &'a UiGlobalTransform,
+    grid: &'a TerminalGrid,
+    cell_w: f32,
+    cell_h: f32,
+}
+
+impl CellContext<'_> {
+    fn hit(&self, cursor_phys: Vec2) -> Option<(CellCoord, Side)> {
+        cell_at_cursor(
+            self.node,
+            self.transform,
+            cursor_phys,
+            self.cell_w,
+            self.cell_h,
+            self.grid.cols,
+            self.grid.rows,
+        )
+    }
+}
+
+/// Resolves one `MouseButtonInput` to a `ButtonEvent` + optional link URI, or
+/// `None` when it maps to no terminal button or no cell. Encapsulates button
+/// mapping, the off-node release fallback, click-count registration, and the
+/// modifier-gated hyperlink lookup.
+fn resolve_button_event(
+    gesture: &mut OzmaMouseGesture,
+    ctx: &CellContext,
+    ev: &MouseButtonInput,
+    cursor_phys: Vec2,
+    scale: f32,
+    modifier_held: bool,
+    now: Duration,
+    cfg: &OzmaMouseConfig,
+) -> Option<(ButtonEvent, Option<String>)> {
+    let button = map_button(ev.button)?;
+    let kind = match ev.state {
+        ButtonState::Pressed => ButtonEventKind::Press,
+        ButtonState::Released => ButtonEventKind::Release,
+    };
+    // NOTE: a release with the cursor off the terminal node must still be
+    // processed (via the last tracked cell) — otherwise `held`/`drag` stick and
+    // later cursor motion replays stale selection / forward reports.
+    let release_fallback = (kind == ButtonEventKind::Release)
+        .then(|| gesture.held.map(|h| (h.last_cell, Side::Left)))
+        .flatten();
+    let (cell, side) = ctx.hit(cursor_phys).or(release_fallback)?;
+    let click_count = if kind == ButtonEventKind::Press {
+        gesture.click.register(
+            now,
+            cursor_phys / scale,
+            (cfg.double_click_timeout, cfg.click_drift_px),
+        )
+    } else {
+        1
+    };
+    let link = (kind == ButtonEventKind::Press && button == MouseButtonKind::Left && modifier_held)
+        .then(|| {
+            ctx.grid
+                .hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16)
+                .map(|(_id, uri)| uri.as_str().to_string())
+        })
+        .flatten();
+    Some((
+        ButtonEvent {
+            kind,
+            button,
+            cell,
+            side,
+            click_count,
+        },
+        link,
+    ))
+}
+
+/// Synthesizes a drag-motion effect set when a held pointer crosses into a new
+/// cell. Returns the decided effects and the new last-cell to record, or `None`
+/// when no button is held, the pointer is off-node, or it has not moved.
+fn synthesize_drag(
+    gesture: &mut OzmaMouseGesture,
+    ctx: &CellContext,
+    cursor_phys: Vec2,
+    modes: TermMode,
+    mods: ProtocolModifiers,
+    modifier_held: bool,
+    cfg: &ButtonConfig,
+) -> Option<(Vec<MouseEffect>, CellCoord)> {
+    let held = gesture.held?;
+    let (cell, side) = ctx.hit(cursor_phys)?;
+    if held.last_cell == cell {
+        return None;
+    }
+    let evt = ButtonEvent {
+        kind: ButtonEventKind::Drag,
+        button: held.button,
+        cell,
+        side,
+        click_count: 1,
+    };
+    let effects = decide_button(gesture, modes, evt, mods, modifier_held, None, cfg);
+    Some((effects, cell))
+}
+
+/// Builds `WheelModifiers` from the held keys + the fine-scroll config.
+fn build_wheel_modifiers(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> WheelModifiers {
+    let m = current_terminal_modifiers(keys);
+    WheelModifiers {
         shift: m.shift,
         ctrl: m.ctrl,
         alt: m.alt,
         fine: fine_held(cfg.fine_modifier, &m),
-    };
-    for effect in decide_wheel(handle.current_modes(), notches, cell, mods, &cfg.wheel) {
-        apply_effect(
-            &mut handle,
-            &mut pty,
-            &mut coalescer,
-            &mut clipboard,
-            effect,
-        );
     }
 }
 
@@ -612,24 +670,46 @@ fn map_button(b: MouseButton) -> Option<MouseButtonKind> {
     }
 }
 
+/// Applies a gather system's decided mouse effects to the target terminal — the
+/// sole apply path for both mouse dispatch systems. Runs at command flush (same
+/// frame as the trigger), mirroring `on_paste` / `on_terminal_key_input`.
+fn on_terminal_mouse_effects(
+    ev: On<TerminalMouseEffects>,
+    mut clipboard: ResMut<Clipboard>,
+    mut terminals: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer), With<OzmaTerminal>>,
+) {
+    let Ok((mut handle, mut pty, mut coalescer)) = terminals.get_mut(ev.entity) else {
+        return;
+    };
+    for effect in &ev.effects {
+        apply_effect(
+            &mut handle,
+            &mut pty,
+            &mut coalescer,
+            &mut clipboard,
+            effect,
+        );
+    }
+}
+
 fn apply_effect(
     handle: &mut TerminalHandle,
     pty: &mut PtyHandle,
     coalescer: &mut Coalescer,
     clipboard: &mut Clipboard,
-    effect: MouseEffect,
+    effect: &MouseEffect,
 ) {
     match effect {
         MouseEffect::Write(b) => {
-            if let Err(e) = handle.write(pty, &b) {
+            if let Err(e) = handle.write(pty, b) {
                 tracing::warn!(?e, "ozma mouse pty write failed");
             }
         }
         MouseEffect::SelStart { point, side, ty } => {
-            handle.selection_start_at(coalescer, point, side, ty)
+            handle.selection_start_at(coalescer, *point, *side, *ty)
         }
         MouseEffect::SelUpdate { point, side } => {
-            handle.selection_update_to(coalescer, point, side)
+            handle.selection_update_to(coalescer, *point, *side)
         }
         MouseEffect::SelClear => handle.selection_clear(coalescer),
         MouseEffect::Copy => {
@@ -637,8 +717,8 @@ fn apply_effect(
                 clipboard.write(text);
             }
         }
-        MouseEffect::Scroll(lines) => handle.scroll(coalescer, lines),
-        MouseEffect::OpenUri(uri) => try_open_uri(&uri),
+        MouseEffect::Scroll(lines) => handle.scroll(coalescer, *lines),
+        MouseEffect::OpenUri(uri) => try_open_uri(uri),
     }
 }
 
@@ -692,6 +772,7 @@ impl Plugin for OzmaMousePlugin {
             .add_message::<MouseButtonInput>()
             .add_message::<MouseWheel>()
             .add_message::<CursorMoved>()
+            .add_observer(on_terminal_mouse_effects)
             .add_systems(
                 Update,
                 hyperlink_hover_cursor
@@ -745,6 +826,22 @@ mod tests {
             });
         app.update();
         assert!(app.world().resource::<OzmaMouseGesture>().drag.is_none());
+    }
+
+    #[test]
+    fn mouse_effects_on_entity_without_terminal_does_not_panic() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Clipboard>()
+            .add_observer(on_terminal_mouse_effects);
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(TerminalMouseEffects {
+            entity,
+            effects: vec![MouseEffect::Scroll(3)],
+        });
+        app.update();
+        // Reaching here proves the observer handles the missing-terminal path
+        // without panicking; effect correctness is covered by the decide_* tests.
     }
 
     fn test_metrics() -> TerminalCellMetricsResource {

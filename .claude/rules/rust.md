@@ -411,6 +411,62 @@ Exception: a call that must be preceded by local logic (e.g., a conditional
 for the calls after the branch. Keep each such sub-chain as long as possible;
 do not split further than the branch requires.
 
+## System composition — keep systems focused; split by responsibility
+
+A Bevy system that, in one body, **gathers** input, **decides** what to do, and
+**applies** the result is doing three jobs at once: it grows long, mixes
+immutable reads with broad `&mut` access, and traps the decision logic behind
+ECS params (and resources with no public constructor), making it untestable.
+Split such systems along the gather → decide → apply seam.
+
+- **Pure decision helpers** take plain data and return *effect values* (an enum
+  / `Vec` of intents), touching no world state — unit-testable without an `App`.
+  Example: `decide_button` / `decide_wheel` (`crates/ozma_terminal/src/mouse.rs`)
+  return `Vec<MouseEffect>`.
+- **Apply via an `EntityEvent` + observer** (the repo idiom). The gather system
+  queries the target **immutably**, computes effects, and `commands.trigger(...)`s
+  them; the observer holds the `&mut` access and writes the world. See
+  `dispatch_input` → `TerminalKeyInput` → `on_terminal_key_input`
+  (`crates/ozma_tty_engine/src/plugin.rs`) and `PasteAction` / `on_paste`
+  (`crates/ozma_terminal/src/action.rs`).
+- **Extract bulky inline blocks** into named helper `fn`s so the body reads as
+  gate → collect → trigger. Gate preconditions with `run_if` (see "System
+  optimization — gate with `run_if`").
+
+Required:
+
+| Instead of (one system does everything) | Use |
+| --- | --- |
+| Read input, decide, and write the world inline in one system | A pure decide helper returning effect values + an `EntityEvent`/observer that applies them |
+| Decision logic interleaved with `&mut` world access | Decision over borrowed data returning intents; mutation isolated to the apply observer |
+| A 40-plus-line inline block in a system body | A named helper `fn` the system calls |
+
+Forbidden:
+
+| Pattern | Why |
+| --- | --- |
+| `.pipe()` to chain a gather system into an apply system | Not this repo's idiom — it sequences with `EntityEvent` + observer and `.chain()` / system-sets, and uses `.pipe()` nowhere |
+| A long system whose only structure is sequential gather/decide/apply phases that could each be a helper or observer | Defeats single-responsibility; hides the apply surface |
+
+Rationale: a gather system that ends in `commands.trigger(Effects { .. })` makes
+its effect on the world legible at the signature, and the observer is the one
+place to look for mutation. The pure decider is testable without a PTY / GPU /
+`App`, and an immutable gather query plus a `&mut` apply observer never contend
+for the same data (separate systems; the observer runs at command flush).
+
+Exceptions:
+
+- A genuinely **single-purpose** system (only gathers, only decides, or only
+  applies) is already focused — leave it.
+- **Do not over-fragment.** Splitting into several systems that each re-query
+  the same components (duplicate access / scheduling cost) is worse than the
+  monolith when a private helper `fn` would do. Prefer a helper `fn` unless the
+  apply step needs isolated `&mut` / NonSend access (the observer case) or
+  independent scheduling.
+- Some apply steps cannot be made pure (NonSend resources, async round-trip
+  state). Move what you can to the observer; keep the irreducible reads in the
+  gather system and record why in a `// NOTE:`.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:
@@ -448,6 +504,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Change detection — no manual `set_changed()` / `bypass_change_detection()`-then-`set_changed()` notification; mutate conditionally so normal `DerefMut` drives change detection (see "Change detection — let mutation drive it, don't force it manually")
 - Imports — no inline fully-qualified paths in signatures, bodies, or type parameters; add a `use` at the top instead (see "Imports — import, don't inline")
 - Naming — `Query` parameters must not use a `_q` suffix; use a descriptive singular or plural noun (see "Naming — Query parameters")
+- System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, apply via an `EntityEvent`+observer (or a focused apply system), bulky inline blocks extracted to helpers (see "System composition — keep systems focused; split by responsibility")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 
