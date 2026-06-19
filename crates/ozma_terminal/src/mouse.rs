@@ -4,19 +4,24 @@
 //! `ButtonAction` / `WheelAction` routers, applying the result to the
 //! `TerminalHandle` / `Clipboard`. Gated per entity by `InputDisabled`.
 
+use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
-use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
+use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::time::{Real, Time};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::CursorMoved;
+use bevy::window::{CursorMoved, PrimaryWindow};
 use ozma_tty_engine::{
-    ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
-    MouseButtonKind, Point, ProtocolModifiers, SelectionType, Side, TermMode, WheelAction,
-    WheelConfig, WheelModifiers,
+    ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Coalescer, Column, Line,
+    MouseButtonKind, Point, ProtocolModifiers, PtyHandle, SelectionType, Side, TermMode,
+    TerminalHandle, TerminalModifiers, WheelAction, WheelConfig, WheelModifiers,
 };
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::schema::TerminalGrid;
 use std::time::Duration;
 
-use crate::hyperlink::hyperlink_hover_cursor;
+use crate::clipboard::Clipboard;
+use crate::hyperlink::{hyperlink_hover_cursor, link_modifier_held, try_open_uri};
 use crate::input::current_terminal_modifiers;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
@@ -88,7 +93,6 @@ pub(crate) enum DragPhase {
 /// last cell a drag reached (dedup + lazy materialization).
 pub(crate) struct DragGesture {
     /// Which mouse button is being held.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by drag dispatch systems (Task 6)"))]
     pub(crate) button: MouseButtonKind,
     /// The cell where the gesture originated.
     pub(crate) origin: CellCoord,
@@ -106,7 +110,6 @@ pub(crate) struct DragGesture {
 #[derive(Resource, Default)]
 pub(crate) struct OzmaMouseGesture {
     /// Consecutive-click counter for multi-click detection.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by button dispatch systems (Task 6)"))]
     pub(crate) click: ClickTracker,
     /// In-progress button gesture, or `None` when idle.
     pub(crate) drag: Option<DragGesture>,
@@ -121,7 +124,6 @@ pub(crate) struct ClickTracker {
 impl ClickTracker {
     /// Registers a press at `now` / logical `pos`, returning the click count
     /// (1..=3). `cfg` is `(timeout, drift_px)`.
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by button dispatch systems (Task 3)"))]
     pub(crate) fn register(&mut self, now: Duration, pos: Vec2, cfg: (Duration, f32)) -> u8 {
         let (timeout, drift) = cfg;
         let count = match self.last {
@@ -180,7 +182,6 @@ pub(crate) fn to_viewport_point(cell: CellCoord) -> Point {
 }
 
 /// Builds `ProtocolModifiers` from the held keys.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by button and wheel dispatch systems (Task 6)"))]
 pub(crate) fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
     let m = current_terminal_modifiers(keys);
     ProtocolModifiers {
@@ -216,7 +217,6 @@ pub(crate) enum MouseEffect {
 /// click state) and returns the effects to apply. A Cmd/Ctrl-click on a linked
 /// cell opens the URL and consumes the event; otherwise the engine's
 /// `ButtonAction::route` decides forward-to-app vs local selection.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by dispatch systems (Task 6)"))]
 pub(crate) fn decide_button(
     gesture: &mut OzmaMouseGesture,
     modes: TermMode,
@@ -286,7 +286,6 @@ pub(crate) struct WheelAccumulator {
 
 /// Cells of scroll for one wheel event: `Line` units count directly, `Pixel`
 /// units divide by the cell height. Positive = wheel-up (toward older lines).
-#[cfg_attr(not(test), expect(dead_code, reason = "called by wheel dispatch system (Task 6)"))]
 pub(crate) fn wheel_delta_cells(unit: MouseScrollUnit, y: f32, cell_h: f32) -> f32 {
     match unit {
         MouseScrollUnit::Line => y,
@@ -297,7 +296,6 @@ pub(crate) fn wheel_delta_cells(unit: MouseScrollUnit, y: f32, cell_h: f32) -> f
 /// Adds `delta_cells` to the accumulator and returns whole notches to emit
 /// (positive = up/older), carrying the remainder. Resets the residual on a
 /// sign flip, then processes the new delta at full magnitude.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by wheel dispatch system (Task 6)"))]
 pub(crate) fn accumulate_notches(
     acc: &mut WheelAccumulator,
     delta_cells: f32,
@@ -317,7 +315,6 @@ pub(crate) fn accumulate_notches(
 
 /// Pure wheel decision. `notches` is in the engine convention (negative =
 /// up/older); callers negate the Bevy-derived up-positive value before calling.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by wheel dispatch system (Task 6)"))]
 pub(crate) fn decide_wheel(
     modes: TermMode,
     notches: i32,
@@ -329,6 +326,180 @@ pub(crate) fn decide_wheel(
         WheelAction::Noop => Vec::new(),
         WheelAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
         WheelAction::ScrollViewport(lines) => vec![MouseEffect::Scroll(lines)],
+    }
+}
+
+/// The crate's mouse-button dispatcher. Resolves the cursor cell, tracks clicks
+/// and drag state, drives `decide_button`, and applies the effects. Skips the
+/// `OzmaTerminal` while it carries `InputDisabled`.
+pub(crate) fn dispatch_mouse_buttons(
+    mut gesture: ResMut<OzmaMouseGesture>,
+    mut buttons: MessageReader<MouseButtonInput>,
+    mut terminal: Query<
+        (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
+        (With<crate::spawn::OzmaTerminal>, Without<crate::input::InputDisabled>),
+    >,
+    mut clipboard: ResMut<Clipboard>,
+    cfg: Res<OzmaMouseConfig>,
+    metrics: Res<TerminalCellMetricsResource>,
+    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time<Real>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let Ok((mut handle, mut pty, mut coalescer, node, transform, grid)) = terminal.single_mut() else {
+        buttons.clear();
+        gesture.drag = None;
+        return;
+    };
+    let Ok(window) = windows.single() else {
+        buttons.clear();
+        gesture.drag = None;
+        return;
+    };
+    if !window.focused {
+        buttons.clear();
+        gesture.drag = None;
+        return;
+    }
+    let Some(cursor_phys) = window.cursor_position().map(|c| c * window.scale_factor()) else {
+        buttons.clear();
+        return;
+    };
+    let scale = window.scale_factor();
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let modes = handle.current_modes();
+    let mods = protocol_mods(&keys);
+    let modifier_held = link_modifier_held(&mods);
+
+    for ev in buttons.read() {
+        let Some(button) = map_button(ev.button) else { continue };
+        let Some((cell, side)) = cell_at_cursor(node, transform, cursor_phys, cell_w, cell_h, grid.cols, grid.rows) else { continue };
+        let kind = match ev.state {
+            ButtonState::Pressed => ButtonEventKind::Press,
+            ButtonState::Released => ButtonEventKind::Release,
+        };
+        let click_count = if kind == ButtonEventKind::Press {
+            gesture.click.register(time.elapsed(), cursor_phys / scale, (cfg.double_click_timeout, cfg.click_drift_px))
+        } else {
+            1
+        };
+        let link_at_cell = (kind == ButtonEventKind::Press && button == MouseButtonKind::Left && modifier_held)
+            .then(|| grid.hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16).map(|(_id, uri)| uri.as_str().to_string()))
+            .flatten();
+        let evt = ButtonEvent { kind, button, cell, side, click_count };
+        let effects = decide_button(&mut gesture, modes, evt, mods, modifier_held, link_at_cell, &cfg.buttons);
+        for effect in effects {
+            apply_effect(&mut handle, &mut pty, &mut coalescer, &mut clipboard, effect);
+        }
+    }
+
+    if gesture.drag.is_some()
+        && let Some((cell, side)) = cell_at_cursor(node, transform, cursor_phys, cell_w, cell_h, grid.cols, grid.rows)
+        && gesture.drag.as_ref().is_some_and(|d| d.last_cell != cell)
+    {
+        let button = gesture.drag.as_ref().map(|d| d.button).unwrap_or(MouseButtonKind::Left);
+        let evt = ButtonEvent { kind: ButtonEventKind::Drag, button, cell, side, click_count: 1 };
+        let effects = decide_button(&mut gesture, modes, evt, mods, modifier_held, None, &cfg.buttons);
+        for effect in effects {
+            apply_effect(&mut handle, &mut pty, &mut coalescer, &mut clipboard, effect);
+        }
+    }
+}
+
+/// The crate's wheel dispatcher: accumulates notches, drives `decide_wheel`,
+/// applies the result.
+pub(crate) fn dispatch_mouse_wheel(
+    mut gesture_acc: ResMut<WheelAccumulator>,
+    mut wheel: MessageReader<MouseWheel>,
+    mut terminal: Query<
+        (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
+        (With<crate::spawn::OzmaTerminal>, Without<crate::input::InputDisabled>),
+    >,
+    mut clipboard: ResMut<Clipboard>,
+    cfg: Res<OzmaMouseConfig>,
+    metrics: Res<TerminalCellMetricsResource>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let Ok((mut handle, mut pty, mut coalescer, node, transform, grid)) = terminal.single_mut() else {
+        wheel.clear();
+        return;
+    };
+    let Ok(window) = windows.single() else { wheel.clear(); return };
+    if !window.focused { wheel.clear(); return }
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+
+    let mut delta_cells = 0.0f32;
+    for ev in wheel.read() {
+        delta_cells += wheel_delta_cells(ev.unit, ev.y, cell_h);
+    }
+    let raw = accumulate_notches(&mut gesture_acc, delta_cells, cfg.cells_per_notch);
+    if raw == 0 {
+        return;
+    }
+    // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
+    let notches = -raw;
+    let cell = window
+        .cursor_position()
+        .map(|c| c * window.scale_factor())
+        .and_then(|p| cell_at_cursor(node, transform, p, cell_w, cell_h, grid.cols, grid.rows))
+        .map(|(cell, _)| cell)
+        .unwrap_or(CellCoord { col: 1, row: 1 });
+    let m = current_terminal_modifiers(&keys);
+    let mods = WheelModifiers {
+        shift: m.shift,
+        ctrl: m.ctrl,
+        alt: m.alt,
+        fine: fine_held(cfg.fine_modifier, &m),
+    };
+    for effect in decide_wheel(handle.current_modes(), notches, cell, mods, &cfg.wheel) {
+        apply_effect(&mut handle, &mut pty, &mut coalescer, &mut clipboard, effect);
+    }
+}
+
+fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
+    match modifier {
+        FineModifier::Shift => m.shift,
+        FineModifier::Ctrl => m.ctrl,
+        FineModifier::Alt => m.alt,
+        FineModifier::None => true,
+    }
+}
+
+fn map_button(b: MouseButton) -> Option<MouseButtonKind> {
+    match b {
+        MouseButton::Left => Some(MouseButtonKind::Left),
+        MouseButton::Middle => Some(MouseButtonKind::Middle),
+        MouseButton::Right => Some(MouseButtonKind::Right),
+        _ => None,
+    }
+}
+
+fn apply_effect(
+    handle: &mut TerminalHandle,
+    pty: &mut PtyHandle,
+    coalescer: &mut Coalescer,
+    clipboard: &mut Clipboard,
+    effect: MouseEffect,
+) {
+    match effect {
+        MouseEffect::Write(b) => {
+            if let Err(e) = handle.write(pty, &b) {
+                tracing::warn!(?e, "ozma mouse pty write failed");
+            }
+        }
+        MouseEffect::SelStart { point, side, ty } => handle.selection_start_at(coalescer, point, side, ty),
+        MouseEffect::SelUpdate { point, side } => handle.selection_update_to(coalescer, point, side),
+        MouseEffect::SelClear => handle.selection_clear(coalescer),
+        MouseEffect::Copy => {
+            if let Some(text) = handle.selection_to_string() {
+                clipboard.write(text);
+            }
+        }
+        MouseEffect::Scroll(lines) => handle.scroll(coalescer, lines),
+        MouseEffect::OpenUri(uri) => try_open_uri(&uri),
     }
 }
 
@@ -375,6 +546,12 @@ impl Plugin for OzmaMousePlugin {
                 hyperlink_hover_cursor
                     .in_set(OzmaTerminalMouseSet)
                     .run_if(on_message::<KeyboardInput>.or(on_message::<CursorMoved>)),
+            )
+            .add_systems(
+                Update,
+                (dispatch_mouse_buttons, dispatch_mouse_wheel)
+                    .in_set(OzmaTerminalMouseSet)
+                    .run_if(on_message::<MouseButtonInput>.or(on_message::<CursorMoved>).or(on_message::<MouseWheel>)),
             );
     }
 }
@@ -382,7 +559,42 @@ impl Plugin for OzmaMousePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::input::mouse::{MouseButton, MouseButtonInput};
     use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind};
+
+    use crate::input::InputDisabled;
+    use crate::spawn::OzmaTerminal;
+
+    #[test]
+    fn input_disabled_terminal_drains_without_arming_a_gesture() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseButtonInput>()
+            .init_resource::<OzmaMouseConfig>()
+            .init_resource::<OzmaMouseGesture>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Clipboard>()
+            .insert_resource(test_metrics())
+            .add_systems(Update, dispatch_mouse_buttons);
+        app.world_mut().spawn((OzmaTerminal, InputDisabled));
+        app.world_mut().spawn((Window { focused: true, ..default() }, PrimaryWindow));
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<MouseButtonInput>>()
+            .write(MouseButtonInput { button: MouseButton::Left, state: ButtonState::Pressed, window: Entity::PLACEHOLDER });
+        app.update();
+        assert!(app.world().resource::<OzmaMouseGesture>().drag.is_none());
+    }
+
+    fn test_metrics() -> TerminalCellMetricsResource {
+        use ozma_tty_renderer::CellMetrics;
+        TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0, line_height_phys: 16.0, ascent_phys: 12.0, descent_phys: 4.0,
+                underline_position_phys: -2.0, underline_thickness_phys: 1.0, max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        }
+    }
 
     fn ev(kind: ButtonEventKind, col: u32, row: u32, count: u8) -> ButtonEvent {
         ButtonEvent {

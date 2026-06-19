@@ -25,7 +25,6 @@ pub(crate) fn link_modifier_held(mods: &ProtocolModifiers) -> bool {
 
 /// Validates `uri` against the shared allowlist and opens it via the OS default
 /// handler. Disallowed URIs are dropped with a debug log.
-#[expect(dead_code, reason = "called by apply_effect (Task 6)")]
 pub(crate) fn try_open_uri(uri: &str) {
     if !is_allowed(uri) {
         debug!("hyperlink: dropping disallowed uri {}", uri);
