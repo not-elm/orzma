@@ -15,8 +15,7 @@ use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::OzmaTerminal;
-use ozma_terminal::{Clipboard, build_paste_bytes};
+use ozma_terminal::{Clipboard, OzmaTerminal, build_paste_bytes};
 use ozma_tty_engine::{
     Coalescer, PtyHandle, TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers,
 };
