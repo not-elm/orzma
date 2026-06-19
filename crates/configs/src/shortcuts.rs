@@ -427,6 +427,9 @@ pub struct Bindings {
     /// `deny_unknown_fields`. Remove after one release.
     #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub copy: Option<KeyChord>,
+    /// Detach the current tmux session and switch to Ozma mode.
+    #[serde(deserialize_with = "deser_chord_or_unbind", default)]
+    pub detach_session: Option<KeyChord>,
 }
 
 fn parse_default_chord(s: &str) -> KeyChord {
@@ -458,6 +461,7 @@ impl Default for Bindings {
             focus_surface_next: None,
             enter_copy_mode: None,
             copy: None,
+            detach_session: None,
         }
     }
 }
@@ -479,6 +483,11 @@ impl Bindings {
             ),
             ("open-picker", &self.open_picker, ShortcutAction::OpenPicker),
             ("quit", &self.quit, ShortcutAction::Quit),
+            (
+                "detach-session",
+                &self.detach_session,
+                ShortcutAction::DetachSession,
+            ),
         ]
         .into_iter()
     }
@@ -515,6 +524,8 @@ pub enum ShortcutAction {
     OpenPicker,
     /// Quits the ozmux application.
     Quit,
+    /// Detaches from the tmux session and returns to Ozma single-terminal mode.
+    DetachSession,
 }
 
 #[cfg(test)]
@@ -769,9 +780,9 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_4_entries() {
+    fn iter_yields_5_entries() {
         let b = Bindings::default();
-        assert_eq!(b.iter().count(), 4);
+        assert_eq!(b.iter().count(), 5);
     }
 
     #[test]
@@ -780,7 +791,7 @@ mod tests {
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Deprecated fields carry
         // `skip_serializing`, so only the active bindings appear here.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"open-picker":{"key":"p","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}}}}"#;
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"open-picker":{"key":"p","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":null}}"#;
         assert_eq!(json, expected);
     }
 
@@ -838,7 +849,7 @@ copy = \"Cmd+C\"
         let parsed: Shortcuts = toml::from_str(toml).expect("deprecated keys must still parse");
         assert_eq!(
             parsed.bindings.iter().count(),
-            4,
+            5,
             "ignored keys must not enter the active set"
         );
     }
