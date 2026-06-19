@@ -70,7 +70,7 @@ impl Default for TerminalInputBindings {
 pub struct OzmaTerminalInputSet;
 
 /// Registers `TerminalInputBindings` and the default keyboard dispatcher.
-pub(crate) struct OzmaInputPlugin;
+pub struct OzmaInputPlugin;
 
 impl Plugin for OzmaInputPlugin {
     fn build(&self, app: &mut App) {

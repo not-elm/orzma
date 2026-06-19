@@ -12,7 +12,9 @@ use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 pub use action::PasteAction;
 use bevy::prelude::*;
 pub use clipboard::{Clipboard, build_paste_bytes};
-pub use input::{InputDisabled, OzmaTerminalInputSet, ReservedChord, TerminalInputBindings};
+pub use input::{
+    InputDisabled, OzmaInputPlugin, OzmaTerminalInputSet, ReservedChord, TerminalInputBindings,
+};
 pub use spawn::{OzmaTerminal, OzmaTerminalConfig, cells_for, resolve_shell};
 
 /// Bevy plugin that registers the Ozma VT terminal subsystems.
