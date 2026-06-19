@@ -251,6 +251,7 @@ fn forward_keys_to_tmux(
                     }
                 }
                 ShortcutAction::ReleaseInlineFocus => {}
+                ShortcutAction::DetachSession => {}
             }
             continue;
         }
