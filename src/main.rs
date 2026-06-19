@@ -56,7 +56,6 @@ fn main() {
     };
     let dyn_registry = DynAssetRegistry::default();
     App::new()
-        .insert_state(initial_mode)
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
                 primary_window: Some(Window {
@@ -68,6 +67,7 @@ fn main() {
             }),
             cef_plugin(dyn_registry.clone()),
         ))
+        .insert_state(initial_mode)
         .add_plugins((
             OzmaTerminalPlugin {
                 config_shell: pre_configs.ozma.shell.clone(),
