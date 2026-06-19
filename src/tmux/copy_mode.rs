@@ -49,7 +49,8 @@ impl Plugin for CopyModePlugin {
                     .run_if(any_with_component::<CopyModeSnapshot>)
                     .after(consume_copy_reply),
             )
-                .after(TmuxProjectionSet),
+                .after(TmuxProjectionSet)
+                .in_set(super::OzmuxActiveSet),
         );
     }
 }

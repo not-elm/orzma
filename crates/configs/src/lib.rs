@@ -22,8 +22,10 @@ pub mod ozma;
 pub mod path;
 mod raw;
 pub mod shortcuts;
+pub mod startup;
 pub mod theme;
 pub mod tmux;
+pub use startup::StartupMode;
 
 /// Fully-resolved ozmux configuration.
 #[derive(Clone, Debug, Default)]
@@ -46,6 +48,8 @@ pub struct OzmuxConfigs {
     pub tmux: tmux::TmuxConfig,
     /// Ozma single-terminal mode configuration.
     pub ozma: ozma::OzmaConfig,
+    /// Startup mode: which application mode launches on boot.
+    pub startup_mode: StartupMode,
 }
 
 impl OzmuxConfigs {

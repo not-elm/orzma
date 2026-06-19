@@ -15,7 +15,9 @@ use crate::event_pump::{
     take_cursor_positions, take_keybindings, take_mode_keys, take_pane_captures, take_prefix_keys,
     take_version, trigger_events,
 };
-use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
+use crate::events::{
+    TmuxActivePaneChanged, TmuxConnectionClosed, TmuxConnectionReset, TmuxWindowsRetained,
+};
 use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
@@ -23,8 +25,8 @@ use crate::state::ConnectionState;
 use bevy::prelude::*;
 use tmux_control::TransportEvent;
 
-/// Present (inserted at plugin build) whenever the tmux backend is active, so
-/// consumers can gate "tmux mode" from frame 0 — before any `%session-changed`.
+/// Marker resource inserted when the tmux backend is active. Drain systems are
+/// gated on its presence; insert it to activate tmux mode, remove it to idle.
 #[derive(Resource, Default)]
 pub struct TmuxPresence;
 
@@ -47,12 +49,21 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<EnumerationState>()
             .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
-            .insert_resource(TmuxPresence)
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
             .add_message::<CopyModeReply>()
-            .add_systems(Update, drain_tmux_events.in_set(TmuxProjectionSet))
-            .add_systems(Update, request_pane_captures.after(TmuxProjectionSet));
+            .add_systems(
+                Update,
+                drain_tmux_events
+                    .in_set(TmuxProjectionSet)
+                    .run_if(resource_exists::<TmuxPresence>),
+            )
+            .add_systems(
+                Update,
+                request_pane_captures
+                    .after(TmuxProjectionSet)
+                    .run_if(resource_exists::<TmuxPresence>),
+            );
     }
 }
 
@@ -211,6 +222,7 @@ fn drain_tmux_events(
         keybindings.clear();
         copy_queries.clear();
         commands.trigger(TmuxConnectionReset);
+        commands.trigger(TmuxConnectionClosed);
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
             connection.set_client_name(name);

@@ -4,11 +4,14 @@
 use crate::components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
 };
+use crate::copy_queries::CopyModeQueries;
+use crate::enumerate::EnumerationState;
 use crate::events::{
     PaneGeom, TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxConnectionReset,
     TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed,
     TmuxWindowFlagsChanged, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
+use crate::keybindings::KeyBindings;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tmux_control_parser::{PaneId, WindowId};
@@ -220,6 +223,9 @@ fn on_connection_reset(
     _ev: On<TmuxConnectionReset>,
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
+    mut enumeration: ResMut<EnumerationState>,
+    mut keybindings: ResMut<KeyBindings>,
+    mut copy_queries: ResMut<CopyModeQueries>,
 ) {
     for (_, e) in index.windows.drain() {
         commands.entity(e).despawn();
@@ -229,6 +235,9 @@ fn on_connection_reset(
         commands.entity(e).despawn();
     }
     index.pending_active_pane = None;
+    *enumeration = EnumerationState::default();
+    keybindings.clear();
+    copy_queries.clear();
 }
 
 fn ensure_window(commands: &mut Commands, index: &mut TmuxProjection, id: WindowId) -> Entity {

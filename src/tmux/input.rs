@@ -53,7 +53,8 @@ impl Plugin for InputPlugin {
                 forward_wheel_to_tmux
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
-            ),
+            )
+                .in_set(super::OzmuxActiveSet),
         );
     }
 }
@@ -119,6 +120,7 @@ fn forward_keys_to_tmux(
     mut focused_webview: ResMut<FocusedWebview>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
+    mut next_mode: ResMut<NextState<AppMode>>,
     connection: NonSend<TmuxConnection>,
     (keys, ime, bindings, resolved): (
         Res<ButtonInput<KeyCode>>,
@@ -290,6 +292,9 @@ fn forward_keys_to_tmux(
                     }
                 }
                 ShortcutAction::ReleaseInlineFocus => {}
+                ShortcutAction::DetachSession => {
+                    next_mode.set(AppMode::Ozma);
+                }
             }
             continue;
         }

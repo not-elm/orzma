@@ -50,9 +50,15 @@ impl Plugin for RenderPlugin {
                 layout_tmux_panes,
             )
                 .chain()
-                .after(TmuxProjectionSet),
+                .after(TmuxProjectionSet)
+                .in_set(super::OzmuxActiveSet),
         );
-        app.add_systems(Update, sync_client_size.after(TmuxProjectionSet));
+        app.add_systems(
+            Update,
+            sync_client_size
+                .after(TmuxProjectionSet)
+                .in_set(super::OzmuxActiveSet),
+        );
     }
 }
 

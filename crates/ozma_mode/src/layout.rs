@@ -1,6 +1,7 @@
 //! Window-fill resize system for the Ozma terminal.
 
-use crate::spawn::OzmaTerminal;
+use crate::AppMode;
+use crate::spawn::{cells_for, OzmaTerminal};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
@@ -12,11 +13,11 @@ impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OzmaLastSize>()
             .add_message::<WindowResized>()
-            .add_systems(OnEnter(crate::AppMode::Ozma), reset_last_size)
+            .add_systems(OnEnter(AppMode::Ozma), reset_last_size)
             .add_systems(
                 Update,
                 resize_to_window
-                    .run_if(in_state(crate::AppMode::Ozma))
+                    .run_if(in_state(AppMode::Ozma))
                     .run_if(resource_exists::<TerminalCellMetricsResource>)
                     .run_if(
                         resource_exists_and_changed::<OzmaLastSize>
@@ -53,7 +54,7 @@ fn resize_to_window(
 
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let (cols, rows) = crate::spawn::cells_for(
+    let (cols, rows) = cells_for(
         window.resolution.physical_width(),
         window.resolution.physical_height(),
         cell_w,

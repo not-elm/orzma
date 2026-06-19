@@ -135,6 +135,7 @@ fn forward_keys_to_ozma(
                     picker.open = true;
                 }
                 ShortcutAction::ReleaseInlineFocus => {}
+                ShortcutAction::DetachSession => {}
             }
             continue;
         }
