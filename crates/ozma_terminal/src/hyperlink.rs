@@ -3,8 +3,8 @@
 //! system updates `HyperlinkHoverState` (renderer underline) and the window
 //! `CursorIcon`.
 
-use crate::input::{InputDisabled, current_terminal_modifiers};
-use crate::mouse::cell_at_cursor;
+use crate::input::InputDisabled;
+use crate::mouse::{cell_at_cursor, protocol_mods};
 use crate::spawn::OzmaTerminal;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -35,17 +35,14 @@ pub(crate) fn try_open_uri(uri: &str) {
     }
 }
 
-/// The cursor icon for a hover state: pointer over a link with the modifier
-/// held, I-beam over the grid, arrow elsewhere.
-pub(crate) fn cursor_decision(
-    has_link: bool,
-    modifier_held: bool,
-    over_grid: bool,
-) -> SystemCursorIcon {
-    match (over_grid, has_link, modifier_held) {
-        (true, true, true) => SystemCursorIcon::Pointer,
-        (true, _, _) => SystemCursorIcon::Text,
-        _ => SystemCursorIcon::Default,
+/// The cursor icon over the grid: pointer over a link with the modifier held,
+/// otherwise the I-beam. Off-grid cases return `Default` in `resolve_hover`
+/// before this is reached.
+fn cursor_decision(has_link: bool, modifier_held: bool) -> SystemCursorIcon {
+    if has_link && modifier_held {
+        SystemCursorIcon::Pointer
+    } else {
+        SystemCursorIcon::Text
     }
 }
 
@@ -62,15 +59,7 @@ pub(crate) fn hyperlink_hover_cursor(
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let modifier_held = link_modifier_held(&{
-        let m = current_terminal_modifiers(&keys);
-        ProtocolModifiers {
-            shift: m.shift,
-            ctrl: m.ctrl,
-            alt: m.alt,
-            meta: m.meta,
-        }
-    });
+    let modifier_held = link_modifier_held(&protocol_mods(&keys));
     hover.entity = None;
     hover.hyperlink_id = None;
     hover.modifier_held = modifier_held;
@@ -121,7 +110,7 @@ fn resolve_hover(
         .map(|(id, _uri)| id);
     hover.entity = Some(entity);
     hover.hyperlink_id = id;
-    cursor_decision(id.is_some(), modifier_held, true)
+    cursor_decision(id.is_some(), modifier_held)
 }
 
 #[cfg(test)]
@@ -142,12 +131,8 @@ mod tests {
 
     #[test]
     fn cursor_decision_pointer_only_on_link_with_modifier() {
-        assert_eq!(cursor_decision(true, true, true), SystemCursorIcon::Pointer);
-        assert_eq!(cursor_decision(true, false, true), SystemCursorIcon::Text);
-        assert_eq!(cursor_decision(false, true, true), SystemCursorIcon::Text);
-        assert_eq!(
-            cursor_decision(false, false, false),
-            SystemCursorIcon::Default
-        );
+        assert_eq!(cursor_decision(true, true), SystemCursorIcon::Pointer);
+        assert_eq!(cursor_decision(false, true), SystemCursorIcon::Text);
+        assert_eq!(cursor_decision(true, false), SystemCursorIcon::Text);
     }
 }

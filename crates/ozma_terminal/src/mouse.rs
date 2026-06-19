@@ -38,7 +38,7 @@ pub enum FineModifier {
     /// Alt/Option key activates fine scrolling.
     #[default]
     Alt,
-    /// Fine scrolling is disabled (always coarse).
+    /// No modifier required; fine scrolling is always active.
     None,
 }
 
@@ -311,7 +311,10 @@ pub(crate) fn accumulate_notches(
     delta_cells: f32,
     cells_per_notch: f32,
 ) -> i32 {
-    if acc.residual_cells != 0.0 && acc.residual_cells.signum() != delta_cells.signum() {
+    if acc.residual_cells != 0.0
+        && delta_cells != 0.0
+        && acc.residual_cells.signum() != delta_cells.signum()
+    {
         acc.residual_cells = 0.0;
     }
     let threshold = cells_per_notch.max(f32::EPSILON);
@@ -382,11 +385,13 @@ pub(crate) fn dispatch_mouse_buttons(
         gesture.held = None;
         return;
     }
-    let Some(cursor_phys) = window.cursor_position().map(|c| c * window.scale_factor()) else {
+    let scale = window.scale_factor();
+    let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
         buttons.clear();
+        gesture.drag = None;
+        gesture.held = None;
         return;
     };
-    let scale = window.scale_factor();
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
     let modes = handle.current_modes();
@@ -397,6 +402,16 @@ pub(crate) fn dispatch_mouse_buttons(
         let Some(button) = map_button(ev.button) else {
             continue;
         };
+        let kind = match ev.state {
+            ButtonState::Pressed => ButtonEventKind::Press,
+            ButtonState::Released => ButtonEventKind::Release,
+        };
+        // NOTE: a release with the cursor off the terminal node must still be
+        // processed (via the last tracked cell) — otherwise `held`/`drag` stick
+        // and later cursor motion replays stale selection / forward reports.
+        let release_fallback = (kind == ButtonEventKind::Release)
+            .then(|| gesture.held.map(|h| (h.last_cell, Side::Left)))
+            .flatten();
         let Some((cell, side)) = cell_at_cursor(
             node,
             transform,
@@ -405,12 +420,9 @@ pub(crate) fn dispatch_mouse_buttons(
             cell_h,
             grid.cols,
             grid.rows,
-        ) else {
+        )
+        .or(release_fallback) else {
             continue;
-        };
-        let kind = match ev.state {
-            ButtonState::Pressed => ButtonEventKind::Press,
-            ButtonState::Released => ButtonEventKind::Release,
         };
         let click_count = if kind == ButtonEventKind::Press {
             gesture.click.register(
@@ -1179,6 +1191,16 @@ mod tests {
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1);
         assert_eq!(accumulate_notches(&mut acc, -1.0, 0.5), -2);
+    }
+
+    #[test]
+    fn accumulator_zero_delta_does_not_reset_residual() {
+        // A zero / negative-zero delta has no direction and must NOT trip the
+        // sign-flip reset (signum(-0.0) == -1.0 would otherwise drop the carry).
+        let mut acc = WheelAccumulator::default();
+        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
+        assert_eq!(accumulate_notches(&mut acc, -0.0, 0.5), 0);
+        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1);
     }
 
     #[test]
