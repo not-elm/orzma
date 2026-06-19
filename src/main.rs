@@ -8,6 +8,7 @@ mod font;
 mod inline_webview;
 mod input;
 mod osc_webview;
+mod ozma_input;
 mod picker;
 mod system_set;
 mod theme;
@@ -27,8 +28,11 @@ use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
+use ozma_input::OzmaInputPlugin;
+use ozma_mode::{AppMode, OzmaModePlugin};
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
+use ozmux_configs::StartupMode;
 use ozmux_webview_host::DynAssetRegistry;
 use picker::OzmuxPickerPlugin;
 use tmux::OzmuxTmuxPlugin;
@@ -40,6 +44,14 @@ use ui::{
 };
 
 fn main() {
+    let pre_configs = ozmux_configs::OzmuxConfigs::load_blocking().unwrap_or_default();
+    // NOTE: Always start in AppMode::Ozmux so Startup deferred commands
+    // (e.g. init_atlas_image inserting AtlasImage) are flushed before any
+    // OnEnter(AppMode::Ozma) fires. on_enter_ozmux_picker handles
+    // StartupMode::Ozma by immediately transitioning to AppMode::Ozma.
+    let initial_mode = match pre_configs.startup_mode {
+        StartupMode::Ozma | StartupMode::Ozmux | StartupMode::AutoAttach => AppMode::Ozmux,
+    };
     let dyn_registry = DynAssetRegistry::default();
     App::new()
         .add_plugins((
@@ -54,6 +66,7 @@ fn main() {
             cef_plugin(dyn_registry.clone()),
         ))
         .add_plugins((
+            OzmaModePlugin::new(pre_configs.ozma.shell.clone(), initial_mode),
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,
@@ -75,6 +88,7 @@ fn main() {
             ImePlugin,
             ImeOverlayPlugin,
             OptionAsAltPlugin,
+            OzmaInputPlugin,
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),

@@ -4,6 +4,7 @@ mod exit;
 mod layout;
 mod spawn;
 
+pub use spawn::OzmaTerminal;
 use crate::{exit::ExitPlugin, layout::LayoutPlugin, spawn::SpawnPlugin};
 use bevy::prelude::*;
 
@@ -26,21 +27,29 @@ pub enum AppMode {
 /// `AppExit` when the shell process exits.
 pub struct OzmaModePlugin {
     config_shell: Option<String>,
+    initial_mode: AppMode,
 }
 
 impl OzmaModePlugin {
-    /// Constructs the plugin with the shell override from config.
+    /// Constructs the plugin with the shell override from config and the
+    /// initial `AppMode` to activate on startup.
     ///
-    /// Pass `OzmuxConfigs.ozma.shell` here; the plugin resolves
+    /// Pass `OzmuxConfigs.ozma.shell` for `config_shell`; the plugin resolves
     /// `$SHELL` and `/bin/sh` fallbacks at spawn time.
-    pub fn new(config_shell: Option<String>) -> Self {
-        Self { config_shell }
+    /// Pass `OzmuxConfigs::startup_mode` (or a hard-coded variant in tests)
+    /// for `initial_mode` — it is inserted via `insert_state` so the chosen
+    /// mode is active from the first frame.
+    pub fn new(config_shell: Option<String>, initial_mode: AppMode) -> Self {
+        Self {
+            config_shell,
+            initial_mode,
+        }
     }
 }
 
 impl Plugin for OzmaModePlugin {
     fn build(&self, app: &mut App) {
-        app.init_state::<AppMode>()
+        app.insert_state(self.initial_mode.clone())
             .insert_resource(OzmaModeConfig {
                 shell: self.config_shell.clone(),
             })
@@ -68,7 +77,7 @@ mod tests {
             MinimalPlugins,
             AssetPlugin::default(),
             bevy::state::app::StatesPlugin,
-            OzmaModePlugin::new(None),
+            OzmaModePlugin::new(None, AppMode::Ozma),
         ));
         app.world_mut()
             .init_resource::<bevy::asset::Assets<TerminalUiMaterial>>();

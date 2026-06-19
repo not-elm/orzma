@@ -28,7 +28,8 @@ impl Plugin for DividerHandlePlugin {
             (
                 reconcile_divider_handles.after(TmuxProjectionSet),
                 divider_hover_feedback.after(InputPhase::Hover),
-            ),
+            )
+                .in_set(super::OzmuxActiveSet),
         );
     }
 }

@@ -17,11 +17,12 @@ use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, NonSend, Query, Res, ResMut, Single};
 use bevy::math::Vec2;
-use bevy::prelude::Entity;
+use bevy::prelude::{Entity, State};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_tty_engine::TerminalHandle;
+use ozma_mode::{AppMode, OzmaTerminal};
+use ozma_tty_engine::{TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozmux_tmux::{ActivePane, TmuxConnection, TmuxPane, send_bytes_command};
@@ -155,6 +156,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// rect origin (`inline_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
 pub(crate) fn ime_policy_system(
+    mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
@@ -164,7 +166,8 @@ pub(crate) fn ime_policy_system(
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
     inline_slots: Query<&InlineWebview>,
     overlays: Query<&TerminalOverlays>,
-    mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
+    current_mode: Res<State<AppMode>>,
+    ozma_terminal: Query<(), With<OzmaTerminal>>,
 ) {
     let Ok(mut window) = primary_window.single_mut() else {
         return;
@@ -218,7 +221,12 @@ pub(crate) fn ime_policy_system(
     }
 
     let Some(entity) = active_surface else {
-        if window.ime_enabled {
+        if *current_mode.get() == AppMode::Ozma {
+            let desired = ozma_terminal.single().is_ok();
+            if window.ime_enabled != desired {
+                window.ime_enabled = desired;
+            }
+        } else if window.ime_enabled {
             window.ime_enabled = false;
         }
         return;
@@ -293,6 +301,8 @@ pub(crate) fn read_ime_events(
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    current_mode: Res<State<AppMode>>,
+    ozma_terminal: Query<Entity, With<OzmaTerminal>>,
     copy_modes: Query<(), With<CopyModeState>>,
 ) {
     let active = active_pane.map(|single| *single);
@@ -312,28 +322,46 @@ pub(crate) fn read_ime_events(
             if commit_text.is_empty() {
                 continue;
             }
-            let Some((entity, pane)) = active else {
-                tracing::warn!(
-                    target: "ozmux_gui::input::ime",
-                    "commit dropped: no active tmux pane",
-                );
-                continue;
-            };
-            if !copy_modes.contains(entity)
-                && let Ok(mut handle) = handles.get_mut(entity)
-                && handle.snap_to_bottom_vt_only()
-            {
-                handle.flush_emit(&mut commands, entity);
-            }
-            let Some(client) = connection.client() else {
-                continue;
-            };
-            let target = format!("%{}", pane.id.0);
-            if let Err(e) = client
-                .handle()
-                .send(&send_bytes_command(&target, commit_text.as_bytes()))
-            {
-                tracing::warn!(?e, "IME commit send failed");
+            match current_mode.get() {
+                AppMode::Ozmux => {
+                    let Some((entity, pane)) = active else {
+                        tracing::warn!(
+                            target: "ozmux_gui::input::ime",
+                            "commit dropped: no active tmux pane",
+                        );
+                        continue;
+                    };
+                    if !copy_modes.contains(entity)
+                        && let Ok(mut handle) = handles.get_mut(entity)
+                        && handle.snap_to_bottom_vt_only()
+                    {
+                        handle.flush_emit(&mut commands, entity);
+                    }
+                    let Some(client) = connection.client() else {
+                        continue;
+                    };
+                    let target = format!("%{}", pane.id.0);
+                    if let Err(e) = client
+                        .handle()
+                        .send(&send_bytes_command(&target, commit_text.as_bytes()))
+                    {
+                        tracing::warn!(?e, "IME commit send failed");
+                    }
+                }
+                AppMode::Ozma => {
+                    // NOTE: bevy_cef delivers the commit to the webview independently; suppress here to prevent duplicate input.
+                    if focused_webview.0.is_some() {
+                        continue;
+                    }
+                    let Ok(entity) = ozma_terminal.single() else {
+                        continue;
+                    };
+                    commands.trigger(TerminalKeyInput {
+                        entity,
+                        key: TerminalKey::Text(commit_text),
+                        modifiers: TerminalModifiers::default(),
+                    });
+                }
             }
         }
     }
@@ -374,7 +402,8 @@ mod tests {
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::prelude::{MinimalPlugins, default};
+    use bevy::prelude::{AppExtStates, MinimalPlugins, default};
+    use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
     use ozma_tty_renderer::CellMetrics;
     use ozma_tty_renderer::prelude::{Cursor, TerminalGrid};
@@ -560,10 +589,11 @@ mod tests {
 
     fn build_app_with_active_pane() -> (App, Entity) {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
+        app.add_plugins((MinimalPlugins, StatesPlugin))
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
+        app.init_state::<AppMode>();
         // No live tmux client: `TmuxConnection::client()` returns None, so the
         // commit send is skipped. Tests assert the state-machine side effects
         // and the absence of a panic on the active-pane / suppression paths.
@@ -598,8 +628,9 @@ mod tests {
     #[test]
     fn ime_stays_enabled_for_focused_webview() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
+        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -643,9 +674,10 @@ mod tests {
     #[test]
     fn ime_enabled_for_active_tmux_pane() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
+        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -741,8 +773,9 @@ mod tests {
         use ozma_tty_renderer::prelude::TerminalOverlays;
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
+        app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
+        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,

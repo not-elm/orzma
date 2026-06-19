@@ -1,4 +1,6 @@
 //! Terminal spawn and despawn for Ozma mode.
+
+use crate::AppMode;
 use crate::OzmaModeConfig;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -9,16 +11,19 @@ use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// Marker component identifying the single Ozma terminal entity.
+/// Marker component identifying the single Ozma-mode terminal entity.
+///
+/// Exactly one entity carries this marker while `AppMode::Ozma` is active.
+/// Spawned by `OnEnter(AppMode::Ozma)` and despawned on `OnExit(AppMode::Ozma)`.
 #[derive(Component)]
-pub(crate) struct OzmaTerminal;
+pub struct OzmaTerminal;
 
 pub(crate) struct SpawnPlugin;
 
 impl Plugin for SpawnPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(crate::AppMode::Ozma), spawn_terminal)
-            .add_systems(OnExit(crate::AppMode::Ozma), despawn_terminal);
+        app.add_systems(OnEnter(AppMode::Ozma), spawn_terminal)
+            .add_systems(OnExit(AppMode::Ozma), despawn_terminal);
     }
 }
 

@@ -27,6 +27,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use ozma_mode::AppMode;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
@@ -48,11 +49,13 @@ impl Plugin for InputPlugin {
             (
                 forward_keys_to_tmux
                     .in_set(InputPhase::FocusedKey)
+                    .run_if(in_state(AppMode::Ozmux))
                     .run_if(on_message::<KeyboardInput>),
                 forward_wheel_to_tmux
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
-            ),
+            )
+                .in_set(super::OzmuxActiveSet),
         );
     }
 }
@@ -107,8 +110,9 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 fn forward_keys_to_tmux(
     mut commands: Commands,
     mut picker: ResMut<SessionPicker>,
-    (mut copy_prompt, confirm_state, rename): (
+    (mut copy_prompt, mut next_mode, confirm_state, rename): (
         ResMut<CopyPrompt>,
+        ResMut<NextState<AppMode>>,
         Option<Res<ConfirmState>>,
         RenameParams,
     ),
@@ -303,6 +307,9 @@ fn forward_keys_to_tmux(
                     }
                 }
                 ShortcutAction::ReleaseInlineFocus => {}
+                ShortcutAction::DetachSession => {
+                    next_mode.set(AppMode::Ozma);
+                }
             }
             continue;
         }

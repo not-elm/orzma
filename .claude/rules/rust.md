@@ -376,6 +376,41 @@ still be told — or a documented workaround for a specific upstream Bevy
 bug. "It's simpler" or "I mutate it every frame anyway" is not a valid
 reason; mutate conditionally instead.
 
+## Bevy `Plugin::build` — method chaining
+
+All `App` configuration calls inside a `Plugin::build` body must be written
+as a single method-chain off the first call rather than as repeated `app.`
+statements. This keeps the registration block visually unified and avoids
+redundant `app.` noise.
+
+Required:
+
+```rust
+// Correct: one chain, semicolon only at the end.
+fn build(&self, app: &mut App) {
+    app.init_resource::<Foo>()
+        .add_systems(Update, my_system)
+        .add_observer(my_observer)
+        .add_plugins(SubPlugin);
+}
+```
+
+Forbidden:
+
+```rust
+// Wrong: each call re-states `app.`.
+fn build(&self, app: &mut App) {
+    app.init_resource::<Foo>();
+    app.add_systems(Update, my_system);
+    app.add_observer(my_observer);
+}
+```
+
+Exception: a call that must be preceded by local logic (e.g., a conditional
+`if` that decides whether to register a system) may start a new `app.` chain
+for the calls after the branch. Keep each such sub-chain as long as possible;
+do not split further than the branch requires.
+
 ## Escape hatches
 
 When a rule is physically impossible to follow (e.g., trybuild fixtures, generated code, FFI conventions), justify the exception with a one-line `// NOTE:` and apply a local lint allowance:

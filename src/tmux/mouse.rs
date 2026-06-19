@@ -52,10 +52,17 @@ pub(crate) struct MousePlugin;
 impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxMouseGesture>();
-        app.add_systems(Update, arbiter.in_set(InputPhase::Dispatch));
         app.add_systems(
             Update,
-            forward_tmux_inline_mouse_moves.in_set(InputPhase::Hover),
+            arbiter
+                .in_set(InputPhase::Dispatch)
+                .in_set(super::OzmuxActiveSet),
+        );
+        app.add_systems(
+            Update,
+            forward_tmux_inline_mouse_moves
+                .in_set(InputPhase::Hover)
+                .in_set(super::OzmuxActiveSet),
         );
     }
 }

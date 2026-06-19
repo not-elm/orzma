@@ -7,11 +7,12 @@ use bevy::ecs::query::With;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::ecs::system::{Commands, Query, Res};
-use bevy::prelude::default;
+use bevy::prelude::{OnExit, default, in_state};
 use bevy::ui::widget::Text;
 use bevy::ui::{
     AlignItems, BackgroundColor, Display, GlobalZIndex, JustifyContent, Node, PositionType, Val,
 };
+use ozma_mode::AppMode;
 use ozmux_tmux::ConnectionState;
 
 const TMUX_DIALOG_Z: i32 = 300;
@@ -21,10 +22,14 @@ pub(crate) struct DialogPlugin;
 
 impl Plugin for DialogPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_tmux_dialog).add_systems(
-            PostUpdate,
-            sync_tmux_dialog.run_if(resource_exists_and_changed::<ConnectionState>),
-        );
+        app.add_systems(Startup, spawn_tmux_dialog)
+            .add_systems(OnExit(AppMode::Ozmux), hide_tmux_dialog)
+            .add_systems(
+                PostUpdate,
+                sync_tmux_dialog
+                    .run_if(resource_exists_and_changed::<ConnectionState>)
+                    .run_if(in_state(AppMode::Ozmux)),
+            );
     }
 }
 
@@ -57,6 +62,12 @@ fn spawn_tmux_dialog(mut commands: Commands) {
         });
 }
 
+fn hide_tmux_dialog(mut backdrop: Query<&mut Node, With<TmuxDialogBackdrop>>) {
+    if let Ok(mut node) = backdrop.single_mut() {
+        node.display = Display::None;
+    }
+}
+
 fn sync_tmux_dialog(
     mut backdrop: Query<&mut Node, With<TmuxDialogBackdrop>>,
     mut text: Query<&mut Text, With<TmuxDialogText>>,
@@ -86,10 +97,13 @@ fn sync_tmux_dialog(
 mod tests {
     use super::*;
     use bevy::app::App;
+    use bevy::prelude::AppExtStates;
 
     #[test]
     fn dialog_shows_on_error_and_detached() {
         let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.insert_state(AppMode::Ozmux);
         app.init_resource::<ConnectionState>();
         app.add_plugins(DialogPlugin);
         app.update();
@@ -114,6 +128,31 @@ mod tests {
         assert_eq!(backdrop_display(&mut app), Display::Flex);
 
         app.insert_resource(ConnectionState::Attached);
+        app.update();
+        assert_eq!(backdrop_display(&mut app), Display::None);
+    }
+
+    #[test]
+    fn dialog_hidden_on_exit_ozmux() {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.insert_state(AppMode::Ozmux);
+        app.init_resource::<ConnectionState>();
+        app.add_plugins(DialogPlugin);
+        app.update();
+
+        fn backdrop_display(app: &mut App) -> Display {
+            let mut q = app
+                .world_mut()
+                .query_filtered::<&Node, With<TmuxDialogBackdrop>>();
+            q.single(app.world()).unwrap().display
+        }
+
+        app.insert_resource(ConnectionState::Detached);
+        app.update();
+        assert_eq!(backdrop_display(&mut app), Display::Flex);
+
+        app.insert_resource(bevy::prelude::NextState::Pending(AppMode::Ozma));
         app.update();
         assert_eq!(backdrop_display(&mut app), Display::None);
     }
