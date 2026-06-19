@@ -30,11 +30,9 @@ impl Plugin for OzmuxPickerPlugin {
             .add_systems(OnEnter(AppMode::Ozmux), on_enter_ozmux_picker)
             .add_systems(
                 Update,
-                handle_picker_input
-                    .after(crate::input::InputPhase::FocusedKey)
-                    .in_set(crate::tmux::OzmuxActiveSet),
+                handle_picker_input.after(crate::input::InputPhase::FocusedKey),
             )
-            .add_systems(Update, refresh_picker_on_open.in_set(crate::tmux::OzmuxActiveSet))
+            .add_systems(Update, refresh_picker_on_open)
             .add_systems(
                 Update,
                 refresh_session_ozmux_sock
@@ -47,9 +45,7 @@ impl Plugin for OzmuxPickerPlugin {
             )
             .add_systems(
                 PostUpdate,
-                sync_picker_ui
-                    .run_if(resource_exists_and_changed::<SessionPicker>)
-                    .run_if(in_state(AppMode::Ozmux)),
+                sync_picker_ui.run_if(resource_exists_and_changed::<SessionPicker>),
             );
     }
 }
