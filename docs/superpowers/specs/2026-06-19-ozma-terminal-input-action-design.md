@@ -98,7 +98,7 @@ spawn.rs      OzmaTerminal (marker), OzmaTerminalBundle::spawn(opts), On<Add> re
               cells_for, resolve_shell, OzmaSpawnOptions
 layout.rs     (existing) window-fill resize
 exit.rs       (existing) child-process exit → AppExit
-input.rs      (new) OzmaInputPlugin, InputDisabled, ReservedChords, key dispatcher
+input.rs      (new) OzmaInputPlugin, InputDisabled, TerminalInputBindings, OzmaTerminalInputSet, key dispatcher
 action.rs     (new) OzmaActionPlugin, PasteAction (EntityEvent) + observer
 clipboard.rs  (new, moved from src/) Clipboard resource + build_paste_bytes
 ```
@@ -109,15 +109,23 @@ While a terminal is active (no `InputDisabled`), two systems read
 `KeyboardInput`: the crate's dispatcher and the binary's app-shortcut handler.
 They never conflict because the partition is total and **order-independent**:
 
-- The crate **skips** any press in `ReservedChords` (the host's chords).
-- The crate **owns** its built-in action chord (`Cmd+V` → Paste); this chord is
-  **excluded** from `ReservedChords`.
-- The crate **forwards** every other press to the PTY as `TerminalKeyInput`.
+- The crate **skips** any press in `bindings.reserved` (the host's chords).
+- The crate **owns** its built-in action chord (`bindings.paste`, default
+  `Cmd+V` → Paste); this chord is **excluded** from `bindings.reserved`.
+- The crate **forwards** every other press to the PTY as `TerminalKeyInput`,
+  **except** unhandled `meta`/Cmd-modified chords, which it drops (preserving
+  today's behavior where `Cmd+<key>` never reaches the PTY).
 - The binary's app-shortcut handler acts **only** on its reserved chords
   (`Quit`, `OpenPicker`, `DetachSession`, `ReleaseInlineFocus`) and no longer
   handles Paste.
 
-No `.before()/.after()` ordering is required between the two readers.
+No `.before()/.after()` ordering is required **between the two readers** — their
+partition is total, so either order yields the same result. One ordering edge
+*is* required, though: the binary's `InputDisabled` maintainer must run
+**before** the crate dispatcher within the same frame, or a focus / IME / picker
+transition is observed one frame late. The crate therefore exposes a public
+`OzmaTerminalInputSet` containing the dispatcher, and the host schedules its
+maintainer `.before(OzmaTerminalInputSet)`.
 
 ## Component Specification
 
@@ -130,15 +138,18 @@ infrastructure, so it belongs here.
 
 - `Clipboard` becomes `pub` (consumed by the crate's `PasteAction` observer and,
   externally, by the binary's tmux copy-mode code).
-- `build_paste_bytes` stays `pub(crate)` (only the `PasteAction` observer calls
-  it inside the crate).
+- `build_paste_bytes` becomes `pub` (not `pub(crate)`): besides the crate's
+  `PasteAction` observer, the binary's tmux paste calls it at
+  `src/tmux/input.rs:301`, so keeping it crate-private would break that path.
 - The crate gains an `arboard` dependency.
 - Headless behavior is unchanged: `arboard` init failure leaves the inner
   `Option` `None`, and reads/writes no-op.
 
-**Consumer fan-out:** every binary reference to `crate::clipboard::Clipboard`
-(`src/ozma_input.rs`, `src/tmux/mouse.rs`, copy-mode code) re-points to
-`ozma_terminal::Clipboard`. This is mechanical. `src/clipboard.rs` is deleted.
+**Consumer fan-out:** every binary reference to `crate::clipboard::*` re-points
+to `ozma_terminal::*`. Consumers (from grep): `src/ozma_input.rs`,
+`src/tmux/mouse.rs`, `src/tmux/input.rs` (uses `build_paste_bytes`),
+`src/tmux/copy_mode.rs`, `src/ui/copy_mode.rs`, and the `mod clipboard`
+declaration in `src/main.rs`. This is mechanical. `src/clipboard.rs` is deleted.
 
 ### `crates/ozma_terminal/src/action.rs` (new)
 
@@ -200,52 +211,57 @@ pub struct ReservedChord {
     pub meta: bool,
 }
 
-/// Chords the host reserves for its own shortcuts. Empty by default — a
-/// spawn-and-go consumer reserves nothing and the crate forwards everything.
-#[derive(Resource, Default)]
-pub struct ReservedChords(pub Vec<ReservedChord>);
+/// Host-supplied input policy: the chord that triggers the built-in Paste
+/// action, plus the chords the dispatcher must skip (the host handles those).
+/// Both are populated together from one source, so the "paste ∉ reserved"
+/// invariant lives in one place rather than split across two resources.
+///
+/// `Default` is `Cmd+V` paste + empty reserved, so a spawn-and-go consumer
+/// that never overrides it still gets working paste and forwards everything
+/// else.
+#[derive(Resource)]
+pub struct TerminalInputBindings {
+    pub paste: ReservedChord,
+    pub reserved: Vec<ReservedChord>,
+}
 
 /// Registers the default terminal keyboard dispatcher.
 pub struct OzmaInputPlugin;
 ```
 
-`OzmaInputPlugin` registers `ReservedChords` (default-empty) and the dispatcher
-system. The dispatcher:
+`OzmaInputPlugin` registers `TerminalInputBindings` (the `Cmd+V`-paste default)
+and the dispatcher system. The dispatcher:
 
 - Query: `Query<Entity, (With<OzmaTerminal>, Without<InputDisabled>)>` — only
-  active terminals. Registered with `run_if(on_message::<KeyboardInput>)`; an
-  empty query (no active terminal) makes the body a no-op, so no extra guard is
-  needed.
-- Computes the current modifier set from `Res<ButtonInput<KeyCode>>` (a
-  crate-local copy of `current_modifiers`).
-- For each `ButtonState::Pressed` event:
-  1. If `(key_code, mods)` is in `ReservedChords` → **skip** (host handles it).
-  2. Else if it matches the built-in Paste chord → `trigger(PasteAction { entity })`.
-  3. Else map the logical key via `bevy_key_to_terminal_key`; on `Some(key)` →
+  active terminals. Registered in the `OzmaTerminalInputSet` (see below) with
+  `run_if(on_message::<KeyboardInput>)`; an empty query (no active terminal)
+  makes the body a no-op, so no extra guard is needed.
+- Computes the current modifier set from `Res<ButtonInput<KeyCode>>` via a
+  crate-local helper returning a **crate-local** modifier type (four bools). It
+  cannot reuse the binary's `current_modifiers`, which returns
+  `ozmux_configs::shortcuts::Modifiers` — the crate must not depend on
+  `ozmux_configs`.
+- For each `ButtonState::Pressed` event, reading `Res<TerminalInputBindings>`:
+  1. If `(key_code, mods)` is in `bindings.reserved` → **skip** (host handles it).
+  2. Else if it matches `bindings.paste` → `trigger(PasteAction { entity })`.
+  3. Else if `mods.meta` (an unhandled Cmd/Super chord) → **drop**. This
+     preserves today's `if mods.meta { continue }` swallow (`src/ozma_input.rs:141`)
+     so that `Cmd+<key>` never reaches the PTY as text. Without this step the
+     three-way partition would forward an unreserved `Cmd+J` to the PTY — a
+     behavior change.
+  4. Else map the logical key via `bevy_key_to_terminal_key`; on `Some(key)` →
      `trigger(TerminalKeyInput { entity, key, modifiers })`; on `None` → drop.
 
 `bevy_key_to_terminal_key` moves here from `src/ozma_input.rs` unchanged (with
 its tests).
 
-**Built-in Paste chord.** To keep the crate config-free while still matching the
-user's configured paste binding, the Paste chord is carried as a host-supplied
-resource:
-
-```rust
-/// The chord that triggers the built-in Paste action. Host-populated;
-/// defaults to `Cmd+V`.
-#[derive(Resource)]
-pub struct PasteChord(pub ReservedChord);
-```
-
-`OzmaInputPlugin` inserts the `Cmd+V` default; the host overrides it from
-config (symmetric with `ReservedChords`). Step 2 above matches the press
-against `PasteChord`, so paste stays data-driven rather than hardcoded and the
-host's configurability is intact.
-
-> Rationale for not hardcoding `Cmd+V`: ozmux lets users rebind paste. The crate
-> stays ignorant of `ozmux_configs` but accepts the resolved chord as plain
-> data, symmetric with `ReservedChords`.
+**Why the Paste chord lives in `TerminalInputBindings`, not hardcoded.** ozmux
+lets users rebind paste, so step 2 matches against `bindings.paste` rather than
+a literal `Cmd+V`. Folding it into the same resource as `reserved` (instead of a
+separate `PasteChord`) keeps the two values — always written together from one
+resolved-shortcut source — in one place, and makes the "paste must not also
+appear in `reserved`" invariant local and testable. The crate stays ignorant of
+`ozmux_configs`; the host supplies both as plain `ReservedChord` data.
 
 ### `crates/ozma_terminal/src/spawn.rs` (extended)
 
@@ -285,10 +301,16 @@ impl OzmaTerminalBundle {
    (`position: Absolute`, `0/0`, `100%/100%`).
 
 The provisional `80×24` is corrected to window fill by the existing
-`resize_to_window` system on the first frame (`reset_last_size` already fires on
-`On<Add, OzmaTerminal>`). The shell has not produced output by then, so there is
-no visible flash. A consumer wanting an exact initial size can resize after
-spawn; no `cols/rows` field is added (YAGNI).
+`resize_to_window` system: `reset_last_size` fires on `On<Add, OzmaTerminal>`
+(setting `OzmaLastSize` to `None`), so `resize_to_window` runs on the first
+frame metrics exist. Caveat: no scheduling edge forces that resize to run before
+the engine's bootstrap snapshot — `check_deadline_flush`
+(`crates/ozma_tty_engine/src/plugin.rs`) can emit one frame at `80×24` before
+the resize lands. This is cosmetic (a single frame, before any shell output). If
+it proves visible, add an ordering edge so `resize_to_window` precedes the engine
+emit, or resize synchronously inside the `On<Add>` observer from window +
+metrics. A consumer wanting an exact initial size can resize after spawn; no
+`cols/rows` field is added (YAGNI).
 
 **Render injection** (new observer in `spawn.rs`):
 
@@ -304,9 +326,16 @@ fn on_add_inject_render(
 ```
 
 This is why spawn can be one consumer call: the GPU material (which needs
-`Assets`) is allocated in the observer, not by the consumer. The observer fires
-during the spawn command flush, so render components are present before the
-first `Update`.
+`Assets`) is allocated in the observer, not by the consumer. The `On<Add>`
+observer runs when `OzmaTerminal` is inserted; the commands it queues are
+applied during command-flush (Bevy 0.18 applies observer-issued commands at the
+end of the triggering flush, not synchronously at the `commands.spawn(...)` call
+site). The render components are therefore present before the first `Update`.
+
+**Precondition:** the observer takes `ResMut<Assets<TerminalUiMaterial>>`, so the
+consumer must add `TerminalRendererPlugin` (which registers that asset) before
+any `OzmaTerminal` is spawned, or the observer panics. In ozmux this holds —
+spawning happens on `OnEnter(AppMode::Ozma)`, long after plugin build.
 
 ### `crates/ozma_terminal/src/lib.rs`
 
@@ -343,17 +372,24 @@ to the crate. What remains, split into two small systems:
 2. **App-shortcut handler.** A faithful extraction of the GUI-action arm of the
    current `forward_keys_to_ozma`: reads `KeyboardInput`, and on a matched
    chord runs `Quit` / `OpenPicker` / `DetachSession` / `ReleaseInlineFocus`.
-   The **Paste arm is removed** (the crate owns it). It keeps its existing
-   guards (skip when picker open / unfocused; handle `ReleaseInlineFocus` while
-   a webview holds focus). It runs independently of the terminal's
-   `InputDisabled` so `ReleaseInlineFocus` still works while a webview is
-   focused.
+   The **Paste arm is removed** (the crate owns it). It is **not** gated by the
+   terminal's `InputDisabled` (it has its own guards), so it must reproduce the
+   current guard structure exactly:
+   - skip entirely when the picker is open or the window is unfocused;
+   - **while a webview holds focus, process only `ReleaseInlineFocus`** and
+     suppress `Quit` / `OpenPicker` / `DetachSession` — matching today's
+     `focused_webview.is_some()` early branch (`src/ozma_input.rs:83-94`).
 
-**`ReservedChords` population.** Add `ResolvedShortcuts::reserved_chords(&self)
--> Vec<ReservedChord>` mapping every resolved shortcut whose action is **not
-Paste** into a crate `ReservedChord`. A `Startup` system (ordered after
-`build_resolved_shortcuts`) writes them into the crate's `ReservedChords`
-resource, and supplies the resolved Paste chord to the crate's `PasteChord`.
+   Missing the webview guard is a regression: those actions would newly fire
+   while a webview is focused. (The crate dispatcher is already off in that
+   state because the maintainer sets `InputDisabled`.)
+
+**`TerminalInputBindings` population.** Add
+`ResolvedShortcuts::input_bindings(&self) -> TerminalInputBindings` that maps the
+resolved Paste chord into `paste` and every resolved shortcut whose action is
+**not Paste** into `reserved` (as crate `ReservedChord`s). A `Startup` system
+(ordered after `build_resolved_shortcuts`) writes the whole resource. Building
+both fields in one function keeps the "paste ∉ reserved" invariant in one place.
 
 **`src/ozma.rs` `spawn_terminal` — collapses to:**
 
@@ -373,9 +409,10 @@ The window/metrics size computation is removed (layout handles it).
 ```
 Startup (binary):
   build_resolved_shortcuts → ResolvedShortcuts
-  populate_reserved_chords  → ozma_terminal::ReservedChords  { Cmd+Q, Cmd+Shift+P,
-                                                               Ctrl+Shift+Escape, Ctrl+Shift+D }
-                            → ozma_terminal::PasteChord       { Cmd+V }     (Paste excluded from reserved)
+  populate_bindings → ozma_terminal::TerminalInputBindings {
+      paste:    Cmd+V
+      reserved: { Cmd+Q, Cmd+Shift+P, Ctrl+Shift+Escape, Ctrl+Shift+D }  (Paste excluded)
+    }
 
 Per frame, terminal active (Without<InputDisabled>):
   KeyboardInput ─┬─▶ crate dispatcher (ozma_terminal::input)
@@ -402,7 +439,9 @@ Per frame, host guard active:
 | `Cmd+Q` | binary quits | crate skips (reserved); binary quits |
 | `Cmd+Shift+P` | binary opens picker | crate skips (reserved); binary opens picker |
 | `Ctrl+Shift+D` (non-meta) | binary detach (no-op in Ozma; not sent to PTY) | crate skips (reserved); binary handles; never leaks to PTY |
-| `Ctrl+Shift+Escape` while webview focused | binary releases focus | binary releases focus (runs despite `InputDisabled`) |
+| `Ctrl+Shift+Escape` while webview focused | binary releases focus | binary releases focus (app-shortcut handler runs despite terminal `InputDisabled`) |
+| `Cmd+Q` / `Cmd+Shift+P` while webview focused | suppressed (only ReleaseInlineFocus fires) | suppressed — app-shortcut handler's webview guard skips them |
+| unreserved `Cmd+J` | dropped (`if mods.meta` swallow) | dropped (dispatcher step 3: unhandled meta) |
 
 ## Error Handling
 
@@ -410,8 +449,9 @@ Per frame, host guard active:
   propagates to the consumer, which decides the response (the binary logs and
   sends `AppExit::Success`, as today).
 - `Clipboard` unavailable (headless) → `PasteAction` no-ops.
-- Empty `ReservedChords` / unset host → the crate forwards everything and
-  pastes on the default chord; a minimal consumer needs zero input code.
+- Default `TerminalInputBindings` (empty `reserved`, `Cmd+V` paste) → the crate
+  forwards everything and pastes on `Cmd+V`; a minimal consumer needs zero input
+  code.
 - A logical key with no `TerminalKey` mapping (function keys, etc.) is dropped,
   as today.
 
@@ -424,6 +464,8 @@ Crate (`crates/ozma_terminal`), all with `MinimalPlugins` + injected
   - reserved chord → no `TerminalKeyInput` / `PasteAction` fired.
   - paste chord → `PasteAction` fired for the entity.
   - plain/forwardable key → `TerminalKeyInput` fired with correct `TerminalKey`.
+  - unhandled meta chord (e.g. `Cmd+J`, not reserved, not paste) → **nothing
+    fired** (dispatcher step 3 drop — guards the parity regression).
   - `InputDisabled` present → dispatcher fires nothing.
   - `bevy_key_to_terminal_key` unit tests (moved verbatim).
 - `action.rs`: `PasteAction` observer writes bracketed vs unbracketed bytes
@@ -436,44 +478,52 @@ Crate (`crates/ozma_terminal`), all with `MinimalPlugins` + injected
 
 Binary (`src/`):
 
-- `ResolvedShortcuts::reserved_chords` is a pure function: default bindings
-  produce exactly `{Quit, OpenPicker, ReleaseInlineFocus, DetachSession}` chords
-  and exclude Paste.
+- `ResolvedShortcuts::input_bindings` is a pure function: default bindings
+  produce `paste = Cmd+V` and `reserved = {Quit, OpenPicker, ReleaseInlineFocus,
+  DetachSession}`, with Paste excluded from `reserved`.
 - `InputDisabled` maintainer toggles correctly across the guard permutations and
   obeys conditional change detection (no rewrite when state is unchanged).
+- App-shortcut handler: while a webview is focused, `Quit` / `OpenPicker` /
+  `DetachSession` are suppressed and only `ReleaseInlineFocus` fires (the
+  webview-guard parity check).
 
 ## Migration Steps
 
 1. Move `src/clipboard.rs` → `crates/ozma_terminal/src/clipboard.rs`; add
-   `arboard` to the crate; make `Clipboard` `pub`; re-point binary imports
-   (`ozma_input`, `tmux/mouse`, copy-mode); delete `src/clipboard.rs`.
+   `arboard` to the crate; make `Clipboard` **and** `build_paste_bytes` `pub`;
+   re-point binary imports (`ozma_input`, `tmux/mouse`, `tmux/input`,
+   `tmux/copy_mode`, `ui/copy_mode`, and drop `mod clipboard` from `main.rs`);
+   delete `src/clipboard.rs`.
 2. Add `crates/ozma_terminal/src/action.rs` with `PasteAction` + `on_paste` +
    `OzmaActionPlugin`.
 3. Add `crates/ozma_terminal/src/input.rs` with `InputDisabled`,
-   `ReservedChord`/`ReservedChords`, `PasteChord`, the dispatcher, and the
-   moved `bevy_key_to_terminal_key`.
+   `ReservedChord`, `TerminalInputBindings`, the public `OzmaTerminalInputSet`,
+   the dispatcher (incl. the meta-drop step), and the moved
+   `bevy_key_to_terminal_key`.
 4. Extend `spawn.rs`: `OzmaSpawnOptions`, `OzmaTerminalBundle::spawn`, and the
    `On<Add, OzmaTerminal>` render-injection observer.
 5. Wire `OzmaInputPlugin` + `OzmaActionPlugin` + the render observer into
    `OzmaTerminalPlugin::build`.
-6. Binary: split `ozma_input.rs` into the `InputDisabled` maintainer + the
-   app-shortcut handler (drop raw-key forwarding and the Paste arm); add
-   `reserved_chords` + the population `Startup` system; collapse
-   `src/ozma.rs` `spawn_terminal` to the bundle call.
+6. Binary: split `ozma_input.rs` into the `InputDisabled` maintainer
+   (scheduled `.before(OzmaTerminalInputSet)`) + the app-shortcut handler (drop
+   raw-key forwarding and the Paste arm; keep the picker/unfocused/webview
+   guards); add `ResolvedShortcuts::input_bindings` + the population `Startup`
+   system; collapse `src/ozma.rs` `spawn_terminal` to the bundle call.
 7. `cargo test`, `cargo clippy --workspace`, `cargo fmt`. Manual smoke:
    type/paste/quit/open-picker/detach in Ozma mode; confirm Ozmux mode
    (tmux) input is unaffected.
 
 ## Decisions & Rationale
 
-- **ReservedChords over modifier-partition or leftover-event.** Default
-  bindings include non-`meta` app shortcuts (`Ctrl+Shift+D` detach,
+- **A host-supplied reserved set over modifier-partition or leftover-event.**
+  Default bindings include non-`meta` app shortcuts (`Ctrl+Shift+D` detach,
   `Ctrl+Shift+Escape` release-inline-focus), so a "meta = app, non-meta =
   terminal" split leaks those to the PTY. A leftover-event model would still
-  need a reserved set to classify them. `ReservedChords` is the minimal
-  mechanism that handles arbitrary host bindings, keeps the proven
+  need a reserved set to classify them. `TerminalInputBindings.reserved` is the
+  minimal mechanism that handles arbitrary host bindings, keeps the proven
   `match_gui_action` flow in a normal system, and exposes one small, testable
-  seam.
+  seam. (Paste is carried in the same resource so the "paste ∉ reserved"
+  invariant is local.)
 - **Clipboard moves into the crate.** `Paste`'s observer needs clipboard read;
   the clipboard is terminal infrastructure shared with tmux copy-mode. Moving
   it (vs. injecting a trait) is less code and a natural home; `arboard` is
