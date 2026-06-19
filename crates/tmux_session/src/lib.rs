@@ -25,7 +25,7 @@ pub use components::{
 };
 pub use connect::attach_or_create;
 pub use connection::TmuxConnection;
-pub use events::TmuxConnectionReset;
+pub use events::{TmuxConnectionClosed, TmuxConnectionReset};
 pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
     CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, copy_mode_capture_command,

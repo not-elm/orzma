@@ -90,6 +90,13 @@ pub(crate) struct TmuxWindowsRetained {
 #[derive(Event, Debug, Clone)]
 pub struct TmuxConnectionReset;
 
+/// Fired specifically when the tmux transport closes from the tmux side (not
+/// app-initiated). Consumed in `src/tmux.rs` to transition `AppMode` back to
+/// `Ozma`. Keeping this separate from `TmuxConnectionReset` avoids a double
+/// mode-set when the app itself initiates the detach.
+#[derive(Event, Debug, Clone)]
+pub struct TmuxConnectionClosed;
+
 /// Flattens a window layout tree into its panes, in layout order. Leaves with
 /// no id (a layout-grammar artifact) are skipped.
 pub(crate) fn pane_geoms(layout: &WindowLayout) -> Vec<PaneGeom> {

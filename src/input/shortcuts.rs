@@ -182,9 +182,9 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_resolve_to_four() {
+    fn default_bindings_resolve_to_five() {
         let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
-        assert_eq!(r.0.len(), 4);
+        assert_eq!(r.0.len(), 5);
     }
 
     #[test]

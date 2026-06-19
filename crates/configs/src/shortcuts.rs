@@ -461,7 +461,7 @@ impl Default for Bindings {
             focus_surface_next: None,
             enter_copy_mode: None,
             copy: None,
-            detach_session: None,
+            detach_session: Some(parse_default_chord("Ctrl+Shift+D")),
         }
     }
 }
@@ -742,6 +742,7 @@ mod tests {
         assert!(b.release_inline_focus.is_some());
         assert!(b.open_picker.is_some());
         assert!(b.quit.is_some());
+        assert!(b.detach_session.is_some());
     }
 
     #[test]
@@ -791,7 +792,7 @@ mod tests {
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Deprecated fields carry
         // `skip_serializing`, so only the active bindings appear here.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"open-picker":{"key":"p","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":null}}"#;
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"open-picker":{"key":"p","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
         assert_eq!(json, expected);
     }
 

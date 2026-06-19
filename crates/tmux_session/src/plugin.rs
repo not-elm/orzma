@@ -15,7 +15,9 @@ use crate::event_pump::{
     take_cursor_positions, take_keybindings, take_mode_keys, take_pane_captures, take_prefix_keys,
     take_version, trigger_events,
 };
-use crate::events::{TmuxActivePaneChanged, TmuxConnectionReset, TmuxWindowsRetained};
+use crate::events::{
+    TmuxActivePaneChanged, TmuxConnectionClosed, TmuxConnectionReset, TmuxWindowsRetained,
+};
 use crate::keybindings::{KeyBindings, list_keys_command, prefix_options_command};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
@@ -220,6 +222,7 @@ fn drain_tmux_events(
         keybindings.clear();
         copy_queries.clear();
         commands.trigger(TmuxConnectionReset);
+        commands.trigger(TmuxConnectionClosed);
     } else {
         if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
             connection.set_client_name(name);
