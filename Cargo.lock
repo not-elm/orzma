@@ -4881,14 +4881,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "ozma_mode"
+name = "ozma_terminal"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arboard",
  "bevy",
  "ozma_tty_engine",
  "ozma_tty_renderer",
- "ozmux_configs",
  "tracing",
 ]
 
@@ -4956,7 +4956,7 @@ dependencies = [
  "getrandom 0.2.17",
  "libc",
  "open",
- "ozma_mode",
+ "ozma_terminal",
  "ozma_tty_engine",
  "ozma_tty_renderer",
  "ozmux_configs",

@@ -13,10 +13,10 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
-use crate::clipboard::Clipboard;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
+use ozma_terminal::Clipboard;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::schema::{
     SelectionKind, SelectionRange, TerminalGrid, ViCursor, ViewportPoint,
@@ -838,8 +838,8 @@ mod tests {
         // "scroll movement doesn't work" bug). The integration test below masked
         // this by starting a selection first.
         use super::super::render::RenderPlugin;
-        use crate::clipboard::Clipboard;
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
+        use ozma_terminal::Clipboard;
         use ozma_tty_renderer::material::TerminalUiMaterial;
         use ozma_tty_renderer::prelude::TerminalGridPlugin;
         use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
@@ -1019,8 +1019,8 @@ mod tests {
     #[ignore = "requires a real tmux binary and a controlling PTY"]
     fn copy_mode_integration_drives_real_tmux() {
         use super::super::render::RenderPlugin;
-        use crate::clipboard::Clipboard;
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
+        use ozma_terminal::Clipboard;
         use ozma_tty_renderer::material::TerminalUiMaterial;
         use ozma_tty_renderer::prelude::TerminalGridPlugin;
         use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};

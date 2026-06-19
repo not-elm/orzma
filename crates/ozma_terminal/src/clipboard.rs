@@ -1,7 +1,5 @@
-//! Clipboard Bevy Resource. Wraps `arboard::Clipboard` so the rest of
-//! the GUI can read and write text without holding the cross-platform
-//! handle directly. `build_paste_bytes` is the pure helper that turns
-//! clipboard text into the byte stream forwarded to the PTY.
+//! Clipboard Bevy Resource wrapping `arboard::Clipboard`, plus `build_paste_bytes`,
+//! the pure helper that turns clipboard text into the PTY byte stream.
 
 use bevy::ecs::resource::Resource;
 
@@ -113,7 +111,7 @@ impl Clipboard {
 ///   endings so shells receive a `\r` for each line. `\r\n` collapses
 ///   to `\r`, lone `\n` becomes `\r`, and existing `\r` bytes pass
 ///   through unchanged. Matches the xterm / iTerm2 paste convention.
-pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+pub fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
         let mut body = text.to_owned();
         loop {

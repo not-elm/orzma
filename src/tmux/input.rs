@@ -7,12 +7,12 @@
 //! targeted `send-keys -X scroll-up|scroll-down` is sent to tmux.
 
 use super::pane_hit::tmux_pane_at_phys;
-use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, PassthroughKeys, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::osc_webview::NonInteractive;
+use crate::ozma::AppMode;
 use crate::picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
@@ -27,7 +27,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_mode::AppMode;
+use ozma_terminal::{Clipboard, build_paste_bytes};
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
@@ -699,7 +699,11 @@ fn forward_wheel_to_tmux(
             return;
         }
         let total_lines_i32 = total_lines.min(i32::MAX as u32) as i32;
-        let total_delta = if up { total_lines_i32 } else { -total_lines_i32 };
+        let total_delta = if up {
+            total_lines_i32
+        } else {
+            -total_lines_i32
+        };
         handle.scroll_vt_only(total_delta);
         handle.flush_emit(&mut commands, entity);
     }

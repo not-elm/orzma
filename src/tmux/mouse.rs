@@ -14,7 +14,6 @@
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
 use super::pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys};
 use super::render::{DividerPixelRect, PackedTmuxLayout};
-use crate::clipboard::Clipboard;
 use crate::configs::OzmuxConfigsResource;
 use crate::inline_webview::{InlineWebview, inline_hit_at, inline_local_dip};
 use crate::input::InputPhase;
@@ -33,6 +32,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use ozma_terminal::Clipboard;
 use ozma_tty_engine::{
     Column, Line, Point as APoint, SelectionType, Side as ASide, TerminalHandle,
 };
@@ -293,11 +293,11 @@ fn arbiter(
         // so just drop any in-flight inline press — leaving it set would let a
         // later release act on a stale child.
         gesture.inline_press = None;
-        if let GestureState::SelectingVt { pane, .. } = gesture.state {
-            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
-                handle.selection_clear_vt_only();
-                handle.flush_emit(&mut commands, pane);
-            }
+        if let GestureState::SelectingVt { pane, .. } = gesture.state
+            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
+        {
+            handle.selection_clear_vt_only();
+            handle.flush_emit(&mut commands, pane);
         }
         gesture.state = GestureState::Idle;
         return;
@@ -317,11 +317,11 @@ fn arbiter(
             cell_h,
             scale,
         );
-        if let GestureState::SelectingVt { pane, .. } = gesture.state {
-            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
-                handle.selection_clear_vt_only();
-                handle.flush_emit(&mut commands, pane);
-            }
+        if let GestureState::SelectingVt { pane, .. } = gesture.state
+            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
+        {
+            handle.selection_clear_vt_only();
+            handle.flush_emit(&mut commands, pane);
         }
         gesture.state = GestureState::Idle;
         return;
@@ -342,11 +342,11 @@ fn arbiter(
             cell_h,
             scale,
         );
-        if let GestureState::SelectingVt { pane, .. } = gesture.state {
-            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
-                handle.selection_clear_vt_only();
-                handle.flush_emit(&mut commands, pane);
-            }
+        if let GestureState::SelectingVt { pane, .. } = gesture.state
+            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
+        {
+            handle.selection_clear_vt_only();
+            handle.flush_emit(&mut commands, pane);
         }
         gesture.state = GestureState::Idle;
         return;

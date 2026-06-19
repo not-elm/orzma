@@ -8,6 +8,7 @@
 
 use crate::inline_webview::{InlineWebview, focused_inline_of};
 use crate::input::InputPhase;
+use crate::ozma::AppMode;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
@@ -21,7 +22,7 @@ use bevy::prelude::{Entity, State};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_mode::{AppMode, OzmaTerminal};
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};

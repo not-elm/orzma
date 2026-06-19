@@ -1,7 +1,8 @@
 //! Window-fill resize system for the Ozma terminal.
 
-use crate::AppMode;
-use crate::spawn::{cells_for, OzmaTerminal};
+use crate::spawn::{OzmaTerminal, cells_for};
+use bevy::ecs::lifecycle::Add;
+use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
@@ -13,11 +14,11 @@ impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OzmaLastSize>()
             .add_message::<WindowResized>()
-            .add_systems(OnEnter(AppMode::Ozma), reset_last_size)
+            .add_observer(reset_last_size)
             .add_systems(
                 Update,
                 resize_to_window
-                    .run_if(in_state(AppMode::Ozma))
+                    .run_if(any_with_component::<OzmaTerminal>)
                     .run_if(resource_exists::<TerminalCellMetricsResource>)
                     .run_if(
                         resource_exists_and_changed::<OzmaLastSize>
@@ -31,7 +32,7 @@ impl Plugin for LayoutPlugin {
 #[derive(Resource, Default)]
 struct OzmaLastSize(Option<(u16, u16)>);
 
-fn reset_last_size(mut last_size: ResMut<OzmaLastSize>) {
+fn reset_last_size(_trigger: On<Add, OzmaTerminal>, mut last_size: ResMut<OzmaLastSize>) {
     last_size.0 = None;
 }
 
@@ -81,5 +82,23 @@ mod tests {
     #[test]
     fn last_size_starts_none() {
         assert!(OzmaLastSize::default().0.is_none());
+    }
+
+    #[test]
+    fn ozma_terminal_spawn_resets_last_size() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<WindowResized>();
+        app.init_resource::<OzmaLastSize>();
+        app.add_observer(reset_last_size);
+
+        app.world_mut().resource_mut::<OzmaLastSize>().0 = Some((80, 24));
+        app.world_mut().spawn(OzmaTerminal);
+        app.update();
+
+        assert!(
+            app.world().resource::<OzmaLastSize>().0.is_none(),
+            "OzmaLastSize should reset to None when OzmaTerminal spawns",
+        );
     }
 }

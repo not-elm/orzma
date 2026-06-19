@@ -1,13 +1,13 @@
 //! ozmux Bevy GUI entry point.
 
 mod bootstrap;
-mod clipboard;
 mod configs;
 mod control_plane;
 mod font;
 mod inline_webview;
 mod input;
 mod osc_webview;
+mod ozma;
 mod ozma_input;
 mod picker;
 mod system_set;
@@ -20,6 +20,7 @@ use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::osc_webview::OzmuxOscWebviewPlugin;
+use crate::ozma::{AppMode, OzmaModePlugin};
 use crate::webview_render::{OzmuxWebviewRenderPlugin, cef_plugin};
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
@@ -28,8 +29,8 @@ use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
-use ozma_input::OzmaInputPlugin;
-use ozma_mode::{AppMode, OzmaModePlugin};
+use ozma_input::OzmaHostInputPlugin;
+use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_configs::StartupMode;
@@ -65,8 +66,12 @@ fn main() {
             }),
             cef_plugin(dyn_registry.clone()),
         ))
+        .insert_state(initial_mode)
         .add_plugins((
-            OzmaModePlugin::new(pre_configs.ozma.shell.clone(), initial_mode),
+            OzmaTerminalPlugin {
+                config_shell: pre_configs.ozma.shell.clone(),
+            },
+            OzmaModePlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,
@@ -88,7 +93,7 @@ fn main() {
             ImePlugin,
             ImeOverlayPlugin,
             OptionAsAltPlugin,
-            OzmaInputPlugin,
+            OzmaHostInputPlugin,
             OzmuxOscWebviewPlugin,
             OzmuxInlineWebviewPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),

@@ -5,23 +5,24 @@
 //! toggle predicate reads `TerminalHandle::selection_type()` to
 //! decide between "start new selection of kind X" and "clear existing".
 
-use crate::clipboard::Clipboard;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
+use ozma_terminal::Clipboard;
 use ozma_tty_engine::{Coalescer, TerminalHandle};
 
-/// Bevy Plugin: registers the two observers and inserts the global
-/// `Clipboard` resource. `CopyModeState` is inserted/removed per-entity
-/// by the observers themselves; no global system needed.
+/// Bevy Plugin: registers the two observers and ensures the global
+/// `Clipboard` resource exists (idempotent — `OzmaActionPlugin` already
+/// provides it in the full binary). `CopyModeState` is inserted/removed
+/// per-entity by the observers themselves; no global system needed.
 pub struct CopyModePlugin;
 
 impl Plugin for CopyModePlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(Clipboard::new())
+        app.init_resource::<Clipboard>()
             .add_observer(handle_enter_copy_mode_request)
             .add_observer(handle_exit_copy_mode);
     }
