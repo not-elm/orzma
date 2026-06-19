@@ -22,7 +22,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use ozma_mode::{AppMode, OzmaTerminal};
-use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+use ozma_tty_engine::{TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozmux_tmux::{ActivePane, TmuxConnection, TmuxPane, send_bytes_command};
@@ -293,15 +293,17 @@ pub(crate) fn ime_policy_system(
 /// commits — including the macOS Character Viewer emoji path — without any
 /// modifier interpretation.
 pub(crate) fn read_ime_events(
+    mut commands: Commands,
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
-    mut commands: Commands,
+    mut handles: Query<&mut TerminalHandle>,
     connection: NonSend<TmuxConnection>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
     current_mode: Res<State<AppMode>>,
     ozma_terminal: Query<Entity, With<OzmaTerminal>>,
+    copy_modes: Query<(), With<CopyModeState>>,
 ) {
     let active = active_pane.map(|single| *single);
     let active_surface = active.map(|(e, _)| e);
@@ -322,13 +324,19 @@ pub(crate) fn read_ime_events(
             }
             match current_mode.get() {
                 AppMode::Ozmux => {
-                    let Some((_, pane)) = active else {
+                    let Some((entity, pane)) = active else {
                         tracing::warn!(
                             target: "ozmux_gui::input::ime",
                             "commit dropped: no active tmux pane",
                         );
                         continue;
                     };
+                    if !copy_modes.contains(entity)
+                        && let Ok(mut handle) = handles.get_mut(entity)
+                        && handle.snap_to_bottom_vt_only()
+                    {
+                        handle.flush_emit(&mut commands, entity);
+                    }
                     let Some(client) = connection.client() else {
                         continue;
                     };

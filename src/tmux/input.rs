@@ -2,9 +2,9 @@
 //! Keyboard forwarding intercepts a fixed set of ozmux GUI chords and copy-mode
 //! entry commands. Mouse-wheel forwarding accumulates events into cell-deltas
 //! (so trackpad / high-resolution `Pixel` scrolling quantizes the same way the
-//! native terminal path does), drives tmux copy-mode scroll when the active
-//! pane is already in copy mode, and enters copy mode when the wheel binding
-//! triggers a copy-mode entry command.
+//! native terminal path does); outside copy mode the local VT scrollback is
+//! scrolled directly via `scroll_vt_only` + `flush_emit`; inside copy mode a
+//! targeted `send-keys -X scroll-up|scroll-down` is sent to tmux.
 
 use super::pane_hit::tmux_pane_at_phys;
 use crate::clipboard::{Clipboard, build_paste_bytes};
@@ -28,6 +28,7 @@ use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 use ozma_mode::AppMode;
+use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
@@ -109,8 +110,9 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 fn forward_keys_to_tmux(
     mut commands: Commands,
     mut picker: ResMut<SessionPicker>,
-    (mut copy_prompt, confirm_state, rename): (
+    (mut copy_prompt, mut next_mode, confirm_state, rename): (
         ResMut<CopyPrompt>,
+        ResMut<NextState<AppMode>>,
         Option<Res<ConfirmState>>,
         RenameParams,
     ),
@@ -120,7 +122,7 @@ fn forward_keys_to_tmux(
     mut focused_webview: ResMut<FocusedWebview>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
-    mut next_mode: ResMut<NextState<AppMode>>,
+    mut handles: Query<&mut TerminalHandle>,
     connection: NonSend<TmuxConnection>,
     (keys, ime, bindings, resolved): (
         Res<ButtonInput<KeyCode>>,
@@ -230,9 +232,10 @@ fn forward_keys_to_tmux(
                         && c.alt == mods.alt
                         && c.logo == mods.super_
                 })
-                && let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods) {
-                    pass_names.push(name);
-                }
+                && let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods)
+            {
+                pass_names.push(name);
+            }
         }
 
         if !pass_names.is_empty() {
@@ -249,6 +252,12 @@ fn forward_keys_to_tmux(
                         break;
                     }
                 }
+            }
+            if let Some(entity) = active_entity
+                && let Ok(mut handle) = handles.get_mut(entity)
+                && handle.snap_to_bottom_vt_only()
+            {
+                handle.flush_emit(&mut commands, entity);
             }
         }
 
@@ -283,6 +292,12 @@ fn forward_keys_to_tmux(
                     else {
                         continue;
                     };
+                    if let Some(entity) = active_entity
+                        && let Ok(mut handle) = handles.get_mut(entity)
+                        && handle.snap_to_bottom_vt_only()
+                    {
+                        handle.flush_emit(&mut commands, entity);
+                    }
                     let bytes = build_paste_bytes(&text, false);
                     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
                         if let Err(e) = client.handle().send(&send_bytes_command(target, chunk)) {
@@ -313,6 +328,16 @@ fn forward_keys_to_tmux(
     // binding pressed while already in copy mode is relayed here (not
     // re-intercepted), which would otherwise re-insert CopyModeState each press.
     let in_copy_mode = active_entity.is_some_and(|e| copy_modes.get(e).is_ok());
+
+    if !in_copy_mode
+        && !key_names.is_empty()
+        && let Some(entity) = active_entity
+        && let Ok(mut handle) = handles.get_mut(entity)
+        && handle.snap_to_bottom_vt_only()
+    {
+        handle.flush_emit(&mut commands, entity);
+    }
+
     if in_copy_mode {
         let Some(client) = connection.client() else {
             return;
@@ -424,11 +449,6 @@ fn is_copy_mode_entry(command: &str) -> bool {
     command.split_whitespace().any(|token| token == "copy-mode")
 }
 
-/// The tmux key name for one mouse-wheel notch in the given direction.
-fn wheel_key_name(up: bool) -> &'static str {
-    if up { "WheelUpPane" } else { "WheelDownPane" }
-}
-
 /// Builds a pane-targeted copy-mode scroll command for one wheel notch:
 /// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down`.
 ///
@@ -441,6 +461,19 @@ fn scroll_command(target: &str, up: bool, lines: u32) -> String {
     format!(
         "send-keys -X -t {target} -N {lines} {}",
         if up { "scroll-up" } else { "scroll-down" }
+    )
+}
+
+/// Builds a pane-targeted key-send command for scrolling an alt-screen pane:
+/// `send-keys -t %<id> -N <lines> Up|Down`.
+///
+/// Alt-screen panes are NOT in tmux copy mode, so `-X` (copy-mode command flag)
+/// is invalid. Instead, cursor Up/Down keys are forwarded directly to the
+/// running application, which interprets them as scroll events.
+fn alt_screen_scroll_command(target: &str, up: bool, lines: u32) -> String {
+    format!(
+        "send-keys -t {target} -N {lines} {}",
+        if up { "Up" } else { "Down" }
     )
 }
 
@@ -565,32 +598,20 @@ fn tmux_inline_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
 ///
 /// A focused inline webview under the pointer claims the wheel first
 /// (`resolve_tmux_inline_wheel_target`): each event is forwarded RAW to that
-/// child's CEF browser and dropped before the tmux accumulator, so the gesture
-/// scrolls the page instead of the terminal. Gating is pointer-driven, not the
-/// mere presence of `FocusedWebview` — a focused webview that the pointer is NOT
-/// over still scrolls the terminal pane.
+/// child's CEF browser and dropped before the tmux accumulator.
 ///
-/// Otherwise events are accumulated into a cell-delta (`Pixel` units divided by
-/// the cell height, like the native terminal path) and quantized into integer
-/// notches against `mouse.cells_per_notch`, carrying the remainder across frames
-/// — so a macOS trackpad's stream of small `Pixel` events scrolls gently instead
-/// of firing a full notch per event.
-///
-/// In copy mode each notch sends a single pane-targeted `scroll_command`
-/// (`send-keys -X -t %id scroll-up|scroll-down`, `mouse.lines_per_notch` lines)
-/// — ozmux owns wheel scrolling rather than relaying tmux's copy-table wheel
-/// bindings. Outside copy mode each notch dispatches the root/prefix tables: a
-/// `Forwarded::Run` (e.g. the default `WheelUpPane` `copy-mode -e` conditional)
-/// runs verbatim and, if it enters copy mode, inserts `CopyModeState`; a
-/// `Forwarded::Keys` for an unbound wheel key is dropped — a mouse-wheel key is
-/// never forwarded as literal pane input.
+/// Otherwise events are accumulated into a cell-delta and quantized into integer
+/// notches. When the pane is in copy mode (`CopyModeState`), a single targeted
+/// `send-keys -X scroll-up|scroll-down` is sent for the total notch count.
+/// Outside copy mode, the local `TerminalHandle` VT scrollback is scrolled
+/// directly via `scroll_vt_only` + `flush_emit` — no tmux IPC needed.
 fn forward_wheel_to_tmux(
     mut commands: Commands,
     mut wheel: MessageReader<MouseWheel>,
     mut accumulator: ResMut<TmuxWheelAccumulator>,
+    mut handles: Query<&mut TerminalHandle>,
     inline: TmuxInlineWheelParams,
     connection: NonSend<TmuxConnection>,
-    bindings: Res<KeyBindings>,
     picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
@@ -653,47 +674,34 @@ fn forward_wheel_to_tmux(
     let count = (raw_notches.unsigned_abs() as usize).min(MAX_NOTCHES_PER_FRAME);
     let target = format!("%{}", pane.id.0);
     let lines = configs.mouse.lines_per_notch;
-    // NOTE: mutable so a multi-notch fling that enters copy mode on an early
-    // notch routes the remaining notches in the same frame to the scroll path.
-    // The `CopyModeState` insert is only deferred (Commands), so `copy_modes`
-    // would still read stale within this frame — track entry in this local.
-    let mut in_copy_mode = copy_modes.get(entity).is_ok();
+    let in_copy_mode = copy_modes.get(entity).is_ok();
+    let total_lines = count as u32 * lines;
 
     let Some(client) = connection.client() else {
         return;
     };
-    let handle = client.handle();
+    let tmux = client.handle();
 
-    'notches: for _ in 0..count {
-        if in_copy_mode {
-            let cmd = scroll_command(&target, up, lines);
-            if let Err(e) = handle.send(&cmd) {
-                tracing::warn!(?e, "copy-mode wheel scroll send failed");
-                break 'notches;
-            }
-        } else {
-            let key = wheel_key_name(up);
-            let mut prefix = false;
-            let actions = plan_forward(&mut prefix, &bindings, vec![key.to_string()]);
-            for action in actions {
-                // NOTE: drop `Forwarded::Keys` — an unbound wheel key (e.g. the
-                // default root `WheelDownPane`) must never be sent as pane input,
-                // or tmux types the key name into the shell. Only run bound
-                // commands (e.g. the `WheelUpPane` copy-mode-entry conditional).
-                let Forwarded::Run(command) = action else {
-                    continue;
-                };
-                let enters = is_copy_mode_entry(&command);
-                if let Err(e) = handle.send(&command) {
-                    tracing::warn!(?e, "tmux wheel forward send failed");
-                    break 'notches;
-                }
-                if enters {
-                    commands.entity(entity).insert(CopyModeState);
-                    in_copy_mode = true;
-                }
-            }
+    if in_copy_mode {
+        let cmd = scroll_command(&target, up, total_lines);
+        if let Err(e) = tmux.send(&cmd) {
+            tracing::warn!(?e, "copy-mode wheel scroll send failed");
         }
+    } else {
+        let Ok(mut handle) = handles.get_mut(entity) else {
+            return;
+        };
+        if handle.is_in_alt_screen() {
+            let cmd = alt_screen_scroll_command(&target, up, total_lines);
+            if let Err(e) = tmux.send(&cmd) {
+                tracing::warn!(?e, "alt-screen wheel scroll send failed");
+            }
+            return;
+        }
+        let total_lines_i32 = total_lines.min(i32::MAX as u32) as i32;
+        let total_delta = if up { total_lines_i32 } else { -total_lines_i32 };
+        handle.scroll_vt_only(total_delta);
+        handle.flush_emit(&mut commands, entity);
     }
 }
 
@@ -773,16 +781,6 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::mouse::MouseScrollUnit;
     use ozmux_tmux::PromptKind;
-
-    #[test]
-    fn wheel_key_name_up_is_wheel_up_pane() {
-        assert_eq!(wheel_key_name(true), "WheelUpPane");
-    }
-
-    #[test]
-    fn wheel_key_name_down_is_wheel_down_pane() {
-        assert_eq!(wheel_key_name(false), "WheelDownPane");
-    }
 
     #[test]
     fn scroll_command_up_is_targeted_and_repeated() {

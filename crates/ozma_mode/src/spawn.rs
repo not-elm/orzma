@@ -94,10 +94,7 @@ fn spawn_terminal(
     }
 }
 
-fn despawn_terminal(
-    mut commands: Commands,
-    terminals: Query<Entity, With<OzmaTerminal>>,
-) {
+fn despawn_terminal(mut commands: Commands, terminals: Query<Entity, With<OzmaTerminal>>) {
     for entity in terminals.iter() {
         commands.entity(entity).despawn();
     }

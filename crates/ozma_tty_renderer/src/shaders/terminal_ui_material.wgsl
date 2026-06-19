@@ -110,6 +110,9 @@ const GLYPH_NONE: u32 = 0xFFFFFFFFu;
 // and inline-webview overlays keep their full color. Runs in LINEAR space —
 // `inactive_tint.rgb` is uploaded pre-linearized by the host.
 fn tint_bg(c: vec4<f32>) -> vec4<f32> {
+    // NOTE: alpha=0 means transparent (terminal default bg sentinel); preserve
+    // the zero vector so blend_premultiplied_over does not add phantom RGB.
+    if c.a == 0.0 { return c; }
     return vec4<f32>(mix(c.rgb, params.inactive_tint.rgb, params.inactive_tint.a), c.a);
 }
 
@@ -149,13 +152,20 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 // Top-level pipeline stages
 // ============================================================================
 
-// Pipeline for a fragment that lies inside the grid: background → inline
-// overlays → primary glyph → left-neighbor overdraw → text decorations →
-// cursor → selection.
+// Pipeline for a fragment that lies inside the grid: pane background →
+// inline overlays → cell background → primary glyph → left-neighbor
+// overdraw → text decorations → cursor → selection.
+//
+// The pane background (fallback) is the base layer. Inline webview overlays
+// composite over it next. The cell's own background then composites OVER the
+// overlay result: a transparent cell background (the terminal default) lets
+// the webview show through, while an opaque cell background (set by a TUI
+// widget) occludes the webview and appears in front of it. Glyphs render
+// last, on top of everything.
 fn paint_grid_cell(hit: CellHit, fallback: vec4<f32>) -> vec4<f32> {
     let colors = resolve_cell_colors(hit.cell);
-    var color = tint_bg(colors.bg);
-    color = paint_inline_overlays(hit, color);
+    var color = paint_inline_overlays(hit, fallback);
+    color = blend_premultiplied_over(color, tint_bg(colors.bg));
     color = paint_primary_glyph(hit, colors.fg, color);
     color = paint_left_overdraw(hit, color);
     return paint_cell_overlays(hit, colors.fg, color);
@@ -195,7 +205,7 @@ fn paint_right_strip(p_px: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
         p_px.y - f32(row) * params.cell_size_px.y,
     );
     let colors = resolve_cell_colors(strip_cell);
-    var color = tint_bg(colors.bg);
+    var color = blend_premultiplied_over(fallback, tint_bg(colors.bg));
     // NOTE: paint_cell_glyph (NOT paint_primary_glyph). strip_local.x is
     // in [cell_pitch.x, cell_pitch.x + max_overflow_phys) — already in
     // the right-half coordinate space of any STYLE_WIDE_RIGHT_HALF wide
@@ -397,11 +407,13 @@ fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
 }
 
 // Inline-overlay compositing (spec §6.2): samples each ACTIVE overlay slot
-// whose cell-rect contains this fragment and composites it OVER the cell
-// background. Source is premultiplied alpha (CEF convention, spec §6.3);
-// the sRGB texture view linearizes on read, so values mix in linear space
-// with no manual conversion. Glyphs paint AFTER overlays, so terminal text
-// sits on top of an inline webview.
+// whose cell-rect contains this fragment and composites it OVER the pane
+// background (`base`, which is `fallback` from `paint_grid_cell`). Source
+// is premultiplied alpha (CEF convention, spec §6.3); the sRGB texture view
+// linearizes on read, so values mix in linear space with no manual
+// conversion. The cell's own background composites OVER this result in
+// `paint_grid_cell`, so an opaque widget background occludes the webview.
+// Glyphs paint last, so terminal text sits on top of an inline webview.
 //
 // uv derives from the UNCLIPPED rect (rect.x may be negative when the rect
 // is partially scrolled above the viewport), so partial visibility never
@@ -526,6 +538,13 @@ fn resolve_cell_colors(cell: Cell) -> CellColors {
         let tmp = fg;
         fg = bg;
         bg = tmp;
+        // NOTE: The terminal default bg maps to transparent (alpha=0) so that
+        // cells without an explicit background let webview overlays show through.
+        // When reverse-video promotes that transparent sentinel to the glyph
+        // foreground color, materialise it as opaque black so text stays visible.
+        if fg.a == 0.0 {
+            fg = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+        }
     }
     if dim {
         fg = vec4<f32>(fg.rgb * 0.66, fg.a);
@@ -584,7 +603,11 @@ fn sample_glyph_coverage(glyph: Glyph, local_px: vec2<f32>) -> f32 {
 }
 
 fn blend_glyph(base: vec4<f32>, fg: vec4<f32>, coverage: f32) -> vec4<f32> {
-    return mix(base, vec4<f32>(fg.rgb, max(fg.a, coverage)), coverage);
+    // NOTE: multiply the blend factor by fg.a so that a transparent fg
+    // (STYLE_HIDDEN with transparent default bg) produces no ink at all.
+    // For opaque fg (fg.a == 1.0) this is a no-op; coverage drives blending
+    // as before.
+    return mix(base, vec4<f32>(fg.rgb, max(fg.a, coverage)), coverage * fg.a);
 }
 
 // ============================================================================

@@ -6,10 +6,11 @@
 //!   16..=231 — 6×6×6 RGB cube, channel ramp `[0, 95, 135, 175, 215, 255]`
 //!   232..=255 — 24 grayscale ramp from value 8 to 238 in steps of 10
 //!
-//! Default fg / bg (`AColor::Named(Foreground | Background)`) map to
-//! sentinel colors (`Color::WHITE` / `Color::BLACK`) until the theme
-//! story lands in `src/`. See spec § Risks > "Color::Default semantic
-//! is lost in the schema".
+//! `AColor::Named(Foreground)` maps to `Color::WHITE` as a sentinel.
+//! `AColor::Named(Background)` maps to `Color::NONE` (transparent) so that
+//! cells with the terminal default background let the pane background
+//! (`bg_padding_color`) and any inline webview overlays show through.
+//! Cells with an explicit ANSI color are fully opaque and occlude overlays.
 
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};
 use bevy::prelude::Color;
@@ -49,9 +50,11 @@ pub(crate) fn acolor_to_bevy(c: AColor) -> Color {
 /// Convert a `NamedColor` (whose discriminants jump past 255 starting
 /// at `Foreground = 256`) into a `bevy::Color`.
 ///
-/// `Foreground` / `Background` / `Cursor` / `BrightForeground` /
-/// `DimForeground` fall back to white/black sentinels until the
-/// theme story lands. `Dim*` base colors map to the regular palette
+/// `Foreground` / `Cursor` / `BrightForeground` / `DimForeground` fall
+/// back to `Color::WHITE`. `Background` maps to `Color::NONE` (transparent)
+/// so that default-background cells let webview overlays and the pane
+/// background show through; cells with explicit ANSI colors are opaque
+/// and occlude overlays. `Dim*` base colors map to the regular palette
 /// index (faint is approximated by the base intensity rather than
 /// the bright variant); without this, every `\e[2;Nm`-styled cell
 /// would render as solid white because the Dim* discriminants exceed
@@ -59,7 +62,7 @@ pub(crate) fn acolor_to_bevy(c: AColor) -> Color {
 fn named_color_to_bevy(named: NamedColor) -> Color {
     match named {
         NamedColor::Foreground => Color::WHITE,
-        NamedColor::Background => Color::BLACK,
+        NamedColor::Background => Color::NONE,
         NamedColor::Cursor => Color::WHITE,
         NamedColor::BrightForeground => Color::WHITE,
         NamedColor::DimForeground => Color::WHITE,
@@ -166,10 +169,10 @@ mod tests {
     }
 
     #[test]
-    fn named_background_is_black_sentinel() {
+    fn named_background_is_transparent() {
         assert_eq!(
             acolor_to_bevy(AColor::Named(NamedColor::Background)),
-            Color::BLACK
+            Color::NONE
         );
     }
 
