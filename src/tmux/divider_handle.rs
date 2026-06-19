@@ -26,11 +26,10 @@ impl Plugin for DividerHandlePlugin {
         app.add_systems(
             Update,
             (
-                reconcile_divider_handles
-                    .after(TmuxProjectionSet)
-                    .in_set(super::OzmuxActiveSet),
+                reconcile_divider_handles.after(TmuxProjectionSet),
                 divider_hover_feedback.after(InputPhase::Hover),
-            ),
+            )
+                .in_set(super::OzmuxActiveSet),
         );
     }
 }
