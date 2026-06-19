@@ -1,4 +1,5 @@
 //! Terminal spawn and despawn for Ozma mode.
+use crate::AppMode;
 use crate::OzmaModeConfig;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -17,8 +18,8 @@ pub(crate) struct SpawnPlugin;
 
 impl Plugin for SpawnPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(crate::AppMode::Ozma), spawn_terminal)
-            .add_systems(OnExit(crate::AppMode::Ozma), despawn_terminal);
+        app.add_systems(OnEnter(AppMode::Ozma), spawn_terminal)
+            .add_systems(OnExit(AppMode::Ozma), despawn_terminal);
     }
 }
 
