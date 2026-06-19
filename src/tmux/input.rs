@@ -51,7 +51,8 @@ impl Plugin for InputPlugin {
                 forward_wheel_to_tmux
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
-            ),
+            )
+                .in_set(super::OzmuxActiveSet),
         );
     }
 }

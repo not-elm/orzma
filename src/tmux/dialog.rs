@@ -7,11 +7,12 @@ use bevy::ecs::query::With;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::ecs::system::{Commands, Query, Res};
-use bevy::prelude::default;
+use bevy::prelude::{default, in_state};
 use bevy::ui::widget::Text;
 use bevy::ui::{
     AlignItems, BackgroundColor, Display, GlobalZIndex, JustifyContent, Node, PositionType, Val,
 };
+use ozma_mode::AppMode;
 use ozmux_tmux::ConnectionState;
 
 const TMUX_DIALOG_Z: i32 = 300;
@@ -23,7 +24,9 @@ impl Plugin for DialogPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_tmux_dialog).add_systems(
             PostUpdate,
-            sync_tmux_dialog.run_if(resource_exists_and_changed::<ConnectionState>),
+            sync_tmux_dialog
+                .run_if(resource_exists_and_changed::<ConnectionState>)
+                .run_if(in_state(AppMode::Ozmux)),
         );
     }
 }
@@ -86,10 +89,13 @@ fn sync_tmux_dialog(
 mod tests {
     use super::*;
     use bevy::app::App;
+    use bevy::prelude::AppExtStates;
 
     #[test]
     fn dialog_shows_on_error_and_detached() {
         let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.insert_state(AppMode::Ozmux);
         app.init_resource::<ConnectionState>();
         app.add_plugins(DialogPlugin);
         app.update();

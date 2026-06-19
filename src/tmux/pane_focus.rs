@@ -24,7 +24,8 @@ impl Plugin for PaneFocusPlugin {
             (
                 augment_tmux_pane.after(TmuxProjectionSet),
                 sync_inactive_pane_style.run_if(pane_active_state_changed),
-            ),
+            )
+                .in_set(super::OzmuxActiveSet),
         );
     }
 }
