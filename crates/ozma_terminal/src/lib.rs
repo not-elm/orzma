@@ -9,6 +9,7 @@ mod spawn;
 
 use crate::action::OzmaActionPlugin;
 use crate::input::OzmaInputPlugin;
+use crate::spawn::on_add_inject_render;
 use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 pub use action::PasteAction;
 use bevy::prelude::*;
@@ -34,7 +35,8 @@ impl Plugin for OzmaTerminalPlugin {
         app.insert_resource(OzmaTerminalConfig {
             shell: self.config_shell.clone(),
         })
-        .add_plugins((ExitPlugin, LayoutPlugin, OzmaActionPlugin, OzmaInputPlugin));
+        .add_plugins((ExitPlugin, LayoutPlugin, OzmaActionPlugin, OzmaInputPlugin))
+        .add_observer(on_add_inject_render);
     }
 }
 

@@ -96,13 +96,6 @@ pub fn resolve_shell(config: Option<&str>, env_shell: Option<&str>) -> String {
 
 /// Bevy observer that injects a `TerminalRenderBundle` whenever `OzmaTerminal`
 /// is added to an entity, allocating the GPU material on demand.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into OzmaTerminalPlugin by the binary spawn-switchover task (Task 7), which removes this expectation"
-    )
-)]
 pub(crate) fn on_add_inject_render(
     ev: On<Add, OzmaTerminal>,
     mut commands: Commands,
