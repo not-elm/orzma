@@ -9,8 +9,8 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::CursorMoved;
 use ozma_tty_engine::{
-    ButtonConfig, CellCoord, Column, Line, MouseButtonKind, Point, ProtocolModifiers,
-    SelectionType, Side, WheelConfig,
+    ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
+    MouseButtonKind, Point, ProtocolModifiers, SelectionType, Side, TermMode, WheelConfig,
 };
 use std::time::Duration;
 
@@ -73,7 +73,6 @@ pub struct OzmaTerminalMouseSet;
 
 /// Phase of an in-progress left-drag: `Armed` after a single-click press (no
 /// selection started yet), `Started` once the pointer crossed into another cell.
-#[cfg_attr(not(test), expect(dead_code, reason = "constructed by decide_button (Task 3)"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DragPhase {
     /// The button is held but the pointer has not left the origin cell.
@@ -84,9 +83,9 @@ pub(crate) enum DragPhase {
 
 /// An in-progress button gesture: the held button, the selection anchor, and the
 /// last cell a drag reached (dedup + lazy materialization).
-#[cfg_attr(not(test), expect(dead_code, reason = "fields read by decide_button and drag dispatch systems (Task 3)"))]
 pub(crate) struct DragGesture {
     /// Which mouse button is being held.
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by drag dispatch systems (Task 6)"))]
     pub(crate) button: MouseButtonKind,
     /// The cell where the gesture originated.
     pub(crate) origin: CellCoord,
@@ -107,7 +106,6 @@ pub(crate) struct OzmaMouseGesture {
     #[cfg_attr(not(test), expect(dead_code, reason = "read by button dispatch systems (Task 6)"))]
     pub(crate) click: ClickTracker,
     /// In-progress button gesture, or `None` when idle.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by button dispatch systems (Task 6)"))]
     pub(crate) drag: Option<DragGesture>,
 }
 
@@ -175,7 +173,6 @@ pub(crate) fn cell_at_cursor(
 
 /// Converts a 1-indexed protocol `CellCoord` into the engine's viewport-relative
 /// selection `Point` (row 0 = top of viewport; the engine translates for scroll).
-#[cfg_attr(not(test), expect(dead_code, reason = "called by selection dispatch systems (Task 6)"))]
 pub(crate) fn to_viewport_point(cell: CellCoord) -> Point {
     Point::new(Line(cell.row as i32 - 1), Column(cell.col as usize - 1))
 }
@@ -189,6 +186,121 @@ pub(crate) fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
         ctrl: m.ctrl,
         alt: m.alt,
         meta: m.meta,
+    }
+}
+
+/// A resolved intent the apply step writes to the handle / clipboard. Kept
+/// separate from application so the decision logic is unit-testable without a
+/// `TerminalHandle` (which has no public constructor).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum MouseEffect {
+    /// Write these bytes to the PTY.
+    Write(Vec<u8>),
+    /// Start a new local selection at `point`.
+    SelStart { point: Point, side: Side, ty: SelectionType },
+    /// Extend the current selection's moving end to `point`.
+    SelUpdate { point: Point, side: Side },
+    /// Clear any active local selection.
+    SelClear,
+    /// Copy the current selection to the clipboard.
+    Copy,
+    /// Scroll the viewport by `i32` lines (negative = up).
+    #[expect(dead_code, reason = "emitted by wheel dispatch systems (Task 6)")]
+    Scroll(i32),
+    /// Open the given URI in the host browser / handler.
+    OpenUri(String),
+}
+
+/// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
+/// click state) and returns the effects to apply. A Cmd/Ctrl-click on a linked
+/// cell opens the URL and consumes the event; otherwise the engine's
+/// `ButtonAction::route` decides forward-to-app vs local selection.
+#[cfg_attr(not(test), expect(dead_code, reason = "called by dispatch systems (Task 6)"))]
+pub(crate) fn decide_button(
+    gesture: &mut OzmaMouseGesture,
+    modes: TermMode,
+    evt: ButtonEvent,
+    mods: ProtocolModifiers,
+    modifier_held: bool,
+    link_at_cell: Option<String>,
+    cfg: &ButtonConfig,
+) -> Vec<MouseEffect> {
+    if evt.kind == ButtonEventKind::Press
+        && evt.button == MouseButtonKind::Left
+        && modifier_held
+        && let Some(uri) = link_at_cell
+    {
+        return vec![MouseEffect::OpenUri(uri)];
+    }
+
+    let mut effects = match ButtonAction::route(modes, evt, mods, cfg) {
+        ButtonAction::Noop => Vec::new(),
+        ButtonAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
+        ButtonAction::ClearAndWriteToPty(b) => vec![MouseEffect::SelClear, MouseEffect::Write(b)],
+        ButtonAction::ArmDrag { ty, cell, side } => {
+            gesture.drag = Some(DragGesture {
+                button: evt.button,
+                origin: cell,
+                side,
+                ty,
+                phase: DragPhase::Armed,
+                last_cell: cell,
+            });
+            vec![MouseEffect::SelClear]
+        }
+        ButtonAction::StartLocalSelection { ty, cell, side } => {
+            gesture.drag = Some(DragGesture {
+                button: evt.button,
+                origin: cell,
+                side,
+                ty,
+                phase: DragPhase::Started,
+                last_cell: cell,
+            });
+            vec![MouseEffect::SelStart { point: to_viewport_point(cell), side, ty }]
+        }
+        ButtonAction::UpdateLocalSelection { cell, side } => update_selection(gesture, cell, side),
+        ButtonAction::ClearLocalSelection => {
+            gesture.drag = None;
+            vec![MouseEffect::SelClear]
+        }
+    };
+
+    if evt.kind == ButtonEventKind::Release && evt.button == MouseButtonKind::Left {
+        if effects.is_empty()
+            && matches!(&gesture.drag, Some(d) if d.phase == DragPhase::Started)
+        {
+            effects.push(MouseEffect::Copy);
+        }
+        gesture.drag = None;
+    }
+    effects
+}
+
+/// Lazily materializes an armed selection on the first cell change, then extends.
+fn update_selection(gesture: &mut OzmaMouseGesture, cell: CellCoord, side: Side) -> Vec<MouseEffect> {
+    let Some(drag) = gesture.drag.as_mut() else {
+        return Vec::new();
+    };
+    match drag.phase {
+        DragPhase::Armed => {
+            if cell == drag.origin {
+                return Vec::new();
+            }
+            let origin = drag.origin;
+            let ty = drag.ty;
+            let origin_side = drag.side;
+            drag.phase = DragPhase::Started;
+            drag.last_cell = cell;
+            vec![
+                MouseEffect::SelStart { point: to_viewport_point(origin), side: origin_side, ty },
+                MouseEffect::SelUpdate { point: to_viewport_point(cell), side },
+            ]
+        }
+        DragPhase::Started => {
+            drag.last_cell = cell;
+            vec![MouseEffect::SelUpdate { point: to_viewport_point(cell), side }]
+        }
     }
 }
 
@@ -208,6 +320,97 @@ impl Plugin for OzmaMousePlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind};
+
+    fn ev(kind: ButtonEventKind, col: u32, row: u32, count: u8) -> ButtonEvent {
+        ButtonEvent {
+            kind,
+            button: MouseButtonKind::Left,
+            cell: CellCoord { col, row },
+            side: Side::Left,
+            click_count: count,
+        }
+    }
+
+    #[test]
+    fn local_single_press_arms_drag_and_clears() {
+        let mut g = OzmaMouseGesture::default();
+        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers::default(), false, None, &ButtonConfig { max_protocol_events_per_frame: 8 });
+        assert_eq!(fx, vec![MouseEffect::SelClear]);
+        assert!(matches!(g.drag, Some(DragGesture { phase: DragPhase::Armed, .. })));
+    }
+
+    #[test]
+    fn local_drag_materializes_then_extends() {
+        let mut g = OzmaMouseGesture::default();
+        let cfg = ButtonConfig { max_protocol_events_per_frame: 8 };
+        decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Drag, 7, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        assert_eq!(fx, vec![
+            MouseEffect::SelStart { point: to_viewport_point(CellCoord { col: 5, row: 5 }), side: Side::Left, ty: SelectionType::Simple },
+            MouseEffect::SelUpdate { point: to_viewport_point(CellCoord { col: 7, row: 5 }), side: Side::Left },
+        ]);
+        let fx2 = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Drag, 9, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        assert_eq!(fx2, vec![MouseEffect::SelUpdate { point: to_viewport_point(CellCoord { col: 9, row: 5 }), side: Side::Left }]);
+    }
+
+    #[test]
+    fn release_after_drag_copies() {
+        let mut g = OzmaMouseGesture::default();
+        let cfg = ButtonConfig { max_protocol_events_per_frame: 8 };
+        decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Drag, 7, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Release, 7, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        assert_eq!(fx, vec![MouseEffect::Copy]);
+        assert!(g.drag.is_none());
+    }
+
+    #[test]
+    fn release_after_bare_click_does_not_copy() {
+        let mut g = OzmaMouseGesture::default();
+        let cfg = ButtonConfig { max_protocol_events_per_frame: 8 };
+        decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Release, 5, 5, 1), ProtocolModifiers::default(), false, None, &cfg);
+        assert_eq!(fx, vec![]);
+        assert!(g.drag.is_none());
+    }
+
+    #[test]
+    fn double_click_starts_word_selection() {
+        let mut g = OzmaMouseGesture::default();
+        let cfg = ButtonConfig { max_protocol_events_per_frame: 8 };
+        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 2), ProtocolModifiers::default(), false, None, &cfg);
+        assert_eq!(fx, vec![MouseEffect::SelStart { point: to_viewport_point(CellCoord { col: 5, row: 5 }), side: Side::Left, ty: SelectionType::Semantic }]);
+    }
+
+    #[test]
+    fn app_capture_press_forwards_sgr_bytes() {
+        let mut g = OzmaMouseGesture::default();
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let fx = decide_button(&mut g, modes, ev(ButtonEventKind::Press, 5, 5, 1), ProtocolModifiers::default(), false, None, &ButtonConfig { max_protocol_events_per_frame: 8 });
+        assert_eq!(fx, vec![MouseEffect::SelClear, MouseEffect::Write(b"\x1b[<0;5;5M".to_vec())]);
+    }
+
+    #[test]
+    fn shift_bypass_selects_even_when_captured() {
+        let mut g = OzmaMouseGesture::default();
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let mods = ProtocolModifiers { shift: true, ..Default::default() };
+        let fx = decide_button(&mut g, modes, ev(ButtonEventKind::Press, 5, 5, 1), mods, false, None, &ButtonConfig { max_protocol_events_per_frame: 8 });
+        assert_eq!(fx, vec![MouseEffect::SelClear]);
+        assert!(matches!(g.drag, Some(DragGesture { phase: DragPhase::Armed, .. })));
+    }
+
+    #[test]
+    fn cmd_click_on_link_opens_and_consumes() {
+        let mut g = OzmaMouseGesture::default();
+        let fx = decide_button(&mut g, TermMode::empty(), ev(ButtonEventKind::Press, 5, 5, 1),
+            ProtocolModifiers { meta: true, ..Default::default() }, true, Some("https://example.com".into()),
+            &ButtonConfig { max_protocol_events_per_frame: 8 });
+        assert_eq!(fx, vec![MouseEffect::OpenUri("https://example.com".into())]);
+        assert!(g.drag.is_none(), "a link-open press must not arm a drag");
+    }
 
     #[test]
     fn default_config_sets_button_cap_explicitly() {
