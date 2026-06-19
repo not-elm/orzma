@@ -3,6 +3,7 @@
 mod action;
 mod clipboard;
 mod exit;
+mod hyperlink;
 mod input;
 mod layout;
 mod mouse;

@@ -4,6 +4,7 @@
 //! `ButtonAction` / `WheelAction` routers, applying the result to the
 //! `TerminalHandle` / `Clipboard`. Gated per entity by `InputDisabled`.
 
+use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -15,6 +16,7 @@ use ozma_tty_engine::{
 };
 use std::time::Duration;
 
+use crate::hyperlink::hyperlink_hover_cursor;
 use crate::input::current_terminal_modifiers;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
@@ -156,7 +158,6 @@ pub(crate) fn cell_at_local(
 
 /// Resolves the window-space physical cursor to a cell on the terminal node, or
 /// `None` when the cursor is outside the node.
-#[cfg_attr(not(test), expect(dead_code, reason = "called by cursor hit-test systems (Task 6)"))]
 pub(crate) fn cell_at_cursor(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
@@ -365,9 +366,16 @@ impl Plugin for OzmaMousePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OzmaMouseConfig>()
             .init_resource::<OzmaMouseGesture>()
+            .init_resource::<WheelAccumulator>()
             .add_message::<MouseButtonInput>()
             .add_message::<MouseWheel>()
-            .add_message::<CursorMoved>();
+            .add_message::<CursorMoved>()
+            .add_systems(
+                Update,
+                hyperlink_hover_cursor
+                    .in_set(OzmaTerminalMouseSet)
+                    .run_if(on_message::<KeyboardInput>.or(on_message::<CursorMoved>)),
+            );
     }
 }
 
