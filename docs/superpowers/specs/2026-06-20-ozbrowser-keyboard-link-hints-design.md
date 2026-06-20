@@ -157,17 +157,26 @@ Activation by element type:
   `{ kind: "clicked" }`.
 - Form field → `el.focus()`. Report `{ kind: "focusedInput" }`.
 
-### Label algorithm (the unit-tested core)
+### Label algorithm (prefix-free, uniform length)
 
-- `generateLabels(n)`: Vimium-style shortest-unique labels over a home-row
-  alphabet (default `"sadfjklewcmpgh"`, tunable). One character while the
-  alphabet covers the count; otherwise fixed-width two-character labels (longer
-  if ever needed). Deterministic, order-stable with the target list.
-- `filterByPrefix(labels, prefix)`: case-insensitive prefix match returning the
-  surviving labels (and whether exactly one is a full match).
+A home-row alphabet (default `"sadfjklewcmpgh"`, tunable). Labels are
+**uniform-length and therefore prefix-free**, which sidesteps the ambiguity of
+mixing a 1-char label `a` with a 2-char label `ab`:
 
-These two functions are pure and have no DOM dependency; they are the primary
-unit-test surface (see §7).
+- `n ≤ alphabet.length` → every label is one character (`alphabet[0..n]`).
+- `alphabet.length < n ≤ alphabet.length²` → every label is two characters, the
+  first `n` of the cartesian product (`a[i]+a[j]`).
+- (`n` beyond the square is not expected on a single viewport; cap or extend
+  later.)
+
+Because all labels share one length, a typed prefix matches at most one full
+label, so activation triggers exactly when the prefix length reaches the label
+length and a single badge remains. Filtering is a case-insensitive prefix test;
+a keystroke that would leave zero matches is ignored (so the overlay never goes
+blank mid-type).
+
+This logic is small and obviously correct by inspection; it is authored inline
+in `ozma_hints.js` (see §7 for why there is no separate JS unit test).
 
 ### Injection wiring (`src/webview_render/preload.rs`, `src/inline_webview.rs`)
 
@@ -211,9 +220,14 @@ unit-test surface (see §7).
     → Insert; `on_hint_result("navigated"|"clicked"|"empty")` → Normal.
   - preload builder: a URL webview's `PreloadScripts` contains the hints script
     after the bridge; an inline/dir webview does not.
-- **JS**: vitest over `generateLabels` and `filterByPrefix` (uniqueness,
-  shortest-length growth, prefix narrowing, case-insensitivity). DOM enumeration
-  and overlay rendering are verified manually.
+- **JS**: `ozma_hints.js` is hand-written plain JS injected by the host, exactly
+  like `ozma_bridge.js` — which carries no JS unit tests because
+  `src/webview_render/` is part of the root Rust crate, not a pnpm package (the
+  vitest workspace only covers `sdk/*` and `apps/*`). The label scheme is the
+  prefix-free uniform-length form above, obviously correct by inspection; DOM
+  enumeration, overlay, and activation are verified manually by running
+  ozbrowser. The Rust preload-builder test (above) is what guards that the script
+  is actually injected, after the bridge, for URL webviews.
 
 ## 8. Out of scope (YAGNI)
 
