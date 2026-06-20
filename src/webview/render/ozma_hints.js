@@ -123,10 +123,22 @@
     if (t.kind === 'input') {
       t.el.focus();
       ozma.call('hintResult', { kind: 'focusedInput' });
-    } else {
-      t.el.click();
-      ozma.call('hintResult', { kind: t.kind === 'link' ? 'navigated' : 'clicked' });
+      return;
     }
+    if (t.kind === 'link') {
+      // NOTE: a script-synthesized el.click() carries no user activation, so CEF
+      // records no back-history entry for the navigation and `H` (go_back) cannot
+      // return to it. Route real http(s) links through the host's browser-
+      // initiated navigation (frame.load_url builds history); fall back to
+      // click() for javascript:/mailto:/#/SPA links the host cannot load.
+      var href = t.el.href;
+      if (/^https?:\/\//i.test(href)) {
+        ozma.call('hintResult', { kind: 'navigated', url: href });
+        return;
+      }
+    }
+    t.el.click();
+    ozma.call('hintResult', { kind: t.kind === 'link' ? 'navigated' : 'clicked' });
   }
 
   // Hides badges whose label does not start with the prefix and activates the

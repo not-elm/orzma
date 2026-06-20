@@ -17,6 +17,15 @@ use ratatui_ozma::{KeyChord, Ozma, OzmaBackend, OzmaError, RpcError, Webview, We
 use std::io::stdout;
 use std::time::Duration;
 
+/// A hint activation reported by the page over `hintResult`: the outcome `kind`
+/// (`navigated`/`clicked`/`focusedInput`/`empty`) plus, for a real http(s) link,
+/// the URL to load via a host browser-initiated navigation (so back/forward
+/// history is built — a page-side `el.click()` would not record a back entry).
+struct HintOutcome {
+    kind: String,
+    url: Option<String>,
+}
+
 fn main() {
     if let Err(e) = run() {
         eprintln!("ozbrowser: {e}");
@@ -37,7 +46,7 @@ fn run() -> anyhow::Result<()> {
     })?;
 
     let (url_tx, url_rx) = crossbeam_channel::unbounded::<String>();
-    let (hint_tx, hint_rx) = crossbeam_channel::unbounded::<String>();
+    let (hint_tx, hint_rx) = crossbeam_channel::unbounded::<HintOutcome>();
     let view = register_view(&ozma, &initial_url, url_tx, hint_tx)?;
 
     enable_raw_mode()?;
@@ -61,7 +70,7 @@ fn event_loop(
     mut app: App,
     ozma: &Ozma,
     url_rx: &Receiver<String>,
-    hint_rx: &Receiver<String>,
+    hint_rx: &Receiver<HintOutcome>,
 ) -> anyhow::Result<()> {
     let backend = OzmaBackend::new(CrosstermBackend::new(stdout()), ozma);
     let mut terminal = Terminal::new(backend)?;
@@ -70,8 +79,14 @@ fn event_loop(
         while let Ok(url) = url_rx.try_recv() {
             app.on_page_url_changed(url);
         }
-        while let Ok(kind) = hint_rx.try_recv() {
-            app.on_hint_result(&kind);
+        while let Ok(outcome) = hint_rx.try_recv() {
+            app.on_hint_result(&outcome.kind);
+            // A link hint reports its target URL so the host performs a
+            // browser-initiated navigation (which builds back/forward history);
+            // a page-side el.click() would record no back entry.
+            if let Some(url) = outcome.url {
+                view.navigate(url)?;
+            }
         }
 
         terminal.draw(|f| {
@@ -115,7 +130,7 @@ fn register_view(
     ozma: &Ozma,
     url: &str,
     url_tx: Sender<String>,
-    hint_tx: Sender<String>,
+    hint_tx: Sender<HintOutcome>,
 ) -> anyhow::Result<WebviewHandle> {
     let pass = [
         KeyChord {
@@ -220,7 +235,10 @@ fn register_view(
                 "hintResult",
                 move |args: serde_json::Value| -> Result<(), RpcError> {
                     if let Some(kind) = args["kind"].as_str() {
-                        let _ = hint_tx.send(kind.to_owned());
+                        let _ = hint_tx.send(HintOutcome {
+                            kind: kind.to_owned(),
+                            url: args["url"].as_str().map(str::to_owned),
+                        });
                     }
                     Ok(())
                 },
