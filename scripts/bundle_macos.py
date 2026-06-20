@@ -42,6 +42,35 @@ def helper_bundle_id(base: str, suffix: str) -> str:
     return f"{base}.helper.{raw}"
 
 
+def merge_cef_keys(plist: dict) -> dict:
+    env = plist.get("LSEnvironment")
+    if env is None:
+        env = {}
+    elif not isinstance(env, dict):
+        raise ValueError("LSEnvironment exists but is not a dictionary")
+    env["MallocNanoZone"] = "0"
+    plist["LSEnvironment"] = env
+
+    existing = plist.get("LSMinimumSystemVersion")
+    if existing is None or version_less_than(str(existing), MIN_MACOS):
+        plist["LSMinimumSystemVersion"] = MIN_MACOS
+
+    plist.setdefault("NSSupportsAutomaticGraphicsSwitching", True)
+    return plist
+
+
+def build_helper_plist(name: str, bundle_id: str) -> dict:
+    return {
+        "CFBundleExecutable": name,
+        "CFBundleName": name,
+        "CFBundleIdentifier": bundle_id,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundlePackageType": "APPL",
+        "LSEnvironment": {"MallocNanoZone": "0"},
+        "LSUIElement": True,
+    }
+
+
 @dataclass
 class BundleConfig:
     version: str

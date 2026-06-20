@@ -39,5 +39,43 @@ class PureHelpers(unittest.TestCase):
         self.assertEqual(cfg.zip_path, Path("/tmp/out/ozmux-1.2.3-arm64.zip"))
 
 
+class PlistLogic(unittest.TestCase):
+    def test_merge_cef_keys_into_empty(self):
+        out = bm.merge_cef_keys({})
+        self.assertEqual(out["LSEnvironment"]["MallocNanoZone"], "0")
+        self.assertEqual(out["LSMinimumSystemVersion"], "11.0")
+        self.assertTrue(out["NSSupportsAutomaticGraphicsSwitching"])
+
+    def test_merge_cef_keys_preserves_existing_env(self):
+        out = bm.merge_cef_keys({"LSEnvironment": {"FOO": "bar"}})
+        self.assertEqual(out["LSEnvironment"]["FOO"], "bar")
+        self.assertEqual(out["LSEnvironment"]["MallocNanoZone"], "0")
+
+    def test_merge_cef_keys_keeps_higher_min_version(self):
+        out = bm.merge_cef_keys({"LSMinimumSystemVersion": "12.0"})
+        self.assertEqual(out["LSMinimumSystemVersion"], "12.0")
+
+    def test_merge_cef_keys_bumps_lower_min_version(self):
+        out = bm.merge_cef_keys({"LSMinimumSystemVersion": "10.15"})
+        self.assertEqual(out["LSMinimumSystemVersion"], "11.0")
+
+    def test_merge_cef_keys_keeps_existing_graphics_switch(self):
+        out = bm.merge_cef_keys({"NSSupportsAutomaticGraphicsSwitching": False})
+        self.assertFalse(out["NSSupportsAutomaticGraphicsSwitching"])
+
+    def test_merge_cef_keys_rejects_bad_env(self):
+        with self.assertRaises(ValueError):
+            bm.merge_cef_keys({"LSEnvironment": "not-a-dict"})
+
+    def test_build_helper_plist(self):
+        p = bm.build_helper_plist("ozmux-gui Helper (GPU)", "not.elm.ozmux.helper.gpu")
+        self.assertEqual(p["CFBundleExecutable"], "ozmux-gui Helper (GPU)")
+        self.assertEqual(p["CFBundleName"], "ozmux-gui Helper (GPU)")
+        self.assertEqual(p["CFBundleIdentifier"], "not.elm.ozmux.helper.gpu")
+        self.assertEqual(p["CFBundlePackageType"], "APPL")
+        self.assertEqual(p["LSEnvironment"]["MallocNanoZone"], "0")
+        self.assertTrue(p["LSUIElement"])
+
+
 if __name__ == "__main__":
     unittest.main()
