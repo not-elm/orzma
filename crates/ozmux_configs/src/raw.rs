@@ -3,7 +3,7 @@
 
 use crate::OzmuxConfigs;
 use crate::font::FontPatch;
-use crate::inactive_pane::InactivePaneConfigPatch;
+use crate::inactive_pane::InactivePaneConfig;
 use crate::keyboard::KeyboardConfig;
 use crate::mouse::MouseConfig;
 use crate::osc_webview::OscWebviewConfig;
@@ -24,7 +24,7 @@ pub(crate) struct RawConfigs {
     pub(crate) font: Option<FontPatch>,
     pub(crate) mouse: Option<MouseConfig>,
     pub(crate) keyboard: Option<KeyboardConfig>,
-    pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
+    pub(crate) inactive_pane: Option<InactivePaneConfig>,
     pub(crate) osc_webview: Option<OscWebviewConfig>,
     pub(crate) tmux: Option<TmuxConfig>,
     pub(crate) ozma: Option<OzmaConfig>,
@@ -54,8 +54,9 @@ impl RawConfigs {
         if let Some(keyboard) = self.keyboard {
             base.keyboard = keyboard;
         }
-        if let Some(patch) = self.inactive_pane {
-            base.inactive_pane = patch.apply_to(base.inactive_pane);
+        if let Some(mut inactive_pane) = self.inactive_pane {
+            inactive_pane.normalize();
+            base.inactive_pane = inactive_pane;
         }
         if let Some(osc_webview) = self.osc_webview {
             base.osc_webview = osc_webview;
