@@ -30,6 +30,12 @@ use tmux_control::TransportEvent;
 #[derive(Resource, Default)]
 pub struct TmuxPresence;
 
+/// Emitted the frame the control client's transport transitions to `Attached`
+/// (including a reconnect). Gates [`send_attach_enumeration`]. A pure signal —
+/// the init-send system reads the live client from `TmuxConnection`.
+#[derive(Message)]
+struct TmuxClientAttached;
+
 /// This frame's drained transport events, shared across the drain chain.
 /// Overwritten by [`drain_tmux_transport`] each frame; read-only downstream.
 #[derive(Resource, Default)]
@@ -58,10 +64,13 @@ impl Plugin for TmuxSessionPlugin {
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
             .add_message::<CopyModeReply>()
+            .add_message::<TmuxClientAttached>()
             .add_systems(
                 Update,
                 (
                     drain_tmux_transport,
+                    advance_tmux_connection.run_if(tmux_batch_pending),
+                    send_attach_enumeration.run_if(on_message::<TmuxClientAttached>),
                     drain_tmux_events.run_if(tmux_batch_pending),
                 )
                     .chain()
@@ -117,6 +126,81 @@ fn tmux_batch_pending(batch: Res<TmuxEventBatch>) -> bool {
     !batch.0.is_empty()
 }
 
+/// Folds the batch through `advance_state`, writes `ConnectionState` only on a
+/// real transition (so change detection fires once per transition), emits
+/// `TmuxClientAttached` on the attach edge, and on `Closed` reclaims the dead
+/// client and triggers the projection teardown.
+fn advance_tmux_connection(
+    mut commands: Commands,
+    mut state: ResMut<ConnectionState>,
+    mut connection: NonSendMut<TmuxConnection>,
+    mut attached: MessageWriter<TmuxClientAttached>,
+    batch: Res<TmuxEventBatch>,
+) {
+    if let Some(next) = advance_state(&state, &batch.0) {
+        let is_attached = matches!(next, ConnectionState::Attached);
+        *state = next;
+        if is_attached {
+            attached.write(TmuxClientAttached);
+        }
+    }
+    if batch
+        .0
+        .iter()
+        .any(|event| matches!(event, TransportEvent::Closed { .. }))
+    {
+        connection.take();
+        commands.trigger(TmuxConnectionReset);
+        commands.trigger(TmuxConnectionClosed);
+    }
+}
+
+/// Sends the one-time initial query suite when the client attaches:
+/// `list-windows`, active-pane, window-flags subscription, client name, the four
+/// `list-keys` tables, prefix options, mode-keys, and version. Gated by
+/// `on_message::<TmuxClientAttached>` so it runs exactly once per attach edge.
+fn send_attach_enumeration(
+    mut enumeration: ResMut<EnumerationState>,
+    connection: NonSend<TmuxConnection>,
+) {
+    let Some(client) = connection.client() else {
+        return;
+    };
+    send_session_enumeration(&mut enumeration, client);
+    match client.handle().send(&client_name_command()) {
+        Ok(id) => enumeration.client_name_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send client-name query"),
+    }
+    match client.handle().send(&list_keys_command("root")) {
+        Ok(id) => enumeration.keys_root_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send list-keys -T root"),
+    }
+    match client.handle().send(&list_keys_command("prefix")) {
+        Ok(id) => enumeration.keys_prefix_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send list-keys -T prefix"),
+    }
+    match client.handle().send(&prefix_options_command()) {
+        Ok(id) => enumeration.prefix_keys_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send prefix query"),
+    }
+    match client.handle().send(&list_keys_command("copy-mode")) {
+        Ok(id) => enumeration.keys_copy_mode_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send list-keys -T copy-mode"),
+    }
+    match client.handle().send(&list_keys_command("copy-mode-vi")) {
+        Ok(id) => enumeration.keys_copy_mode_vi_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send list-keys -T copy-mode-vi"),
+    }
+    match client.handle().send(&mode_keys_command()) {
+        Ok(id) => enumeration.mode_keys_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send mode-keys query"),
+    }
+    match client.handle().send(&version_command()) {
+        Ok(id) => enumeration.version_pending = Some(id),
+        Err(error) => tracing::warn!(?error, "failed to send version query"),
+    }
+}
+
 /// Drains the live connection's transport channel into [`TmuxEventBatch`] and
 /// routes `%output` to `PaneOutput`. Skips the write on a fully-idle frame so
 /// change detection fires only when the batch's contents actually change; still
@@ -139,21 +223,13 @@ fn drain_tmux_transport(
     batch.0 = drained;
 }
 
-/// Applies this frame's drained `TmuxEventBatch`: advances
-/// `ConnectionState`, sends the `list-windows` enumeration once on attach, and
-/// triggers the global projection events (notifications + the enumeration
-/// reply, in stream order) the observers consume. On `Closed` it reclaims the
-/// dead client and triggers `TmuxConnectionReset` so the projected entities do
-/// not linger.
-///
-/// `ConnectionState` is written back only when [`advance_state`] reports a real
-/// transition, so normal change detection fires it exactly once per transition —
-/// an output flood does not force the
-/// `resource_exists_and_changed::<ConnectionState>`-gated consumers to re-run
-/// every frame.
+/// Applies this frame's drained `TmuxEventBatch`: triggers the global
+/// projection events (notifications + the enumeration reply, in stream order)
+/// the observers consume, routes topology re-enumeration queries on window-add /
+/// window-switch / session-switch, and consumes the pending enumeration replies
+/// (pane captures, cursor positions, keybindings, etc.).
 fn drain_tmux_events(
     mut commands: Commands,
-    mut state: ResMut<ConnectionState>,
     mut enumeration: ResMut<EnumerationState>,
     mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
@@ -161,10 +237,14 @@ fn drain_tmux_events(
     mut pane_output: MessageWriter<PaneOutput>,
     mut copy_replies: MessageWriter<CopyModeReply>,
     batch: Res<TmuxEventBatch>,
+    state: Res<ConnectionState>,
     index: Res<TmuxProjection>,
     sessions: Query<&TmuxSession>,
 ) {
     let events = &batch.0;
+    if connection.client().is_none() {
+        return;
+    }
     let current_session = index
         .session
         .and_then(|e| sessions.get(e).ok())
@@ -201,141 +281,89 @@ fn drain_tmux_events(
             }
         }
     }
-    if let Some(next) = advance_state(&state, events) {
-        *state = next;
-        if matches!(*state, ConnectionState::Attached)
+    if let Some(name) = take_client_name(&mut enumeration.client_name_pending, events) {
+        connection.set_client_name(name);
+    }
+    if let Some(version) = take_version(&mut enumeration.version_pending, events) {
+        connection.set_per_window_refresh(version_supports_per_window_refresh(&version));
+    }
+    if let Some((window, pane)) = take_active_pane(&mut enumeration.active_pane_pending, events) {
+        commands.trigger(TmuxActivePaneChanged {
+            window,
+            pane,
+            from_notification: false,
+        });
+        if !enumeration.aggressive_resize_checked
+            && enumeration.aggressive_resize_pending.is_none()
             && let Some(client) = connection.client()
         {
-            send_session_enumeration(&mut enumeration, client);
-            match client.handle().send(&client_name_command()) {
-                Ok(id) => enumeration.client_name_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send client-name query"),
-            }
-            match client.handle().send(&list_keys_command("root")) {
-                Ok(id) => enumeration.keys_root_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send list-keys -T root"),
-            }
-            match client.handle().send(&list_keys_command("prefix")) {
-                Ok(id) => enumeration.keys_prefix_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send list-keys -T prefix"),
-            }
-            match client.handle().send(&prefix_options_command()) {
-                Ok(id) => enumeration.prefix_keys_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send prefix query"),
-            }
-            match client.handle().send(&list_keys_command("copy-mode")) {
-                Ok(id) => enumeration.keys_copy_mode_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send list-keys -T copy-mode"),
-            }
-            match client.handle().send(&list_keys_command("copy-mode-vi")) {
-                Ok(id) => enumeration.keys_copy_mode_vi_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send list-keys -T copy-mode-vi"),
-            }
-            match client.handle().send(&mode_keys_command()) {
-                Ok(id) => enumeration.mode_keys_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send mode-keys query"),
-            }
-            match client.handle().send(&version_command()) {
-                Ok(id) => enumeration.version_pending = Some(id),
-                Err(error) => tracing::warn!(?error, "failed to send version query"),
+            match client.handle().send(&aggressive_resize_command(window)) {
+                Ok(id) => enumeration.aggressive_resize_pending = Some(id),
+                Err(error) => tracing::warn!(?error, "failed to query aggressive-resize"),
             }
         }
     }
-    if events
-        .iter()
-        .any(|event| matches!(event, TransportEvent::Closed { .. }))
+    if let Some(value) = take_aggressive_resize(&mut enumeration.aggressive_resize_pending, events)
     {
-        connection.take();
-        commands.trigger(TmuxConnectionReset);
-        commands.trigger(TmuxConnectionClosed);
-    } else {
-        if let Some(name) = take_client_name(&mut enumeration.client_name_pending, events) {
-            connection.set_client_name(name);
+        enumeration.aggressive_resize_checked = true;
+        if value.trim() == "on" {
+            tracing::warn!(
+                "tmux 'aggressive-resize on' is incompatible with control-mode integration; \
+                 windows may resize unexpectedly"
+            );
         }
-        if let Some(version) = take_version(&mut enumeration.version_pending, events) {
-            connection.set_per_window_refresh(version_supports_per_window_refresh(&version));
-        }
-        if let Some((window, pane)) = take_active_pane(&mut enumeration.active_pane_pending, events)
-        {
-            commands.trigger(TmuxActivePaneChanged {
-                window,
-                pane,
-                from_notification: false,
-            });
-            if !enumeration.aggressive_resize_checked
-                && enumeration.aggressive_resize_pending.is_none()
-                && let Some(client) = connection.client()
-            {
-                match client.handle().send(&aggressive_resize_command(window)) {
-                    Ok(id) => enumeration.aggressive_resize_pending = Some(id),
-                    Err(error) => tracing::warn!(?error, "failed to query aggressive-resize"),
-                }
-            }
-        }
-        if let Some(value) =
-            take_aggressive_resize(&mut enumeration.aggressive_resize_pending, events)
-        {
-            enumeration.aggressive_resize_checked = true;
-            if value.trim() == "on" {
-                tracing::warn!(
-                    "tmux 'aggressive-resize on' is incompatible with control-mode integration; \
-                     windows may resize unexpectedly"
-                );
-            }
-        }
-        // NOTE: deref once so the borrow checker can see these as distinct
-        // field borrows rather than overlapping borrows through DerefMut.
-        // NOTE: take_pane_captures MUST run before take_cursor_positions: when
-        // both a capture reply and its paired cursor reply arrive in the same
-        // event batch, captures populates capture_awaiting_cursor first, then
-        // cursor_positions drains it. Swapping the calls silently drops cursor
-        // fixes on same-batch arrivals.
-        let e = &mut *enumeration;
-        for output in take_pane_captures(
-            &mut e.capture_pending,
-            &mut e.capture_awaiting_cursor,
-            &e.panes_with_cursor_pending,
-            events,
-        ) {
-            pane_output.write(output);
-        }
-        for output in take_cursor_positions(
-            &mut e.cursor_pending,
-            &mut e.panes_with_cursor_pending,
-            &mut e.capture_awaiting_cursor,
-            events,
-        ) {
-            pane_output.write(output);
-        }
-        if let Some(bindings) = take_keybindings(&mut enumeration.keys_root_pending, events) {
-            keybindings.install(bindings);
-        }
-        if let Some(bindings) = take_keybindings(&mut enumeration.keys_prefix_pending, events) {
-            keybindings.install(bindings);
-        }
-        if let Some(keys) = take_prefix_keys(&mut enumeration.prefix_keys_pending, events) {
-            keybindings.set_prefix_keys(keys);
-        }
-        if let Some(bindings) = take_keybindings(&mut enumeration.keys_copy_mode_pending, events) {
-            keybindings.install(bindings);
-        }
-        if let Some(bindings) = take_keybindings(&mut enumeration.keys_copy_mode_vi_pending, events)
-        {
-            keybindings.install(bindings);
-        }
-        if let Some(mode_keys) = take_mode_keys(&mut enumeration.mode_keys_pending, events) {
-            keybindings.set_mode_keys(mode_keys);
-        }
-        for reply in drain_copy_replies(&mut copy_queries, events) {
-            copy_replies.write(reply);
-        }
-        trigger_events(
-            &mut commands,
-            &mut enumeration.pending,
-            events,
-            connection.client_name(),
-        );
     }
+    // NOTE: deref once so the borrow checker can see these as distinct
+    // field borrows rather than overlapping borrows through DerefMut.
+    // NOTE: take_pane_captures MUST run before take_cursor_positions: when
+    // both a capture reply and its paired cursor reply arrive in the same
+    // event batch, captures populates capture_awaiting_cursor first, then
+    // cursor_positions drains it. Swapping the calls silently drops cursor
+    // fixes on same-batch arrivals.
+    let e = &mut *enumeration;
+    for output in take_pane_captures(
+        &mut e.capture_pending,
+        &mut e.capture_awaiting_cursor,
+        &e.panes_with_cursor_pending,
+        events,
+    ) {
+        pane_output.write(output);
+    }
+    for output in take_cursor_positions(
+        &mut e.cursor_pending,
+        &mut e.panes_with_cursor_pending,
+        &mut e.capture_awaiting_cursor,
+        events,
+    ) {
+        pane_output.write(output);
+    }
+    if let Some(bindings) = take_keybindings(&mut enumeration.keys_root_pending, events) {
+        keybindings.install(bindings);
+    }
+    if let Some(bindings) = take_keybindings(&mut enumeration.keys_prefix_pending, events) {
+        keybindings.install(bindings);
+    }
+    if let Some(keys) = take_prefix_keys(&mut enumeration.prefix_keys_pending, events) {
+        keybindings.set_prefix_keys(keys);
+    }
+    if let Some(bindings) = take_keybindings(&mut enumeration.keys_copy_mode_pending, events) {
+        keybindings.install(bindings);
+    }
+    if let Some(bindings) = take_keybindings(&mut enumeration.keys_copy_mode_vi_pending, events) {
+        keybindings.install(bindings);
+    }
+    if let Some(mode_keys) = take_mode_keys(&mut enumeration.mode_keys_pending, events) {
+        keybindings.set_mode_keys(mode_keys);
+    }
+    for reply in drain_copy_replies(&mut copy_queries, events) {
+        copy_replies.write(reply);
+    }
+    trigger_events(
+        &mut commands,
+        &mut enumeration.pending,
+        events,
+        connection.client_name(),
+    );
     // NOTE: runs after the Closed branch took the connection, so `client()` is
     // None there and this is a no-op — safe to re-arm only while still attached.
     if matches!(*state, ConnectionState::Attached)
@@ -405,6 +433,45 @@ mod tests {
         assert!(index.windows.is_empty());
         assert!(index.panes.is_empty());
         assert!(index.session.is_none());
+    }
+
+    #[test]
+    fn advance_to_attached_emits_client_attached_message() {
+        use bevy::ecs::system::RunSystemOnce;
+        use tmux_control::{ClientEvent, ControlEvent};
+        use tmux_control_parser::WindowId;
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+        *app.world_mut().resource_mut::<ConnectionState>() = ConnectionState::Connecting;
+        app.world_mut()
+            .resource_mut::<TmuxEventBatch>()
+            .0
+            .push(TransportEvent::Protocol(ClientEvent::Notification(
+                ControlEvent::WindowAdd {
+                    window: WindowId(1),
+                },
+            )));
+        app.world_mut()
+            .run_system_once(advance_tmux_connection)
+            .unwrap();
+        let messages = app.world().resource::<Messages<TmuxClientAttached>>();
+        assert_eq!(messages.iter_current_update_messages().count(), 1);
+        assert_eq!(
+            *app.world().resource::<ConnectionState>(),
+            ConnectionState::Attached
+        );
+    }
+
+    #[test]
+    fn send_attach_enumeration_runs_on_message() {
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+        app.insert_resource(TmuxPresence);
+        // No live client: the system must still run on the message but send nothing,
+        // leaving `pending` (list-windows id) None without panicking.
+        app.world_mut().write_message(TmuxClientAttached);
+        app.update();
+        assert!(app.world().resource::<EnumerationState>().pending.is_none());
     }
 
     #[test]
