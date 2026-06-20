@@ -110,11 +110,14 @@ pub(crate) struct DragGesture {
     pub(crate) phase: DragPhase,
 }
 
-/// A held mouse button and the last cell a drag was synthesized for. Tracked
+/// A held mouse button: the terminal the press landed on, the button, and the
+/// last cell a drag was synthesized for. The `entity` locks drag/release to the
+/// press terminal even when the pointer wanders onto another terminal. Tracked
 /// for BOTH local selection and app-forward drags — the forward path never sets
 /// `drag`, so drag-motion synthesis must not depend on it.
 #[derive(Clone, Copy)]
 pub(crate) struct HeldPointer {
+    pub(crate) entity: Entity,
     pub(crate) button: MouseButtonKind,
     pub(crate) last_cell: CellCoord,
 }
@@ -188,6 +191,20 @@ pub(crate) fn cell_at_cursor(
         .normalize_point(*transform, cursor_phys)
         .map(|n| (n + Vec2::splat(0.5)) * node.size)?;
     Some(cell_at_local(local, cell_w, cell_h, cols, rows))
+}
+
+/// The `Entity` of the topmost `OzmaTerminal` whose node contains `cursor_phys`,
+/// or `None` when the cursor is over none. "Topmost" is the highest
+/// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); a higher
+/// index is drawn later, i.e. on top.
+pub(crate) fn topmost_terminal_at<'a>(
+    cursor_phys: Vec2,
+    candidates: impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)>,
+) -> Option<Entity> {
+    candidates
+        .filter(|&(_, node, transform)| node.contains_point(*transform, cursor_phys))
+        .max_by_key(|&(_, node, _)| node.stack_index())
+        .map(|(entity, _, _)| entity)
 }
 
 /// Converts a 1-indexed protocol `CellCoord` into the engine's viewport-relative
@@ -361,14 +378,16 @@ pub(crate) fn decide_wheel(
     }
 }
 
-/// The crate's mouse-button dispatcher. Resolves the cursor cell, tracks clicks
-/// and drag state, drives `decide_button`, and applies the effects. Skips any
-/// `OzmaTerminal` carrying `MouseDisabled`.
+/// The crate's mouse-button dispatcher. Hit-tests the topmost terminal under the
+/// cursor on press, locks drag/release to that terminal, tracks clicks and drag
+/// state, drives `decide_button`, and triggers `TerminalMouseEffects`. Skips any
+/// `OzmaTerminal` carrying `MouseDisabled`; an empty candidate set (modal
+/// suppression) drains events and resets the gesture.
 pub(crate) fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OzmaMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
-    terminal: Query<
+    terminals: Query<
         (
             Entity,
             &TerminalHandle,
@@ -384,19 +403,13 @@ pub(crate) fn dispatch_mouse_buttons(
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok((entity, handle, node, transform, grid)) = terminal.single() else {
-        buttons.clear();
-        gesture.drag = None;
-        gesture.held = None;
-        return;
-    };
     let Ok(window) = windows.single() else {
         buttons.clear();
         gesture.drag = None;
         gesture.held = None;
         return;
     };
-    if !window.focused {
+    if !window.focused || terminals.is_empty() {
         buttons.clear();
         gesture.drag = None;
         gesture.held = None;
@@ -409,19 +422,40 @@ pub(crate) fn dispatch_mouse_buttons(
         gesture.held = None;
         return;
     };
-    let ctx = CellContext {
-        node,
-        transform,
-        grid,
-        cell_w: metrics.metrics.advance_phys.floor().max(1.0),
-        cell_h: metrics.metrics.line_height_phys.floor().max(1.0),
-    };
-    let modes = handle.current_modes();
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
     let mods = protocol_mods(&keys);
     let modifier_held = link_modifier_held(&mods);
 
-    let mut effects: Vec<MouseEffect> = Vec::new();
     for ev in buttons.read() {
+        let kind = match ev.state {
+            ButtonState::Pressed => ButtonEventKind::Press,
+            ButtonState::Released => ButtonEventKind::Release,
+        };
+        let target = if kind == ButtonEventKind::Press {
+            topmost_terminal_at(
+                cursor_phys,
+                terminals.iter().map(|(e, _, node, transform, _)| (e, node, transform)),
+            )
+        } else {
+            gesture.held.map(|h| h.entity)
+        };
+        let Some(target) = target else {
+            continue;
+        };
+        let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
+            gesture.held = None;
+            gesture.drag = None;
+            continue;
+        };
+        let ctx = CellContext {
+            node,
+            transform,
+            grid,
+            cell_w,
+            cell_h,
+        };
+        let modes = handle.current_modes();
         let Some((evt, link)) = resolve_button_event(
             &mut gesture,
             &ctx,
@@ -444,10 +478,10 @@ pub(crate) fn dispatch_mouse_buttons(
             &cfg.buttons,
         );
         let opened = matches!(decided.as_slice(), [MouseEffect::OpenUri(_)]);
-        effects.extend(decided);
         match evt.kind {
             ButtonEventKind::Press if !opened => {
                 gesture.held = Some(HeldPointer {
+                    entity: target,
                     button: evt.button,
                     last_cell: evt.cell,
                 });
@@ -455,8 +489,30 @@ pub(crate) fn dispatch_mouse_buttons(
             ButtonEventKind::Release => gesture.held = None,
             _ => {}
         }
+        if !decided.is_empty() {
+            commands.trigger(TerminalMouseEffects {
+                entity: target,
+                effects: decided,
+            });
+        }
     }
 
+    let Some(held) = gesture.held else {
+        return;
+    };
+    let Ok((_, handle, node, transform, grid)) = terminals.get(held.entity) else {
+        gesture.held = None;
+        gesture.drag = None;
+        return;
+    };
+    let ctx = CellContext {
+        node,
+        transform,
+        grid,
+        cell_w,
+        cell_h,
+    };
+    let modes = handle.current_modes();
     if let Some((drag_effects, new_cell)) = synthesize_drag(
         &mut gesture,
         &ctx,
@@ -466,14 +522,15 @@ pub(crate) fn dispatch_mouse_buttons(
         modifier_held,
         &cfg.buttons,
     ) {
-        effects.extend(drag_effects);
         if let Some(h) = gesture.held.as_mut() {
             h.last_cell = new_cell;
         }
-    }
-
-    if !effects.is_empty() {
-        commands.trigger(TerminalMouseEffects { entity, effects });
+        if !drag_effects.is_empty() {
+            commands.trigger(TerminalMouseEffects {
+                entity: held.entity,
+                effects: drag_effects,
+            });
+        }
     }
 }
 
@@ -798,6 +855,39 @@ mod tests {
     use super::*;
     use bevy::input::mouse::{MouseButton, MouseButtonInput};
     use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind};
+
+    #[test]
+    fn topmost_terminal_at_picks_highest_stack_index_among_containing() {
+        let mut world = World::new();
+        let a = world.spawn_empty().id();
+        let b = world.spawn_empty().id();
+        let c = world.spawn_empty().id();
+        // A: left half (x 0..400), stack 5. B: right half (x 400..800), stack 3.
+        // C: left half, stack 9 — overlaps A and sits on top.
+        let node_a = ComputedNode { size: Vec2::new(400.0, 600.0), stack_index: 5, ..ComputedNode::DEFAULT };
+        let tf_a = UiGlobalTransform::from_xy(200.0, 300.0);
+        let node_b = ComputedNode { size: Vec2::new(400.0, 600.0), stack_index: 3, ..ComputedNode::DEFAULT };
+        let tf_b = UiGlobalTransform::from_xy(600.0, 300.0);
+        let node_c = ComputedNode { size: Vec2::new(400.0, 600.0), stack_index: 9, ..ComputedNode::DEFAULT };
+        let tf_c = UiGlobalTransform::from_xy(200.0, 300.0);
+        let candidates = [(a, &node_a, &tf_a), (b, &node_b, &tf_b), (c, &node_c, &tf_c)];
+
+        assert_eq!(
+            topmost_terminal_at(Vec2::new(600.0, 300.0), candidates.iter().copied()),
+            Some(b),
+            "a point only B contains must resolve to B"
+        );
+        assert_eq!(
+            topmost_terminal_at(Vec2::new(100.0, 300.0), candidates.iter().copied()),
+            Some(c),
+            "where A and C overlap, the higher stack_index (C) wins"
+        );
+        assert_eq!(
+            topmost_terminal_at(Vec2::new(2000.0, 2000.0), candidates.iter().copied()),
+            None,
+            "a point outside every node resolves to None"
+        );
+    }
 
     #[test]
     fn mouse_disabled_terminal_drains_without_arming_a_gesture() {
