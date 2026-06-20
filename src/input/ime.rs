@@ -22,7 +22,7 @@ use bevy::prelude::{Entity, State};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::OzmaTerminal;
+use ozma_terminal::{KeyboardFocused, OzmaTerminal};
 use ozma_tty_engine::{TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
@@ -168,7 +168,7 @@ pub(crate) fn ime_policy_system(
     inline_slots: Query<&InlineWebview>,
     overlays: Query<&TerminalOverlays>,
     current_mode: Res<State<AppMode>>,
-    ozma_terminal: Query<(), With<OzmaTerminal>>,
+    ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
 ) {
     let Ok(mut window) = primary_window.single_mut() else {
         return;
@@ -221,13 +221,16 @@ pub(crate) fn ime_policy_system(
         return;
     }
 
-    let Some(entity) = active_surface else {
-        if *current_mode.get() == AppMode::Ozma {
-            let desired = ozma_terminal.single().is_ok();
-            if window.ime_enabled != desired {
-                window.ime_enabled = desired;
-            }
-        } else if window.ime_enabled {
+    let surface = match active_surface {
+        Some(entity) => Some(entity),
+        // NOTE: Ozma mode has no tmux ActivePane; the keyboard-focused terminal
+        // is the IME surface, so the shared path below anchors `ime_position` at
+        // its cursor (the tmux path's same px math).
+        None if *current_mode.get() == AppMode::Ozma => ozma_terminal.single().ok(),
+        None => None,
+    };
+    let Some(entity) = surface else {
+        if window.ime_enabled {
             window.ime_enabled = false;
         }
         return;
@@ -303,7 +306,7 @@ pub(crate) fn read_ime_events(
     focused_webview: Res<FocusedWebview>,
     inline_parents: Query<&ChildOf, With<InlineWebview>>,
     current_mode: Res<State<AppMode>>,
-    ozma_terminal: Query<Entity, With<OzmaTerminal>>,
+    ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     copy_modes: Query<(), With<CopyModeState>>,
 ) {
     let active = active_pane.map(|single| *single);
@@ -354,6 +357,10 @@ pub(crate) fn read_ime_events(
                     if focused_webview.0.is_some() {
                         continue;
                     }
+                    // NOTE: route the commit to the focused terminal but do NOT
+                    // also filter on `KeyboardDisabled` — IME composition itself
+                    // sets `KeyboardDisabled` (suppressing raw keys via
+                    // `dispatch_input`), yet the commit must still land here.
                     let Ok(entity) = ozma_terminal.single() else {
                         continue;
                     };
@@ -911,6 +918,97 @@ mod tests {
         assert!(
             !app.world().resource::<ImeState>().is_composing(),
             "commit should clear the composition even when dropped",
+        );
+    }
+
+    #[test]
+    fn ime_commit_routes_to_focused_ozma_terminal() {
+        use bevy::prelude::On;
+
+        #[derive(Resource, Default)]
+        struct Hits(Vec<Entity>);
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .add_systems(Update, read_ime_events);
+        app.init_resource::<ImeState>();
+        app.init_resource::<FocusedWebview>();
+        app.init_resource::<Hits>();
+        app.init_state::<AppMode>();
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.add_message::<Ime>();
+        app.add_observer(|ev: On<TerminalKeyInput>, mut hits: ResMut<Hits>| {
+            hits.0.push(ev.entity);
+        });
+
+        app.world_mut().spawn(OzmaTerminal);
+        let focused = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .write(Ime::Commit {
+                window: Entity::PLACEHOLDER,
+                value: "あ".into(),
+            });
+        app.update();
+
+        assert_eq!(app.world().resource::<Hits>().0, vec![focused]);
+    }
+
+    #[test]
+    fn ime_enabled_and_anchored_for_focused_ozma_terminal() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_resource::<FocusedWebview>();
+        app.init_state::<AppMode>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+
+        app.world_mut().spawn(OzmaTerminal);
+        app.world_mut().spawn((
+            OzmaTerminal,
+            KeyboardFocused,
+            ComputedNode::default(),
+            UiGlobalTransform::default(),
+            TerminalGrid {
+                cursor: Some(Cursor::default()),
+                ..default()
+            },
+        ));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ime_enabled: false,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+
+        app.world_mut().run_system_once(ime_policy_system).unwrap();
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Window, With<PrimaryWindow>>();
+        let window = q.single(app.world()).expect("primary window");
+        assert!(
+            window.ime_enabled,
+            "IME must enable for the focused Ozma terminal even with another terminal present"
+        );
+        assert_eq!(
+            window.ime_position,
+            Vec2::new(0.0, 16.0),
+            "candidate window anchors one row below the focused terminal's cursor"
         );
     }
 }
