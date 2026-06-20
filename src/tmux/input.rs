@@ -638,14 +638,15 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
     WheelOwner::CededToOzma
 }
 
-/// Forwards mouse-wheel events to the active tmux pane for the cases
+/// Forwards mouse-wheel events to the tmux pane UNDER THE POINTER for the cases
 /// `ozma_terminal::dispatch_mouse_wheel` does NOT usefully own.
 ///
 /// A focused inline webview under the pointer claims the wheel first
 /// (`resolve_tmux_inline_wheel_target`): each event is forwarded RAW to that
 /// child's CEF browser and dropped before the tmux accumulator.
 ///
-/// Otherwise the owner is decided as the exact complement of
+/// Otherwise the owner is decided for the CURSOR pane (resolved via
+/// `tmux_pane_at_phys`) as the exact complement of
 /// `ozma_tty_engine::wheel::WheelAction::route` (see `decide_wheel_owner`):
 /// a copy-mode pane (`CopyModeState`, always `MouseDisabled`) gets a targeted
 /// `send-keys -X scroll-up|scroll-down`; an alt-screen pane with neither
@@ -653,6 +654,15 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 /// would no-op on the alt buffer — gets `alt_screen_scroll_command` (cursor
 /// keys). Every other case is ceded to ozma (local scrollback / SGR / SS3) and
 /// the accumulator is left untouched for that pane so no residual notch bleeds.
+///
+/// # Invariants
+///
+/// The target pane MUST be the pane under the cursor, not `ActivePane`:
+/// `ozma_terminal::dispatch_mouse_wheel` and `crate::tmux::gate` both key off the
+/// cursor pane, so keying this system off the active pane would let both fire on
+/// different panes (cursor pane ≠ active pane) and double-act. The
+/// "complement gated solely by `MouseDisabled`" invariant holds only when both
+/// systems target the same pane.
 fn forward_wheel_to_tmux(
     mut wheel: MessageReader<MouseWheel>,
     mut accumulator: ResMut<TmuxWheelAccumulator>,
@@ -664,7 +674,6 @@ fn forward_wheel_to_tmux(
     rename_prompt: Option<Res<RenamePrompt>>,
     configs: Res<OzmuxConfigsResource>,
     metrics: Res<TerminalCellMetricsResource>,
-    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -703,11 +712,14 @@ fn forward_wheel_to_tmux(
         accumulator.residual_cells = 0.0;
         return;
     }
-    let Some(single) = active_pane else {
+    // The wheel acts on the pane under the pointer — the same basis ozma's
+    // dispatch_mouse_wheel and the gate's MouseDisabled use (see # Invariants).
+    let Some((entity, pane_id, _local)) =
+        cursor_phys.and_then(|c| tmux_pane_at_phys(&inline.panes, c))
+    else {
         accumulator.residual_cells = 0.0;
         return;
     };
-    let (entity, pane) = *single;
 
     // NOTE: decide the owner BEFORE touching the accumulator. A ceded frame must
     // leave the residual untouched for this pane — advancing then dropping it
@@ -737,7 +749,7 @@ fn forward_wheel_to_tmux(
     }
     let up = raw_notches > 0;
     let count = (raw_notches.unsigned_abs() as usize).min(MAX_NOTCHES_PER_FRAME);
-    let target = format!("%{}", pane.id.0);
+    let target = format!("%{}", pane_id.0);
     let lines = configs.mouse.lines_per_notch;
     let total_lines = count as u32 * lines;
 
@@ -913,6 +925,77 @@ mod tests {
                 WheelOwner::CededToOzma
             );
         }
+    }
+
+    fn spawn_pane_node(
+        app: &mut App,
+        copy_mode: bool,
+        active: bool,
+        center_x: f32,
+        size_x: f32,
+    ) -> Entity {
+        use tmux_control_parser::CellDims;
+
+        let mut e = app.world_mut().spawn((
+            TmuxPane {
+                id: ozmux_tmux::PaneId(1),
+                dims: CellDims {
+                    width: 50,
+                    height: 37,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            },
+            ComputedNode {
+                size: Vec2::new(size_x, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(center_x, 300.0),
+            TerminalOverlays::default(),
+        ));
+        if copy_mode {
+            e.insert(CopyModeState);
+        }
+        if active {
+            e.insert(ActivePane);
+        }
+        e.id()
+    }
+
+    #[test]
+    fn wheel_owner_is_decided_from_cursor_pane_not_active_pane() {
+        // Two non-overlapping panes: the cursor is over a NORMAL pane (left half),
+        // while the ActivePane is a copy-mode pane (right half). The wheel owner
+        // MUST be decided from the cursor pane (→ CededToOzma), not the active
+        // pane (which would give CopyMode). This pins the cursor-pane targeting
+        // that keeps the complement aligned with ozma + the gate.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let cursor_pane = spawn_pane_node(&mut app, false, false, 200.0, 400.0);
+        let _active_copy_pane = spawn_pane_node(&mut app, true, true, 600.0, 400.0);
+
+        let (resolved, owner) = app
+            .world_mut()
+            .run_system_once(
+                move |panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+                      copy_modes: Query<(), With<CopyModeState>>| {
+                    let (entity, _id, _local) =
+                        tmux_pane_at_phys(&panes, Vec2::new(200.0, 300.0)).unwrap();
+                    let in_copy_mode = copy_modes.get(entity).is_ok();
+                    // No TerminalHandle in this harness → the Err arm: a normal,
+                    // non-alt cursor pane resolves to CededToOzma.
+                    let owner = decide_wheel_owner(in_copy_mode, false, TermMode::empty());
+                    (entity, owner)
+                },
+            )
+            .unwrap();
+
+        assert_eq!(resolved, cursor_pane, "wheel must target the cursor pane");
+        assert_eq!(
+            owner,
+            WheelOwner::CededToOzma,
+            "cursor pane is normal → ceded to ozma, despite the active pane being in copy mode"
+        );
     }
 
     #[test]

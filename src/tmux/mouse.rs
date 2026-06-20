@@ -23,7 +23,7 @@ use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::mouse::MouseButtonInput;
+use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -317,7 +317,7 @@ fn arbiter(
         .unwrap_or(&[]);
 
     for ev in buttons.read() {
-        if ev.button != bevy::input::mouse::MouseButton::Left {
+        if ev.button != MouseButton::Left {
             continue;
         }
         if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)

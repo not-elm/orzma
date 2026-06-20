@@ -814,7 +814,6 @@ fn on_terminal_mouse_effects(
         }
         return;
     }
-    // PTY-less (tmux pane): local effects via *_vt_only, Write forwarded out.
     let mut dirty = false;
     for effect in &ev.effects {
         dirty |= apply_effect_detached(

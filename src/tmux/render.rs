@@ -37,27 +37,27 @@ pub(crate) struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LastClientSize>();
-        app.insert_resource(ClearColor(theme::PANE_GAP));
-        app.add_systems(
-            Update,
-            (
-                attach_tmux_window_container,
-                attach_tmux_pane_terminal,
-                route_tmux_output.run_if(on_message::<PaneOutput>),
-                sync_active_window,
-                layout_tmux_panes,
+        app.init_resource::<LastClientSize>()
+            .insert_resource(ClearColor(theme::PANE_GAP))
+            .add_systems(
+                Update,
+                (
+                    attach_tmux_window_container,
+                    attach_tmux_pane_terminal,
+                    route_tmux_output.run_if(on_message::<PaneOutput>),
+                    sync_active_window,
+                    layout_tmux_panes,
+                )
+                    .chain()
+                    .after(TmuxProjectionSet)
+                    .in_set(super::OzmuxActiveSet),
             )
-                .chain()
-                .after(TmuxProjectionSet)
-                .in_set(super::OzmuxActiveSet),
-        );
-        app.add_systems(
-            Update,
-            sync_client_size
-                .after(TmuxProjectionSet)
-                .in_set(super::OzmuxActiveSet),
-        );
+            .add_systems(
+                Update,
+                sync_client_size
+                    .after(TmuxProjectionSet)
+                    .in_set(super::OzmuxActiveSet),
+            );
     }
 }
 
