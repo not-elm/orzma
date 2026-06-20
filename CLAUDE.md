@@ -11,9 +11,9 @@ ozmux is a terminal multiplexer that runs as a single native GUI application. It
 The workspace root package is the one and only binary; library crates live under `crates/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
 
 - `ozmux-gui` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.18 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "ozmux") plus `cef_plugin(&asset_endpoint)` (from `bevy_cef`), then the ozmux plugins:
-  - `TerminalHandlePlugin` (from `ozma_tty_engine`), `TerminalRendererPlugin` (from `ozma_tty_renderer`), `TmuxSessionPlugin` (from `ozmux_tmux`, the sole multiplexer), `OzmuxTmuxPickerPlugin`, `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxWebviewRenderPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`, and the tmux UI/IO plugins `CopyPromptPlugin`, `ConfirmPromptPlugin`, `TmuxDialogPlugin`, `OzmuxTmuxRenderPlugin`, `OzmuxTmuxInputPlugin`, `OzmuxTmuxWindowBarPlugin`, `OzmuxTmuxPaneFocusPlugin`, `OzmuxTmuxCopyModePlugin`, `OzmuxTmuxMousePlugin`, `OzmuxTmuxDividerHandlePlugin`;
+  - `TerminalHandlePlugin` (from `ozma_tty_engine`), `TerminalRendererPlugin` (from `ozma_tty_renderer`), `TmuxSessionPlugin` (from `ozmux_tmux`, the sole multiplexer), `OzmuxTmuxPickerPlugin`, `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxWebviewPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`, and the tmux UI/IO plugins `CopyPromptPlugin`, `ConfirmPromptPlugin`, `TmuxDialogPlugin`, `OzmuxTmuxRenderPlugin`, `OzmuxTmuxInputPlugin`, `OzmuxTmuxWindowBarPlugin`, `OzmuxTmuxPaneFocusPlugin`, `OzmuxTmuxCopyModePlugin`, `OzmuxTmuxMousePlugin`, `OzmuxTmuxDividerHandlePlugin`;
   - the input plugins `HyperlinkInputPlugin`, `ImePlugin`, and `ImeOverlayPlugin`;
-  - `OzmuxOscWebviewPlugin` (OSC 5379 `mount-inline` / `unmount-inline` of dynamically-registered webviews), `OzmuxInlineWebviewPlugin`, and `OzmuxControlPlanePlugin` (the control-socket listener that mints Tier 1 dynamic webview handles).
+  - and `OzmuxControlPlanePlugin` (the control-socket listener that mints Tier 1 dynamic webview handles). The in-process webview feature — CEF render wiring, the `window.ozma` back-channel, OSC 5379 `mount-inline` / `unmount-inline`, and inline webviews — is aggregated under `OzmuxWebviewPlugin` (above).
 
   The root `Cargo.toml` depends on `bevy_cef` (path dep, `features = ["debug"]`) and on `ozmux_webview_host` with the `cef` feature enabled. A root `[features] debug` flag enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
 
@@ -38,7 +38,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 
 ### `src/` module map
 
-`src/main.rs` plus: `bootstrap`, `clipboard`, `configs`, `control_plane`, `font`, `inline_webview`, `input`, `osc_webview`, `system_set`, `theme`, `tmux_copy_mode`, `tmux_input`, `tmux_mouse`, `tmux_pane_hit`, `tmux_picker`, `tmux_render`, `ui`, `webview_render`.
+`src/main.rs` plus: `bootstrap`, `clipboard`, `configs`, `control_plane`, `font`, `input`, `system_set`, `theme`, `tmux_copy_mode`, `tmux_input`, `tmux_mouse`, `tmux_pane_hit`, `tmux_picker`, `tmux_render`, `ui`, `webview`.
 
 ## Commands
 

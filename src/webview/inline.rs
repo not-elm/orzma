@@ -1,15 +1,15 @@
 //! Inline webviews: `ChildOf` children of a terminal surface that render a
 //! registered view into the terminal's text flow. This module owns the
 //! components, the mount/unmount policy executed by the `MountInline` /
-//! `UnmountInline` arms of `osc_webview::on_osc_webview_request`, and the
-//! `OzmuxInlineWebviewPlugin` runtime systems that keep `WebviewSize` in
+//! `UnmountInline` arms of `osc::on_osc_webview_request`, and the
+//! `InlinePlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
+use super::osc::NonInteractive;
+use super::render::preload::build_dynamic_preload;
 use crate::control_plane::{
     ConnectionWriters, DynSource, DynamicRegistry, NormalizedChord, PushMsg, WebviewOwner,
 };
-use crate::osc_webview::NonInteractive;
-use crate::webview_render::preload::build_dynamic_preload;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
@@ -82,9 +82,9 @@ pub(crate) struct CompositeNotified;
 /// `Update` (the PTY drain systems flush the `FrameSnapshot` / `FrameDelta`
 /// observers there), so projecting just before the material rebuild hands the
 /// same frame's overlays to the shader.
-pub(crate) struct OzmuxInlineWebviewPlugin;
+pub(super) struct InlinePlugin;
 
-impl Plugin for OzmuxInlineWebviewPlugin {
+impl Plugin for InlinePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, sync_inline_webview_size);
         app.add_systems(
@@ -690,7 +690,7 @@ fn on_placement_removed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::osc_webview::on_osc_webview_request;
+    use crate::webview::osc::on_osc_webview_request;
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
     use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
