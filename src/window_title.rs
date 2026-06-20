@@ -22,9 +22,11 @@ impl Plugin for WindowTitlePlugin {
                 update_ozma_window_title.run_if(in_state(AppMode::Ozma)),
                 update_ozmux_window_title
                     .run_if(in_state(AppMode::Ozmux))
+                    .run_if(ozmux_title_dirty)
                     .after(TmuxProjectionSet),
             ),
-        );
+        )
+        .add_systems(OnEnter(AppMode::Ozmux), update_ozmux_window_title);
     }
 }
 
@@ -72,6 +74,27 @@ fn update_ozmux_window_title(
         .next()
         .map(|w| sanitize_title(&w.name));
     apply_title(&mut window, format_ozmux(&session, active.as_deref()));
+}
+
+/// True when the tmux session name, the active window, or the active window's
+/// name may have changed this frame — the inputs to the Ozmux window title.
+fn ozmux_title_dirty(
+    mut removed_session: RemovedComponents<TmuxSession>,
+    mut removed_active: RemovedComponents<ActiveWindow>,
+    changed_session: Query<(), Changed<TmuxSession>>,
+    changed_active_window: Query<(), (Changed<TmuxWindow>, With<ActiveWindow>)>,
+    added_active: Query<(), Added<ActiveWindow>>,
+) -> bool {
+    // NOTE: drain both RemovedComponents readers up front, not inside the `||`
+    // chain — a short-circuit on an earlier term would leave the one-frame
+    // removal events unread, so they would re-fire (a spurious run) next frame.
+    let session_removed = removed_session.read().next().is_some();
+    let active_removed = removed_active.read().next().is_some();
+    !changed_session.is_empty()
+        || !changed_active_window.is_empty()
+        || !added_active.is_empty()
+        || session_removed
+        || active_removed
 }
 
 fn format_ozma(title: Option<&str>) -> String {
@@ -280,5 +303,52 @@ mod tests {
         app.update();
 
         assert_eq!(primary_window_title(&mut app), "main:vim — ozmux");
+    }
+
+    #[test]
+    fn ozmux_title_is_not_recomputed_when_nothing_changed() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(AppMode::Ozmux);
+        app.add_plugins(WindowTitlePlugin);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        let session = app
+            .world_mut()
+            .spawn(TmuxSession {
+                id: SessionId(1),
+                name: "main".to_string(),
+            })
+            .id();
+        app.world_mut().spawn((
+            TmuxWindow {
+                id: WindowId(2),
+                index: 1,
+                name: "vim".to_string(),
+            },
+            ActiveWindow,
+        ));
+
+        app.update();
+        assert_eq!(primary_window_title(&mut app), "main:vim — ozmux");
+
+        // An unchanged frame must not recompute the title: overwrite it out of
+        // band, update with no tmux change, and confirm the gate suppressed the
+        // system (the sentinel survives).
+        {
+            let world = app.world_mut();
+            let mut windows = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
+            windows.single_mut(world).unwrap().title = "SENTINEL".to_string();
+        }
+        app.update();
+        assert_eq!(primary_window_title(&mut app), "SENTINEL");
+
+        // Renaming the session marks TmuxSession Changed, so the gate fires again.
+        app.world_mut()
+            .entity_mut(session)
+            .get_mut::<TmuxSession>()
+            .unwrap()
+            .name = "other".to_string();
+        app.update();
+        assert_eq!(primary_window_title(&mut app), "other:vim — ozmux");
     }
 }
