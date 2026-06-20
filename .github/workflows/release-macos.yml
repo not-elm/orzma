@@ -39,19 +39,38 @@ jobs:
           p12-file-base64: ${{ secrets.MACOS_CERT_P12 }}
           p12-password: ${{ secrets.MACOS_CERT_PASSWORD }}
 
+      - name: Resolve version
+        id: ver
+        run: |
+          CARGO_VERSION="$(cargo metadata --format-version 1 --no-deps \
+            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="ozmux-gui"))')"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [ "${TAG_VERSION}" != "${CARGO_VERSION}" ]; then
+              echo "Tag v${TAG_VERSION} does not match Cargo version ${CARGO_VERSION}; bump Cargo.toml or fix the tag." >&2
+              exit 1
+            fi
+            VERSION="${TAG_VERSION}"
+          else
+            VERSION="${CARGO_VERSION}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Build, sign, (notarize), package
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           if [ -n "$MACOS_SIGN_IDENTITY" ]; then
-            python3 scripts/bundle_macos.py --notarize
+            python3 scripts/bundle_macos.py --version "$VERSION" --notarize
           else
-            python3 scripts/bundle_macos.py
+            python3 scripts/bundle_macos.py --version "$VERSION"
           fi
 
       - name: Read artifact metadata
         id: meta
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VERSION="$(cargo metadata --format-version 1 --no-deps \
-            | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="ozmux-gui"))')"
           ZIP="target/bundle/ozmux-${VERSION}-arm64.zip"
           test -f "$ZIP" || { echo "Bundle not found: $ZIP"; exit 1; }
           SHA="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open('${ZIP}','rb').read()).hexdigest())")"
