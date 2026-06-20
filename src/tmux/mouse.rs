@@ -12,6 +12,7 @@
 //! coordinate maps to an absolute target size sent as `resize-pane -x/-y`.
 
 mod apply;
+mod decide;
 mod effect;
 
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
@@ -34,6 +35,8 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+pub(crate) use decide::divider_at;
+use decide::{ClickTracker, resize_target_size};
 use effect::MultiSelectKind;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
@@ -140,29 +143,6 @@ pub(crate) struct TmuxMouseGesture {
     webview_press: Option<Entity>,
 }
 
-/// Tracks consecutive-click count using a timeout + positional drift gate.
-#[derive(Default)]
-struct ClickTracker {
-    last: Option<(Duration, Vec2, u8)>,
-}
-
-impl ClickTracker {
-    /// Registers a press at `now` / `pos` and returns the resulting click count
-    /// (1 = single, 2 = double, 3 = triple, capped at 3). `cfg` is
-    /// `(double_click_timeout, click_drift_px)` in logical units.
-    fn register(&mut self, now: Duration, pos: Vec2, cfg: (Duration, f32)) -> u8 {
-        let (timeout, drift) = cfg;
-        let count = match self.last {
-            Some((t, p, c)) if now.saturating_sub(t) <= timeout && p.distance(pos) <= drift => {
-                (c + 1).min(3)
-            }
-            _ => 1,
-        };
-        self.last = Some((now, pos, count));
-        count
-    }
-}
-
 /// Returns the `(Entity, PaneId)` of the first `TmuxPane` whose `ComputedNode`
 /// contains `cursor_phys` (physical px), or `None` when no pane covers the point.
 fn pane_under_cursor(
@@ -173,38 +153,6 @@ fn pane_under_cursor(
         .iter()
         .find(|(_, _, node, transform)| node.contains_point(**transform, cursor_phys))
         .map(|(entity, pane, _, _)| (entity, pane.id))
-}
-
-/// Returns the divider whose grab zone contains `cursor` (logical px), given a
-/// tolerance in logical px. The grab zone is the 1px gap at `[pos_px, pos_px+1)`
-/// on the major axis expanded by `tol` on each side, intersected with the
-/// divider's span on the perpendicular axis.
-pub(crate) fn divider_at(
-    dividers: &[DividerPixelRect],
-    cursor: Vec2,
-    tol: f32,
-) -> Option<DividerPixelRect> {
-    dividers.iter().copied().find(|d| match d.axis {
-        DividerAxis::Vertical => {
-            cursor.x >= d.pos_px - tol
-                && cursor.x <= d.pos_px + 1.0 + tol
-                && cursor.y >= d.span_start_px
-                && cursor.y < d.span_end_px
-        }
-        DividerAxis::Horizontal => {
-            cursor.y >= d.pos_px - tol
-                && cursor.y <= d.pos_px + 1.0 + tol
-                && cursor.x >= d.span_start_px
-                && cursor.x < d.span_end_px
-        }
-    })
-}
-
-/// New absolute size (cells) for a divider's primary pane given the pointer's
-/// cell coordinate on the major axis. The pane's near edge stays fixed; its far
-/// edge follows the pointer. Clamped to at least 1.
-fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
-    (pointer_cell - near).max(1) as u32
 }
 
 /// Interprets raw left-button messages into tmux `select-pane`, `resize-pane`,
@@ -889,95 +837,6 @@ mod tests {
     #[test]
     fn gesture_state_default_is_idle() {
         assert_eq!(GestureState::default(), GestureState::Idle);
-    }
-
-    fn pixel_vdiv(pos: f32, span_start: f32, span_end: f32) -> DividerPixelRect {
-        DividerPixelRect {
-            axis: DividerAxis::Vertical,
-            primary: PaneId(1),
-            pos_px: pos,
-            span_start_px: span_start,
-            span_end_px: span_end,
-        }
-    }
-
-    #[test]
-    fn pixel_hit_test_within_tolerance() {
-        let d = pixel_vdiv(320.0, 0.0, 384.0);
-        let hit = divider_at(&[d], Vec2::new(322.0, 100.0), 4.0);
-        assert!(hit.is_some());
-        assert_eq!(hit.unwrap().primary, PaneId(1));
-    }
-
-    #[test]
-    fn pixel_hit_test_outside_tolerance() {
-        let d = pixel_vdiv(320.0, 0.0, 384.0);
-        assert!(divider_at(&[d], Vec2::new(330.0, 100.0), 4.0).is_none());
-    }
-
-    #[test]
-    fn pixel_hit_test_outside_span() {
-        let d = pixel_vdiv(320.0, 0.0, 192.0);
-        assert!(divider_at(&[d], Vec2::new(320.0, 200.0), 4.0).is_none());
-    }
-
-    #[test]
-    fn pixel_hit_test_far_side_of_tolerance() {
-        let d = pixel_vdiv(320.0, 0.0, 384.0);
-        assert!(divider_at(&[d], Vec2::new(324.0, 100.0), 4.0).is_some());
-    }
-
-    #[test]
-    fn click_count_increments_within_timeout_and_drift() {
-        let mut t = ClickTracker::default();
-        let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(
-            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
-            1
-        );
-        assert_eq!(
-            t.register(Duration::from_millis(200), Vec2::new(11.0, 11.0), cfg),
-            2
-        );
-        assert_eq!(
-            t.register(Duration::from_millis(350), Vec2::new(12.0, 10.0), cfg),
-            3
-        );
-    }
-
-    #[test]
-    fn click_count_resets_after_timeout() {
-        let mut t = ClickTracker::default();
-        let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(
-            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
-            1
-        );
-        assert_eq!(
-            t.register(Duration::from_millis(500), Vec2::new(10.0, 10.0), cfg),
-            1
-        );
-    }
-
-    #[test]
-    fn click_count_resets_after_drift() {
-        let mut t = ClickTracker::default();
-        let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(
-            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
-            1
-        );
-        assert_eq!(
-            t.register(Duration::from_millis(100), Vec2::new(40.0, 40.0), cfg),
-            1
-        );
-    }
-
-    #[test]
-    fn resize_target_size_follows_pointer() {
-        assert_eq!(resize_target_size(0, 50), 50);
-        assert_eq!(resize_target_size(10, 25), 15);
-        assert_eq!(resize_target_size(0, 0), 1);
     }
 
     fn test_metrics() -> TerminalCellMetricsResource {
