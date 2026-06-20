@@ -11,7 +11,7 @@ use crate::ozma::OzmaConfig;
 use crate::shortcuts::Shortcuts;
 use crate::startup::StartupMode;
 use crate::theme::Theme;
-use crate::tmux::TmuxPatch;
+use crate::tmux::TmuxConfig;
 use serde::Deserialize;
 
 /// Top-level TOML shape: every section is optional. `deny_unknown_fields`
@@ -26,7 +26,7 @@ pub(crate) struct RawConfigs {
     pub(crate) keyboard: Option<KeyboardConfig>,
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
     pub(crate) osc_webview: Option<OscWebviewConfig>,
-    pub(crate) tmux: Option<TmuxPatch>,
+    pub(crate) tmux: Option<TmuxConfig>,
     pub(crate) ozma: Option<OzmaConfig>,
     pub(crate) startup_mode: Option<StartupMode>,
 }
@@ -60,8 +60,8 @@ impl RawConfigs {
         if let Some(osc_webview) = self.osc_webview {
             base.osc_webview = osc_webview;
         }
-        if let Some(patch) = self.tmux {
-            base.tmux = patch.apply_to(base.tmux);
+        if let Some(tmux) = self.tmux {
+            base.tmux = tmux;
         }
         if let Some(ozma) = self.ozma {
             base.ozma = ozma;
