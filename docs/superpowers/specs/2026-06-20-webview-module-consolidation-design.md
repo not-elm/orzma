@@ -115,10 +115,16 @@ impl Plugin for OzmuxWebviewPlugin {
 }
 ```
 
-Sub-module visibility is `pub(crate)` because external callers (e.g.
-`control_plane.rs`, `tmux/*.rs`, `input/ime.rs`) reference items by full path
-(`crate::webview::render::sync_focused_webview`, etc.). `render/preload.rs`
-keeps its existing `pub(crate) mod preload;` declaration inside `render.rs`.
+Each sub-*module* is `pub(crate)` because each has a verified external caller
+that references its items by full path: `render` (e.g.
+`crate::webview::render::sync_focused_webview` from `control_plane.rs`,
+`tmux/render.rs`), `osc` (`crate::webview::osc::NonInteractive` /
+`OscWebviewGate` from `control_plane.rs`, `tmux/*.rs`), and `inline`
+(`crate::webview::inline::InlineWebview` from `control_plane.rs`,
+`input/ime.rs`, `tmux/*.rs`). This differs from the tmux precedent, where the
+sub-modules are private `mod` and only `pane_hit` is `pub(crate)`. The plugin
+*structs* inside these modules are narrower (`pub(super)`; see Plugin Naming).
+`render/preload.rs` keeps its existing `pub(crate) mod preload;` inside `render.rs`.
 
 `cef_plugin` is a free function (not a plugin) called from `main.rs` while
 building `CefPlugin`; it is not part of the aggregator and stays exported from
@@ -127,14 +133,19 @@ building `CefPlugin`; it is not part of the aggregator and stays exported from
 ## Plugin Naming
 
 The three sub-plugins are referenced only within `src/webview.rs` after this
-change, so they drop their `Ozmux`/`Webview` prefix and narrow to
-`pub(crate)`, matching the tmux precedent:
+change, so they drop their `Ozmux`/`Webview` prefix and narrow to `pub(super)`
+(only the parent `src/webview.rs` references them). This is one step tighter
+than the tmux precedent's `pub(crate)`: tmux's sub-modules are private `mod`,
+which already caps their plugin structs, whereas webview's sub-modules are
+`pub(crate)` (their *functions* have external callers), so the structs need
+`pub(super)` to avoid leaking crate-wide. The aggregator stays `pub` to mirror
+`OzmuxTmuxPlugin` (binary crate — no external surface either way):
 
 | Old name | Old visibility | New name | New visibility |
 |---|---|---|---|
-| `OzmuxWebviewRenderPlugin` | `pub` | `RenderPlugin` | `pub(crate)` |
-| `OzmuxOscWebviewPlugin` | `pub(crate)` | `OscPlugin` | `pub(crate)` |
-| `OzmuxInlineWebviewPlugin` | `pub(crate)` | `InlinePlugin` | `pub(crate)` |
+| `OzmuxWebviewRenderPlugin` | `pub` | `RenderPlugin` | `pub(super)` |
+| `OzmuxOscWebviewPlugin` | `pub(crate)` | `OscPlugin` | `pub(super)` |
+| `OzmuxInlineWebviewPlugin` | `pub(crate)` | `InlinePlugin` | `pub(super)` |
 | *(new)* | — | `OzmuxWebviewPlugin` | `pub` |
 
 No test references these plugin structs directly (tests build minimal apps with
