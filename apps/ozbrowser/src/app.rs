@@ -135,6 +135,12 @@ impl App {
                 self.mode = Mode::Insert;
                 vec![]
             }
+            Action::EnterHint => {
+                self.mode = Mode::Hint;
+                vec![]
+            }
+            Action::HintKey(_) => vec![],
+            Action::HintBackspace => vec![],
             Action::OpenHelp => {
                 self.mode = Mode::Help;
                 vec![]

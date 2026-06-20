@@ -43,6 +43,7 @@ fn draw_status_bar(frame: &mut Frame<'_>, area: Rect, app: &App) {
         Mode::Insert => "Insert",
         Mode::Help => "Help",
         Mode::Address => "Address",
+        Mode::Hint => "Hint",
     };
     let text = format!("[{mode_label}] {}", app.url());
     frame.render_widget(
