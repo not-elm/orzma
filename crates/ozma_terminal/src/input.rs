@@ -17,6 +17,14 @@ use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 #[derive(Component)]
 pub struct KeyboardDisabled;
 
+/// When present on an `OzmaTerminal` entity, that terminal is the keyboard
+/// focus: the crate's keyboard dispatcher routes raw keys to it, and the host
+/// routes IME commits and anchors the OS candidate window to it. The host owns
+/// focus policy and maintains the "exactly one focused" invariant; a terminal
+/// with no `KeyboardFocused` receives no keyboard input.
+#[derive(Component)]
+pub struct KeyboardFocused;
+
 /// A keyboard chord, as a physical `KeyCode` plus the four modifier bits.
 /// Config-agnostic plain data the host supplies in `TerminalInputBindings`.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -90,11 +98,12 @@ fn dispatch_input(
     mut events: MessageReader<KeyboardInput>,
     bindings: Res<TerminalInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
-    terminal: Query<Entity, (With<OzmaTerminal>, Without<KeyboardDisabled>)>,
+    terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>, Without<KeyboardDisabled>)>,
 ) {
-    // NOTE: keyboard keeps the single-terminal model — a future multi-terminal
-    // host MUST keep exactly one OzmaTerminal un-`KeyboardDisabled`, or this
-    // `.single()` returns Err and every keypress is silently dropped.
+    // NOTE: keyboard routes to the single `KeyboardFocused` terminal. The host
+    // owns focus policy and MUST keep exactly one OzmaTerminal both
+    // `KeyboardFocused` and not `KeyboardDisabled`, or this `.single()` returns
+    // Err and every keypress is silently dropped.
     let Ok(entity) = terminal.single() else {
         events.clear();
         return;
@@ -213,7 +222,7 @@ mod tests {
     #[test]
     fn plain_key_forwards_as_terminal_key() {
         let mut app = test_app();
-        app.world_mut().spawn(OzmaTerminal);
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
         press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         let c = app.world().resource::<Captured>();
@@ -224,7 +233,7 @@ mod tests {
     #[test]
     fn paste_chord_fires_paste_action() {
         let mut app = test_app();
-        app.world_mut().spawn(OzmaTerminal);
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
         hold_meta(&mut app);
         press(&mut app, KeyCode::KeyV, Key::Character("v".into()));
         app.update();
@@ -236,7 +245,7 @@ mod tests {
     #[test]
     fn reserved_chord_is_skipped() {
         let mut app = test_app();
-        app.world_mut().spawn(OzmaTerminal);
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
         app.world_mut()
             .resource_mut::<TerminalInputBindings>()
             .reserved = vec![ReservedChord {
@@ -257,7 +266,7 @@ mod tests {
     #[test]
     fn unhandled_meta_chord_is_dropped() {
         let mut app = test_app();
-        app.world_mut().spawn(OzmaTerminal);
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
         hold_meta(&mut app);
         press(&mut app, KeyCode::KeyJ, Key::Character("j".into()));
         app.update();
@@ -267,14 +276,45 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_disabled_entity_fires_nothing() {
+    fn keyboard_disabled_overrides_focus() {
         let mut app = test_app();
-        app.world_mut().spawn((OzmaTerminal, KeyboardDisabled));
+        app.world_mut()
+            .spawn((OzmaTerminal, KeyboardFocused, KeyboardDisabled));
         press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         let c = app.world().resource::<Captured>();
         assert!(c.keys.is_empty());
         assert_eq!(c.paste, 0);
+    }
+
+    #[test]
+    fn routes_to_keyboard_focused_terminal() {
+        let mut app = test_app();
+        app.world_mut().spawn(OzmaTerminal);
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert_eq!(c.keys, vec![TerminalKey::Text("a".into())]);
+    }
+
+    #[test]
+    fn no_focused_terminal_drops_keys() {
+        let mut app = test_app();
+        app.world_mut().spawn(OzmaTerminal);
+        press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        assert!(app.world().resource::<Captured>().keys.is_empty());
+    }
+
+    #[test]
+    fn two_focused_terminals_drop_keys() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        assert!(app.world().resource::<Captured>().keys.is_empty());
     }
 
     #[test]
