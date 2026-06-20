@@ -79,8 +79,8 @@ in the same frame, unchanged.
 | ① | `drain_tmux_transport` | — | Drain the channel into `TmuxEventBatch`; route `%output` → `PaneOutput`. |
 | ② | `advance_tmux_connection` | batch-pending | `advance_state` → conditional `ConnectionState` write; on attach transition emit `TmuxClientAttached`; on `Closed` → `connection.take()` + trigger `TmuxConnectionReset` + `TmuxConnectionClosed`. |
 | ③a | `send_attach_enumeration` | `on_message::<TmuxClientAttached>` | Send the initial query suite. |
-| ③b | `send_tmux_reenumeration` | batch-pending + connection-alive | Topology re-enumeration (session switch / window add / window switch) + client-name re-arm. |
-| ④ | `apply_tmux_replies` | batch-pending + connection-alive | Single-pass enum dispatch (replies → world), active-pane→aggressive-resize follow-up, copy replies, notifications → projection triggers. |
+| ③b | `send_tmux_reenumeration` | batch-pending (+ live-client body guard) | Topology re-enumeration (session switch / window add / window switch) + client-name re-arm. |
+| ④ | `apply_tmux_replies` | batch-pending (+ live-client body guard) | Single-pass enum dispatch (replies → world), active-pane→aggressive-resize follow-up, copy replies, notifications → projection triggers. |
 
 ### New shared resource
 
@@ -90,9 +90,13 @@ in the same frame, unchanged.
 struct TmuxEventBatch(Vec<TransportEvent>);
 ```
 
-`ResMut` in ① (overwritten each frame with the freshly drained `Vec`, empty when
-the channel is empty), `Res` everywhere downstream. No cloning of events: every
-consumer borrows `&batch.0`.
+`ResMut` in ①, `Res` everywhere downstream. No cloning of events: every consumer
+borrows `&batch.0`. ① overwrites the batch with each frame's drain so a
+previously-non-empty batch is cleared to empty exactly once — otherwise ②–④,
+gated on `tmux_batch_pending`, would re-process last frame's events. To honor the
+repo's "mutate conditionally" change-detection rule, ① skips the write when both
+the fresh drain and the current batch are already empty, so idle frames neither
+re-fire change detection nor leave stale events.
 
 ### New message
 
@@ -121,18 +125,31 @@ if let Some(next) = advance_state(&state, &batch.0) {
 Because `.chain()` orders ② before ③a, the message is delivered same-frame, and
 the `on_message` run condition's internal cursor fires the system exactly once.
 
-### New run conditions
+### New run condition + connection body guard
 
 ```rust
 fn tmux_batch_pending(batch: Res<TmuxEventBatch>) -> bool { !batch.0.is_empty() }
-fn tmux_connection_alive(connection: NonSend<TmuxConnection>) -> bool {
-    connection.client().is_some()
-}
 ```
 
-These express, as `run_if` gates (per the repo's "gate with `run_if`" rule), the
-two whole-system guards the monolith did inline: skip when nothing was drained,
-and skip the reply/teardown path once the connection is gone.
+`tmux_batch_pending` gates ②–④ as a `run_if` condition (per the repo's "gate
+with `run_if`" rule): skip when nothing was drained.
+
+Connection liveness is **not** a `run_if` condition. A run condition that reads
+`NonSend<TmuxConnection>` is unsound under Bevy's multi-threaded executor: Bevy
+intends to reject it (the `SystemCondition` `is_send()` assertion) but the check
+is currently defeated (bevyengine/bevy#21230), so it silently registers and may
+run off the main thread. Instead, ③b and ④ — which already hold
+`NonSend`/`NonSendMut<TmuxConnection>` and are therefore pinned to the main
+thread — early-return with a body guard, matching the existing
+`request_pane_captures` idiom (`plugin.rs:82-84`):
+
+```rust
+let Some(client) = connection.client() else { return };
+```
+
+This skips the reply/teardown path once ② has taken the connection on `Closed`.
+The repo's "gate with `run_if`" rule explicitly exempts a body guard when no
+Send-friendly condition exists; record the reason in a `// NOTE:` citing #21230.
 
 ## Reply Correlation — `PendingReply`
 
@@ -189,8 +206,15 @@ A small `register(state, send_result, reply)` helper folds the
 `Option` fields used to give is only relied on for the client-name re-arm and
 aggressive-resize, which already carry their own guards; those checks become
 `pending.values().any(|r| matches!(r, PendingReply::ClientName))` over the small
-map. Session-switch cache clearing becomes
-`pending.retain(|_, r| !matches!(r, PendingReply::Capture { .. } | PendingReply::Cursor { .. }))`.
+map. Session-switch clearing must drop the in-flight entries the switch
+invalidates — the capture/cursor pairs **and** the enumeration ids that
+`send_session_enumeration` re-issues:
+`pending.retain(|_, r| !matches!(r, PendingReply::Capture { .. } | PendingReply::Cursor { .. } | PendingReply::ListWindows | PendingReply::ActivePane))`.
+The monolith's `Option<CommandId>` fields got this for free — the re-send
+overwrote the old `list-windows`/active-pane id (last write wins) — but a
+`HashMap` keyed by `CommandId` lets a stale old-session id and the fresh id
+coexist, so a late pre-switch reply would otherwise mis-seed the new session's
+projection. A test must cover a `list-windows` reply arriving after a switch.
 
 ### Dispatch (`④ apply_tmux_replies`)
 
@@ -232,22 +256,33 @@ away. Copy-mode replies stay on their separate pass (`drain_copy_replies`).
 Behavior is preserved except for these, each carrying a `// NOTE:`:
 
 1. **Capture-before-cursor becomes structural.** The single ordered pass relies
-   on tmux's FIFO replies (capture is sent before cursor for a pane), so the
-   `Capture` arm populates `capture_awaiting_cursor` before the `Cursor` arm
-   drains it — no explicit call-ordering requirement remains. The old
-   `take_pane_captures`-before-`take_cursor_positions` `// NOTE:` is deleted.
+   on tmux's FIFO replies (capture is sent before cursor for a pane —
+   `plugin.rs:86-92`, `enumerate.rs:274-286`), so the `Capture` arm populates
+   `capture_awaiting_cursor` before the `Cursor` arm drains it. The old
+   `take_pane_captures`-before-`take_cursor_positions` `// NOTE:` is replaced by
+   a `// NOTE:` on ④'s loop: it **must** stay a single in-order pass over
+   `batch.0` — splitting captures and cursors into two passes would reorder the
+   arms and silently drop cursor fixes. This reuses the same tmux FIFO
+   assumption existing code already depends on; an integration test should order
+   a capture reply before its paired cursor reply in one batch to lock it in.
 
-2. **Teardown precedes sends.** In the monolith, topology sends ran before the
-   `Closed` teardown. In the chain, ② (teardown) runs before ③b (sends). For
-   the rare batch containing both a topology notification *and* `Closed`, the
-   connection is taken first and ③b/④ skip via `tmux_connection_alive` —
-   i.e. ozmux no longer sends on a dying connection. This is the more correct
-   direction; documented with a `// NOTE:`.
+2. **Teardown precedes re-enumeration sends.** In the monolith, the
+   session-switch / window-add / window-switch handling — including its
+   `TmuxWindowsRetained { windows: [] }` trigger, capture/cursor clears, and
+   aggressive-resize reset — ran *before* the `Closed` teardown
+   (`plugin.rs:144-175` precede `:216`). In the chain, ② (teardown) runs before
+   ③b. So for the rare batch carrying both a topology notification *and*
+   `Closed`, the connection is taken first and ③b/④ body-guard out — the
+   re-enumeration sends *and* those reset side-effects are skipped. This is
+   benign: ② already triggers `TmuxConnectionReset`, which tears the whole
+   projection down anyway. The **attach** send (③a) is unaffected — a
+   `[protocol, Closed]` batch folds to `Detached`, so no `TmuxClientAttached` is
+   emitted (see item 4). Documented with a `// NOTE:`.
 
-3. **`%output` is still routed on a closing batch.** Output routing lives in ①
-   (gated only on presence + batch-pending, *not* connection-alive), so a batch
-   containing both `%output` and `Closed` still flushes the output — matching
-   the monolith, where `%output` routing preceded the `Closed` check.
+3. **`%output` is still routed on a closing batch.** Output routing lives in ①,
+   which has no live-client body guard (only presence + batch-pending), so a
+   batch containing both `%output` and `Closed` still flushes the output —
+   matching the monolith, where `%output` routing preceded the `Closed` check.
 
 4. **No false attach on a same-batch close.** `advance_state` folds to the final
    state, so a `[protocol, Closed]` batch yields `Some(Detached)` and emits no
