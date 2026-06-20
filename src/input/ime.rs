@@ -6,10 +6,10 @@
 //! the active tmux pane), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
-use crate::inline_webview::{InlineWebview, focused_inline_of};
 use crate::input::InputPhase;
 use crate::ozma::AppMode;
 use crate::ui::copy_mode::CopyModeState;
+use crate::webview::inline::{InlineWebview, focused_inline_of};
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
