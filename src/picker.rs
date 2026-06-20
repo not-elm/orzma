@@ -13,8 +13,8 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use ozmux_configs::StartupMode;
 use ozmux_tmux::{
-    AttachTarget, ConnectionState, SelectWindow, SwitchClient, TmuxCommand, TmuxConnection,
-    attach_or_create, select_attach_target, set_environment_in_session_command,
+    AttachTarget, ConnectionState, SelectWindow, SetEnvironmentInSession, SwitchClient,
+    TmuxCommand, TmuxConnection, attach_or_create, select_attach_target,
 };
 use tmux_control::{SessionInfo, TmuxServer, WindowEntry};
 
@@ -484,7 +484,14 @@ fn apply_switch(
             // it independent of which session is current.
             let mut cmds = Vec::new();
             if let Some(sock) = &ozma_sock {
-                cmds.push(set_environment_in_session_command(&name, "OZMA_SOCK", sock));
+                cmds.push(
+                    SetEnvironmentInSession {
+                        session: &name,
+                        key: "OZMA_SOCK",
+                        value: sock,
+                    }
+                    .into_raw_command(),
+                );
             }
             cmds.push(SwitchClient { name: &name }.into_raw_command());
             if let Some(window_id) = window {

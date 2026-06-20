@@ -159,35 +159,6 @@ pub(crate) fn subscribe_window_flags_command() -> String {
     format!("refresh-client -B {WINDOW_FLAGS_SUBSCRIPTION}:@*:#{{window_raw_flags}}")
 }
 
-/// Builds `set-environment <key> <value>` (session-scoped) to set an
-/// environment variable on the control client's current session, so panes the
-/// session spawns afterward inherit it. Session-scoped (no `-g`) to avoid
-/// polluting the server-global environment of an attached, user-owned tmux
-/// server. Used to propagate `$OZMA_SOCK` to panes created after attach —
-/// already-running panes cannot be updated.
-pub fn set_environment_command(key: &str, value: &str) -> String {
-    format!("set-environment {} {}", quote(key), quote(value))
-}
-
-/// Builds `set-environment -t <session> <key> <value>` to set an environment
-/// variable on a specific session rather than the control client's current one,
-/// so panes that session spawns afterward inherit it.
-///
-/// Used when the client switches to another session: the attach path's
-/// current-session [`set_environment_command`] does not re-run on
-/// `switch-client`, so the target session would otherwise never receive
-/// `$OZMA_SOCK`. Session-scoped (no `-g`) for the same reason as
-/// [`set_environment_command`]; already-running panes recover the value via
-/// `tmux show-environment`.
-pub fn set_environment_in_session_command(session: &str, key: &str, value: &str) -> String {
-    format!(
-        "set-environment -t {} {} {}",
-        quote(session),
-        quote(key),
-        quote(value)
-    )
-}
-
 pub(crate) fn rename_command(verb: &str, sigil: char, id: u32, name: &str) -> String {
     format!("{verb} -t {sigil}{id} -- {}", quote(name))
 }
@@ -525,38 +496,6 @@ mod tests {
     #[test]
     fn capture_pane_command_targets_at_id_with_escapes() {
         assert_eq!(capture_pane_command(PaneId(5)), "capture-pane -p -e -t %5");
-    }
-
-    #[test]
-    fn set_environment_command_is_session_scoped() {
-        assert_eq!(
-            set_environment_command("OZMA_SOCK", "/tmp/ctl.sock"),
-            "set-environment OZMA_SOCK /tmp/ctl.sock"
-        );
-    }
-
-    #[test]
-    fn set_environment_command_quotes_paths_with_spaces() {
-        assert_eq!(
-            set_environment_command("OZMA_SOCK", "/tmp/a b/ctl.sock"),
-            "set-environment OZMA_SOCK '/tmp/a b/ctl.sock'"
-        );
-    }
-
-    #[test]
-    fn set_environment_in_session_command_targets_named_session() {
-        assert_eq!(
-            set_environment_in_session_command("work", "OZMA_SOCK", "/tmp/ctl.sock"),
-            "set-environment -t work OZMA_SOCK /tmp/ctl.sock"
-        );
-    }
-
-    #[test]
-    fn set_environment_in_session_command_quotes_session_and_value() {
-        assert_eq!(
-            set_environment_in_session_command("my work", "OZMA_SOCK", "/tmp/a b/ctl.sock"),
-            "set-environment -t 'my work' OZMA_SOCK '/tmp/a b/ctl.sock'"
-        );
     }
 
     #[test]

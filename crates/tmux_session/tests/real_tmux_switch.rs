@@ -111,11 +111,11 @@ fn set_environment_in_session_command_reaches_only_the_target_session() {
     std::thread::sleep(Duration::from_millis(300));
     client
         .handle()
-        .send(&ozmux_tmux::set_environment_in_session_command(
-            &b,
-            "OZMA_SOCK",
-            "/tmp/ozma-switch.sock",
-        ))
+        .send(ozmux_tmux::SetEnvironmentInSession {
+            session: &b,
+            key: "OZMA_SOCK",
+            value: "/tmp/ozma-switch.sock",
+        })
         .expect("set-environment -t b");
     std::thread::sleep(Duration::from_millis(300));
 

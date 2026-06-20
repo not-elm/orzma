@@ -23,7 +23,7 @@ mod state;
 
 pub use command::{
     RefreshClient, RenameSession, RenameWindow, ResizePaneX, ResizePaneY, ResizeWindow, SelectPane,
-    SelectWindow, SwitchClient, WindowRefreshClient,
+    SelectWindow, SetEnvironment, SetEnvironmentInSession, SwitchClient, WindowRefreshClient,
 };
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
@@ -34,8 +34,7 @@ pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
     CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, copy_mode_capture_command,
     copy_state_query_command, parse_copy_state, parse_window_rows, prompt_command,
-    set_environment_command, set_environment_in_session_command, show_buffer_command,
-    version_command,
+    show_buffer_command, version_command,
 };
 pub use events::{TmuxConnectionClosed, TmuxConnectionReset};
 pub use input::{KeyMods, bevy_key_to_tmux_name, send_bytes_command, send_pane_keys_command};
