@@ -53,6 +53,7 @@ jobs:
           VERSION="$(cargo metadata --format-version 1 --no-deps \
             | python3 -c 'import json,sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"]=="ozmux-gui"))')"
           ZIP="target/bundle/ozmux-${VERSION}-arm64.zip"
+          test -f "$ZIP" || { echo "Bundle not found: $ZIP"; exit 1; }
           SHA="$(python3 -c "import hashlib,sys; print(hashlib.sha256(open('${ZIP}','rb').read()).hexdigest())")"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "zip=${ZIP}" >> "$GITHUB_OUTPUT"
