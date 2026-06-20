@@ -3,7 +3,7 @@
 use crate::error::OzmaResult;
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
-use crate::protocol::{ClientMsg, RegisterKind};
+use crate::protocol::{ClientMsg, NavAction, RegisterKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -156,10 +156,44 @@ impl WebviewHandle {
         Ok(())
     }
 
+    /// Navigates this handle's mounted webview to `url` in place (no
+    /// re-registration). Mount-scoped: a no-op (still `Ok`) when nothing is
+    /// mounted.
+    pub fn navigate(&self, url: impl Into<String>) -> OzmaResult<()> {
+        self.send_nav(NavAction::To(url.into()))
+    }
+
+    /// Goes back in the webview's native session history. Mount-scoped.
+    pub fn go_back(&self) -> OzmaResult<()> {
+        self.send_nav(NavAction::Back)
+    }
+
+    /// Goes forward in the webview's native session history. Mount-scoped.
+    pub fn go_forward(&self) -> OzmaResult<()> {
+        self.send_nav(NavAction::Forward)
+    }
+
+    /// Reloads the current page. Mount-scoped.
+    pub fn reload(&self) -> OzmaResult<()> {
+        self.send_nav(NavAction::Reload)
+    }
+
     /// Creates a handle from a pre-existing shared ID slot for callers that need
     /// to share the ID slot across threads.
     pub(crate) fn new_shared(id: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
         Self { id, writer }
+    }
+
+    fn send_nav(&self, action: NavAction) -> OzmaResult<()> {
+        let msg = ClientMsg::Navigate {
+            handle: self.id(),
+            action,
+        };
+        let line = serde_json::to_string(&msg)?;
+        let mut w = self.writer.lock()?;
+        writeln!(w, "{line}")?;
+        w.flush()?;
+        Ok(())
     }
 }
 

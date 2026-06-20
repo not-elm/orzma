@@ -41,6 +41,27 @@ pub(crate) enum ClientMsg {
         /// The mount instance id, or `None` for the default instance.
         instance: Option<String>,
     },
+    /// Navigate a handle's mounted webview in place (no re-registration).
+    Navigate {
+        /// The target handle.
+        handle: String,
+        /// What to do.
+        action: NavAction,
+    },
+}
+
+/// A navigation action on an already-registered handle's mounted webview.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum NavAction {
+    /// Go back in the webview's native session history.
+    Back,
+    /// Go forward in the webview's native session history.
+    Forward,
+    /// Reload the current page.
+    Reload,
+    /// Navigate the existing webview to a new URL.
+    To(String),
 }
 
 /// The content variants of a `register` request.
@@ -269,5 +290,28 @@ mod tests {
         .unwrap();
         assert_eq!(v["kind"], "url");
         assert_eq!(v["bridge"], true);
+    }
+
+    #[test]
+    fn navigate_back_serializes() {
+        let v = serde_json::to_value(ClientMsg::Navigate {
+            handle: "H".into(),
+            action: NavAction::Back,
+        })
+        .unwrap();
+        assert_eq!(v["op"], "navigate");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["action"], "back");
+    }
+
+    #[test]
+    fn navigate_to_serializes_url_under_to() {
+        let v = serde_json::to_value(ClientMsg::Navigate {
+            handle: "H".into(),
+            action: NavAction::To("https://example.com/x".into()),
+        })
+        .unwrap();
+        assert_eq!(v["op"], "navigate");
+        assert_eq!(v["action"]["to"], "https://example.com/x");
     }
 }
