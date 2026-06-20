@@ -5,7 +5,7 @@ use crate::input::quote;
 use crate::keybindings::PromptKind;
 use bevy::prelude::Resource;
 use std::collections::{HashMap, HashSet};
-use tmux_control::CommandId;
+use tmux_control::{CommandId, TmuxResult};
 use tmux_control_parser::{PaneId, SessionId, WindowId, WindowLayout};
 
 /// The `-F` format ozmux sends to enumerate windows. Tab-separated, with the
@@ -418,47 +418,77 @@ pub(crate) fn aggressive_resize_command(win: WindowId) -> String {
     format!("show-options -wqv -t @{} aggressive-resize", win.0)
 }
 
-/// Tracks the in-flight `list-windows` enumeration command so its reply can
-/// be correlated by [`CommandId`] and seeded into the projection.
+/// What an in-flight command's reply will populate, keyed by its `CommandId`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum PendingReply {
+    /// `list-windows` enumeration → per-row projection seed.
+    ListWindows,
+    /// `display-message #{client_name}`.
+    ClientName,
+    /// `display-message #{version}`.
+    Version,
+    /// `display-message #{window_id} #{pane_id}` active-pane query.
+    ActivePane,
+    /// Any `list-keys -T <table>` reply → `KeyBindings::install`.
+    KeyBindings,
+    /// Prefix-options query → `set_prefix_keys`.
+    PrefixKeys,
+    /// `#{mode-keys}` → `set_mode_keys`.
+    ModeKeys,
+    /// `aggressive-resize` option query → warn if `on`.
+    AggressiveResize,
+    /// `capture-pane` of a pane's screen.
+    Capture { pane: PaneId },
+    /// Cursor-position query paired with a [`PendingReply::Capture`].
+    Cursor { pane: PaneId },
+}
+
+/// Correlates in-flight enumeration/query commands by [`CommandId`] and the
+/// capture/cursor pairing buffers, so each drained reply routes to its handler.
 #[derive(Resource, Default)]
 pub(crate) struct EnumerationState {
-    /// The id of the in-flight `list-windows` command, if any.
-    pub(crate) pending: Option<CommandId>,
-    /// The id of the in-flight `display-message` client-name query, if any.
-    pub(crate) client_name_pending: Option<CommandId>,
-    /// The id of the in-flight `display-message` version query, if any.
-    pub(crate) version_pending: Option<CommandId>,
-    /// The id of the in-flight `display-message` active-pane query, if any.
-    pub(crate) active_pane_pending: Option<CommandId>,
-    /// The id of the in-flight `list-keys -T root` command, if any.
-    pub(crate) keys_root_pending: Option<CommandId>,
-    /// The id of the in-flight `list-keys -T prefix` command, if any.
-    pub(crate) keys_prefix_pending: Option<CommandId>,
-    /// The id of the in-flight `display-message` prefix-key query, if any.
-    pub(crate) prefix_keys_pending: Option<CommandId>,
-    /// In-flight `list-keys -T copy-mode` command, if any.
-    pub(crate) keys_copy_mode_pending: Option<CommandId>,
-    /// In-flight `list-keys -T copy-mode-vi` command, if any.
-    pub(crate) keys_copy_mode_vi_pending: Option<CommandId>,
-    /// In-flight `#{mode-keys}` query, if any.
-    pub(crate) mode_keys_pending: Option<CommandId>,
-    /// The id of the in-flight `aggressive-resize` option query, if any.
-    pub(crate) aggressive_resize_pending: Option<CommandId>,
-    /// Whether the one-time aggressive-resize option check has completed.
+    pub(crate) pending: HashMap<CommandId, PendingReply>,
     pub(crate) aggressive_resize_checked: bool,
-    /// In-flight `capture-pane` commands → the pane each reply seeds.
-    pub(crate) capture_pending: HashMap<CommandId, PaneId>,
-    /// In-flight cursor-position `display-message` queries → the pane.
-    ///
-    /// Replies arrive after the paired `capture-pane` reply (FIFO). When both
-    /// have been received the cursor-positioning escape is appended to the
-    /// captured content before the `PaneOutput` is emitted.
-    pub(crate) cursor_pending: HashMap<CommandId, PaneId>,
-    /// Panes whose cursor query is still in-flight; used for O(1) lookup when
-    /// the capture reply arrives to decide whether to cache or emit immediately.
-    pub(crate) panes_with_cursor_pending: HashSet<PaneId>,
-    /// Captured screen lines held while the cursor reply has not yet arrived.
     pub(crate) capture_awaiting_cursor: HashMap<PaneId, Vec<String>>,
+    pub(crate) panes_with_cursor_pending: HashSet<PaneId>,
+}
+
+impl EnumerationState {
+    /// Records `reply` under the id `send` returned, logging on send failure.
+    pub(crate) fn register(&mut self, send: TmuxResult<CommandId>, reply: PendingReply) {
+        match send {
+            Ok(id) => {
+                self.pending.insert(id, reply);
+            }
+            Err(error) => tracing::warn!(?error, ?reply, "failed to send tmux query"),
+        }
+    }
+
+    /// Whether a reply of `reply`'s kind is already in flight (replaces the old
+    /// `Option::is_some` singleton guard for client-name / aggressive-resize).
+    pub(crate) fn has_pending(&self, reply: PendingReply) -> bool {
+        self.pending.values().any(|r| *r == reply)
+    }
+
+    /// Drops the in-flight entries a session switch invalidates: the
+    /// capture/cursor pairs and the enumeration ids `send_session_enumeration`
+    /// re-issues. A `HashMap` keyed by `CommandId` does not get the old
+    /// `Option` fields' free last-write-wins overwrite, so a stale pre-switch
+    /// `list-windows`/active-pane reply would otherwise mis-seed the new session.
+    pub(crate) fn clear_for_session_switch(&mut self) {
+        self.pending.retain(|_, r| {
+            !matches!(
+                r,
+                PendingReply::Capture { .. }
+                    | PendingReply::Cursor { .. }
+                    | PendingReply::ListWindows
+                    | PendingReply::ActivePane
+            )
+        });
+        self.capture_awaiting_cursor.clear();
+        self.panes_with_cursor_pending.clear();
+        self.aggressive_resize_checked = false;
+    }
 }
 
 #[cfg(test)]
@@ -829,5 +859,39 @@ mod tests {
     #[test]
     fn version_command_has_expected_format() {
         assert_eq!(version_command(), "display-message -p '#{version}'");
+    }
+
+    #[test]
+    fn clear_for_session_switch_drops_enumeration_but_keeps_keybindings() {
+        let mut state = EnumerationState::default();
+        state
+            .pending
+            .insert(CommandId(1), PendingReply::ListWindows);
+        state.pending.insert(CommandId(2), PendingReply::ActivePane);
+        state
+            .pending
+            .insert(CommandId(3), PendingReply::KeyBindings);
+        state
+            .pending
+            .insert(CommandId(4), PendingReply::Capture { pane: PaneId(7) });
+        state.aggressive_resize_checked = true;
+        state.clear_for_session_switch();
+        assert_eq!(
+            state.pending.get(&CommandId(3)),
+            Some(&PendingReply::KeyBindings)
+        );
+        assert!(
+            !state.pending.contains_key(&CommandId(1)),
+            "stale list-windows dropped"
+        );
+        assert!(
+            !state.pending.contains_key(&CommandId(2)),
+            "stale active-pane dropped"
+        );
+        assert!(
+            !state.pending.contains_key(&CommandId(4)),
+            "capture dropped"
+        );
+        assert!(!state.aggressive_resize_checked, "aggressive guard reset");
     }
 }
