@@ -38,6 +38,14 @@ pub(crate) enum Cmd {
     Reload,
     /// Scroll the webview.
     Scroll(ScrollAction),
+    /// Show the link-hint overlay on the page.
+    HintShow,
+    /// Forward a typed hint-label character to the page.
+    HintKey(char),
+    /// Forward a hint-label backspace to the page.
+    HintBackspace,
+    /// Tear down the link-hint overlay on the page.
+    HintHide,
     /// Exit the app.
     Quit,
 }
@@ -127,9 +135,14 @@ impl App {
                 }
             }
             Action::Escape => {
+                let was_hint = self.mode == Mode::Hint;
                 self.mode = Mode::Normal;
                 self.address_buf.clear();
-                vec![]
+                if was_hint {
+                    vec![Cmd::HintHide]
+                } else {
+                    vec![]
+                }
             }
             Action::EnterInsert => {
                 self.mode = Mode::Insert;
@@ -137,10 +150,10 @@ impl App {
             }
             Action::EnterHint => {
                 self.mode = Mode::Hint;
-                vec![]
+                vec![Cmd::HintShow]
             }
-            Action::HintKey(_) => vec![],
-            Action::HintBackspace => vec![],
+            Action::HintKey(c) => vec![Cmd::HintKey(c)],
+            Action::HintBackspace => vec![Cmd::HintBackspace],
             Action::OpenHelp => {
                 self.mode = Mode::Help;
                 vec![]
@@ -152,6 +165,21 @@ impl App {
     /// Updates the current URL (called by main.rs when `urlChanged` fires from the page).
     pub(crate) fn set_url(&mut self, url: String) {
         self.url = url;
+    }
+
+    /// Applies a `hintResult` reported by the page: a hint that focused a form
+    /// field switches to Insert mode; any other resolution returns to Normal.
+    /// A no-op unless currently in Hint mode (guards against a late result
+    /// arriving after the user already cancelled with Esc).
+    pub(crate) fn on_hint_result(&mut self, kind: &str) {
+        if self.mode != Mode::Hint {
+            return;
+        }
+        self.mode = if kind == "focusedInput" {
+            Mode::Insert
+        } else {
+            Mode::Normal
+        };
     }
 
     /// Called by main.rs for `Cmd::Navigate`: pushes current URL onto history, updates self.url.
@@ -425,5 +453,53 @@ mod tests {
     fn ignore_produces_no_cmds() {
         let mut a = app();
         assert_eq!(a.on_action(Action::Ignore), vec![]);
+    }
+
+    #[test]
+    fn enter_hint_sets_hint_mode_and_emits_show() {
+        let mut a = app();
+        assert_eq!(a.on_action(Action::EnterHint), vec![Cmd::HintShow]);
+        assert_eq!(a.mode(), Mode::Hint);
+    }
+
+    #[test]
+    fn hint_key_and_backspace_emit_commands_without_mode_change() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_action(Action::HintKey('a')), vec![Cmd::HintKey('a')]);
+        assert_eq!(a.mode(), Mode::Hint);
+        assert_eq!(a.on_action(Action::HintBackspace), vec![Cmd::HintBackspace]);
+        assert_eq!(a.mode(), Mode::Hint);
+    }
+
+    #[test]
+    fn escape_from_hint_mode_hides_and_returns_to_normal() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_action(Action::Escape), vec![Cmd::HintHide]);
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn hint_result_focused_input_switches_to_insert() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        a.on_hint_result("focusedInput");
+        assert_eq!(a.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn hint_result_navigated_or_clicked_returns_to_normal() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        a.on_hint_result("navigated");
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn hint_result_is_ignored_when_not_in_hint_mode() {
+        let mut a = app();
+        a.on_hint_result("focusedInput");
+        assert_eq!(a.mode(), Mode::Normal);
     }
 }

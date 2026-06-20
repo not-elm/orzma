@@ -102,6 +102,10 @@ fn event_loop(
                     Cmd::Scroll(action) => {
                         let _ = view.emit("scroll", &scroll_payload(action));
                     }
+                    Cmd::HintShow => {}
+                    Cmd::HintKey(_) => {}
+                    Cmd::HintBackspace => {}
+                    Cmd::HintHide => {}
                 }
             }
         }
