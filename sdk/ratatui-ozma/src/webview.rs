@@ -1,7 +1,7 @@
 //! Webview builder and registered handle.
 
 use crate::error::OzmaResult;
-use crate::events::EventDecl;
+use crate::events::{EventDecl, EventQueues};
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
 use crate::protocol::{ClientMsg, NavAction, RegisterKind};
@@ -160,6 +160,7 @@ impl Webview {
 #[derive(Clone, Debug)]
 pub struct WebviewHandle {
     id: Arc<Mutex<String>>,
+    events: Arc<EventQueues>,
     writer: SharedWriter,
 }
 
@@ -213,10 +214,31 @@ impl WebviewHandle {
         self.send_nav(NavAction::Reload)
     }
 
+    /// Drains and returns every buffered event of type `T`, oldest first.
+    /// Payloads that fail to deserialize into `T` are dropped and logged; the
+    /// result is empty if `T` was never declared via [`Webview::add_event`].
+    pub fn read_events<T: DeserializeOwned + 'static>(&self) -> Vec<T> {
+        self.events
+            .drain_type(TypeId::of::<T>())
+            .into_iter()
+            .filter_map(|v| match serde_json::from_value::<T>(v) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping inbound event that failed to deserialize");
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Creates a handle from a pre-existing shared ID slot for callers that need
     /// to share the ID slot across threads.
-    pub(crate) fn new_shared(id: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
-        Self { id, writer }
+    pub(crate) fn new_shared(
+        id: Arc<Mutex<String>>,
+        events: Arc<EventQueues>,
+        writer: SharedWriter,
+    ) -> Self {
+        Self { id, events, writer }
     }
 
     fn send_nav(&self, action: NavAction) -> OzmaResult<()> {
@@ -361,10 +383,51 @@ mod tests {
         let slot = Arc::new(Mutex::new("old-id".to_owned()));
         let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(a));
-        let handle = WebviewHandle::new_shared(slot.clone(), writer);
+        let handle = WebviewHandle::new_shared(
+            slot.clone(),
+            Arc::new(crate::events::EventQueues::default()),
+            writer,
+        );
         assert_eq!(handle.id(), "old-id");
         *slot.lock().unwrap() = "new-id".to_owned();
         assert_eq!(handle.id(), "new-id");
+    }
+
+    #[test]
+    fn read_events_drains_and_deserializes_and_skips_bad() {
+        use crate::events::{EventDecl, EventQueues};
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct Hello {
+            message: String,
+        }
+        let decls = vec![EventDecl {
+            name: "hello".into(),
+            type_id: std::any::TypeId::of::<Hello>(),
+        }];
+        let events = Arc::new(EventQueues::from_decls(&decls));
+        events.ingest("hello", json!({"message": "a"}));
+        events.ingest("hello", json!({"nope": 1})); // fails to deserialize -> skipped
+        events.ingest("hello", json!({"message": "b"}));
+
+        let (sock, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(sock));
+        let handle =
+            WebviewHandle::new_shared(Arc::new(Mutex::new("h".to_owned())), events, writer);
+
+        let got = handle.read_events::<Hello>();
+        assert_eq!(
+            got,
+            vec![
+                Hello {
+                    message: "a".into()
+                },
+                Hello {
+                    message: "b".into()
+                }
+            ]
+        );
+        // Drained: a second read is empty.
+        assert!(handle.read_events::<Hello>().is_empty());
     }
 
     #[test]
