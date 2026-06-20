@@ -483,6 +483,7 @@ impl EnumerationState {
                     | PendingReply::Cursor { .. }
                     | PendingReply::ListWindows
                     | PendingReply::ActivePane
+                    | PendingReply::AggressiveResize
             )
         });
         self.capture_awaiting_cursor.clear();
@@ -874,11 +875,15 @@ mod tests {
         state
             .pending
             .insert(CommandId(4), PendingReply::Capture { pane: PaneId(7) });
+        state
+            .pending
+            .insert(CommandId(5), PendingReply::AggressiveResize);
         state.aggressive_resize_checked = true;
         state.clear_for_session_switch();
         assert_eq!(
             state.pending.get(&CommandId(3)),
-            Some(&PendingReply::KeyBindings)
+            Some(&PendingReply::KeyBindings),
+            "keybindings entry must survive"
         );
         assert!(
             !state.pending.contains_key(&CommandId(1)),
@@ -891,6 +896,10 @@ mod tests {
         assert!(
             !state.pending.contains_key(&CommandId(4)),
             "capture dropped"
+        );
+        assert!(
+            !state.pending.contains_key(&CommandId(5)),
+            "stale aggressive-resize dropped so new session is re-checked"
         );
         assert!(!state.aggressive_resize_checked, "aggressive guard reset");
     }

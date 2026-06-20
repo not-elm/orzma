@@ -39,7 +39,8 @@ pub struct TmuxPresence;
 struct TmuxClientAttached;
 
 /// This frame's drained transport events, shared across the drain chain.
-/// Overwritten by [`drain_tmux_transport`] each frame; read-only downstream.
+/// Refreshed by [`drain_tmux_transport`] when the drain or the prior batch is
+/// non-empty; read-only downstream.
 #[derive(Resource, Default)]
 struct TmuxEventBatch(Vec<TransportEvent>);
 
@@ -560,8 +561,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
         app.insert_resource(TmuxPresence);
-        // No live client: the system must still run on the message but send nothing,
-        // leaving `pending` empty without panicking.
         app.world_mut().write_message(TmuxClientAttached);
         app.update();
         assert!(
