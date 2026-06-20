@@ -350,10 +350,6 @@ def main(argv: list[str] | None = None) -> None:
     print(f"artifact={cfg.zip_path}")
 
 
-if __name__ == "__main__":
-    main()
-
-
 @dataclass
 class BundleConfig:
     version: str
@@ -377,3 +373,7 @@ class BundleConfig:
     @property
     def zip_path(self) -> Path:
         return self.out_dir / zip_name(self.app_name, self.version, self.arch)
+
+
+if __name__ == "__main__":
+    main()

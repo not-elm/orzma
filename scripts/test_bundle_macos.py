@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -128,7 +130,6 @@ class CommandBuilders(unittest.TestCase):
         self.assertEqual(bm.stapler_argv(Path("/tmp/a.app")), ["xcrun", "stapler", "staple", "/tmp/a.app"])
 
     def test_compute_sha256(self):
-        import tempfile
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(b"hello")
             name = f.name
@@ -167,7 +168,6 @@ class ConfigResolution(unittest.TestCase):
         self.assertFalse(cfg.notarize)
 
     def test_verify_prerequisites_missing_binary(self):
-        import tempfile
         with tempfile.TemporaryDirectory() as d:
             cfg = bm.resolve_config(self._parse([
                 "--version", "0.1.0", "--bin", str(Path(d) / "missing"),
@@ -205,7 +205,6 @@ class AssembleAndEmbed(unittest.TestCase):
         )
 
     def setUp(self):
-        import tempfile
         self._tmp = tempfile.TemporaryDirectory()
         self.d = Path(self._tmp.name)
         self.cfg = self._cfg(self.d)
@@ -252,7 +251,6 @@ class EndToEnd(unittest.TestCase):
         return fw
 
     def test_main_adhoc_end_to_end(self):
-        import tempfile
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             self._macho(d / "ozmux-gui")
@@ -272,7 +270,6 @@ class EndToEnd(unittest.TestCase):
             self.assertTrue(sha_file.is_file())
             self.assertEqual(bm.compute_sha256(zip_path), sha_file.read_text().split()[0])
             # ad-hoc signature must verify
-            import subprocess
             subprocess.run(
                 ["codesign", "--verify", "--deep", "--strict", str(out / "ozmux.app")],
                 check=True,
