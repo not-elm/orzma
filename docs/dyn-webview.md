@@ -130,10 +130,10 @@ After receiving the handle, print this sequence to stdout at the cursor
 position:
 
 ```
-ESC ] 5379 ; mount-inline ; <handle> ; <rows> ; <cols> ESC \
+ESC ] 5379 ; mount ; <handle> ; <rows> ; <cols> ESC \
 ```
 
-In Rust string syntax: `"\x1b]5379;mount-inline;{handle};{rows};{cols}\x1b\\"`.
+In Rust string syntax: `"\x1b]5379;mount;{handle};{rows};{cols}\x1b\\"`.
 
 Then print `<rows>` newlines to reserve vertical space so subsequent output
 lands below the webview.
@@ -144,8 +144,8 @@ lands below the webview.
   whose `$OZMA_TOKEN` was used in `hello`). Mounting from a different surface
   is silently dropped.
 
-For the full OSC 5379 protocol (including `unmount-inline`, geometry limits,
-focus, and scrollback caveats) see [`docs/inline-webview.md`](inline-webview.md).
+For the full OSC 5379 protocol (including `unmount`, geometry limits,
+focus, and scrollback caveats) see [`docs/webview.md`](webview.md).
 
 ## Reference client
 
@@ -171,7 +171,7 @@ cargo run --features debug
 cargo run --example dyn_webview_client
 ```
 
-Expected behavior: an inline webview reading "hello from a TUI app" renders at
+Expected behavior: a webview reading "hello from a TUI app" renders at
 the cursor, scrolls with the scrollback buffer, and disappears when the client
 is killed (`Ctrl-C` → socket disconnect → automatic registration teardown).
 

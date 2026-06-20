@@ -10,15 +10,11 @@
 use crossbeam_channel::Sender;
 use std::path::PathBuf;
 
-/// Verb carried by `ControlFrame::OscWebview`: tab mount/unmount or inline mount/unmount of a registered view.
+/// Verb carried by `ControlFrame::OscWebview`: inline mount/unmount of a registered view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscWebviewVerb {
-    /// Mount a registered webview by its unique identifier.
-    Mount { view_id: String },
-    /// Unmount the active webview, optionally scoped to a specific view id.
-    Unmount { view_id: Option<String> },
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.
-    MountInline {
+    Mount {
         view_id: String,
         rows: u16,
         cols: u16,
@@ -26,19 +22,19 @@ pub enum OscWebviewVerb {
         /// implicit default instance. `(view_id, instance_id)` is the address.
         instance_id: Option<String>,
     },
-    /// Unmount inline webview(s): a specific `(view_id, instance_id)`, all
+    /// Unmount webview(s): a specific `(view_id, instance_id)`, all
     /// instances of a `view_id`, or all for this terminal.
     ///
     /// # Invariants
     /// `view_id == None` implies `instance_id == None` (an instance is
     /// addressable only alongside its view id; enforced at the capture stage).
-    UnmountInline {
+    Unmount {
         view_id: Option<String>,
         instance_id: Option<String>,
     },
 }
 
-/// How an inline webview is anchored to its terminal.
+/// How a webview is anchored to its terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnchorMode {
     /// Anchored to an absolute scrollback line; scrolls with the text
@@ -60,7 +56,7 @@ pub enum AnchorMode {
 }
 
 /// Anchor stamped by the VT thread at the exact byte position of a
-/// `mount-inline` OSC: the anchor mode (scrollback vs alternate-screen) and
+/// `mount` OSC: the anchor mode (scrollback vs alternate-screen) and
 /// the `frame_seq` the next grid emit will carry (used by the GUI to defer
 /// first projection until the grid catches up).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,7 +81,7 @@ pub(crate) enum ControlFrame {
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
     /// An OSC-driven webview mount/unmount request from the PTY.
-    /// `anchor` is `Some` only for `MountInline` (stamped in `handle.rs`).
+    /// `anchor` is `Some` only for `Mount` (stamped in `handle.rs`).
     OscWebview {
         verb: OscWebviewVerb,
         anchor: Option<InlineAnchor>,

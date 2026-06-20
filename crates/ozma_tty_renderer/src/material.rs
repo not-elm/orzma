@@ -147,7 +147,7 @@ impl Default for PaneInactiveStyle {
 pub const OVERLAY_SLOTS: usize = 4;
 
 /// Per-terminal overlay placements + textures, derived every frame by the
-/// consumer (e.g. ozmux-gui's inline-webview projection) and consumed by
+/// consumer (e.g. ozmux-gui's webview projection) and consumed by
 /// `update_terminal_material` — the only material mutation site. The renderer
 /// knows nothing about what the textures contain.
 ///

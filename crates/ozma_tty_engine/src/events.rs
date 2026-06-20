@@ -73,9 +73,9 @@ pub struct TerminalCurrentDir {
 pub struct OscWebviewRequest {
     #[event_target]
     pub entity: Entity,
-    /// The verb (tab or inline mount/unmount) parsed from the OSC 5379 payload.
+    /// The inline mount/unmount verb parsed from the OSC 5379 payload.
     pub verb: OscWebviewVerb,
-    /// Anchor metadata for `MountInline` (absolute line + column + frame seq);
+    /// Anchor metadata for `Mount` (absolute line + column + frame seq);
     /// `None` for every other verb.
     pub anchor: Option<InlineAnchor>,
 }

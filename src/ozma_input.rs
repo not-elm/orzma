@@ -1,7 +1,7 @@
 //! Host-side input for `AppMode::Ozma`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
 //! markers from the coarse guards (picker, IME, focus, webview), and handles the
 //! application-level GUI shortcuts the terminal crate does not own (Quit,
-//! OpenPicker, DetachSession, ReleaseInlineFocus). Raw-key forwarding and paste
+//! OpenPicker, DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
 use crate::input::ime::ImeState;
@@ -91,7 +91,7 @@ fn app_shortcut_handler(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        if webview_focused && shortcuts.is_release_inline_focus(ev.key_code, mods) {
+        if webview_focused && shortcuts.is_release_webview_focus(ev.key_code, mods) {
             focused_webview.0 = None;
             continue;
         }
@@ -109,7 +109,7 @@ fn app_shortcut_handler(
                 picker.open = true;
             }
             ShortcutAction::DetachSession => {}
-            ShortcutAction::Paste | ShortcutAction::ReleaseInlineFocus => {}
+            ShortcutAction::Paste | ShortcutAction::ReleaseWebviewFocus => {}
         }
     }
 }
@@ -124,7 +124,7 @@ fn should_disable_input(
 }
 
 fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutAction) -> bool {
-    webview_focused && action != ShortcutAction::ReleaseInlineFocus
+    webview_focused && action != ShortcutAction::ReleaseWebviewFocus
 }
 
 #[cfg(test)]
@@ -153,7 +153,7 @@ mod tests {
         ));
         assert!(!gui_action_suppressed_by_webview(
             true,
-            ShortcutAction::ReleaseInlineFocus
+            ShortcutAction::ReleaseWebviewFocus
         ));
         assert!(!gui_action_suppressed_by_webview(
             false,

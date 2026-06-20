@@ -25,11 +25,11 @@ pub struct InactivePaneConfig {
     /// and overlays are untouched.
     pub tint: f32,
     /// Inactive-webview brightness multiplier in `0.0..=1.0` (lower = darker);
-    /// `1.0` leaves brightness untouched. Applied to inline-webview overlays
+    /// `1.0` leaves brightness untouched. Applied to webview overlays
     /// only, so the background tint can stay background-only.
     pub webview_dim: f32,
     /// Inactive-webview desaturation in `0.0..=1.0`: `0.0` keeps full color,
-    /// `1.0` is fully grey. Applied to inline-webview overlays alongside
+    /// `1.0` is fully grey. Applied to webview overlays alongside
     /// `webview_dim`.
     pub webview_desaturate: f32,
 }

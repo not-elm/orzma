@@ -1,4 +1,4 @@
-//! ratatui widget + RPC handler for embedding an ozmux inline webview.
+//! ratatui widget + RPC handler for embedding an ozmux webview.
 //!
 //! Run inside an ozmux pane: [`Ozma::connect`] dials `$OZMA_SOCK`, [`Webview`]
 //! registers content (minting a handle), [`WebviewWidget`] renders it as a

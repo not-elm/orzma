@@ -132,7 +132,7 @@ fn register_view(
     url_tx: Sender<String>,
     hint_tx: Sender<HintOutcome>,
 ) -> anyhow::Result<WebviewHandle> {
-    let pass = [
+    let forward = [
         KeyChord {
             mods: KeyModifiers::NONE,
             code: KeyCode::Esc,
@@ -221,7 +221,7 @@ fn register_view(
     let view = ozma.register(
         Webview::url(url)
             .interactive(true)
-            .passthrough(pass)
+            .forward_keys(forward)
             .on(
                 "urlChanged",
                 move |args: serde_json::Value| -> Result<(), RpcError> {
