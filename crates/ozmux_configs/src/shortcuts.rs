@@ -868,7 +868,10 @@ copy = \"Cmd+C\"
         let toml = "[bindings]\nrelease-inline-focus = \"Cmd+E\"\n";
         let parsed: Shortcuts = toml::from_str(toml).expect("deprecated key must still parse");
         assert!(
-            parsed.bindings.iter().all(|(label, _, _)| label != "release-inline-focus"),
+            parsed
+                .bindings
+                .iter()
+                .all(|(label, _, _)| label != "release-inline-focus"),
             "deprecated key must not enter the active set"
         );
         // The new field falls back to its default chord.

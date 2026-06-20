@@ -284,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn match_gui_action_excludes_release_inline_focus() {
+    fn match_gui_action_excludes_release_webview_focus() {
         let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
         assert_eq!(
             r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn is_release_inline_focus_matches_default_chord() {
+    fn is_release_webview_focus_matches_default_chord() {
         let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
         assert!(r.is_release_webview_focus(KeyCode::Escape, mods(true, true, false, false)));
         assert!(!r.is_release_webview_focus(KeyCode::KeyV, mods(false, false, false, true)));

@@ -819,11 +819,7 @@ mod tests {
         placements[0].area = rect(2, 3, 50, 12);
         let mut buf3 = Vec::new();
         flush_placements(&mut buf3, &mut state, &placements).unwrap();
-        assert!(
-            String::from_utf8(buf3)
-                .unwrap()
-                .contains("mount;h1;12;50")
-        );
+        assert!(String::from_utf8(buf3).unwrap().contains("mount;h1;12;50"));
     }
 
     #[test]
@@ -837,11 +833,7 @@ mod tests {
 
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &[]).unwrap();
-        assert!(
-            String::from_utf8(buf)
-                .unwrap()
-                .contains("unmount;h1")
-        );
+        assert!(String::from_utf8(buf).unwrap().contains("unmount;h1"));
     }
 
     #[test]

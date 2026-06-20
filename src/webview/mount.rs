@@ -384,7 +384,7 @@ pub(crate) struct WebviewHit {
 /// the hit-test, so their rects pass through as plain terminal input.
 pub(crate) fn webview_hit_at(
     children: &Query<&Children>,
-    inline: &Query<(&Webview, Has<NonInteractive>)>,
+    webviews: &Query<(&Webview, Has<NonInteractive>)>,
     overlays: &TerminalOverlays,
     terminal: Entity,
     local_phys: Vec2,
@@ -396,7 +396,7 @@ pub(crate) fn webview_hit_at(
     let col = (local_phys.x / cell_w_phys).floor() as i32;
     let kids = children.get(terminal).ok()?;
     kids.iter().find_map(|child| {
-        let Ok((view, non_interactive)) = inline.get(child) else {
+        let Ok((view, non_interactive)) = webviews.get(child) else {
             return None;
         };
         if non_interactive {
@@ -582,7 +582,7 @@ fn project_webview_overlays(
         Option<&Children>,
         Has<TerminalOverlays>,
     )>,
-    inline: Query<(
+    webviews: Query<(
         &Webview,
         &WebviewPlacement,
         &WebviewTextureTarget,
@@ -603,7 +603,7 @@ fn project_webview_overlays(
         let mut has_webview_child = false;
         if let Some(kids) = children {
             for child in kids.iter() {
-                let Ok((view, placement, texture, already_notified, owner)) = inline.get(child)
+                let Ok((view, placement, texture, already_notified, owner)) = webviews.get(child)
                 else {
                     continue;
                 };
@@ -1662,9 +1662,7 @@ mod tests {
             },
             phys_font_size: 24,
         });
-        app.world_mut()
-            .run_system_once(sync_webview_size)
-            .unwrap();
+        app.world_mut().run_system_once(sync_webview_size).unwrap();
 
         assert_eq!(
             app.world().get::<WebviewSize>(child),
@@ -1754,9 +1752,9 @@ mod tests {
         app.world_mut()
             .run_system_once(
                 move |children: Query<&Children>,
-                      inline: Query<(&Webview, Has<NonInteractive>)>| {
+                      webviews: Query<(&Webview, Has<NonInteractive>)>| {
                     webview_hit_at(
-                        &children, &inline, &overlays, terminal, local_phys, HIT_CELL_W,
+                        &children, &webviews, &overlays, terminal, local_phys, HIT_CELL_W,
                         HIT_CELL_H, scale,
                     )
                 },

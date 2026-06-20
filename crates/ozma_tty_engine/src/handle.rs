@@ -1063,8 +1063,7 @@ impl TerminalHandle {
         // synchronized-update (CSI ?2026) buffer flushed before the anchor is
         // read. Flushing for the other verbs would force-end an in-flight
         // synchronized update and tear a partial frame for no benefit.
-        if matches!(verb, OscWebviewVerb::Mount { .. }) && self.parser.sync_bytes_count() > 0
-        {
+        if matches!(verb, OscWebviewVerb::Mount { .. }) && self.parser.sync_bytes_count() > 0 {
             self.parser.stop_sync(&mut self.term);
         }
         // NOTE: maintenance (fold) must run BEFORE the anchor is stamped —
@@ -2567,10 +2566,7 @@ mod tests {
             "unmount-all fires exactly once while saturated"
         );
         h.advance(b"\x1b]5379;mount;memo;2;5\x1b\\");
-        assert!(
-            rx.try_recv().is_err(),
-            "mount rejected while saturated"
-        );
+        assert!(rx.try_recv().is_err(), "mount rejected while saturated");
         h.advance(b"\x1b[3J");
         let fold = rx.try_recv().expect("fold unmount on clear");
         assert!(matches!(

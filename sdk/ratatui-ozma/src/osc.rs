@@ -16,9 +16,7 @@ pub(crate) fn mount(handle: &str, rows: u16, cols: u16) -> OzmaResult<String> {
             reason: format!("geometry out of range: {rows}x{cols}"),
         });
     }
-    Ok(format!(
-        "\x1b]5379;mount;{handle};{rows};{cols}\x1b\\"
-    ))
+    Ok(format!("\x1b]5379;mount;{handle};{rows};{cols}\x1b\\"))
 }
 
 /// Returns the `unmount` OSC 5379 sequence for a single view handle.
@@ -66,10 +64,7 @@ mod tests {
 
     #[test]
     fn unmount_sequence_is_canonical() {
-        assert_eq!(
-            unmount("memo.main"),
-            "\x1b]5379;unmount;memo.main\x1b\\"
-        );
+        assert_eq!(unmount("memo.main"), "\x1b]5379;unmount;memo.main\x1b\\");
     }
 
     #[test]

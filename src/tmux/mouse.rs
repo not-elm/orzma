@@ -858,7 +858,7 @@ fn arbiter(
 struct TmuxWebviewRouteParams<'w, 's> {
     focused_webview: Option<ResMut<'w, FocusedWebview>>,
     children: Query<'w, 's, &'static Children>,
-    inline: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
+    webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
     webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     browsers: Option<NonSend<'w, Browsers>>,
@@ -927,7 +927,7 @@ fn route_tmux_webview_left_click(
             let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
                 webview_hit_at(
                     &route.children,
-                    &route.inline,
+                    &route.webviews,
                     overlays,
                     terminal,
                     local_phys,
@@ -995,7 +995,7 @@ fn tmux_webview_release_dip(
     let terminal = route.webview_parents.get(child).ok()?.parent();
     let (_, _, node, transform) = panes.get(terminal).ok()?;
     let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
-    let (view, _) = route.inline.get(child).ok()?;
+    let (view, _) = route.webviews.get(child).ok()?;
     webview_local_dip(
         route.overlay_rects.get(terminal).ok()?,
         view.slot,
@@ -1016,7 +1016,7 @@ fn forward_tmux_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     children: Query<&Children>,
-    inline: Query<(&Webview, Has<NonInteractive>)>,
+    webviews: Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: Query<&TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -1045,7 +1045,7 @@ fn forward_tmux_webview_mouse_moves(
         return;
     };
     let Some(hit) = webview_hit_at(
-        &children, &inline, overlays, terminal, local_phys, cell_w, cell_h, scale,
+        &children, &webviews, overlays, terminal, local_phys, cell_w, cell_h, scale,
     ) else {
         return;
     };
@@ -1344,7 +1344,7 @@ mod tests {
             .spawn((
                 ChildOf(pane),
                 Webview {
-                    view_id: "inline".into(),
+                    view_id: "webview".into(),
                     instance_id: None,
                     slot: 0,
                 },
@@ -1387,7 +1387,7 @@ mod tests {
     }
 
     #[test]
-    fn inline_press_focuses_child_and_consumes() {
+    fn webview_press_focuses_child_and_consumes() {
         let (mut app, _pane, child) = make_arbiter_webview_app();
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_button(
@@ -1418,13 +1418,13 @@ mod tests {
             .run_system_once(
                 move |panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
                       children: Query<&Children>,
-                      inline: Query<(&Webview, Has<NonInteractive>)>,
+                      webviews: Query<(&Webview, Has<NonInteractive>)>,
                       overlays: Query<&TerminalOverlays>| {
                     let (terminal, _pane_id, local) =
                         tmux_pane_at_phys(&panes, Vec2::new(40.0, 48.0)).unwrap();
                     webview_hit_at(
                         &children,
-                        &inline,
+                        &webviews,
                         overlays.get(terminal).unwrap(),
                         terminal,
                         local,
@@ -1453,13 +1453,13 @@ mod tests {
             .run_system_once(
                 |panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
                  children: Query<&Children>,
-                 inline: Query<(&Webview, Has<NonInteractive>)>,
+                 webviews: Query<(&Webview, Has<NonInteractive>)>,
                  overlays: Query<&TerminalOverlays>| {
                     let (terminal, _pane_id, local) =
                         tmux_pane_at_phys(&panes, Vec2::new(400.0, 400.0)).unwrap();
                     webview_hit_at(
                         &children,
-                        &inline,
+                        &webviews,
                         overlays.get(terminal).unwrap(),
                         terminal,
                         local,

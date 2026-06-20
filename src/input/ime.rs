@@ -319,7 +319,8 @@ pub(crate) fn read_ime_events(
             // pane — doing so double-delivers the composition (once to the page,
             // once to the terminal). The state machine above still ran, so
             // `ImeState` stays consistent; only the pane write is skipped.
-            if focused_webview_of(Some(&focused_webview), &webview_parents, active_surface).is_some()
+            if focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
+                .is_some()
             {
                 continue;
             }
@@ -829,7 +830,7 @@ mod tests {
             .spawn((
                 ChildOf(pane),
                 Webview {
-                    view_id: "inline".into(),
+                    view_id: "webview".into(),
                     instance_id: None,
                     slot: 0,
                 },
@@ -874,7 +875,7 @@ mod tests {
             .spawn((
                 ChildOf(pane_entity),
                 Webview {
-                    view_id: "inline".into(),
+                    view_id: "webview".into(),
                     instance_id: None,
                     slot: 0,
                 },

@@ -148,10 +148,7 @@ mod tests {
     #[test]
     fn gate_off_drops_sequence() {
         let mut c = cap(false);
-        c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"],
-            true,
-        );
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"], true);
         assert!(c.take_pending().is_none());
     }
 
@@ -159,10 +156,7 @@ mod tests {
     fn gate_on_buffers_verb_and_terminated_reflects_pending() {
         let mut c = cap(true);
         assert!(!Perform::terminated(&c));
-        c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"],
-            true,
-        );
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"], true);
         assert!(Perform::terminated(&c), "pending verb must set terminated");
         assert_eq!(
             c.take_pending(),
@@ -190,13 +184,7 @@ mod tests {
     fn bad_view_id_rejected() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[
-                OSC_WEBVIEW_CODE,
-                b"mount",
-                b"../etc/passwd",
-                b"3",
-                b"20",
-            ],
+            &[OSC_WEBVIEW_CODE, b"mount", b"../etc/passwd", b"3", b"20"],
             true,
         );
         assert!(c.take_pending().is_none());
@@ -205,10 +193,7 @@ mod tests {
     #[test]
     fn mount_parses_rows_cols() {
         let mut c = cap(true);
-        c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"],
-            true,
-        );
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"], true);
         assert_eq!(
             c.take_pending(),
             Some(OscWebviewVerb::Mount {
@@ -250,10 +235,7 @@ mod tests {
     #[test]
     fn mount_minimum_dims_accepted() {
         let mut c = cap(true);
-        c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"1", b"1"],
-            true,
-        );
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"1", b"1"], true);
         assert_eq!(
             c.take_pending(),
             Some(OscWebviewVerb::Mount {
@@ -268,10 +250,7 @@ mod tests {
     #[test]
     fn mount_maximum_dims_accepted() {
         let mut c = cap(true);
-        c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"200", b"400"],
-            true,
-        );
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"200", b"400"], true);
         assert_eq!(
             c.take_pending(),
             Some(OscWebviewVerb::Mount {
@@ -318,14 +297,7 @@ mod tests {
     fn mount_parses_instance_id() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[
-                OSC_WEBVIEW_CODE,
-                b"mount",
-                b"memo",
-                b"3",
-                b"20",
-                b"a",
-            ],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20", b"a"],
             true,
         );
         assert_eq!(
@@ -342,10 +314,7 @@ mod tests {
     #[test]
     fn mount_absent_instance_id_is_none() {
         let mut c = cap(true);
-        c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"],
-            true,
-        );
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"], true);
         assert_eq!(
             c.take_pending(),
             Some(OscWebviewVerb::Mount {
@@ -374,14 +343,7 @@ mod tests {
     fn mount_bad_instance_id_dropped() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[
-                OSC_WEBVIEW_CODE,
-                b"mount",
-                b"memo",
-                b"3",
-                b"20",
-                b"../etc",
-            ],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20", b"../etc"],
             true,
         );
         assert!(
@@ -467,10 +429,7 @@ mod tests {
     #[test]
     fn unmount_bad_instance_dropped() {
         let mut c = cap(true);
-        c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"unmount", b"memo", b"../x"],
-            true,
-        );
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo", b"../x"], true);
         assert!(
             c.take_pending().is_none(),
             "an out-of-charset instance id is malformed"

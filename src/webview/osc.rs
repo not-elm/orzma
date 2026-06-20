@@ -39,7 +39,7 @@ fn init_gate_from_config(
 
 pub(crate) fn on_osc_webview_request(
     ev: On<OscWebviewRequest>,
-    mut inline: WebviewParams,
+    mut webview: WebviewParams,
     dynamic: Res<DynamicRegistry>,
 ) {
     let req = ev.event();
@@ -52,7 +52,7 @@ pub(crate) fn on_osc_webview_request(
             instance_id,
         } => {
             mount(
-                &mut inline,
+                &mut webview,
                 &dynamic,
                 WebviewMountContext {
                     terminal_surface,
@@ -69,7 +69,7 @@ pub(crate) fn on_osc_webview_request(
             instance_id,
         } => {
             unmount(
-                &mut inline,
+                &mut webview,
                 terminal_surface,
                 view_id.as_deref(),
                 instance_id.as_deref(),

@@ -16,7 +16,7 @@ use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
-use crate::webview::mount::{Webview, PassthroughKeys, focused_webview_of, webview_hit_at};
+use crate::webview::mount::{PassthroughKeys, Webview, focused_webview_of, webview_hit_at};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -911,7 +911,10 @@ mod tests {
         (app, pane, child)
     }
 
-    fn run_resolve_wheel_target(app: &mut App, cursor_phys: Vec2) -> Option<TmuxWebviewWheelTarget> {
+    fn run_resolve_wheel_target(
+        app: &mut App,
+        cursor_phys: Vec2,
+    ) -> Option<TmuxWebviewWheelTarget> {
         app.world_mut()
             .run_system_once(move |params: TmuxWebviewWheelParams| {
                 resolve_tmux_webview_wheel_target(&params, cursor_phys, 8.0, 16.0, 1.0)
