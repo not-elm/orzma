@@ -62,6 +62,12 @@ impl Plugin for OzmuxPickerPlugin {
                 picker_row_hover_cursor
                     .after(crate::input::InputPhase::Hover)
                     .run_if(picker_is_open),
+            )
+            .add_systems(
+                Update,
+                handle_picker_scroll
+                    .run_if(on_message::<MouseWheel>)
+                    .run_if(picker_is_open),
             );
     }
 }
@@ -479,6 +485,29 @@ fn picker_row_hover_cursor(
     }
 }
 
+fn handle_picker_scroll(
+    mut list: Query<(&mut ScrollPosition, &ComputedNode), With<PickerList>>,
+    mut wheel: MessageReader<MouseWheel>,
+) {
+    let Ok((mut pos, node)) = list.single_mut() else {
+        wheel.clear();
+        return;
+    };
+    let mut delta = 0.0;
+    for ev in wheel.read() {
+        delta += wheel_delta_px(ev.unit, ev.y);
+    }
+    if delta == 0.0 {
+        return;
+    }
+    let inv = node.inverse_scale_factor;
+    let max = (node.content_size().y - node.size().y).max(0.0) * inv;
+    let next = (pos.0.y + delta).clamp(0.0, max);
+    if pos.0.y != next {
+        pos.0.y = next;
+    }
+}
+
 fn handle_picker_input(
     mut picker: ResMut<SessionPicker>,
     mut connection: NonSendMut<TmuxConnection>,
@@ -785,6 +814,22 @@ fn step_selection(selected: usize, entry_count: usize, up: bool) -> usize {
         selected + 1
     } else {
         selected
+    }
+}
+
+/// Logical pixels scrolled per wheel "line" notch. Roughly one row stride
+/// (row height ≈ 18px + 2px gap).
+const LINE_SCROLL_PX: f32 = 24.0;
+
+/// The logical-pixel `ScrollPosition` delta for one wheel event. The sign is
+/// inverted relative to the wheel `y` so that wheel-down (negative `y`) yields a
+/// positive delta — a larger `ScrollPosition.0.y` moves the content up, i.e. the
+/// viewport down. (Same structure as `tmux_inline_wheel_delta` but the opposite
+/// sign, because that path drives a terminal, not a scroll offset.)
+fn wheel_delta_px(unit: MouseScrollUnit, y: f32) -> f32 {
+    match unit {
+        MouseScrollUnit::Line => -y * LINE_SCROLL_PX,
+        MouseScrollUnit::Pixel => -y,
     }
 }
 
@@ -1097,6 +1142,20 @@ mod tests {
         indices.sort_unstable();
         // build_rows([alpha], []) == [Session(0), NewSession] -> indices 0,1
         assert_eq!(indices, vec![0, 1]);
+    }
+
+    #[test]
+    fn wheel_line_delta_is_inverted_and_scaled_by_row_stride() {
+        // Wheel up (y>0) scrolls content toward the top -> negative offset delta.
+        assert_eq!(wheel_delta_px(MouseScrollUnit::Line, 1.0), -LINE_SCROLL_PX);
+        // Wheel down (y<0) -> positive offset delta.
+        assert_eq!(wheel_delta_px(MouseScrollUnit::Line, -2.0), 2.0 * LINE_SCROLL_PX);
+    }
+
+    #[test]
+    fn wheel_pixel_delta_is_inverted_identity() {
+        assert_eq!(wheel_delta_px(MouseScrollUnit::Pixel, 5.0), -5.0);
+        assert_eq!(wheel_delta_px(MouseScrollUnit::Pixel, -3.0), 3.0);
     }
 
     #[test]
