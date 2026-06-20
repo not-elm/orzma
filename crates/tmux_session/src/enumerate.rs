@@ -458,6 +458,22 @@ impl EnumerationState {
     pub(crate) fn register(&mut self, send: TmuxResult<CommandId>, reply: PendingReply) {
         match send {
             Ok(id) => {
+                // NOTE: singleton query kinds keep the old `Option` last-write-wins
+                // — a re-issued query must supersede any still-in-flight one of the
+                // same kind, or BOTH ids stay in `pending` and dispatch twice (a
+                // re-sent list-windows on %window-add while the attach enumeration
+                // is still in flight would fire trigger_seed twice, and a re-queried
+                // active-pane would fire TmuxActivePaneChanged twice). The four
+                // concurrent KeyBindings tables and the per-pane Capture/Cursor kinds
+                // are legitimately multi and exempt.
+                if !matches!(
+                    reply,
+                    PendingReply::KeyBindings
+                        | PendingReply::Capture { .. }
+                        | PendingReply::Cursor { .. }
+                ) {
+                    self.pending.retain(|_, r| *r != reply);
+                }
                 self.pending.insert(id, reply);
             }
             Err(error) => tracing::warn!(?error, ?reply, "failed to send tmux query"),
@@ -902,5 +918,56 @@ mod tests {
             "stale aggressive-resize dropped so new session is re-checked"
         );
         assert!(!state.aggressive_resize_checked, "aggressive guard reset");
+    }
+
+    #[test]
+    fn register_supersedes_in_flight_singleton_but_keeps_concurrent_kinds() {
+        let mut state = EnumerationState::default();
+        state.register(Ok(CommandId(1)), PendingReply::ListWindows);
+        state.register(Ok(CommandId(2)), PendingReply::ListWindows);
+        assert!(
+            !state.pending.contains_key(&CommandId(1)),
+            "the superseded list-windows id is dropped (old Option last-write-wins)"
+        );
+        assert_eq!(
+            state.pending.get(&CommandId(2)),
+            Some(&PendingReply::ListWindows),
+            "only the latest list-windows id remains, so trigger_seed fires once"
+        );
+
+        state.register(Ok(CommandId(3)), PendingReply::ActivePane);
+        state.register(Ok(CommandId(4)), PendingReply::ActivePane);
+        assert!(
+            !state.pending.contains_key(&CommandId(3)),
+            "stale active-pane dropped"
+        );
+        assert_eq!(
+            state.pending.get(&CommandId(4)),
+            Some(&PendingReply::ActivePane)
+        );
+
+        state.register(Ok(CommandId(5)), PendingReply::KeyBindings);
+        state.register(Ok(CommandId(6)), PendingReply::KeyBindings);
+        assert_eq!(
+            state.pending.get(&CommandId(5)),
+            Some(&PendingReply::KeyBindings),
+            "the four list-keys tables are concurrent — earlier KeyBindings entries are kept"
+        );
+        assert_eq!(
+            state.pending.get(&CommandId(6)),
+            Some(&PendingReply::KeyBindings)
+        );
+
+        state.register(Ok(CommandId(7)), PendingReply::Capture { pane: PaneId(1) });
+        state.register(Ok(CommandId(8)), PendingReply::Capture { pane: PaneId(2) });
+        assert_eq!(
+            state.pending.get(&CommandId(7)),
+            Some(&PendingReply::Capture { pane: PaneId(1) }),
+            "per-pane captures are independent — both kept"
+        );
+        assert_eq!(
+            state.pending.get(&CommandId(8)),
+            Some(&PendingReply::Capture { pane: PaneId(2) })
+        );
     }
 }

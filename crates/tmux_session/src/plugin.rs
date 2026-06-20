@@ -32,18 +32,6 @@ use tmux_control::{ClientEvent, TmuxClient, TransportEvent};
 #[derive(Resource, Default)]
 pub struct TmuxPresence;
 
-/// Emitted the frame the control client's transport transitions to `Attached`
-/// (including a reconnect). Gates [`send_attach_enumeration`]. A pure signal —
-/// the init-send system reads the live client from `TmuxConnection`.
-#[derive(Message)]
-struct TmuxClientAttached;
-
-/// This frame's drained transport events, shared across the drain chain.
-/// Refreshed by [`drain_tmux_transport`] when the drain or the prior batch is
-/// non-empty; read-only downstream.
-#[derive(Resource, Default)]
-struct TmuxEventBatch(Vec<TransportEvent>);
-
 /// Wires the tmux integration into the Bevy app: connection state, the
 /// projection observers + id->entity index, and the per-frame transport-drain
 /// system that triggers the global projection events.
@@ -89,6 +77,18 @@ impl Plugin for TmuxSessionPlugin {
             );
     }
 }
+
+/// Emitted the frame the control client's transport transitions to `Attached`
+/// (including a reconnect). Gates [`send_attach_enumeration`]. A pure signal —
+/// the init-send system reads the live client from `TmuxConnection`.
+#[derive(Message)]
+struct TmuxClientAttached;
+
+/// This frame's drained transport events, shared across the drain chain.
+/// Refreshed by [`drain_tmux_transport`] when the drain or the prior batch is
+/// non-empty; read-only downstream.
+#[derive(Resource, Default)]
+struct TmuxEventBatch(Vec<TransportEvent>);
 
 /// Sends `capture-pane` and a companion cursor-position `display-message` once
 /// for each newly-projected pane so its current screen seeds the first paint
