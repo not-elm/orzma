@@ -415,7 +415,7 @@ fn apply_control_events(
     mut focused: Option<ResMut<FocusedWebview>>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<WebviewAssetRegistryRes>,
-    inline: Query<(Entity, &Webview)>,
+    webviews: Query<(Entity, &Webview)>,
     child_of: Query<&ChildOf>,
     non_interactive: Query<(), With<NonInteractive>>,
 ) {
@@ -464,14 +464,14 @@ fn apply_control_events(
                 } else {
                     vec![]
                 };
-                despawn_mounted(&mut commands, &inline, &removed);
+                despawn_mounted(&mut commands, &webviews, &removed);
             }
             ControlEvent::Disconnect { connection_id } => {
                 let removed = registry.remove_by_connection(connection_id);
                 for h in &removed {
                     dyn_assets.0.remove(h);
                 }
-                despawn_mounted(&mut commands, &inline, &removed);
+                despawn_mounted(&mut commands, &webviews, &removed);
                 for (webview, page_req) in rpc.drain_connection(connection_id) {
                     let payload = serde_json::json!({ "reqId": page_req, "ok": false, "error": "owner_disconnected" });
                     commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
@@ -512,7 +512,7 @@ fn apply_control_events(
                     continue;
                 }
                 let frame = serde_json::json!({ "event": event, "payload": payload });
-                for (entity, view) in &inline {
+                for (entity, view) in &webviews {
                     if view.view_id == handle {
                         commands.trigger(HostEmitEvent::new(entity, "ozma.event", &frame));
                     }
@@ -536,7 +536,7 @@ fn apply_control_events(
                             tracing::debug!(handle = %h, "focus op for unowned handle, dropping");
                             continue;
                         }
-                        let target = inline.iter().find(|(entity, view)| {
+                        let target = webviews.iter().find(|(entity, view)| {
                             view.view_id == h
                                 && view.instance_id.as_deref() == instance.as_deref()
                                 && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
@@ -566,10 +566,10 @@ fn apply_control_events(
 
 fn despawn_mounted(
     commands: &mut Commands,
-    inline: &Query<(Entity, &Webview)>,
+    webviews: &Query<(Entity, &Webview)>,
     removed: &[String],
 ) {
-    for (entity, view) in inline {
+    for (entity, view) in webviews {
         if removed.contains(&view.view_id) {
             commands.entity(entity).despawn();
         }

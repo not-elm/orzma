@@ -513,7 +513,7 @@ struct TmuxWebviewWheelParams<'w, 's> {
         ),
     >,
     children: Query<'w, 's, &'static Children>,
-    inline: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
+    webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     browsers: Option<NonSend<'w, Browsers>>,
 }
@@ -571,7 +571,7 @@ fn resolve_tmux_webview_wheel_target(
     let overlays = params.overlay_rects.get(terminal).ok()?;
     let hit = webview_hit_at(
         &params.children,
-        &params.inline,
+        &params.webviews,
         overlays,
         terminal,
         local_phys,
@@ -610,7 +610,7 @@ fn forward_wheel_to_tmux(
     mut wheel: MessageReader<MouseWheel>,
     mut accumulator: ResMut<TmuxWheelAccumulator>,
     mut handles: Query<&mut TerminalHandle>,
-    inline: TmuxWebviewWheelParams,
+    wheel_params: TmuxWebviewWheelParams,
     connection: NonSend<TmuxConnection>,
     picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
@@ -630,13 +630,14 @@ fn forward_wheel_to_tmux(
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
     let cursor_phys = window.cursor_position().map(|c| c * dpr);
 
-    let target = cursor_phys
-        .and_then(|c| resolve_tmux_webview_wheel_target(&inline, c, cell_w_phys, cell_h_phys, dpr));
+    let target = cursor_phys.and_then(|c| {
+        resolve_tmux_webview_wheel_target(&wheel_params, c, cell_w_phys, cell_h_phys, dpr)
+    });
 
     let Some(delta_cells) = aggregate_tmux_wheel_cells(
         &mut wheel,
         target,
-        inline.browsers.as_deref(),
+        wheel_params.browsers.as_deref(),
         cell_h_logical,
     ) else {
         // NOTE: an all-inline frame must reset the residual — leaving carried

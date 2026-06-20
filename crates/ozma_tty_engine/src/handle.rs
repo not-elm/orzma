@@ -2805,7 +2805,7 @@ mod tests {
     }
 
     #[test]
-    fn drain_forwards_mount_inline_anchor_to_request() {
+    fn drain_forwards_mount_anchor_to_request() {
         use crate::events::OscWebviewRequest;
         use crate::title::TerminalTitle;
         use crate::vt::listener::{AnchorMode, ControlFrame, InlineAnchor, OscWebviewVerb};
