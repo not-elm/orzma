@@ -74,6 +74,13 @@ fn sweep_in(base: &Path, is_alive: impl Fn(u32) -> bool, self_pid: u32) {
 
 #[cfg(unix)]
 fn pid_alive(pid: u32) -> bool {
+    // NOTE: kill(0, …) and kill(<negative>, …) target a process GROUP, not one
+    // PID; a directory named 0 or above pid_t's positive range would otherwise
+    // misclassify liveness and risk sweeping the wrong directory. Real PIDs are
+    // 1..=i32::MAX — treat anything outside that as alive so it is never swept.
+    if pid == 0 || pid > i32::MAX as u32 {
+        return true;
+    }
     // SAFETY: `kill` with signal 0 sends no signal; it performs only the
     // existence/permission check and has no preconditions on `pid`.
     let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };

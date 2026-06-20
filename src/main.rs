@@ -67,7 +67,7 @@ fn main() {
                 }),
                 ..default()
             }),
-            cef_plugin(dyn_registry.clone(), cef_profile.path().to_path_buf()),
+            cef_plugin(dyn_registry.clone(), cef_profile.path()),
         ))
         .insert_state(initial_mode)
         .add_plugins((
