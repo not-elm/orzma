@@ -18,7 +18,6 @@ impl Default for OscWebviewConfig {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -31,7 +30,10 @@ mod tests {
     #[test]
     fn empty_keeps_default_on() {
         let cfg: OscWebviewConfig = toml::from_str("").unwrap();
-        assert!(cfg.enabled, "missing enabled defaults to true via impl Default");
+        assert!(
+            cfg.enabled,
+            "missing enabled defaults to true via impl Default"
+        );
     }
 
     #[test]

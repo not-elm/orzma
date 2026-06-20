@@ -74,7 +74,11 @@ impl InactivePaneConfig {
 
 /// Returns `v` clamped to `0.0..=1.0`, or `default` when `v` is NaN.
 fn norm_unit(v: f32, default: f32) -> f32 {
-    if v.is_nan() { default } else { v.clamp(0.0, 1.0) }
+    if v.is_nan() {
+        default
+    } else {
+        v.clamp(0.0, 1.0)
+    }
 }
 
 /// Parses a `#RRGGBB` hex string into `(r, g, b)` bytes; returns `None` for
@@ -156,7 +160,10 @@ mod tests {
     fn non_ascii_six_byte_tint_color_falls_back_without_panic() {
         let cfg = from_toml_normalized(r##"tint_color = "#中文""##);
         assert_eq!(cfg.tint_color, "#3a3b45");
-        let bad = InactivePaneConfig { tint_color: "#中文".to_string(), ..Default::default() };
+        let bad = InactivePaneConfig {
+            tint_color: "#中文".to_string(),
+            ..Default::default()
+        };
         assert_eq!(bad.tint_color_rgb(), (0, 0, 0));
     }
 

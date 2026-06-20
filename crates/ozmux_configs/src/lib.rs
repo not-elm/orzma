@@ -10,7 +10,7 @@ use crate::osc_webview::OscWebviewConfig;
 use crate::shortcuts::Shortcuts;
 use crate::theme::Theme;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
-use std::path::Path;
+use serde::Deserialize;
 
 pub mod error;
 pub mod font;
@@ -20,7 +20,6 @@ pub mod mouse;
 pub mod osc_webview;
 pub mod ozma;
 pub mod path;
-mod raw;
 pub mod shortcuts;
 pub mod startup;
 pub mod theme;
@@ -28,7 +27,8 @@ pub mod tmux;
 pub use startup::StartupMode;
 
 /// Fully-resolved ozmux configuration.
-#[derive(Clone, Debug, Default)]
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct OzmuxConfigs {
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
@@ -84,18 +84,18 @@ impl OzmuxConfigs {
             }
         };
 
-        Self::parse_and_validate(&text, &configured_path)
-    }
-
-    fn parse_and_validate(text: &str, path: &Path) -> OzmuxConfigsResult<Self> {
-        let raw: raw::RawConfigs =
-            toml::from_str(text).map_err(|source| OzmuxConfigsError::ParseToml {
-                path: path.to_path_buf(),
+        let mut configs: OzmuxConfigs =
+            toml::from_str(&text).map_err(|source| OzmuxConfigsError::ParseToml {
+                path: configured_path.clone(),
                 source,
             })?;
-        let merged = raw.apply_to(Self::default());
-        merged.validate()?;
-        Ok(merged)
+        configs.normalize();
+        configs.validate()?;
+        Ok(configs)
+    }
+
+    fn normalize(&mut self) {
+        self.inactive_pane.normalize();
     }
 
     fn validate(&self) -> OzmuxConfigsResult<()> {
@@ -171,9 +171,9 @@ mod validate_tests {
 [shortcuts.bindings]
 release-inline-focus = "Cmd+V"
 "#;
-        let raw: raw::RawConfigs = toml::from_str(toml_str).unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        let err = merged.validate().unwrap_err();
+        let mut configs: OzmuxConfigs = toml::from_str(toml_str).unwrap();
+        configs.normalize();
+        let err = configs.validate().unwrap_err();
         match err {
             OzmuxConfigsError::DuplicateChords(dupes) => {
                 assert_eq!(dupes.len(), 1);
@@ -186,31 +186,190 @@ release-inline-focus = "Cmd+V"
 }
 
 #[cfg(test)]
-mod mouse_integration_tests {
+mod integration_tests {
     use super::*;
+
+    fn parse(s: &str) -> OzmuxConfigs {
+        let mut c: OzmuxConfigs = toml::from_str(s).unwrap();
+        c.normalize();
+        c
+    }
+
+    #[test]
+    fn empty_toml_is_all_defaults() {
+        assert_eq!(parse("").font, OzmuxConfigs::default().font);
+        assert_eq!(parse("").mouse, OzmuxConfigs::default().mouse);
+    }
+
+    #[test]
+    fn empty_raw_returns_defaults() {
+        let c = parse("");
+        assert_eq!(
+            c.shortcuts.bindings,
+            OzmuxConfigs::default().shortcuts.bindings
+        );
+    }
+
+    #[test]
+    fn unknown_top_level_section_is_rejected() {
+        assert!(
+            toml::from_str::<OzmuxConfigs>("[shortucts]\n").is_err(),
+            "a misspelled section name must error under top-level deny_unknown_fields"
+        );
+    }
+
+    #[test]
+    fn unknown_binding_field_is_rejected() {
+        let toml_str = r#"
+[shortcuts.bindings]
+resize-pane-down = "Cmd+Shift+J"
+"#;
+        let err = toml::from_str::<OzmuxConfigs>(toml_str)
+            .err()
+            .expect("expected parse error for unknown binding field");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("resize-pane-down") || msg.contains("unknown field"),
+            "error message should mention the unknown field; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn old_nested_font_table_fails_at_top_level() {
+        assert!(
+            toml::from_str::<OzmuxConfigs>("[font.normal]\npath = \"/x.ttf\"").is_err(),
+            "old nested font schema must fail to load through OzmuxConfigs, not be shimmed"
+        );
+    }
+
+    #[test]
+    fn inactive_pane_section_merges_and_clamps() {
+        let c = parse("[inactive_pane]\nenabled = false\ntint = 2.0\ntint_color = \"#102030\"\n");
+        assert!(!c.inactive_pane.enabled);
+        assert_eq!(c.inactive_pane.tint, 1.0, "tint clamps to 1.0");
+        assert_eq!(c.inactive_pane.tint_color, "#102030");
+        assert_eq!(c.inactive_pane.dim, 1.0, "dim keeps default");
+    }
+
+    #[test]
+    fn missing_inactive_pane_section_uses_defaults() {
+        let c = parse("");
+        assert_eq!(c.inactive_pane, InactivePaneConfig::default());
+    }
+
+    #[test]
+    fn inactive_pane_is_normalized_through_pipeline() {
+        let c = parse("[inactive_pane]\ndim = 4.0\ntint_color = \"#FF00AB\"");
+        assert_eq!(c.inactive_pane.dim, 1.0);
+        assert_eq!(c.inactive_pane.tint_color, "#ff00ab");
+    }
+
+    #[test]
+    fn osc_webview_setting_merges_from_toml() {
+        let disabled = parse("[osc_webview]\nenabled = false\n");
+        assert!(
+            !disabled.osc_webview.enabled,
+            "[osc_webview] enabled = false must flip the default-on gate off"
+        );
+        let defaulted = parse("");
+        assert!(
+            defaulted.osc_webview.enabled,
+            "empty TOML must keep the default-on gate"
+        );
+    }
+
+    #[test]
+    fn tmux_section_merges_from_toml() {
+        let c = parse("[tmux]\nprogram = \"/usr/local/bin/tmux\"\n");
+        assert_eq!(c.tmux.program, "/usr/local/bin/tmux");
+        assert_eq!(c.tmux.socket_name, None);
+    }
+
+    #[test]
+    fn missing_tmux_section_uses_defaults() {
+        let c = parse("");
+        assert_eq!(c.tmux, tmux::TmuxConfig::default());
+    }
+
+    #[test]
+    fn startup_mode_defaults_to_ozma() {
+        let c = parse("");
+        assert_eq!(c.startup_mode, StartupMode::Ozma);
+    }
+
+    #[test]
+    fn startup_mode_auto_attach_parses() {
+        let c = parse(r#"startup_mode = "auto-attach""#);
+        assert_eq!(c.startup_mode, StartupMode::AutoAttach);
+    }
+
+    #[test]
+    fn startup_mode_ozmux_parses() {
+        let c = parse(r#"startup_mode = "ozmux""#);
+        assert_eq!(c.startup_mode, StartupMode::Ozmux);
+    }
+
+    #[test]
+    fn unknown_startup_mode_is_rejected() {
+        assert!(toml::from_str::<OzmuxConfigs>(r#"startup_mode = "invalid""#).is_err());
+    }
+
+    #[test]
+    fn keyboard_section_merges_from_toml() {
+        let c = parse("[keyboard]\noption_as_alt = \"both\"\n");
+        assert_eq!(c.keyboard.option_as_alt, keyboard::OptionAsAlt::Both);
+    }
+
+    #[test]
+    fn missing_keyboard_section_uses_defaults() {
+        let c = parse("");
+        assert_eq!(c.keyboard, keyboard::KeyboardConfig::default());
+    }
+
+    #[test]
+    fn ozma_section_parses_from_toml() {
+        let c = parse("[ozma]\nshell = \"/usr/bin/zsh\"\n");
+        assert_eq!(c.ozma.shell.as_deref(), Some("/usr/bin/zsh"));
+    }
+
+    #[test]
+    fn missing_ozma_section_uses_defaults() {
+        let c = parse("");
+        assert!(c.ozma.shell.is_none());
+    }
 
     #[test]
     fn parses_full_mouse_section() {
-        let toml_input = r#"
-[mouse]
-lines_per_notch = 5
-fine_modifier = "ctrl"
-fine_lines = 2
-max_protocol_events_per_frame = 16
-"#;
-        let raw: raw::RawConfigs = toml::from_str(toml_input).unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.mouse.lines_per_notch, 5);
-        assert_eq!(merged.mouse.fine_modifier, mouse::FineModifier::Ctrl);
-        assert_eq!(merged.mouse.fine_lines, 2);
-        assert_eq!(merged.mouse.max_protocol_events_per_frame, 16);
+        let c = parse(
+            "[mouse]\nlines_per_notch = 5\nfine_modifier = \"ctrl\"\nfine_lines = 2\nmax_protocol_events_per_frame = 16\n",
+        );
+        assert_eq!(c.mouse.lines_per_notch, 5);
+        assert_eq!(c.mouse.fine_modifier, mouse::FineModifier::Ctrl);
+        assert_eq!(c.mouse.fine_lines, 2);
+        assert_eq!(c.mouse.max_protocol_events_per_frame, 16);
     }
 
     #[test]
     fn missing_mouse_section_uses_defaults() {
-        let toml_input = "";
-        let raw: raw::RawConfigs = toml::from_str(toml_input).unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        assert_eq!(merged.mouse, mouse::MouseConfig::default());
+        let c = parse("");
+        assert_eq!(c.mouse, mouse::MouseConfig::default());
+    }
+
+    #[test]
+    fn user_override_replaces_one_binding_keeps_others() {
+        let c = parse("[shortcuts.bindings]\nclose-pane = \"Cmd+Shift+W\"\n");
+        let close = c.shortcuts.bindings.close_pane.as_ref().unwrap();
+        assert_eq!(close.key, shortcuts::Key::Char('w'));
+        assert!(close.modifiers.meta && close.modifiers.shift);
+        assert!(
+            c.shortcuts.bindings.focus_pane_left.is_none(),
+            "unspecified deprecated bindings stay None",
+        );
+    }
+
+    #[test]
+    fn user_unbind_with_empty_string_sets_field_to_none() {
+        let c = parse("[shortcuts.bindings]\nclose-pane = \"\"\n");
+        assert!(c.shortcuts.bindings.close_pane.is_none());
     }
 }

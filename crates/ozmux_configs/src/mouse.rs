@@ -96,7 +96,6 @@ impl Default for MouseConfig {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

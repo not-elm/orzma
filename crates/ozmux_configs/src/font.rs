@@ -49,13 +49,18 @@ mod tests {
 
     #[test]
     fn parses_flat_paths() {
-        let f: FontConfig = toml::from_str(
-            "size = 14.0\nnormal = \"/abs/Regular.ttf\"\nbold = \"/abs/Bold.ttf\"",
-        )
-        .unwrap();
+        let f: FontConfig =
+            toml::from_str("size = 14.0\nnormal = \"/abs/Regular.ttf\"\nbold = \"/abs/Bold.ttf\"")
+                .unwrap();
         assert_eq!(f.size, 14.0);
-        assert_eq!(f.normal.as_deref(), Some(std::path::Path::new("/abs/Regular.ttf")));
-        assert_eq!(f.bold.as_deref(), Some(std::path::Path::new("/abs/Bold.ttf")));
+        assert_eq!(
+            f.normal.as_deref(),
+            Some(std::path::Path::new("/abs/Regular.ttf"))
+        );
+        assert_eq!(
+            f.bold.as_deref(),
+            Some(std::path::Path::new("/abs/Bold.ttf"))
+        );
         assert_eq!(f.italic, None);
         assert_eq!(f.bold_italic, None);
     }
@@ -70,6 +75,9 @@ mod tests {
     #[test]
     fn old_nested_table_form_is_rejected() {
         let err = toml::from_str::<FontConfig>("[normal]\npath = \"/x.ttf\"").is_err();
-        assert!(err, "old nested [font.normal] path= form must fail to parse");
+        assert!(
+            err,
+            "old nested [font.normal] path= form must fail to parse"
+        );
     }
 }
