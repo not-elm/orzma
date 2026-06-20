@@ -259,4 +259,22 @@ option_as_alt = "both"
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(merged.keyboard, crate::keyboard::KeyboardConfig::default());
     }
+
+    #[test]
+    fn ozma_section_parses_from_toml() {
+        let toml_str = r#"
+[ozma]
+shell = "/usr/bin/zsh"
+"#;
+        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert_eq!(merged.ozma.shell.as_deref(), Some("/usr/bin/zsh"));
+    }
+
+    #[test]
+    fn missing_ozma_section_uses_defaults() {
+        let raw: RawConfigs = toml::from_str("").unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        assert!(merged.ozma.shell.is_none());
+    }
 }
