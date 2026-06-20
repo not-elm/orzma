@@ -251,6 +251,19 @@ pub(crate) enum MouseEffect {
     OpenUri(String),
 }
 
+/// Terminal input bytes destined for the backend of `entity` (a PTY for a
+/// local terminal, or tmux `send-keys` for a control-mode pane). Emitted by the
+/// mouse apply observer when the terminal has no `PtyHandle`; the host owns the
+/// observer that routes it to the real backend.
+#[derive(EntityEvent, Debug, Clone)]
+pub struct TerminalForwardInput {
+    /// The terminal entity whose backend should receive `bytes`.
+    #[event_target]
+    pub entity: Entity,
+    /// The raw bytes to deliver to the backend.
+    pub bytes: Vec<u8>,
+}
+
 /// Carries a gather system's decided mouse effects to the apply observer, so the
 /// dispatch systems stay read-only on the terminal and all mutation lives in one
 /// place (`on_terminal_mouse_effects`), mirroring `PasteAction` / `on_paste`.
@@ -775,20 +788,44 @@ fn map_button(b: MouseButton) -> Option<MouseButtonKind> {
 /// frame as the trigger), mirroring `on_paste` / `on_terminal_key_input`.
 fn on_terminal_mouse_effects(
     ev: On<TerminalMouseEffects>,
+    mut commands: Commands,
     mut clipboard: ResMut<Clipboard>,
-    mut terminals: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer), With<OzmaTerminal>>,
+    mut terminals: Query<
+        (
+            &mut TerminalHandle,
+            Option<&mut PtyHandle>,
+            Option<&mut Coalescer>,
+        ),
+        With<OzmaTerminal>,
+    >,
 ) {
-    let Ok((mut handle, mut pty, mut coalescer)) = terminals.get_mut(ev.entity) else {
+    let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
         return;
     };
+    if let (Some(mut pty), Some(mut coalescer)) = (pty, coalescer) {
+        for effect in &ev.effects {
+            apply_effect(
+                &mut handle,
+                &mut pty,
+                &mut coalescer,
+                &mut clipboard,
+                effect,
+            );
+        }
+        return;
+    }
+    let mut dirty = false;
     for effect in &ev.effects {
-        apply_effect(
+        dirty |= apply_effect_detached(
             &mut handle,
-            &mut pty,
-            &mut coalescer,
             &mut clipboard,
+            &mut commands,
+            ev.entity,
             effect,
         );
+    }
+    if dirty {
+        handle.flush_emit(&mut commands, ev.entity);
     }
 }
 
@@ -819,6 +856,50 @@ fn apply_effect(
         }
         MouseEffect::Scroll(lines) => handle.scroll(coalescer, *lines),
         MouseEffect::OpenUri(uri) => try_open_uri(uri),
+    }
+}
+
+fn apply_effect_detached(
+    handle: &mut TerminalHandle,
+    clipboard: &mut Clipboard,
+    commands: &mut Commands,
+    entity: Entity,
+    effect: &MouseEffect,
+) -> bool {
+    match effect {
+        MouseEffect::Write(b) => {
+            commands.trigger(TerminalForwardInput {
+                entity,
+                bytes: b.clone(),
+            });
+            false
+        }
+        MouseEffect::SelStart { point, side, ty } => {
+            handle.selection_start_at_vt_only(*point, *side, *ty);
+            true
+        }
+        MouseEffect::SelUpdate { point, side } => {
+            handle.selection_update_to_vt_only(*point, *side);
+            true
+        }
+        MouseEffect::SelClear => {
+            handle.selection_clear_vt_only();
+            true
+        }
+        MouseEffect::Copy => {
+            if let Some(text) = handle.selection_to_string() {
+                clipboard.write(text);
+            }
+            false
+        }
+        MouseEffect::Scroll(lines) => {
+            handle.scroll_vt_only(*lines);
+            true
+        }
+        MouseEffect::OpenUri(uri) => {
+            try_open_uri(uri);
+            false
+        }
     }
 }
 
@@ -891,6 +972,54 @@ mod tests {
     use super::*;
     use bevy::input::mouse::{MouseButton, MouseButtonInput};
     use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind};
+
+    #[test]
+    fn detached_terminal_forwards_write_and_selects_via_vt_only() {
+        use ozma_tty_engine::TerminalHandle;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        #[derive(Resource, Default)]
+        struct CapturedForward(Vec<Vec<u8>>);
+
+        let mut app = App::new();
+        app.init_resource::<Clipboard>()
+            .init_resource::<CapturedForward>()
+            .add_observer(on_terminal_mouse_effects)
+            .add_observer(
+                |ev: On<TerminalForwardInput>, mut cap: ResMut<CapturedForward>| {
+                    cap.0.push(ev.bytes.clone());
+                },
+            );
+
+        let handle = TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
+        let entity = app.world_mut().spawn((OzmaTerminal, handle)).id();
+
+        app.world_mut().trigger(TerminalMouseEffects {
+            entity,
+            effects: vec![MouseEffect::Write(b"\x1b[<0;1;1M".to_vec())],
+        });
+        app.world_mut().trigger(TerminalMouseEffects {
+            entity,
+            effects: vec![MouseEffect::SelStart {
+                point: Point::new(Line(0), Column(0)),
+                side: Side::Left,
+                ty: SelectionType::Simple,
+            }],
+        });
+        app.world_mut().flush();
+
+        assert_eq!(
+            app.world().resource::<CapturedForward>().0,
+            vec![b"\x1b[<0;1;1M".to_vec()],
+            "Write on a PTY-less OzmaTerminal must emit TerminalForwardInput"
+        );
+        let handle = app.world().entity(entity).get::<TerminalHandle>().unwrap();
+        assert!(
+            handle.selection_to_string().is_some(),
+            "SelStart on a PTY-less OzmaTerminal must set a selection via vt_only"
+        );
+    }
 
     #[test]
     fn topmost_terminal_at_picks_highest_stack_index_among_containing() {

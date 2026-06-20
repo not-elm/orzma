@@ -5,8 +5,8 @@
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
-use crate::inline_webview::InlineWebview;
-use crate::osc_webview::NonInteractive;
+use crate::webview::inline::InlineWebview;
+use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
@@ -1178,7 +1178,7 @@ mod apply_tests {
 
     #[test]
     fn disconnect_despawns_mounted_webviews_for_its_handles() {
-        use crate::inline_webview::InlineWebview;
+        use crate::webview::inline::InlineWebview;
         let mut app = App::new();
         let dyn_assets = WebviewAssetRegistry::default();
         let mut reg = DynamicRegistry::default();
@@ -1866,7 +1866,7 @@ mod focus_tests {
 
     #[test]
     fn sync_preserves_app_declared_focus_from_control_plane() {
-        use crate::webview_render::sync_focused_webview;
+        use crate::webview::render::sync_focused_webview;
         use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
         use tmux_control_parser::CellDims;
 

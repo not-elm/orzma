@@ -1,8 +1,8 @@
-//! OSC 8 hyperlink hover detection, cursor-icon control, and Cmd+click
-//! activation. Scheme validation is delegated to
-//! `ozma_tty_renderer::schema::is_allowed` (this module does not own the
-//! allowlist). The plugin registered here also re-exports the pure
-//! predicates the mouse-buttons system calls during interception.
+//! OSC 8 hyperlink hover detection and cursor-icon control. Over a linked
+//! cell the cursor becomes a pointer while the platform activation modifier
+//! (`link_modifier_held`) is held, and text otherwise. Hyperlink activation
+//! (Cmd/Ctrl-click open) for a pane is owned by `ozma_terminal`'s shared
+//! mouse systems, not here.
 
 use crate::input::{InputPhase, current_modifiers};
 use crate::tmux::pane_hit::{cell_at_local, tmux_pane_at_phys};
@@ -15,7 +15,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid, is_allowed};
+use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;
 use ozmux_tmux::TmuxPane;
 
@@ -41,40 +41,6 @@ pub(crate) fn link_modifier_held(mods: &Modifiers) -> bool {
     } else {
         mods.ctrl
     }
-}
-
-/// Validates `uri` against the scheme allowlist and hands it to the
-/// OS default opener via `open::that_detached`. Disallowed URIs are
-/// dropped with a debug log; opener errors are warned.
-pub(crate) fn try_open_uri(uri: &str) {
-    if !is_allowed(uri) {
-        debug!("hyperlink: dropping disallowed uri {}", uri);
-        return;
-    }
-    if let Err(e) = open::that_detached(uri) {
-        warn!("hyperlink: failed to open {}: {}", uri, e);
-    }
-}
-
-/// Pure predicate: returns the URI of the cell at `(row, col)` when
-/// a `Press + Left + modifier_held` event arrives on a linked cell;
-/// otherwise `None`. Centralizes the interception decision so the tmux
-/// mouse arbiter (`tmux_mouse::arbiter`) only has to check the return value.
-pub(crate) fn should_open_at(
-    grid: &ozma_tty_renderer::schema::TerminalGrid,
-    row: u16,
-    col: u16,
-    button: ozma_tty_engine::MouseButtonKind,
-    kind: ozma_tty_engine::ButtonEventKind,
-    modifier_held: bool,
-) -> Option<ozma_tty_renderer::schema::HyperlinkUri> {
-    if !modifier_held || button != ozma_tty_engine::MouseButtonKind::Left {
-        return None;
-    }
-    if !matches!(kind, ozma_tty_engine::ButtonEventKind::Press) {
-        return None;
-    }
-    grid.hyperlink_at(row, col).map(|(_id, uri)| uri.clone())
 }
 
 fn hyperlink_hover_and_cursor(
@@ -227,99 +193,6 @@ mod tests {
         assert!(!link_modifier_held(&mods));
         mods.ctrl = true;
         assert!(link_modifier_held(&mods));
-    }
-
-    use bevy::prelude::Color;
-    use ozma_tty_engine::{ButtonEventKind, MouseButtonKind};
-    use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
-
-    fn make_grid_with_link(
-        row: usize,
-        col: usize,
-        id: HyperlinkId,
-    ) -> ozma_tty_renderer::schema::TerminalGrid {
-        let cell = Cell {
-            text: "x".to_string(),
-            width: 1,
-            fg: Color::WHITE,
-            bg: Color::BLACK,
-            style: 0,
-            hyperlink_id: Some(id),
-        };
-        let mut cells = vec![
-            vec![
-                Cell {
-                    text: " ".to_string(),
-                    width: 1,
-                    fg: Color::WHITE,
-                    bg: Color::BLACK,
-                    style: 0,
-                    hyperlink_id: None,
-                };
-                col + 1
-            ];
-            row + 1
-        ];
-        cells[row][col] = cell;
-        ozma_tty_renderer::schema::TerminalGrid {
-            cols: (col as u16) + 1,
-            rows: (row as u16) + 1,
-            cells,
-            hyperlinks: vec![(id, HyperlinkUri::new("https://example.com"))],
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn should_open_at_returns_none_without_modifier() {
-        let grid = make_grid_with_link(0, 0, HyperlinkId(1));
-        let result = should_open_at(
-            &grid,
-            0,
-            0,
-            MouseButtonKind::Left,
-            ButtonEventKind::Press,
-            false,
-        );
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn should_open_at_returns_none_for_non_left_button() {
-        let grid = make_grid_with_link(0, 0, HyperlinkId(1));
-        for button in [MouseButtonKind::Middle, MouseButtonKind::Right] {
-            let result = should_open_at(&grid, 0, 0, button, ButtonEventKind::Press, true);
-            assert!(result.is_none(), "button={:?}", button);
-        }
-    }
-
-    #[test]
-    fn should_open_at_returns_none_for_release_event() {
-        let grid = make_grid_with_link(0, 0, HyperlinkId(1));
-        let result = should_open_at(
-            &grid,
-            0,
-            0,
-            MouseButtonKind::Left,
-            ButtonEventKind::Release,
-            true,
-        );
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn should_open_at_returns_uri_for_press_left_modifier_on_link() {
-        let grid = make_grid_with_link(0, 0, HyperlinkId(1));
-        let uri = should_open_at(
-            &grid,
-            0,
-            0,
-            MouseButtonKind::Left,
-            ButtonEventKind::Press,
-            true,
-        )
-        .expect("hyperlink present");
-        assert_eq!(uri.as_str(), "https://example.com");
     }
 
     #[test]
