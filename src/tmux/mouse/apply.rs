@@ -131,7 +131,7 @@ pub(super) fn on_tmux_mouse_effects(
 /// Inserts `-t %<id>` into a `send-keys -X ...` copy-mode command so it targets
 /// a specific pane instead of the client's active pane. Non-`send-keys -X`
 /// commands are returned unchanged.
-pub(super) fn target_copy_cmd(pane: PaneId, cmd: &str) -> String {
+fn target_copy_cmd(pane: PaneId, cmd: &str) -> String {
     match cmd.strip_prefix("send-keys -X") {
         Some(rest) => format!("send-keys -X -t %{}{}", pane.0, rest),
         None => cmd.to_string(),
@@ -141,7 +141,7 @@ pub(super) fn target_copy_cmd(pane: PaneId, cmd: &str) -> String {
 /// Pane-targeted copy-mode commands to position the copy cursor at `cell`
 /// (relative to the snapshot cursor) and select a word/line. Does NOT include
 /// `show-buffer` — the caller sends that separately to register the reply.
-pub(super) fn multi_select_commands(
+fn multi_select_commands(
     kind: MultiSelectKind,
     snapshot_cursor: (u16, u16),
     cell: (u16, u16),

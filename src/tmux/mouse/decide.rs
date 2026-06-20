@@ -34,7 +34,7 @@ pub(super) enum PressHit {
 }
 
 /// Pre-resolved inputs for `decide_release` (the released gesture is read from
-/// the state itself before it is replaced with `Idle`).
+/// the state itself, which the decider then replaces with `Idle`).
 pub(super) struct ReleaseCtx {
     /// Whether the `Pressed` pane is in copy mode (multi-click promotion gate).
     pub(super) copy_mode: bool,
@@ -42,8 +42,6 @@ pub(super) struct ReleaseCtx {
     pub(super) multi_cell: Option<(u16, u16)>,
     /// Pane under the cursor for a divider-click focus fallback.
     pub(super) pane_under: Option<PaneId>,
-    /// Whether the `Pressed` pane entity is still alive.
-    pub(super) pane_alive: bool,
 }
 
 /// Pre-resolved per-state inputs for `decide_continuation`. Only the fields
@@ -133,12 +131,13 @@ pub(super) fn decide_press(
     }
 }
 
-/// Resolves a left release (the state is already taken to `Idle` by the caller's
-/// `mem::replace`; the prior state is read back through `state` after a swap).
+/// Resolves a left release: takes the prior state to `Idle` (via `mem::replace`),
+/// then decides the transition + effects from that prior state.
 ///
 /// A begun `Selecting` copies the selection; a multi-click (>=2) in copy mode
-/// with a resolved cell enters `PendingMultiSelect`; a `Resizing` that never
-/// dragged focuses the pane under the cursor as a fallback click.
+/// with a resolved cell enters `PendingMultiSelect` (otherwise stays `Idle`); a
+/// `Resizing` that never dragged focuses the pane under the cursor as a fallback
+/// click.
 pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<TmuxMouseEffect> {
     let prior = std::mem::replace(state, GestureState::Idle);
     match prior {
@@ -509,7 +508,6 @@ mod tests {
                 copy_mode: false,
                 multi_cell: None,
                 pane_under: None,
-                pane_alive: true,
             },
         );
         assert_eq!(fx, vec![TmuxMouseEffect::CopySelection { pane: PaneId(7) }]);
@@ -531,7 +529,6 @@ mod tests {
                 copy_mode: false,
                 multi_cell: None,
                 pane_under: None,
-                pane_alive: true,
             },
         );
         assert!(fx.is_empty());
@@ -552,7 +549,6 @@ mod tests {
                 copy_mode: true,
                 multi_cell: Some((6, 2)),
                 pane_under: None,
-                pane_alive: true,
             },
         );
         assert!(fx.is_empty());
@@ -580,7 +576,6 @@ mod tests {
                 copy_mode: true,
                 multi_cell: Some((6, 2)),
                 pane_under: None,
-                pane_alive: true,
             },
         );
         assert!(fx.is_empty());
@@ -607,7 +602,6 @@ mod tests {
                 copy_mode: false,
                 multi_cell: Some((6, 2)),
                 pane_under: None,
-                pane_alive: true,
             },
         );
         assert!(fx.is_empty());
@@ -628,7 +622,6 @@ mod tests {
                 copy_mode: true,
                 multi_cell: None,
                 pane_under: None,
-                pane_alive: true,
             },
         );
         assert!(fx.is_empty());
@@ -650,7 +643,6 @@ mod tests {
                 copy_mode: false,
                 multi_cell: None,
                 pane_under: Some(PaneId(9)),
-                pane_alive: true,
             },
         );
         assert_eq!(fx, vec![TmuxMouseEffect::SelectPane(PaneId(9))]);
@@ -672,7 +664,6 @@ mod tests {
                 copy_mode: false,
                 multi_cell: None,
                 pane_under: Some(PaneId(9)),
-                pane_alive: true,
             },
         );
         assert!(fx.is_empty());

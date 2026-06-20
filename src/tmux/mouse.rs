@@ -15,7 +15,7 @@ mod apply;
 mod decide;
 mod effect;
 
-use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
+use super::copy_mode::{CopyModeSnapshot, cell_at_pane};
 use super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
 use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
@@ -25,7 +25,6 @@ use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
 use crate::webview::osc::NonInteractive;
-use apply::{multi_select_commands, target_copy_cmd};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -36,14 +35,14 @@ use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 pub(crate) use decide::divider_at;
-use decide::{ClickTracker, resize_target_size};
-use effect::MultiSelectKind;
+use decide::{
+    ClickTracker, ContinuationCtx, PressHit, ReleaseCtx, decide_continuation, decide_press,
+    decide_release,
+};
+use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozmux_tmux::{
-    ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxPane,
-    resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
-};
+use ozmux_tmux::{ActiveWindow, PaneId, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 
@@ -180,11 +179,10 @@ fn pane_under_cursor(
 /// gesture pipeline; a press outside every rect drops inline focus and falls
 /// through to the normal pane gesture.
 fn arbiter(
+    mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
-    mut queries: ResMut<CopyModeQueries>,
     mut webview_route: TmuxWebviewRouteParams,
-    connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -210,14 +208,14 @@ fn arbiter(
     let scale = window.scale_factor();
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let guard_cursor_phys = window.cursor_position().map(|c| c * scale);
+    let cursor_phys = window.cursor_position().map(|c| c * scale);
     if !window.focused {
         buttons.clear();
         release_webview_press(
             &mut gesture,
             &webview_route,
             &panes,
-            guard_cursor_phys,
+            cursor_phys,
             cell_w,
             cell_h,
             scale,
@@ -236,7 +234,7 @@ fn arbiter(
             &mut gesture,
             &webview_route,
             &panes,
-            guard_cursor_phys,
+            cursor_phys,
             cell_w,
             cell_h,
             scale,
@@ -257,17 +255,20 @@ fn arbiter(
         })
         .unwrap_or((4.0, 4.0, 400, 8.0));
     let drag_threshold_phys = drag_threshold_logical * scale;
+    let dbl_click = (Duration::from_millis(dbl_click_ms as u64), click_drift);
 
     let packed_dividers: &[DividerPixelRect] = packed_q
         .single()
         .map(|p| p.dividers.as_slice())
         .unwrap_or(&[]);
 
+    let mut effects: Vec<TmuxMouseEffect> = Vec::new();
+
     for ev in buttons.read() {
         if ev.button != MouseButton::Left {
             continue;
         }
-        if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
+        if let Some(cursor_phys) = cursor_phys
             && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
         {
             let consumed = route_tmux_webview_left_click(
@@ -290,332 +291,251 @@ fn arbiter(
                 // previously-active pane.
                 if ev.state == ButtonState::Pressed
                     && let Ok((_, pane, _, _)) = panes.get(terminal)
-                    && let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(&select_pane_command(pane.id))
                 {
-                    tracing::warn!(?e, pane = pane.id.0, "inline-press select-pane send failed");
+                    effects.push(TmuxMouseEffect::SelectPane(pane.id));
                 }
                 continue;
             }
         }
         match ev.state {
             ButtonState::Pressed => {
-                let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
+                // A press with no cursor cannot hit-test; skip it without
+                // disturbing the gesture (matches the pre-refactor `continue`).
+                let Some(cursor_phys) = cursor_phys else {
                     continue;
                 };
-                let pane_under = pane_under_cursor(&panes, cursor_phys);
-                // Resolve a divider grab to its primary pane's near edge + size.
-                // A divider whose primary pane has no projected geometry yet
-                // cannot be resized, so it falls through to a pane focus rather
-                // than entering Resizing with a bogus (0) baseline.
-                let cursor_logical = cursor_phys / scale;
-                let resize = divider_at(packed_dividers, cursor_logical, grab_tol_logical)
-                    .and_then(|d| {
-                        panes
-                            .iter()
-                            .find(|(_, p, _, _)| p.id == d.primary)
-                            .map(|(_, p, _, _)| match d.axis {
-                                DividerAxis::Vertical => (d, p.dims.xoff, p.dims.width),
-                                DividerAxis::Horizontal => (d, p.dims.yoff, p.dims.height),
-                            })
-                    });
-                if let Some((divider, near, last_sent)) = resize {
-                    gesture.state = GestureState::Resizing {
-                        divider,
-                        near,
-                        last_sent,
-                        resized: false,
-                    };
-                } else if let Some((pane, pane_id)) = pane_under {
-                    if let Some(client) = connection.client() {
-                        let cmd = select_pane_command(pane_id);
-                        if let Err(e) = client.handle().send(&cmd) {
-                            tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
-                        }
-                    }
-                    let now = time.elapsed();
-                    let cursor_logical = cursor_phys / scale;
-                    let click_cfg = (Duration::from_millis(dbl_click_ms as u64), click_drift);
-                    let count = gesture.click.register(now, cursor_logical, click_cfg);
-                    gesture.state = GestureState::Pressed {
-                        pane,
-                        pane_id,
-                        origin_phys: cursor_phys,
-                        click_count: count,
-                    };
-                }
+                let Some(hit) = press_hit(
+                    &panes,
+                    packed_dividers,
+                    cursor_phys,
+                    scale,
+                    grab_tol_logical,
+                ) else {
+                    continue;
+                };
+                let TmuxMouseGesture { state, click, .. } = &mut *gesture;
+                effects.extend(decide_press(state, click, hit, time.elapsed(), dbl_click));
             }
             ButtonState::Released => {
-                let prior = std::mem::replace(&mut gesture.state, GestureState::Idle);
-                match prior {
-                    // Only copy when a selection was actually begun. A drag that
-                    // released before the copy-mode snapshot arrived never sent
-                    // `begin-selection`; copying then would clobber the system
-                    // clipboard with the stale paste buffer.
-                    GestureState::Selecting { pane_id, begun, .. } if begun => {
-                        if let Some(client) = connection.client() {
-                            let handle = client.handle();
-                            let copy = target_copy_cmd(pane_id, "send-keys -X copy-selection");
-                            if let Err(e) = handle.send(&copy) {
-                                tracing::warn!(
-                                    ?e,
-                                    pane = pane_id.0,
-                                    "drag-select copy-selection send failed"
-                                );
-                            } else {
-                                match handle.send(&show_buffer_command()) {
-                                    Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            ?e,
-                                            pane = pane_id.0,
-                                            "drag-select show-buffer send failed"
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    GestureState::Pressed {
-                        pane,
-                        pane_id,
-                        origin_phys,
-                        click_count,
-                    } if click_count >= 2 && copy_gate.copy_modes.get(pane).is_ok() => {
-                        // NOTE: resolve the click cell before entering PendingMultiSelect —
-                        // a failed lookup here exits the match cleanly; once in PendingMultiSelect,
-                        // the state persists until a snapshot arrives (or the pane is destroyed).
-                        let Ok((_, p, node, transform)) = panes.get(pane) else {
-                            break;
-                        };
-                        let cols = p.dims.width as u16;
-                        let rows = p.dims.height as u16;
-                        let Some(cell) =
-                            cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
-                        else {
-                            break;
-                        };
-                        let kind = if click_count == 2 {
-                            MultiSelectKind::Word
-                        } else {
-                            MultiSelectKind::Line
-                        };
-                        gesture.state = GestureState::PendingMultiSelect {
-                            pane,
-                            pane_id,
-                            cell,
-                            kind,
-                        };
-                    }
-                    // A divider press that never dragged is a click: the grab
-                    // zone overlaps the adjacent pane bodies, so focus the pane
-                    // under the cursor instead of silently doing nothing.
-                    GestureState::Resizing { resized, .. } if !resized => {
-                        if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
-                            && let Some((_, pane_id)) = pane_under_cursor(&panes, cursor_phys)
-                            && let Some(client) = connection.client()
-                            && let Err(e) = client.handle().send(&select_pane_command(pane_id))
-                        {
-                            tracing::warn!(
-                                ?e,
-                                pane = pane_id.0,
-                                "divider-click select-pane failed"
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    if let GestureState::Pressed {
-        pane,
-        pane_id,
-        origin_phys,
-        ..
-    } = gesture.state
-    {
-        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-            return;
-        };
-        if cursor_phys.distance(origin_phys) <= drag_threshold_phys {
-            return;
-        }
-        let Ok((_, p, node, transform)) = panes.get(pane) else {
-            gesture.state = GestureState::Idle;
-            return;
-        };
-        let cols = p.dims.width as u16;
-        let rows = p.dims.height as u16;
-        // NOTE: a non-copy-mode drag is owned by `ozma_terminal`'s VT selection;
-        // reset to Idle here so the gesture does not linger in `Pressed` (the
-        // arbiter only relays copy-mode selection).
-        if copy_gate.copy_modes.get(pane).is_ok() {
-            let Some(anchor) =
-                cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
-            else {
-                return;
-            };
-            gesture.state = GestureState::Selecting {
-                pane,
-                pane_id,
-                anchor,
-                begun: false,
-                last_target: None,
-            };
-        } else {
-            gesture.state = GestureState::Idle;
-        }
-        return;
-    }
-
-    if let GestureState::Selecting {
-        pane,
-        pane_id,
-        anchor,
-        begun,
-        last_target,
-    } = &mut gesture.state
-    {
-        let Ok((_, p, node, transform)) = panes.get(*pane) else {
-            gesture.state = GestureState::Idle;
-            return;
-        };
-        // NOTE: the snapshot is the copy cursor the relative cursor_deltas are
-        // computed from. copy-mode was just entered, so the first state refresh
-        // round-trips over a frame; without a snapshot, defer to a later frame
-        // rather than computing deltas off a stale/absent cursor.
-        let Ok(snapshot_cursor) = copy_gate
-            .snapshots
-            .get(*pane)
-            .map(|s| (s.0.cursor_x, s.0.cursor_y))
-        else {
-            return;
-        };
-        let Some(client) = connection.client() else {
-            return;
-        };
-        let handle = client.handle();
-        let cols = p.dims.width as u16;
-        let rows = p.dims.height as u16;
-        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-            return;
-        };
-        let Some(cell) = cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows)
-        else {
-            return;
-        };
-
-        if !*begun {
-            for cmd in cursor_deltas(snapshot_cursor, *anchor) {
-                if let Err(e) = handle.send(&target_copy_cmd(*pane_id, &cmd)) {
-                    tracing::warn!(?e, pane = pane_id.0, "drag-select anchor delta send failed");
-                }
-            }
-            if let Err(e) = handle.send(&target_copy_cmd(*pane_id, "send-keys -X begin-selection"))
-            {
-                tracing::warn!(
-                    ?e,
-                    pane = pane_id.0,
-                    "drag-select begin-selection send failed"
+                let ctx = release_ctx(
+                    &gesture.state,
+                    &panes,
+                    &copy_gate,
+                    cursor_phys,
+                    cell_w,
+                    cell_h,
                 );
-                return;
+                effects.extend(decide_release(&mut gesture.state, ctx));
             }
-            *begun = true;
-            *last_target = Some(*anchor);
-        } else if Some(cell) != *last_target {
-            for cmd in cursor_deltas(snapshot_cursor, cell) {
-                if let Err(e) = handle.send(&target_copy_cmd(*pane_id, &cmd)) {
-                    tracing::warn!(?e, pane = pane_id.0, "drag-select extend delta send failed");
-                }
-            }
-            *last_target = Some(cell);
         }
-        return;
     }
 
-    if let GestureState::PendingMultiSelect {
+    let ctx = continuation_ctx(
+        &gesture.state,
+        &panes,
+        &copy_gate,
+        cursor_phys,
+        drag_threshold_phys,
+        cell_w,
+        cell_h,
+    );
+    let entity = gesture_pane_entity(&gesture.state);
+    effects.extend(decide_continuation(&mut gesture.state, ctx));
+
+    if !effects.is_empty() {
+        let entity = entity
+            .or_else(|| effect_target_entity(&panes, &effects))
+            .unwrap_or(Entity::PLACEHOLDER);
+        commands.trigger(TmuxMouseEffects { entity, effects });
+    }
+}
+
+/// Hit-tests a left press at `cursor_phys` into a `PressHit`: a divider grab
+/// (resolved to its primary pane's near edge + current size) takes priority over
+/// a pane-body focus. A divider whose primary pane has no projected geometry yet
+/// falls through to a pane focus rather than a bogus (0) resize baseline; `None`
+/// means the press landed on neither.
+fn press_hit(
+    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    dividers: &[DividerPixelRect],
+    cursor_phys: Vec2,
+    scale: f32,
+    grab_tol_logical: f32,
+) -> Option<PressHit> {
+    let cursor_logical = cursor_phys / scale;
+    let resize = divider_at(dividers, cursor_logical, grab_tol_logical).and_then(|d| {
+        panes
+            .iter()
+            .find(|(_, p, _, _)| p.id == d.primary)
+            .map(|(_, p, _, _)| match d.axis {
+                DividerAxis::Vertical => (d, p.dims.xoff, p.dims.width),
+                DividerAxis::Horizontal => (d, p.dims.yoff, p.dims.height),
+            })
+    });
+    if let Some((divider, near, last_sent)) = resize {
+        return Some(PressHit::Divider {
+            divider,
+            near,
+            last_sent,
+        });
+    }
+    let (pane, pane_id) = pane_under_cursor(panes, cursor_phys)?;
+    Some(PressHit::Pane {
         pane,
         pane_id,
-        cell,
-        kind,
-    } = gesture.state
-    {
-        if panes.get(pane).is_err() {
-            gesture.state = GestureState::Idle;
-            return;
-        }
-        let Ok(snapshot_cursor) = copy_gate
-            .snapshots
-            .get(pane)
-            .map(|s| (s.0.cursor_x, s.0.cursor_y))
-        else {
-            return;
-        };
-        let Some(client) = connection.client() else {
-            return;
-        };
-        let handle = client.handle();
-        for cmd in multi_select_commands(kind, snapshot_cursor, cell, pane_id) {
-            if let Err(e) = handle.send(&cmd) {
-                tracing::warn!(?e, pane = pane_id.0, "multi-select cmd send failed");
+        origin_phys: cursor_phys,
+        cursor_logical,
+    })
+}
+
+/// Resolves the `ReleaseCtx` for the gesture's current (pre-release) state:
+/// copy-mode + a `Pressed` multi-click's origin cell, and the pane under the
+/// cursor for a `Resizing`-click focus fallback.
+fn release_ctx(
+    state: &GestureState,
+    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    copy_gate: &CopyModeGate,
+    cursor_phys: Option<Vec2>,
+    cell_w: f32,
+    cell_h: f32,
+) -> ReleaseCtx {
+    match *state {
+        GestureState::Pressed {
+            pane, origin_phys, ..
+        } => {
+            let copy_mode = copy_gate.copy_modes.get(pane).is_ok();
+            let multi_cell = panes.get(pane).ok().and_then(|(_, p, node, transform)| {
+                let cols = p.dims.width as u16;
+                let rows = p.dims.height as u16;
+                cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
+            });
+            ReleaseCtx {
+                copy_mode,
+                multi_cell,
+                pane_under: None,
             }
         }
-        match handle.send(&show_buffer_command()) {
-            Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
-            Err(e) => {
-                tracing::warn!(?e, pane = pane_id.0, "multi-select show-buffer send failed")
-            }
-        }
-        gesture.state = GestureState::Idle;
-        return;
+        GestureState::Resizing { .. } => ReleaseCtx {
+            copy_mode: false,
+            multi_cell: None,
+            pane_under: cursor_phys.and_then(|c| pane_under_cursor(panes, c).map(|(_, id)| id)),
+        },
+        _ => ReleaseCtx {
+            copy_mode: false,
+            multi_cell: None,
+            pane_under: None,
+        },
     }
+}
 
-    if let GestureState::Resizing {
-        divider,
-        near,
-        last_sent,
-        resized,
-    } = &mut gesture.state
-    {
-        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-            return;
-        };
-
-        let pointer_cell = match divider.axis {
-            DividerAxis::Vertical => (cursor_phys.x / cell_w).floor() as i32,
-            DividerAxis::Horizontal => (cursor_phys.y / cell_h).floor() as i32,
-        };
-
-        let target = resize_target_size(*near, pointer_cell);
-
-        // The pointer drives the send (not `%layout-change`), so there is no
-        // resize feedback loop; emitting only on a new target cell yields at
-        // most one absolute (idempotent) resize per frame. We do NOT gate on
-        // the confirmed pane size catching up to `last_sent` — when tmux clamps
-        // a resize the size never reaches the request, and such a gate would
-        // wedge the drag for the rest of the gesture.
-        if target == *last_sent {
-            return;
+/// Resolves the per-frame `ContinuationCtx` for the gesture's current state,
+/// reading only the inputs the active arm needs (cursor + copy-mode + origin
+/// anchor for `Pressed`; snapshot + live cell for `Selecting`; snapshot for
+/// `PendingMultiSelect`; pointer cell for `Resizing`).
+fn continuation_ctx(
+    state: &GestureState,
+    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    copy_gate: &CopyModeGate,
+    cursor_phys: Option<Vec2>,
+    drag_threshold_phys: f32,
+    cell_w: f32,
+    cell_h: f32,
+) -> ContinuationCtx {
+    let mut ctx = ContinuationCtx {
+        pane_alive: false,
+        cursor_phys,
+        drag_threshold_phys,
+        copy_mode: false,
+        anchor_cell: None,
+        snapshot_cursor: None,
+        selecting_cell: None,
+        resize_pointer_cell: None,
+    };
+    match *state {
+        GestureState::Pressed {
+            pane, origin_phys, ..
+        } => {
+            ctx.copy_mode = copy_gate.copy_modes.get(pane).is_ok();
+            if let Ok((_, p, node, transform)) = panes.get(pane) {
+                ctx.pane_alive = true;
+                let cols = p.dims.width as u16;
+                let rows = p.dims.height as u16;
+                ctx.anchor_cell =
+                    cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows);
+            }
         }
-
-        let Some(client) = connection.client() else {
-            return;
-        };
-
-        let cmd = match divider.axis {
-            DividerAxis::Vertical => resize_pane_x_command(divider.primary, target),
-            DividerAxis::Horizontal => resize_pane_y_command(divider.primary, target),
-        };
-
-        if let Err(e) = client.handle().send(&cmd) {
-            tracing::warn!(?e, pane = divider.primary.0, "resize-pane send failed");
-            return;
+        GestureState::Selecting { pane, .. } => {
+            if let Ok((_, p, node, transform)) = panes.get(pane) {
+                ctx.pane_alive = true;
+                ctx.snapshot_cursor = copy_gate
+                    .snapshots
+                    .get(pane)
+                    .map(|s| (s.0.cursor_x, s.0.cursor_y))
+                    .ok();
+                if let Some(cursor_phys) = cursor_phys {
+                    let cols = p.dims.width as u16;
+                    let rows = p.dims.height as u16;
+                    ctx.selecting_cell =
+                        cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows);
+                }
+            }
         }
+        GestureState::PendingMultiSelect { pane, .. } => {
+            if panes.get(pane).is_ok() {
+                ctx.pane_alive = true;
+                ctx.snapshot_cursor = copy_gate
+                    .snapshots
+                    .get(pane)
+                    .map(|s| (s.0.cursor_x, s.0.cursor_y))
+                    .ok();
+            }
+        }
+        GestureState::Resizing { divider, .. } => {
+            ctx.pane_alive = true;
+            ctx.resize_pointer_cell = cursor_phys.map(|c| match divider.axis {
+                DividerAxis::Vertical => (c.x / cell_w).floor() as i32,
+                DividerAxis::Horizontal => (c.y / cell_h).floor() as i32,
+            });
+        }
+        GestureState::Idle => {}
+    }
+    ctx
+}
 
-        *last_sent = target;
-        *resized = true;
+/// The pane `Entity` carried by the active gesture state, used as the
+/// `TmuxMouseEffects` event target. `Resizing`/`Idle` carry no pane entity.
+fn gesture_pane_entity(state: &GestureState) -> Option<Entity> {
+    match *state {
+        GestureState::Pressed { pane, .. }
+        | GestureState::PendingMultiSelect { pane, .. }
+        | GestureState::Selecting { pane, .. } => Some(pane),
+        GestureState::Resizing { .. } | GestureState::Idle => None,
+    }
+}
+
+/// The first live pane `Entity` whose `PaneId` is targeted by an effect, used as
+/// a `TmuxMouseEffects` target fallback when the gesture state carries none
+/// (e.g. a `Resizing` resize or a consumed-press `SelectPane`).
+fn effect_target_entity(
+    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    effects: &[TmuxMouseEffect],
+) -> Option<Entity> {
+    let target = effects.iter().find_map(effect_pane_id)?;
+    panes
+        .iter()
+        .find(|(_, p, _, _)| p.id == target)
+        .map(|(e, _, _, _)| e)
+}
+
+/// The `PaneId` an effect targets.
+fn effect_pane_id(effect: &TmuxMouseEffect) -> Option<PaneId> {
+    match *effect {
+        TmuxMouseEffect::SelectPane(id)
+        | TmuxMouseEffect::ResizePane { primary: id, .. }
+        | TmuxMouseEffect::BeginCopyDrag { pane: id, .. }
+        | TmuxMouseEffect::ExtendCopyDrag { pane: id, .. }
+        | TmuxMouseEffect::MultiSelect { pane: id, .. }
+        | TmuxMouseEffect::CopySelection { pane: id } => Some(id),
     }
 }
 
@@ -833,6 +753,7 @@ mod tests {
     use bevy::input::ButtonState;
     use bevy::input::mouse::MouseButtonInput;
     use ozma_tty_renderer::CellMetrics;
+    use ozmux_tmux::{CopyModeQueries, TmuxConnection};
 
     #[test]
     fn gesture_state_default_is_idle() {
@@ -903,6 +824,7 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, arbiter);
+        app.add_observer(apply::on_tmux_mouse_effects);
 
         // Pane host node at window center (400, 300), size 800x600 → top-left
         // at (0, 0). Rect rows 2..12, cols 3..43 → phys y 32..192, x 24..344 at
