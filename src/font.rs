@@ -133,11 +133,15 @@ fn bridge_font_config(
         return;
     }
 
-    let regular_bytes = load_face_bytes(font.normal.as_deref(), bundled::REGULAR, FontFace::Regular);
+    let regular_bytes =
+        load_face_bytes(font.normal.as_deref(), bundled::REGULAR, FontFace::Regular);
     let bold_bytes = load_face_bytes(font.bold.as_deref(), bundled::BOLD, FontFace::Bold);
     let italic_bytes = load_face_bytes(font.italic.as_deref(), bundled::ITALIC, FontFace::Italic);
-    let bold_italic_bytes =
-        load_face_bytes(font.bold_italic.as_deref(), bundled::BOLD_ITALIC, FontFace::BoldItalic);
+    let bold_italic_bytes = load_face_bytes(
+        font.bold_italic.as_deref(),
+        bundled::BOLD_ITALIC,
+        FontFace::BoldItalic,
+    );
 
     // NOTE: validate-per-face is load-bearing. Without it, a corrupt
     // override on ANY face drops ALL overrides — the all-or-nothing
