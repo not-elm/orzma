@@ -98,7 +98,14 @@ fn dispatch_input(
     mut events: MessageReader<KeyboardInput>,
     bindings: Res<TerminalInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
-    terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>, Without<KeyboardDisabled>)>,
+    terminal: Query<
+        Entity,
+        (
+            With<OzmaTerminal>,
+            With<KeyboardFocused>,
+            Without<KeyboardDisabled>,
+        ),
+    >,
 ) {
     // NOTE: keyboard routes to the single `KeyboardFocused` terminal. The host
     // owns focus policy and MUST keep exactly one OzmaTerminal both
@@ -183,6 +190,7 @@ mod tests {
     struct Captured {
         paste: u32,
         keys: Vec<TerminalKey>,
+        entities: Vec<Entity>,
     }
 
     fn test_app() -> App {
@@ -198,6 +206,7 @@ mod tests {
             })
             .add_observer(|ev: On<TerminalKeyInput>, mut c: ResMut<Captured>| {
                 c.keys.push(ev.key.clone());
+                c.entities.push(ev.entity);
             });
         app
     }
@@ -291,11 +300,12 @@ mod tests {
     fn routes_to_keyboard_focused_terminal() {
         let mut app = test_app();
         app.world_mut().spawn(OzmaTerminal);
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        let focused = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
         press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         let c = app.world().resource::<Captured>();
         assert_eq!(c.keys, vec![TerminalKey::Text("a".into())]);
+        assert_eq!(c.entities, vec![focused]);
     }
 
     #[test]

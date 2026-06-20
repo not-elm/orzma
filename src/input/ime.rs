@@ -146,12 +146,13 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// `PrimaryWindow.ime_enabled` and `.ime_position`.
 ///
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
-/// IME through bevy_cef's `Ime` → CEF bridge), OR a tmux pane is active and
-/// that pane does NOT have `CopyModeState`, OR — in `AppMode::Ozma` with no
-/// active pane — a `KeyboardFocused` terminal exists (its cursor is the anchor).
+/// IME through bevy_cef's `Ime` → CEF bridge), OR a surface exists that does
+/// NOT have `CopyModeState`. The surface is the active tmux pane, or — in
+/// `AppMode::Ozma` with no active pane — the `KeyboardFocused` terminal; both
+/// flow through the same copy-mode gate below.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
-/// window — computed from the active pane's `UiGlobalTransform`
+/// window — computed from the surface's `UiGlobalTransform`
 /// translation + `TerminalGrid.cursor` × cell pitch, then divided by
 /// the window scale factor. When the focused webview is an INLINE child of
 /// the active pane, the anchor instead comes from that child's overlay
@@ -224,9 +225,7 @@ pub(crate) fn ime_policy_system(
 
     let surface = match active_surface {
         Some(entity) => Some(entity),
-        // NOTE: Ozma mode has no tmux ActivePane; the keyboard-focused terminal
-        // is the IME surface, so the shared path below anchors `ime_position` at
-        // its cursor (the tmux path's same px math).
+        // NOTE: Ozma mode has no tmux ActivePane; fall back to the focused terminal.
         None if *current_mode.get() == AppMode::Ozma => ozma_terminal.single().ok(),
         None => None,
     };
@@ -272,7 +271,7 @@ pub(crate) fn ime_policy_system(
     let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
         return;
     };
-    let scale = window.resolution.scale_factor();
+    let scale = window.resolution.scale_factor().max(f32::EPSILON);
     let cell_w_phys = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h_phys = metrics.metrics.line_height_phys.floor().max(1.0);
     let cursor_cell = grid.cursor.clone().unwrap_or_default();
