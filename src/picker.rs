@@ -10,7 +10,10 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::schedule::common_conditions::{not, resource_exists_and_changed};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::ui::{ComputedNode, ScrollPosition, UiGlobalTransform, UiSystems};
+use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_configs::StartupMode;
 use ozmux_tmux::{
     AttachTarget, ConnectionState, TmuxConnection, attach_or_create, select_attach_target,
@@ -84,7 +87,7 @@ struct PickerBackdrop;
 struct PickerList;
 
 #[derive(Component)]
-struct PickerRowLabel;
+struct PickerRowLabel(usize);
 
 fn build_rows(sessions: &[SessionInfo], windows: &[WindowEntry]) -> Vec<PickerRow> {
     let mut rows = Vec::new();
@@ -227,6 +230,7 @@ fn spawn_picker_ui(mut commands: Commands) {
                         flex_direction: FlexDirection::Column,
                         align_items: AlignItems::Stretch,
                         min_width: Val::Px(360.0),
+                        max_height: Val::Vh(65.0),
                         padding: UiRect::axes(Val::Px(20.0), Val::Px(16.0)),
                         row_gap: Val::Px(10.0),
                         border: UiRect::all(Val::Px(1.0)),
@@ -250,8 +254,12 @@ fn spawn_picker_ui(mut commands: Commands) {
                             flex_direction: FlexDirection::Column,
                             width: Val::Percent(100.0),
                             row_gap: Val::Px(2.0),
+                            flex_grow: 1.0,
+                            min_height: Val::Px(0.0),
+                            overflow: Overflow::scroll_y(),
                             ..default()
                         },
+                        ScrollPosition::default(),
                         PickerList,
                     ));
                     panel.spawn((
@@ -363,8 +371,9 @@ fn sync_picker_ui(
     } else {
         commands.entity(list_entity).despawn_related::<Children>();
         commands.entity(list_entity).with_children(|parent| {
-            for (label, text_color, bar_color) in visuals {
+            for (i, (label, text_color, bar_color)) in visuals.into_iter().enumerate() {
                 parent.spawn((
+                    Button,
                     Node {
                         width: Val::Percent(100.0),
                         padding: UiRect::axes(Val::Px(8.0), Val::Px(2.0)),
@@ -378,7 +387,7 @@ fn sync_picker_ui(
                         font_size: 14.0,
                         ..default()
                     },
-                    PickerRowLabel,
+                    PickerRowLabel(i),
                 ));
             }
         });
@@ -909,6 +918,33 @@ mod tests {
             *app.world().resource::<State<AppMode>>().get(),
             AppMode::Ozmux
         );
+    }
+
+    #[test]
+    fn rows_spawn_as_buttons_carrying_their_index() {
+        let mut app = App::new();
+        app.insert_resource(SessionPicker {
+            sessions: vec![fake_session(0, "alpha")],
+            windows: vec![],
+            selected: 0,
+            open: true,
+            last_open: true,
+        });
+        app.add_systems(Startup, spawn_picker_ui);
+        app.add_systems(Update, sync_picker_ui);
+        app.update();
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<(&PickerRowLabel, Option<&Button>), With<PickerRowLabel>>();
+        let mut indices: Vec<usize> = Vec::new();
+        for (label, button) in q.iter(app.world()) {
+            assert!(button.is_some(), "every picker row must carry Button");
+            indices.push(label.0);
+        }
+        indices.sort_unstable();
+        // build_rows([alpha], []) == [Session(0), NewSession] -> indices 0,1
+        assert_eq!(indices, vec![0, 1]);
     }
 
     #[test]
