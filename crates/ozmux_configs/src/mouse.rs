@@ -106,8 +106,16 @@ mod tests {
         let cfg = MouseConfig::default();
         assert_eq!(cfg.lines_per_notch, 3);
         assert_eq!(cfg.fine_modifier, FineModifier::Alt);
+        assert_eq!(cfg.fine_lines, 1);
+        assert_eq!(cfg.max_protocol_events_per_frame, 8);
         assert_eq!(cfg.cells_per_notch, 0.5);
+        assert_eq!(cfg.double_click_timeout_ms, 400);
+        assert_eq!(cfg.click_drift_px, 8.0);
+        assert_eq!(cfg.autoscroll_base_period_ms, 50);
+        assert_eq!(cfg.autoscroll_min_period_ms, 16);
+        assert_eq!(cfg.autoscroll_step_ms, 4);
         assert_eq!(cfg.drag_threshold_px, 4.0);
+        assert_eq!(cfg.divider_grab_tolerance_px, 4.0);
     }
 
     #[test]
@@ -124,6 +132,12 @@ mod tests {
     fn fine_modifier_parses_lowercase() {
         let cfg: MouseConfig = toml::from_str(r#"fine_modifier = "ctrl""#).unwrap();
         assert_eq!(cfg.fine_modifier, FineModifier::Ctrl);
+    }
+
+    #[test]
+    fn fine_modifier_none_variant_parses() {
+        let cfg: MouseConfig = toml::from_str(r#"fine_modifier = "none""#).unwrap();
+        assert_eq!(cfg.fine_modifier, FineModifier::None);
     }
 
     #[test]
