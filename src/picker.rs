@@ -52,6 +52,10 @@ impl Plugin for OzmuxPickerPlugin {
             .add_systems(
                 PostUpdate,
                 sync_picker_ui.run_if(resource_exists_and_changed::<SessionPicker>),
+            )
+            .add_systems(
+                Update,
+                handle_picker_row_interaction.run_if(picker_is_open),
             );
     }
 }
@@ -394,6 +398,63 @@ fn sync_picker_ui(
     }
 }
 
+// NOTE: `hover_armed` stays false until a CursorMoved arrives after the picker
+// opens, so opening under a stationary cursor does not hijack the keyboard's
+// first-session selection. Clicks (Pressed) are never gated by it.
+fn handle_picker_row_interaction(
+    mut picker: ResMut<SessionPicker>,
+    mut connection: NonSendMut<TmuxConnection>,
+    mut state: ResMut<ConnectionState>,
+    mut next_mode: ResMut<NextState<AppMode>>,
+    mut cursor_moved: MessageReader<CursorMoved>,
+    mut hover_armed: Local<bool>,
+    mut was_open: Local<bool>,
+    rows: Query<(&Interaction, &PickerRowLabel), Changed<Interaction>>,
+    configs: Res<OzmuxConfigsResource>,
+    current_mode: Res<State<AppMode>>,
+    control: Option<Res<ControlPlaneHandle>>,
+) {
+    let opened = picker.open && !*was_open;
+    *was_open = picker.open;
+    if opened {
+        *hover_armed = false;
+    }
+    if cursor_moved.read().count() > 0 {
+        *hover_armed = true;
+    }
+
+    for (interaction, label) in rows.iter() {
+        match interaction {
+            Interaction::Pressed => {
+                picker.selected = label.0;
+                let built = build_rows(&picker.sessions, &picker.windows);
+                let row = built
+                    .get(picker.selected)
+                    .copied()
+                    .unwrap_or(PickerRow::NewSession);
+                activate_row(
+                    &mut connection,
+                    &mut state,
+                    &mut next_mode,
+                    &configs,
+                    control.as_deref(),
+                    &picker,
+                    current_mode.get(),
+                    row,
+                );
+                picker.open = false;
+                break;
+            }
+            Interaction::Hovered => {
+                if *hover_armed {
+                    picker.selected = label.0;
+                }
+            }
+            Interaction::None => {}
+        }
+    }
+}
+
 fn handle_picker_input(
     mut picker: ResMut<SessionPicker>,
     mut connection: NonSendMut<TmuxConnection>,
@@ -446,6 +507,10 @@ fn handle_picker_input(
             _ => {}
         }
     }
+}
+
+fn picker_is_open(picker: Res<SessionPicker>) -> bool {
+    picker.open
 }
 
 // NOTE: mirrors the keyboard Enter arm exactly — used by both the Enter handler
@@ -928,6 +993,58 @@ mod tests {
         assert_eq!(
             *app.world().resource::<State<AppMode>>().get(),
             AppMode::Ozmux
+        );
+    }
+
+    fn cursor_moved() -> CursorMoved {
+        CursorMoved {
+            window: Entity::PLACEHOLDER,
+            position: Vec2::ZERO,
+            delta: None,
+        }
+    }
+
+    #[test]
+    fn hover_moves_selection_only_after_the_mouse_moves() {
+        let mut app = App::new();
+        app.add_plugins(StatesPlugin);
+        app.insert_state(AppMode::Ozma);
+        app.add_message::<CursorMoved>();
+        app.insert_resource(SessionPicker {
+            sessions: vec![fake_session(0, "alpha"), fake_session(1, "beta")],
+            windows: vec![],
+            selected: 0,
+            open: true,
+            last_open: true,
+        });
+        app.init_resource::<ConnectionState>();
+        app.init_resource::<OzmuxConfigsResource>();
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.add_systems(Update, handle_picker_row_interaction);
+
+        // A hovered row exists but the mouse has not moved since open: no change.
+        let row = app.world_mut().spawn((Interaction::Hovered, PickerRowLabel(1))).id();
+        app.update();
+        assert_eq!(
+            app.world().resource::<SessionPicker>().selected,
+            0,
+            "stationary-cursor hover must not move selection"
+        );
+
+        // Arm by moving the mouse, then re-trigger the hover change.
+        app.world_mut().write_message(cursor_moved());
+        app.world_mut()
+            .entity_mut(row)
+            .insert(Interaction::None);
+        app.update();
+        app.world_mut()
+            .entity_mut(row)
+            .insert(Interaction::Hovered);
+        app.update();
+        assert_eq!(
+            app.world().resource::<SessionPicker>().selected,
+            1,
+            "after the mouse moves, hover moves selection"
         );
     }
 
