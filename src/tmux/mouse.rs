@@ -11,6 +11,8 @@
 //! of a divider line enters `Resizing` state; the pointer's major-axis cell
 //! coordinate maps to an absolute target size sent as `resize-pane -x/-y`.
 
+mod effect;
+
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
 use super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
 use super::render::{DividerPixelRect, PackedTmuxLayout};
@@ -30,6 +32,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_tmux::{
@@ -75,13 +78,6 @@ struct ModalGate<'w> {
 struct CopyModeGate<'w, 's> {
     copy_modes: Query<'w, 's, (), With<CopyModeState>>,
     snapshots: Query<'w, 's, &'static CopyModeSnapshot>,
-}
-
-/// Word- vs line-granularity selection for a double/triple click.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MultiSelectKind {
-    Word,
-    Line,
 }
 
 /// The current phase of a left-button gesture over a tmux pane.
