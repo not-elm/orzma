@@ -1,7 +1,9 @@
 //! AppMode state enum and the Ozma single-terminal lifecycle plugin.
 
 use bevy::prelude::*;
-use ozma_terminal::{OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig};
+use ozma_terminal::{
+    KeyboardFocused, OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig,
+};
 
 /// Application mode. `Ozma` is the default (single PTY, no tmux).
 /// `Ozmux` activates the tmux multiplexer backend.
@@ -16,8 +18,8 @@ pub(crate) enum AppMode {
 
 /// Bevy plugin that registers the `AppMode::Ozma` spawn/despawn lifecycle.
 ///
-/// Spawns one `OzmaTerminal` entity on `OnEnter(AppMode::Ozma)` and
-/// despawns it on `OnExit(AppMode::Ozma)`. Requires `AppMode` to be
+/// Spawns one `OzmaTerminal` entity (marked `KeyboardFocused`, the keyboard
+/// target) on `OnEnter(AppMode::Ozma)` and despawns it on `OnExit(AppMode::Ozma)`. Requires `AppMode` to be
 /// inserted via `App::insert_state` before this plugin runs, and
 /// `OzmaTerminalPlugin` must be added first (it inserts `OzmaTerminalConfig`
 /// that `spawn_terminal` reads).
@@ -40,7 +42,7 @@ fn spawn_terminal(
         ..default()
     }) {
         Ok(bundle) => {
-            commands.spawn(bundle);
+            commands.spawn((bundle, KeyboardFocused));
         }
         Err(e) => {
             tracing::error!(?e, "failed to spawn ozma terminal");
