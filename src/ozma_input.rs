@@ -1,5 +1,5 @@
-//! Host-side input for `AppMode::Ozma`: maintains the crate's `InputDisabled`
-//! marker from the coarse guards (picker, IME, focus, webview), and handles the
+//! Host-side input for `AppMode::Ozma`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
+//! markers from the coarse guards (picker, IME, focus, webview), and handles the
 //! application-level GUI shortcuts the terminal crate does not own (Quit,
 //! OpenPicker, DetachSession, ReleaseInlineFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
@@ -14,7 +14,7 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{InputDisabled, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet};
+use ozma_terminal::{KeyboardDisabled, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet};
 use ozmux_configs::shortcuts::ShortcutAction;
 
 /// Registers the host-side input systems for `AppMode::Ozma`.
@@ -24,7 +24,7 @@ impl Plugin for OzmaHostInputPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            maintain_input_disabled
+            maintain_input_gates
                 .before(OzmaTerminalInputSet)
                 .before(OzmaTerminalMouseSet)
                 .run_if(in_state(AppMode::Ozma)),
@@ -39,13 +39,13 @@ impl Plugin for OzmaHostInputPlugin {
     }
 }
 
-fn maintain_input_disabled(
+fn maintain_input_gates(
     mut commands: Commands,
     picker: Res<SessionPicker>,
     ime: Res<ImeState>,
     focused_webview: Res<FocusedWebview>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    terminals: Query<(Entity, Has<InputDisabled>), With<OzmaTerminal>>,
+    terminals: Query<(Entity, Has<KeyboardDisabled>, Has<MouseDisabled>), With<OzmaTerminal>>,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     let disable = should_disable_input(
@@ -54,11 +54,16 @@ fn maintain_input_disabled(
         focused,
         focused_webview.0.is_some(),
     );
-    for (entity, has) in terminals.iter() {
-        if disable && !has {
-            commands.entity(entity).insert(InputDisabled);
-        } else if !disable && has {
-            commands.entity(entity).remove::<InputDisabled>();
+    for (entity, has_keyboard, has_mouse) in terminals.iter() {
+        if disable && !has_keyboard {
+            commands.entity(entity).insert(KeyboardDisabled);
+        } else if !disable && has_keyboard {
+            commands.entity(entity).remove::<KeyboardDisabled>();
+        }
+        if disable && !has_mouse {
+            commands.entity(entity).insert(MouseDisabled);
+        } else if !disable && has_mouse {
+            commands.entity(entity).remove::<MouseDisabled>();
         }
     }
 }

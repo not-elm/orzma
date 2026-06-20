@@ -3,8 +3,7 @@
 //! system updates `HyperlinkHoverState` (renderer underline) and the window
 //! `CursorIcon`.
 
-use crate::input::InputDisabled;
-use crate::mouse::{OzmaTerminalMouseSet, cell_at_cursor, protocol_mods};
+use crate::mouse::{MouseDisabled, OzmaTerminalMouseSet, cell_at_cursor, protocol_mods};
 use crate::spawn::OzmaTerminal;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -61,7 +60,7 @@ fn hyperlink_hover_cursor(
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     terminal: Query<
         (Entity, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
-        (With<OzmaTerminal>, Without<InputDisabled>),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
     >,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -96,7 +95,7 @@ fn resolve_hover(
     hover: &mut HyperlinkHoverState,
     terminal: &Query<
         (Entity, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
-        (With<OzmaTerminal>, Without<InputDisabled>),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
     >,
     metrics: &TerminalCellMetricsResource,
     windows: &Query<&Window, With<PrimaryWindow>>,

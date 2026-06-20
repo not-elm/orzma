@@ -8,9 +8,11 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// Marker component identifying the single Ozma-mode terminal entity.
+/// Marker component identifying an Ozma-mode terminal entity.
 ///
-/// Exactly one entity carries this marker while the terminal is active.
+/// One or more entities may carry this marker; mouse input routes to the
+/// topmost under the cursor, while keyboard input targets the single entity the
+/// host leaves un-`KeyboardDisabled`.
 #[derive(Component)]
 pub struct OzmaTerminal;
 

@@ -2,7 +2,7 @@
 //! selection + copy, wheel scrollback, and Cmd-click hyperlink open. Reads Bevy
 //! mouse input, hit-tests the cursor to a cell, and drives the engine's pure
 //! `ButtonAction` / `WheelAction` routers, applying the result to the
-//! `TerminalHandle` / `Clipboard`. Gated per entity by `InputDisabled`.
+//! `TerminalHandle` / `Clipboard`. Gated per entity by `MouseDisabled`.
 
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel};
@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::clipboard::Clipboard;
 use crate::hyperlink::{link_modifier_held, try_open_uri};
-use crate::input::{InputDisabled, current_terminal_modifiers};
+use crate::input::current_terminal_modifiers;
 use crate::spawn::OzmaTerminal;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
@@ -75,9 +75,17 @@ impl Default for OzmaMouseConfig {
 }
 
 /// System set for the crate's three mouse systems. Hosts maintaining
-/// `InputDisabled` should schedule their maintainer `.before(OzmaTerminalMouseSet)`.
+/// `MouseDisabled` should schedule their maintainer `.before(OzmaTerminalMouseSet)`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OzmaTerminalMouseSet;
+
+/// When present on an `OzmaTerminal` entity, the crate's mouse dispatchers and
+/// hover-cursor system skip it — it is removed from the hit-test candidate set,
+/// so the pointer falls through to the next terminal below it. The host marks
+/// every terminal `MouseDisabled` for modal suppression (picker / IME / focused
+/// webview / unfocused window).
+#[derive(Component)]
+pub struct MouseDisabled;
 
 /// Phase of an in-progress left-drag: `Armed` after a single-click press (no
 /// selection started yet), `Started` once the pointer crossed into another cell.
@@ -354,8 +362,8 @@ pub(crate) fn decide_wheel(
 }
 
 /// The crate's mouse-button dispatcher. Resolves the cursor cell, tracks clicks
-/// and drag state, drives `decide_button`, and applies the effects. Skips the
-/// `OzmaTerminal` while it carries `InputDisabled`.
+/// and drag state, drives `decide_button`, and applies the effects. Skips any
+/// `OzmaTerminal` carrying `MouseDisabled`.
 pub(crate) fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OzmaMouseGesture>,
@@ -368,7 +376,7 @@ pub(crate) fn dispatch_mouse_buttons(
             &UiGlobalTransform,
             &TerminalGrid,
         ),
-        (With<OzmaTerminal>, Without<InputDisabled>),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
     >,
     cfg: Res<OzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -483,7 +491,7 @@ pub(crate) fn dispatch_mouse_wheel(
             &UiGlobalTransform,
             &TerminalGrid,
         ),
-        (With<OzmaTerminal>, Without<InputDisabled>),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
     >,
     cfg: Res<OzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -792,7 +800,7 @@ mod tests {
     use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind};
 
     #[test]
-    fn input_disabled_terminal_drains_without_arming_a_gesture() {
+    fn mouse_disabled_terminal_drains_without_arming_a_gesture() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<MouseButtonInput>()
@@ -802,7 +810,7 @@ mod tests {
             .init_resource::<Clipboard>()
             .insert_resource(test_metrics())
             .add_systems(Update, dispatch_mouse_buttons);
-        app.world_mut().spawn((OzmaTerminal, InputDisabled));
+        app.world_mut().spawn((OzmaTerminal, MouseDisabled));
         app.world_mut().spawn((
             Window {
                 focused: true,
