@@ -204,7 +204,7 @@ fn forward_keys_to_tmux(
 
     // When an inline webview holds focus it owns the keyboard (bevy_cef routes
     // keystrokes to it); forwarding to tmux too would double-send. The configured
-    // release-inline-focus chord releases focus back to the terminal. NOTE: under the tmux backend
+    // release-webview-focus chord releases focus back to the terminal. NOTE: under the tmux backend
     // `FocusedWebview` is live (set by the inline-click router, the control-plane
     // `SetFocus` op, and the focus-preservation arm in `sync_focused_webview`),
     // so this drain is load-bearing whenever an inline webview is focused —
@@ -220,7 +220,7 @@ fn forward_keys_to_tmux(
             if ev.state != ButtonState::Pressed {
                 continue;
             }
-            if resolved.is_release_inline_focus(ev.key_code, cfg_mods) {
+            if resolved.is_release_webview_focus(ev.key_code, cfg_mods) {
                 focused_webview.0 = None;
                 break;
             }
@@ -306,7 +306,7 @@ fn forward_keys_to_tmux(
                         }
                     }
                 }
-                ShortcutAction::ReleaseInlineFocus => {}
+                ShortcutAction::ReleaseWebviewFocus => {}
                 ShortcutAction::DetachSession => {
                     next_mode.set(AppMode::Ozma);
                 }

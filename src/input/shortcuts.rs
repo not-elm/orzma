@@ -27,8 +27,8 @@ pub(crate) struct ResolvedShortcuts(Vec<ResolvedShortcut>);
 
 impl ResolvedShortcuts {
     /// Returns the GUI action bound to `(keycode, mods)`, if any. Excludes
-    /// `ReleaseInlineFocus`, which is meaningful only while an inline webview
-    /// holds focus and is matched separately via `is_release_inline_focus`.
+    /// `ReleaseWebviewFocus`, which is meaningful only while an inline webview
+    /// holds focus and is matched separately via `is_release_webview_focus`.
     pub(crate) fn match_gui_action(
         &self,
         keycode: KeyCode,
@@ -37,18 +37,18 @@ impl ResolvedShortcuts {
         self.0
             .iter()
             .find(|s| {
-                s.action != ShortcutAction::ReleaseInlineFocus
+                s.action != ShortcutAction::ReleaseWebviewFocus
                     && s.keycode == keycode
                     && s.modifiers == mods
             })
             .map(|s| s.action)
     }
 
-    /// True when `(keycode, mods)` matches the configured release-inline-focus
+    /// True when `(keycode, mods)` matches the configured release-webview-focus
     /// chord.
-    pub(crate) fn is_release_inline_focus(&self, keycode: KeyCode, mods: Modifiers) -> bool {
+    pub(crate) fn is_release_webview_focus(&self, keycode: KeyCode, mods: Modifiers) -> bool {
         self.0.iter().any(|s| {
-            s.action == ShortcutAction::ReleaseInlineFocus
+            s.action == ShortcutAction::ReleaseWebviewFocus
                 && s.keycode == keycode
                 && s.modifiers == mods
         })
@@ -308,8 +308,8 @@ mod tests {
     #[test]
     fn is_release_inline_focus_matches_default_chord() {
         let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
-        assert!(r.is_release_inline_focus(KeyCode::Escape, mods(true, true, false, false)));
-        assert!(!r.is_release_inline_focus(KeyCode::KeyV, mods(false, false, false, true)));
+        assert!(r.is_release_webview_focus(KeyCode::Escape, mods(true, true, false, false)));
+        assert!(!r.is_release_webview_focus(KeyCode::KeyV, mods(false, false, false, true)));
     }
 
     #[test]
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(
             b.reserved.len(),
             4,
-            "Quit, OpenPicker, ReleaseInlineFocus, DetachSession"
+            "Quit, OpenPicker, ReleaseWebviewFocus, DetachSession"
         );
         assert!(
             !b.reserved
