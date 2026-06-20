@@ -45,7 +45,7 @@ fn maintain_tmux_input_gates(
     >,
 ) {
     let window_focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    let modal = picker.open || ime.is_composing() || !window_focused || focused_webview.0.is_some();
+    let modal = picker.open || ime.is_composing() || !window_focused;
     for (entity, has_keyboard, has_mouse, in_copy_mode) in panes.iter() {
         if !has_keyboard {
             commands.entity(entity).insert(KeyboardDisabled);
