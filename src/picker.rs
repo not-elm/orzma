@@ -3,6 +3,7 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::control_plane::ControlPlaneHandle;
+use crate::input::InputPhase;
 use crate::ozma::AppMode;
 use crate::theme;
 use bevy::ecs::hierarchy::Children;
@@ -13,7 +14,7 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ScrollPosition, UiGlobalTransform, UiSystems};
-use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
+use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, WindowResized};
 use ozmux_configs::StartupMode;
 use ozmux_tmux::{
     AttachTarget, ConnectionState, TmuxConnection, attach_or_create, select_attach_target,
@@ -34,10 +35,7 @@ impl Plugin for OzmuxPickerPlugin {
                 OnEnter(AppMode::Ozmux),
                 dispatch_startup_mode.run_if(not(resource_exists::<StartupDispatched>)),
             )
-            .add_systems(
-                Update,
-                handle_picker_input.after(crate::input::InputPhase::FocusedKey),
-            )
+            .add_systems(Update, handle_picker_input.after(InputPhase::FocusedKey))
             .add_systems(Update, refresh_picker_on_open)
             .add_systems(
                 Update,
@@ -60,15 +58,18 @@ impl Plugin for OzmuxPickerPlugin {
                 scroll_selected_into_view
                     .after(UiSystems::Layout)
                     .run_if(picker_is_open)
-                    .run_if(resource_exists_and_changed::<SessionPicker>),
+                    .run_if(
+                        resource_exists_and_changed::<SessionPicker>
+                            .or(on_message::<WindowResized>),
+                    ),
             )
-            .add_systems(Update, handle_picker_row_interaction.run_if(picker_is_open))
-            .add_systems(
-                Update,
-                picker_row_hover_cursor
-                    .after(crate::input::InputPhase::Hover)
-                    .run_if(picker_is_open),
-            )
+            // NOTE: handle_picker_row_interaction and picker_row_hover_cursor are
+            // deliberately NOT gated by run_if(picker_is_open): both must observe
+            // the picker's closed state to reset per-open state (re-disarm hover,
+            // and revert the pointer cursor on the click that closes the picker);
+            // gated off while closed, that reset never runs.
+            .add_systems(Update, handle_picker_row_interaction)
+            .add_systems(Update, picker_row_hover_cursor.after(InputPhase::Hover))
             .add_systems(
                 Update,
                 handle_picker_scroll
@@ -416,9 +417,12 @@ fn sync_picker_ui(
     }
 }
 
-// NOTE: `hover_armed` stays false until a CursorMoved arrives after the picker
-// opens, so opening under a stationary cursor does not hijack the keyboard's
-// first-session selection. Clicks (Pressed) are never gated by it.
+// NOTE: this system is ungated (no run_if(picker_is_open)) on purpose. The
+// `was_open` open-edge detector must observe the closed→open transition to
+// re-disarm hover; gated off while the picker is closed it would freeze at
+// `true` and never re-disarm on reopen, letting a stationary cursor hijack the
+// keyboard's selection. `hover_armed` stays false until a CursorMoved arrives
+// after each open; clicks (Pressed) are never gated by it.
 fn handle_picker_row_interaction(
     mut picker: ResMut<SessionPicker>,
     mut connection: NonSendMut<TmuxConnection>,
@@ -436,6 +440,10 @@ fn handle_picker_row_interaction(
     *was_open = picker.open;
     if opened {
         *hover_armed = false;
+    }
+    if !picker.open {
+        cursor_moved.clear();
+        return;
     }
     if cursor_moved.read().count() > 0 {
         *hover_armed = true;
@@ -464,7 +472,7 @@ fn handle_picker_row_interaction(
                 break;
             }
             Interaction::Hovered => {
-                if *hover_armed {
+                if *hover_armed && picker.selected != label.0 {
                     picker.selected = label.0;
                 }
             }
@@ -473,21 +481,31 @@ fn handle_picker_row_interaction(
     }
 }
 
+// NOTE: ungated, and reverts only the pointer cursor THIS system set
+// (`we_set_pointer`). The picker can close (via a click on a row) while a row is
+// still hovered; a gated system would stop before reverting and leave a stuck
+// hand cursor over the terminal. Reverting only our own pointer avoids fighting
+// other cursor owners (e.g. the hyperlink hover cursor) once the picker closes.
 fn picker_row_hover_cursor(
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
+    mut we_set_pointer: Local<bool>,
+    picker: Res<SessionPicker>,
     rows: Query<&Interaction, With<PickerRowLabel>>,
 ) {
-    let hovering = rows
-        .iter()
-        .any(|i| matches!(i, Interaction::Hovered | Interaction::Pressed));
+    let hovering = picker.open
+        && rows
+            .iter()
+            .any(|i| matches!(i, Interaction::Hovered | Interaction::Pressed));
     let Ok(mut icon) = cursor_icons.single_mut() else {
         return;
     };
     let is_pointer = matches!(&*icon, CursorIcon::System(e) if *e == SystemCursorIcon::Pointer);
     if hovering && !is_pointer {
         *icon = CursorIcon::System(SystemCursorIcon::Pointer);
-    } else if !hovering && is_pointer {
+        *we_set_pointer = true;
+    } else if !hovering && *we_set_pointer && is_pointer {
         *icon = CursorIcon::System(SystemCursorIcon::Default);
+        *we_set_pointer = false;
     }
 }
 
@@ -499,16 +517,15 @@ fn handle_picker_scroll(
         wheel.clear();
         return;
     };
+    let inv = node.inverse_scale_factor;
     let mut delta = 0.0;
     for ev in wheel.read() {
-        delta += wheel_delta_px(ev.unit, ev.y);
+        delta += wheel_delta_px(ev.unit, ev.y, inv);
     }
     if delta == 0.0 {
         return;
     }
-    let inv = node.inverse_scale_factor;
-    let max = (node.content_size().y - node.size().y).max(0.0) * inv;
-    let next = (pos.0.y + delta).clamp(0.0, max);
+    let next = (pos.0.y + delta).clamp(0.0, max_scroll_logical(node));
     if pos.0.y != next {
         pos.0.y = next;
     }
@@ -564,7 +581,7 @@ fn scroll_selected_into_view(
     let row_top = current + (row_top_global - list_top_global) * inv;
     let row_h = row_h_phys * inv;
     let viewport_h = viewport_h_phys * inv;
-    let max = (list_node.content_size().y - viewport_h_phys).max(0.0) * inv;
+    let max = max_scroll_logical(list_node);
 
     let next = reveal_offset(row_top, row_h, viewport_h, current, max);
     if pos.0.y != next {
@@ -630,9 +647,8 @@ fn picker_is_open(picker: Res<SessionPicker>) -> bool {
     picker.open
 }
 
-// NOTE: mirrors the keyboard Enter arm exactly — used by both the Enter handler
-// and the mouse click handler so the two paths cannot diverge. Leaves
-// `picker.open` to the caller.
+// NOTE: leaves `picker.open` to the caller — every call site must set it false
+// after activating, or the picker stays open over the now-attached session.
 fn activate_row(
     connection: &mut TmuxConnection,
     state: &mut ConnectionState,
@@ -888,24 +904,32 @@ const LINE_SCROLL_PX: f32 = 24.0;
 /// The logical-pixel `ScrollPosition` delta for one wheel event. The sign is
 /// inverted relative to the wheel `y` so that wheel-down (negative `y`) yields a
 /// positive delta — a larger `ScrollPosition.0.y` moves the content up, i.e. the
-/// viewport down. (Same structure as `tmux_inline_wheel_delta` but the opposite
-/// sign, because that path drives a terminal, not a scroll offset.)
-fn wheel_delta_px(unit: MouseScrollUnit, y: f32) -> f32 {
+/// viewport down. `Pixel` deltas arrive in physical pixels and are scaled to
+/// logical px by `inverse_scale_factor`; `Line` notches are already a logical
+/// constant.
+fn wheel_delta_px(unit: MouseScrollUnit, y: f32, inverse_scale_factor: f32) -> f32 {
     match unit {
         MouseScrollUnit::Line => -y * LINE_SCROLL_PX,
-        MouseScrollUnit::Pixel => -y,
+        MouseScrollUnit::Pixel => -y * inverse_scale_factor,
     }
+}
+
+/// The maximum vertical scroll offset (logical px) of a scroll-container node:
+/// the content height that overflows the viewport, converted physical→logical.
+fn max_scroll_logical(node: &ComputedNode) -> f32 {
+    (node.content_size().y - node.size().y).max(0.0) * node.inverse_scale_factor
 }
 
 /// The new vertical scroll offset (logical px) that brings the row spanning
 /// `[row_top, row_top + row_h]` fully into a `viewport_h`-tall viewport currently
 /// scrolled to `current`. Scrolls up if the row is above the viewport, down if
-/// below, else unchanged; the result is clamped to `[0, max]`.
+/// below, else unchanged; a row taller than the viewport shows its top rather
+/// than its bottom. The result is clamped to `[0, max]`.
 fn reveal_offset(row_top: f32, row_h: f32, viewport_h: f32, current: f32, max: f32) -> f32 {
     let target = if row_top < current {
         row_top
     } else if row_top + row_h > current + viewport_h {
-        row_top + row_h - viewport_h
+        (row_top + row_h - viewport_h).min(row_top)
     } else {
         current
     };
@@ -1193,6 +1217,27 @@ mod tests {
             1,
             "after the mouse moves, hover moves selection"
         );
+
+        // Close the picker, then reopen with the cursor still parked on the row.
+        // The reopen must re-disarm hover so the stationary cursor cannot hijack
+        // the keyboard's selection (regression: the open-edge Local froze when the
+        // system was gated by run_if(picker_is_open) and never ran while closed).
+        app.world_mut().resource_mut::<SessionPicker>().open = false;
+        app.update();
+        {
+            let mut picker = app.world_mut().resource_mut::<SessionPicker>();
+            picker.selected = 0;
+            picker.open = true;
+        }
+        app.world_mut().entity_mut(row).insert(Interaction::None);
+        app.update();
+        app.world_mut().entity_mut(row).insert(Interaction::Hovered);
+        app.update();
+        assert_eq!(
+            app.world().resource::<SessionPicker>().selected,
+            0,
+            "reopening with a stationary cursor must re-disarm hover (no hijack)"
+        );
     }
 
     #[test]
@@ -1224,19 +1269,26 @@ mod tests {
 
     #[test]
     fn wheel_line_delta_is_inverted_and_scaled_by_row_stride() {
+        // Line notches ignore the scale factor (LINE_SCROLL_PX is already logical).
         // Wheel up (y>0) scrolls content toward the top -> negative offset delta.
-        assert_eq!(wheel_delta_px(MouseScrollUnit::Line, 1.0), -LINE_SCROLL_PX);
-        // Wheel down (y<0) -> positive offset delta.
         assert_eq!(
-            wheel_delta_px(MouseScrollUnit::Line, -2.0),
+            wheel_delta_px(MouseScrollUnit::Line, 1.0, 1.0),
+            -LINE_SCROLL_PX
+        );
+        // Wheel down (y<0) -> positive offset delta; scale factor is ignored.
+        assert_eq!(
+            wheel_delta_px(MouseScrollUnit::Line, -2.0, 2.0),
             2.0 * LINE_SCROLL_PX
         );
     }
 
     #[test]
-    fn wheel_pixel_delta_is_inverted_identity() {
-        assert_eq!(wheel_delta_px(MouseScrollUnit::Pixel, 5.0), -5.0);
-        assert_eq!(wheel_delta_px(MouseScrollUnit::Pixel, -3.0), 3.0);
+    fn wheel_pixel_delta_is_inverted_and_scaled_to_logical() {
+        // At 1x the pixel delta is just inverted.
+        assert_eq!(wheel_delta_px(MouseScrollUnit::Pixel, 5.0, 1.0), -5.0);
+        // On a 2x display (inverse_scale_factor 0.5) a 10-physical-px delta is
+        // 5 logical px.
+        assert_eq!(wheel_delta_px(MouseScrollUnit::Pixel, 10.0, 0.5), -5.0);
     }
 
     #[test]
@@ -1261,6 +1313,13 @@ mod tests {
     fn reveal_clamps_to_zero_and_to_max() {
         assert_eq!(reveal_offset(-10.0, 20.0, 100.0, 5.0, 200.0), 0.0);
         assert_eq!(reveal_offset(180.0, 20.0, 100.0, 0.0, 50.0), 50.0);
+    }
+
+    #[test]
+    fn reveal_shows_top_of_a_row_taller_than_the_viewport() {
+        // A row taller than the viewport shows its top, not its bottom: when the
+        // row is below, clamp to row_top (120) rather than row_bottom - viewport.
+        assert_eq!(reveal_offset(120.0, 200.0, 100.0, 0.0, 500.0), 120.0);
     }
 
     #[test]
