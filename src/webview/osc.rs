@@ -2,10 +2,8 @@
 //! at the requesting terminal's cursor (the `MountInline` / `UnmountInline`
 //! verbs); the non-inline tab verbs are accepted but no longer acted on.
 
+use super::inline::{InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline};
 use crate::control_plane::DynamicRegistry;
-use crate::inline_webview::{
-    InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline,
-};
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
 use std::sync::Arc;

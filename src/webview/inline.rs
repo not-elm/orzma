@@ -5,11 +5,11 @@
 //! `OzmuxInlineWebviewPlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
+use super::osc::NonInteractive;
+use super::render::preload::build_dynamic_preload;
 use crate::control_plane::{
     ConnectionWriters, DynSource, DynamicRegistry, NormalizedChord, PushMsg, WebviewOwner,
 };
-use crate::osc_webview::NonInteractive;
-use crate::webview_render::preload::build_dynamic_preload;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
@@ -690,7 +690,7 @@ fn on_placement_removed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::osc_webview::on_osc_webview_request;
+    use crate::webview::osc::on_osc_webview_request;
     use bevy::ecs::system::RunSystemOnce;
     use bevy_cef::prelude::PreloadScripts;
     use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};

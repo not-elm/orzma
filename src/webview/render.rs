@@ -3,9 +3,9 @@
 //! step with the active pane, and routes the `ozma.call` frames the page bridge
 //! emits to the registering program over the control socket.
 
+use super::inline::InlineWebview;
+use super::osc::NonInteractive;
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
-use crate::inline_webview::InlineWebview;
-use crate::osc_webview::NonInteractive;
 use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
@@ -289,7 +289,7 @@ mod tests {
 
     #[test]
     fn non_interactive_webview_surface_never_takes_keyboard_focus() {
-        use crate::osc_webview::NonInteractive;
+        use crate::webview::osc::NonInteractive;
         use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
         use tmux_control_parser::CellDims;
 
