@@ -406,7 +406,7 @@ mod tests {
         }];
         let events = Arc::new(EventQueues::from_decls(&decls));
         events.ingest("hello", json!({"message": "a"}));
-        events.ingest("hello", json!({"nope": 1})); // fails to deserialize -> skipped
+        events.ingest("hello", json!({"nope": 1}));
         events.ingest("hello", json!({"message": "b"}));
 
         let (sock, _b) = std::os::unix::net::UnixStream::pair().unwrap();
