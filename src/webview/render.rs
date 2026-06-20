@@ -65,6 +65,7 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(JsEmitEventPlugin::<OzmuxFrame>::default())
             .add_observer(on_ozmux_call_frame)
+            .add_observer(on_webview_address_changed)
             .add_observer(drop_ozmux_inflight_on_webview_despawn)
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
@@ -173,6 +174,40 @@ fn on_ozmux_call_frame(
 fn reject_ozmux_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
     let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
     commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
+}
+
+/// Outbound (Tier 1 back-channel): when a webview's top-level URL changes (CEF
+/// `OnAddressChange` — link clicks, hint activations, redirects, hash/pushState),
+/// forwards a `urlChanged` call to the registering program so it can track
+/// page-driven navigation (e.g. ozbrowser's history + URL bar). Scoped to remote
+/// `http(s)` webviews; `ozma-dyn://` dir/inline views (which register no
+/// `urlChanged` handler) are skipped. Fire-and-forget: the minted reqId is not
+/// recorded, so the program's reply finds no in-flight entry and is dropped by
+/// `OzmuxRpc::take_for_connection`.
+fn on_webview_address_changed(
+    addr: On<AddressChanged>,
+    mut rpc: ResMut<OzmuxRpc>,
+    writers: Res<ConnectionWriters>,
+    views: Query<(&WebviewOwner, &WebviewSource)>,
+) {
+    let Ok((owner, source)) = views.get(addr.webview) else {
+        return;
+    };
+    let WebviewSource::Url(source_url) = source else {
+        return;
+    };
+    if !(source_url.starts_with("http://") || source_url.starts_with("https://")) {
+        return;
+    }
+    let line = serde_json::json!({
+        "op": "call",
+        "handle": owner.handle,
+        "reqId": rpc.mint(),
+        "method": "urlChanged",
+        "params": { "url": addr.url },
+    })
+    .to_string();
+    let _ = writers.send(owner.connection_id, line);
 }
 
 /// Despawn prune: drop a despawned webview's in-flight back-channel calls.
@@ -453,6 +488,82 @@ mod tests {
                 .resource::<OzmuxRpc>()
                 .count_in_flight_for_test(),
             1
+        );
+    }
+
+    fn address_changed_app() -> (App, crossbeam_channel::Receiver<String>) {
+        use crossbeam_channel::unbounded;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(OzmuxRpc::default());
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_webview_address_changed);
+        (app, rx)
+    }
+
+    #[test]
+    fn address_change_pushes_urlchanged_call_to_owner_for_http_url() {
+        let (mut app, rx) = address_changed_app();
+        let webview = app
+            .world_mut()
+            .spawn((
+                WebviewOwner {
+                    connection_id: 7,
+                    handle: "H".into(),
+                },
+                WebviewSource::new("https://example.com"),
+            ))
+            .id();
+
+        app.world_mut().trigger(AddressChanged {
+            webview,
+            url: "https://example.com/next".into(),
+            can_go_back: true,
+            can_go_forward: false,
+        });
+
+        let line = rx.try_recv().expect("a urlChanged call was pushed");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["op"], "call");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["method"], "urlChanged");
+        assert_eq!(v["params"]["url"], "https://example.com/next");
+        assert_eq!(
+            app.world()
+                .resource::<OzmuxRpc>()
+                .count_in_flight_for_test(),
+            0,
+            "urlChanged is fire-and-forget: it records no in-flight call"
+        );
+    }
+
+    #[test]
+    fn address_change_on_dyn_view_pushes_nothing() {
+        let (mut app, rx) = address_changed_app();
+        let webview = app
+            .world_mut()
+            .spawn((
+                WebviewOwner {
+                    connection_id: 7,
+                    handle: "H".into(),
+                },
+                WebviewSource::new("ozma-dyn://H/index.html"),
+            ))
+            .id();
+
+        app.world_mut().trigger(AddressChanged {
+            webview,
+            url: "ozma-dyn://H/index.html#section".into(),
+            can_go_back: false,
+            can_go_forward: false,
+        });
+
+        assert!(
+            rx.try_recv().is_err(),
+            "an ozma-dyn:// dir/inline view must report no urlChanged"
         );
     }
 }

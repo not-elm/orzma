@@ -4,12 +4,13 @@
 //! disconnect or surface despawn. Uses a Tokio-free reader/writer thread model.
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
-use crate::control_plane::protocol::{HostKeyChord, RegisterKind, ServerMsg};
+use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
 use crate::webview::mount::Webview;
 use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
+use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use ozmux_tmux::TmuxPane;
@@ -70,6 +71,11 @@ impl DynSource {
             DynSource::Dir(_) | DynSource::Inline(_) => true,
             DynSource::Url { bridge, .. } => *bridge,
         }
+    }
+
+    /// Whether this source is a remote `http(s)` URL (vs `Dir`/`Inline`).
+    pub(crate) fn is_url(&self) -> bool {
+        matches!(self, DynSource::Url { .. })
     }
 }
 
@@ -413,6 +419,7 @@ fn apply_control_events(
     mut registry: ResMut<DynamicRegistry>,
     mut rpc: ResMut<OzmuxRpc>,
     mut focused: Option<ResMut<FocusedWebview>>,
+    mut sources: Query<&mut WebviewSource>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<WebviewAssetRegistryRes>,
     webviews: Query<(Entity, &Webview)>,
@@ -558,6 +565,59 @@ fn apply_control_events(
                             focused.0 = None;
                         }
                     }
+                }
+            }
+            ControlEvent::Navigate {
+                connection_id,
+                owner_surface,
+                handle,
+                action,
+            } => {
+                let Some(view) = registry.get(&handle) else {
+                    continue;
+                };
+                if view.connection_id != connection_id {
+                    tracing::debug!(handle = %handle, "navigate for unowned handle, dropping");
+                    continue;
+                }
+                let is_url = view.source.is_url();
+                let target = webviews.iter().find(|(entity, v)| {
+                    v.view_id == handle
+                        && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
+                });
+                let Some((entity, _)) = target else {
+                    tracing::debug!(handle = %handle, "navigate for unmounted view, dropping");
+                    continue;
+                };
+                match action {
+                    NavAction::To(url) => {
+                        if !is_url {
+                            tracing::debug!(handle = %handle, "navigate To on a non-url view, dropping");
+                            continue;
+                        }
+                        match validate_url_source(&url) {
+                            Ok(valid) => {
+                                if let Ok(mut source) = sources.get_mut(entity) {
+                                    // Mutate only on a real change so navigating to the
+                                    // URL already loaded does not fire a spurious CEF
+                                    // reload (WebviewSource has no PartialEq for set_if_neq).
+                                    let unchanged = matches!(
+                                        &*source,
+                                        WebviewSource::Url(cur) if *cur == valid
+                                    );
+                                    if !unchanged {
+                                        *source = WebviewSource::Url(valid);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(handle = %handle, error = e, "navigate To rejected url");
+                            }
+                        }
+                    }
+                    NavAction::Back => commands.trigger(RequestGoBack { webview: entity }),
+                    NavAction::Forward => commands.trigger(RequestGoForward { webview: entity }),
+                    NavAction::Reload => commands.trigger(RequestReload { webview: entity }),
                 }
             }
         }
@@ -1415,6 +1475,174 @@ mod apply_tests {
 
         let caps = app.world().resource::<Caps>();
         assert_eq!(caps.0, vec![(mounted, "ozma.event".to_string())]);
+    }
+
+    #[test]
+    fn apply_navigate_to_updates_webview_source_for_owned_url_view() {
+        use bevy_cef::prelude::WebviewSource;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "H".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://example.com".into(),
+                    bridge: true,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    view_id: "H".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+                WebviewSource::new("https://example.com"),
+                ChildOf(surface),
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Navigate {
+                connection_id: 5,
+                owner_surface: surface,
+                handle: "H".into(),
+                action: NavAction::To("https://example.com/next".into()),
+            })
+            .unwrap();
+        app.update();
+
+        match app.world().get::<WebviewSource>(child).unwrap() {
+            WebviewSource::Url(u) => assert_eq!(u, "https://example.com/next"),
+            other => panic!("expected Url, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_navigate_back_triggers_request_go_back_on_owned_view() {
+        use bevy_cef::prelude::{RequestGoBack, WebviewSource};
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "H".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://example.com".into(),
+                    bridge: true,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    view_id: "H".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+                WebviewSource::new("https://example.com"),
+                ChildOf(surface),
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct BackOn(Vec<Entity>);
+        app.insert_resource(BackOn::default());
+        app.add_observer(|e: On<RequestGoBack>, mut c: ResMut<BackOn>| c.0.push(e.webview));
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Navigate {
+                connection_id: 5,
+                owner_surface: surface,
+                handle: "H".into(),
+                action: NavAction::Back,
+            })
+            .unwrap();
+        app.update();
+
+        assert_eq!(app.world().resource::<BackOn>().0, vec![child]);
+    }
+
+    #[test]
+    fn apply_navigate_is_dropped_for_unowned_connection() {
+        use bevy_cef::prelude::WebviewSource;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "H".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://example.com".into(),
+                    bridge: true,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    view_id: "H".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+                WebviewSource::new("https://example.com"),
+                ChildOf(surface),
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Navigate {
+                connection_id: 9, // not the owner (5)
+                owner_surface: surface,
+                handle: "H".into(),
+                action: NavAction::To("https://evil.example/x".into()),
+            })
+            .unwrap();
+        app.update();
+
+        match app.world().get::<WebviewSource>(child).unwrap() {
+            WebviewSource::Url(u) => {
+                assert_eq!(u, "https://example.com", "unowned navigate is a no-op")
+            }
+            other => panic!("expected Url, got {other:?}"),
+        }
     }
 }
 

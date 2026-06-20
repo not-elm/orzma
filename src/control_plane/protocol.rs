@@ -57,6 +57,27 @@ pub(crate) enum ClientMsg {
         #[serde(default)]
         instance: Option<String>,
     },
+    /// Navigate a handle's mounted webview in place.
+    Navigate {
+        /// The target handle.
+        handle: String,
+        /// What to do.
+        action: NavAction,
+    },
+}
+
+/// A navigation action on an already-registered handle's mounted webview.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NavAction {
+    /// Go back in the webview's native session history.
+    Back,
+    /// Go forward in the webview's native session history.
+    Forward,
+    /// Reload the current page.
+    Reload,
+    /// Navigate the existing webview to a new URL.
+    To(String),
 }
 
 /// A forward-key chord as received on the register wire (host side).
@@ -392,6 +413,34 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&msg).unwrap(),
             r#"{"op":"compositing","handle":"abc123","active":false}"#
+        );
+    }
+
+    #[test]
+    fn parses_navigate_back() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"op":"navigate","handle":"H","action":"back"}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Navigate {
+                handle: "H".into(),
+                action: NavAction::Back,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_navigate_to_url() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"op":"navigate","handle":"H","action":{"to":"https://example.com"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Navigate {
+                handle: "H".into(),
+                action: NavAction::To("https://example.com".into()),
+            }
         );
     }
 }
