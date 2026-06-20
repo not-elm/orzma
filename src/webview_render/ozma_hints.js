@@ -100,8 +100,8 @@
       var badge = document.createElement('div');
       badge.textContent = labels[i].toUpperCase();
       badge.setAttribute('style',
-        'position:fixed;left:' + Math.max(0, Math.floor(it.rect.left)) + 'px;' +
-        'top:' + Math.max(0, Math.floor(it.rect.top)) + 'px;' +
+        'position:fixed;left:' + Math.floor(it.rect.left) + 'px;' +
+        'top:' + Math.floor(it.rect.top) + 'px;' +
         'background:#ffd76e;color:#302505;font:bold 11px/14px monospace;' +
         'padding:0 3px;border-radius:3px;box-shadow:0 1px 2px rgba(0,0,0,.4);');
       overlay.appendChild(badge);
@@ -113,6 +113,13 @@
 
   function activate(t) {
     teardown();
+    if (!t.el.isConnected) {
+      // The captured node was detached between show() and activation (dynamic
+      // page re-render); clicking it is a silent no-op, so report no activation
+      // instead of a false 'navigated'/'clicked'.
+      ozma.call('hintResult', { kind: 'empty' });
+      return;
+    }
     if (t.kind === 'input') {
       t.el.focus();
       ozma.call('hintResult', { kind: 'focusedInput' });
@@ -139,7 +146,10 @@
         survivor = t;
       }
     }
-    if (remaining === 1) activate(survivor);
+    // NOTE: require a non-empty prefix — an empty prefix on a single-target page
+    // (e.g. after a dead-end keystroke restores prefix to '') must NOT auto-activate
+    // the lone hint the user never selected.
+    if (remaining === 1 && p.length > 0) activate(survivor);
     return remaining;
   }
 

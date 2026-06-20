@@ -123,9 +123,12 @@ impl App {
                 vec![]
             }
             Action::AddressConfirm => {
-                let url = self.address_buf.trim().to_owned();
+                let input = self.address_buf.trim();
+                let empty = input.is_empty();
+                let url = normalize_url(input);
                 self.mode = Mode::Normal;
-                if url.is_empty() || url == self.url {
+                self.address_buf.clear();
+                if empty || url == self.url {
                     vec![]
                 } else {
                     vec![Cmd::Navigate(url)]
@@ -185,6 +188,17 @@ impl App {
             'g' => vec![Cmd::Scroll(ScrollAction::Top)],
             _ => vec![],
         }
+    }
+}
+
+/// Prepends `https://` to a scheme-less address-bar input so a bare hostname
+/// (`github.com`) navigates instead of being rejected by the host's URL
+/// validation. Input already carrying a `scheme://` is returned unchanged.
+fn normalize_url(input: &str) -> String {
+    if input.contains("://") {
+        input.to_owned()
+    } else {
+        format!("https://{input}")
     }
 }
 
@@ -292,6 +306,21 @@ mod tests {
         let cmds = a.on_action(Action::AddressConfirm);
         assert_eq!(cmds, vec![Cmd::Navigate("https://n".into())]);
         assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn address_confirm_prepends_https_to_bare_host_and_clears_buffer() {
+        let mut a = app();
+        a.on_action(Action::OpenAddress);
+        for _ in 0.."https://example.com".len() {
+            a.on_action(Action::AddressBackspace);
+        }
+        for c in "github.com".chars() {
+            a.on_action(Action::AddressChar(c));
+        }
+        let cmds = a.on_action(Action::AddressConfirm);
+        assert_eq!(cmds, vec![Cmd::Navigate("https://github.com".into())]);
+        assert_eq!(a.address_buf(), "", "buffer cleared after confirm");
     }
 
     #[test]

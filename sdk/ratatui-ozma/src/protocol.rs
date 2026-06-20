@@ -51,8 +51,11 @@ pub(crate) enum ClientMsg {
 }
 
 /// A navigation action on an already-registered handle's mounted webview.
+// NOTE: rename_all must match the host's NavAction (snake_case) so the wire
+// contract agrees for any future multi-word variant, not just the current
+// single-word ones where lowercase and snake_case coincide.
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum NavAction {
     /// Go back in the webview's native session history.
     Back,

@@ -72,6 +72,11 @@ impl DynSource {
             DynSource::Url { bridge, .. } => *bridge,
         }
     }
+
+    /// Whether this source is a remote `http(s)` URL (vs `Dir`/`Inline`).
+    pub(crate) fn is_url(&self) -> bool {
+        matches!(self, DynSource::Url { .. })
+    }
 }
 
 /// A Tier 1 dynamic registration: its content source, entry, input policy, and
@@ -575,7 +580,7 @@ fn apply_control_events(
                     tracing::debug!(handle = %handle, "navigate for unowned handle, dropping");
                     continue;
                 }
-                let is_url = matches!(view.source, DynSource::Url { .. });
+                let is_url = view.source.is_url();
                 let target = inline.iter().find(|(entity, v)| {
                     v.view_id == handle
                         && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
@@ -593,7 +598,16 @@ fn apply_control_events(
                         match validate_url_source(&url) {
                             Ok(valid) => {
                                 if let Ok(mut source) = sources.get_mut(entity) {
-                                    *source = WebviewSource::Url(valid);
+                                    // Mutate only on a real change so navigating to the
+                                    // URL already loaded does not fire a spurious CEF
+                                    // reload (WebviewSource has no PartialEq for set_if_neq).
+                                    let unchanged = matches!(
+                                        &*source,
+                                        WebviewSource::Url(cur) if *cur == valid
+                                    );
+                                    if !unchanged {
+                                        *source = WebviewSource::Url(valid);
+                                    }
                                 }
                             }
                             Err(e) => {

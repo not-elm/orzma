@@ -85,18 +85,10 @@ fn event_loop(
             for cmd in app.on_action(action) {
                 match cmd {
                     Cmd::Quit => return Ok(()),
-                    Cmd::Navigate(url) => {
-                        let _ = view.navigate(url);
-                    }
-                    Cmd::HistoryBack => {
-                        let _ = view.go_back();
-                    }
-                    Cmd::HistoryForward => {
-                        let _ = view.go_forward();
-                    }
-                    Cmd::Reload => {
-                        let _ = view.reload();
-                    }
+                    Cmd::Navigate(url) => view.navigate(url)?,
+                    Cmd::HistoryBack => view.go_back()?,
+                    Cmd::HistoryForward => view.go_forward()?,
+                    Cmd::Reload => view.reload()?,
                     Cmd::Scroll(action) => {
                         let _ = view.emit("scroll", &scroll_payload(action));
                     }

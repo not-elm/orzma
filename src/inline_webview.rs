@@ -184,7 +184,7 @@ pub(crate) fn resolve_mount(
         DynSource::Inline(_) => format!("ozma-dyn://{id}/index.html"),
         DynSource::Url { url, .. } => url.clone(),
     };
-    let is_url = matches!(view.source, DynSource::Url { .. });
+    let is_url = view.source.is_url();
     let owner = view
         .source
         .is_bridged()
