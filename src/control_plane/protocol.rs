@@ -478,7 +478,7 @@ mod tests {
             serde_json::from_str(r#"{"op":"register","kind":"inline","html":"x"}"#).unwrap();
         match m {
             ClientMsg::Register(RegisterKind::Inline { preload, .. }) => {
-                assert!(preload.is_empty())
+                assert!(preload.is_empty());
             }
             _ => panic!("expected inline register"),
         }
