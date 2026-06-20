@@ -5,6 +5,21 @@ A terminal multiplexer built as a single
 GPU rendering, layout, input, and in-process CEF webview rendering all run in
 one ECS world.
 
+## Installation
+
+macOS (Apple Silicon) via Homebrew Cask:
+
+```bash
+brew install --cask not-elm/ozmux/ozmux
+```
+
+This taps `not-elm/homebrew-ozmux`, installs `ozmux.app` into `/Applications`,
+and pulls in `tmux` as a dependency. Upgrade later with:
+
+```bash
+brew upgrade --cask ozmux
+```
+
 ## Prerequisites
 
 - Rust 1.95 (pinned by `rust-toolchain.toml`)
