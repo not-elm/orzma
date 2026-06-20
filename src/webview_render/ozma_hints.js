@@ -7,19 +7,33 @@
   var OVERLAY_ID = '__ozmaHints';
   var state = null;
 
-  function isVisible(el) {
+  function visibleRect(el) {
+    if (el.matches && el.matches(':disabled')) return null;
     var r = el.getBoundingClientRect();
-    if (r.width === 0 || r.height === 0) return false;
+    if (r.width === 0 || r.height === 0) return null;
     if (r.bottom < 0 || r.right < 0 || r.top > window.innerHeight || r.left > window.innerWidth) {
-      return false;
+      return null;
     }
-    var s = getComputedStyle(el);
-    return s.visibility !== 'hidden' && s.display !== 'none' && parseFloat(s.opacity) > 0;
+    if (el.checkVisibility) {
+      var ok = el.checkVisibility({
+        opacityProperty: true,
+        visibilityProperty: true,
+        contentVisibilityAuto: true,
+      });
+      if (!ok) return null;
+    } else {
+      var s = getComputedStyle(el);
+      if (s.visibility === 'hidden' || s.display === 'none' || parseFloat(s.opacity) === 0) {
+        return null;
+      }
+    }
+    return r;
   }
 
   function classify(el) {
     var tag = el.tagName.toLowerCase();
     if (tag === 'a' && el.hasAttribute('href')) return 'link';
+    if (el.isContentEditable) return 'input';
     if (tag === 'textarea' || tag === 'select') return 'input';
     if (tag === 'input') {
       var t = (el.getAttribute('type') || 'text').toLowerCase();
@@ -30,18 +44,37 @@
     return 'button';
   }
 
+  // Uniform-length labels over ALPHABET (label i is i written base-k, big-endian),
+  // so labels are prefix-free and the length grows to cover any target count.
   function generateLabels(n) {
-    var a = ALPHABET, k = a.length, labels = [];
-    if (n <= k) {
-      for (var i = 0; i < n; i++) labels.push(a[i]);
-      return labels;
+    var a = ALPHABET, k = a.length;
+    if (n <= 0) return [];
+    var len = 1, cap = k;
+    while (cap < n) {
+      len++;
+      cap *= k;
     }
-    for (var i = 0; i < k && labels.length < n; i++) {
-      for (var j = 0; j < k && labels.length < n; j++) {
-        labels.push(a[i] + a[j]);
+    var labels = [];
+    for (var i = 0; i < n; i++) {
+      var s = '', x = i;
+      for (var d = 0; d < len; d++) {
+        s = a[x % k] + s;
+        x = Math.floor(x / k);
       }
+      labels.push(s);
     }
     return labels;
+  }
+
+  function collect() {
+    var sel = 'a[href], button, input, textarea, select, [role=button], [onclick]';
+    var els = Array.prototype.slice.call(document.querySelectorAll(sel));
+    var items = [];
+    for (var i = 0; i < els.length; i++) {
+      var rect = visibleRect(els[i]);
+      if (rect) items.push({ el: els[i], rect: rect, kind: classify(els[i]) });
+    }
+    return items;
   }
 
   function teardown() {
@@ -52,33 +85,27 @@
 
   function show() {
     teardown();
-    var sel = 'a[href], button, input, textarea, select, [role=button], [onclick]';
-    var els = Array.prototype.slice.call(document.querySelectorAll(sel)).filter(isVisible);
-    if (els.length === 0) {
+    var items = collect();
+    if (items.length === 0) {
       ozma.call('hintResult', { kind: 'empty' });
       return;
     }
-    var labels = generateLabels(els.length);
-    if (els.length > labels.length) {
-      els = els.slice(0, labels.length);
-    }
+    var labels = generateLabels(items.length);
     var overlay = document.createElement('div');
     overlay.id = OVERLAY_ID;
     overlay.setAttribute('style', 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;');
     var targets = [];
-    for (var i = 0; i < els.length; i++) {
-      var el = els[i];
-      var label = labels[i];
-      var r = el.getBoundingClientRect();
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
       var badge = document.createElement('div');
-      badge.textContent = label.toUpperCase();
+      badge.textContent = labels[i].toUpperCase();
       badge.setAttribute('style',
-        'position:fixed;left:' + Math.max(0, Math.floor(r.left)) + 'px;' +
-        'top:' + Math.max(0, Math.floor(r.top)) + 'px;' +
+        'position:fixed;left:' + Math.max(0, Math.floor(it.rect.left)) + 'px;' +
+        'top:' + Math.max(0, Math.floor(it.rect.top)) + 'px;' +
         'background:#ffd76e;color:#302505;font:bold 11px/14px monospace;' +
         'padding:0 3px;border-radius:3px;box-shadow:0 1px 2px rgba(0,0,0,.4);');
       overlay.appendChild(badge);
-      targets.push({ el: el, label: label, kind: classify(el), badge: badge });
+      targets.push({ el: it.el, label: labels[i], kind: it.kind, badge: badge });
     }
     document.documentElement.appendChild(overlay);
     state = { targets: targets, prefix: '' };
@@ -95,9 +122,13 @@
     }
   }
 
+  // Hides badges whose label does not start with the prefix and activates the
+  // sole survivor as soon as the prefix uniquely identifies it (labels are
+  // prefix-free, so a single remaining label is unambiguous even before its
+  // full length is typed). Returns the number of surviving badges.
   function refilter() {
     var p = state.prefix;
-    var match = null;
+    var survivor = null;
     var remaining = 0;
     for (var i = 0; i < state.targets.length; i++) {
       var t = state.targets[i];
@@ -105,10 +136,11 @@
       t.badge.style.display = hit ? '' : 'none';
       if (hit) {
         remaining++;
-        if (t.label === p) match = t;
+        survivor = t;
       }
     }
-    if (match && remaining === 1) activate(match);
+    if (remaining === 1) activate(survivor);
+    return remaining;
   }
 
   ozma.on('hints:show', function () { show(); });
@@ -118,16 +150,20 @@
     if (payload && payload.backspace) {
       if (state.prefix.length === 0) return;
       state.prefix = state.prefix.slice(0, -1);
-    } else {
-      var key = payload && payload.key;
-      if (!key) return;
-      var ch = key.toLowerCase();
-      if (ALPHABET.indexOf(ch) === -1) return;
-      var next = state.prefix + ch;
-      var any = state.targets.some(function (t) { return t.label.indexOf(next) === 0; });
-      if (!any) return;
-      state.prefix = next;
+      refilter();
+      return;
     }
-    refilter();
+    var key = payload && payload.key;
+    if (!key) return;
+    var ch = key.toLowerCase();
+    if (ALPHABET.indexOf(ch) === -1) return;
+    var prev = state.prefix;
+    state.prefix = prev + ch;
+    if (refilter() === 0) {
+      // The new prefix matches nothing — ignore the keystroke and restore the
+      // previous view in a second pass (only on this rare dead-end path).
+      state.prefix = prev;
+      refilter();
+    }
   });
 })();

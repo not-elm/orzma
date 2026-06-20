@@ -489,11 +489,17 @@ mod tests {
     }
 
     #[test]
-    fn hint_result_navigated_or_clicked_returns_to_normal() {
-        let mut a = app();
-        a.on_action(Action::EnterHint);
-        a.on_hint_result("navigated");
-        assert_eq!(a.mode(), Mode::Normal);
+    fn hint_result_non_input_kinds_return_to_normal() {
+        for kind in ["navigated", "clicked", "empty"] {
+            let mut a = app();
+            a.on_action(Action::EnterHint);
+            a.on_hint_result(kind);
+            assert_eq!(
+                a.mode(),
+                Mode::Normal,
+                "kind {kind:?} must return to Normal"
+            );
+        }
     }
 
     #[test]

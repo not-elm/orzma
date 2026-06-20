@@ -1950,6 +1950,10 @@ mod tests {
             !preload.0.iter().any(|s| s.contains("__ozmuxGranted")),
             "a dynamic view must carry no capability grant / host bridge"
         );
+        assert!(
+            !preload.0.iter().any(|s| s.contains("hints:show")),
+            "a dir/inline view must not carry the link-hint engine (build_dynamic_preload)"
+        );
     }
 
     #[test]
@@ -2199,6 +2203,10 @@ mod tests {
         assert!(
             !preload.0.is_empty(),
             "a bridged url must carry the ozmux bridge scripts"
+        );
+        assert!(
+            preload.0.iter().any(|s| s.contains("hints:show")),
+            "a bridged url view must carry the link-hint engine (build_url_preload)"
         );
         assert_eq!(
             app.world().get::<WebviewOwner>(child),
