@@ -194,7 +194,6 @@ class AssembleAndEmbed(unittest.TestCase):
         return fw
 
     def _cfg(self, d: Path) -> "bm.BundleConfig":
-        import shutil as _sh
         self._macho(d / "ozmux-gui")
         self._macho(d / "helper")
         fw = self._fake_cef(d)
