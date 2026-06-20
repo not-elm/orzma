@@ -2,10 +2,15 @@
 //! rendering to the same raw control-mode string its former builder produced.
 
 mod env;
+mod query;
 mod size;
 mod target;
 
 pub use env::{SetEnvironment, SetEnvironmentInSession};
+pub(crate) use query::{
+    ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListKeys, ListWindows,
+    ModeKeys, PrefixOptions, SubscribeWindowFlags, Version,
+};
 pub use size::{RefreshClient, ResizeWindow, WindowRefreshClient};
 pub use target::{
     RenameSession, RenameWindow, ResizePaneX, ResizePaneY, SelectPane, SelectWindow, SwitchClient,
