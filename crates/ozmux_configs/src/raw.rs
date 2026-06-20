@@ -10,7 +10,7 @@ use crate::osc_webview::OscWebviewPatch;
 use crate::ozma::OzmaPatch;
 use crate::shortcuts::Shortcuts;
 use crate::startup::StartupMode;
-use crate::theme::ThemePatch;
+use crate::theme::Theme;
 use crate::tmux::TmuxPatch;
 use serde::Deserialize;
 
@@ -20,7 +20,7 @@ use serde::Deserialize;
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawConfigs {
     pub(crate) shortcuts: Option<Shortcuts>,
-    pub(crate) theme: Option<ThemePatch>,
+    pub(crate) theme: Option<Theme>,
     pub(crate) font: Option<FontPatch>,
     pub(crate) mouse: Option<MousePatch>,
     pub(crate) keyboard: Option<KeyboardPatch>,
@@ -34,14 +34,15 @@ pub(crate) struct RawConfigs {
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `bindings` is full-replace when present.
-    /// The `theme`, `font`, `mouse`, `keyboard`, `inactive_pane`, and `osc_webview`
+    /// The `font`, `mouse`, `keyboard`, `inactive_pane`, and `osc_webview`
     /// sections use their respective `Patch::apply_to` for per-field merge.
+    /// The `theme` section is full-replace (serde default fills missing fields).
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(shortcuts) = self.shortcuts {
             base.shortcuts = shortcuts;
         }
-        if let Some(patch) = self.theme {
-            base.theme = patch.apply_to(base.theme);
+        if let Some(theme) = self.theme {
+            base.theme = theme;
         }
         if let Some(patch) = self.font {
             base.font = patch.apply_to(base.font);
