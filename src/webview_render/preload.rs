@@ -1,5 +1,6 @@
-//! Preload-script builder for ozmux-managed webviews: the `window.ozma` Tier 1
-//! back-channel bridge (`ozma_bridge.js`).
+//! Preload-script builders for ozmux-managed webviews: the `window.ozma` Tier 1
+//! back-channel bridge (`ozma_bridge.js`), and — for URL webviews — the
+//! Vimium-style link-hint engine (`ozma_hints.js`) layered after it.
 
 use bevy_cef::prelude::PreloadScripts;
 

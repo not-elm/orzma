@@ -14,7 +14,7 @@
       return false;
     }
     var s = getComputedStyle(el);
-    return s.visibility !== 'hidden' && s.display !== 'none' && s.opacity !== '0';
+    return s.visibility !== 'hidden' && s.display !== 'none' && parseFloat(s.opacity) > 0;
   }
 
   function classify(el) {
@@ -59,6 +59,9 @@
       return;
     }
     var labels = generateLabels(els.length);
+    if (els.length > labels.length) {
+      els = els.slice(0, labels.length);
+    }
     var overlay = document.createElement('div');
     overlay.id = OVERLAY_ID;
     overlay.setAttribute('style', 'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;');
@@ -113,6 +116,7 @@
   ozma.on('hints:key', function (payload) {
     if (!state) return;
     if (payload && payload.backspace) {
+      if (state.prefix.length === 0) return;
       state.prefix = state.prefix.slice(0, -1);
     } else {
       var key = payload && payload.key;
