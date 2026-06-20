@@ -1,4 +1,4 @@
-//! A keyboard chord declared as passthrough for a webview (crossterm-typed).
+//! A keyboard chord declared as a forward-key for a webview (crossterm-typed).
 
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use serde::Serialize;

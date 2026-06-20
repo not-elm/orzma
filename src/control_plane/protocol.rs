@@ -59,7 +59,7 @@ pub(crate) enum ClientMsg {
     },
 }
 
-/// A passthrough chord as received on the register wire (host side).
+/// A forward-key chord as received on the register wire (host side).
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(crate) struct HostKeyChord {
     /// Modifier names: any of `alt`, `ctrl`, `shift`, `meta`.
@@ -83,7 +83,7 @@ pub(crate) enum RegisterKind {
         interactive: bool,
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
-        passthrough: Vec<HostKeyChord>,
+        forward_keys: Vec<HostKeyChord>,
     },
     /// Serve a single dynamic HTML document supplied inline.
     Inline {
@@ -94,7 +94,7 @@ pub(crate) enum RegisterKind {
         interactive: bool,
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
-        passthrough: Vec<HostKeyChord>,
+        forward_keys: Vec<HostKeyChord>,
     },
     /// Load a remote `http(s)` URL as the top-level document.
     Url {
@@ -108,7 +108,7 @@ pub(crate) enum RegisterKind {
         bridge: bool,
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
-        passthrough: Vec<HostKeyChord>,
+        forward_keys: Vec<HostKeyChord>,
     },
 }
 
@@ -191,7 +191,7 @@ mod tests {
                 root: "/abs".into(),
                 entry: "index.html".into(),
                 interactive: true,
-                passthrough: vec![],
+                forward_keys: vec![],
             })
         );
     }
@@ -207,7 +207,7 @@ mod tests {
             ClientMsg::Register(RegisterKind::Inline {
                 html: "<h1>x</h1>".into(),
                 interactive: false,
-                passthrough: vec![],
+                forward_keys: vec![],
             })
         );
     }
@@ -296,16 +296,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_register_with_passthrough() {
+    fn parses_register_with_forward_keys() {
         let m: ClientMsg = serde_json::from_str(
-            r#"{"op":"register","kind":"inline","html":"x","passthrough":[{"mods":["alt"],"key":"h"}]}"#,
+            r#"{"op":"register","kind":"inline","html":"x","forward_keys":[{"mods":["alt"],"key":"h"}]}"#,
         )
         .unwrap();
         match m {
-            ClientMsg::Register(RegisterKind::Inline { passthrough, .. }) => {
-                assert_eq!(passthrough.len(), 1);
-                assert_eq!(passthrough[0].key, "h");
-                assert_eq!(passthrough[0].mods, vec!["alt".to_string()]);
+            ClientMsg::Register(RegisterKind::Inline { forward_keys, .. }) => {
+                assert_eq!(forward_keys.len(), 1);
+                assert_eq!(forward_keys[0].key, "h");
+                assert_eq!(forward_keys[0].mods, vec!["alt".to_string()]);
             }
             _ => panic!("expected inline register"),
         }
@@ -322,7 +322,7 @@ mod tests {
                 url: "https://example.com".into(),
                 interactive: true,
                 bridge: false,
-                passthrough: vec![],
+                forward_keys: vec![],
             })
         );
     }
@@ -339,7 +339,7 @@ mod tests {
                 url: "https://app.example.com".into(),
                 interactive: true,
                 bridge: true,
-                passthrough: vec![],
+                forward_keys: vec![],
             })
         );
     }
@@ -354,7 +354,7 @@ mod tests {
                 url: "https://example.com".into(),
                 interactive: true,
                 bridge: false,
-                passthrough: vec![],
+                forward_keys: vec![],
             })
         );
     }

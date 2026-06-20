@@ -1,23 +1,21 @@
 //! Mouse gesture arbiter for the tmux backend.
 //!
 //! Owns a single left-button state machine (`TmuxMouseGesture`) that reads raw
-//! `MouseButtonInput` messages and issues `select-pane` on a focused press,
-//! or enters text-selection when a press drags past `drag_threshold_px`. When
-//! the pane is NOT in copy mode, drag starts a native VT selection on the
-//! `TerminalHandle` and multi-click (≥2) immediately selects a word/line and
-//! copies to clipboard; when already in copy mode, drag and multi-click use
-//! the existing tmux copy-mode path with pane-targeted `send-keys -X` commands.
+//! `MouseButtonInput` messages and issues `select-pane` on a focused press. When
+//! the pane is in copy mode, a press that drags past `drag_threshold_px` enters
+//! `Selecting` and multi-click (≥2) enters `PendingMultiSelect`; both relay the
+//! tmux copy-mode path with pane-targeted `send-keys -X` commands. Text selection,
+//! word/line copy, and hyperlink hover/open for a pane NOT in copy mode are owned
+//! by `ozma_terminal`'s shared mouse systems, not here.
 //! Divider-drag-to-resize is also here: a press within `divider_grab_tolerance_px`
 //! of a divider line enters `Resizing` state; the pointer's major-axis cell
 //! coordinate maps to an absolute target size sent as `resize-pane -x/-y`.
 
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
-use super::pane_hit::{cell_at_local, phys_to_pane_local, tmux_pane_at_phys};
+use super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
 use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::current_modifiers;
-use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
@@ -25,20 +23,15 @@ use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::mouse::MouseButtonInput;
+use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_terminal::Clipboard;
-use ozma_tty_engine::{
-    Column, Line, Point as APoint, SelectionType, Side as ASide, TerminalHandle,
-};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxPane,
     resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
@@ -75,22 +68,6 @@ impl Plugin for MousePlugin {
 struct ModalGate<'w> {
     picker: Res<'w, SessionPicker>,
     copy_prompt: Res<'w, CopyPrompt>,
-}
-
-/// Hyperlink-open inputs for the arbiter's Cmd/Ctrl-click branch, bundled to
-/// stay within Bevy's system-parameter limit.
-#[derive(SystemParam)]
-struct HyperlinkGate<'w, 's> {
-    grids: Query<'w, 's, &'static TerminalGrid>,
-    keys: Res<'w, ButtonInput<KeyCode>>,
-}
-
-/// Bundles VT-selection writes: terminal handles and the system clipboard.
-/// Mutable because both members require `&mut` access.
-#[derive(SystemParam)]
-struct VtSelectionParams<'w, 's> {
-    handles: Query<'w, 's, &'static mut TerminalHandle>,
-    clipboard: ResMut<'w, Clipboard>,
 }
 
 /// Bundles the two immutable copy-mode query reads used by the gesture arbiter.
@@ -136,14 +113,6 @@ enum GestureState {
         pane_id: PaneId,
         anchor: (u16, u16),
         begun: bool,
-        last_target: Option<(u16, u16)>,
-    },
-    /// Active VT (native) text selection — tmux copy-mode was NOT entered.
-    /// The selection lives entirely on the `TerminalHandle`; no tmux IPC.
-    SelectingVt {
-        pane: Entity,
-        /// Last cell the selection end was updated to (0-indexed col/row), for
-        /// deduplication: skip `flush_emit` when the pointer is in the same cell.
         last_target: Option<(u16, u16)>,
     },
     /// Dragging a divider to resize its primary pane.
@@ -246,19 +215,17 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 /// press within a divider's grab zone (whose primary pane has geometry) enters
 /// `Resizing`; otherwise the pane under the cursor is focused (`select-pane`)
 /// and the state becomes `Pressed`. While `Pressed`, a pointer that drags past
-/// `drag_threshold_px` transitions to either `Selecting` (tmux copy-mode, when
-/// the pane is already in copy mode) or `SelectingVt` (native VT selection on
-/// the `TerminalHandle`, when not in copy mode). Multi-click (≥2) on a pane in
-/// copy mode enters `PendingMultiSelect` to wait for a copy-mode snapshot, then
-/// selects a word/line via copy-mode commands; on a pane NOT in copy mode, it
-/// immediately selects via VT and copies to clipboard. Each frame while
-/// `Resizing` the pointer's major-axis cell coordinate is mapped to an absolute
-/// target size and sent as `resize-pane -x/-y` whenever the target changes. On
-/// `Released` from `Selecting` a begun selection is copied to clipboard; from
-/// `SelectingVt` the VT selection persists; from `Resizing` that never dragged,
-/// the pane under the cursor is focused as a fallback click. When the primary
-/// window is not focused, or a modal (picker / copy-search prompt) owns input,
-/// queued events are drained and the state is reset.
+/// `drag_threshold_px` transitions to `Selecting` when the pane is already in
+/// copy mode (drag/selection for a pane NOT in copy mode is owned by
+/// `ozma_terminal`). Multi-click (≥2) on a pane in copy mode enters
+/// `PendingMultiSelect` to wait for a copy-mode snapshot, then selects a
+/// word/line via copy-mode commands. Each frame while `Resizing` the pointer's
+/// major-axis cell coordinate is mapped to an absolute target size and sent as
+/// `resize-pane -x/-y` whenever the target changes. On `Released` from
+/// `Selecting` a begun selection is copied to clipboard; from `Resizing` that
+/// never dragged, the pane under the cursor is focused as a fallback click. When
+/// the primary window is not focused, or a modal (picker / copy-search prompt)
+/// owns input, queued events are drained and the state is reset.
 ///
 /// Each left press/release is first offered to the webview layer
 /// (`route_tmux_webview_left_click`): a press inside an interactive inline rect
@@ -268,13 +235,10 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 fn arbiter(
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
-    mut commands: Commands,
     mut queries: ResMut<CopyModeQueries>,
     mut webview_route: TmuxWebviewRouteParams,
-    mut vt_select: VtSelectionParams,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    hyperlink: HyperlinkGate,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OzmuxConfigsResource>>,
@@ -293,12 +257,6 @@ fn arbiter(
         // so just drop any in-flight inline press — leaving it set would let a
         // later release act on a stale child.
         gesture.webview_press = None;
-        if let GestureState::SelectingVt { pane, .. } = gesture.state
-            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
-        {
-            handle.selection_clear_vt_only();
-            handle.flush_emit(&mut commands, pane);
-        }
         gesture.state = GestureState::Idle;
         return;
     };
@@ -317,12 +275,6 @@ fn arbiter(
             cell_h,
             scale,
         );
-        if let GestureState::SelectingVt { pane, .. } = gesture.state
-            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
-        {
-            handle.selection_clear_vt_only();
-            handle.flush_emit(&mut commands, pane);
-        }
         gesture.state = GestureState::Idle;
         return;
     }
@@ -342,12 +294,6 @@ fn arbiter(
             cell_h,
             scale,
         );
-        if let GestureState::SelectingVt { pane, .. } = gesture.state
-            && let Ok(mut handle) = vt_select.handles.get_mut(pane)
-        {
-            handle.selection_clear_vt_only();
-            handle.flush_emit(&mut commands, pane);
-        }
         gesture.state = GestureState::Idle;
         return;
     }
@@ -371,7 +317,7 @@ fn arbiter(
         .unwrap_or(&[]);
 
     for ev in buttons.read() {
-        if ev.button != bevy::input::mouse::MouseButton::Left {
+        if ev.button != MouseButton::Left {
             continue;
         }
         if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
@@ -411,33 +357,6 @@ fn arbiter(
                     continue;
                 };
                 let pane_under = pane_under_cursor(&panes, cursor_phys);
-                // NOTE: this open-check must run (and `continue`) before the
-                // divider / select-pane logic below — otherwise a
-                // modifier-click on a link would also focus/select the pane in
-                // the same press.
-                if let Some((pane_e, _pane_id)) = pane_under {
-                    let mods = current_modifiers(&hyperlink.keys);
-                    if link_modifier_held(&mods)
-                        && let Some((_, _, node, transform)) =
-                            panes.iter().find(|(e, _, _, _)| *e == pane_e)
-                        && let Some(local) = phys_to_pane_local(node, transform, cursor_phys)
-                        && let Ok(grid) = hyperlink.grids.get(pane_e)
-                    {
-                        let (col, row, _) =
-                            cell_at_local(local, cell_w, cell_h, grid.cols, grid.rows);
-                        if let Some(uri) = should_open_at(
-                            grid,
-                            row.saturating_sub(1) as u16,
-                            col.saturating_sub(1) as u16,
-                            ozma_tty_engine::MouseButtonKind::Left,
-                            ozma_tty_engine::ButtonEventKind::Press,
-                            true,
-                        ) {
-                            try_open_uri(uri.as_str());
-                            continue;
-                        }
-                    }
-                }
                 // Resolve a divider grab to its primary pane's near edge + size.
                 // A divider whose primary pane has no projected geometry yet
                 // cannot be resized, so it falls through to a pane focus rather
@@ -515,87 +434,31 @@ fn arbiter(
                         pane_id,
                         origin_phys,
                         click_count,
-                    } if click_count >= 2 => {
-                        if copy_gate.copy_modes.get(pane).is_ok() {
-                            // NOTE: resolve the click cell before entering PendingMultiSelect —
-                            // a failed lookup here exits the match cleanly; once in PendingMultiSelect,
-                            // the state persists until a snapshot arrives (or the pane is destroyed).
-                            let Ok((_, p, node, transform)) = panes.get(pane) else {
-                                break;
-                            };
-                            let cols = p.dims.width as u16;
-                            let rows = p.dims.height as u16;
-                            let Some(cell) = cell_at_pane(
-                                node,
-                                transform,
-                                origin_phys,
-                                cell_w,
-                                cell_h,
-                                cols,
-                                rows,
-                            ) else {
-                                break;
-                            };
-                            let kind = if click_count == 2 {
-                                MultiSelectKind::Word
-                            } else {
-                                MultiSelectKind::Line
-                            };
-                            gesture.state = GestureState::PendingMultiSelect {
-                                pane,
-                                pane_id,
-                                cell,
-                                kind,
-                            };
+                    } if click_count >= 2 && copy_gate.copy_modes.get(pane).is_ok() => {
+                        // NOTE: resolve the click cell before entering PendingMultiSelect —
+                        // a failed lookup here exits the match cleanly; once in PendingMultiSelect,
+                        // the state persists until a snapshot arrives (or the pane is destroyed).
+                        let Ok((_, p, node, transform)) = panes.get(pane) else {
+                            break;
+                        };
+                        let cols = p.dims.width as u16;
+                        let rows = p.dims.height as u16;
+                        let Some(cell) =
+                            cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
+                        else {
+                            break;
+                        };
+                        let kind = if click_count == 2 {
+                            MultiSelectKind::Word
                         } else {
-                            let ty = if click_count == 2 {
-                                SelectionType::Semantic
-                            } else {
-                                SelectionType::Lines
-                            };
-                            if let Ok((_, p, node, transform)) = panes.get(pane)
-                                && let Some(local) =
-                                    phys_to_pane_local(node, transform, origin_phys)
-                            {
-                                let (col, row, a_side) = cell_and_side(
-                                    local,
-                                    cell_w,
-                                    cell_h,
-                                    p.dims.width as u16,
-                                    p.dims.height as u16,
-                                );
-                                let point = APoint::new(Line(row as i32), Column(col as usize));
-                                if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
-                                    handle.selection_start_at_vt_only(point, a_side, ty);
-                                    if let Some(text) = handle.selection_to_string() {
-                                        vt_select.clipboard.write(text);
-                                    } else {
-                                        handle.selection_clear_vt_only();
-                                    }
-                                    handle.flush_emit(&mut commands, pane);
-                                }
-                            }
-                        }
-                    }
-                    GestureState::SelectingVt { pane, .. } => {
-                        if let Ok(handle) = vt_select.handles.get(pane)
-                            && let Some(text) = handle.selection_to_string()
-                        {
-                            vt_select.clipboard.write(text);
-                        }
-                        // NOTE: do not clear the VT selection on release — the highlight
-                        // persists so the user can see what was copied, and single-click
-                        // clears it explicitly in the Pressed branch below.
-                    }
-                    GestureState::Pressed {
-                        pane, click_count, ..
-                    } if click_count < 2 => {
-                        if let Ok(mut handle) = vt_select.handles.get_mut(pane)
-                            && handle.selection_type().is_some()
-                        {
-                            handle.selection_clear_vt_only();
-                            handle.flush_emit(&mut commands, pane);
-                        }
+                            MultiSelectKind::Line
+                        };
+                        gesture.state = GestureState::PendingMultiSelect {
+                            pane,
+                            pane_id,
+                            cell,
+                            kind,
+                        };
                     }
                     // A divider press that never dragged is a click: the grab
                     // zone overlaps the adjacent pane bodies, so focus the pane
@@ -638,6 +501,9 @@ fn arbiter(
         };
         let cols = p.dims.width as u16;
         let rows = p.dims.height as u16;
+        // NOTE: a non-copy-mode drag is owned by `ozma_terminal`'s VT selection;
+        // reset to Idle here so the gesture does not linger in `Pressed` (the
+        // arbiter only relays copy-mode selection).
         if copy_gate.copy_modes.get(pane).is_ok() {
             let Some(anchor) =
                 cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
@@ -652,52 +518,7 @@ fn arbiter(
                 last_target: None,
             };
         } else {
-            let Some(local) = phys_to_pane_local(node, transform, origin_phys) else {
-                return;
-            };
-            let (col, row, a_side) = cell_and_side(local, cell_w, cell_h, cols, rows);
-            let point = APoint::new(Line(row as i32), Column(col as usize));
-            if let Ok(mut handle) = vt_select.handles.get_mut(pane) {
-                handle.selection_start_at_vt_only(point, a_side, SelectionType::Simple);
-                handle.flush_emit(&mut commands, pane);
-                gesture.state = GestureState::SelectingVt {
-                    pane,
-                    last_target: Some((col, row)),
-                };
-            } else {
-                gesture.state = GestureState::Idle;
-            }
-        }
-        return;
-    }
-
-    if let GestureState::SelectingVt { pane, last_target } = &mut gesture.state {
-        let Ok((_, p, node, transform)) = panes.get(*pane) else {
             gesture.state = GestureState::Idle;
-            return;
-        };
-        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-            return;
-        };
-        let Some(local) = phys_to_pane_local(node, transform, cursor_phys) else {
-            return;
-        };
-        let (col, row, a_side) = cell_and_side(
-            local,
-            cell_w,
-            cell_h,
-            p.dims.width as u16,
-            p.dims.height as u16,
-        );
-        let cell = (col, row);
-        if Some(cell) == *last_target {
-            return;
-        }
-        *last_target = Some(cell);
-        let point = APoint::new(Line(row as i32), Column(col as usize));
-        if let Ok(mut handle) = vt_select.handles.get_mut(*pane) {
-            handle.selection_update_to_vt_only(point, a_side);
-            handle.flush_emit(&mut commands, *pane);
         }
         return;
     }
@@ -1091,22 +912,6 @@ fn multi_select_commands(
     out
 }
 
-/// Maps a pane-local physical-pixel position to a 0-indexed `(col, row, side)`,
-/// clamped to `[0, cols) × [0, rows)`. `side` is `Left` when the pointer falls
-/// in the left half of the cell, `Right` otherwise.
-fn cell_and_side(local: Vec2, cell_w: f32, cell_h: f32, cols: u16, rows: u16) -> (u16, u16, ASide) {
-    let col_f = (local.x / cell_w).max(0.0);
-    let row_f = (local.y / cell_h).max(0.0);
-    let col = (col_f.floor() as u16).min(cols.saturating_sub(1));
-    let row = (row_f.floor() as u16).min(rows.saturating_sub(1));
-    let side = if col_f - (col as f32) < 0.5 {
-        ASide::Left
-    } else {
-        ASide::Right
-    };
-    (col, row, side)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1234,8 +1039,6 @@ mod tests {
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
-        app.init_resource::<ButtonInput<KeyCode>>();
-        app.init_resource::<Clipboard>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, arbiter);
         app.world_mut().spawn((
@@ -1309,8 +1112,6 @@ mod tests {
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
-        app.init_resource::<ButtonInput<KeyCode>>();
-        app.init_resource::<Clipboard>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, arbiter);
 

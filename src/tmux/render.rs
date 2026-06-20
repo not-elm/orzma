@@ -9,11 +9,9 @@ use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_terminal::cells_for;
+use ozma_terminal::{OzmaTerminal, cells_for};
 use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::material::TerminalUiMaterial;
-use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
     ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
@@ -39,27 +37,27 @@ pub(crate) struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LastClientSize>();
-        app.insert_resource(ClearColor(theme::PANE_GAP));
-        app.add_systems(
-            Update,
-            (
-                attach_tmux_window_container,
-                attach_tmux_pane_terminal,
-                route_tmux_output.run_if(on_message::<PaneOutput>),
-                sync_active_window,
-                layout_tmux_panes,
+        app.init_resource::<LastClientSize>()
+            .insert_resource(ClearColor(theme::PANE_GAP))
+            .add_systems(
+                Update,
+                (
+                    attach_tmux_window_container,
+                    attach_tmux_pane_terminal,
+                    route_tmux_output.run_if(on_message::<PaneOutput>),
+                    sync_active_window,
+                    layout_tmux_panes,
+                )
+                    .chain()
+                    .after(TmuxProjectionSet)
+                    .in_set(super::OzmuxActiveSet),
             )
-                .chain()
-                .after(TmuxProjectionSet)
-                .in_set(super::OzmuxActiveSet),
-        );
-        app.add_systems(
-            Update,
-            sync_client_size
-                .after(TmuxProjectionSet)
-                .in_set(super::OzmuxActiveSet),
-        );
+            .add_systems(
+                Update,
+                sync_client_size
+                    .after(TmuxProjectionSet)
+                    .in_set(super::OzmuxActiveSet),
+            );
     }
 }
 
@@ -110,8 +108,10 @@ fn attach_tmux_window_container(
     }
 }
 
-/// Attaches a detached `TerminalHandle`, a `TerminalRenderBundle`, and a
+/// Attaches a detached `TerminalHandle`, the `OzmaTerminal` marker, and a
 /// placeholder absolute `Node` to each `TmuxPane` that lacks a `TerminalHandle`.
+/// The `On<Add, OzmaTerminal>` observer in `ozma_terminal` injects the
+/// `TerminalRenderBundle` (one per entity, no duplicate material creation here).
 /// The `TerminalGrid` lives on the pane entity itself, so `flush_emit` /
 /// `emit_pending` and the webview overlay projection all target it
 /// directly (a webview mounts as a `ChildOf` the pane).
@@ -121,7 +121,6 @@ fn attach_tmux_window_container(
 /// `ChildOf(window)` parent. `layout_tmux_panes` sets the real rect every frame.
 fn attach_tmux_pane_terminal(
     mut commands: Commands,
-    mut materials: ResMut<Assets<TerminalUiMaterial>>,
     gate: Option<Res<OscWebviewGate>>,
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
 ) {
@@ -135,12 +134,11 @@ fn attach_tmux_pane_terminal(
     for (entity, pane) in panes.iter() {
         let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
         let handle = TerminalHandle::detached(cols, rows, gate.clone());
-        let material = materials.add(TerminalUiMaterial::default());
 
         commands.entity(entity).insert((
             handle,
             TerminalTitle::default(),
-            TerminalRenderBundle::new(material),
+            OzmaTerminal,
             Node {
                 position_type: PositionType::Absolute,
                 ..default()
@@ -603,6 +601,8 @@ fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<Tm
 mod tests {
     use super::*;
     use bevy::math::{Rect, Vec2};
+    use ozma_terminal::OzmaTerminalPlugin;
+    use ozma_tty_renderer::material::TerminalUiMaterial;
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
     use tmux_control_parser::{Cell, CellDims, SplitDir};
@@ -705,6 +705,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
         app.insert_non_send_resource(TmuxConnection::default());
@@ -761,6 +762,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
         app.insert_non_send_resource(TmuxConnection::default());
@@ -1560,5 +1562,36 @@ mod tests {
             "pane 3 gets its share of slack"
         );
         assert_eq!(bbox.y, 440.0, "bounding box matches workspace_h");
+    }
+
+    #[test]
+    fn attach_adds_ozma_terminal_and_render_bundle() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.insert_non_send_resource(TmuxConnection::default());
+
+        let pane_entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(42),
+                dims: dims(),
+            })
+            .id();
+
+        app.add_systems(Update, attach_tmux_pane_terminal);
+
+        app.update();
+
+        assert!(
+            app.world().entity(pane_entity).contains::<OzmaTerminal>(),
+            "projected pane must carry OzmaTerminal after attach",
+        );
+        assert!(
+            app.world().entity(pane_entity).contains::<TerminalGrid>(),
+            "On<Add, OzmaTerminal> must inject TerminalRenderBundle (TerminalGrid proves exactly one render bundle)",
+        );
     }
 }
