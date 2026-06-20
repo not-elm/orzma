@@ -1,7 +1,6 @@
 //! App state machine for ozbrowser. `on_action` is the single entry point;
 //! it returns the [`Cmd`] side-effects for `main.rs` to execute.
 
-use crate::history::History;
 use crate::keymap::{Action, Mode};
 
 /// Scroll direction / magnitude for the webview.
@@ -57,7 +56,6 @@ pub(crate) struct App {
     pending_prefix: Option<char>,
     url: String,
     address_buf: String,
-    history: History,
 }
 
 impl App {
@@ -68,7 +66,6 @@ impl App {
             pending_prefix: None,
             url: initial_url,
             address_buf: String::new(),
-            history: History::new(),
         }
     }
 
@@ -162,18 +159,10 @@ impl App {
         }
     }
 
-    /// Records a page-driven URL change reported via `urlChanged`. A change to a
-    /// new URL pushes the current URL onto the back-stack (an in-page navigation
-    /// ozbrowser did not initiate — e.g. an `f`-hint or link click); a change
-    /// that merely echoes the current URL (the load that follows an address-bar
-    /// / history / reload re-registration ozbrowser already accounted for)
-    /// updates nothing.
+    /// Records a page-driven URL change reported via `urlChanged` (CEF owns the
+    /// session history now, so this only updates the displayed URL).
     pub(crate) fn on_page_url_changed(&mut self, url: String) {
-        if url == self.url {
-            return;
-        }
-        let current = self.url.clone();
-        self.url = self.history.navigate(current, url);
+        self.url = url;
     }
 
     /// Applies a `hintResult` reported by the page: a hint that focused a form
@@ -189,32 +178,6 @@ impl App {
         } else {
             Mode::Normal
         };
-    }
-
-    /// Called by main.rs for `Cmd::Navigate`: pushes current URL onto history, updates self.url.
-    /// Returns the URL to load.
-    pub(crate) fn navigate(&mut self, new_url: String) -> String {
-        let current = self.url.clone();
-        self.url = self.history.navigate(current, new_url);
-        self.url.clone()
-    }
-
-    /// Called by main.rs for `Cmd::HistoryBack`: pops from back stack, updates self.url.
-    /// Returns the URL to load, or None if already at the beginning.
-    pub(crate) fn go_back(&mut self) -> Option<String> {
-        let current = self.url.clone();
-        let prev = self.history.back(current)?;
-        self.url = prev.clone();
-        Some(prev)
-    }
-
-    /// Called by main.rs for `Cmd::HistoryForward`: pops from forward stack, updates self.url.
-    /// Returns the URL to load, or None if no forward history.
-    pub(crate) fn go_forward(&mut self) -> Option<String> {
-        let current = self.url.clone();
-        let next = self.history.forward(current)?;
-        self.url = next.clone();
-        Some(next)
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -365,35 +328,10 @@ mod tests {
     }
 
     #[test]
-    fn go_back_with_empty_stack_returns_none() {
+    fn page_url_changed_updates_displayed_url() {
         let mut a = app();
-        assert_eq!(a.go_back(), None);
-        assert_eq!(a.url(), "https://example.com");
-    }
-
-    #[test]
-    fn go_forward_with_empty_stack_returns_none() {
-        let mut a = app();
-        assert_eq!(a.go_forward(), None);
-    }
-
-    #[test]
-    fn go_back_navigates_to_previous_url() {
-        let mut a = app();
-        a.navigate("https://b.com".into());
-        let prev = a.go_back();
-        assert_eq!(prev, Some("https://example.com".into()));
-        assert_eq!(a.url(), "https://example.com");
-    }
-
-    #[test]
-    fn go_forward_after_back_restores_url() {
-        let mut a = app();
-        a.navigate("https://b.com".into());
-        a.go_back();
-        let next = a.go_forward();
-        assert_eq!(next, Some("https://b.com".into()));
-        assert_eq!(a.url(), "https://b.com");
+        a.on_page_url_changed("https://docs.rs".into());
+        assert_eq!(a.url(), "https://docs.rs");
     }
 
     #[test]
@@ -403,45 +341,6 @@ mod tests {
         let cmds = a.on_action(Action::AddressConfirm);
         assert_eq!(cmds, vec![]);
         assert_eq!(a.mode(), Mode::Normal);
-    }
-
-    #[test]
-    fn navigate_updates_url_and_history() {
-        let mut a = app();
-        let url = a.navigate("https://rust-lang.org".into());
-        assert_eq!(url, "https://rust-lang.org");
-        assert_eq!(a.url(), "https://rust-lang.org");
-        let prev = a.go_back().unwrap();
-        assert_eq!(prev, "https://example.com");
-    }
-
-    #[test]
-    fn page_url_change_to_new_url_pushes_history() {
-        let mut a = app();
-        a.on_page_url_changed("https://b.com".into());
-        assert_eq!(a.url(), "https://b.com");
-        assert_eq!(a.go_back(), Some("https://example.com".into()));
-    }
-
-    #[test]
-    fn page_url_change_to_current_url_is_noop() {
-        let mut a = app();
-        a.on_page_url_changed("https://example.com".into());
-        assert_eq!(a.url(), "https://example.com");
-        assert_eq!(
-            a.go_back(),
-            None,
-            "an echo of the current url must not push history"
-        );
-    }
-
-    #[test]
-    fn page_navigation_then_back_returns_to_previous_page() {
-        let mut a = app();
-        a.on_page_url_changed("https://docs.rs".into());
-        assert_eq!(a.url(), "https://docs.rs");
-        assert_eq!(a.go_back(), Some("https://example.com".into()));
-        assert_eq!(a.url(), "https://example.com");
     }
 
     #[test]

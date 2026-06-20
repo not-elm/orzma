@@ -1,7 +1,6 @@
 //! ozbrowser — a TUI browser for remote URLs in ozmux panes.
 
 mod app;
-mod history;
 mod keymap;
 mod ui;
 
@@ -39,7 +38,7 @@ fn run() -> anyhow::Result<()> {
 
     let (url_tx, url_rx) = crossbeam_channel::unbounded::<String>();
     let (hint_tx, hint_rx) = crossbeam_channel::unbounded::<String>();
-    let view = register_view(&ozma, &initial_url, url_tx.clone(), hint_tx.clone())?;
+    let view = register_view(&ozma, &initial_url, url_tx, hint_tx)?;
 
     enable_raw_mode()?;
     if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
@@ -50,15 +49,7 @@ fn run() -> anyhow::Result<()> {
     }
     install_panic_hook();
 
-    let result = event_loop(
-        view,
-        App::new(initial_url),
-        &ozma,
-        url_tx,
-        &url_rx,
-        hint_tx,
-        &hint_rx,
-    );
+    let result = event_loop(view, App::new(initial_url), &ozma, &url_rx, &hint_rx);
 
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen);
@@ -66,12 +57,10 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn event_loop(
-    mut view: WebviewHandle,
+    view: WebviewHandle,
     mut app: App,
     ozma: &Ozma,
-    url_tx: Sender<String>,
     url_rx: &Receiver<String>,
-    hint_tx: Sender<String>,
     hint_rx: &Receiver<String>,
 ) -> anyhow::Result<()> {
     let backend = OzmaBackend::new(CrosstermBackend::new(stdout()), ozma);
@@ -97,21 +86,16 @@ fn event_loop(
                 match cmd {
                     Cmd::Quit => return Ok(()),
                     Cmd::Navigate(url) => {
-                        let url = app.navigate(url);
-                        view = register_view(ozma, &url, url_tx.clone(), hint_tx.clone())?;
+                        let _ = view.navigate(url);
                     }
                     Cmd::HistoryBack => {
-                        if let Some(url) = app.go_back() {
-                            view = register_view(ozma, &url, url_tx.clone(), hint_tx.clone())?;
-                        }
+                        let _ = view.go_back();
                     }
                     Cmd::HistoryForward => {
-                        if let Some(url) = app.go_forward() {
-                            view = register_view(ozma, &url, url_tx.clone(), hint_tx.clone())?;
-                        }
+                        let _ = view.go_forward();
                     }
                     Cmd::Reload => {
-                        view = register_view(ozma, app.url(), url_tx.clone(), hint_tx.clone())?;
+                        let _ = view.reload();
                     }
                     Cmd::Scroll(action) => {
                         let _ = view.emit("scroll", &scroll_payload(action));
@@ -135,9 +119,6 @@ fn event_loop(
     }
 }
 
-// TODO: each call to register_view mints a new WebviewHandle registration that is never
-// unregistered — the old handle is dropped but the server-side entry persists because the
-// SDK has no unregister/Drop path yet. Fix this when the SDK exposes one.
 fn register_view(
     ozma: &Ozma,
     url: &str,
