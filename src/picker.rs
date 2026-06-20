@@ -62,10 +62,7 @@ impl Plugin for OzmuxPickerPlugin {
                     .run_if(picker_is_open)
                     .run_if(resource_exists_and_changed::<SessionPicker>),
             )
-            .add_systems(
-                Update,
-                handle_picker_row_interaction.run_if(picker_is_open),
-            )
+            .add_systems(Update, handle_picker_row_interaction.run_if(picker_is_open))
             .add_systems(
                 Update,
                 picker_row_hover_cursor
@@ -522,7 +519,15 @@ fn handle_picker_scroll(
 // UiGlobalTransform center) and converts to logical via inverse_scale_factor,
 // because ScrollPosition is in logical px.
 fn scroll_selected_into_view(
-    mut list: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform, &Children), With<PickerList>>,
+    mut list: Query<
+        (
+            &mut ScrollPosition,
+            &ComputedNode,
+            &UiGlobalTransform,
+            &Children,
+        ),
+        With<PickerList>,
+    >,
     rows: Query<(&ComputedNode, &UiGlobalTransform, &PickerRowLabel)>,
     picker: Res<SessionPicker>,
 ) {
@@ -1166,7 +1171,10 @@ mod tests {
         app.add_systems(Update, handle_picker_row_interaction);
 
         // A hovered row exists but the mouse has not moved since open: no change.
-        let row = app.world_mut().spawn((Interaction::Hovered, PickerRowLabel(1))).id();
+        let row = app
+            .world_mut()
+            .spawn((Interaction::Hovered, PickerRowLabel(1)))
+            .id();
         app.update();
         assert_eq!(
             app.world().resource::<SessionPicker>().selected,
@@ -1176,13 +1184,9 @@ mod tests {
 
         // Arm by moving the mouse, then re-trigger the hover change.
         app.world_mut().write_message(cursor_moved());
-        app.world_mut()
-            .entity_mut(row)
-            .insert(Interaction::None);
+        app.world_mut().entity_mut(row).insert(Interaction::None);
         app.update();
-        app.world_mut()
-            .entity_mut(row)
-            .insert(Interaction::Hovered);
+        app.world_mut().entity_mut(row).insert(Interaction::Hovered);
         app.update();
         assert_eq!(
             app.world().resource::<SessionPicker>().selected,
@@ -1223,7 +1227,10 @@ mod tests {
         // Wheel up (y>0) scrolls content toward the top -> negative offset delta.
         assert_eq!(wheel_delta_px(MouseScrollUnit::Line, 1.0), -LINE_SCROLL_PX);
         // Wheel down (y<0) -> positive offset delta.
-        assert_eq!(wheel_delta_px(MouseScrollUnit::Line, -2.0), 2.0 * LINE_SCROLL_PX);
+        assert_eq!(
+            wheel_delta_px(MouseScrollUnit::Line, -2.0),
+            2.0 * LINE_SCROLL_PX
+        );
     }
 
     #[test]
