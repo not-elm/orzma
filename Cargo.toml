@@ -33,7 +33,7 @@ data-encoding = "2"
 getrandom = "0.2"
 libc = "0.2"
 open = { workspace = true }
-ozmux_configs = { path = "crates/configs" }
+ozmux_configs = { path = "crates/ozmux_configs" }
 ozmux_webview_host = { path = "crates/webview_host", features = ["cef"] }
 ozmux_tmux = { path = "crates/tmux_session" }
 tmux_control = { path = "crates/tmux_control" }
@@ -75,7 +75,6 @@ publish = false
 # part of bevy's default set via 2d/3d/ui → default_platform → default_font,
 # but listing it explicitly here protects against future "default-features = false".
 bevy = { version = "0.18", features = ["default_font"] }
-tokio = { version = "1.52" }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
