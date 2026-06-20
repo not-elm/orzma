@@ -56,6 +56,12 @@ impl Plugin for OzmuxPickerPlugin {
             .add_systems(
                 Update,
                 handle_picker_row_interaction.run_if(picker_is_open),
+            )
+            .add_systems(
+                Update,
+                picker_row_hover_cursor
+                    .after(crate::input::InputPhase::Hover)
+                    .run_if(picker_is_open),
             );
     }
 }
@@ -452,6 +458,24 @@ fn handle_picker_row_interaction(
             }
             Interaction::None => {}
         }
+    }
+}
+
+fn picker_row_hover_cursor(
+    mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
+    rows: Query<&Interaction, With<PickerRowLabel>>,
+) {
+    let hovering = rows
+        .iter()
+        .any(|i| matches!(i, Interaction::Hovered | Interaction::Pressed));
+    let Ok(mut icon) = cursor_icons.single_mut() else {
+        return;
+    };
+    let is_pointer = matches!(&*icon, CursorIcon::System(e) if *e == SystemCursorIcon::Pointer);
+    if hovering && !is_pointer {
+        *icon = CursorIcon::System(SystemCursorIcon::Pointer);
+    } else if !hovering && is_pointer {
+        *icon = CursorIcon::System(SystemCursorIcon::Default);
     }
 }
 
