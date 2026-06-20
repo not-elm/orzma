@@ -1,5 +1,5 @@
 //! Gated end-to-end tests against a real tmux `-CC`: forward keys to a pane via
-//! `send_pane_keys_command` (the production forward path) and observe the result
+//! `SendPaneKeys` (the production forward path) and observe the result
 //! through `%output`.
 //! Run with: `cargo test -p ozmux_tmux --test real_tmux_input -- --ignored`.
 

@@ -462,32 +462,38 @@ fn is_copy_mode_entry(command: &str) -> bool {
     command.split_whitespace().any(|token| token == "copy-mode")
 }
 
-/// Builds a pane-targeted copy-mode scroll command for one wheel notch:
-/// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down`.
-///
-/// ozmux drives copy-mode wheel scrolling with this single, targeted command
-/// rather than relaying tmux's copy-table `WheelUpPane`/`WheelDownPane`
-/// bindings, which are `select-pane \; send-keys …` sequences: relaying a
-/// sequence as one control-mode command makes tmux emit an extra reply block
-/// the protocol client cannot correlate (the `no pending command` storm).
-fn scroll_command(target: &str, up: bool, lines: u32) -> String {
-    format!(
-        "send-keys -X -t {target} -N {lines} {}",
-        if up { "scroll-up" } else { "scroll-down" }
-    )
+/// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down` — one copy-mode wheel notch.
+struct Scroll<'a> {
+    target: &'a str,
+    up: bool,
+    lines: u32,
+}
+impl TmuxCommand for Scroll<'_> {
+    fn into_raw_command(self) -> String {
+        format!(
+            "send-keys -X -t {} -N {} {}",
+            self.target,
+            self.lines,
+            if self.up { "scroll-up" } else { "scroll-down" }
+        )
+    }
 }
 
-/// Builds a pane-targeted key-send command for scrolling an alt-screen pane:
-/// `send-keys -t %<id> -N <lines> Up|Down`.
-///
-/// Alt-screen panes are NOT in tmux copy mode, so `-X` (copy-mode command flag)
-/// is invalid. Instead, cursor Up/Down keys are forwarded directly to the
-/// running application, which interprets them as scroll events.
-fn alt_screen_scroll_command(target: &str, up: bool, lines: u32) -> String {
-    format!(
-        "send-keys -t {target} -N {lines} {}",
-        if up { "Up" } else { "Down" }
-    )
+/// `send-keys -t %<id> -N <lines> Up|Down` — scrolls an alt-screen (non-copy-mode) pane.
+struct AltScreenScroll<'a> {
+    target: &'a str,
+    up: bool,
+    lines: u32,
+}
+impl TmuxCommand for AltScreenScroll<'_> {
+    fn into_raw_command(self) -> String {
+        format!(
+            "send-keys -t {} -N {} {}",
+            self.target,
+            self.lines,
+            if self.up { "Up" } else { "Down" }
+        )
+    }
 }
 
 /// Carries the sub-notch wheel remainder (in cells) across frames for the tmux
@@ -661,7 +667,7 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 /// a copy-mode pane (`CopyModeState`, always `MouseDisabled`) gets a targeted
 /// `send-keys -X scroll-up|scroll-down`; an alt-screen pane with neither
 /// `ALTERNATE_SCROLL` nor a `MOUSE_MODE` bit — where ozma's `ScrollViewport`
-/// would no-op on the alt buffer — gets `alt_screen_scroll_command` (cursor
+/// would no-op on the alt buffer — gets `AltScreenScroll` (cursor
 /// keys). Every other case is ceded to ozma (local scrollback / SGR / SS3) and
 /// the accumulator is left untouched for that pane so no residual notch bleeds.
 ///
@@ -770,11 +776,21 @@ fn forward_wheel_to_tmux(
 
     let (cmd, failure) = match owner {
         WheelOwner::CopyMode => (
-            scroll_command(&target, up, total_lines),
+            Scroll {
+                target: &target,
+                up,
+                lines: total_lines,
+            }
+            .into_raw_command(),
             "copy-mode wheel scroll send failed",
         ),
         WheelOwner::AltScreenResidual => (
-            alt_screen_scroll_command(&target, up, total_lines),
+            AltScreenScroll {
+                target: &target,
+                up,
+                lines: total_lines,
+            }
+            .into_raw_command(),
             "alt-screen wheel scroll send failed",
         ),
         WheelOwner::CededToOzma => return,
@@ -864,7 +880,12 @@ mod tests {
     #[test]
     fn scroll_command_up_is_targeted_and_repeated() {
         assert_eq!(
-            scroll_command("%3", true, 3),
+            Scroll {
+                target: "%3",
+                up: true,
+                lines: 3,
+            }
+            .into_raw_command(),
             "send-keys -X -t %3 -N 3 scroll-up"
         );
     }
@@ -872,7 +893,7 @@ mod tests {
     #[test]
     fn wheel_copy_mode_pane_is_owned_by_tmux() {
         // Copy-mode panes carry MouseDisabled (ozma never runs), so tmux keeps
-        // the scroll_command path regardless of screen / mode bits.
+        // the Scroll path regardless of screen / mode bits.
         assert_eq!(
             decide_wheel_owner(true, false, TermMode::empty()),
             WheelOwner::CopyMode
@@ -1011,7 +1032,12 @@ mod tests {
     #[test]
     fn scroll_command_down_is_targeted_and_repeated() {
         assert_eq!(
-            scroll_command("%3", false, 5),
+            Scroll {
+                target: "%3",
+                up: false,
+                lines: 5,
+            }
+            .into_raw_command(),
             "send-keys -X -t %3 -N 5 scroll-down"
         );
     }

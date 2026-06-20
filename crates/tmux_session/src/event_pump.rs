@@ -150,7 +150,7 @@ pub(crate) fn detect_session_switch(
 ///
 /// NOTE: tmux emits *only* `%session-window-changed` for such a switch, never a
 /// `%window-pane-changed`, so the caller must re-query the active pane
-/// (`active_pane_command`) to move `ActiveWindow`/`ActivePane`. Without that the
+/// (`ActivePane`) to move `ActiveWindow`/`ActivePane`. Without that the
 /// switch never reaches the projection and the UI stays on the old window.
 pub(crate) fn detect_window_switch(events: &[TransportEvent], current: Option<SessionId>) -> bool {
     let Some(current) = current else {

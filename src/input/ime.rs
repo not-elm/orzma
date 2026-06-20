@@ -292,7 +292,7 @@ pub(crate) fn ime_policy_system(
 /// which case the commit-to-pane write is suppressed (bevy_cef commits it to
 /// the page; see spec §7).
 ///
-/// The commit text is sent verbatim via `send_bytes_command`
+/// The commit text is sent verbatim via `SendBytes`
 /// (`send-keys -H -t %<id> <hex…>`), which is byte-safe for UTF-8 multibyte
 /// commits — including the macOS Character Viewer emoji path — without any
 /// modifier interpretation.

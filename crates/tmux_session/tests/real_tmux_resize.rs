@@ -467,7 +467,7 @@ fn wheel_binding_enters_copy_mode() {
 /// Proves the wheel-in-copy-mode fix end to end. ozmux no longer relays tmux's
 /// copy-mode `WheelUpPane` binding (a `select-pane \; send-keys …` sequence that
 /// desyncs the control protocol); instead it sends a single pane-targeted
-/// `send-keys -X -t %id -N <n> scroll-up` (`tmux_input::scroll_command`). That
+/// `send-keys -X -t %id -N <n> scroll-up` (`tmux_input::Scroll`). That
 /// command must scroll the copy-mode viewport.
 #[test]
 #[ignore = "requires a real tmux binary and a controlling PTY"]
