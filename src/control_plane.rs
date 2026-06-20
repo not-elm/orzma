@@ -4,12 +4,13 @@
 //! disconnect or surface despawn. Uses a Tokio-free reader/writer thread model.
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
-use crate::control_plane::protocol::{HostKeyChord, RegisterKind, ServerMsg};
-use crate::webview::inline::InlineWebview;
+use crate::control_plane::protocol::{HostKeyChord, NavAction, RegisterKind, ServerMsg};
+use crate::webview::mount::Webview;
 use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef::prelude::HostEmitEvent;
+use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use ozmux_tmux::TmuxPane;
@@ -25,7 +26,7 @@ mod protocol;
 
 pub(crate) use protocol::PushMsg;
 
-/// A passthrough chord normalized to host input types: a bevy `KeyCode` plus
+/// A forward-key chord normalized to host input types: a bevy `KeyCode` plus
 /// modifier booleans. Used to suppress CEF double-delivery and to match keys
 /// for PTY forwarding (design spec §E type normalization).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +72,11 @@ impl DynSource {
             DynSource::Url { bridge, .. } => *bridge,
         }
     }
+
+    /// Whether this source is a remote `http(s)` URL (vs `Dir`/`Inline`).
+    pub(crate) fn is_url(&self) -> bool {
+        matches!(self, DynSource::Url { .. })
+    }
 }
 
 /// A Tier 1 dynamic registration: its content source, entry, input policy, and
@@ -84,19 +90,19 @@ pub(crate) struct DynamicView {
     pub(crate) entry: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub(crate) interactive: bool,
-    /// The terminal surface a `mount-inline;<handle>` must originate from. The
+    /// The terminal surface a `mount;<handle>` must originate from. The
     /// registering program's PTY env token resolved to this surface, so only
     /// that surface may mount the handle (tighter than the spec's pane wording).
     pub(crate) owner_surface: Entity,
     /// The control-plane connection that registered it.
     pub(crate) connection_id: u64,
-    /// The normalized passthrough chords for this view, derived from the
+    /// The normalized forward-key chords for this view, derived from the
     /// `register` wire payload. Copied onto the mounted webview entity as
-    /// `PassthroughKeys` so Phase-4 systems can read them off the focused child.
-    pub(crate) passthrough: Vec<NormalizedChord>,
+    /// `ForwardKeys` so Phase-4 systems can read them off the focused child.
+    pub(crate) forward_keys: Vec<NormalizedChord>,
 }
 
-/// Stamped on a Tier 1 inline webview entity at mount: the control-plane
+/// Stamped on a Tier 1 webview entity at mount: the control-plane
 /// connection that registered it (back-channel routing target) and its handle.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WebviewOwner {
@@ -286,7 +292,7 @@ impl ConnectionWriters {
 
 /// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded) and
 /// lowercased. The alphabet `a-z2-7` is a subset of the OSC `view_id` charset
-/// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount-inline;<id>`.
+/// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount;<id>`.
 ///
 /// # Invariants
 /// The output MUST be lowercase. A handle is used as the host of the
@@ -413,9 +419,10 @@ fn apply_control_events(
     mut registry: ResMut<DynamicRegistry>,
     mut rpc: ResMut<OzmuxRpc>,
     mut focused: Option<ResMut<FocusedWebview>>,
+    mut sources: Query<&mut WebviewSource>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<WebviewAssetRegistryRes>,
-    inline: Query<(Entity, &InlineWebview)>,
+    webviews: Query<(Entity, &Webview)>,
     child_of: Query<&ChildOf>,
     non_interactive: Query<(), With<NonInteractive>>,
 ) {
@@ -464,14 +471,14 @@ fn apply_control_events(
                 } else {
                     vec![]
                 };
-                despawn_mounted(&mut commands, &inline, &removed);
+                despawn_mounted(&mut commands, &webviews, &removed);
             }
             ControlEvent::Disconnect { connection_id } => {
                 let removed = registry.remove_by_connection(connection_id);
                 for h in &removed {
                     dyn_assets.0.remove(h);
                 }
-                despawn_mounted(&mut commands, &inline, &removed);
+                despawn_mounted(&mut commands, &webviews, &removed);
                 for (webview, page_req) in rpc.drain_connection(connection_id) {
                     let payload = serde_json::json!({ "reqId": page_req, "ok": false, "error": "owner_disconnected" });
                     commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
@@ -512,7 +519,7 @@ fn apply_control_events(
                     continue;
                 }
                 let frame = serde_json::json!({ "event": event, "payload": payload });
-                for (entity, view) in &inline {
+                for (entity, view) in &webviews {
                     if view.view_id == handle {
                         commands.trigger(HostEmitEvent::new(entity, "ozma.event", &frame));
                     }
@@ -536,7 +543,7 @@ fn apply_control_events(
                             tracing::debug!(handle = %h, "focus op for unowned handle, dropping");
                             continue;
                         }
-                        let target = inline.iter().find(|(entity, view)| {
+                        let target = webviews.iter().find(|(entity, view)| {
                             view.view_id == h
                                 && view.instance_id.as_deref() == instance.as_deref()
                                 && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
@@ -560,16 +567,69 @@ fn apply_control_events(
                     }
                 }
             }
+            ControlEvent::Navigate {
+                connection_id,
+                owner_surface,
+                handle,
+                action,
+            } => {
+                let Some(view) = registry.get(&handle) else {
+                    continue;
+                };
+                if view.connection_id != connection_id {
+                    tracing::debug!(handle = %handle, "navigate for unowned handle, dropping");
+                    continue;
+                }
+                let is_url = view.source.is_url();
+                let target = webviews.iter().find(|(entity, v)| {
+                    v.view_id == handle
+                        && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
+                });
+                let Some((entity, _)) = target else {
+                    tracing::debug!(handle = %handle, "navigate for unmounted view, dropping");
+                    continue;
+                };
+                match action {
+                    NavAction::To(url) => {
+                        if !is_url {
+                            tracing::debug!(handle = %handle, "navigate To on a non-url view, dropping");
+                            continue;
+                        }
+                        match validate_url_source(&url) {
+                            Ok(valid) => {
+                                if let Ok(mut source) = sources.get_mut(entity) {
+                                    // Mutate only on a real change so navigating to the
+                                    // URL already loaded does not fire a spurious CEF
+                                    // reload (WebviewSource has no PartialEq for set_if_neq).
+                                    let unchanged = matches!(
+                                        &*source,
+                                        WebviewSource::Url(cur) if *cur == valid
+                                    );
+                                    if !unchanged {
+                                        *source = WebviewSource::Url(valid);
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(handle = %handle, error = e, "navigate To rejected url");
+                            }
+                        }
+                    }
+                    NavAction::Back => commands.trigger(RequestGoBack { webview: entity }),
+                    NavAction::Forward => commands.trigger(RequestGoForward { webview: entity }),
+                    NavAction::Reload => commands.trigger(RequestReload { webview: entity }),
+                }
+            }
         }
     }
 }
 
 fn despawn_mounted(
     commands: &mut Commands,
-    inline: &Query<(Entity, &InlineWebview)>,
+    webviews: &Query<(Entity, &Webview)>,
     removed: &[String],
 ) {
-    for (entity, view) in inline {
+    for (entity, view) in webviews {
         if removed.contains(&view.view_id) {
             commands.entity(entity).despawn();
         }
@@ -588,7 +648,7 @@ fn build_view(
             root,
             entry,
             interactive,
-            passthrough,
+            forward_keys,
         } => {
             let root_path = PathBuf::from(&root);
             if !root_path.is_absolute() || !root_path.is_dir() {
@@ -603,13 +663,13 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
-                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
             })
         }
         RegisterKind::Inline {
             html,
             interactive,
-            passthrough,
+            forward_keys,
         } => {
             if html.len() > MAX_INLINE_HTML {
                 return Err("html_too_large");
@@ -620,14 +680,14 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
-                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
             })
         }
         RegisterKind::Url {
             url,
             interactive,
             bridge,
-            passthrough,
+            forward_keys,
         } => {
             let url = validate_url_source(&url)?;
             Ok(DynamicView {
@@ -636,7 +696,7 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
-                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
             })
         }
     }
@@ -672,7 +732,7 @@ fn validate_url_source(url: &str) -> Result<String, &'static str> {
 /// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
 /// for unrecognized key names. Note that `"backtab"` maps to [`KeyCode::Tab`]
 /// (the same as `"tab"`): the shift distinction is carried in the modifier bits,
-/// so a passthrough `BackTab` and `Tab` are indistinguishable at the host.
+/// so a forward-key `BackTab` and `Tab` are indistinguishable at the host.
 fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
     let code = match chord.key.as_str() {
         "tab" | "backtab" => KeyCode::Tab,
@@ -858,7 +918,7 @@ mod token_tests {
                 interactive: true,
                 owner_surface: pane,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -901,7 +961,7 @@ mod registry_tests {
                 interactive: true,
                 owner_surface: surface(1),
                 connection_id: 7,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         assert_eq!(reg.get("h1").map(|v| v.interactive), Some(true));
@@ -948,7 +1008,7 @@ mod registry_tests {
             interactive: true,
             owner_surface: owner,
             connection_id: conn,
-            passthrough: vec![],
+            forward_keys: vec![],
         }
     }
 }
@@ -979,7 +1039,7 @@ mod apply_tests {
                     root: dir.path().to_string_lossy().into_owned(),
                     entry: "index.html".into(),
                     interactive: true,
-                    passthrough: vec![],
+                    forward_keys: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1024,7 +1084,7 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    passthrough: vec![],
+                    forward_keys: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1061,7 +1121,7 @@ mod apply_tests {
                     root: "/nonexistent/abs/xyz".into(),
                     entry: "index.html".into(),
                     interactive: true,
-                    passthrough: vec![],
+                    forward_keys: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1087,7 +1147,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -1118,7 +1178,7 @@ mod apply_tests {
 
     #[test]
     fn disconnect_despawns_mounted_webviews_for_its_handles() {
-        use crate::webview::inline::InlineWebview;
+        use crate::webview::mount::Webview;
         let mut app = App::new();
         let dyn_assets = WebviewAssetRegistry::default();
         let mut reg = DynamicRegistry::default();
@@ -1130,13 +1190,13 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 9,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let mounted = app
             .world_mut()
-            .spawn(InlineWebview {
+            .spawn(Webview {
                 view_id: "HMOUNT".into(),
                 instance_id: None,
                 slot: 0,
@@ -1274,10 +1334,10 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
-        app.world_mut().spawn(InlineWebview {
+        app.world_mut().spawn(Webview {
             view_id: "disp".into(),
             instance_id: None,
             slot: 0,
@@ -1328,7 +1388,7 @@ mod apply_tests {
                     url: "https://example.com".into(),
                     interactive: true,
                     bridge: false,
-                    passthrough: vec![],
+                    forward_keys: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1366,13 +1426,13 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let mounted = app
             .world_mut()
             .spawn((
-                InlineWebview {
+                Webview {
                     view_id: "H".into(),
                     instance_id: None,
                     slot: 0,
@@ -1416,6 +1476,174 @@ mod apply_tests {
         let caps = app.world().resource::<Caps>();
         assert_eq!(caps.0, vec![(mounted, "ozma.event".to_string())]);
     }
+
+    #[test]
+    fn apply_navigate_to_updates_webview_source_for_owned_url_view() {
+        use bevy_cef::prelude::WebviewSource;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "H".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://example.com".into(),
+                    bridge: true,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    view_id: "H".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+                WebviewSource::new("https://example.com"),
+                ChildOf(surface),
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Navigate {
+                connection_id: 5,
+                owner_surface: surface,
+                handle: "H".into(),
+                action: NavAction::To("https://example.com/next".into()),
+            })
+            .unwrap();
+        app.update();
+
+        match app.world().get::<WebviewSource>(child).unwrap() {
+            WebviewSource::Url(u) => assert_eq!(u, "https://example.com/next"),
+            other => panic!("expected Url, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn apply_navigate_back_triggers_request_go_back_on_owned_view() {
+        use bevy_cef::prelude::{RequestGoBack, WebviewSource};
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "H".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://example.com".into(),
+                    bridge: true,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    view_id: "H".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+                WebviewSource::new("https://example.com"),
+                ChildOf(surface),
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        #[derive(Resource, Default)]
+        struct BackOn(Vec<Entity>);
+        app.insert_resource(BackOn::default());
+        app.add_observer(|e: On<RequestGoBack>, mut c: ResMut<BackOn>| c.0.push(e.webview));
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Navigate {
+                connection_id: 5,
+                owner_surface: surface,
+                handle: "H".into(),
+                action: NavAction::Back,
+            })
+            .unwrap();
+        app.update();
+
+        assert_eq!(app.world().resource::<BackOn>().0, vec![child]);
+    }
+
+    #[test]
+    fn apply_navigate_is_dropped_for_unowned_connection() {
+        use bevy_cef::prelude::WebviewSource;
+        let mut app = App::new();
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let surface = app.world_mut().spawn_empty().id();
+        let mut reg = DynamicRegistry::default();
+        reg.insert(
+            "H".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://example.com".into(),
+                    bridge: true,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 5,
+                forward_keys: vec![],
+            },
+        );
+        let child = app
+            .world_mut()
+            .spawn((
+                Webview {
+                    view_id: "H".into(),
+                    instance_id: None,
+                    slot: 0,
+                },
+                WebviewSource::new("https://example.com"),
+                ChildOf(surface),
+            ))
+            .id();
+        app.insert_resource(reg);
+        app.insert_resource(OzmuxRpc::default());
+        app.insert_resource(ControlEvents(ev_rx));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app.add_systems(Update, apply_control_events);
+
+        ev_tx
+            .send(ControlEvent::Navigate {
+                connection_id: 9, // not the owner (5)
+                owner_surface: surface,
+                handle: "H".into(),
+                action: NavAction::To("https://evil.example/x".into()),
+            })
+            .unwrap();
+        app.update();
+
+        match app.world().get::<WebviewSource>(child).unwrap() {
+            WebviewSource::Url(u) => {
+                assert_eq!(u, "https://example.com", "unowned navigate is a no-op")
+            }
+            other => panic!("expected Url, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1444,14 +1672,14 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let child = app
             .world_mut()
             .spawn((
                 ChildOf(surface),
-                InlineWebview {
+                Webview {
                     view_id: "h1".into(),
                     instance_id: None,
                     slot: 0,
@@ -1508,7 +1736,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 99,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         // Spawn a VALID interactive inline child that WOULD be focused if the
@@ -1517,7 +1745,7 @@ mod focus_tests {
         // this assertion would FAIL.
         app.world_mut().spawn((
             ChildOf(surface),
-            InlineWebview {
+            Webview {
                 view_id: "h1".into(),
                 instance_id: None,
                 slot: 0,
@@ -1564,7 +1792,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface_a,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         // Spawn the matching interactive inline child on surface_a.
@@ -1572,7 +1800,7 @@ mod focus_tests {
             .world_mut()
             .spawn((
                 ChildOf(surface_a),
-                InlineWebview {
+                Webview {
                     view_id: "ha".into(),
                     instance_id: None,
                     slot: 0,
@@ -1675,14 +1903,14 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let child = app
             .world_mut()
             .spawn((
                 ChildOf(surface),
-                InlineWebview {
+                Webview {
                     view_id: "h1".into(),
                     instance_id: None,
                     slot: 0,
@@ -1816,7 +2044,7 @@ mod normalize_tests {
     }
 
     #[test]
-    fn normalize_chord_maps_passthrough_keys() {
+    fn normalize_chord_maps_forward_keys_keys() {
         let cases: &[(&str, KeyCode)] = &[
             ("esc", KeyCode::Escape),
             (" ", KeyCode::Space),
@@ -1898,7 +2126,7 @@ mod url_source_tests {
                 url: "https://example.com".into(),
                 interactive: true,
                 bridge: true,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
             Entity::from_bits(1),
             7,
@@ -1917,7 +2145,7 @@ mod url_source_tests {
                 url: "file:///etc/passwd".into(),
                 interactive: true,
                 bridge: false,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
             Entity::from_bits(1),
             7,

@@ -9,7 +9,7 @@
 
 use crate::control_plane::ConnectionWriters;
 use crate::control_plane::TokenRegistry;
-use crate::control_plane::protocol::{ClientMsg, RegisterKind, ServerMsg};
+use crate::control_plane::protocol::{ClientMsg, NavAction, RegisterKind, ServerMsg};
 use bevy::prelude::Entity;
 use crossbeam_channel::{Receiver, Sender, bounded, unbounded};
 use serde_json::Value;
@@ -78,6 +78,17 @@ pub(crate) enum ControlEvent {
         handle: Option<String>,
         /// The mount instance id, or `None` for the default instance.
         instance: Option<String>,
+    },
+    /// An app-initiated in-place navigation of a handle's mounted webview.
+    Navigate {
+        /// Connection id (ownership check in apply).
+        connection_id: u64,
+        /// The surface the connection's token resolved to.
+        owner_surface: Entity,
+        /// The target handle.
+        handle: String,
+        /// What to do.
+        action: NavAction,
     },
 }
 
@@ -316,6 +327,14 @@ fn handle_client_msg(
                 instance,
             });
         }
+        ClientMsg::Navigate { handle, action } => {
+            let _ = events.send(ControlEvent::Navigate {
+                connection_id,
+                owner_surface,
+                handle,
+                action,
+            });
+        }
     }
     ControlFlow::Continue(())
 }
@@ -536,5 +555,39 @@ mod tests {
             line.contains(r#""op":"call""#) && line.contains(r#""reqId":"g0""#),
             "got {line}"
         );
+    }
+
+    #[test]
+    fn navigate_msg_emits_navigate_event() {
+        let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
+        let (out_tx, _out_rx) = unbounded::<String>();
+        let surface = Entity::from_bits(1);
+
+        let flow = handle_client_msg(
+            ClientMsg::Navigate {
+                handle: "H".into(),
+                action: NavAction::Reload,
+            },
+            7,
+            surface,
+            &ev_tx,
+            &out_tx,
+        );
+
+        assert!(matches!(flow, ControlFlow::Continue(())));
+        match ev_rx.try_recv().expect("a navigate event") {
+            ControlEvent::Navigate {
+                connection_id,
+                owner_surface,
+                handle,
+                action,
+            } => {
+                assert_eq!(connection_id, 7);
+                assert_eq!(owner_surface, surface);
+                assert_eq!(handle, "H");
+                assert_eq!(action, NavAction::Reload);
+            }
+            _ => panic!("expected Navigate"),
+        }
     }
 }

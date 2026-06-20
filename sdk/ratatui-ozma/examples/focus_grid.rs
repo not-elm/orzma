@@ -4,7 +4,7 @@
 //!
 //! A 2x2 grid — two native panels (NW, SE) and two webviews (NE, SW). The app
 //! OWNS focus in a `focused` string and moves it spatially with `Alt+h/j/k/l`.
-//! The webview cells declare those chords as PASSTHROUGH, so the host forwards
+//! The webview cells declare those chords as FORWARD-KEYS, so the host forwards
 //! them to the PTY (reaching plain `event::read`) and suppresses them from the
 //! page even while a webview is focused — that is how focus can leave a focused
 //! webview. `WebviewWidget::focused` reports focus to the SDK; the `OzmaBackend`
@@ -63,9 +63,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ];
     let ne =
-        ozma.register(Webview::inline(webview_html("NE webview", "#8be9fd")).passthrough(nav))?;
+        ozma.register(Webview::inline(webview_html("NE webview", "#8be9fd")).forward_keys(nav))?;
     let sw =
-        ozma.register(Webview::inline(webview_html("SW webview", "#bd93f9")).passthrough(nav))?;
+        ozma.register(Webview::inline(webview_html("SW webview", "#bd93f9")).forward_keys(nav))?;
 
     enable_raw_mode()?;
     if let Err(e) = execute!(stdout(), EnterAlternateScreen) {

@@ -1,7 +1,7 @@
 //! Per-pane input gating for `AppMode::Ozmux`: every pane is `KeyboardDisabled`
 //! (keys pass through to tmux), and `MouseDisabled` whenever a modal owns input,
-//! the pane is in copy mode, the focused inline webview belongs to the pane, or
-//! an interactive inline webview under the cursor claims the press — so
+//! the pane is in copy mode, the focused webview belongs to the pane, or
+//! an interactive webview under the cursor claims the press — so
 //! `ozma_terminal`'s shared mouse systems yield to the tmux-specific gestures.
 
 use super::pane_hit::tmux_pane_at_phys;
@@ -11,7 +11,7 @@ use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::rename_prompt::RenamePrompt;
-use crate::webview::inline::{InlineWebview, inline_hit_at};
+use crate::webview::mount::{Webview, webview_hit_at};
 use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -48,8 +48,8 @@ fn maintain_tmux_input_gates(
     windows: Query<&Window, With<PrimaryWindow>>,
     pane_geometry: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     children: Query<&Children>,
-    inline: Query<(&InlineWebview, Has<NonInteractive>)>,
-    inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    webviews: Query<(&Webview, Has<NonInteractive>)>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     overlay_rects: Query<&TerminalOverlays>,
     panes: Query<
         (
@@ -70,23 +70,23 @@ fn maintain_tmux_input_gates(
         || rename_prompt.is_some();
     // NOTE: gate only the focused webview's OWNING pane, not all panes — a
     // global `focused_webview.0.is_some()` would kill scroll/selection on every
-    // other pane while any inline webview is focused.
+    // other pane while any webview is focused.
     let focused_webview_pane = focused_webview
         .0
-        .and_then(|webview| inline_parents.get(webview).ok())
+        .and_then(|webview| webview_parents.get(webview).ok())
         .map(|childof| childof.parent());
     // TODO: a press within `divider_grab_tolerance_px` of a divider can still
     // both resize the pane and start an `ozma_terminal` selection — the
     // divider-band claim is not folded in here yet. Adding it requires the
     // logical-vs-physical divider coordinate space; tracked as a follow-up.
     let claimed_pane = window.and_then(|window| {
-        claimed_inline_pane(
+        claimed_webview_pane(
             window,
             metrics.as_deref(),
             &pane_geometry,
             &children,
-            &inline,
-            &inline_parents,
+            &webviews,
+            &webview_parents,
             &overlay_rects,
         )
     });
@@ -118,20 +118,20 @@ fn should_disable_pane_mouse(
     modal || in_copy_mode || webview_focused_here || region_claimed
 }
 
-/// The parent `TmuxPane` entity of the interactive inline webview currently
+/// The parent `TmuxPane` entity of the interactive webview currently
 /// under the cursor, or `None`. Mirrors the press-routing hit-test in the mouse
-/// arbiter (`route_tmux_inline_left_click`): `cursor_phys = cursor × scale`,
-/// `tmux_pane_at_phys` → `local_phys`, then `inline_hit_at` against the pane's
-/// active overlays. `inline_hit_at` already skips `NonInteractive` webviews, so
+/// arbiter (`route_tmux_webview_left_click`): `cursor_phys = cursor × scale`,
+/// `tmux_pane_at_phys` → `local_phys`, then `webview_hit_at` against the pane's
+/// active overlays. `webview_hit_at` already skips `NonInteractive` webviews, so
 /// only an interactive one claims. Returns `None` when metrics are absent (no
 /// cell pitch to hit-test with), the cursor is off every pane, or no rect is hit.
-fn claimed_inline_pane(
+fn claimed_webview_pane(
     window: &Window,
     metrics: Option<&TerminalCellMetricsResource>,
     pane_geometry: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     children: &Query<&Children>,
-    inline: &Query<(&InlineWebview, Has<NonInteractive>)>,
-    inline_parents: &Query<&ChildOf, With<InlineWebview>>,
+    webviews: &Query<(&Webview, Has<NonInteractive>)>,
+    webview_parents: &Query<&ChildOf, With<Webview>>,
     overlay_rects: &Query<&TerminalOverlays>,
 ) -> Option<Entity> {
     let metrics = metrics?;
@@ -141,10 +141,10 @@ fn claimed_inline_pane(
     let cursor_phys = window.cursor_position()? * scale;
     let (terminal, _pane_id, local_phys) = tmux_pane_at_phys(pane_geometry, cursor_phys)?;
     let overlays = overlay_rects.get(terminal).ok()?;
-    let hit = inline_hit_at(
-        children, inline, overlays, terminal, local_phys, cell_w, cell_h, scale,
+    let hit = webview_hit_at(
+        children, webviews, overlays, terminal, local_phys, cell_w, cell_h, scale,
     )?;
-    Some(inline_parents.get(hit.child).ok()?.parent())
+    Some(webview_parents.get(hit.child).ok()?.parent())
 }
 
 #[cfg(test)]

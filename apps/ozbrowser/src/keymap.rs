@@ -10,6 +10,7 @@ pub(crate) enum Mode {
     Insert,
     Address,
     Help,
+    Hint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,10 +28,13 @@ pub(crate) enum Action {
     OpenAddress,
     Reload,
     EnterInsert,
+    EnterHint,
     OpenHelp,
     AddressChar(char),
     AddressBackspace,
     AddressConfirm,
+    HintKey(char),
+    HintBackspace,
     Escape,
     Quit,
     Ignore,
@@ -41,6 +45,7 @@ pub(crate) fn map(mode: Mode, key: KeyEvent) -> Action {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     match mode {
         Mode::Normal => map_normal(ctrl, key.code),
+        Mode::Hint => map_hint(ctrl, key.code),
         Mode::Insert => match key.code {
             KeyCode::Esc => Action::Escape,
             _ => Action::Ignore,
@@ -82,8 +87,20 @@ fn map_normal(ctrl: bool, code: KeyCode) -> Action {
         KeyCode::Char('o') | KeyCode::Char(':') => Action::OpenAddress,
         KeyCode::Char('r') => Action::Reload,
         KeyCode::Char('i') => Action::EnterInsert,
+        KeyCode::Char('f') => Action::EnterHint,
         KeyCode::Char('?') => Action::OpenHelp,
         KeyCode::Char('q') => Action::Quit,
+        _ => Action::Ignore,
+    }
+}
+
+fn map_hint(ctrl: bool, code: KeyCode) -> Action {
+    match code {
+        KeyCode::Char('c') if ctrl => Action::Quit,
+        _ if ctrl => Action::Ignore,
+        KeyCode::Esc => Action::Escape,
+        KeyCode::Backspace => Action::HintBackspace,
+        KeyCode::Char(c) => Action::HintKey(c),
         _ => Action::Ignore,
     }
 }
@@ -177,5 +194,31 @@ mod tests {
         assert_eq!(map(Mode::Help, special(KeyCode::Esc)), Action::Escape);
         assert_eq!(map(Mode::Help, key('q')), Action::Escape);
         assert_eq!(map(Mode::Help, key('j')), Action::Ignore);
+    }
+
+    #[test]
+    fn normal_f_enters_hint_mode() {
+        assert_eq!(map(Mode::Normal, key('f')), Action::EnterHint);
+    }
+
+    #[test]
+    fn hint_mode_printable_char_is_hint_key() {
+        assert_eq!(map(Mode::Hint, key('a')), Action::HintKey('a'));
+        assert_eq!(map(Mode::Hint, key('s')), Action::HintKey('s'));
+    }
+
+    #[test]
+    fn hint_mode_backspace_and_escape() {
+        assert_eq!(
+            map(Mode::Hint, special(KeyCode::Backspace)),
+            Action::HintBackspace
+        );
+        assert_eq!(map(Mode::Hint, special(KeyCode::Esc)), Action::Escape);
+    }
+
+    #[test]
+    fn hint_mode_ctrl_c_quits_and_other_ctrl_ignored() {
+        assert_eq!(map(Mode::Hint, ctrl('c')), Action::Quit);
+        assert_eq!(map(Mode::Hint, ctrl('d')), Action::Ignore);
     }
 }

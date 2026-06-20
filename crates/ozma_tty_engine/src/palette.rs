@@ -9,7 +9,7 @@
 //! `AColor::Named(Foreground)` maps to `Color::WHITE` as a sentinel.
 //! `AColor::Named(Background)` maps to `Color::NONE` (transparent) so that
 //! cells with the terminal default background let the pane background
-//! (`bg_padding_color`) and any inline webview overlays show through.
+//! (`bg_padding_color`) and any webview overlays show through.
 //! Cells with an explicit ANSI color are fully opaque and occlude overlays.
 
 use alacritty_terminal::vte::ansi::{Color as AColor, NamedColor};

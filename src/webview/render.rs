@@ -3,7 +3,7 @@
 //! step with the active pane, and routes the `ozma.call` frames the page bridge
 //! emits to the registering program over the control socket.
 
-use super::inline::InlineWebview;
+use super::mount::Webview;
 use super::osc::NonInteractive;
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
 use crate::system_set::OzmuxSystems;
@@ -65,6 +65,7 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(JsEmitEventPlugin::<OzmuxFrame>::default())
             .add_observer(on_ozmux_call_frame)
+            .add_observer(on_webview_address_changed)
             .add_observer(drop_ozmux_inflight_on_webview_despawn)
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
@@ -84,11 +85,11 @@ impl Plugin for RenderPlugin {
 /// CEF focus when `FocusedWebview` becomes `None`).
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
-/// inline webview child (`InlineWebview`) whose `ChildOf` parent is a live
+/// webview child (`Webview`) whose `ChildOf` parent is a live
 /// `TmuxPane` — active or not — that inline focus stands (spec §7, single
 /// focus source). This covers click-granted focus and the app-declared focus
 /// set via the control-plane `SetFocus` op, and means switching the active
-/// pane does NOT clear an inline webview's focus: the webview keeps keyboard
+/// pane does NOT clear a webview's focus: the webview keeps keyboard
 /// focus until its child despawns (or focus moves off it), at which point the
 /// sync falls through to the clear path below, which maps the active terminal
 /// pane to `None`.
@@ -97,16 +98,16 @@ pub(crate) fn sync_focused_webview(
     active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
-    inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     tmux_panes: Query<(), With<TmuxPane>>,
 ) {
-    // NOTE: a despawned inline child fails `inline_parents.get` here and so
+    // NOTE: a despawned inline child fails `webview_parents.get` here and so
     // falls through to the clear path below, which resolves to `None` and
     // clears it — that fall-through is the GC for tmux-pane inline focus; a
     // later edit that short-circuits this arm before the despawn check would
     // leak focus.
     if let Some(child) = focused.0
-        && let Ok(parent) = inline_parents.get(child)
+        && let Ok(parent) = webview_parents.get(child)
         && tmux_panes.contains(parent.parent())
     {
         return;
@@ -173,6 +174,40 @@ fn on_ozmux_call_frame(
 fn reject_ozmux_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
     let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
     commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
+}
+
+/// Outbound (Tier 1 back-channel): when a webview's top-level URL changes (CEF
+/// `OnAddressChange` — link clicks, hint activations, redirects, hash/pushState),
+/// forwards a `urlChanged` call to the registering program so it can track
+/// page-driven navigation (e.g. ozbrowser's history + URL bar). Scoped to remote
+/// `http(s)` webviews; `ozma-dyn://` dir/inline views (which register no
+/// `urlChanged` handler) are skipped. Fire-and-forget: the minted reqId is not
+/// recorded, so the program's reply finds no in-flight entry and is dropped by
+/// `OzmuxRpc::take_for_connection`.
+fn on_webview_address_changed(
+    addr: On<AddressChanged>,
+    mut rpc: ResMut<OzmuxRpc>,
+    writers: Res<ConnectionWriters>,
+    views: Query<(&WebviewOwner, &WebviewSource)>,
+) {
+    let Ok((owner, source)) = views.get(addr.webview) else {
+        return;
+    };
+    let WebviewSource::Url(source_url) = source else {
+        return;
+    };
+    if !(source_url.starts_with("http://") || source_url.starts_with("https://")) {
+        return;
+    }
+    let line = serde_json::json!({
+        "op": "call",
+        "handle": owner.handle,
+        "reqId": rpc.mint(),
+        "method": "urlChanged",
+        "params": { "url": addr.url },
+    })
+    .to_string();
+    let _ = writers.send(owner.connection_id, line);
 }
 
 /// Despawn prune: drop a despawned webview's in-flight back-channel calls.
@@ -350,7 +385,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "v".into(),
                     instance_id: None,
                     slot: 0,
@@ -394,7 +429,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "v".into(),
                     instance_id: None,
                     slot: 0,
@@ -453,6 +488,82 @@ mod tests {
                 .resource::<OzmuxRpc>()
                 .count_in_flight_for_test(),
             1
+        );
+    }
+
+    fn address_changed_app() -> (App, crossbeam_channel::Receiver<String>) {
+        use crossbeam_channel::unbounded;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(OzmuxRpc::default());
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_webview_address_changed);
+        (app, rx)
+    }
+
+    #[test]
+    fn address_change_pushes_urlchanged_call_to_owner_for_http_url() {
+        let (mut app, rx) = address_changed_app();
+        let webview = app
+            .world_mut()
+            .spawn((
+                WebviewOwner {
+                    connection_id: 7,
+                    handle: "H".into(),
+                },
+                WebviewSource::new("https://example.com"),
+            ))
+            .id();
+
+        app.world_mut().trigger(AddressChanged {
+            webview,
+            url: "https://example.com/next".into(),
+            can_go_back: true,
+            can_go_forward: false,
+        });
+
+        let line = rx.try_recv().expect("a urlChanged call was pushed");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["op"], "call");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["method"], "urlChanged");
+        assert_eq!(v["params"]["url"], "https://example.com/next");
+        assert_eq!(
+            app.world()
+                .resource::<OzmuxRpc>()
+                .count_in_flight_for_test(),
+            0,
+            "urlChanged is fire-and-forget: it records no in-flight call"
+        );
+    }
+
+    #[test]
+    fn address_change_on_dyn_view_pushes_nothing() {
+        let (mut app, rx) = address_changed_app();
+        let webview = app
+            .world_mut()
+            .spawn((
+                WebviewOwner {
+                    connection_id: 7,
+                    handle: "H".into(),
+                },
+                WebviewSource::new("ozma-dyn://H/index.html"),
+            ))
+            .id();
+
+        app.world_mut().trigger(AddressChanged {
+            webview,
+            url: "ozma-dyn://H/index.html#section".into(),
+            can_go_back: false,
+            can_go_forward: false,
+        });
+
+        assert!(
+            rx.try_recv().is_err(),
+            "an ozma-dyn:// dir/inline view must report no urlChanged"
         );
     }
 }

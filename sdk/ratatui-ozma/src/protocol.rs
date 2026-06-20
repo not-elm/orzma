@@ -41,6 +41,30 @@ pub(crate) enum ClientMsg {
         /// The mount instance id, or `None` for the default instance.
         instance: Option<String>,
     },
+    /// Navigate a handle's mounted webview in place (no re-registration).
+    Navigate {
+        /// The target handle.
+        handle: String,
+        /// What to do.
+        action: NavAction,
+    },
+}
+
+/// A navigation action on an already-registered handle's mounted webview.
+// NOTE: rename_all must match the host's NavAction (snake_case) so the wire
+// contract agrees for any future multi-word variant, not just the current
+// single-word ones where lowercase and snake_case coincide.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NavAction {
+    /// Go back in the webview's native session history.
+    Back,
+    /// Go forward in the webview's native session history.
+    Forward,
+    /// Reload the current page.
+    Reload,
+    /// Navigate the existing webview to a new URL.
+    To(String),
 }
 
 /// The content variants of a `register` request.
@@ -55,7 +79,7 @@ pub(crate) enum RegisterKind {
         interactive: bool,
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
-        passthrough: Vec<KeyChord>,
+        forward_keys: Vec<KeyChord>,
     },
     /// A directory of assets served at `ozma-dyn://<handle>/`.
     Dir {
@@ -67,7 +91,7 @@ pub(crate) enum RegisterKind {
         interactive: bool,
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
-        passthrough: Vec<KeyChord>,
+        forward_keys: Vec<KeyChord>,
     },
     /// Load a remote `http(s)` URL as the top-level document.
     Url {
@@ -79,7 +103,7 @@ pub(crate) enum RegisterKind {
         bridge: bool,
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
-        passthrough: Vec<KeyChord>,
+        forward_keys: Vec<KeyChord>,
     },
 }
 
@@ -151,7 +175,7 @@ mod tests {
         let v = serde_json::to_value(ClientMsg::Register(RegisterKind::Inline {
             html: "<h1>hi</h1>".into(),
             interactive: true,
-            passthrough: Vec::new(),
+            forward_keys: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["op"], "register");
@@ -244,7 +268,7 @@ mod tests {
             url: "https://example.com".into(),
             interactive: true,
             bridge: false,
-            passthrough: Vec::new(),
+            forward_keys: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["op"], "register");
@@ -253,8 +277,8 @@ mod tests {
         assert_eq!(v["interactive"], true);
         assert_eq!(v["bridge"], false);
         assert!(
-            v.get("passthrough").is_none(),
-            "empty passthrough must be skipped"
+            v.get("forward_keys").is_none(),
+            "empty forward_keys must be skipped"
         );
     }
 
@@ -264,10 +288,33 @@ mod tests {
             url: "https://app.example.com".into(),
             interactive: true,
             bridge: true,
-            passthrough: Vec::new(),
+            forward_keys: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["kind"], "url");
         assert_eq!(v["bridge"], true);
+    }
+
+    #[test]
+    fn navigate_back_serializes() {
+        let v = serde_json::to_value(ClientMsg::Navigate {
+            handle: "H".into(),
+            action: NavAction::Back,
+        })
+        .unwrap();
+        assert_eq!(v["op"], "navigate");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["action"], "back");
+    }
+
+    #[test]
+    fn navigate_to_serializes_url_under_to() {
+        let v = serde_json::to_value(ClientMsg::Navigate {
+            handle: "H".into(),
+            action: NavAction::To("https://example.com/x".into()),
+        })
+        .unwrap();
+        assert_eq!(v["op"], "navigate");
+        assert_eq!(v["action"]["to"], "https://example.com/x");
     }
 }

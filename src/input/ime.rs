@@ -9,7 +9,7 @@
 use crate::input::InputPhase;
 use crate::ozma::AppMode;
 use crate::ui::copy_mode::CopyModeState;
-use crate::webview::inline::{InlineWebview, focused_inline_of};
+use crate::webview::mount::{Webview, focused_webview_of};
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
@@ -156,7 +156,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// translation + `TerminalGrid.cursor` × cell pitch, then divided by
 /// the window scale factor. When the focused webview is an INLINE child of
 /// the active pane, the anchor instead comes from that child's overlay
-/// rect origin (`inline_ime_position`), since inline entities carry no UI
+/// rect origin (`webview_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
 pub(crate) fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
@@ -166,8 +166,8 @@ pub(crate) fn ime_policy_system(
     metrics: Res<TerminalCellMetricsResource>,
     focused_webview: Res<FocusedWebview>,
     webview_anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
-    inline_parents: Query<&ChildOf, With<InlineWebview>>,
-    inline_slots: Query<&InlineWebview>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
+    webview_slots: Query<&Webview>,
     overlays: Query<&TerminalOverlays>,
     current_mode: Res<State<AppMode>>,
     ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
@@ -193,14 +193,14 @@ pub(crate) fn ime_policy_system(
         // tab-webview `webview_anchors` arm below cannot anchor it. Derive the
         // candidate-window position from the owning terminal's node transform
         // plus the inline placement rect's origin — the SAME px conversion the
-        // wheel/click hit-test uses (`inline_local_dip`'s `origin_phys`), so
+        // wheel/click hit-test uses (`webview_local_dip`'s `origin_phys`), so
         // composition appears at the inline rect, not the terminal cursor.
         if let Some(child) =
-            focused_inline_of(Some(&focused_webview), &inline_parents, active_surface)
-            && let Some(pos) = inline_ime_position(
+            focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
+            && let Some(pos) = webview_ime_position(
                 window.resolution.scale_factor(),
-                &inline_parents,
-                &inline_slots,
+                &webview_parents,
+                &webview_slots,
                 &anchors,
                 &overlays,
                 &metrics,
@@ -288,7 +288,7 @@ pub(crate) fn ime_policy_system(
 }
 
 /// Drains `Ime` events, mutates `ImeState`, and forwards `Ime::Commit`
-/// text to the active tmux pane — UNLESS an inline webview owns focus, in
+/// text to the active tmux pane — UNLESS a webview owns focus, in
 /// which case the commit-to-pane write is suppressed (bevy_cef commits it to
 /// the page; see spec §7).
 ///
@@ -304,7 +304,7 @@ pub(crate) fn read_ime_events(
     connection: NonSend<TmuxConnection>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
-    inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     current_mode: Res<State<AppMode>>,
     ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     copy_modes: Query<(), With<CopyModeState>>,
@@ -319,7 +319,8 @@ pub(crate) fn read_ime_events(
             // pane — doing so double-delivers the composition (once to the page,
             // once to the terminal). The state machine above still ran, so
             // `ImeState` stays consistent; only the pane write is skipped.
-            if focused_inline_of(Some(&focused_webview), &inline_parents, active_surface).is_some()
+            if focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
+                .is_some()
             {
                 continue;
             }
@@ -375,23 +376,23 @@ pub(crate) fn read_ime_events(
     }
 }
 
-/// The logical-pixel anchor for the OS candidate window when an inline webview
+/// The logical-pixel anchor for the OS candidate window when a webview
 /// owns focus: the owning terminal node's top-left (physical px) plus the
 /// child's active overlay rect origin (`rect.y × cell_w`, `rect.x × cell_h`),
 /// divided by the window scale factor. `None` when the focus chain is gone
 /// (child/terminal despawned, no terminal node, or a sentinel rect) — the
 /// caller then leaves `ime_position` unchanged rather than mis-anchoring.
-fn inline_ime_position(
+fn webview_ime_position(
     scale_factor: f32,
-    inline_parents: &Query<&ChildOf, With<InlineWebview>>,
-    inline_slots: &Query<&InlineWebview>,
+    webview_parents: &Query<&ChildOf, With<Webview>>,
+    webview_slots: &Query<&Webview>,
     anchors: &Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     overlays: &Query<&TerminalOverlays>,
     metrics: &TerminalCellMetricsResource,
     child: Entity,
 ) -> Option<Vec2> {
-    let terminal = inline_parents.get(child).ok()?.parent();
-    let slot = inline_slots.get(child).ok()?.slot;
+    let terminal = webview_parents.get(child).ok()?.parent();
+    let slot = webview_slots.get(child).ok()?.slot;
     let (node, ui_xform, _) = anchors.get(terminal).ok()?;
     let rect = *overlays.get(terminal).ok()?.rects.get(usize::from(slot))?;
     if rect.z == 0 {
@@ -828,8 +829,8 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
-                    view_id: "inline".into(),
+                Webview {
+                    view_id: "webview".into(),
                     instance_id: None,
                     slot: 0,
                 },
@@ -855,7 +856,7 @@ mod tests {
         let window = q.single(app.world()).expect("primary window");
         assert!(
             window.ime_enabled,
-            "IME must stay enabled while an inline webview owns focus"
+            "IME must stay enabled while a webview owns focus"
         );
         assert!(
             window.ime_position.abs_diff_eq(Vec2::new(24.0, 32.0), 1e-3),
@@ -873,8 +874,8 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane_entity),
-                InlineWebview {
-                    view_id: "inline".into(),
+                Webview {
+                    view_id: "webview".into(),
                     instance_id: None,
                     slot: 0,
                 },

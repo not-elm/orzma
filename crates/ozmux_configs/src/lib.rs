@@ -169,7 +169,7 @@ mod validate_tests {
     fn validate_detects_chord_conflict() {
         let toml_str = r#"
 [shortcuts.bindings]
-release-inline-focus = "Cmd+V"
+release-webview-focus = "Cmd+V"
 "#;
         let mut configs: OzmuxConfigs = toml::from_str(toml_str).unwrap();
         configs.normalize();
@@ -178,7 +178,7 @@ release-inline-focus = "Cmd+V"
             OzmuxConfigsError::DuplicateChords(dupes) => {
                 assert_eq!(dupes.len(), 1);
                 assert!(dupes[0].actions.contains(&"paste"));
-                assert!(dupes[0].actions.contains(&"release-inline-focus"));
+                assert!(dupes[0].actions.contains(&"release-webview-focus"));
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
         }

@@ -76,7 +76,7 @@ fn backend_draw_emits_mount_osc_and_focus_op() {
 
         let out = String::from_utf8(term_bytes.0.lock().unwrap().clone()).unwrap();
         assert!(
-            out.contains("mount-inline;view-1;12;48"),
+            out.contains("mount;view-1;12;48"),
             "terminal output missing mount OSC: {out:?}"
         );
 

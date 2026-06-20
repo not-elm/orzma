@@ -86,7 +86,7 @@ fn sync_inactive_pane_style(
 
 /// Returns the [`PaneInactiveStyle`] applied to inactive panes when the
 /// treatment is enabled: background tint (`tint_color` linearized + `tint`
-/// amount) and the inline-webview overlay treatment (`webview_dim` /
+/// amount) and the webview overlay treatment (`webview_dim` /
 /// `webview_desaturate`). Disabled or absent config yields the no-op default.
 fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> PaneInactiveStyle {
     match configs {

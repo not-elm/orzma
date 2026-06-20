@@ -1,8 +1,8 @@
 //! Observes `OscWebviewRequest` and mounts/unmounts an inline dynamic webview
-//! at the requesting terminal's cursor (the `MountInline` / `UnmountInline`
-//! verbs); the non-inline tab verbs are accepted but no longer acted on.
+//! at the requesting terminal's cursor (the `Mount` / `Unmount`
+//! verbs).
 
-use super::inline::{InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline};
+use super::mount::{WebviewMountContext, WebviewParams, mount, unmount};
 use crate::control_plane::DynamicRegistry;
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Resource, Clone)]
 pub(crate) struct OscWebviewGate(pub(crate) Arc<AtomicBool>);
 
-/// Marks an inline webview as render-only (no pointer or keyboard input
+/// Marks a webview as render-only (no pointer or keyboard input
 /// forwarded to the embedded page).
 #[derive(Component, Debug, Default)]
 pub(crate) struct NonInteractive;
@@ -39,22 +39,22 @@ fn init_gate_from_config(
 
 pub(crate) fn on_osc_webview_request(
     ev: On<OscWebviewRequest>,
-    mut inline: InlineWebviewParams,
+    mut webview: WebviewParams,
     dynamic: Res<DynamicRegistry>,
 ) {
     let req = ev.event();
     let terminal_surface = req.entity;
     match &req.verb {
-        OscWebviewVerb::MountInline {
+        OscWebviewVerb::Mount {
             view_id,
             rows,
             cols,
             instance_id,
         } => {
-            mount_inline(
-                &mut inline,
+            mount(
+                &mut webview,
                 &dynamic,
-                InlineMountContext {
+                WebviewMountContext {
                     terminal_surface,
                     view_id,
                     instance_id: instance_id.as_deref(),
@@ -64,24 +64,15 @@ pub(crate) fn on_osc_webview_request(
                 },
             );
         }
-        OscWebviewVerb::UnmountInline {
+        OscWebviewVerb::Unmount {
             view_id,
             instance_id,
         } => {
-            unmount_inline(
-                &mut inline,
+            unmount(
+                &mut webview,
                 terminal_surface,
                 view_id.as_deref(),
                 instance_id.as_deref(),
-            );
-        }
-        // The non-inline tab-mount verbs are still parsed by the VT layer but no
-        // longer act on anything (their tab-surface path was removed). Log the
-        // drop so a program still emitting them isn't met with total silence.
-        OscWebviewVerb::Mount { .. } | OscWebviewVerb::Unmount { .. } => {
-            tracing::debug!(
-                verb = ?req.verb,
-                "osc-webview: non-inline mount/unmount verb is no longer supported, dropping"
             );
         }
     }

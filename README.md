@@ -42,15 +42,15 @@ cargo run               # or: make run
 - `crates/` — `ozma_tty_engine`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
 - `sdk/ozma-web` — `@ozma/web` (in-page `window.ozma` bridge client for webview pages)
 
-## Inline webviews
+## Webviews
 
 A program in the shell can render a webview **inline in the terminal text flow**
 (a live CEF webview composited in the terminal shader, scrolling with the text).
 It registers content over the control plane to mint a handle, then writes an OSC
-5379 `mount-inline;<handle>` sequence:
+5379 `mount;<handle>` sequence:
 
 ```sh
-printf '\033]5379;mount-inline;%s;12;48\033\\' "$handle"
+printf '\033]5379;mount;%s;12;48\033\\' "$handle"
 printf '\n%.0s' $(seq 12)
 ```
 
@@ -59,7 +59,7 @@ see [`examples/dyn_webview_client.rs`](examples/dyn_webview_client.rs). Click th
 view to focus it; keys, wheel, and IME then route to the page; `Ctrl+Shift+Escape`
 returns focus to the terminal. Full protocol, focus model, and limits:
 [`docs/dyn-webview.md`](docs/dyn-webview.md) and
-[`docs/inline-webview.md`](docs/inline-webview.md).
+[`docs/webview.md`](docs/webview.md).
 
 ## Development
 

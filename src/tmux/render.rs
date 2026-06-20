@@ -112,8 +112,8 @@ fn attach_tmux_window_container(
 /// The `On<Add, OzmaTerminal>` observer in `ozma_terminal` injects the
 /// `TerminalRenderBundle` (one per entity, no duplicate material creation here).
 /// The `TerminalGrid` lives on the pane entity itself, so `flush_emit` /
-/// `emit_pending` and the inline-webview overlay projection all target it
-/// directly (an inline webview mounts as a `ChildOf` the pane).
+/// `emit_pending` and the webview overlay projection all target it
+/// directly (a webview mounts as a `ChildOf` the pane).
 ///
 /// Runs every frame but targets each pane exactly once. `ChildOf` is NOT set
 /// here — the projection observers already establish the correct
@@ -124,7 +124,7 @@ fn attach_tmux_pane_terminal(
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
 ) {
     // NOTE: clone the SHARED OscWebviewGate so a tmux pane captures OSC 5379 when
-    // the feature is enabled; a fresh `false` atomic would leave inline-webview
+    // the feature is enabled; a fresh `false` atomic would leave webview
     // capture permanently off for tmux panes. The fallback is only reached in
     // tests that do not install the gate resource.
     let gate = gate
@@ -188,7 +188,7 @@ fn route_tmux_output(
         // NOTE: drain captured control frames — crucially the OSC 5379
         // mount/unmount verbs — into observer triggers. The engine's own control
         // drain runs only for PtyHandle-backed terminals; tmux panes have no
-        // PtyHandle, so without this call a pane program's inline-webview mount
+        // PtyHandle, so without this call a pane program's webview mount
         // OSC is parsed and then silently dropped (no webview ever mounts).
         handle.drain_control_events(&mut commands, entity, &mut title);
         // NOTE: skip the live flush while in copy mode — `apply_copy_overlay` paints
@@ -888,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_osc_from_pane_triggers_webview_request() {
+    fn mount_osc_from_pane_triggers_webview_request() {
         use ozma_tty_engine::OscWebviewRequest;
 
         #[derive(Resource, Default)]
@@ -924,19 +924,19 @@ mod tests {
         // Frame 1: attach the handle + TerminalTitle (no output yet).
         app.update();
 
-        // Frame 2: deliver a mount-inline OSC and route it.
+        // Frame 2: deliver a mount OSC and route it.
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
             .write(PaneOutput {
                 pane: pane_id,
-                data: b"\x1b]5379;mount-inline;memo;3;10\x1b\\".to_vec(),
+                data: b"\x1b]5379;mount;memo;3;10\x1b\\".to_vec(),
             });
         app.update();
 
         assert_eq!(
             app.world().resource::<Seen>().0,
             1,
-            "a mount-inline OSC from a tmux pane must trigger exactly one OscWebviewRequest",
+            "a mount OSC from a tmux pane must trigger exactly one OscWebviewRequest",
         );
     }
 

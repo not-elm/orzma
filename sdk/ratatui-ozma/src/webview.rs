@@ -3,7 +3,7 @@
 use crate::error::OzmaResult;
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
-use crate::protocol::{ClientMsg, RegisterKind};
+use crate::protocol::{ClientMsg, NavAction, RegisterKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::collections::HashMap;
@@ -28,7 +28,7 @@ impl Webview {
             kind: RegisterKind::Inline {
                 html: html.into(),
                 interactive: true,
-                passthrough: Vec::new(),
+                forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -45,7 +45,7 @@ impl Webview {
                 url: url.into(),
                 interactive: true,
                 bridge: false,
-                passthrough: Vec::new(),
+                forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -58,7 +58,7 @@ impl Webview {
                 root: root.as_ref().display().to_string(),
                 entry: entry.into(),
                 interactive: true,
-                passthrough: Vec::new(),
+                forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -85,11 +85,11 @@ impl Webview {
 
     /// Declares chords the page lets through to the app while focused (the host
     /// forwards them to the PTY so the app reads them via `crossterm::event::read`).
-    pub fn passthrough(mut self, keys: impl IntoIterator<Item = KeyChord>) -> Self {
+    pub fn forward_keys(mut self, keys: impl IntoIterator<Item = KeyChord>) -> Self {
         match &mut self.kind {
-            RegisterKind::Inline { passthrough, .. }
-            | RegisterKind::Dir { passthrough, .. }
-            | RegisterKind::Url { passthrough, .. } => passthrough.extend(keys),
+            RegisterKind::Inline { forward_keys, .. }
+            | RegisterKind::Dir { forward_keys, .. }
+            | RegisterKind::Url { forward_keys, .. } => forward_keys.extend(keys),
         }
         self
     }
@@ -156,10 +156,44 @@ impl WebviewHandle {
         Ok(())
     }
 
+    /// Navigates this handle's mounted webview to `url` in place (no
+    /// re-registration). Mount-scoped: a no-op (still `Ok`) when nothing is
+    /// mounted.
+    pub fn navigate(&self, url: impl Into<String>) -> OzmaResult<()> {
+        self.send_nav(NavAction::To(url.into()))
+    }
+
+    /// Goes back in the webview's native session history. Mount-scoped.
+    pub fn go_back(&self) -> OzmaResult<()> {
+        self.send_nav(NavAction::Back)
+    }
+
+    /// Goes forward in the webview's native session history. Mount-scoped.
+    pub fn go_forward(&self) -> OzmaResult<()> {
+        self.send_nav(NavAction::Forward)
+    }
+
+    /// Reloads the current page. Mount-scoped.
+    pub fn reload(&self) -> OzmaResult<()> {
+        self.send_nav(NavAction::Reload)
+    }
+
     /// Creates a handle from a pre-existing shared ID slot for callers that need
     /// to share the ID slot across threads.
     pub(crate) fn new_shared(id: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
         Self { id, writer }
+    }
+
+    fn send_nav(&self, action: NavAction) -> OzmaResult<()> {
+        let msg = ClientMsg::Navigate {
+            handle: self.id(),
+            action,
+        };
+        let line = serde_json::to_string(&msg)?;
+        let mut w = self.writer.lock()?;
+        writeln!(w, "{line}")?;
+        w.flush()?;
+        Ok(())
     }
 }
 
@@ -214,25 +248,25 @@ mod tests {
     }
 
     #[test]
-    fn passthrough_rides_register_wire() {
+    fn forward_keys_rides_register_wire() {
         use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-        let wv = Webview::inline("x").passthrough([KeyChord {
+        let wv = Webview::inline("x").forward_keys([KeyChord {
             mods: KeyModifiers::ALT,
             code: KeyCode::Char('h'),
         }]);
         let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
         assert_eq!(v["op"], "register");
-        assert_eq!(v["passthrough"][0]["key"], "h");
-        assert_eq!(v["passthrough"][0]["mods"][0], "alt");
+        assert_eq!(v["forward_keys"][0]["key"], "h");
+        assert_eq!(v["forward_keys"][0]["mods"][0], "alt");
     }
 
     #[test]
-    fn empty_passthrough_is_omitted_from_wire() {
+    fn empty_forward_keys_is_omitted_from_wire() {
         let wv = Webview::inline("x");
         let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
         assert!(
-            v.get("passthrough").is_none(),
-            "empty passthrough must be skipped"
+            v.get("forward_keys").is_none(),
+            "empty forward_keys must be skipped"
         );
     }
 
@@ -276,15 +310,15 @@ mod tests {
     }
 
     #[test]
-    fn url_passthrough_rides_register_wire() {
+    fn url_forward_keys_rides_register_wire() {
         use ratatui::crossterm::event::{KeyCode, KeyModifiers};
-        let wv = Webview::url("https://example.com").passthrough([KeyChord {
+        let wv = Webview::url("https://example.com").forward_keys([KeyChord {
             mods: KeyModifiers::ALT,
             code: KeyCode::Char('h'),
         }]);
         let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
         assert_eq!(v["kind"], "url");
-        assert_eq!(v["passthrough"][0]["key"], "h");
+        assert_eq!(v["forward_keys"][0]["key"], "h");
     }
 
     #[test]

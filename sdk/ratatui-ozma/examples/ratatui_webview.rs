@@ -3,7 +3,7 @@
 //! Renders a webview and a native status line. The app OWNS focus in a simple
 //! `web_focused` bool: `Alt+l` focuses the webview, `Alt+h` returns focus to the
 //! app, and `q` quits while the app is focused. `Alt+h`/`Alt+l` are declared as
-//! passthrough chords, so the host forwards them to the PTY (reaching plain
+//! forward-key chords, so the host forwards them to the PTY (reaching plain
 //! `event::read`) and suppresses them from the page even while the webview is
 //! focused. `WebviewWidget::focused` tells the SDK the current focus; the
 //! `OzmaBackend` wrapping the terminal emits the control-plane focus op on change.
@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let view = ozma.register(
         Webview::inline(html)
-            .passthrough([
+            .forward_keys([
                 KeyChord {
                     mods: KeyModifiers::ALT,
                     code: KeyCode::Char('h'),
