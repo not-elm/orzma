@@ -2,7 +2,6 @@
 
 use crate::components::WindowFlags;
 use crate::input::quote;
-use crate::keybindings::PromptKind;
 use bevy::prelude::Resource;
 use std::collections::{HashMap, HashSet};
 use tmux_control::{CommandId, TmuxResult};
@@ -126,7 +125,7 @@ pub(crate) fn rename_command(verb: &str, sigil: char, id: u32, name: &str) -> St
 
 /// The tab-separated `display-message -F` format ozmux reads each refresh while
 /// a pane is in copy mode. Field order is fixed; `parse_copy_state` depends on it.
-const COPY_STATE_FORMAT: &str = "#{pane_in_mode}\t#{scroll_position}\t#{pane_height}\t#{history_size}\t#{copy_cursor_x}\t#{copy_cursor_y}\t#{selection_present}\t#{rectangle_toggle}\t#{selection_start_x}\t#{selection_start_y}\t#{selection_end_x}\t#{selection_end_y}";
+pub(crate) const COPY_STATE_FORMAT: &str = "#{pane_in_mode}\t#{scroll_position}\t#{pane_height}\t#{history_size}\t#{copy_cursor_x}\t#{copy_cursor_y}\t#{selection_present}\t#{rectangle_toggle}\t#{selection_start_x}\t#{selection_start_y}\t#{selection_end_x}\t#{selection_end_y}";
 
 /// One snapshot of a pane's copy-mode state from `COPY_STATE_FORMAT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,16 +204,10 @@ pub fn parse_copy_state(line: &str) -> Option<CopyState> {
 /// Returns the `capture-pane -S/-E` offsets for the scrolled copy-mode view:
 /// `(-scroll_position, pane_height - 1 - scroll_position)`. Verified against
 /// tmux 3.6a.
-fn capture_offsets(scroll_position: u32, pane_height: u16) -> (i32, i32) {
+pub(crate) fn capture_offsets(scroll_position: u32, pane_height: u16) -> (i32, i32) {
     let start = -(scroll_position as i32);
     let end = pane_height as i32 - 1 - scroll_position as i32;
     (start, end)
-}
-
-/// Builds `capture-pane -p -e -t %N -S {start} -E {end}` for the scrolled view.
-pub fn copy_mode_capture_command(pane: PaneId, scroll_position: u32, pane_height: u16) -> String {
-    let (start, end) = capture_offsets(scroll_position, pane_height);
-    format!("capture-pane -p -e -t %{} -S {start} -E {end}", pane.0)
 }
 
 /// Maps an absolute (history-relative) grid line to a visible viewport row:
@@ -222,27 +215,6 @@ pub fn copy_mode_capture_command(pane: PaneId, scroll_position: u32, pane_height
 pub fn absolute_to_visible_row(absolute_y: u32, history_size: u32, scroll_position: u32) -> i32 {
     let top = history_size as i32 - scroll_position as i32;
     absolute_y as i32 - top
-}
-
-/// Builds the per-refresh `display-message -p -t %N "<COPY_STATE_FORMAT>"`.
-pub fn copy_state_query_command(pane: PaneId) -> String {
-    format!("display-message -p -t %{} \"{COPY_STATE_FORMAT}\"", pane.0)
-}
-
-/// Builds `send-keys -X -t %N <copy-command> -- '<text>'` for an ozmux prompt
-/// submit (search regex or jump char). The text is tmux-quoted.
-pub fn prompt_command(pane: PaneId, kind: PromptKind, text: &str) -> String {
-    format!(
-        "send-keys -X -t %{} {} -- {}",
-        pane.0,
-        kind.copy_command(),
-        quote(text)
-    )
-}
-
-/// Builds `show-buffer` to read tmux's top paste buffer for the clipboard bridge.
-pub fn show_buffer_command() -> String {
-    "show-buffer".to_string()
 }
 
 /// What an in-flight command's reply will populate, keyed by its `CommandId`.
@@ -404,14 +376,6 @@ mod tests {
     }
 
     #[test]
-    fn copy_mode_capture_command_uses_scroll_offsets() {
-        assert_eq!(
-            copy_mode_capture_command(PaneId(3), 12, 8),
-            "capture-pane -p -e -t %3 -S -12 -E -5"
-        );
-    }
-
-    #[test]
     fn absolute_to_visible_row_matches_verified_mapping() {
         assert_eq!(absolute_to_visible_row(57, 53, 3), 7);
         assert_eq!(absolute_to_visible_row(54, 53, 3), 4);
@@ -464,22 +428,6 @@ mod tests {
         assert!(!s.selection_present);
         assert_eq!((s.sel_start_x, s.sel_start_y), (0, 0));
         assert_eq!((s.sel_end_x, s.sel_end_y), (0, 0));
-    }
-
-    #[test]
-    fn copy_state_query_command_targets_pane() {
-        assert_eq!(
-            copy_state_query_command(PaneId(4)),
-            format!("display-message -p -t %4 \"{COPY_STATE_FORMAT}\"")
-        );
-    }
-
-    #[test]
-    fn prompt_search_command_quotes_text_and_targets_pane() {
-        assert_eq!(
-            prompt_command(PaneId(2), PromptKind::SearchForward, "foo bar"),
-            "send-keys -X -t %2 search-forward -- 'foo bar'"
-        );
     }
 
     #[test]

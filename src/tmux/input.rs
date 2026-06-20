@@ -37,9 +37,9 @@ use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use ozmux_tmux::{
     ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
-    KeyMods, PromptKind, TmuxConnection, TmuxPane, TmuxSession, TmuxWindow, bevy_key_to_tmux_name,
-    copy_mode_dispatch, plan_forward, send_bytes_command, send_pane_keys_command,
-    show_buffer_command,
+    KeyMods, PromptKind, ShowBuffer, TmuxConnection, TmuxPane, TmuxSession, TmuxWindow,
+    bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward, send_bytes_command,
+    send_pane_keys_command,
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
@@ -352,7 +352,7 @@ fn forward_keys_to_tmux(
                 match handle.send(cmd) {
                     Ok(_) if outcome.bridge => {
                         if let Some(pane_id) = active_pane_id {
-                            match handle.send(&show_buffer_command()) {
+                            match handle.send(ShowBuffer) {
                                 Ok(buf_id) => {
                                     copy_queries.register(buf_id, pane_id, CopyQueryKind::Buffer);
                                 }

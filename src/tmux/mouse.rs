@@ -34,7 +34,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_tmux::{
     ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, ResizePaneX, ResizePaneY, SelectPane,
-    TmuxCommand, TmuxConnection, TmuxPane, show_buffer_command,
+    ShowBuffer, TmuxCommand, TmuxConnection, TmuxPane,
 };
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
@@ -415,7 +415,7 @@ fn arbiter(
                                     "drag-select copy-selection send failed"
                                 );
                             } else {
-                                match handle.send(&show_buffer_command()) {
+                                match handle.send(ShowBuffer) {
                                     Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
                                     Err(e) => {
                                         tracing::warn!(
@@ -614,7 +614,7 @@ fn arbiter(
                 tracing::warn!(?e, pane = pane_id.0, "multi-select cmd send failed");
             }
         }
-        match handle.send(&show_buffer_command()) {
+        match handle.send(ShowBuffer) {
             Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
             Err(e) => {
                 tracing::warn!(?e, pane = pane_id.0, "multi-select show-buffer send failed")

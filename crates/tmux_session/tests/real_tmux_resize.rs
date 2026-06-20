@@ -22,8 +22,8 @@
 use bevy::prelude::*;
 use crossbeam_channel::RecvTimeoutError;
 use ozmux_tmux::{
-    ConnectionState, PaneId, ResizePaneX, TmuxCommand, TmuxConnection, TmuxPane, TmuxSessionPlugin,
-    copy_state_query_command, parse_copy_state, show_buffer_command,
+    ConnectionState, CopyStateQuery, PaneId, ResizePaneX, ShowBuffer, TmuxCommand, TmuxConnection,
+    TmuxPane, TmuxSessionPlugin, parse_copy_state,
 };
 use std::time::{Duration, Instant};
 use tmux_control::{ClientEvent, TmuxServer, TransportEvent};
@@ -108,7 +108,7 @@ fn pane_width(app: &mut App, id: PaneId) -> Option<u32> {
 /// here while the app is NOT being updated so there is no contention.
 fn read_show_buffer_reply(app: &mut App, timeout: Duration) -> Option<String> {
     let handle = handle_of(app);
-    let id = handle.send(&show_buffer_command()).expect("show-buffer");
+    let id = handle.send(ShowBuffer).expect("show-buffer");
     let deadline = Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -143,10 +143,10 @@ fn read_show_buffer_reply(app: &mut App, timeout: Duration) -> Option<String> {
     }
 }
 
-/// Waits for a `copy_state_query_command` reply on the raw transport channel.
+/// Waits for a `CopyStateQuery` reply on the raw transport channel.
 fn read_copy_state_reply(app: &mut App, pane_id: PaneId, timeout: Duration) -> Option<String> {
     let handle = handle_of(app);
-    let cmd = copy_state_query_command(pane_id);
+    let cmd = CopyStateQuery { pane: pane_id }.into_raw_command();
     let id = handle.send(&cmd).expect("copy-state-query");
     let deadline = Instant::now() + timeout;
     loop {
