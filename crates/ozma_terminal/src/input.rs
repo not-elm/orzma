@@ -1,7 +1,7 @@
 //! Default terminal keyboard dispatcher. Reads `KeyboardInput` and, per press,
 //! fires `PasteAction`, forwards a raw key as `TerminalKeyInput`, or skips it:
-//! host-reserved chords and unhandled meta/Cmd chords are dropped. Gated per
-//! entity by the `KeyboardDisabled` marker.
+//! host-reserved chords and unhandled meta/Cmd chords are dropped. Routed to the
+//! single `KeyboardFocused` entity and gated per entity by `KeyboardDisabled`.
 
 use crate::action::PasteAction;
 use crate::spawn::OzmaTerminal;

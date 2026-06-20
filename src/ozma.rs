@@ -19,10 +19,10 @@ pub(crate) enum AppMode {
 /// Bevy plugin that registers the `AppMode::Ozma` spawn/despawn lifecycle.
 ///
 /// Spawns one `OzmaTerminal` entity (marked `KeyboardFocused`, the keyboard
-/// target) on `OnEnter(AppMode::Ozma)` and despawns it on `OnExit(AppMode::Ozma)`. Requires `AppMode` to be
-/// inserted via `App::insert_state` before this plugin runs, and
-/// `OzmaTerminalPlugin` must be added first (it inserts `OzmaTerminalConfig`
-/// that `spawn_terminal` reads).
+/// target) on `OnEnter(AppMode::Ozma)` and despawns it on
+/// `OnExit(AppMode::Ozma)`. Requires `AppMode` to be inserted via
+/// `App::insert_state` before this plugin runs, and `OzmaTerminalPlugin` must
+/// be added first (it inserts `OzmaTerminalConfig` that `spawn_terminal` reads).
 pub(crate) struct OzmaModePlugin;
 
 impl Plugin for OzmaModePlugin {

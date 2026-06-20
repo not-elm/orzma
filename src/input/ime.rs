@@ -147,7 +147,8 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 ///
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
 /// IME through bevy_cef's `Ime` → CEF bridge), OR a tmux pane is active and
-/// that pane does NOT have `CopyModeState`.
+/// that pane does NOT have `CopyModeState`, OR — in `AppMode::Ozma` with no
+/// active pane — a `KeyboardFocused` terminal exists (its cursor is the anchor).
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
 /// window — computed from the active pane's `UiGlobalTransform`
