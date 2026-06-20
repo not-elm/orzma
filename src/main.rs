@@ -19,9 +19,8 @@ use crate::cef_profile::CefProfileDir;
 use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::ozma::{AppMode, OzmaModePlugin};
-use crate::webview::inline::OzmuxInlineWebviewPlugin;
-use crate::webview::osc::OzmuxOscWebviewPlugin;
-use crate::webview::render::{OzmuxWebviewRenderPlugin, cef_plugin};
+use crate::webview::OzmuxWebviewPlugin;
+use crate::webview::render::cef_plugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
@@ -83,7 +82,7 @@ fn main() {
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
-            OzmuxWebviewRenderPlugin,
+            OzmuxWebviewPlugin,
             CopyModePlugin,
             CopyModeIndicatorPlugin,
         ))
@@ -96,8 +95,6 @@ fn main() {
             ImeOverlayPlugin,
             OptionAsAltPlugin,
             OzmaHostInputPlugin,
-            OzmuxOscWebviewPlugin,
-            OzmuxInlineWebviewPlugin,
             OzmuxControlPlanePlugin::new(dyn_registry),
         ))
         .run();

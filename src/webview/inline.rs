@@ -82,9 +82,9 @@ pub(crate) struct CompositeNotified;
 /// `Update` (the PTY drain systems flush the `FrameSnapshot` / `FrameDelta`
 /// observers there), so projecting just before the material rebuild hands the
 /// same frame's overlays to the shader.
-pub(crate) struct OzmuxInlineWebviewPlugin;
+pub(super) struct InlinePlugin;
 
-impl Plugin for OzmuxInlineWebviewPlugin {
+impl Plugin for InlinePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, sync_inline_webview_size);
         app.add_systems(

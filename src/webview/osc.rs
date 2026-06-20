@@ -20,9 +20,9 @@ pub(crate) struct OscWebviewGate(pub(crate) Arc<AtomicBool>);
 pub(crate) struct NonInteractive;
 
 /// Wires the OSC-webview mount/unmount observer and the config-driven gate.
-pub(crate) struct OzmuxOscWebviewPlugin;
+pub(super) struct OscPlugin;
 
-impl Plugin for OzmuxOscWebviewPlugin {
+impl Plugin for OscPlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(false))))
             .add_systems(Startup, init_gate_from_config)

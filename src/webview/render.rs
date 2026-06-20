@@ -59,9 +59,9 @@ fn cef_command_line_config() -> CommandLineConfig {
 /// Wires the `window.ozma` Tier 1 back-channel: the `ozma.call` frame
 /// observer, the webview-load loggers, and the focus sync that keeps
 /// `bevy_cef`'s `FocusedWebview` in step with the active pane.
-pub struct OzmuxWebviewRenderPlugin;
+pub(super) struct RenderPlugin;
 
-impl Plugin for OzmuxWebviewRenderPlugin {
+impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(JsEmitEventPlugin::<OzmuxFrame>::default())
             .add_observer(on_ozmux_call_frame)
