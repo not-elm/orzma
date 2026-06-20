@@ -71,7 +71,8 @@ impl Plugin for TmuxSessionPlugin {
                     drain_tmux_transport,
                     advance_tmux_connection.run_if(tmux_batch_pending),
                     send_attach_enumeration.run_if(on_message::<TmuxClientAttached>),
-                    drain_tmux_events.run_if(tmux_batch_pending),
+                    send_tmux_reenumeration.run_if(tmux_batch_pending),
+                    apply_tmux_replies.run_if(tmux_batch_pending),
                 )
                     .chain()
                     .in_set(TmuxProjectionSet)
@@ -201,50 +202,26 @@ fn send_attach_enumeration(
     }
 }
 
-/// Drains the live connection's transport channel into [`TmuxEventBatch`] and
-/// routes `%output` to `PaneOutput`. Skips the write on a fully-idle frame so
-/// change detection fires only when the batch's contents actually change; still
-/// clears a previously-non-empty batch to empty exactly once.
-fn drain_tmux_transport(
-    mut batch: ResMut<TmuxEventBatch>,
-    mut pane_output: MessageWriter<PaneOutput>,
-    connection: NonSend<TmuxConnection>,
-) {
-    let drained = match connection.client() {
-        Some(client) => drain_transport(client.events()),
-        None => Vec::new(),
-    };
-    if drained.is_empty() && batch.0.is_empty() {
-        return;
-    }
-    for output in collect_pane_outputs(&drained) {
-        pane_output.write(output);
-    }
-    batch.0 = drained;
-}
-
-/// Applies this frame's drained `TmuxEventBatch`: triggers the global
-/// projection events (notifications + the enumeration reply, in stream order)
-/// the observers consume, routes topology re-enumeration queries on window-add /
-/// window-switch / session-switch, and consumes the pending enumeration replies
-/// (pane captures, cursor positions, keybindings, etc.).
-fn drain_tmux_events(
+/// Re-enumerates topology when the batch contains a session-switch, window-add,
+/// or window-switch notification; re-arms the client-name query if the name has
+/// not yet been learned after attach.
+///
+/// Body-guards on the live client (see [`apply_tmux_replies`]).
+fn send_tmux_reenumeration(
     mut commands: Commands,
     mut enumeration: ResMut<EnumerationState>,
-    mut keybindings: ResMut<KeyBindings>,
-    mut copy_queries: ResMut<CopyModeQueries>,
-    mut connection: NonSendMut<TmuxConnection>,
-    mut pane_output: MessageWriter<PaneOutput>,
-    mut copy_replies: MessageWriter<CopyModeReply>,
-    batch: Res<TmuxEventBatch>,
+    connection: NonSend<TmuxConnection>,
     state: Res<ConnectionState>,
     index: Res<TmuxProjection>,
     sessions: Query<&TmuxSession>,
+    batch: Res<TmuxEventBatch>,
 ) {
-    let events = &batch.0;
+    // NOTE: connection liveness is a body guard, not a run_if — a run condition
+    // reading NonSend<TmuxConnection> is unsound (bevyengine/bevy#21230).
     if connection.client().is_none() {
         return;
     }
+    let events = &batch.0;
     let current_session = index
         .session
         .and_then(|e| sessions.get(e).ok())
@@ -281,6 +258,62 @@ fn drain_tmux_events(
             }
         }
     }
+    if matches!(*state, ConnectionState::Attached)
+        && connection.client_name().is_none()
+        && enumeration.client_name_pending.is_none()
+        && let Some(client) = connection.client()
+    {
+        match client.handle().send(&client_name_command()) {
+            Ok(id) => enumeration.client_name_pending = Some(id),
+            Err(error) => tracing::warn!(?error, "failed to re-send client-name query"),
+        }
+    }
+}
+
+/// Drains the live connection's transport channel into [`TmuxEventBatch`] and
+/// routes `%output` to `PaneOutput`. Skips the write on a fully-idle frame so
+/// change detection fires only when the batch's contents actually change; still
+/// clears a previously-non-empty batch to empty exactly once.
+fn drain_tmux_transport(
+    mut batch: ResMut<TmuxEventBatch>,
+    mut pane_output: MessageWriter<PaneOutput>,
+    connection: NonSend<TmuxConnection>,
+) {
+    let drained = match connection.client() {
+        Some(client) => drain_transport(client.events()),
+        None => Vec::new(),
+    };
+    if drained.is_empty() && batch.0.is_empty() {
+        return;
+    }
+    for output in collect_pane_outputs(&drained) {
+        pane_output.write(output);
+    }
+    batch.0 = drained;
+}
+
+/// Applies this frame's command replies and notifications to the world: drains
+/// each reply to what it answers, runs the active-pane→aggressive-resize
+/// follow-up, surfaces copy-mode replies, and triggers the projection events the
+/// observers consume.
+///
+/// Body-guards on the live client (see [`send_tmux_reenumeration`]).
+fn apply_tmux_replies(
+    mut commands: Commands,
+    mut enumeration: ResMut<EnumerationState>,
+    mut keybindings: ResMut<KeyBindings>,
+    mut copy_queries: ResMut<CopyModeQueries>,
+    mut connection: NonSendMut<TmuxConnection>,
+    mut pane_output: MessageWriter<PaneOutput>,
+    mut copy_replies: MessageWriter<CopyModeReply>,
+    batch: Res<TmuxEventBatch>,
+) {
+    // NOTE: connection liveness is a body guard, not a run_if — a run condition
+    // reading NonSend<TmuxConnection> is unsound (bevyengine/bevy#21230).
+    if connection.client().is_none() {
+        return;
+    }
+    let events = &batch.0;
     if let Some(name) = take_client_name(&mut enumeration.client_name_pending, events) {
         connection.set_client_name(name);
     }
@@ -364,18 +397,6 @@ fn drain_tmux_events(
         events,
         connection.client_name(),
     );
-    // NOTE: runs after the Closed branch took the connection, so `client()` is
-    // None there and this is a no-op — safe to re-arm only while still attached.
-    if matches!(*state, ConnectionState::Attached)
-        && connection.client_name().is_none()
-        && enumeration.client_name_pending.is_none()
-        && let Some(client) = connection.client()
-    {
-        match client.handle().send(&client_name_command()) {
-            Ok(id) => enumeration.client_name_pending = Some(id),
-            Err(error) => tracing::warn!(?error, "failed to re-send client-name query"),
-        }
-    }
 }
 
 /// Sends the per-session enumeration queries (`list-windows` + active-pane) that
@@ -506,5 +527,26 @@ mod tests {
         assert!(index.windows.is_empty());
         assert!(index.panes.is_empty());
         assert!(index.session.is_some());
+    }
+
+    #[test]
+    fn apply_and_reenumeration_skip_without_client() {
+        use bevy::ecs::system::RunSystemOnce;
+        use tmux_control::{ClientEvent, ControlEvent};
+        use tmux_control_parser::WindowId;
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+        // Non-empty batch but no live client: both systems must body-guard out.
+        app.insert_resource(TmuxEventBatch(vec![TransportEvent::Protocol(
+            ClientEvent::Notification(ControlEvent::WindowAdd {
+                window: WindowId(9),
+            }),
+        )]));
+        app.world_mut()
+            .run_system_once(send_tmux_reenumeration)
+            .unwrap();
+        app.world_mut().run_system_once(apply_tmux_replies).unwrap();
+        // No panic, and no enumeration was registered (nothing was sent).
+        assert!(app.world().resource::<EnumerationState>().pending.is_none());
     }
 }
