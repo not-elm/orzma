@@ -4,7 +4,7 @@
 use crate::OzmuxConfigs;
 use crate::font::FontPatch;
 use crate::inactive_pane::InactivePaneConfigPatch;
-use crate::keyboard::KeyboardPatch;
+use crate::keyboard::KeyboardConfig;
 use crate::mouse::MouseConfig;
 use crate::osc_webview::OscWebviewPatch;
 use crate::ozma::OzmaPatch;
@@ -23,7 +23,7 @@ pub(crate) struct RawConfigs {
     pub(crate) theme: Option<Theme>,
     pub(crate) font: Option<FontPatch>,
     pub(crate) mouse: Option<MouseConfig>,
-    pub(crate) keyboard: Option<KeyboardPatch>,
+    pub(crate) keyboard: Option<KeyboardConfig>,
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
     pub(crate) osc_webview: Option<OscWebviewPatch>,
     pub(crate) tmux: Option<TmuxPatch>,
@@ -34,10 +34,10 @@ pub(crate) struct RawConfigs {
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `bindings` is full-replace when present.
-    /// The `font`, `keyboard`, `inactive_pane`, and `osc_webview`
-    /// sections use their respective `Patch::apply_to` for per-field merge.
-    /// The `theme` and `mouse` sections are full-replace (serde default fills
-    /// missing fields).
+    /// The `font`, `inactive_pane`, and `osc_webview` sections use their
+    /// respective `Patch::apply_to` for per-field merge. The `theme`, `mouse`,
+    /// and `keyboard` sections are full-replace (serde default fills missing
+    /// fields).
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(shortcuts) = self.shortcuts {
             base.shortcuts = shortcuts;
@@ -51,8 +51,8 @@ impl RawConfigs {
         if let Some(mouse) = self.mouse {
             base.mouse = mouse;
         }
-        if let Some(patch) = self.keyboard {
-            base.keyboard = patch.apply_to(base.keyboard);
+        if let Some(keyboard) = self.keyboard {
+            base.keyboard = keyboard;
         }
         if let Some(patch) = self.inactive_pane {
             base.inactive_pane = patch.apply_to(base.inactive_pane);

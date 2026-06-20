@@ -21,26 +21,10 @@ pub enum OptionAsAlt {
 
 /// Fully-resolved `[keyboard]` config block.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct KeyboardConfig {
     /// Which Option key(s) act as Meta on macOS.
     pub option_as_alt: OptionAsAlt,
-}
-
-/// Per-field-optional patch produced by parsing `[keyboard]` from
-/// `config.toml`. Missing keys fall through to the defaults.
-#[derive(Deserialize, Default)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct KeyboardPatch {
-    pub(crate) option_as_alt: Option<OptionAsAlt>,
-}
-
-impl KeyboardPatch {
-    pub(crate) fn apply_to(self, mut base: KeyboardConfig) -> KeyboardConfig {
-        if let Some(v) = self.option_as_alt {
-            base.option_as_alt = v;
-        }
-        base
-    }
 }
 
 #[cfg(test)]
@@ -53,47 +37,27 @@ mod tests {
     }
 
     #[test]
-    fn parses_each_lowercase_value() {
-        for (s, expected) in [
-            ("none", OptionAsAlt::None),
-            ("left", OptionAsAlt::Left),
-            ("right", OptionAsAlt::Right),
-            ("both", OptionAsAlt::Both),
-        ] {
-            let patch: KeyboardPatch =
-                toml::from_str(&format!(r#"option_as_alt = "{s}""#)).unwrap();
-            assert_eq!(patch.option_as_alt, Some(expected));
-        }
+    fn parses_value() {
+        let cfg: KeyboardConfig = toml::from_str(r#"option_as_alt = "both""#).unwrap();
+        assert_eq!(cfg.option_as_alt, OptionAsAlt::Both);
     }
 
     #[test]
-    fn patch_overrides_present_field() {
-        let patch = KeyboardPatch {
-            option_as_alt: Some(OptionAsAlt::Both),
-        };
-        let merged = patch.apply_to(KeyboardConfig::default());
-        assert_eq!(merged.option_as_alt, OptionAsAlt::Both);
-    }
-
-    #[test]
-    fn empty_patch_keeps_default() {
-        let patch = KeyboardPatch::default();
-        let merged = patch.apply_to(KeyboardConfig::default());
-        assert_eq!(merged, KeyboardConfig::default());
+    fn empty_is_default() {
+        let cfg: KeyboardConfig = toml::from_str("").unwrap();
+        assert_eq!(cfg, KeyboardConfig::default());
     }
 
     #[test]
     fn rejects_unknown_value() {
-        let err = toml::from_str::<KeyboardPatch>(r#"option_as_alt = "meta""#).err();
-        assert!(err.is_some(), "unknown enum value must be a parse error");
+        assert!(toml::from_str::<KeyboardConfig>(r#"option_as_alt = "meta""#).is_err());
     }
 
     #[test]
     fn rejects_unknown_field() {
-        let err = toml::from_str::<KeyboardPatch>(r#"option_as_alt2 = "both""#).err();
         assert!(
-            err.is_some(),
-            "a misspelled key in [keyboard] must be a parse error, not silently ignored"
+            toml::from_str::<KeyboardConfig>(r#"option_as_alt2 = "both""#).is_err(),
+            "a misspelled key must error under deny_unknown_fields"
         );
     }
 }
