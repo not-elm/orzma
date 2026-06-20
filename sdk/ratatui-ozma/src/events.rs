@@ -4,6 +4,7 @@
 use serde_json::Value;
 use std::any::TypeId;
 use std::collections::{HashMap, VecDeque};
+use std::mem;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,7 +38,7 @@ type Ring = Arc<Mutex<RingBuf>>;
 /// side reaches it in a single lookup. Both maps are frozen after construction;
 /// only ring contents mutate, so the whole struct is shared behind one `Arc`
 /// with no outer lock.
-#[derive(Default, Debug)]
+#[derive(Debug)]
 pub(crate) struct EventQueues {
     by_name: HashMap<String, Ring>,
     by_type: HashMap<TypeId, Ring>,
@@ -88,7 +89,7 @@ impl EventQueues {
             return Vec::new();
         };
         let mut ring = ring.lock().unwrap_or_else(|e| e.into_inner());
-        Vec::from(std::mem::take(&mut ring.buf))
+        Vec::from(mem::take(&mut ring.buf))
     }
 
     fn from_decls_with_cap(decls: &[EventDecl], cap: usize) -> Self {
@@ -104,6 +105,12 @@ impl EventQueues {
             by_type,
             cap,
         }
+    }
+}
+
+impl Default for EventQueues {
+    fn default() -> Self {
+        Self::from_decls(&[])
     }
 }
 
@@ -135,7 +142,6 @@ mod tests {
         assert!(q.ingest("a", json!(2)));
         let drained = q.drain_type(TypeId::of::<A>());
         assert_eq!(drained, vec![json!(1), json!(2)]);
-        // A second drain is empty; the ring was consumed.
         assert!(q.drain_type(TypeId::of::<A>()).is_empty());
     }
 
