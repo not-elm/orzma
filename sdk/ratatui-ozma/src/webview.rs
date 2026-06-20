@@ -29,6 +29,7 @@ impl Webview {
                 html: html.into(),
                 interactive: true,
                 forward_keys: Vec::new(),
+                preload: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -46,6 +47,7 @@ impl Webview {
                 interactive: true,
                 bridge: false,
                 forward_keys: Vec::new(),
+                preload: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -59,6 +61,7 @@ impl Webview {
                 entry: entry.into(),
                 interactive: true,
                 forward_keys: Vec::new(),
+                preload: Vec::new(),
             },
             handlers: HashMap::new(),
         }
@@ -90,6 +93,29 @@ impl Webview {
             RegisterKind::Inline { forward_keys, .. }
             | RegisterKind::Dir { forward_keys, .. }
             | RegisterKind::Url { forward_keys, .. } => forward_keys.extend(keys),
+        }
+        self
+    }
+
+    /// Declares JavaScript injected before the page's own scripts run, in the
+    /// order supplied. Runs after the host's `window.ozma` bridge (and the
+    /// link-hint engine for url views), so a script may use `window.ozma` when
+    /// the view is bridged. Additive across calls; applies to all view kinds,
+    /// including display-only `url` views.
+    ///
+    /// Each entry should be a complete, self-contained statement: the host
+    /// concatenates all preload scripts with `;` and evaluates them as one
+    /// script in the page's shared context, so a trailing `//` line comment, a
+    /// top-level redeclaration colliding with the bridge's identifiers, or a
+    /// syntax error can break the whole eval. Wrapping each entry in an IIFE
+    /// (`(() => { … })();`) is the safe idiom.
+    pub fn preload(mut self, scripts: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        match &mut self.kind {
+            RegisterKind::Inline { preload, .. }
+            | RegisterKind::Dir { preload, .. }
+            | RegisterKind::Url { preload, .. } => {
+                preload.extend(scripts.into_iter().map(Into::into));
+            }
         }
         self
     }
@@ -319,6 +345,38 @@ mod tests {
         let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
         assert_eq!(v["kind"], "url");
         assert_eq!(v["forward_keys"][0]["key"], "h");
+    }
+
+    #[test]
+    fn preload_accumulates_across_calls_and_rides_register_wire() {
+        let wv = Webview::inline("x")
+            .preload(["window.A = 1;"])
+            .preload(["window.B = 2;"]);
+        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
+        assert_eq!(v["preload"][0], "window.A = 1;");
+        assert_eq!(v["preload"][1], "window.B = 2;");
+    }
+
+    #[test]
+    fn preload_rides_wire_for_every_kind() {
+        for wv in [
+            Webview::inline("x").preload(["a"]),
+            Webview::dir("/abs/ui", "index.html").preload(["a"]),
+            Webview::url("https://example.com").preload(["a"]),
+        ] {
+            let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
+            assert_eq!(
+                v["preload"][0], "a",
+                "preload must ride the wire for every kind"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_preload_is_omitted_from_wire() {
+        let wv = Webview::inline("x");
+        let v = serde_json::to_value(crate::protocol::ClientMsg::Register(wv.kind)).unwrap();
+        assert!(v.get("preload").is_none(), "empty preload must be skipped");
     }
 
     #[test]
