@@ -1,6 +1,8 @@
 // NOTE: bevy_cef contract — Rust->JS cef.listen delivers a JSON *string* (hence
 // JSON.parse); JS->Rust cef.emit serializes only its FIRST argument. Replies
 // arrive on the "ozma" channel keyed by reqId; push events on "ozma.event".
+// Page->host one-way events use ozma.emit -> cef.emit({kind:'ozma.emit'}):
+// fire-and-forget, no reqId and no calls entry, so they cannot leak.
 // The {__u8} base64 tag carries a Uint8Array, but only as a top-level value (the
 // `params` sent, or a reply `value`/event `payload` received via decodeValue) —
 // bytes nested inside an object/array param are NOT tagged and won't round-trip.

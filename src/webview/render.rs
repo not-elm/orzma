@@ -189,7 +189,7 @@ fn reject_ozmux_call(commands: &mut Commands, webview: Entity, req_id: &str, err
 /// drops the event (debug-logged); there is no page Promise to settle.
 ///
 /// Registered on the shared `Receive<OzmuxFrame>` event (not a second
-/// `JsEmitEventPlugin`); non-`ozma.emit` frames return early on `OZMA_EMIT_KIND`.
+/// `JsEmitEventPlugin`); frames whose `kind` is not `ozma.emit` are ignored.
 fn on_ozmux_emit_frame(
     frame: On<Receive<OzmuxFrame>>,
     writers: Res<ConnectionWriters>,
