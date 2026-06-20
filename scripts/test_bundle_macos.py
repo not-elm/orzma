@@ -140,5 +140,41 @@ class CommandBuilders(unittest.TestCase):
             os.unlink(name)
 
 
+class ConfigResolution(unittest.TestCase):
+    def _parse(self, argv):
+        return bm.build_arg_parser().parse_args(argv)
+
+    def test_resolve_defaults_with_explicit_version(self):
+        cfg = bm.resolve_config(self._parse(["--version", "0.1.0", "--skip-build"]))
+        self.assertEqual(cfg.version, "0.1.0")
+        self.assertEqual(cfg.bin_name, "ozmux-gui")
+        self.assertEqual(cfg.sign_identity, "-")
+        self.assertFalse(cfg.notarize)
+        self.assertEqual(cfg.bin_source.name, "ozmux-gui")
+        self.assertIn("aarch64-apple-darwin", str(cfg.bin_source))
+
+    def test_resolve_sign_identity_from_env(self):
+        os.environ["MACOS_SIGN_IDENTITY"] = "Developer ID Application: Y"
+        try:
+            cfg = bm.resolve_config(self._parse(["--version", "0.1.0"]))
+            self.assertEqual(cfg.sign_identity, "Developer ID Application: Y")
+        finally:
+            del os.environ["MACOS_SIGN_IDENTITY"]
+
+    def test_notarize_downgraded_when_adhoc(self):
+        cfg = bm.resolve_config(self._parse(["--version", "0.1.0", "--notarize"]))
+        self.assertFalse(cfg.notarize)
+
+    def test_verify_prerequisites_missing_binary(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            cfg = bm.resolve_config(self._parse([
+                "--version", "0.1.0", "--bin", str(Path(d) / "missing"),
+                "--cef-framework", d, "--helper-bin", str(Path(d) / "missing-helper"),
+            ]))
+            with self.assertRaises(SystemExit):
+                bm.verify_prerequisites(cfg)
+
+
 if __name__ == "__main__":
     unittest.main()

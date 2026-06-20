@@ -124,6 +124,69 @@ def compute_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def cargo_version(bin_name: str) -> str:
+    out = subprocess.run(
+        ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+        cwd=str(REPO_ROOT), capture_output=True, text=True, check=True,
+    ).stdout
+    meta = json.loads(out)
+    for pkg in meta["packages"]:
+        if pkg["name"] == bin_name:
+            return pkg["version"]
+    raise SystemExit(f"package {bin_name} not found in cargo metadata")
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="Bundle ozmux into a CEF-embedded macOS .app")
+    p.add_argument("--version")
+    p.add_argument("--bin")
+    p.add_argument("--skip-build", action="store_true")
+    p.add_argument("--no-sign", action="store_true")
+    p.add_argument("--sign-identity")
+    p.add_argument("--notarize", action="store_true")
+    p.add_argument("--cef-framework",
+                   default="~/.local/share/cef/Chromium Embedded Framework.framework")
+    p.add_argument("--helper-bin", default="~/.cargo/bin/bevy_cef_render_process")
+    p.add_argument("--out-dir", default=str(REPO_ROOT / "target" / "bundle"))
+    return p
+
+
+def resolve_config(args: argparse.Namespace) -> BundleConfig:
+    version = args.version or cargo_version(BIN_NAME)
+    bin_source = (
+        Path(args.bin) if args.bin
+        else REPO_ROOT / "target" / TARGET_TRIPLE / CARGO_PROFILE / BIN_NAME
+    )
+    sign_identity = args.sign_identity or os.environ.get("MACOS_SIGN_IDENTITY") or "-"
+    notarize = args.notarize
+    if notarize and sign_identity == "-":
+        print("==> WARNING: --notarize requires a Developer ID identity; disabling notarization")
+        notarize = False
+    return BundleConfig(
+        version=version, app_name=APP_NAME, bin_name=BIN_NAME, bundle_id_base=BUNDLE_ID_BASE,
+        arch=ARCH, target_triple=TARGET_TRIPLE, bin_source=bin_source,
+        cef_framework=Path(args.cef_framework).expanduser(),
+        helper_bin=Path(args.helper_bin).expanduser(),
+        out_dir=Path(args.out_dir), sign_identity=sign_identity,
+        no_sign=args.no_sign, notarize=notarize,
+    )
+
+
+def verify_prerequisites(cfg: BundleConfig) -> None:
+    if not cfg.bin_source.is_file():
+        raise SystemExit(f"binary not found: {cfg.bin_source} (build first or pass --bin)")
+    if not cfg.cef_framework.is_dir():
+        raise SystemExit(
+            f"CEF framework not found: {cfg.cef_framework} (run `make setup-cef-release`)"
+        )
+    if not cfg.helper_bin.is_file():
+        raise SystemExit(
+            f"render-process helper not found: {cfg.helper_bin}\n"
+            "Install it: cargo install --git https://github.com/not-elm/bevy_cef "
+            "--branch passthrough bevy_cef_render_process"
+        )
+
+
 @dataclass
 class BundleConfig:
     version: str
