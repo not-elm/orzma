@@ -5,7 +5,7 @@ use crate::OzmuxConfigs;
 use crate::font::FontPatch;
 use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::keyboard::KeyboardPatch;
-use crate::mouse::MousePatch;
+use crate::mouse::MouseConfig;
 use crate::osc_webview::OscWebviewPatch;
 use crate::ozma::OzmaPatch;
 use crate::shortcuts::Shortcuts;
@@ -22,7 +22,7 @@ pub(crate) struct RawConfigs {
     pub(crate) shortcuts: Option<Shortcuts>,
     pub(crate) theme: Option<Theme>,
     pub(crate) font: Option<FontPatch>,
-    pub(crate) mouse: Option<MousePatch>,
+    pub(crate) mouse: Option<MouseConfig>,
     pub(crate) keyboard: Option<KeyboardPatch>,
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
     pub(crate) osc_webview: Option<OscWebviewPatch>,
@@ -34,9 +34,10 @@ pub(crate) struct RawConfigs {
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `bindings` is full-replace when present.
-    /// The `font`, `mouse`, `keyboard`, `inactive_pane`, and `osc_webview`
+    /// The `font`, `keyboard`, `inactive_pane`, and `osc_webview`
     /// sections use their respective `Patch::apply_to` for per-field merge.
-    /// The `theme` section is full-replace (serde default fills missing fields).
+    /// The `theme` and `mouse` sections are full-replace (serde default fills
+    /// missing fields).
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(shortcuts) = self.shortcuts {
             base.shortcuts = shortcuts;
@@ -47,8 +48,8 @@ impl RawConfigs {
         if let Some(patch) = self.font {
             base.font = patch.apply_to(base.font);
         }
-        if let Some(patch) = self.mouse {
-            base.mouse = patch.apply_to(base.mouse);
+        if let Some(mouse) = self.mouse {
+            base.mouse = mouse;
         }
         if let Some(patch) = self.keyboard {
             base.keyboard = patch.apply_to(base.keyboard);
