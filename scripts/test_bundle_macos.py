@@ -84,7 +84,8 @@ class CommandBuilders(unittest.TestCase):
     def test_cargo_build_argv(self):
         self.assertEqual(
             bm.cargo_build_argv("aarch64-apple-darwin", "dist"),
-            ["cargo", "build", "--profile", "dist", "--target", "aarch64-apple-darwin", "--locked"],
+            ["cargo", "build", "--profile", "dist", "--target", "aarch64-apple-darwin", "--locked",
+             "--no-default-features"],
         )
 
     def test_parse_lipo_archs(self):
@@ -274,6 +275,28 @@ class EndToEnd(unittest.TestCase):
                 ["codesign", "--verify", "--deep", "--strict", str(out / "ozmux.app")],
                 check=True,
             )
+
+
+class NotarizeGuards(unittest.TestCase):
+    def _parse(self, argv):
+        return bm.build_arg_parser().parse_args(argv)
+
+    def test_no_sign_disables_notarize(self):
+        cfg = bm.resolve_config(self._parse([
+            "--version", "0.1.0", "--no-sign", "--notarize",
+            "--sign-identity", "Developer ID Application: X",
+        ]))
+        self.assertFalse(cfg.notarize)
+
+    def test_notarize_raises_without_credentials(self):
+        cfg = bm.resolve_config(self._parse([
+            "--version", "0.1.0", "--notarize",
+            "--sign-identity", "Developer ID Application: X",
+        ]))
+        for var in ("APPLE_ID", "APPLE_TEAM_ID", "APPLE_APP_PASSWORD"):
+            os.environ.pop(var, None)
+        with self.assertRaises(SystemExit):
+            bm.notarize(cfg)
 
 
 if __name__ == "__main__":

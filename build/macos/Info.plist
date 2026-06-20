@@ -10,8 +10,6 @@
     <string>ozmux-gui</string>
     <key>CFBundleIdentifier</key>
     <string>not.elm.ozmux</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon.icns</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>

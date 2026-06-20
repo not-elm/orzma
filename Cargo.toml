@@ -12,10 +12,11 @@ name = "ozmux-gui"
 path = "src/main.rs"
 
 [features]
-# Dev-only diagnostics. Forwards to `bevy_cef/debug`, which loads CEF from
-# `~/.local/share/cef` and uses the debug render process. Distribution builds
-# MUST omit this so CEF loads from the bundled `Contents/Frameworks`. Enable
-# for development with `cargo run --features debug`.
+# Default-on for development: `cargo run` / `make run` load CEF from
+# ~/.local/share/cef via bevy_cef's debug loader. Distribution builds MUST
+# drop this — the bundler builds with `--no-default-features` so the release
+# binary loads CEF from the app's bundled Contents/Frameworks instead.
+default = ["debug"]
 debug = ["bevy_cef/debug"]
 
 [dependencies]

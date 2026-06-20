@@ -72,7 +72,8 @@ def build_helper_plist(name: str, bundle_id: str) -> dict:
 
 
 def cargo_build_argv(triple: str, profile: str) -> list[str]:
-    return ["cargo", "build", "--profile", profile, "--target", triple, "--locked"]
+    return ["cargo", "build", "--profile", profile, "--target", triple,
+            "--locked", "--no-default-features"]
 
 
 def lipo_archs_argv(path: Path) -> list[str]:
@@ -162,6 +163,9 @@ def resolve_config(args: argparse.Namespace) -> BundleConfig:
     if notarize and sign_identity == "-":
         print("==> WARNING: --notarize requires a Developer ID identity; disabling notarization")
         notarize = False
+    if notarize and args.no_sign:
+        print("==> WARNING: --no-sign skips signing; disabling notarization")
+        notarize = False
     return BundleConfig(
         version=version, app_name=APP_NAME, bin_name=BIN_NAME, bundle_id_base=BUNDLE_ID_BASE,
         arch=ARCH, target_triple=TARGET_TRIPLE, bin_source=bin_source,
@@ -187,8 +191,9 @@ def verify_prerequisites(cfg: BundleConfig) -> None:
         )
 
 
-def run(argv: list[str]) -> None:
-    print(f"==> {' '.join(argv)}")
+def run(argv: list[str], redact: tuple[str, ...] = ()) -> None:
+    shown = " ".join("***" if arg in redact else arg for arg in argv)
+    print(f"==> {shown}")
     subprocess.run(argv, check=True)
 
 
@@ -211,6 +216,10 @@ def assemble_app(cfg: BundleConfig) -> None:
         plist = plistlib.load(f)
     plist["CFBundleShortVersionString"] = cfg.version
     plist["CFBundleVersion"] = cfg.version
+    icns = REPO_ROOT / "build" / "macos" / "AppIcon.icns"
+    has_icns = icns.is_file()
+    if has_icns:
+        plist["CFBundleIconFile"] = "AppIcon.icns"
     with open(contents / "Info.plist", "wb") as f:
         plistlib.dump(plist, f)
 
@@ -218,12 +227,7 @@ def assemble_app(cfg: BundleConfig) -> None:
     shutil.copy2(cfg.bin_source, dest_bin)
     dest_bin.chmod(0o755)
 
-    assets = REPO_ROOT / "assets"
-    if assets.is_dir():
-        shutil.copytree(assets, contents / "Resources" / "assets")
-
-    icns = REPO_ROOT / "build" / "macos" / "AppIcon.icns"
-    if icns.is_file():
+    if has_icns:
         shutil.copy2(icns, contents / "Resources" / "AppIcon.icns")
 
     print(f"Assembled {app}")
@@ -302,14 +306,20 @@ def notarize(cfg: BundleConfig) -> None:
     apple_id = os.environ.get("APPLE_ID")
     team_id = os.environ.get("APPLE_TEAM_ID")
     password = os.environ.get("APPLE_APP_PASSWORD")
-    if not (apple_id and team_id and password):
-        print("==> notarization credentials absent; skipping notarize")
-        return
+    missing = [name for name, value in (
+        ("APPLE_ID", apple_id),
+        ("APPLE_TEAM_ID", team_id),
+        ("APPLE_APP_PASSWORD", password),
+    ) if not value]
+    if missing:
+        raise SystemExit(
+            "--notarize requires these environment variables: " + ", ".join(missing)
+        )
     tmp_zip = cfg.out_dir / "notarize-upload.zip"
     if tmp_zip.exists():
         tmp_zip.unlink()
     run(ditto_zip_argv(cfg.app_path, tmp_zip))
-    run(notarytool_submit_argv(tmp_zip, apple_id, team_id, password))
+    run(notarytool_submit_argv(tmp_zip, apple_id, team_id, password), redact=(password,))
     run(stapler_argv(cfg.app_path))
     tmp_zip.unlink(missing_ok=True)
 
