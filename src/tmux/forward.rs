@@ -5,11 +5,6 @@ use bevy::prelude::*;
 use ozma_terminal::TerminalForwardInput;
 use ozmux_tmux::{PaneId, TmuxConnection, TmuxPane, send_bytes_command};
 
-/// The tmux target string (`%<id>`) for a pane id.
-fn pane_target(pane: PaneId) -> String {
-    format!("%{}", pane.0)
-}
-
 /// Registers the `TerminalForwardInput` → tmux `send-keys -H` observer.
 pub(crate) struct ForwardPlugin;
 
@@ -36,6 +31,11 @@ fn forward_pane_input(
     {
         tracing::warn!(?e, "tmux mouse-report forward failed");
     }
+}
+
+/// The tmux target string (`%<id>`) for a pane id.
+fn pane_target(pane: PaneId) -> String {
+    format!("%{}", pane.0)
 }
 
 #[cfg(test)]
