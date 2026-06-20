@@ -49,9 +49,16 @@ use tmux_control_parser::DividerAxis;
 /// Bevy plugin that registers the tmux mouse gesture arbiter.
 pub(crate) struct MousePlugin;
 
+/// Tracks the CEF child that is currently pressed (a left press inside an
+/// interactive inline rect was forwarded to it) so the matching release routes
+/// to the same child even if the pointer drifted off-rect.
+#[derive(Resource, Default)]
+pub(super) struct TmuxWebviewPress(pub(super) Option<Entity>);
+
 impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxMouseGesture>()
+            .init_resource::<TmuxWebviewPress>()
             .add_systems(
                 Update,
                 arbiter
@@ -136,10 +143,6 @@ enum GestureState {
 pub(crate) struct TmuxMouseGesture {
     state: GestureState,
     click: ClickTracker,
-    /// The in-flight webview press: the child a left press inside an
-    /// interactive inline rect was forwarded to, so the matching release's
-    /// click-up routes to the SAME child even if the pointer drifted off-rect.
-    webview_press: Option<Entity>,
 }
 
 /// Returns the `(Entity, PaneId)` of the first `TmuxPane` whose `ComputedNode`
@@ -181,6 +184,7 @@ fn pane_under_cursor(
 fn arbiter(
     mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
+    mut webview_press: ResMut<TmuxWebviewPress>,
     mut buttons: MessageReader<MouseButtonInput>,
     mut webview_route: TmuxWebviewRouteParams,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -201,7 +205,7 @@ fn arbiter(
         // NOTE: no window means no cursor/scale to synthesize the CEF mouse-up,
         // so just drop any in-flight inline press — leaving it set would let a
         // later release act on a stale child.
-        gesture.webview_press = None;
+        webview_press.0 = None;
         gesture.state = GestureState::Idle;
         return;
     };
@@ -212,7 +216,7 @@ fn arbiter(
     if !window.focused {
         buttons.clear();
         release_webview_press(
-            &mut gesture,
+            &mut webview_press,
             &webview_route,
             &panes,
             cursor_phys,
@@ -231,7 +235,7 @@ fn arbiter(
     if picker.open || copy_prompt.open.is_some() {
         buttons.clear();
         release_webview_press(
-            &mut gesture,
+            &mut webview_press,
             &webview_route,
             &panes,
             cursor_phys,
@@ -272,7 +276,7 @@ fn arbiter(
             && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
         {
             let consumed = route_tmux_webview_left_click(
-                &mut gesture,
+                &mut webview_press,
                 &mut webview_route,
                 &panes,
                 terminal,
@@ -557,7 +561,7 @@ struct TmuxWebviewRouteParams<'w, 's> {
 /// queued release (modal open / window unfocused) so the focused web page is
 /// not left logically pressed with no matching mouse-up.
 fn release_webview_press(
-    gesture: &mut TmuxMouseGesture,
+    webview_press: &mut TmuxWebviewPress,
     route: &TmuxWebviewRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     cursor_phys: Option<Vec2>,
@@ -565,7 +569,7 @@ fn release_webview_press(
     cell_h_phys: f32,
     scale: f32,
 ) {
-    let Some(child) = gesture.webview_press.take() else {
+    let Some(child) = webview_press.0.take() else {
         return;
     };
     if let Some(cursor_phys) = cursor_phys
@@ -595,10 +599,10 @@ fn release_webview_press(
 /// forwards the click-up to the recorded child (drift-tolerant) and clears.
 #[expect(
     clippy::too_many_arguments,
-    reason = "inline routing needs the gesture state, route params, and pointer geometry"
+    reason = "inline routing needs the webview press state, route params, and pointer geometry"
 )]
 fn route_tmux_webview_left_click(
-    gesture: &mut TmuxMouseGesture,
+    webview_press: &mut TmuxWebviewPress,
     route: &mut TmuxWebviewRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     terminal: Entity,
@@ -611,7 +615,7 @@ fn route_tmux_webview_left_click(
 ) -> bool {
     match button_state {
         ButtonState::Pressed => {
-            gesture.webview_press = None;
+            webview_press.0 = None;
             let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
                 webview_hit_at(
                     &route.children,
@@ -643,11 +647,11 @@ fn route_tmux_webview_left_click(
                 browsers.set_focus(&hit.child, true);
                 browsers.send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
             }
-            gesture.webview_press = Some(hit.child);
+            webview_press.0 = Some(hit.child);
             true
         }
         ButtonState::Released => {
-            let Some(child) = gesture.webview_press.take() else {
+            let Some(child) = webview_press.0.take() else {
                 return false;
             };
             if let Some(browsers) = route.browsers.as_deref()
@@ -782,6 +786,7 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
+        app.init_resource::<TmuxWebviewPress>();
         app.init_resource::<CopyModeQueries>();
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
@@ -818,6 +823,7 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
+        app.init_resource::<TmuxWebviewPress>();
         app.init_resource::<CopyModeQueries>();
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
