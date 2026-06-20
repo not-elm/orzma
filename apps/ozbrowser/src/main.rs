@@ -112,7 +112,7 @@ fn event_loop(
 // unregistered — the old handle is dropped but the server-side entry persists because the
 // SDK has no unregister/Drop path yet. Fix this when the SDK exposes one.
 fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Result<WebviewHandle> {
-    let pass = [
+    let forward = [
         KeyChord {
             mods: KeyModifiers::NONE,
             code: KeyCode::Esc,
@@ -198,15 +198,20 @@ fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Resu
             code: KeyCode::Char('c'),
         },
     ];
-    let view = ozma.register(Webview::url(url).interactive(true).passthrough(pass).on(
-        "urlChanged",
-        move |args: serde_json::Value| -> Result<(), RpcError> {
-            if let Some(u) = args["url"].as_str() {
-                let _ = url_tx.send(u.to_owned());
-            }
-            Ok(())
-        },
-    ))?;
+    let view = ozma.register(
+        Webview::url(url)
+            .interactive(true)
+            .forward_keys(forward)
+            .on(
+                "urlChanged",
+                move |args: serde_json::Value| -> Result<(), RpcError> {
+                    if let Some(u) = args["url"].as_str() {
+                        let _ = url_tx.send(u.to_owned());
+                    }
+                    Ok(())
+                },
+            ),
+    )?;
     Ok(view)
 }
 

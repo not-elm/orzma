@@ -25,7 +25,7 @@ mod protocol;
 
 pub(crate) use protocol::PushMsg;
 
-/// A passthrough chord normalized to host input types: a bevy `KeyCode` plus
+/// A forward-key chord normalized to host input types: a bevy `KeyCode` plus
 /// modifier booleans. Used to suppress CEF double-delivery and to match keys
 /// for PTY forwarding (design spec §E type normalization).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,10 +90,10 @@ pub(crate) struct DynamicView {
     pub(crate) owner_surface: Entity,
     /// The control-plane connection that registered it.
     pub(crate) connection_id: u64,
-    /// The normalized passthrough chords for this view, derived from the
+    /// The normalized forward-key chords for this view, derived from the
     /// `register` wire payload. Copied onto the mounted webview entity as
-    /// `PassthroughKeys` so Phase-4 systems can read them off the focused child.
-    pub(crate) passthrough: Vec<NormalizedChord>,
+    /// `ForwardKeys` so Phase-4 systems can read them off the focused child.
+    pub(crate) forward_keys: Vec<NormalizedChord>,
 }
 
 /// Stamped on a Tier 1 inline webview entity at mount: the control-plane
@@ -588,7 +588,7 @@ fn build_view(
             root,
             entry,
             interactive,
-            passthrough,
+            forward_keys,
         } => {
             let root_path = PathBuf::from(&root);
             if !root_path.is_absolute() || !root_path.is_dir() {
@@ -603,13 +603,13 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
-                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
             })
         }
         RegisterKind::Inline {
             html,
             interactive,
-            passthrough,
+            forward_keys,
         } => {
             if html.len() > MAX_INLINE_HTML {
                 return Err("html_too_large");
@@ -620,14 +620,14 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
-                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
             })
         }
         RegisterKind::Url {
             url,
             interactive,
             bridge,
-            passthrough,
+            forward_keys,
         } => {
             let url = validate_url_source(&url)?;
             Ok(DynamicView {
@@ -636,7 +636,7 @@ fn build_view(
                 interactive,
                 owner_surface,
                 connection_id,
-                passthrough: passthrough.iter().filter_map(normalize_chord).collect(),
+                forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
             })
         }
     }
@@ -672,7 +672,7 @@ fn validate_url_source(url: &str) -> Result<String, &'static str> {
 /// Converts a wire [`HostKeyChord`] to a [`NormalizedChord`], returning `None`
 /// for unrecognized key names. Note that `"backtab"` maps to [`KeyCode::Tab`]
 /// (the same as `"tab"`): the shift distinction is carried in the modifier bits,
-/// so a passthrough `BackTab` and `Tab` are indistinguishable at the host.
+/// so a forward-key `BackTab` and `Tab` are indistinguishable at the host.
 fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
     let code = match chord.key.as_str() {
         "tab" | "backtab" => KeyCode::Tab,
@@ -858,7 +858,7 @@ mod token_tests {
                 interactive: true,
                 owner_surface: pane,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -901,7 +901,7 @@ mod registry_tests {
                 interactive: true,
                 owner_surface: surface(1),
                 connection_id: 7,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         assert_eq!(reg.get("h1").map(|v| v.interactive), Some(true));
@@ -948,7 +948,7 @@ mod registry_tests {
             interactive: true,
             owner_surface: owner,
             connection_id: conn,
-            passthrough: vec![],
+            forward_keys: vec![],
         }
     }
 }
@@ -979,7 +979,7 @@ mod apply_tests {
                     root: dir.path().to_string_lossy().into_owned(),
                     entry: "index.html".into(),
                     interactive: true,
-                    passthrough: vec![],
+                    forward_keys: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1024,7 +1024,7 @@ mod apply_tests {
                 kind: RegisterKind::Inline {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
-                    passthrough: vec![],
+                    forward_keys: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1061,7 +1061,7 @@ mod apply_tests {
                     root: "/nonexistent/abs/xyz".into(),
                     entry: "index.html".into(),
                     interactive: true,
-                    passthrough: vec![],
+                    forward_keys: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1087,7 +1087,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -1130,7 +1130,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 9,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
@@ -1274,7 +1274,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         app.world_mut().spawn(InlineWebview {
@@ -1328,7 +1328,7 @@ mod apply_tests {
                     url: "https://example.com".into(),
                     interactive: true,
                     bridge: false,
-                    passthrough: vec![],
+                    forward_keys: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1366,7 +1366,7 @@ mod apply_tests {
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let mounted = app
@@ -1444,7 +1444,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let child = app
@@ -1508,7 +1508,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 99,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         // Spawn a VALID interactive inline child that WOULD be focused if the
@@ -1564,7 +1564,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface_a,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         // Spawn the matching interactive inline child on surface_a.
@@ -1675,7 +1675,7 @@ mod focus_tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let child = app
@@ -1816,7 +1816,7 @@ mod normalize_tests {
     }
 
     #[test]
-    fn normalize_chord_maps_passthrough_keys() {
+    fn normalize_chord_maps_forward_keys_keys() {
         let cases: &[(&str, KeyCode)] = &[
             ("esc", KeyCode::Escape),
             (" ", KeyCode::Space),
@@ -1898,7 +1898,7 @@ mod url_source_tests {
                 url: "https://example.com".into(),
                 interactive: true,
                 bridge: true,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
             Entity::from_bits(1),
             7,
@@ -1917,7 +1917,7 @@ mod url_source_tests {
                 url: "file:///etc/passwd".into(),
                 interactive: true,
                 bridge: false,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
             Entity::from_bits(1),
             7,
