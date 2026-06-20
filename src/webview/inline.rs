@@ -1,8 +1,8 @@
 //! Inline webviews: `ChildOf` children of a terminal surface that render a
 //! registered view into the terminal's text flow. This module owns the
 //! components, the mount/unmount policy executed by the `MountInline` /
-//! `UnmountInline` arms of `osc_webview::on_osc_webview_request`, and the
-//! `OzmuxInlineWebviewPlugin` runtime systems that keep `WebviewSize` in
+//! `UnmountInline` arms of `osc::on_osc_webview_request`, and the
+//! `InlinePlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use super::osc::NonInteractive;
