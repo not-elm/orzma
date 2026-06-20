@@ -683,6 +683,7 @@ fn step_selection(selected: usize, entry_count: usize, up: bool) -> usize {
 mod tests {
     use super::*;
     use bevy::prelude::AppExtStates;
+    use bevy::state::app::StatesPlugin;
     use tmux_control::{SessionId, WindowId};
 
     fn fake_session(id: u32, name: &str) -> SessionInfo {
@@ -785,7 +786,7 @@ mod tests {
 
     fn picker_input_app() -> App {
         let mut app = App::new();
-        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(StatesPlugin);
         app.insert_state(AppMode::Ozma);
         app.add_message::<bevy::input::keyboard::KeyboardInput>();
         app.insert_resource(SessionPicker {
@@ -865,7 +866,7 @@ mod tests {
 
     fn dispatch_app() -> App {
         let mut app = App::new();
-        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.add_plugins(StatesPlugin);
         app.insert_state(AppMode::Ozma);
         app.init_resource::<SessionPicker>();
         app.init_resource::<ConnectionState>();
@@ -879,7 +880,7 @@ mod tests {
     }
 
     fn enter_ozmux(app: &mut App) {
-        app.insert_resource(bevy::prelude::NextState::Pending(AppMode::Ozmux));
+        app.insert_resource(NextState::Pending(AppMode::Ozmux));
         app.update();
     }
 
