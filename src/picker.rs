@@ -375,8 +375,10 @@ fn handle_picker_input(
     mut picker: ResMut<SessionPicker>,
     mut connection: NonSendMut<TmuxConnection>,
     mut state: ResMut<ConnectionState>,
+    mut next_mode: ResMut<NextState<AppMode>>,
     mut keys: MessageReader<KeyboardInput>,
     configs: Res<OzmuxConfigsResource>,
+    current_mode: Res<State<AppMode>>,
     control: Option<Res<ControlPlaneHandle>>,
 ) {
     if !picker.open {
@@ -415,7 +417,7 @@ fn handle_picker_input(
                         row,
                     );
                 } else {
-                    apply_attach(
+                    let attached = apply_attach(
                         &mut connection,
                         &mut state,
                         &configs,
@@ -423,6 +425,9 @@ fn handle_picker_input(
                         &picker,
                         row,
                     );
+                    if should_enter_ozmux(attached, current_mode.get()) {
+                        next_mode.set(AppMode::Ozmux);
+                    }
                 }
                 picker.open = false;
                 break;
@@ -511,7 +516,7 @@ fn apply_attach(
     control: Option<&ControlPlaneHandle>,
     picker: &SessionPicker,
     row: PickerRow,
-) {
+) -> bool {
     let target = match row {
         PickerRow::Session(si) => AttachTarget::Attach(picker.sessions[si].name.clone()),
         PickerRow::Window { session, .. } => {
@@ -527,13 +532,27 @@ fn apply_attach(
         Ok(client) => {
             connection.set(client);
             *state = ConnectionState::Connecting;
+            true
         }
         Err(e) => {
             *state = ConnectionState::Error {
                 reason: format!("tmux connect failed: {e}"),
             };
+            false
         }
     }
+}
+
+/// Whether a successful picker attach should transition the app into
+/// [`AppMode::Ozmux`]: true only when the attach succeeded and the app is
+/// currently in [`AppMode::Ozma`].
+///
+/// The `Ozma` guard is correctness-critical, not an optimization: under Bevy
+/// 0.18 `NextState::set` to the current value re-runs `OnExit`/`OnEnter`, so
+/// setting `Ozmux` while already in `Ozmux` would run `on_exit_ozmux`
+/// (`connection.take()` + `detach-client`) and tear down the live client.
+fn should_enter_ozmux(attached: bool, current: &AppMode) -> bool {
+    attached && *current == AppMode::Ozma
 }
 
 /// Refreshes `$OZMA_SOCK` to this ozmux's live control socket across the whole
@@ -649,6 +668,7 @@ fn step_selection(selected: usize, entry_count: usize, up: bool) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::prelude::AppExtStates;
     use tmux_control::{SessionId, WindowId};
 
     fn fake_session(id: u32, name: &str) -> SessionInfo {
@@ -730,6 +750,14 @@ mod tests {
         assert_eq!(step_selection(0, 3, true), 0);
     }
 
+    #[test]
+    fn should_enter_ozmux_only_when_attached_from_ozma() {
+        assert!(should_enter_ozmux(true, &AppMode::Ozma));
+        assert!(!should_enter_ozmux(false, &AppMode::Ozma));
+        assert!(!should_enter_ozmux(true, &AppMode::Ozmux));
+        assert!(!should_enter_ozmux(false, &AppMode::Ozmux));
+    }
+
     fn key_press(code: KeyCode) -> bevy::input::keyboard::KeyboardInput {
         bevy::input::keyboard::KeyboardInput {
             key_code: code,
@@ -743,6 +771,8 @@ mod tests {
 
     fn picker_input_app() -> App {
         let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.insert_state(AppMode::Ozma);
         app.add_message::<bevy::input::keyboard::KeyboardInput>();
         app.insert_resource(SessionPicker {
             sessions: vec![fake_session(0, "alpha"), fake_session(1, "beta")],
