@@ -1,6 +1,7 @@
 //! Font configuration: the `[font]` section.
 
 use serde::Deserialize;
+use std::path::PathBuf;
 
 const DEFAULT_SIZE: f32 = 11.25;
 
@@ -11,13 +12,13 @@ pub struct FontConfig {
     /// Terminal font size in points, matching Alacritty.
     pub size: f32,
     /// Absolute or `~`-prefixed path to the regular-face TTF (Bevy GUI only).
-    pub normal: Option<std::path::PathBuf>,
+    pub normal: Option<PathBuf>,
     /// Absolute or `~`-prefixed path to the bold-face TTF (Bevy GUI only).
-    pub bold: Option<std::path::PathBuf>,
+    pub bold: Option<PathBuf>,
     /// Absolute or `~`-prefixed path to the italic-face TTF (Bevy GUI only).
-    pub italic: Option<std::path::PathBuf>,
+    pub italic: Option<PathBuf>,
     /// Absolute or `~`-prefixed path to the bold-italic-face TTF (Bevy GUI only).
-    pub bold_italic: Option<std::path::PathBuf>,
+    pub bold_italic: Option<PathBuf>,
 }
 
 impl Default for FontConfig {
