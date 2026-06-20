@@ -14,7 +14,9 @@ use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{KeyboardDisabled, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet};
+use ozma_terminal::{
+    KeyboardDisabled, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet,
+};
 use ozmux_configs::shortcuts::ShortcutAction;
 
 /// Registers the host-side input systems for `AppMode::Ozma`.

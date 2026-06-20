@@ -3,7 +3,9 @@
 //! system updates `HyperlinkHoverState` (renderer underline) and the window
 //! `CursorIcon`.
 
-use crate::mouse::{MouseDisabled, OzmaTerminalMouseSet, cell_at_cursor, protocol_mods, topmost_terminal_at};
+use crate::mouse::{
+    MouseDisabled, OzmaTerminalMouseSet, cell_at_cursor, protocol_mods, topmost_terminal_at,
+};
 use crate::spawn::OzmaTerminal;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -54,7 +56,8 @@ impl Plugin for HyperlinkPlugin {
 }
 
 /// Updates `HyperlinkHoverState` and the window cursor as the pointer moves over
-/// the terminal grid. Gated to the single enabled `OzmaTerminal`.
+/// the terminal grid. Resolves the hover against the topmost enabled
+/// `OzmaTerminal` under the cursor.
 fn hyperlink_hover_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
@@ -109,7 +112,9 @@ fn resolve_hover(
     };
     let Some(target) = topmost_terminal_at(
         cursor_phys,
-        terminals.iter().map(|(e, node, transform, _)| (e, node, transform)),
+        terminals
+            .iter()
+            .map(|(e, node, transform, _)| (e, node, transform)),
     ) else {
         return SystemCursorIcon::Default;
     };

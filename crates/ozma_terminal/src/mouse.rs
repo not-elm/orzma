@@ -448,7 +448,9 @@ pub(crate) fn dispatch_mouse_buttons(
         let target = if kind == ButtonEventKind::Press {
             topmost_terminal_at(
                 cursor_phys,
-                terminals.iter().map(|(e, _, node, transform, _)| (e, node, transform)),
+                terminals
+                    .iter()
+                    .map(|(e, _, node, transform, _)| (e, node, transform)),
             )
         } else {
             gesture.held.map(|h| h.entity)
@@ -586,7 +588,9 @@ pub(crate) fn dispatch_mouse_wheel(
     };
     let Some(target) = topmost_terminal_at(
         cursor_phys,
-        terminals.iter().map(|(e, _, node, transform, _)| (e, node, transform)),
+        terminals
+            .iter()
+            .map(|(e, _, node, transform, _)| (e, node, transform)),
     ) else {
         wheel.clear();
         return;
@@ -894,13 +898,29 @@ mod tests {
         let c = world.spawn_empty().id();
         // A: left half (x 0..400), stack 5. B: right half (x 400..800), stack 3.
         // C: left half, stack 9 — overlaps A and sits on top.
-        let node_a = ComputedNode { size: Vec2::new(400.0, 600.0), stack_index: 5, ..ComputedNode::DEFAULT };
+        let node_a = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 5,
+            ..ComputedNode::DEFAULT
+        };
         let tf_a = UiGlobalTransform::from_xy(200.0, 300.0);
-        let node_b = ComputedNode { size: Vec2::new(400.0, 600.0), stack_index: 3, ..ComputedNode::DEFAULT };
+        let node_b = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 3,
+            ..ComputedNode::DEFAULT
+        };
         let tf_b = UiGlobalTransform::from_xy(600.0, 300.0);
-        let node_c = ComputedNode { size: Vec2::new(400.0, 600.0), stack_index: 9, ..ComputedNode::DEFAULT };
+        let node_c = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 9,
+            ..ComputedNode::DEFAULT
+        };
         let tf_c = UiGlobalTransform::from_xy(200.0, 300.0);
-        let candidates = [(a, &node_a, &tf_a), (b, &node_b, &tf_b), (c, &node_c, &tf_c)];
+        let candidates = [
+            (a, &node_a, &tf_a),
+            (b, &node_b, &tf_b),
+            (c, &node_c, &tf_c),
+        ];
 
         assert_eq!(
             topmost_terminal_at(Vec2::new(600.0, 300.0), candidates.iter().copied()),
@@ -1420,9 +1440,17 @@ mod tests {
         acc.retarget(a);
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
         acc.retarget(a);
-        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1, "0.3 + 0.3 = 0.6 → one notch on the same target");
+        assert_eq!(
+            accumulate_notches(&mut acc, 0.3, 0.5),
+            1,
+            "0.3 + 0.3 = 0.6 → one notch on the same target"
+        );
         acc.retarget(b);
-        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0, "switching target clears the carried residual");
+        assert_eq!(
+            accumulate_notches(&mut acc, 0.3, 0.5),
+            0,
+            "switching target clears the carried residual"
+        );
     }
 
     #[test]
