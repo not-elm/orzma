@@ -9,7 +9,7 @@
 use crate::input::InputPhase;
 use crate::ozma::AppMode;
 use crate::ui::copy_mode::CopyModeState;
-use crate::webview::inline::{InlineWebview, focused_inline_of};
+use crate::webview::inline::{Webview, focused_inline_of};
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
@@ -166,8 +166,8 @@ pub(crate) fn ime_policy_system(
     metrics: Res<TerminalCellMetricsResource>,
     focused_webview: Res<FocusedWebview>,
     webview_anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
-    inline_parents: Query<&ChildOf, With<InlineWebview>>,
-    inline_slots: Query<&InlineWebview>,
+    inline_parents: Query<&ChildOf, With<Webview>>,
+    inline_slots: Query<&Webview>,
     overlays: Query<&TerminalOverlays>,
     current_mode: Res<State<AppMode>>,
     ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
@@ -304,7 +304,7 @@ pub(crate) fn read_ime_events(
     connection: NonSend<TmuxConnection>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
-    inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    inline_parents: Query<&ChildOf, With<Webview>>,
     current_mode: Res<State<AppMode>>,
     ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     copy_modes: Query<(), With<CopyModeState>>,
@@ -383,8 +383,8 @@ pub(crate) fn read_ime_events(
 /// caller then leaves `ime_position` unchanged rather than mis-anchoring.
 fn inline_ime_position(
     scale_factor: f32,
-    inline_parents: &Query<&ChildOf, With<InlineWebview>>,
-    inline_slots: &Query<&InlineWebview>,
+    inline_parents: &Query<&ChildOf, With<Webview>>,
+    inline_slots: &Query<&Webview>,
     anchors: &Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     overlays: &Query<&TerminalOverlays>,
     metrics: &TerminalCellMetricsResource,
@@ -828,7 +828,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "inline".into(),
                     instance_id: None,
                     slot: 0,
@@ -873,7 +873,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane_entity),
-                InlineWebview {
+                Webview {
                     view_id: "inline".into(),
                     instance_id: None,
                     slot: 0,

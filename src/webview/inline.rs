@@ -2,7 +2,7 @@
 //! registered view into the terminal's text flow. This module owns the
 //! components, the mount/unmount policy executed by the `Mount` /
 //! `Unmount` arms of `osc::on_osc_webview_request`, and the
-//! `InlinePlugin` runtime systems that keep `WebviewSize` in
+//! `WebviewPlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use super::osc::NonInteractive;
@@ -37,7 +37,7 @@ pub(crate) struct PassthroughKeys(pub(crate) Vec<NormalizedChord>);
 /// back-references" convention. Each child's `slot` is the single source of
 /// truth for slot allocation (no separate allocation table).
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InlineWebview {
+pub(crate) struct Webview {
     /// The registered view id this inline webview was mounted from.
     pub(crate) view_id: String,
     /// The client-assigned instance id; `None` is the implicit default
@@ -52,7 +52,7 @@ pub(crate) struct InlineWebview {
 /// grid emit carries (`project_inline_overlays` defers first projection until
 /// the grid catches up).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InlinePlacement {
+pub(crate) struct WebviewPlacement {
     /// Where the rect is anchored.
     pub(crate) anchor: AnchorMode,
     /// Rect height in terminal cells.
@@ -82,9 +82,9 @@ pub(crate) struct CompositeNotified;
 /// `Update` (the PTY drain systems flush the `FrameSnapshot` / `FrameDelta`
 /// observers there), so projecting just before the material rebuild hands the
 /// same frame's overlays to the shader.
-pub(super) struct InlinePlugin;
+pub(super) struct WebviewPlugin;
 
-impl Plugin for InlinePlugin {
+impl Plugin for WebviewPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Update, sync_inline_webview_size);
         app.add_systems(
@@ -112,7 +112,7 @@ impl Plugin for InlinePlugin {
 
 /// Everything the `Mount` verb carries into `mount`: the target
 /// terminal surface and the parsed verb + anchor payload.
-pub(crate) struct InlineMountContext<'a> {
+pub(crate) struct WebviewMountContext<'a> {
     /// The requesting terminal surface — the `ChildOf` parent of the mount.
     pub(crate) terminal_surface: Entity,
     /// The registered view id to mount.
@@ -130,12 +130,12 @@ pub(crate) struct InlineMountContext<'a> {
 /// The system params `mount` / `unmount` need, bundled so the
 /// `on_osc_webview_request` observer gains a single extra parameter.
 #[derive(SystemParam)]
-pub(crate) struct InlineWebviewParams<'w, 's> {
+pub(crate) struct WebviewParams<'w, 's> {
     commands: Commands<'w, 's>,
     images: ResMut<'w, Assets<Image>>,
-    placements: Query<'w, 's, &'static mut InlinePlacement>,
+    placements: Query<'w, 's, &'static mut WebviewPlacement>,
     children: Query<'w, 's, &'static Children>,
-    views: Query<'w, 's, &'static InlineWebview>,
+    views: Query<'w, 's, &'static Webview>,
     metrics: Option<Res<'w, TerminalCellMetricsResource>>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
@@ -212,9 +212,9 @@ pub(crate) fn resolve_mount(
 /// a placeholder cell of 8×16 physical px at scale 1.0 is used —
 /// `sync_inline_webview_size` corrects it once real metrics arrive.
 pub(crate) fn mount(
-    params: &mut InlineWebviewParams,
+    params: &mut WebviewParams,
     dynamic: &DynamicRegistry,
-    ctx: InlineMountContext<'_>,
+    ctx: WebviewMountContext<'_>,
 ) {
     let Some(anchor) = ctx.anchor else {
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount without anchor, dropping");
@@ -225,7 +225,7 @@ pub(crate) fn mount(
         .iter()
         .find(|(_, v)| v.view_id == ctx.view_id && v.instance_id.as_deref() == ctx.instance_id)
     {
-        let next = InlinePlacement {
+        let next = WebviewPlacement {
             anchor: anchor.mode,
             rows: ctx.rows,
             cols: ctx.cols,
@@ -272,12 +272,12 @@ pub(crate) fn mount(
         source,
         texture,
         WebviewSize(size),
-        InlineWebview {
+        Webview {
             view_id: ctx.view_id.to_string(),
             instance_id: ctx.instance_id.map(str::to_string),
             slot,
         },
-        InlinePlacement {
+        WebviewPlacement {
             anchor: anchor.mode,
             rows: ctx.rows,
             cols: ctx.cols,
@@ -322,7 +322,7 @@ pub(crate) fn mount(
 /// (the VT-synthesized fold/saturation `Unmount { view_id: None }`
 /// frames take this path).
 pub(crate) fn unmount(
-    params: &mut InlineWebviewParams,
+    params: &mut WebviewParams,
     terminal_surface: Entity,
     view_id: Option<&str>,
     instance_id: Option<&str>,
@@ -346,12 +346,12 @@ pub(crate) fn unmount(
 
 /// Returns the inline webview entity that currently holds keyboard focus on
 /// `active_surface`: `Some(e)` iff `FocusedWebview` points at `e`, `e` carries
-/// `InlineWebview`, and its `ChildOf` parent is the active surface. The input
+/// `Webview`, and its `ChildOf` parent is the active surface. The input
 /// dispatcher uses this to hoist the release-chord check, restrict the Escape
 /// scroll-to-bottom pre-handler, and suppress PTY key forwarding (spec §7).
 pub(crate) fn focused_inline_of(
     focused: Option<&FocusedWebview>,
-    inline_parents: &Query<&ChildOf, With<InlineWebview>>,
+    inline_parents: &Query<&ChildOf, With<Webview>>,
     active_surface: Option<Entity>,
 ) -> Option<Entity> {
     let candidate = focused?.0?;
@@ -362,7 +362,7 @@ pub(crate) fn focused_inline_of(
 /// A pointer hit on an interactive inline webview rect: the child entity that
 /// owns the rect and the pointer position in webview-local DIP (logical px).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct InlineHit {
+pub(crate) struct WebviewHit {
     /// The interactive inline webview child under the pointer.
     pub(crate) child: Entity,
     /// `(local_phys − rect_origin_phys) / scale_factor` — the pointer in
@@ -384,14 +384,14 @@ pub(crate) struct InlineHit {
 /// the hit-test, so their rects pass through as plain terminal input.
 pub(crate) fn inline_hit_at(
     children: &Query<&Children>,
-    inline: &Query<(&InlineWebview, Has<NonInteractive>)>,
+    inline: &Query<(&Webview, Has<NonInteractive>)>,
     overlays: &TerminalOverlays,
     terminal: Entity,
     local_phys: Vec2,
     cell_w_phys: f32,
     cell_h_phys: f32,
     scale_factor: f32,
-) -> Option<InlineHit> {
+) -> Option<WebviewHit> {
     let row = (local_phys.y / cell_h_phys).floor() as i32;
     let col = (local_phys.x / cell_w_phys).floor() as i32;
     let kids = children.get(terminal).ok()?;
@@ -419,7 +419,7 @@ pub(crate) fn inline_hit_at(
             cell_h_phys,
             scale_factor,
         )?;
-        Some(InlineHit { child, local_dip })
+        Some(WebviewHit { child, local_dip })
     })
 }
 
@@ -457,7 +457,7 @@ fn despawn_fixed_screen_on_alt_exit(
     event: On<TerminalModeChanged>,
     mut commands: Commands,
     children: Query<&Children>,
-    placements: Query<&InlinePlacement>,
+    placements: Query<&WebviewPlacement>,
 ) {
     if !event.removed.iter().any(|m| m == ALT_SCREEN_MODE) {
         return;
@@ -477,9 +477,9 @@ fn despawn_fixed_screen_on_alt_exit(
 /// The live inline-webview children of a terminal surface.
 fn live_inline_children<'a>(
     children: &Query<&Children>,
-    views: &'a Query<&'static InlineWebview>,
+    views: &'a Query<&'static Webview>,
     terminal_surface: Entity,
-) -> Vec<(Entity, &'a InlineWebview)> {
+) -> Vec<(Entity, &'a Webview)> {
     let Ok(kids) = children.get(terminal_surface) else {
         return Vec::new();
     };
@@ -490,7 +490,7 @@ fn live_inline_children<'a>(
 
 /// The smallest slot in `0..OVERLAY_SLOTS` not occupied by a live child, or
 /// `None` when every slot is taken.
-fn smallest_free_slot(live: &[(Entity, &InlineWebview)]) -> Option<u8> {
+fn smallest_free_slot(live: &[(Entity, &Webview)]) -> Option<u8> {
     (0..OVERLAY_SLOTS as u8).find(|slot| live.iter().all(|(_, v)| v.slot != *slot))
 }
 
@@ -529,7 +529,7 @@ fn seed_logical_size(
 /// frame-to-frame unless metrics/scale actually changed, and this math is
 /// deterministic.
 fn sync_inline_webview_size(
-    mut sizes: Query<(&mut WebviewSize, &InlinePlacement)>,
+    mut sizes: Query<(&mut WebviewSize, &WebviewPlacement)>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -583,8 +583,8 @@ fn project_inline_overlays(
         Has<TerminalOverlays>,
     )>,
     inline: Query<(
-        &InlineWebview,
-        &InlinePlacement,
+        &Webview,
+        &WebviewPlacement,
         &WebviewTextureTarget,
         Has<CompositeNotified>,
         Option<&WebviewOwner>,
@@ -669,7 +669,7 @@ fn project_inline_overlays(
 /// (i.e., after its first successful projection). Entities that were never
 /// projected (never stamped `CompositeNotified`) are silently ignored.
 fn on_placement_removed(
-    event: On<Remove, InlinePlacement>,
+    event: On<Remove, WebviewPlacement>,
     owners: Query<(&WebviewOwner, Has<CompositeNotified>)>,
     writers: Res<ConnectionWriters>,
 ) {
@@ -788,7 +788,7 @@ mod tests {
             .map(|children| {
                 children
                     .iter()
-                    .filter(|child| world.get::<InlineWebview>(*child).is_some())
+                    .filter(|child| world.get::<Webview>(*child).is_some())
                     .collect()
             })
             .unwrap_or_default()
@@ -799,7 +799,7 @@ mod tests {
             .into_iter()
             .find_map(|child| {
                 app.world()
-                    .get::<InlineWebview>(child)
+                    .get::<Webview>(child)
                     .filter(|v| v.view_id == view_id)
                     .map(|v| v.slot)
             })
@@ -848,7 +848,7 @@ mod tests {
             .into_iter()
             .find_map(|child| {
                 app.world()
-                    .get::<InlineWebview>(child)
+                    .get::<Webview>(child)
                     .filter(|v| v.view_id == view_id && v.instance_id.as_deref() == instance_id)
                     .map(|v| v.slot)
             })
@@ -872,16 +872,16 @@ mod tests {
             "the inline webview must be a ChildOf the terminal surface"
         );
         assert_eq!(
-            app.world().get::<InlineWebview>(child),
-            Some(&InlineWebview {
+            app.world().get::<Webview>(child),
+            Some(&Webview {
                 view_id: "dash".into(),
                 instance_id: None,
                 slot: 0
             }),
         );
         assert_eq!(
-            app.world().get::<InlinePlacement>(child),
-            Some(&InlinePlacement {
+            app.world().get::<WebviewPlacement>(child),
+            Some(&WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
@@ -929,7 +929,7 @@ mod tests {
         let before = inline_children_of(&app, terminal);
         assert_eq!(before.len(), 1, "first mount spawns one child");
         let entity = before[0];
-        let slot_before = app.world().get::<InlineWebview>(entity).unwrap().slot;
+        let slot_before = app.world().get::<Webview>(entity).unwrap().slot;
 
         // Re-mount the same handle with a different anchor.
         app.world_mut().trigger(OscWebviewRequest {
@@ -954,8 +954,8 @@ mod tests {
             "re-mount must reuse the same entity (no reload)"
         );
         assert_eq!(
-            app.world().get::<InlinePlacement>(entity),
-            Some(&InlinePlacement {
+            app.world().get::<WebviewPlacement>(entity),
+            Some(&WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 99, col: 7 },
                 rows: 12,
                 cols: 50,
@@ -964,7 +964,7 @@ mod tests {
             "re-mount updates the placement in place"
         );
         assert_eq!(
-            app.world().get::<InlineWebview>(entity).unwrap().slot,
+            app.world().get::<Webview>(entity).unwrap().slot,
             slot_before,
             "re-mount preserves the overlay slot"
         );
@@ -1239,7 +1239,7 @@ mod tests {
         app: &mut App,
         terminal: Entity,
         slot: u8,
-        placement: InlinePlacement,
+        placement: WebviewPlacement,
     ) -> Handle<Image> {
         let handle = app
             .world_mut()
@@ -1247,7 +1247,7 @@ mod tests {
             .add(Image::default());
         app.world_mut().spawn((
             ChildOf(terminal),
-            InlineWebview {
+            Webview {
                 view_id: format!("view-{slot}"),
                 instance_id: None,
                 slot,
@@ -1290,7 +1290,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
@@ -1327,8 +1327,8 @@ mod tests {
         }
     }
 
-    fn formula_placement() -> InlinePlacement {
-        InlinePlacement {
+    fn formula_placement() -> WebviewPlacement {
+        WebviewPlacement {
             anchor: AnchorMode::Scrollback { line: 30, col: 2 },
             rows: 4,
             cols: 10,
@@ -1389,19 +1389,19 @@ mod tests {
                 ..Default::default()
             })
             .id();
-        let above = InlinePlacement {
+        let above = WebviewPlacement {
             anchor: AnchorMode::Scrollback { line: 10, col: 0 },
             rows: 10,
             cols: 10,
             frame_seq: 0,
         };
-        let below = InlinePlacement {
+        let below = WebviewPlacement {
             anchor: AnchorMode::Scrollback { line: 100, col: 0 },
             rows: 10,
             cols: 10,
             frame_seq: 0,
         };
-        let col_out = InlinePlacement {
+        let col_out = WebviewPlacement {
             anchor: AnchorMode::Scrollback { line: 35, col: 80 },
             rows: 10,
             cols: 10,
@@ -1423,7 +1423,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 79 },
                 rows: 10,
                 cols: 10,
@@ -1453,7 +1453,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
@@ -1491,7 +1491,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::FixedScreen { row: 5, col: 2 },
                 rows: 4,
                 cols: 10,
@@ -1515,7 +1515,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::FixedScreen { row: 5, col: 2 },
                 rows: 4,
                 cols: 10,
@@ -1535,7 +1535,7 @@ mod tests {
             &mut app,
             terminal,
             2,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
@@ -1561,7 +1561,7 @@ mod tests {
     fn projection_draws_two_instances_in_their_own_slots() {
         let mut app = make_test_app();
         let terminal = app.world_mut().spawn(projection_grid(7)).id();
-        let placement = InlinePlacement {
+        let placement = WebviewPlacement {
             anchor: AnchorMode::Scrollback { line: 42, col: 3 },
             rows: 10,
             cols: 40,
@@ -1614,7 +1614,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
@@ -1723,7 +1723,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(terminal),
-                InlineWebview {
+                Webview {
                     view_id: format!("view-{slot}"),
                     instance_id: None,
                     slot,
@@ -1750,11 +1750,11 @@ mod tests {
         terminal: Entity,
         local_phys: Vec2,
         scale: f32,
-    ) -> Option<InlineHit> {
+    ) -> Option<WebviewHit> {
         app.world_mut()
             .run_system_once(
                 move |children: Query<&Children>,
-                      inline: Query<(&InlineWebview, Has<NonInteractive>)>| {
+                      inline: Query<(&Webview, Has<NonInteractive>)>| {
                     inline_hit_at(
                         &children, &inline, &overlays, terminal, local_phys, HIT_CELL_W,
                         HIT_CELL_H, scale,
@@ -1775,7 +1775,7 @@ mod tests {
         let hit = run_hit(&mut app, overlays, terminal, Vec2::new(100.0, 100.0), 1.0);
         assert_eq!(
             hit,
-            Some(InlineHit {
+            Some(WebviewHit {
                 child,
                 local_dip: Vec2::new(100.0 - 24.0, 100.0 - 32.0),
             }),
@@ -1810,7 +1810,7 @@ mod tests {
             .expect("the point lies inside slot 1's rect");
         assert_eq!(
             hit.child, slot1,
-            "the hit must resolve slot → child via InlineWebview.slot"
+            "the hit must resolve slot → child via Webview.slot"
         );
         assert_eq!(hit.local_dip, Vec2::new(36.0 - 32.0, 72.0 - 64.0));
     }
@@ -2037,7 +2037,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::FixedScreen { row: 1, col: 0 },
                 rows: 4,
                 cols: 10,
@@ -2048,7 +2048,7 @@ mod tests {
             &mut app,
             terminal,
             1,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 0 },
                 rows: 4,
                 cols: 10,
@@ -2059,7 +2059,7 @@ mod tests {
             .into_iter()
             .find(|e| {
                 matches!(
-                    app.world().get::<InlinePlacement>(*e).unwrap().anchor,
+                    app.world().get::<WebviewPlacement>(*e).unwrap().anchor,
                     AnchorMode::FixedScreen { .. }
                 )
             })
@@ -2085,7 +2085,7 @@ mod tests {
         );
         assert!(matches!(
             app.world()
-                .get::<InlinePlacement>(remaining[0])
+                .get::<WebviewPlacement>(remaining[0])
                 .unwrap()
                 .anchor,
             AnchorMode::Scrollback { .. }
@@ -2213,7 +2213,7 @@ mod tests {
         app: &mut App,
         terminal: Entity,
         slot: u8,
-        placement: InlinePlacement,
+        placement: WebviewPlacement,
         connection_id: u64,
         handle: &str,
     ) -> Entity {
@@ -2224,7 +2224,7 @@ mod tests {
         app.world_mut()
             .spawn((
                 ChildOf(terminal),
-                InlineWebview {
+                Webview {
                     view_id: format!("view-{slot}"),
                     instance_id: None,
                     slot,
@@ -2249,7 +2249,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
@@ -2284,7 +2284,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
@@ -2314,7 +2314,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,
@@ -2349,7 +2349,7 @@ mod tests {
             &mut app,
             terminal,
             0,
-            InlinePlacement {
+            WebviewPlacement {
                 anchor: AnchorMode::Scrollback { line: 42, col: 3 },
                 rows: 10,
                 cols: 40,

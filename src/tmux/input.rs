@@ -16,7 +16,7 @@ use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
-use crate::webview::inline::{InlineWebview, PassthroughKeys, focused_inline_of, inline_hit_at};
+use crate::webview::inline::{Webview, PassthroughKeys, focused_inline_of, inline_hit_at};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -501,7 +501,7 @@ struct TmuxInlineWheelTarget {
 #[derive(SystemParam)]
 struct TmuxInlineWheelParams<'w, 's> {
     focused_webview: Res<'w, FocusedWebview>,
-    inline_parents: Query<'w, 's, &'static ChildOf, With<InlineWebview>>,
+    inline_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
     panes: Query<
         'w,
         's,
@@ -513,7 +513,7 @@ struct TmuxInlineWheelParams<'w, 's> {
         ),
     >,
     children: Query<'w, 's, &'static Children>,
-    inline: Query<'w, 's, (&'static InlineWebview, Has<NonInteractive>)>,
+    inline: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     browsers: Option<NonSend<'w, Browsers>>,
 }
@@ -892,7 +892,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "inline".into(),
                     instance_id: None,
                     slot: 0,

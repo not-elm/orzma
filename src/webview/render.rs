@@ -3,7 +3,7 @@
 //! step with the active pane, and routes the `ozma.call` frames the page bridge
 //! emits to the registering program over the control socket.
 
-use super::inline::InlineWebview;
+use super::inline::Webview;
 use super::osc::NonInteractive;
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
 use crate::system_set::OzmuxSystems;
@@ -84,7 +84,7 @@ impl Plugin for RenderPlugin {
 /// CEF focus when `FocusedWebview` becomes `None`).
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
-/// inline webview child (`InlineWebview`) whose `ChildOf` parent is a live
+/// inline webview child (`Webview`) whose `ChildOf` parent is a live
 /// `TmuxPane` — active or not — that inline focus stands (spec §7, single
 /// focus source). This covers click-granted focus and the app-declared focus
 /// set via the control-plane `SetFocus` op, and means switching the active
@@ -97,7 +97,7 @@ pub(crate) fn sync_focused_webview(
     active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
-    inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    inline_parents: Query<&ChildOf, With<Webview>>,
     tmux_panes: Query<(), With<TmuxPane>>,
 ) {
     // NOTE: a despawned inline child fails `inline_parents.get` here and so
@@ -350,7 +350,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "v".into(),
                     instance_id: None,
                     slot: 0,
@@ -394,7 +394,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "v".into(),
                     instance_id: None,
                     slot: 0,

@@ -5,7 +5,7 @@
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, RegisterKind, ServerMsg};
-use crate::webview::inline::InlineWebview;
+use crate::webview::inline::Webview;
 use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
@@ -415,7 +415,7 @@ fn apply_control_events(
     mut focused: Option<ResMut<FocusedWebview>>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<WebviewAssetRegistryRes>,
-    inline: Query<(Entity, &InlineWebview)>,
+    inline: Query<(Entity, &Webview)>,
     child_of: Query<&ChildOf>,
     non_interactive: Query<(), With<NonInteractive>>,
 ) {
@@ -566,7 +566,7 @@ fn apply_control_events(
 
 fn despawn_mounted(
     commands: &mut Commands,
-    inline: &Query<(Entity, &InlineWebview)>,
+    inline: &Query<(Entity, &Webview)>,
     removed: &[String],
 ) {
     for (entity, view) in inline {
@@ -1118,7 +1118,7 @@ mod apply_tests {
 
     #[test]
     fn disconnect_despawns_mounted_webviews_for_its_handles() {
-        use crate::webview::inline::InlineWebview;
+        use crate::webview::inline::Webview;
         let mut app = App::new();
         let dyn_assets = WebviewAssetRegistry::default();
         let mut reg = DynamicRegistry::default();
@@ -1136,7 +1136,7 @@ mod apply_tests {
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let mounted = app
             .world_mut()
-            .spawn(InlineWebview {
+            .spawn(Webview {
                 view_id: "HMOUNT".into(),
                 instance_id: None,
                 slot: 0,
@@ -1277,7 +1277,7 @@ mod apply_tests {
                 passthrough: vec![],
             },
         );
-        app.world_mut().spawn(InlineWebview {
+        app.world_mut().spawn(Webview {
             view_id: "disp".into(),
             instance_id: None,
             slot: 0,
@@ -1372,7 +1372,7 @@ mod apply_tests {
         let mounted = app
             .world_mut()
             .spawn((
-                InlineWebview {
+                Webview {
                     view_id: "H".into(),
                     instance_id: None,
                     slot: 0,
@@ -1451,7 +1451,7 @@ mod focus_tests {
             .world_mut()
             .spawn((
                 ChildOf(surface),
-                InlineWebview {
+                Webview {
                     view_id: "h1".into(),
                     instance_id: None,
                     slot: 0,
@@ -1517,7 +1517,7 @@ mod focus_tests {
         // this assertion would FAIL.
         app.world_mut().spawn((
             ChildOf(surface),
-            InlineWebview {
+            Webview {
                 view_id: "h1".into(),
                 instance_id: None,
                 slot: 0,
@@ -1572,7 +1572,7 @@ mod focus_tests {
             .world_mut()
             .spawn((
                 ChildOf(surface_a),
-                InlineWebview {
+                Webview {
                     view_id: "ha".into(),
                     instance_id: None,
                     slot: 0,
@@ -1682,7 +1682,7 @@ mod focus_tests {
             .world_mut()
             .spawn((
                 ChildOf(surface),
-                InlineWebview {
+                Webview {
                     view_id: "h1".into(),
                     instance_id: None,
                     slot: 0,

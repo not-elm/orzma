@@ -2,7 +2,7 @@
 //! at the requesting terminal's cursor (the `Mount` / `Unmount`
 //! verbs).
 
-use super::inline::{InlineMountContext, InlineWebviewParams, mount, unmount};
+use super::inline::{WebviewMountContext, WebviewParams, mount, unmount};
 use crate::control_plane::DynamicRegistry;
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
@@ -39,7 +39,7 @@ fn init_gate_from_config(
 
 pub(crate) fn on_osc_webview_request(
     ev: On<OscWebviewRequest>,
-    mut inline: InlineWebviewParams,
+    mut inline: WebviewParams,
     dynamic: Res<DynamicRegistry>,
 ) {
     let req = ev.event();
@@ -54,7 +54,7 @@ pub(crate) fn on_osc_webview_request(
             mount(
                 &mut inline,
                 &dynamic,
-                InlineMountContext {
+                WebviewMountContext {
                     terminal_surface,
                     view_id,
                     instance_id: instance_id.as_deref(),

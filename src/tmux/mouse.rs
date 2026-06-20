@@ -21,7 +21,7 @@ use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
-use crate::webview::inline::{InlineWebview, inline_hit_at, inline_local_dip};
+use crate::webview::inline::{Webview, inline_hit_at, inline_local_dip};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -858,8 +858,8 @@ fn arbiter(
 struct TmuxInlineRouteParams<'w, 's> {
     focused_webview: Option<ResMut<'w, FocusedWebview>>,
     children: Query<'w, 's, &'static Children>,
-    inline: Query<'w, 's, (&'static InlineWebview, Has<NonInteractive>)>,
-    inline_parents: Query<'w, 's, &'static ChildOf, With<InlineWebview>>,
+    inline: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
+    inline_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     browsers: Option<NonSend<'w, Browsers>>,
 }
@@ -1016,7 +1016,7 @@ fn forward_tmux_inline_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     children: Query<&Children>,
-    inline: Query<(&InlineWebview, Has<NonInteractive>)>,
+    inline: Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: Query<&TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -1343,7 +1343,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "inline".into(),
                     instance_id: None,
                     slot: 0,
@@ -1418,7 +1418,7 @@ mod tests {
             .run_system_once(
                 move |panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
                       children: Query<&Children>,
-                      inline: Query<(&InlineWebview, Has<NonInteractive>)>,
+                      inline: Query<(&Webview, Has<NonInteractive>)>,
                       overlays: Query<&TerminalOverlays>| {
                     let (terminal, _pane_id, local) =
                         tmux_pane_at_phys(&panes, Vec2::new(40.0, 48.0)).unwrap();
@@ -1453,7 +1453,7 @@ mod tests {
             .run_system_once(
                 |panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
                  children: Query<&Children>,
-                 inline: Query<(&InlineWebview, Has<NonInteractive>)>,
+                 inline: Query<(&Webview, Has<NonInteractive>)>,
                  overlays: Query<&TerminalOverlays>| {
                     let (terminal, _pane_id, local) =
                         tmux_pane_at_phys(&panes, Vec2::new(400.0, 400.0)).unwrap();

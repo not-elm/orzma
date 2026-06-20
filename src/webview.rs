@@ -8,7 +8,7 @@ pub(crate) mod osc;
 pub(crate) mod render;
 
 use bevy::prelude::*;
-use inline::InlinePlugin;
+use inline::WebviewPlugin;
 use osc::OscPlugin;
 use render::RenderPlugin;
 
@@ -17,6 +17,6 @@ pub struct OzmuxWebviewPlugin;
 
 impl Plugin for OzmuxWebviewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((RenderPlugin, OscPlugin, InlinePlugin));
+        app.add_plugins((RenderPlugin, OscPlugin, WebviewPlugin));
     }
 }
