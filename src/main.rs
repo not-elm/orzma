@@ -47,7 +47,7 @@ use ui::{
 };
 
 fn main() {
-    let pre_configs = ozmux_configs::OzmuxConfigs::load_blocking().unwrap_or_default();
+    let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
     // NOTE: start in AppMode::Ozmux as a boot-dispatch state; dispatch_startup_mode
     // (OnEnter(Ozmux), gated to run once) routes to the real mode. Routing to Ozma
     // via a queued NextState — rather than booting straight into Ozma — defers
