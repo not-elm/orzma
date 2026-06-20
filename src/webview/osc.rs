@@ -1,6 +1,6 @@
 //! Observes `OscWebviewRequest` and mounts/unmounts an inline dynamic webview
 //! at the requesting terminal's cursor (the `MountInline` / `UnmountInline`
-//! verbs); the non-inline tab verbs are accepted but no longer acted on.
+//! verbs).
 
 use super::inline::{InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline};
 use crate::control_plane::DynamicRegistry;
@@ -73,15 +73,6 @@ pub(crate) fn on_osc_webview_request(
                 terminal_surface,
                 view_id.as_deref(),
                 instance_id.as_deref(),
-            );
-        }
-        // The non-inline tab-mount verbs are still parsed by the VT layer but no
-        // longer act on anything (their tab-surface path was removed). Log the
-        // drop so a program still emitting them isn't met with total silence.
-        OscWebviewVerb::Mount { .. } | OscWebviewVerb::Unmount { .. } => {
-            tracing::debug!(
-                verb = ?req.verb,
-                "osc-webview: non-inline mount/unmount verb is no longer supported, dropping"
             );
         }
     }

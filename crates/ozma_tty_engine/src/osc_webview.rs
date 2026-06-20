@@ -73,23 +73,6 @@ impl Perform for OscWebviewCapture {
             return;
         }
         let verb = match params.get(1).copied() {
-            Some(b"mount") => match params.get(2).copied().and_then(valid_view_id) {
-                Some(view_id) => OscWebviewVerb::Mount { view_id },
-                None => return,
-            },
-            Some(b"unmount") => {
-                // NOTE: a present-but-invalid view-id is a malformed sequence, not
-                // an implicit "unmount any". Drop it; only an ABSENT third param
-                // means "unmount the pane's OSC webview".
-                let view_id = match params.get(2).copied() {
-                    Some(raw) => match valid_view_id(raw) {
-                        Some(v) => Some(v),
-                        None => return,
-                    },
-                    None => None,
-                };
-                OscWebviewVerb::Unmount { view_id }
-            }
             Some(b"mount-inline") => {
                 let Some(view_id) = params.get(2).copied().and_then(valid_view_id) else {
                     return;
@@ -165,20 +148,29 @@ mod tests {
     #[test]
     fn gate_off_drops_sequence() {
         let mut c = cap(false);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"dash"], true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            true,
+        );
         assert!(c.take_pending().is_none());
     }
 
     #[test]
-    fn gate_on_buffers_mount_and_terminated_reflects_pending() {
+    fn gate_on_buffers_verb_and_terminated_reflects_pending() {
         let mut c = cap(true);
         assert!(!Perform::terminated(&c));
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"dash"], true);
+        c.osc_dispatch(
+            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            true,
+        );
         assert!(Perform::terminated(&c), "pending verb must set terminated");
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::Mount {
-                view_id: "dash".into()
+            Some(OscWebviewVerb::MountInline {
+                view_id: "memo".into(),
+                rows: 3,
+                cols: 20,
+                instance_id: None,
             })
         );
         assert!(
@@ -197,24 +189,16 @@ mod tests {
     #[test]
     fn bad_view_id_rejected() {
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"../etc/passwd"], true);
-        assert!(c.take_pending().is_none());
-    }
-
-    #[test]
-    fn unmount_without_view_id_targets_any() {
-        let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount"], true);
-        assert_eq!(
-            c.take_pending(),
-            Some(OscWebviewVerb::Unmount { view_id: None })
+        c.osc_dispatch(
+            &[
+                OSC_WEBVIEW_CODE,
+                b"mount-inline",
+                b"../etc/passwd",
+                b"3",
+                b"20",
+            ],
+            true,
         );
-    }
-
-    #[test]
-    fn unmount_with_invalid_view_id_dropped() {
-        let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"../etc/passwd"], true);
         assert!(c.take_pending().is_none());
     }
 

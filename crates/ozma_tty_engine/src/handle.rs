@@ -2365,22 +2365,6 @@ mod tests {
     }
 
     #[test]
-    fn legacy_mount_still_arrives_without_anchor() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
-        h.advance(b"\x1b]5379;mount;dash\x1b\\");
-        let ControlFrame::OscWebview { verb, anchor } = rx.try_recv().expect("frame") else {
-            panic!("expected OscWebview");
-        };
-        assert_eq!(
-            verb,
-            OscWebviewVerb::Mount {
-                view_id: "dash".into()
-            }
-        );
-        assert!(anchor.is_none());
-    }
-
-    #[test]
     fn osc_split_across_two_chunks_still_anchors_correctly() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         let full = b"\x1b]5379;mount-inline;memo;3;10\x1b\\";
