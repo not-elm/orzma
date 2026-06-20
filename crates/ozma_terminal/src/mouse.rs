@@ -196,14 +196,16 @@ pub(crate) fn cell_at_cursor(
 /// The `Entity` of the topmost `OzmaTerminal` whose node contains `cursor_phys`,
 /// or `None` when the cursor is over none. "Topmost" is the highest
 /// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); a higher
-/// index is drawn later, i.e. on top.
+/// index is drawn later, i.e. on top. Equal stack indices (only possible before
+/// the first layout pass assigns them) are broken by `Entity` order so the
+/// result is deterministic rather than query-iteration dependent.
 pub(crate) fn topmost_terminal_at<'a>(
     cursor_phys: Vec2,
     candidates: impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)>,
 ) -> Option<Entity> {
     candidates
         .filter(|&(_, node, transform)| node.contains_point(*transform, cursor_phys))
-        .max_by_key(|&(_, node, _)| node.stack_index())
+        .max_by_key(|&(entity, node, _)| (node.stack_index(), entity))
         .map(|(entity, _, _)| entity)
 }
 
@@ -936,6 +938,35 @@ mod tests {
             topmost_terminal_at(Vec2::new(2000.0, 2000.0), candidates.iter().copied()),
             None,
             "a point outside every node resolves to None"
+        );
+    }
+
+    #[test]
+    fn topmost_terminal_at_breaks_stack_index_ties_deterministically() {
+        let mut world = World::new();
+        let lower = world.spawn_empty().id();
+        let higher = world.spawn_empty().id();
+        // Two fully-overlapping nodes with the SAME stack_index (only reachable
+        // before the first layout pass assigns indices). The winner must not
+        // depend on candidate iteration order.
+        let node = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 0,
+            ..ComputedNode::DEFAULT
+        };
+        let tf = UiGlobalTransform::from_xy(200.0, 300.0);
+        let forward = [(lower, &node, &tf), (higher, &node, &tf)];
+        let reversed = [(higher, &node, &tf), (lower, &node, &tf)];
+        let winner = topmost_terminal_at(Vec2::new(100.0, 300.0), forward.iter().copied());
+        assert_eq!(
+            winner,
+            topmost_terminal_at(Vec2::new(100.0, 300.0), reversed.iter().copied()),
+            "tie resolution must not depend on iteration order"
+        );
+        assert_eq!(
+            winner,
+            Some(lower.max(higher)),
+            "a stack_index tie resolves by Entity order, deterministically"
         );
     }
 
