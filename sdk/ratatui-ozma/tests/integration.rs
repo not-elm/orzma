@@ -138,6 +138,43 @@ fn emit_reaches_the_server() {
 }
 
 #[test]
+fn inbound_event_is_buffered_and_read() {
+    use std::time::{Duration, Instant};
+    #[derive(serde::Deserialize, PartialEq, Debug)]
+    struct Hello {
+        message: String,
+    }
+
+    let server = FakeServer::start("view-ev");
+    with_env(&server.sock_path.clone(), || {
+        let ozma = Ozma::connect().unwrap();
+        let handle = ozma
+            .register(Webview::inline("x").add_event::<Hello>("hello"))
+            .unwrap();
+
+        server.send(json!({
+            "op": "event", "handle": "view-ev", "event": "hello", "payload": { "message": "hi" }
+        }));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let events = loop {
+            let evs = handle.read_events::<Hello>();
+            if !evs.is_empty() {
+                break evs;
+            }
+            assert!(Instant::now() < deadline, "inbound event never arrived");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(
+            events,
+            vec![Hello {
+                message: "hi".into()
+            }]
+        );
+    });
+}
+
+#[test]
 fn register_returns_disconnected_when_socket_closes() {
     // Regression: a register whose reply never arrives because the socket closes
     // must return Disconnected, not block forever on the pending reply.
