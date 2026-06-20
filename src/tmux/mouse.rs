@@ -11,6 +11,7 @@
 //! of a divider line enters `Resizing` state; the pointer's major-axis cell
 //! coordinate maps to an absolute target size sent as `resize-pane -x/-y`.
 
+mod apply;
 mod effect;
 
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
@@ -23,6 +24,7 @@ use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
 use crate::webview::osc::NonInteractive;
+use apply::{multi_select_commands, target_copy_cmd};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -32,7 +34,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
+use effect::MultiSelectKind;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_tmux::{
@@ -47,19 +49,20 @@ pub(crate) struct MousePlugin;
 
 impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TmuxMouseGesture>();
-        app.add_systems(
-            Update,
-            arbiter
-                .in_set(InputPhase::Dispatch)
-                .in_set(super::OzmuxActiveSet),
-        );
-        app.add_systems(
-            Update,
-            forward_tmux_webview_mouse_moves
-                .in_set(InputPhase::Hover)
-                .in_set(super::OzmuxActiveSet),
-        );
+        app.init_resource::<TmuxMouseGesture>()
+            .add_systems(
+                Update,
+                arbiter
+                    .in_set(InputPhase::Dispatch)
+                    .in_set(super::OzmuxActiveSet),
+            )
+            .add_systems(
+                Update,
+                forward_tmux_webview_mouse_moves
+                    .in_set(InputPhase::Hover)
+                    .in_set(super::OzmuxActiveSet),
+            )
+            .add_observer(apply::on_tmux_mouse_effects);
     }
 }
 
@@ -876,38 +879,6 @@ fn forward_tmux_webview_mouse_moves(
     }
 }
 
-/// Inserts `-t %<id>` into a `send-keys -X ...` copy-mode command so it targets
-/// a specific pane instead of the client's active pane. Non-`send-keys -X`
-/// commands are returned unchanged.
-fn target_copy_cmd(pane: PaneId, cmd: &str) -> String {
-    match cmd.strip_prefix("send-keys -X") {
-        Some(rest) => format!("send-keys -X -t %{}{}", pane.0, rest),
-        None => cmd.to_string(),
-    }
-}
-
-/// Pane-targeted copy-mode commands to position the copy cursor at `cell`
-/// (relative to the snapshot cursor) and select a word/line. Does NOT include
-/// `show-buffer` — the caller sends that separately to register the reply.
-fn multi_select_commands(
-    kind: MultiSelectKind,
-    snapshot_cursor: (u16, u16),
-    cell: (u16, u16),
-    pane: PaneId,
-) -> Vec<String> {
-    let mut out: Vec<String> = cursor_deltas(snapshot_cursor, cell)
-        .iter()
-        .map(|c| target_copy_cmd(pane, c))
-        .collect();
-    let select = match kind {
-        MultiSelectKind::Word => "send-keys -X select-word",
-        MultiSelectKind::Line => "send-keys -X select-line",
-    };
-    out.push(target_copy_cmd(pane, select));
-    out.push(target_copy_cmd(pane, "send-keys -X copy-selection"));
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1055,43 +1026,6 @@ mod tests {
         assert_eq!(
             app.world().resource::<TmuxMouseGesture>().state,
             GestureState::Idle
-        );
-    }
-
-    #[test]
-    fn multi_select_word_commands() {
-        let cmds = multi_select_commands(MultiSelectKind::Word, (0, 0), (3, 0), PaneId(2));
-        assert_eq!(
-            cmds,
-            vec![
-                "send-keys -X -t %2 -N 3 cursor-right".to_string(),
-                "send-keys -X -t %2 select-word".to_string(),
-                "send-keys -X -t %2 copy-selection".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_inserts_pane_target_after_send_keys_x() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "send-keys -X begin-selection"),
-            "send-keys -X -t %2 begin-selection",
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_preserves_flags_after_send_keys_x() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "send-keys -X -N 3 cursor-right"),
-            "send-keys -X -t %2 -N 3 cursor-right",
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_passes_non_matching_through() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "copy-mode -t %2"),
-            "copy-mode -t %2",
         );
     }
 
