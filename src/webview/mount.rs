@@ -728,6 +728,7 @@ mod tests {
                 owner_surface,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
     }
@@ -746,6 +747,7 @@ mod tests {
                 owner_surface,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
     }
@@ -1921,6 +1923,7 @@ mod tests {
                 owner_surface,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
     }
@@ -1969,6 +1972,7 @@ mod tests {
                 owner_surface: owner,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
 
@@ -1997,6 +2001,7 @@ mod tests {
                 owner_surface: owner,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let r = resolve_mount("INLINEH", owner, &dynamic).expect("inline resolves");
@@ -2018,6 +2023,7 @@ mod tests {
                 owner_surface: terminal,
                 connection_id: 42,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
 
@@ -2121,6 +2127,7 @@ mod tests {
                 owner_surface: surface,
                 connection_id: 7,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         reg.insert(
@@ -2135,6 +2142,7 @@ mod tests {
                 owner_surface: surface,
                 connection_id: 7,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
 
