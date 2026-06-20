@@ -1059,19 +1059,18 @@ impl TerminalHandle {
     /// Stamps the anchor / applies state gates for a buffered OSC 5379 verb
     /// at an `advance_until_terminated` stop point, then forwards the frame.
     fn handle_webview_verb(&mut self, verb: OscWebviewVerb) {
-        // NOTE: only MountInline samples the cursor, so only it needs the
+        // NOTE: only Mount samples the cursor, so only it needs the
         // synchronized-update (CSI ?2026) buffer flushed before the anchor is
         // read. Flushing for the other verbs would force-end an in-flight
         // synchronized update and tear a partial frame for no benefit.
-        if matches!(verb, OscWebviewVerb::MountInline { .. }) && self.parser.sync_bytes_count() > 0
-        {
+        if matches!(verb, OscWebviewVerb::Mount { .. }) && self.parser.sync_bytes_count() > 0 {
             self.parser.stop_sync(&mut self.term);
         }
         // NOTE: maintenance (fold) must run BEFORE the anchor is stamped —
-        // same-chunk "CSI 3 J then mount-inline" depends on this order
+        // same-chunk "CSI 3 J then mount" depends on this order
         // (spec §3).
         self.run_history_maintenance();
-        let anchor = if matches!(verb, OscWebviewVerb::MountInline { .. }) {
+        let anchor = if matches!(verb, OscWebviewVerb::Mount { .. }) {
             let cursor = self.term.grid().cursor.point;
             let col = cursor.column.0 as u16;
             let mode = if self.term.mode().contains(TermMode::ALT_SCREEN) {
@@ -1081,7 +1080,7 @@ impl TerminalHandle {
                 }
             } else {
                 if self.saturated {
-                    tracing::debug!("mount-inline rejected: scrollback saturated");
+                    tracing::debug!("mount rejected: scrollback saturated");
                     return;
                 }
                 AnchorMode::Scrollback {
@@ -1139,7 +1138,7 @@ impl TerminalHandle {
     }
 
     /// Saturation policy (spec §3): once `history_size` reaches the
-    /// scrollback cap, trims become unobservable, so all inline webviews
+    /// scrollback cap, trims become unobservable, so all webviews
     /// are unmounted once and further mounts are rejected until the
     /// history shrinks below the cap again (e.g. CSI 3 J).
     ///
@@ -1150,7 +1149,7 @@ impl TerminalHandle {
         if self.scroll_cap > 0 && history_size >= self.scroll_cap {
             if !self.saturated {
                 self.saturated = true;
-                tracing::debug!("scrollback saturated: unmounting all inline webviews");
+                tracing::debug!("scrollback saturated: unmounting all webviews");
                 self.send_synthetic_unmount_all();
             }
         } else {
@@ -1162,14 +1161,14 @@ impl TerminalHandle {
     /// the saturation first-arrival rule.
     fn send_synthetic_unmount_all(&mut self) {
         let frame = ControlFrame::OscWebview {
-            verb: OscWebviewVerb::UnmountInline {
+            verb: OscWebviewVerb::Unmount {
                 view_id: None,
                 instance_id: None,
             },
             anchor: None,
         };
         if let Err(e) = self.control_tx.send(frame) {
-            tracing::warn!(?e, "control_tx send(synthetic UnmountInline) failed");
+            tracing::warn!(?e, "control_tx send(synthetic Unmount) failed");
         }
     }
 
@@ -2327,17 +2326,17 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_anchor_is_cursor_at_osc_byte_position_not_chunk_end() {
+    fn mount_anchor_is_cursor_at_osc_byte_position_not_chunk_end() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
-        let mut payload = b"\x1b]5379;mount-inline;memo;3;10\x1b\\".to_vec();
+        let mut payload = b"\x1b]5379;mount;memo;3;10\x1b\\".to_vec();
         payload.extend_from_slice(b"\r\n\r\n\r\n");
         h.advance(&payload);
-        let frame = rx.try_recv().expect("MountInline frame");
+        let frame = rx.try_recv().expect("Mount frame");
         let ControlFrame::OscWebview { verb, anchor } = frame else {
             panic!("expected OscWebview, got {frame:?}");
         };
-        assert!(matches!(verb, OscWebviewVerb::MountInline { .. }));
-        let anchor = anchor.expect("MountInline carries an anchor");
+        assert!(matches!(verb, OscWebviewVerb::Mount { .. }));
+        let anchor = anchor.expect("Mount carries an anchor");
         let AnchorMode::Scrollback { line, col } = anchor.mode else {
             panic!("expected scrollback anchor, got {:?}", anchor.mode);
         };
@@ -2349,10 +2348,10 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_anchor_accounts_for_prior_output_in_same_chunk() {
+    fn mount_anchor_accounts_for_prior_output_in_same_chunk() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         let mut payload = b"\r\n\r\n".to_vec();
-        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x07");
+        payload.extend_from_slice(b"\x1b]5379;mount;memo;2;10\x07");
         payload.extend_from_slice(b"\r\n\r\n");
         h.advance(&payload);
         let ControlFrame::OscWebview { anchor, .. } = rx.try_recv().expect("frame") else {
@@ -2365,25 +2364,9 @@ mod tests {
     }
 
     #[test]
-    fn legacy_mount_still_arrives_without_anchor() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
-        h.advance(b"\x1b]5379;mount;dash\x1b\\");
-        let ControlFrame::OscWebview { verb, anchor } = rx.try_recv().expect("frame") else {
-            panic!("expected OscWebview");
-        };
-        assert_eq!(
-            verb,
-            OscWebviewVerb::Mount {
-                view_id: "dash".into()
-            }
-        );
-        assert!(anchor.is_none());
-    }
-
-    #[test]
     fn osc_split_across_two_chunks_still_anchors_correctly() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
-        let full = b"\x1b]5379;mount-inline;memo;3;10\x1b\\";
+        let full = b"\x1b]5379;mount;memo;3;10\x1b\\";
         let (a, b) = full.split_at(10);
         h.advance(a);
         h.advance(b);
@@ -2399,9 +2382,9 @@ mod tests {
     #[test]
     fn two_mounts_in_one_chunk_each_get_their_own_anchor() {
         let (mut h, rx) = handle_with_gate_on(20, 6);
-        let mut payload = b"\x1b]5379;mount-inline;a1;2;10\x1b\\".to_vec();
+        let mut payload = b"\x1b]5379;mount;a1;2;10\x1b\\".to_vec();
         payload.extend_from_slice(b"\r\n\r\n");
-        payload.extend_from_slice(b"\x1b]5379;mount-inline;b2;2;10\x1b\\");
+        payload.extend_from_slice(b"\x1b]5379;mount;b2;2;10\x1b\\");
         h.advance(&payload);
         let first = rx.try_recv().expect("first frame");
         let second = rx.try_recv().expect("second frame");
@@ -2435,11 +2418,11 @@ mod tests {
         let hist_before = h.vi_indicator_snapshot().history_size;
         assert!(hist_before > 0, "precondition: scrollback non-empty");
         h.advance(b"\x1b[3J");
-        let frame = rx.try_recv().expect("synthesized UnmountInline");
+        let frame = rx.try_recv().expect("synthesized Unmount");
         assert_eq!(
             frame,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline {
+                verb: OscWebviewVerb::Unmount {
                     view_id: None,
                     instance_id: None,
                 },
@@ -2454,13 +2437,13 @@ mod tests {
         seed_scrollback(&mut h, 30);
         let hist = h.vi_indicator_snapshot().history_size as u64;
         let mut payload = b"\x1b[3J".to_vec();
-        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        payload.extend_from_slice(b"\x1b]5379;mount;memo;2;10\x1b\\");
         h.advance(&payload);
         let first = rx.try_recv().expect("fold unmount first");
         assert!(matches!(
             first,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline {
+                verb: OscWebviewVerb::Unmount {
                     view_id: None,
                     instance_id: None,
                 },
@@ -2509,7 +2492,7 @@ mod tests {
         assert!(matches!(
             frame,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline {
+                verb: OscWebviewVerb::Unmount {
                     view_id: None,
                     instance_id: None,
                 },
@@ -2533,7 +2516,7 @@ mod tests {
     #[test]
     fn bel_terminated_mount_at_exact_chunk_end_is_drained_in_same_call() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
-        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x07");
+        h.advance(b"\x1b]5379;mount;memo;2;10\x07");
         assert!(
             matches!(rx.try_recv(), Ok(ControlFrame::OscWebview { .. })),
             "verb must be drained in the same advance call even when the chunk ends at BEL"
@@ -2543,7 +2526,7 @@ mod tests {
     #[test]
     fn mount_anchor_col_reflects_text_before_osc_on_same_row() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
-        h.advance(b"ab\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(b"ab\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(a), ..
         } = rx.try_recv().expect("frame")
@@ -2571,7 +2554,7 @@ mod tests {
         assert!(matches!(
             frame,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline {
+                verb: OscWebviewVerb::Unmount {
                     view_id: None,
                     instance_id: None,
                 },
@@ -2582,40 +2565,37 @@ mod tests {
             rx.try_recv().is_err(),
             "unmount-all fires exactly once while saturated"
         );
-        h.advance(b"\x1b]5379;mount-inline;memo;2;5\x1b\\");
-        assert!(
-            rx.try_recv().is_err(),
-            "mount-inline rejected while saturated"
-        );
+        h.advance(b"\x1b]5379;mount;memo;2;5\x1b\\");
+        assert!(rx.try_recv().is_err(), "mount rejected while saturated");
         h.advance(b"\x1b[3J");
         let fold = rx.try_recv().expect("fold unmount on clear");
         assert!(matches!(
             fold,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::UnmountInline {
+                verb: OscWebviewVerb::Unmount {
                     view_id: None,
                     instance_id: None,
                 },
                 ..
             }
         ));
-        h.advance(b"\x1b]5379;mount-inline;memo;2;5\x1b\\");
+        h.advance(b"\x1b]5379;mount;memo;2;5\x1b\\");
         let frame = rx.try_recv().expect("mount accepted after clear");
         assert!(matches!(
             frame,
             ControlFrame::OscWebview {
-                verb: OscWebviewVerb::MountInline { .. },
+                verb: OscWebviewVerb::Mount { .. },
                 anchor: Some(_)
             }
         ));
     }
 
     #[test]
-    fn mount_inline_on_alt_screen_stamps_fixed_screen_anchor() {
+    fn mount_on_alt_screen_stamps_fixed_screen_anchor() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\r\n\r\n");
-        h.advance(b"\x1b]5379;mount-inline;v;3;5\x1b\\");
+        h.advance(b"\x1b]5379;mount;v;3;5\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
             ..
@@ -2634,7 +2614,7 @@ mod tests {
     fn alt_screen_mount_then_primary_uses_scrollback() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         h.advance(b"\x1b[?1049h");
-        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
             ..
@@ -2648,7 +2628,7 @@ mod tests {
             anchor.mode
         );
         h.advance(b"\x1b[?1049l");
-        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
             ..
@@ -2668,7 +2648,7 @@ mod tests {
     #[test]
     fn same_chunk_alt_enter_then_mount_stamps_fixed_screen() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
-        h.advance(b"\x1b[?1049h\x1b]5379;mount-inline;v;3;5\x1b\\");
+        h.advance(b"\x1b[?1049h\x1b]5379;mount;v;3;5\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
             ..
@@ -2691,7 +2671,7 @@ mod tests {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         h.advance(b"\x1b[?1049h");
         h.saturated = true;
-        h.advance(b"\x1b]5379;mount-inline;v;3;5\x1b\\");
+        h.advance(b"\x1b]5379;mount;v;3;5\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
             ..
@@ -2712,7 +2692,7 @@ mod tests {
     fn mount_inside_synchronized_update_samples_flushed_state() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
         let mut payload = b"\x1b[?2026h\r\n\r\n".to_vec();
-        payload.extend_from_slice(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        payload.extend_from_slice(b"\x1b]5379;mount;memo;2;10\x1b\\");
         h.advance(&payload);
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
@@ -2734,7 +2714,7 @@ mod tests {
     fn mount_stamps_next_emit_seq_and_force_flag_bypasses_noop() {
         use bevy::ecs::world::{CommandQueue, World};
         let (mut h, rx) = handle_with_gate_on(20, 5);
-        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
             ..
@@ -2789,7 +2769,7 @@ mod tests {
     fn force_flag_survives_a_no_damage_abort() {
         use bevy::ecs::world::{CommandQueue, World};
         let (mut h, rx) = handle_with_gate_on(20, 5);
-        h.advance(b"\x1b]5379;mount-inline;memo;2;10\x1b\\");
+        h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let _ = rx.try_recv().expect("mount frame");
         assert!(h.test_force_next_emit());
 
@@ -2825,7 +2805,7 @@ mod tests {
     }
 
     #[test]
-    fn drain_forwards_mount_inline_anchor_to_request() {
+    fn drain_forwards_mount_anchor_to_request() {
         use crate::events::OscWebviewRequest;
         use crate::title::TerminalTitle;
         use crate::vt::listener::{AnchorMode, ControlFrame, InlineAnchor, OscWebviewVerb};
@@ -2860,7 +2840,7 @@ mod tests {
 
         inject_tx
             .send(ControlFrame::OscWebview {
-                verb: OscWebviewVerb::MountInline {
+                verb: OscWebviewVerb::Mount {
                     view_id: "memo".into(),
                     rows: 3,
                     cols: 10,
@@ -2892,14 +2872,14 @@ mod tests {
         assert!(
             matches!(
                 req.verb,
-                OscWebviewVerb::MountInline {
+                OscWebviewVerb::Mount {
                     ref view_id,
                     rows: 3,
                     cols: 10,
                     instance_id: None,
                 } if view_id == "memo"
             ),
-            "verb must be MountInline{{memo, 3, 10}}, got {:?}",
+            "verb must be Mount{{memo, 3, 10}}, got {:?}",
             req.verb
         );
         assert_eq!(
@@ -2915,7 +2895,7 @@ mod tests {
     #[test]
     fn c1_osc_introducer_is_rejected_not_parsed() {
         let (mut h, rx) = handle_with_gate_on(20, 5);
-        h.advance(b"\x9d5379;mount-inline;memo;3;10\x9c");
+        h.advance(b"\x9d5379;mount;memo;3;10\x9c");
         assert!(
             rx.try_recv().is_err(),
             "8-bit C1 OSC introducer must not reach the capture (spec section 2: 7-bit ESC ] only)"

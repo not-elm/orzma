@@ -2,7 +2,7 @@
 
 use crate::error::{OzmaError, OzmaResult};
 use crate::handler::BoxedHandler;
-use crate::osc::{clamp_dims, cursor_to, mount_inline, unmount_inline, valid_handle};
+use crate::osc::{clamp_dims, cursor_to, mount, unmount, valid_handle};
 use crate::protocol::{ClientMsg, IncomingCall, RegisterKind, RegisterReply};
 use crate::webview::{SharedWriter, Webview, WebviewHandle};
 use crossbeam_channel::{Sender, bounded};
@@ -397,7 +397,7 @@ fn connect_first_reachable(candidates: &[String]) -> OzmaResult<UnixStream> {
     Err(OzmaError::SocketUnavailable { path, cause })
 }
 
-/// Emits CUP + mount-inline for new/changed placements and unmount for vanished
+/// Emits CUP + mount for new/changed placements and unmount for vanished
 /// handles, updating `state` to the new frame. Degenerate rects are skipped.
 fn flush_placements(
     out: &mut impl Write,
@@ -422,13 +422,13 @@ fn flush_placements(
         };
         current.insert(p.handle.clone(), key);
         if state.last.get(&p.handle) != Some(&key) {
-            let seq = mount_inline(&p.handle, rows, cols)?;
+            let seq = mount(&p.handle, rows, cols)?;
             write!(out, "{}{}", cursor_to(p.area.y, p.area.x), seq)?;
         }
     }
     for handle in state.last.keys() {
         if !current.contains_key(handle) {
-            write!(out, "{}", unmount_inline(handle))?;
+            write!(out, "{}", unmount(handle))?;
         }
     }
     out.flush()?;
@@ -807,7 +807,7 @@ mod tests {
         flush_placements(&mut buf, &mut state, &placements).unwrap();
         let first = String::from_utf8(buf).unwrap();
         assert!(first.contains("\x1b[4;3H"));
-        assert!(first.contains("mount-inline;h1;12;48"));
+        assert!(first.contains("mount;h1;12;48"));
 
         let mut buf2 = Vec::new();
         flush_placements(&mut buf2, &mut state, &placements).unwrap();
@@ -819,11 +819,7 @@ mod tests {
         placements[0].area = rect(2, 3, 50, 12);
         let mut buf3 = Vec::new();
         flush_placements(&mut buf3, &mut state, &placements).unwrap();
-        assert!(
-            String::from_utf8(buf3)
-                .unwrap()
-                .contains("mount-inline;h1;12;50")
-        );
+        assert!(String::from_utf8(buf3).unwrap().contains("mount;h1;12;50"));
     }
 
     #[test]
@@ -837,11 +833,7 @@ mod tests {
 
         let mut buf = Vec::new();
         flush_placements(&mut buf, &mut state, &[]).unwrap();
-        assert!(
-            String::from_utf8(buf)
-                .unwrap()
-                .contains("unmount-inline;h1")
-        );
+        assert!(String::from_utf8(buf).unwrap().contains("unmount;h1"));
     }
 
     #[test]

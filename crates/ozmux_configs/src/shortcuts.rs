@@ -384,8 +384,13 @@ pub struct Bindings {
     /// Paste the system clipboard into the active terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub paste: Option<KeyChord>,
-    /// Releases keyboard focus from a focused inline webview back to the terminal.
+    /// Releases keyboard focus from a focused webview back to the terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub release_webview_focus: Option<KeyChord>,
+    /// Deprecated and ignored: renamed to `release_webview_focus`. Accepted so
+    /// existing configs carrying it still parse under `deny_unknown_fields`.
+    /// Remove after one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub release_inline_focus: Option<KeyChord>,
     /// Opens the tmux session/window picker overlay.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
@@ -452,7 +457,8 @@ impl Default for Bindings {
             focus_workspace_prev: None,
             focus_workspace_next: None,
             paste: Some(parse_default_chord("Cmd+V")),
-            release_inline_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
+            release_webview_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
+            release_inline_focus: None,
             open_picker: Some(parse_default_chord("Cmd+Shift+P")),
             quit: Some(parse_default_chord("Cmd+Q")),
             close_surface: None,
@@ -477,9 +483,9 @@ impl Bindings {
         [
             ("paste", &self.paste, ShortcutAction::Paste),
             (
-                "release-inline-focus",
-                &self.release_inline_focus,
-                ShortcutAction::ReleaseInlineFocus,
+                "release-webview-focus",
+                &self.release_webview_focus,
+                ShortcutAction::ReleaseWebviewFocus,
             ),
             ("open-picker", &self.open_picker, ShortcutAction::OpenPicker),
             ("quit", &self.quit, ShortcutAction::Quit),
@@ -518,8 +524,8 @@ impl Bindings {
 pub enum ShortcutAction {
     /// Paste the system clipboard into the active terminal.
     Paste,
-    /// Releases keyboard focus from a focused inline webview back to the terminal.
-    ReleaseInlineFocus,
+    /// Releases keyboard focus from a focused webview back to the terminal.
+    ReleaseWebviewFocus,
     /// Opens the tmux session/window picker overlay.
     OpenPicker,
     /// Quits the ozmux application.
@@ -739,7 +745,7 @@ mod tests {
     fn bindings_default_has_active_fields_some() {
         let b = Bindings::default();
         assert!(b.paste.is_some());
-        assert!(b.release_inline_focus.is_some());
+        assert!(b.release_webview_focus.is_some());
         assert!(b.open_picker.is_some());
         assert!(b.quit.is_some());
         assert!(b.detach_session.is_some());
@@ -777,7 +783,7 @@ mod tests {
         let err = b.validate_no_conflicts().unwrap_err();
         assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
         assert!(err[0].actions.contains(&"paste"));
-        assert!(err[0].actions.contains(&"release-inline-focus"));
+        assert!(err[0].actions.contains(&"release-webview-focus"));
     }
 
     #[test]
@@ -792,7 +798,7 @@ mod tests {
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Deprecated fields carry
         // `skip_serializing`, so only the active bindings appear here.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-inline-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"open-picker":{"key":"p","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"open-picker":{"key":"p","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
         assert_eq!(json, expected);
     }
 
@@ -853,6 +859,23 @@ copy = \"Cmd+C\"
             5,
             "ignored keys must not enter the active set"
         );
+    }
+
+    #[test]
+    fn deprecated_release_inline_focus_key_still_parses_and_is_ignored() {
+        // Old configs carrying the renamed key must still parse under
+        // deny_unknown_fields, and must not appear in the active binding set.
+        let toml = "[bindings]\nrelease-inline-focus = \"Cmd+E\"\n";
+        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated key must still parse");
+        assert!(
+            parsed
+                .bindings
+                .iter()
+                .all(|(label, _, _)| label != "release-inline-focus"),
+            "deprecated key must not enter the active set"
+        );
+        // The new field falls back to its default chord.
+        assert!(parsed.bindings.release_webview_focus.is_some());
     }
 
     #[test]

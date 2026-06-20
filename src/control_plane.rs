@@ -5,7 +5,7 @@
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, RegisterKind, ServerMsg};
-use crate::webview::inline::InlineWebview;
+use crate::webview::mount::Webview;
 use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
@@ -84,7 +84,7 @@ pub(crate) struct DynamicView {
     pub(crate) entry: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub(crate) interactive: bool,
-    /// The terminal surface a `mount-inline;<handle>` must originate from. The
+    /// The terminal surface a `mount;<handle>` must originate from. The
     /// registering program's PTY env token resolved to this surface, so only
     /// that surface may mount the handle (tighter than the spec's pane wording).
     pub(crate) owner_surface: Entity,
@@ -96,7 +96,7 @@ pub(crate) struct DynamicView {
     pub(crate) forward_keys: Vec<NormalizedChord>,
 }
 
-/// Stamped on a Tier 1 inline webview entity at mount: the control-plane
+/// Stamped on a Tier 1 webview entity at mount: the control-plane
 /// connection that registered it (back-channel routing target) and its handle.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WebviewOwner {
@@ -286,7 +286,7 @@ impl ConnectionWriters {
 
 /// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded) and
 /// lowercased. The alphabet `a-z2-7` is a subset of the OSC `view_id` charset
-/// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount-inline;<id>`.
+/// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount;<id>`.
 ///
 /// # Invariants
 /// The output MUST be lowercase. A handle is used as the host of the
@@ -415,7 +415,7 @@ fn apply_control_events(
     mut focused: Option<ResMut<FocusedWebview>>,
     events: Option<Res<ControlEvents>>,
     dyn_assets: Res<WebviewAssetRegistryRes>,
-    inline: Query<(Entity, &InlineWebview)>,
+    webviews: Query<(Entity, &Webview)>,
     child_of: Query<&ChildOf>,
     non_interactive: Query<(), With<NonInteractive>>,
 ) {
@@ -464,14 +464,14 @@ fn apply_control_events(
                 } else {
                     vec![]
                 };
-                despawn_mounted(&mut commands, &inline, &removed);
+                despawn_mounted(&mut commands, &webviews, &removed);
             }
             ControlEvent::Disconnect { connection_id } => {
                 let removed = registry.remove_by_connection(connection_id);
                 for h in &removed {
                     dyn_assets.0.remove(h);
                 }
-                despawn_mounted(&mut commands, &inline, &removed);
+                despawn_mounted(&mut commands, &webviews, &removed);
                 for (webview, page_req) in rpc.drain_connection(connection_id) {
                     let payload = serde_json::json!({ "reqId": page_req, "ok": false, "error": "owner_disconnected" });
                     commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
@@ -512,7 +512,7 @@ fn apply_control_events(
                     continue;
                 }
                 let frame = serde_json::json!({ "event": event, "payload": payload });
-                for (entity, view) in &inline {
+                for (entity, view) in &webviews {
                     if view.view_id == handle {
                         commands.trigger(HostEmitEvent::new(entity, "ozma.event", &frame));
                     }
@@ -536,7 +536,7 @@ fn apply_control_events(
                             tracing::debug!(handle = %h, "focus op for unowned handle, dropping");
                             continue;
                         }
-                        let target = inline.iter().find(|(entity, view)| {
+                        let target = webviews.iter().find(|(entity, view)| {
                             view.view_id == h
                                 && view.instance_id.as_deref() == instance.as_deref()
                                 && child_of.get(*entity).map(|c| c.parent()) == Ok(owner_surface)
@@ -566,10 +566,10 @@ fn apply_control_events(
 
 fn despawn_mounted(
     commands: &mut Commands,
-    inline: &Query<(Entity, &InlineWebview)>,
+    webviews: &Query<(Entity, &Webview)>,
     removed: &[String],
 ) {
-    for (entity, view) in inline {
+    for (entity, view) in webviews {
         if removed.contains(&view.view_id) {
             commands.entity(entity).despawn();
         }
@@ -1118,7 +1118,7 @@ mod apply_tests {
 
     #[test]
     fn disconnect_despawns_mounted_webviews_for_its_handles() {
-        use crate::webview::inline::InlineWebview;
+        use crate::webview::mount::Webview;
         let mut app = App::new();
         let dyn_assets = WebviewAssetRegistry::default();
         let mut reg = DynamicRegistry::default();
@@ -1136,7 +1136,7 @@ mod apply_tests {
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let mounted = app
             .world_mut()
-            .spawn(InlineWebview {
+            .spawn(Webview {
                 view_id: "HMOUNT".into(),
                 instance_id: None,
                 slot: 0,
@@ -1277,7 +1277,7 @@ mod apply_tests {
                 forward_keys: vec![],
             },
         );
-        app.world_mut().spawn(InlineWebview {
+        app.world_mut().spawn(Webview {
             view_id: "disp".into(),
             instance_id: None,
             slot: 0,
@@ -1372,7 +1372,7 @@ mod apply_tests {
         let mounted = app
             .world_mut()
             .spawn((
-                InlineWebview {
+                Webview {
                     view_id: "H".into(),
                     instance_id: None,
                     slot: 0,
@@ -1451,7 +1451,7 @@ mod focus_tests {
             .world_mut()
             .spawn((
                 ChildOf(surface),
-                InlineWebview {
+                Webview {
                     view_id: "h1".into(),
                     instance_id: None,
                     slot: 0,
@@ -1517,7 +1517,7 @@ mod focus_tests {
         // this assertion would FAIL.
         app.world_mut().spawn((
             ChildOf(surface),
-            InlineWebview {
+            Webview {
                 view_id: "h1".into(),
                 instance_id: None,
                 slot: 0,
@@ -1572,7 +1572,7 @@ mod focus_tests {
             .world_mut()
             .spawn((
                 ChildOf(surface_a),
-                InlineWebview {
+                Webview {
                     view_id: "ha".into(),
                     instance_id: None,
                     slot: 0,
@@ -1682,7 +1682,7 @@ mod focus_tests {
             .world_mut()
             .spawn((
                 ChildOf(surface),
-                InlineWebview {
+                Webview {
                     view_id: "h1".into(),
                     instance_id: None,
                     slot: 0,

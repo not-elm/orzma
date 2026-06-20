@@ -107,7 +107,7 @@ const GLYPH_NONE: u32 = 0xFFFFFFFFu;
 // blends toward `params.inactive_tint.rgb` by `params.inactive_tint.a`; alpha
 // is preserved. Active pane => `inactive_tint.a == 0.0` (no-op). Applied only
 // at background-establishment points (before glyphs/overlays paint), so text
-// and inline-webview overlays keep their full color. Runs in LINEAR space —
+// and webview overlays keep their full color. Runs in LINEAR space —
 // `inactive_tint.rgb` is uploaded pre-linearized by the host.
 fn tint_bg(c: vec4<f32>) -> vec4<f32> {
     // NOTE: alpha=0 means transparent (terminal default bg sentinel); preserve
@@ -156,7 +156,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 // inline overlays → cell background → primary glyph → left-neighbor
 // overdraw → text decorations → cursor → selection.
 //
-// The pane background (fallback) is the base layer. Inline webview overlays
+// The pane background (fallback) is the base layer. Webview overlays
 // composite over it next. The cell's own background then composites OVER the
 // overlay result: a transparent cell background (the terminal default) lets
 // the webview show through, while an opaque cell background (set by a TUI
@@ -413,7 +413,7 @@ fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
 // linearizes on read, so values mix in linear space with no manual
 // conversion. The cell's own background composites OVER this result in
 // `paint_grid_cell`, so an opaque widget background occludes the webview.
-// Glyphs paint last, so terminal text sits on top of an inline webview.
+// Glyphs paint last, so terminal text sits on top of a webview.
 //
 // uv derives from the UNCLIPPED rect (rect.x may be negative when the rect
 // is partially scrolled above the viewport), so partial visibility never

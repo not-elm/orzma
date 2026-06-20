@@ -120,7 +120,7 @@ pub(crate) enum ServerMsg {
     Ok {
         /// Always `true`.
         ok: bool,
-        /// The opaque handle to mount via `OSC mount-inline;<handle>`.
+        /// The opaque handle to mount via `OSC mount;<handle>`.
         handle: String,
     },
     /// A rejected request.
@@ -155,7 +155,7 @@ impl ServerMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub(crate) enum PushMsg {
-    /// Fired when the inline webview first composites (`active: true`) or is
+    /// Fired when the webview first composites (`active: true`) or is
     /// unmounted after compositing (`active: false`).
     Compositing {
         /// The registered handle whose compositing state changed.

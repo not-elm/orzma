@@ -3,7 +3,7 @@
 //! step with the active pane, and routes the `ozma.call` frames the page bridge
 //! emits to the registering program over the control socket.
 
-use super::inline::InlineWebview;
+use super::mount::Webview;
 use super::osc::NonInteractive;
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
 use crate::system_set::OzmuxSystems;
@@ -84,11 +84,11 @@ impl Plugin for RenderPlugin {
 /// CEF focus when `FocusedWebview` becomes `None`).
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
-/// inline webview child (`InlineWebview`) whose `ChildOf` parent is a live
+/// webview child (`Webview`) whose `ChildOf` parent is a live
 /// `TmuxPane` — active or not — that inline focus stands (spec §7, single
 /// focus source). This covers click-granted focus and the app-declared focus
 /// set via the control-plane `SetFocus` op, and means switching the active
-/// pane does NOT clear an inline webview's focus: the webview keeps keyboard
+/// pane does NOT clear a webview's focus: the webview keeps keyboard
 /// focus until its child despawns (or focus moves off it), at which point the
 /// sync falls through to the clear path below, which maps the active terminal
 /// pane to `None`.
@@ -97,16 +97,16 @@ pub(crate) fn sync_focused_webview(
     active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
-    inline_parents: Query<&ChildOf, With<InlineWebview>>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     tmux_panes: Query<(), With<TmuxPane>>,
 ) {
-    // NOTE: a despawned inline child fails `inline_parents.get` here and so
+    // NOTE: a despawned inline child fails `webview_parents.get` here and so
     // falls through to the clear path below, which resolves to `None` and
     // clears it — that fall-through is the GC for tmux-pane inline focus; a
     // later edit that short-circuits this arm before the despawn check would
     // leak focus.
     if let Some(child) = focused.0
-        && let Ok(parent) = inline_parents.get(child)
+        && let Ok(parent) = webview_parents.get(child)
         && tmux_panes.contains(parent.parent())
     {
         return;
@@ -350,7 +350,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "v".into(),
                     instance_id: None,
                     slot: 0,
@@ -394,7 +394,7 @@ mod tests {
             .world_mut()
             .spawn((
                 ChildOf(pane),
-                InlineWebview {
+                Webview {
                     view_id: "v".into(),
                     instance_id: None,
                     slot: 0,
