@@ -9,7 +9,7 @@ use crate::control_plane::{
     ConnectionWriters, DynSource, DynamicRegistry, NormalizedChord, PushMsg, WebviewOwner,
 };
 use crate::osc_webview::NonInteractive;
-use crate::webview_render::preload::build_dynamic_preload;
+use crate::webview_render::preload::{build_dynamic_preload, build_url_preload};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
@@ -154,6 +154,9 @@ pub(crate) struct ResolvedWebviewMount {
     /// the registration is bridged; a display-only `Url` view leaves it `None`,
     /// which is the gate that also withholds the preload at mount.
     pub(crate) owner: Option<(u64, String)>,
+    /// Whether the resolved source is a remote `Url` (vs `Dir`/`Inline`). A
+    /// bridged URL view additionally receives the link-hint preload.
+    pub(crate) is_url: bool,
     /// The normalized passthrough chords copied from the registration, stamped
     /// as a `PassthroughKeys` component so the focused-key systems read them off
     /// the webview entity without a registry lookup (design spec §C).
@@ -181,6 +184,7 @@ pub(crate) fn resolve_mount(
         DynSource::Inline(_) => format!("ozma-dyn://{id}/index.html"),
         DynSource::Url { url, .. } => url.clone(),
     };
+    let is_url = matches!(view.source, DynSource::Url { .. });
     let owner = view
         .source
         .is_bridged()
@@ -189,6 +193,7 @@ pub(crate) fn resolve_mount(
         url: Some(url),
         interactive: view.interactive,
         owner,
+        is_url,
         passthrough: view.passthrough.clone(),
     })
 }
@@ -293,8 +298,13 @@ pub(crate) fn mount_inline(
     // remains the empty default from WebviewSource #[require]) and no
     // WebviewOwner.
     if let Some((connection_id, handle)) = resolved.owner {
+        let preload = if resolved.is_url {
+            build_url_preload()
+        } else {
+            build_dynamic_preload()
+        };
         params.commands.entity(webview).insert((
-            build_dynamic_preload(),
+            preload,
             WebviewOwner {
                 connection_id,
                 handle,
