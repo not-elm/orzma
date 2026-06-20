@@ -272,6 +272,88 @@ def embed_cef(cfg: BundleConfig) -> None:
         print(f"  Created {helper_name}.app")
 
 
+def strip_xattrs(cfg: BundleConfig) -> None:
+    run(xattr_strip_argv(cfg.app_path))
+
+
+def codesign_bundle(cfg: BundleConfig) -> None:
+    hardened = cfg.sign_identity != "-"
+    entitlements = (REPO_ROOT / "build" / "macos" / "Entitlements.plist") if hardened else None
+    cef_fw = cfg.app_path / "Contents" / "Frameworks" / "Chromium Embedded Framework.framework"
+
+    libs = cef_fw / "Libraries"
+    if libs.is_dir():
+        for dylib in sorted(libs.glob("*.dylib")):
+            run(codesign_argv(cfg.sign_identity, dylib, hardened=hardened, entitlements=entitlements))
+    run(codesign_argv(cfg.sign_identity, cef_fw / "Chromium Embedded Framework",
+                      hardened=hardened, entitlements=entitlements))
+    run(codesign_argv(cfg.sign_identity, cef_fw, hardened=hardened, entitlements=entitlements))
+
+    frameworks = cfg.app_path / "Contents" / "Frameworks"
+    for suffix in HELPER_SUFFIXES:
+        helper_app = frameworks / f"{cfg.bin_name} Helper{suffix}.app"
+        run(codesign_argv(cfg.sign_identity, helper_app, hardened=hardened, entitlements=entitlements))
+
+    run(codesign_argv(cfg.sign_identity, cfg.app_path, hardened=hardened, entitlements=entitlements))
+    run(codesign_verify_argv(cfg.app_path))
+
+
+def notarize(cfg: BundleConfig) -> None:
+    apple_id = os.environ.get("APPLE_ID")
+    team_id = os.environ.get("APPLE_TEAM_ID")
+    password = os.environ.get("APPLE_APP_PASSWORD")
+    if not (apple_id and team_id and password):
+        print("==> notarization credentials absent; skipping notarize")
+        return
+    tmp_zip = cfg.out_dir / "notarize-upload.zip"
+    if tmp_zip.exists():
+        tmp_zip.unlink()
+    run(ditto_zip_argv(cfg.app_path, tmp_zip))
+    run(notarytool_submit_argv(tmp_zip, apple_id, team_id, password))
+    run(stapler_argv(cfg.app_path))
+    tmp_zip.unlink(missing_ok=True)
+
+
+def package(cfg: BundleConfig) -> str:
+    dest = cfg.zip_path
+    if dest.exists():
+        dest.unlink()
+    run(ditto_zip_argv(cfg.app_path, dest))
+    digest = compute_sha256(dest)
+    (dest.parent / (dest.name + ".sha256")).write_text(f"{digest}  {dest.name}\n")
+    return digest
+
+
+def cargo_build(cfg: BundleConfig) -> None:
+    run(cargo_build_argv(cfg.target_triple, CARGO_PROFILE))
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_arg_parser().parse_args(argv)
+    cfg = resolve_config(args)
+    cfg.out_dir.mkdir(parents=True, exist_ok=True)
+
+    if not args.skip_build:
+        cargo_build(cfg)
+    verify_prerequisites(cfg)
+    assemble_app(cfg)
+    embed_cef(cfg)
+    strip_xattrs(cfg)
+    if not cfg.no_sign:
+        codesign_bundle(cfg)
+    if cfg.notarize:
+        notarize(cfg)
+    digest = package(cfg)
+
+    print(f"version={cfg.version}")
+    print(f"sha256={digest}")
+    print(f"artifact={cfg.zip_path}")
+
+
+if __name__ == "__main__":
+    main()
+
+
 @dataclass
 class BundleConfig:
     version: str

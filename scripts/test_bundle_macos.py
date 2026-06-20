@@ -237,5 +237,47 @@ class AssembleAndEmbed(unittest.TestCase):
             self.assertTrue(hp["LSUIElement"])
 
 
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
+class EndToEnd(unittest.TestCase):
+    def _macho(self, dest: Path) -> None:
+        # NOTE: shutil.copy (not copy2) avoids PermissionError from SIP-restricted flags on /usr/bin/true
+        shutil.copy("/usr/bin/true", dest)
+        dest.chmod(0o755)
+
+    def _fake_cef(self, root: Path) -> Path:
+        fw = root / "Chromium Embedded Framework.framework"
+        (fw / "Libraries").mkdir(parents=True)
+        self._macho(fw / "Chromium Embedded Framework")
+        self._macho(fw / "Libraries" / "libEGL.dylib")
+        return fw
+
+    def test_main_adhoc_end_to_end(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            self._macho(d / "ozmux-gui")
+            self._macho(d / "helper")
+            fw = self._fake_cef(d)
+            out = d / "out"
+            bm.main([
+                "--skip-build", "--version", "9.9.9",
+                "--bin", str(d / "ozmux-gui"),
+                "--cef-framework", str(fw),
+                "--helper-bin", str(d / "helper"),
+                "--out-dir", str(out),
+            ])
+            zip_path = out / "ozmux-9.9.9-arm64.zip"
+            self.assertTrue(zip_path.is_file())
+            sha_file = out / "ozmux-9.9.9-arm64.zip.sha256"
+            self.assertTrue(sha_file.is_file())
+            self.assertEqual(bm.compute_sha256(zip_path), sha_file.read_text().split()[0])
+            # ad-hoc signature must verify
+            import subprocess
+            subprocess.run(
+                ["codesign", "--verify", "--deep", "--strict", str(out / "ozmux.app")],
+                check=True,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
