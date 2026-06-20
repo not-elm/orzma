@@ -430,32 +430,43 @@ fn handle_picker_input(
                     .get(picker.selected)
                     .copied()
                     .unwrap_or(PickerRow::NewSession);
-                if connection.client().is_some() {
-                    apply_switch(
-                        &mut connection,
-                        &mut state,
-                        &configs,
-                        control.as_deref(),
-                        &picker,
-                        row,
-                    );
-                } else {
-                    let attached = apply_attach(
-                        &mut connection,
-                        &mut state,
-                        &configs,
-                        control.as_deref(),
-                        &picker,
-                        row,
-                    );
-                    if should_enter_ozmux(attached, current_mode.get()) {
-                        next_mode.set(AppMode::Ozmux);
-                    }
-                }
+                activate_row(
+                    &mut connection,
+                    &mut state,
+                    &mut next_mode,
+                    &configs,
+                    control.as_deref(),
+                    &picker,
+                    current_mode.get(),
+                    row,
+                );
                 picker.open = false;
                 break;
             }
             _ => {}
+        }
+    }
+}
+
+// NOTE: mirrors the keyboard Enter arm exactly — used by both the Enter handler
+// and the mouse click handler so the two paths cannot diverge. Leaves
+// `picker.open` to the caller.
+fn activate_row(
+    connection: &mut TmuxConnection,
+    state: &mut ConnectionState,
+    next_mode: &mut NextState<AppMode>,
+    configs: &OzmuxConfigsResource,
+    control: Option<&ControlPlaneHandle>,
+    picker: &SessionPicker,
+    current_mode: &AppMode,
+    row: PickerRow,
+) {
+    if connection.client().is_some() {
+        apply_switch(connection, state, configs, control, picker, row);
+    } else {
+        let attached = apply_attach(connection, state, configs, control, picker, row);
+        if should_enter_ozmux(attached, current_mode) {
+            next_mode.set(AppMode::Ozmux);
         }
     }
 }
