@@ -21,7 +21,7 @@ use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
-use crate::webview::inline::{Webview, webview_hit_at, webview_local_dip};
+use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;

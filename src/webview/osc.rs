@@ -2,7 +2,7 @@
 //! at the requesting terminal's cursor (the `Mount` / `Unmount`
 //! verbs).
 
-use super::inline::{WebviewMountContext, WebviewParams, mount, unmount};
+use super::mount::{WebviewMountContext, WebviewParams, mount, unmount};
 use crate::control_plane::DynamicRegistry;
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};

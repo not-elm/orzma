@@ -5,7 +5,7 @@
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
 use crate::control_plane::protocol::{HostKeyChord, RegisterKind, ServerMsg};
-use crate::webview::inline::Webview;
+use crate::webview::mount::Webview;
 use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
@@ -1118,7 +1118,7 @@ mod apply_tests {
 
     #[test]
     fn disconnect_despawns_mounted_webviews_for_its_handles() {
-        use crate::webview::inline::Webview;
+        use crate::webview::mount::Webview;
         let mut app = App::new();
         let dyn_assets = WebviewAssetRegistry::default();
         let mut reg = DynamicRegistry::default();

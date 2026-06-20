@@ -3,7 +3,7 @@
 //! step with the active pane, and routes the `ozma.call` frames the page bridge
 //! emits to the registering program over the control socket.
 
-use super::inline::Webview;
+use super::mount::Webview;
 use super::osc::NonInteractive;
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
 use crate::system_set::OzmuxSystems;

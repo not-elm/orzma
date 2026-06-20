@@ -9,7 +9,7 @@
 use crate::input::InputPhase;
 use crate::ozma::AppMode;
 use crate::ui::copy_mode::CopyModeState;
-use crate::webview::inline::{Webview, focused_webview_of};
+use crate::webview::mount::{Webview, focused_webview_of};
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;

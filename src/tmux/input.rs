@@ -16,7 +16,7 @@ use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
-use crate::webview::inline::{Webview, PassthroughKeys, focused_webview_of, webview_hit_at};
+use crate::webview::mount::{Webview, PassthroughKeys, focused_webview_of, webview_hit_at};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;

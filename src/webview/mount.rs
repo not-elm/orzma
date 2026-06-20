@@ -1,4 +1,4 @@
-//! Inline webviews: `ChildOf` children of a terminal surface that render a
+//! Webview mount module: `ChildOf` children of a terminal surface that render a
 //! registered view into the terminal's text flow. This module owns the
 //! components, the mount/unmount policy executed by the `Mount` /
 //! `Unmount` arms of `osc::on_osc_webview_request`, and the
