@@ -37,9 +37,17 @@ mod tests {
     }
 
     #[test]
-    fn parses_value() {
-        let cfg: KeyboardConfig = toml::from_str(r#"option_as_alt = "both""#).unwrap();
-        assert_eq!(cfg.option_as_alt, OptionAsAlt::Both);
+    fn parses_each_lowercase_value() {
+        let cases = [
+            ("none", OptionAsAlt::None),
+            ("left", OptionAsAlt::Left),
+            ("right", OptionAsAlt::Right),
+            ("both", OptionAsAlt::Both),
+        ];
+        for (s, expected) in cases {
+            let cfg: KeyboardConfig = toml::from_str(&format!(r#"option_as_alt = "{s}""#)).unwrap();
+            assert_eq!(cfg.option_as_alt, expected, "value {s:?} should parse");
+        }
     }
 
     #[test]

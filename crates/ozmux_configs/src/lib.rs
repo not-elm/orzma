@@ -202,7 +202,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn empty_raw_returns_defaults() {
+    fn empty_toml_returns_default_bindings() {
         let c = parse("");
         assert_eq!(
             c.shortcuts.bindings,
@@ -224,9 +224,7 @@ mod integration_tests {
 [shortcuts.bindings]
 resize-pane-down = "Cmd+Shift+J"
 "#;
-        let err = toml::from_str::<OzmuxConfigs>(toml_str)
-            .err()
-            .expect("expected parse error for unknown binding field");
+        let err = toml::from_str::<OzmuxConfigs>(toml_str).unwrap_err();
         let msg = err.to_string();
         assert!(
             msg.contains("resize-pane-down") || msg.contains("unknown field"),
