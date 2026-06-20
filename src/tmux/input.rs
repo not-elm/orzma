@@ -878,7 +878,7 @@ mod tests {
     use ozmux_tmux::PromptKind;
 
     #[test]
-    fn scroll_command_up_is_targeted_and_repeated() {
+    fn scroll_up_is_targeted_and_repeated() {
         assert_eq!(
             Scroll {
                 target: "%3",
@@ -1030,7 +1030,7 @@ mod tests {
     }
 
     #[test]
-    fn scroll_command_down_is_targeted_and_repeated() {
+    fn scroll_down_is_targeted_and_repeated() {
         assert_eq!(
             Scroll {
                 target: "%3",

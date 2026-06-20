@@ -5,7 +5,9 @@ use tmux_control_parser::WindowId;
 
 /// `refresh-client -C <cols>,<rows>` — declares this client's global cell size.
 pub struct RefreshClient {
+    /// Terminal width in columns.
     pub cols: u16,
+    /// Terminal height in rows.
     pub rows: u16,
 }
 impl TmuxCommand for RefreshClient {
@@ -16,8 +18,11 @@ impl TmuxCommand for RefreshClient {
 
 /// `refresh-client -C @<win>:<cols>x<rows>` — per-window size (tmux ≥ 3.4).
 pub struct WindowRefreshClient {
+    /// Target window id.
     pub win: WindowId,
+    /// Window width in columns.
     pub cols: u16,
+    /// Window height in rows.
     pub rows: u16,
 }
 impl TmuxCommand for WindowRefreshClient {
@@ -35,8 +40,11 @@ impl TmuxCommand for WindowRefreshClient {
 ///
 /// tmux sets the session's `window-size` option to `manual` as a side effect.
 pub struct ResizeWindow {
+    /// Target window id.
     pub win: WindowId,
+    /// Window width in columns.
     pub cols: u16,
+    /// Window height in rows.
     pub rows: u16,
 }
 impl TmuxCommand for ResizeWindow {

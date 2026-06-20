@@ -635,7 +635,7 @@ mod tests {
     use tmux_control_parser::{Cell, CellDims, SplitDir};
 
     #[test]
-    fn pin_command_selects_form_by_capability() {
+    fn pin_selects_form_by_capability() {
         use ozmux_tmux::WindowId;
         assert_eq!(
             Pin {

@@ -6,7 +6,9 @@ use tmux_control::TmuxCommand;
 
 /// `set-environment <key> <value>` — sets a var on the control client's current session.
 pub struct SetEnvironment<'a> {
+    /// Environment variable name.
     pub key: &'a str,
+    /// Environment variable value.
     pub value: &'a str,
 }
 impl TmuxCommand for SetEnvironment<'_> {
@@ -17,8 +19,11 @@ impl TmuxCommand for SetEnvironment<'_> {
 
 /// `set-environment -t <session> <key> <value>` — sets a var on a specific session.
 pub struct SetEnvironmentInSession<'a> {
+    /// Target session name.
     pub session: &'a str,
+    /// Environment variable name.
     pub key: &'a str,
+    /// Environment variable value.
     pub value: &'a str,
 }
 impl TmuxCommand for SetEnvironmentInSession<'_> {

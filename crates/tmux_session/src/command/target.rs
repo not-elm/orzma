@@ -8,6 +8,7 @@ use tmux_control_parser::{PaneId, SessionId, WindowId};
 
 /// `select-window -t @<id>` — switches the client's active window.
 pub struct SelectWindow {
+    /// Target window id.
     pub id: WindowId,
 }
 impl TmuxCommand for SelectWindow {
@@ -18,6 +19,7 @@ impl TmuxCommand for SelectWindow {
 
 /// `select-pane -t %<id>` — focuses a pane.
 pub struct SelectPane {
+    /// Target pane id.
     pub id: PaneId,
 }
 impl TmuxCommand for SelectPane {
@@ -28,6 +30,7 @@ impl TmuxCommand for SelectPane {
 
 /// `switch-client -t <name>` — repoints the attached control client at another session.
 pub struct SwitchClient<'a> {
+    /// Target session name.
     pub name: &'a str,
 }
 impl TmuxCommand for SwitchClient<'_> {
@@ -38,7 +41,9 @@ impl TmuxCommand for SwitchClient<'_> {
 
 /// `rename-window -t @<id> -- <name>` (name tmux-quoted; `--` guards a leading `-`).
 pub struct RenameWindow<'a> {
+    /// Target window id.
     pub id: WindowId,
+    /// New window name.
     pub name: &'a str,
 }
 impl TmuxCommand for RenameWindow<'_> {
@@ -49,7 +54,9 @@ impl TmuxCommand for RenameWindow<'_> {
 
 /// `rename-session -t $<id> -- <name>` (name tmux-quoted).
 pub struct RenameSession<'a> {
+    /// Target session id.
     pub id: SessionId,
+    /// New session name.
     pub name: &'a str,
 }
 impl TmuxCommand for RenameSession<'_> {
@@ -60,7 +67,9 @@ impl TmuxCommand for RenameSession<'_> {
 
 /// `resize-pane -t %<id> -x <width>` (absolute, idempotent).
 pub struct ResizePaneX {
+    /// Target pane id.
     pub id: PaneId,
+    /// Absolute width in columns.
     pub width: u32,
 }
 impl TmuxCommand for ResizePaneX {
@@ -71,7 +80,9 @@ impl TmuxCommand for ResizePaneX {
 
 /// `resize-pane -t %<id> -y <height>` (absolute, idempotent).
 pub struct ResizePaneY {
+    /// Target pane id.
     pub id: PaneId,
+    /// Absolute height in rows.
     pub height: u32,
 }
 impl TmuxCommand for ResizePaneY {
