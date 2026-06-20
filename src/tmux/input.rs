@@ -37,9 +37,8 @@ use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use ozmux_tmux::{
     ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
-    KeyMods, PromptKind, ShowBuffer, TmuxConnection, TmuxPane, TmuxSession, TmuxWindow,
-    bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward, send_bytes_command,
-    send_pane_keys_command,
+    KeyMods, PromptKind, SendBytes, SendPaneKeys, ShowBuffer, TmuxCommand, TmuxConnection,
+    TmuxPane, TmuxSession, TmuxWindow, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
@@ -248,7 +247,11 @@ fn forward_keys_to_tmux(
                 for action in actions {
                     let cmd = match action {
                         Forwarded::Run(cmd) => cmd,
-                        Forwarded::Keys(names) => send_pane_keys_command(target, &names),
+                        Forwarded::Keys(names) => SendPaneKeys {
+                            pane: target,
+                            names: &names,
+                        }
+                        .into_raw_command(),
                     };
                     if let Err(e) = handle.send(&cmd) {
                         tracing::warn!(?e, "passthrough forward failed");
@@ -303,7 +306,10 @@ fn forward_keys_to_tmux(
                     }
                     let bytes = build_paste_bytes(&text, false);
                     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
-                        if let Err(e) = client.handle().send(&send_bytes_command(target, chunk)) {
+                        if let Err(e) = client.handle().send(SendBytes {
+                            pane: target,
+                            bytes: chunk,
+                        }) {
                             tracing::warn!(?e, "paste send failed");
                             break;
                         }
@@ -424,7 +430,11 @@ fn forward_keys_to_tmux(
         let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
         let cmd = match action {
             Forwarded::Run(command) => command,
-            Forwarded::Keys(names) => send_pane_keys_command(target, &names),
+            Forwarded::Keys(names) => SendPaneKeys {
+                pane: target,
+                names: &names,
+            }
+            .into_raw_command(),
         };
         if let Err(e) = handle.send(&cmd) {
             tracing::warn!(?e, "tmux forward send failed");

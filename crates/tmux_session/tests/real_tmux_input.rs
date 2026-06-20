@@ -5,8 +5,7 @@
 
 use bevy::prelude::*;
 use ozmux_tmux::{
-    ConnectionState, PaneOutput, TmuxConnection, TmuxPane, TmuxSessionPlugin,
-    send_pane_keys_command,
+    ConnectionState, PaneOutput, SendPaneKeys, TmuxConnection, TmuxPane, TmuxSessionPlugin,
 };
 use std::time::{Duration, Instant};
 use tmux_control::TmuxServer;
@@ -91,7 +90,10 @@ fn key_a_echoes_back_from_real_tmux() {
     let (mut app, target) = attach_and_project("echo");
     let handle = handle_of(&app);
     handle
-        .send(&send_pane_keys_command(&target, &["a".to_string()]))
+        .send(SendPaneKeys {
+            pane: &target,
+            names: &["a".to_string()],
+        })
         .expect("send-keys a");
     let echoed = pump_until(&mut app, 5, |app| {
         app.world().resource::<Captured>().0.contains(&b'a')
@@ -119,7 +121,10 @@ fn arrow_up_recalls_previous_command_via_pane_send() {
 
     // Forward ArrowUp exactly as the production input plugin does.
     handle
-        .send(&send_pane_keys_command(&target, &["Up".to_string()]))
+        .send(SendPaneKeys {
+            pane: &target,
+            names: &["Up".to_string()],
+        })
         .expect("forward Up");
     let recalled = pump_until(&mut app, 3, |app| {
         contains(&app.world().resource::<Captured>().0, b"echo OZMUXHIST")
