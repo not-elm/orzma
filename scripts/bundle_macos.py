@@ -71,6 +71,59 @@ def build_helper_plist(name: str, bundle_id: str) -> dict:
     }
 
 
+def cargo_build_argv(triple: str, profile: str) -> list[str]:
+    return ["cargo", "build", "--profile", profile, "--target", triple, "--locked"]
+
+
+def lipo_archs_argv(path: Path) -> list[str]:
+    return ["lipo", "-archs", str(path)]
+
+
+def parse_lipo_archs(output: str) -> set[str]:
+    return set(output.split())
+
+
+def codesign_argv(identity: str, path: Path, *, hardened: bool, entitlements: Path | None) -> list[str]:
+    argv = ["codesign", "--force", "--sign", identity]
+    if hardened:
+        argv += ["--options", "runtime"]
+    if entitlements is not None:
+        argv += ["--entitlements", str(entitlements)]
+    argv.append(str(path))
+    return argv
+
+
+def codesign_verify_argv(path: Path) -> list[str]:
+    return ["codesign", "--verify", "--deep", "--strict", str(path)]
+
+
+def xattr_strip_argv(path: Path) -> list[str]:
+    return ["xattr", "-cr", str(path)]
+
+
+def ditto_zip_argv(app: Path, dest: Path) -> list[str]:
+    return ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", str(app), str(dest)]
+
+
+def notarytool_submit_argv(zip_path: Path, apple_id: str, team_id: str, password: str) -> list[str]:
+    return [
+        "xcrun", "notarytool", "submit", str(zip_path),
+        "--apple-id", apple_id, "--team-id", team_id, "--password", password, "--wait",
+    ]
+
+
+def stapler_argv(app: Path) -> list[str]:
+    return ["xcrun", "stapler", "staple", str(app)]
+
+
+def compute_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 @dataclass
 class BundleConfig:
     version: str

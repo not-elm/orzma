@@ -77,5 +77,68 @@ class PlistLogic(unittest.TestCase):
         self.assertTrue(p["LSUIElement"])
 
 
+class CommandBuilders(unittest.TestCase):
+    def test_cargo_build_argv(self):
+        self.assertEqual(
+            bm.cargo_build_argv("aarch64-apple-darwin", "dist"),
+            ["cargo", "build", "--profile", "dist", "--target", "aarch64-apple-darwin", "--locked"],
+        )
+
+    def test_parse_lipo_archs(self):
+        self.assertEqual(bm.parse_lipo_archs("x86_64 arm64\n"), {"x86_64", "arm64"})
+
+    def test_codesign_argv_adhoc(self):
+        argv = bm.codesign_argv("-", Path("/tmp/a.app"), hardened=False, entitlements=None)
+        self.assertEqual(argv, ["codesign", "--force", "--sign", "-", "/tmp/a.app"])
+
+    def test_codesign_argv_hardened(self):
+        argv = bm.codesign_argv(
+            "Developer ID Application: X", Path("/tmp/a.app"),
+            hardened=True, entitlements=Path("/tmp/e.plist"),
+        )
+        self.assertEqual(argv, [
+            "codesign", "--force", "--sign", "Developer ID Application: X",
+            "--options", "runtime", "--entitlements", "/tmp/e.plist", "/tmp/a.app",
+        ])
+
+    def test_codesign_verify_argv(self):
+        self.assertEqual(
+            bm.codesign_verify_argv(Path("/tmp/a.app")),
+            ["codesign", "--verify", "--deep", "--strict", "/tmp/a.app"],
+        )
+
+    def test_ditto_zip_argv(self):
+        self.assertEqual(
+            bm.ditto_zip_argv(Path("/tmp/a.app"), Path("/tmp/a.zip")),
+            ["ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", "/tmp/a.app", "/tmp/a.zip"],
+        )
+
+    def test_xattr_strip_argv(self):
+        self.assertEqual(bm.xattr_strip_argv(Path("/tmp/a.app")), ["xattr", "-cr", "/tmp/a.app"])
+
+    def test_notarytool_submit_argv(self):
+        self.assertEqual(
+            bm.notarytool_submit_argv(Path("/tmp/a.zip"), "me@x.com", "TEAM", "pw"),
+            ["xcrun", "notarytool", "submit", "/tmp/a.zip", "--apple-id", "me@x.com",
+             "--team-id", "TEAM", "--password", "pw", "--wait"],
+        )
+
+    def test_stapler_argv(self):
+        self.assertEqual(bm.stapler_argv(Path("/tmp/a.app")), ["xcrun", "stapler", "staple", "/tmp/a.app"])
+
+    def test_compute_sha256(self):
+        import tempfile
+        with tempfile.NamedTemporaryFile(delete=False) as f:
+            f.write(b"hello")
+            name = f.name
+        try:
+            self.assertEqual(
+                bm.compute_sha256(Path(name)),
+                "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824",
+            )
+        finally:
+            os.unlink(name)
+
+
 if __name__ == "__main__":
     unittest.main()
