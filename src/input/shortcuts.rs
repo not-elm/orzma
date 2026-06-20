@@ -5,8 +5,11 @@
 
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
-use ozma_terminal::{ReservedChord, TerminalInputBindings};
+use ozma_terminal::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
+use ozma_tty_engine::{ButtonConfig, WheelConfig};
+use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
+use std::time::Duration;
 
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
 /// the exact modifier set required, and the action to run.
@@ -119,6 +122,35 @@ pub(crate) fn build_resolved_shortcuts(
 /// `build_resolved_shortcuts`.
 pub(crate) fn populate_input_bindings(mut commands: Commands, resolved: Res<ResolvedShortcuts>) {
     commands.insert_resource(resolved.input_bindings());
+}
+
+/// Maps the resolved `[mouse]` config block to the terminal crate's
+/// `OzmaMouseConfig`.
+fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
+    OzmaMouseConfig {
+        buttons: ButtonConfig {
+            max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
+        },
+        wheel: WheelConfig {
+            lines_per_notch: mc.lines_per_notch,
+            fine_lines: mc.fine_lines,
+            max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
+        },
+        cells_per_notch: mc.cells_per_notch,
+        double_click_timeout: Duration::from_millis(mc.double_click_timeout_ms as u64),
+        click_drift_px: mc.click_drift_px,
+        fine_modifier: match mc.fine_modifier {
+            CfgFineModifier::Shift => FineModifier::Shift,
+            CfgFineModifier::Ctrl => FineModifier::Ctrl,
+            CfgFineModifier::Alt => FineModifier::Alt,
+            CfgFineModifier::None => FineModifier::None,
+        },
+    }
+}
+
+/// `Startup` system: inserts `OzmaMouseConfig` from the resolved `[mouse]` block.
+pub(crate) fn populate_mouse_config(mut commands: Commands, configs: Res<OzmuxConfigsResource>) {
+    commands.insert_resource(ozma_mouse_config(&configs.mouse));
 }
 
 /// Maps a config logical `Key` to the physical `KeyCode` ozmux matches on.
@@ -278,6 +310,28 @@ mod tests {
         let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
         assert!(r.is_release_inline_focus(KeyCode::Escape, mods(true, true, false, false)));
         assert!(!r.is_release_inline_focus(KeyCode::KeyV, mods(false, false, false, true)));
+    }
+
+    #[test]
+    fn mouse_config_maps_from_ozmux_config() {
+        use ozmux_configs::mouse::{FineModifier as CfgFine, MouseConfig};
+        let mc = MouseConfig {
+            fine_modifier: CfgFine::Ctrl,
+            max_protocol_events_per_frame: 5,
+            cells_per_notch: 1.0,
+            ..MouseConfig::default()
+        };
+        let out = ozma_mouse_config(&mc);
+        assert_eq!(out.buttons.max_protocol_events_per_frame, 5);
+        assert_eq!(out.wheel.max_protocol_events_per_frame, 5);
+        assert_eq!(out.wheel.lines_per_notch, mc.lines_per_notch);
+        assert_eq!(out.cells_per_notch, 1.0);
+        assert_eq!(out.fine_modifier, ozma_terminal::FineModifier::Ctrl);
+        assert_eq!(
+            out.double_click_timeout,
+            std::time::Duration::from_millis(mc.double_click_timeout_ms as u64)
+        );
+        assert_eq!(out.click_drift_px, mc.click_drift_px);
     }
 
     #[test]

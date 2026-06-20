@@ -36,6 +36,7 @@ impl Plugin for OzmuxShortcutPlugin {
                 (
                     shortcuts::build_resolved_shortcuts,
                     shortcuts::populate_input_bindings,
+                    shortcuts::populate_mouse_config,
                 )
                     .chain(),
             )

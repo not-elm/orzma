@@ -125,7 +125,7 @@ fn dispatch_input(
     }
 }
 
-fn current_terminal_modifiers(keys: &ButtonInput<KeyCode>) -> TerminalModifiers {
+pub(crate) fn current_terminal_modifiers(keys: &ButtonInput<KeyCode>) -> TerminalModifiers {
     TerminalModifiers {
         ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
         shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),

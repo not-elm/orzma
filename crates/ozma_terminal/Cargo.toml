@@ -11,6 +11,7 @@ publish.workspace = true
 anyhow            = { workspace = true }
 arboard           = { version = "3", features = ["wayland-data-control"] }
 bevy              = { workspace = true }
+open              = { workspace = true }
 ozma_tty_engine   = { path = "../ozma_tty_engine" }
 ozma_tty_renderer = { path = "../ozma_tty_renderer" }
 tracing           = { workspace = true }

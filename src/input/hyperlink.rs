@@ -1,7 +1,8 @@
-//! OSC 8 hyperlink hover detection, cursor-icon control, scheme
-//! allowlist, and Cmd+click activation. The plugin registered here
-//! also re-exports the pure predicates the mouse-buttons system calls
-//! during interception.
+//! OSC 8 hyperlink hover detection, cursor-icon control, and Cmd+click
+//! activation. Scheme validation is delegated to
+//! `ozma_tty_renderer::schema::is_allowed` (this module does not own the
+//! allowlist). The plugin registered here also re-exports the pure
+//! predicates the mouse-buttons system calls during interception.
 
 use crate::input::{InputPhase, current_modifiers};
 use crate::tmux::pane_hit::{cell_at_local, tmux_pane_at_phys};
@@ -14,7 +15,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
+use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid, is_allowed};
 use ozmux_configs::shortcuts::Modifiers;
 use ozmux_tmux::TmuxPane;
 
@@ -74,31 +75,6 @@ pub(crate) fn should_open_at(
         return None;
     }
     grid.hyperlink_at(row, col).map(|(_id, uri)| uri.clone())
-}
-
-const ALLOWED_SCHEMES: &[&str] = &["http", "https", "mailto", "ftp"];
-
-/// Parses an RFC 3986 scheme: first byte ALPHA, continuation
-/// ALPHA / DIGIT / `+` / `-` / `.`. Returns `None` for malformed input.
-fn scheme_of(uri: &str) -> Option<&str> {
-    let (scheme, _) = uri.split_once(':')?;
-    let mut bytes = scheme.bytes();
-    let first = bytes.next()?;
-    if !first.is_ascii_alphabetic() {
-        return None;
-    }
-    if !bytes.all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'-' || b == b'.') {
-        return None;
-    }
-    Some(scheme)
-}
-
-/// Returns `true` when `uri` carries a scheme on the v1 allowlist
-/// (`http`, `https`, `mailto`, `ftp`), case-insensitive.
-fn is_allowed(uri: &str) -> bool {
-    scheme_of(uri)
-        .map(|s| s.to_ascii_lowercase())
-        .is_some_and(|s| ALLOWED_SCHEMES.contains(&s.as_str()))
 }
 
 fn hyperlink_hover_and_cursor(
@@ -256,48 +232,6 @@ mod tests {
     use bevy::prelude::Color;
     use ozma_tty_engine::{ButtonEventKind, MouseButtonKind};
     use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
-
-    #[test]
-    fn scheme_of_rejects_leading_digit() {
-        assert_eq!(scheme_of("1abc:foo"), None);
-    }
-
-    #[test]
-    fn scheme_of_rejects_empty_scheme() {
-        assert_eq!(scheme_of(":foo"), None);
-        assert_eq!(scheme_of("no-colon"), None);
-    }
-
-    #[test]
-    fn scheme_of_rejects_disallowed_punctuation() {
-        assert_eq!(scheme_of("my_scheme:foo"), None);
-    }
-
-    #[test]
-    fn scheme_of_accepts_canonical_schemes() {
-        assert_eq!(scheme_of("http:foo"), Some("http"));
-        assert_eq!(scheme_of("https:foo"), Some("https"));
-        assert_eq!(scheme_of("git+ssh:foo"), Some("git+ssh"));
-        assert_eq!(scheme_of("a-b.c:foo"), Some("a-b.c"));
-    }
-
-    #[test]
-    fn is_allowed_accepts_canonical_schemes_case_insensitive() {
-        assert!(is_allowed("http://example.com"));
-        assert!(is_allowed("HTTPS://example.com"));
-        assert!(is_allowed("Mailto:foo@example"));
-        assert!(is_allowed("ftp://example.com"));
-    }
-
-    #[test]
-    fn is_allowed_rejects_dangerous_or_unknown_schemes() {
-        assert!(!is_allowed("javascript:alert(1)"));
-        assert!(!is_allowed("file:///etc/passwd"));
-        assert!(!is_allowed("data:text/html,<script>"));
-        assert!(!is_allowed("vscode://"));
-        assert!(!is_allowed(""));
-        assert!(!is_allowed("no-colon-here"));
-    }
 
     fn make_grid_with_link(
         row: usize,
