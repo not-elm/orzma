@@ -1,11 +1,13 @@
 //! Webview builder and registered handle.
 
 use crate::error::OzmaResult;
+use crate::events::EventDecl;
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
 use crate::protocol::{ClientMsg, NavAction, RegisterKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -19,6 +21,7 @@ pub(crate) type SharedWriter = Arc<Mutex<UnixStream>>;
 pub struct Webview {
     pub(crate) kind: RegisterKind,
     pub(crate) handlers: HashMap<String, BoxedHandler>,
+    pub(crate) event_decls: Vec<EventDecl>,
 }
 
 impl Webview {
@@ -31,6 +34,7 @@ impl Webview {
                 forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
+            event_decls: Vec::new(),
         }
     }
 
@@ -48,6 +52,7 @@ impl Webview {
                 forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
+            event_decls: Vec::new(),
         }
     }
 
@@ -61,6 +66,7 @@ impl Webview {
                 forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
+            event_decls: Vec::new(),
         }
     }
 
@@ -114,6 +120,35 @@ impl Webview {
             "method {method:?} uses the reserved __ozma. namespace"
         );
         self.handlers.insert(method, make_handler(f));
+        if let RegisterKind::Url { bridge, .. } = &mut self.kind {
+            *bridge = true;
+        }
+        self
+    }
+
+    /// Declares an inbound event the page may send via `window.ozma.emit(name, …)`,
+    /// binding the wire `name` to the Rust type `T`. The app later drains it with
+    /// [`WebviewHandle::read_events::<T>`]. Enables the `window.ozma` bridge for
+    /// `url` webviews (like [`Webview::on`]); a no-op for `inline`/`dir`, which
+    /// are always bridged.
+    ///
+    /// # Panics
+    /// Panics if `name` or the type `T` is already registered on this builder —
+    /// the type ↔ name mapping must be 1:1. (`on` silently overwrites a
+    /// duplicate method; `add_event` enforces uniqueness instead.)
+    pub fn add_event<T: DeserializeOwned + 'static>(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        let type_id = TypeId::of::<T>();
+        assert!(
+            !self.event_decls.iter().any(|d| d.name == name),
+            "event name {name:?} is already registered"
+        );
+        assert!(
+            !self.event_decls.iter().any(|d| d.type_id == type_id),
+            "event type {} is already registered",
+            std::any::type_name::<T>()
+        );
+        self.event_decls.push(EventDecl { name, type_id });
         if let RegisterKind::Url { bridge, .. } = &mut self.kind {
             *bridge = true;
         }
@@ -330,5 +365,48 @@ mod tests {
         assert_eq!(handle.id(), "old-id");
         *slot.lock().unwrap() = "new-id".to_owned();
         assert_eq!(handle.id(), "new-id");
+    }
+
+    #[test]
+    fn add_event_records_decl() {
+        #[derive(serde::Deserialize)]
+        struct Hello;
+        let wv = Webview::inline("x").add_event::<Hello>("hello");
+        assert_eq!(wv.event_decls.len(), 1);
+        assert_eq!(wv.event_decls[0].name, "hello");
+        assert_eq!(wv.event_decls[0].type_id, std::any::TypeId::of::<Hello>());
+    }
+
+    #[test]
+    fn add_event_enables_bridge_for_url() {
+        #[derive(serde::Deserialize)]
+        struct Hello;
+        let wv = Webview::url("https://example.com").add_event::<Hello>("hello");
+        match &wv.kind {
+            RegisterKind::Url { bridge, .. } => assert!(*bridge),
+            _ => panic!("expected url"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered")]
+    fn add_event_rejects_duplicate_name() {
+        #[derive(serde::Deserialize)]
+        struct A;
+        #[derive(serde::Deserialize)]
+        struct B;
+        let _ = Webview::inline("x")
+            .add_event::<A>("dup")
+            .add_event::<B>("dup");
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered")]
+    fn add_event_rejects_duplicate_type() {
+        #[derive(serde::Deserialize)]
+        struct A;
+        let _ = Webview::inline("x")
+            .add_event::<A>("one")
+            .add_event::<A>("two");
     }
 }

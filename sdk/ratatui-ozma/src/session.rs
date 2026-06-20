@@ -229,7 +229,11 @@ impl Ozma {
 
     /// Registers a webview, blocking until the control plane mints its handle.
     pub fn register(&self, webview: Webview) -> OzmaResult<WebviewHandle> {
-        let Webview { kind, handlers } = webview;
+        let Webview {
+            kind,
+            handlers,
+            event_decls: _,
+        } = webview;
         let handlers = Arc::new(handlers);
         let (tx, rx) = bounded(1);
         let line = serde_json::to_string(&ClientMsg::Register(kind.clone()))?;
