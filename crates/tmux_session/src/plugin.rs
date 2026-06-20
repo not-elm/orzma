@@ -30,6 +30,11 @@ use tmux_control::TransportEvent;
 #[derive(Resource, Default)]
 pub struct TmuxPresence;
 
+/// This frame's drained transport events, shared across the drain chain.
+/// Overwritten by [`drain_tmux_transport`] each frame; read-only downstream.
+#[derive(Resource, Default)]
+struct TmuxEventBatch(Vec<TransportEvent>);
+
 /// Wires the tmux integration into the Bevy app: connection state, the
 /// projection observers + id->entity index, and the per-frame transport-drain
 /// system that triggers the global projection events.
@@ -49,12 +54,17 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<EnumerationState>()
             .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
+            .init_resource::<TmuxEventBatch>()
             .insert_non_send_resource(TmuxConnection::default())
             .add_message::<PaneOutput>()
             .add_message::<CopyModeReply>()
             .add_systems(
                 Update,
-                drain_tmux_events
+                (
+                    drain_tmux_transport,
+                    drain_tmux_events.run_if(tmux_batch_pending),
+                )
+                    .chain()
                     .in_set(TmuxProjectionSet)
                     .run_if(resource_exists::<TmuxPresence>),
             )
@@ -103,6 +113,32 @@ fn request_pane_captures(
     }
 }
 
+fn tmux_batch_pending(batch: Res<TmuxEventBatch>) -> bool {
+    !batch.0.is_empty()
+}
+
+/// Drains the live connection's transport channel into [`TmuxEventBatch`] and
+/// routes `%output` to `PaneOutput`. Skips the write on a fully-idle frame so
+/// change detection fires only when the batch's contents actually change; still
+/// clears a previously-non-empty batch to empty exactly once.
+fn drain_tmux_transport(
+    mut batch: ResMut<TmuxEventBatch>,
+    mut pane_output: MessageWriter<PaneOutput>,
+    connection: NonSend<TmuxConnection>,
+) {
+    let drained = match connection.client() {
+        Some(client) => drain_transport(client.events()),
+        None => Vec::new(),
+    };
+    if drained.is_empty() && batch.0.is_empty() {
+        return;
+    }
+    for output in collect_pane_outputs(&drained) {
+        pane_output.write(output);
+    }
+    batch.0 = drained;
+}
+
 /// Drains the live connection's transport events each frame: advances
 /// `ConnectionState`, sends the `list-windows` enumeration once on attach, and
 /// triggers the global projection events (notifications + the enumeration
@@ -124,24 +160,16 @@ fn drain_tmux_events(
     mut connection: NonSendMut<TmuxConnection>,
     mut pane_output: MessageWriter<PaneOutput>,
     mut copy_replies: MessageWriter<CopyModeReply>,
+    batch: Res<TmuxEventBatch>,
     index: Res<TmuxProjection>,
     sessions: Query<&TmuxSession>,
 ) {
-    let events = match connection.client() {
-        Some(client) => drain_transport(client.events()),
-        None => return,
-    };
-    if events.is_empty() {
-        return;
-    }
-    for output in collect_pane_outputs(&events) {
-        pane_output.write(output);
-    }
+    let events = &batch.0;
     let current_session = index
         .session
         .and_then(|e| sessions.get(e).ok())
         .map(|s| s.id);
-    if detect_session_switch(&events, current_session, connection.client_name()).is_some()
+    if detect_session_switch(events, current_session, connection.client_name()).is_some()
         && let Some(client) = connection.client()
     {
         commands.trigger(TmuxWindowsRetained {
@@ -158,13 +186,13 @@ fn drain_tmux_events(
         enumeration.aggressive_resize_pending = None;
         send_session_enumeration(&mut enumeration, client);
     } else if let Some(client) = connection.client() {
-        if detect_window_added(&events) {
+        if detect_window_added(events) {
             match client.handle().send(&list_windows_command()) {
                 Ok(id) => enumeration.pending = Some(id),
                 Err(error) => tracing::warn!(?error, "failed to re-enumerate on window-add"),
             }
         }
-        if detect_window_switch(&events, current_session) {
+        if detect_window_switch(events, current_session) {
             match client.handle().send(&active_pane_command()) {
                 Ok(id) => enumeration.active_pane_pending = Some(id),
                 Err(error) => {
@@ -173,7 +201,7 @@ fn drain_tmux_events(
             }
         }
     }
-    if let Some(next) = advance_state(&state, &events) {
+    if let Some(next) = advance_state(&state, events) {
         *state = next;
         if matches!(*state, ConnectionState::Attached)
             && let Some(client) = connection.client()
@@ -221,14 +249,13 @@ fn drain_tmux_events(
         commands.trigger(TmuxConnectionReset);
         commands.trigger(TmuxConnectionClosed);
     } else {
-        if let Some(name) = take_client_name(&mut enumeration.client_name_pending, &events) {
+        if let Some(name) = take_client_name(&mut enumeration.client_name_pending, events) {
             connection.set_client_name(name);
         }
-        if let Some(version) = take_version(&mut enumeration.version_pending, &events) {
+        if let Some(version) = take_version(&mut enumeration.version_pending, events) {
             connection.set_per_window_refresh(version_supports_per_window_refresh(&version));
         }
-        if let Some((window, pane)) =
-            take_active_pane(&mut enumeration.active_pane_pending, &events)
+        if let Some((window, pane)) = take_active_pane(&mut enumeration.active_pane_pending, events)
         {
             commands.trigger(TmuxActivePaneChanged {
                 window,
@@ -246,7 +273,7 @@ fn drain_tmux_events(
             }
         }
         if let Some(value) =
-            take_aggressive_resize(&mut enumeration.aggressive_resize_pending, &events)
+            take_aggressive_resize(&mut enumeration.aggressive_resize_pending, events)
         {
             enumeration.aggressive_resize_checked = true;
             if value.trim() == "on" {
@@ -268,7 +295,7 @@ fn drain_tmux_events(
             &mut e.capture_pending,
             &mut e.capture_awaiting_cursor,
             &e.panes_with_cursor_pending,
-            &events,
+            events,
         ) {
             pane_output.write(output);
         }
@@ -276,37 +303,36 @@ fn drain_tmux_events(
             &mut e.cursor_pending,
             &mut e.panes_with_cursor_pending,
             &mut e.capture_awaiting_cursor,
-            &events,
+            events,
         ) {
             pane_output.write(output);
         }
-        if let Some(bindings) = take_keybindings(&mut enumeration.keys_root_pending, &events) {
+        if let Some(bindings) = take_keybindings(&mut enumeration.keys_root_pending, events) {
             keybindings.install(bindings);
         }
-        if let Some(bindings) = take_keybindings(&mut enumeration.keys_prefix_pending, &events) {
+        if let Some(bindings) = take_keybindings(&mut enumeration.keys_prefix_pending, events) {
             keybindings.install(bindings);
         }
-        if let Some(keys) = take_prefix_keys(&mut enumeration.prefix_keys_pending, &events) {
+        if let Some(keys) = take_prefix_keys(&mut enumeration.prefix_keys_pending, events) {
             keybindings.set_prefix_keys(keys);
         }
-        if let Some(bindings) = take_keybindings(&mut enumeration.keys_copy_mode_pending, &events) {
+        if let Some(bindings) = take_keybindings(&mut enumeration.keys_copy_mode_pending, events) {
             keybindings.install(bindings);
         }
-        if let Some(bindings) =
-            take_keybindings(&mut enumeration.keys_copy_mode_vi_pending, &events)
+        if let Some(bindings) = take_keybindings(&mut enumeration.keys_copy_mode_vi_pending, events)
         {
             keybindings.install(bindings);
         }
-        if let Some(mode_keys) = take_mode_keys(&mut enumeration.mode_keys_pending, &events) {
+        if let Some(mode_keys) = take_mode_keys(&mut enumeration.mode_keys_pending, events) {
             keybindings.set_mode_keys(mode_keys);
         }
-        for reply in drain_copy_replies(&mut copy_queries, &events) {
+        for reply in drain_copy_replies(&mut copy_queries, events) {
             copy_replies.write(reply);
         }
         trigger_events(
             &mut commands,
             &mut enumeration.pending,
-            &events,
+            events,
             connection.client_name(),
         );
     }
@@ -345,6 +371,27 @@ fn send_session_enumeration(enumeration: &mut EnumerationState, client: &tmux_co
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drain_transport_clears_stale_batch_once_then_skips_idle() {
+        use crossbeam_channel::unbounded;
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+        app.insert_resource(TmuxPresence);
+        app.insert_resource(TmuxEventBatch(vec![TransportEvent::Closed {
+            reason: "x".into(),
+        }]));
+        let _ = unbounded::<TransportEvent>();
+        app.update();
+        assert!(app.world().resource::<TmuxEventBatch>().0.is_empty());
+        let changed_tick = app.world().resource_ref::<TmuxEventBatch>().last_changed();
+        app.update();
+        assert_eq!(
+            app.world().resource_ref::<TmuxEventBatch>().last_changed(),
+            changed_tick,
+            "idle frame must not re-fire change detection on an already-empty batch"
+        );
+    }
 
     #[test]
     fn plugin_registers_resources_and_stays_idle_without_connection() {
