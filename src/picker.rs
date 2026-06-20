@@ -35,46 +35,45 @@ impl Plugin for OzmuxPickerPlugin {
                 OnEnter(AppMode::Ozmux),
                 dispatch_startup_mode.run_if(not(resource_exists::<StartupDispatched>)),
             )
-            .add_systems(Update, handle_picker_input.after(InputPhase::FocusedKey))
-            .add_systems(Update, refresh_picker_on_open)
             .add_systems(
                 Update,
-                refresh_session_ozmux_sock
-                    .run_if(resource_exists_and_changed::<ConnectionState>)
-                    .in_set(crate::tmux::OzmuxActiveSet),
+                (
+                    handle_picker_input.after(InputPhase::FocusedKey),
+                    refresh_picker_on_open,
+                    refresh_session_ozmux_sock
+                        .run_if(resource_exists_and_changed::<ConnectionState>)
+                        .in_set(crate::tmux::OzmuxActiveSet),
+                    // NOTE: handle_picker_row_interaction and picker_row_hover_cursor
+                    // are deliberately NOT gated by run_if(picker_is_open): both must
+                    // observe the picker's closed state to reset per-open state
+                    // (re-disarm hover, and revert the pointer cursor on the click
+                    // that closes the picker); gated off while closed, that reset
+                    // never runs.
+                    handle_picker_row_interaction,
+                    picker_row_hover_cursor.after(InputPhase::Hover),
+                    handle_picker_scroll
+                        .run_if(on_message::<MouseWheel>)
+                        .run_if(picker_is_open),
+                ),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    sync_picker_ui
+                        .before(UiSystems::Layout)
+                        .run_if(resource_exists_and_changed::<SessionPicker>),
+                    scroll_selected_into_view
+                        .after(UiSystems::Layout)
+                        .run_if(picker_is_open)
+                        .run_if(
+                            resource_exists_and_changed::<SessionPicker>
+                                .or(on_message::<WindowResized>),
+                        ),
+                ),
             )
             .add_systems(
                 Last,
                 cleanup_session_ozmux_sock.run_if(on_message::<AppExit>),
-            )
-            .add_systems(
-                PostUpdate,
-                sync_picker_ui
-                    .before(UiSystems::Layout)
-                    .run_if(resource_exists_and_changed::<SessionPicker>),
-            )
-            .add_systems(
-                PostUpdate,
-                scroll_selected_into_view
-                    .after(UiSystems::Layout)
-                    .run_if(picker_is_open)
-                    .run_if(
-                        resource_exists_and_changed::<SessionPicker>
-                            .or(on_message::<WindowResized>),
-                    ),
-            )
-            // NOTE: handle_picker_row_interaction and picker_row_hover_cursor are
-            // deliberately NOT gated by run_if(picker_is_open): both must observe
-            // the picker's closed state to reset per-open state (re-disarm hover,
-            // and revert the pointer cursor on the click that closes the picker);
-            // gated off while closed, that reset never runs.
-            .add_systems(Update, handle_picker_row_interaction)
-            .add_systems(Update, picker_row_hover_cursor.after(InputPhase::Hover))
-            .add_systems(
-                Update,
-                handle_picker_scroll
-                    .run_if(on_message::<MouseWheel>)
-                    .run_if(picker_is_open),
             );
     }
 }
