@@ -6,7 +6,7 @@ use crate::font::FontPatch;
 use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::keyboard::KeyboardConfig;
 use crate::mouse::MouseConfig;
-use crate::osc_webview::OscWebviewPatch;
+use crate::osc_webview::OscWebviewConfig;
 use crate::ozma::OzmaPatch;
 use crate::shortcuts::Shortcuts;
 use crate::startup::StartupMode;
@@ -25,7 +25,7 @@ pub(crate) struct RawConfigs {
     pub(crate) mouse: Option<MouseConfig>,
     pub(crate) keyboard: Option<KeyboardConfig>,
     pub(crate) inactive_pane: Option<InactivePaneConfigPatch>,
-    pub(crate) osc_webview: Option<OscWebviewPatch>,
+    pub(crate) osc_webview: Option<OscWebviewConfig>,
     pub(crate) tmux: Option<TmuxPatch>,
     pub(crate) ozma: Option<OzmaPatch>,
     pub(crate) startup_mode: Option<StartupMode>,
@@ -34,9 +34,9 @@ pub(crate) struct RawConfigs {
 impl RawConfigs {
     /// Applies any populated fields onto `base` and returns the merged result.
     /// Within the `shortcuts` section, `bindings` is full-replace when present.
-    /// The `font`, `inactive_pane`, and `osc_webview` sections use their
-    /// respective `Patch::apply_to` for per-field merge. The `theme`, `mouse`,
-    /// and `keyboard` sections are full-replace (serde default fills missing
+    /// The `font` and `inactive_pane` sections use their respective
+    /// `Patch::apply_to` for per-field merge. The `theme`, `mouse`, `keyboard`,
+    /// and `osc_webview` sections are full-replace (serde default fills missing
     /// fields).
     pub(crate) fn apply_to(self, mut base: OzmuxConfigs) -> OzmuxConfigs {
         if let Some(shortcuts) = self.shortcuts {
@@ -57,8 +57,8 @@ impl RawConfigs {
         if let Some(patch) = self.inactive_pane {
             base.inactive_pane = patch.apply_to(base.inactive_pane);
         }
-        if let Some(patch) = self.osc_webview {
-            base.osc_webview = patch.apply_to(base.osc_webview);
+        if let Some(osc_webview) = self.osc_webview {
+            base.osc_webview = osc_webview;
         }
         if let Some(patch) = self.tmux {
             base.tmux = patch.apply_to(base.tmux);

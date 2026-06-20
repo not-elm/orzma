@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 /// `OSC 5379 ; mount ; <view-id>` mounts the registered view unless
 /// `enabled = false`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
 pub struct OscWebviewConfig {
     /// Master switch for the OSC-driven webview feature.
     pub enabled: bool,
@@ -17,21 +18,6 @@ impl Default for OscWebviewConfig {
     }
 }
 
-/// Per-field-optional view of `[osc_webview]` for TOML deserialization.
-#[derive(Deserialize, Default, Clone, Debug)]
-pub(crate) struct OscWebviewPatch {
-    /// Optional `[osc_webview].enabled` override.
-    pub enabled: Option<bool>,
-}
-
-impl OscWebviewPatch {
-    /// Applies this patch over `base`, keeping `base`'s value where unset.
-    pub(crate) fn apply_to(self, base: OscWebviewConfig) -> OscWebviewConfig {
-        OscWebviewConfig {
-            enabled: self.enabled.unwrap_or(base.enabled),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -43,14 +29,14 @@ mod tests {
     }
 
     #[test]
-    fn patch_overrides_when_present() {
-        let patched = OscWebviewPatch {
-            enabled: Some(false),
-        }
-        .apply_to(OscWebviewConfig::default());
-        assert!(
-            !patched.enabled,
-            "an explicit override flips the default-on gate off"
-        );
+    fn empty_keeps_default_on() {
+        let cfg: OscWebviewConfig = toml::from_str("").unwrap();
+        assert!(cfg.enabled, "missing enabled defaults to true via impl Default");
+    }
+
+    #[test]
+    fn explicit_false_overrides() {
+        let cfg: OscWebviewConfig = toml::from_str("enabled = false").unwrap();
+        assert!(!cfg.enabled);
     }
 }
