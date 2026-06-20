@@ -11,16 +11,16 @@
 
 use super::pane_hit::tmux_pane_at_phys;
 use crate::configs::OzmuxConfigsResource;
-use crate::inline_webview::{InlineWebview, PassthroughKeys, focused_inline_of, inline_hit_at};
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
-use crate::osc_webview::NonInteractive;
 use crate::ozma::AppMode;
 use crate::picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
+use crate::webview::inline::{InlineWebview, PassthroughKeys, focused_inline_of, inline_hit_at};
+use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};

@@ -2,9 +2,9 @@
 //! GPU render bundle to each projected `TmuxPane`, then routes tmux `%output`
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
-use crate::osc_webview::OscWebviewGate;
 use crate::theme;
 use crate::ui::WorkspaceUiRoot;
+use crate::webview::osc::OscWebviewGate;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
