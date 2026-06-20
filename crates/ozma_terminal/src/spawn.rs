@@ -11,8 +11,8 @@ use std::sync::atomic::AtomicBool;
 /// Marker component identifying an Ozma-mode terminal entity.
 ///
 /// One or more entities may carry this marker; mouse input routes to the
-/// topmost under the cursor, while keyboard input targets the single entity the
-/// host leaves un-`KeyboardDisabled`.
+/// topmost under the cursor, while keyboard input (raw keys and IME) targets the
+/// single entity the host marks `KeyboardFocused`.
 #[derive(Component)]
 pub struct OzmaTerminal;
 
