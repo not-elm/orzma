@@ -49,7 +49,7 @@ pub(crate) struct Webview {
 
 /// Where an inline webview sits: its anchor mode (scrollback line vs fixed
 /// viewport cell), the rect extent in cells, and the VT `frame_seq` the next
-/// grid emit carries (`project_inline_overlays` defers first projection until
+/// grid emit carries (`project_webview_overlays` defers first projection until
 /// the grid catches up).
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct WebviewPlacement {
@@ -86,10 +86,10 @@ pub(super) struct WebviewPlugin;
 
 impl Plugin for WebviewPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, sync_inline_webview_size);
+        app.add_systems(Update, sync_webview_size);
         app.add_systems(
             PostUpdate,
-            project_inline_overlays.before(TerminalMaterialSystems::UpdateMaterial),
+            project_webview_overlays.before(TerminalMaterialSystems::UpdateMaterial),
         );
         // NOTE: without this edge, `TerminalUiMaterial`'s bind-group rebuild
         // can run between bevy_cef's rebind image-touch (which re-uploads the
@@ -202,7 +202,7 @@ pub(crate) fn resolve_mount(
 /// `TmuxPane` entity itself: `tmux_render::attach_tmux_pane_terminal` inserts
 /// both the `TerminalHandle` (which emits the OSC request) and the
 /// `TerminalRenderBundle` (`TerminalGrid`) onto that one entity, so the
-/// `ChildOf` parent is also the entity `project_inline_overlays` reads grid
+/// `ChildOf` parent is also the entity `project_webview_overlays` reads grid
 /// state from.
 ///
 /// `WebviewSize` is seeded here because `bevy_cef` builds the CEF browser
@@ -210,7 +210,7 @@ pub(crate) fn resolve_mount(
 /// scale_factor` in logical px from `TerminalCellMetricsResource` and the
 /// primary window; when neither exists yet (headless tests, pre-first-render)
 /// a placeholder cell of 8×16 physical px at scale 1.0 is used —
-/// `sync_inline_webview_size` corrects it once real metrics arrive.
+/// `sync_webview_size` corrects it once real metrics arrive.
 pub(crate) fn mount(
     params: &mut WebviewParams,
     dynamic: &DynamicRegistry,
@@ -220,7 +220,7 @@ pub(crate) fn mount(
         tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount without anchor, dropping");
         return;
     };
-    let live = live_inline_children(&params.children, &params.views, ctx.terminal_surface);
+    let live = live_webview_children(&params.children, &params.views, ctx.terminal_surface);
     if let Some((existing, _)) = live
         .iter()
         .find(|(_, v)| v.view_id == ctx.view_id && v.instance_id.as_deref() == ctx.instance_id)
@@ -328,7 +328,7 @@ pub(crate) fn unmount(
     instance_id: Option<&str>,
 ) {
     let targets: Vec<Entity> =
-        live_inline_children(&params.children, &params.views, terminal_surface)
+        live_webview_children(&params.children, &params.views, terminal_surface)
             .into_iter()
             .filter(|(_, v)| match (view_id, instance_id) {
                 (Some(vid), Some(inst)) => {
@@ -349,13 +349,13 @@ pub(crate) fn unmount(
 /// `Webview`, and its `ChildOf` parent is the active surface. The input
 /// dispatcher uses this to hoist the release-chord check, restrict the Escape
 /// scroll-to-bottom pre-handler, and suppress PTY key forwarding (spec §7).
-pub(crate) fn focused_inline_of(
+pub(crate) fn focused_webview_of(
     focused: Option<&FocusedWebview>,
-    inline_parents: &Query<&ChildOf, With<Webview>>,
+    webview_parents: &Query<&ChildOf, With<Webview>>,
     active_surface: Option<Entity>,
 ) -> Option<Entity> {
     let candidate = focused?.0?;
-    let parent = inline_parents.get(candidate).ok()?.parent();
+    let parent = webview_parents.get(candidate).ok()?.parent();
     (Some(parent) == active_surface).then_some(candidate)
 }
 
@@ -382,7 +382,7 @@ pub(crate) struct WebviewHit {
 /// visible cells (its DIP origin lies above the viewport, so `local_dip.y`
 /// lands past the clipped rows). `NonInteractive` children are invisible to
 /// the hit-test, so their rects pass through as plain terminal input.
-pub(crate) fn inline_hit_at(
+pub(crate) fn webview_hit_at(
     children: &Query<&Children>,
     inline: &Query<(&Webview, Has<NonInteractive>)>,
     overlays: &TerminalOverlays,
@@ -411,7 +411,7 @@ pub(crate) fn inline_hit_at(
         if !contains {
             return None;
         }
-        let local_dip = inline_local_dip(
+        let local_dip = webview_local_dip(
             overlays,
             view.slot,
             local_phys,
@@ -429,7 +429,7 @@ pub(crate) fn inline_hit_at(
 /// drifted off the rect still produces a (possibly out-of-view) release
 /// position. Returns `None` for an out-of-range slot or a `rows == 0`
 /// sentinel rect.
-pub(crate) fn inline_local_dip(
+pub(crate) fn webview_local_dip(
     overlays: &TerminalOverlays,
     slot: u8,
     local_phys: Vec2,
@@ -475,7 +475,7 @@ fn despawn_fixed_screen_on_alt_exit(
 }
 
 /// The live inline-webview children of a terminal surface.
-fn live_inline_children<'a>(
+fn live_webview_children<'a>(
     children: &Query<&Children>,
     views: &'a Query<&'static Webview>,
     terminal_surface: Entity,
@@ -528,7 +528,7 @@ fn seed_logical_size(
 /// IOSurface) every frame. Exact equality suffices: the inputs are identical
 /// frame-to-frame unless metrics/scale actually changed, and this math is
 /// deterministic.
-fn sync_inline_webview_size(
+fn sync_webview_size(
     mut sizes: Query<(&mut WebviewSize, &WebviewPlacement)>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -574,7 +574,7 @@ const ALT_SCREEN_MODE: &str = "alt-screen";
 /// OR already carries `TerminalOverlays`, so a terminal whose last inline
 /// child despawned converges to all-sentinel / all-`None` instead of keeping
 /// stale texture handles alive.
-fn project_inline_overlays(
+fn project_webview_overlays(
     mut commands: Commands,
     terminals: Query<(
         Entity,
@@ -600,14 +600,14 @@ fn project_inline_overlays(
         // delta can therefore never carry an alt-screen flip past this check.
         let on_alt_screen = grid.modes.iter().any(|m| m == ALT_SCREEN_MODE);
         let mut overlays = TerminalOverlays::default();
-        let mut has_inline_child = false;
+        let mut has_webview_child = false;
         if let Some(kids) = children {
             for child in kids.iter() {
                 let Ok((view, placement, texture, already_notified, owner)) = inline.get(child)
                 else {
                     continue;
                 };
-                has_inline_child = true;
+                has_webview_child = true;
                 if (grid.last_seq.wrapping_sub(placement.frame_seq) as i32) < 0 {
                     continue;
                 }
@@ -658,7 +658,7 @@ fn project_inline_overlays(
                 }
             }
         }
-        if has_inline_child || has_overlays {
+        if has_webview_child || has_overlays {
             commands.entity(terminal).insert(overlays);
         }
     }
@@ -781,7 +781,7 @@ mod tests {
         app.update();
     }
 
-    fn inline_children_of(app: &App, terminal: Entity) -> Vec<Entity> {
+    fn webview_children_of(app: &App, terminal: Entity) -> Vec<Entity> {
         let world = app.world();
         world
             .get::<Children>(terminal)
@@ -795,7 +795,7 @@ mod tests {
     }
 
     fn slot_of(app: &App, terminal: Entity, view_id: &str) -> Option<u8> {
-        inline_children_of(app, terminal)
+        webview_children_of(app, terminal)
             .into_iter()
             .find_map(|child| {
                 app.world()
@@ -844,7 +844,7 @@ mod tests {
         view_id: &str,
         instance_id: Option<&str>,
     ) -> Option<u8> {
-        inline_children_of(app, terminal)
+        webview_children_of(app, terminal)
             .into_iter()
             .find_map(|child| {
                 app.world()
@@ -862,7 +862,7 @@ mod tests {
 
         mount(&mut app, terminal, "dash", Some(test_anchor()));
 
-        let children = inline_children_of(&app, terminal);
+        let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1, "mount must spawn one inline child");
         let child = children[0];
 
@@ -926,7 +926,7 @@ mod tests {
         register_dyn(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", Some(test_anchor()));
-        let before = inline_children_of(&app, terminal);
+        let before = webview_children_of(&app, terminal);
         assert_eq!(before.len(), 1, "first mount spawns one child");
         let entity = before[0];
         let slot_before = app.world().get::<Webview>(entity).unwrap().slot;
@@ -947,7 +947,7 @@ mod tests {
         });
         app.world_mut().flush();
 
-        let after = inline_children_of(&app, terminal);
+        let after = webview_children_of(&app, terminal);
         assert_eq!(after.len(), 1, "re-mount must NOT spawn a second child");
         assert_eq!(
             after[0], entity,
@@ -988,7 +988,7 @@ mod tests {
 
         mount(&mut app, terminal, "e", Some(test_anchor()));
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
+            webview_children_of(&app, terminal).len(),
             OVERLAY_SLOTS,
             "a fifth mount must be rejected once all slots are taken"
         );
@@ -1007,7 +1007,7 @@ mod tests {
         mount(&mut app, terminal, "b", Some(test_anchor()));
         unmount(&mut app, terminal, Some("a"));
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
+            webview_children_of(&app, terminal).len(),
             1,
             "unmounting one view must despawn exactly its child"
         );
@@ -1030,13 +1030,13 @@ mod tests {
         }
         mount(&mut app, terminal, "a", Some(test_anchor()));
         mount(&mut app, terminal, "b", Some(test_anchor()));
-        let children = inline_children_of(&app, terminal);
+        let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 2);
 
         unmount(&mut app, terminal, None);
 
         assert!(
-            inline_children_of(&app, terminal).is_empty(),
+            webview_children_of(&app, terminal).is_empty(),
             "unmount-all must despawn every inline child of the terminal"
         );
         for child in children {
@@ -1055,7 +1055,7 @@ mod tests {
 
         mount(&mut app, terminal, "hud", Some(test_anchor()));
 
-        let children = inline_children_of(&app, terminal);
+        let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1);
         assert!(
             app.world().get::<NonInteractive>(children[0]).is_some(),
@@ -1072,7 +1072,7 @@ mod tests {
         mount(&mut app, terminal, "dash", None);
 
         assert!(
-            inline_children_of(&app, terminal).is_empty(),
+            webview_children_of(&app, terminal).is_empty(),
             "a mount without an anchor must be dropped"
         );
     }
@@ -1085,7 +1085,7 @@ mod tests {
         mount(&mut app, terminal, "ghost", Some(test_anchor()));
 
         assert!(
-            inline_children_of(&app, terminal).is_empty(),
+            webview_children_of(&app, terminal).is_empty(),
             "a mount for an unregistered view must be dropped"
         );
     }
@@ -1100,7 +1100,7 @@ mod tests {
         mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
 
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
+            webview_children_of(&app, terminal).len(),
             2,
             "two distinct (view_id, instance_id) tuples must both mount"
         );
@@ -1118,7 +1118,7 @@ mod tests {
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
 
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
+            webview_children_of(&app, terminal).len(),
             1,
             "a duplicate (view_id, instance_id) mount must be dropped"
         );
@@ -1134,7 +1134,7 @@ mod tests {
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
 
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
+            webview_children_of(&app, terminal).len(),
             2,
             "the default (None) instance and a named instance are distinct"
         );
@@ -1154,7 +1154,7 @@ mod tests {
         unmount_instance(&mut app, terminal, "memo", "a");
 
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
+            webview_children_of(&app, terminal).len(),
             1,
             "unmounting one instance must despawn exactly that instance"
         );
@@ -1176,7 +1176,7 @@ mod tests {
         unmount(&mut app, terminal, Some("memo"));
 
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
+            webview_children_of(&app, terminal).len(),
             1,
             "view-scoped unmount must despawn every instance of that view_id only"
         );
@@ -1192,11 +1192,11 @@ mod tests {
         for inst in ["a", "b", "c", "d"] {
             mount_instance(&mut app, terminal, "memo", inst, Some(test_anchor()));
         }
-        assert_eq!(inline_children_of(&app, terminal).len(), OVERLAY_SLOTS);
+        assert_eq!(webview_children_of(&app, terminal).len(), OVERLAY_SLOTS);
 
         mount_instance(&mut app, terminal, "memo", "e", Some(test_anchor()));
         assert_eq!(
-            inline_children_of(&app, terminal).len(),
+            webview_children_of(&app, terminal).len(),
             OVERLAY_SLOTS,
             "the 4-slot cap is per-terminal across all instances; a 5th is rejected"
         );
@@ -1260,7 +1260,7 @@ mod tests {
 
     fn project(app: &mut App) {
         app.world_mut()
-            .run_system_once(project_inline_overlays)
+            .run_system_once(project_webview_overlays)
             .unwrap();
     }
 
@@ -1643,7 +1643,7 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_dyn(&mut app, "dash", terminal, true);
         mount(&mut app, terminal, "dash", Some(test_anchor()));
-        let child = inline_children_of(&app, terminal)[0];
+        let child = webview_children_of(&app, terminal)[0];
         assert_eq!(
             app.world().get::<WebviewSize>(child),
             Some(&WebviewSize(Vec2::new(320.0, 160.0))),
@@ -1663,7 +1663,7 @@ mod tests {
             phys_font_size: 24,
         });
         app.world_mut()
-            .run_system_once(sync_inline_webview_size)
+            .run_system_once(sync_webview_size)
             .unwrap();
 
         assert_eq!(
@@ -1689,7 +1689,7 @@ mod tests {
         app.init_resource::<SizeChangeProbe>();
         app.add_systems(
             Update,
-            (sync_inline_webview_size, probe_webview_size_changed).chain(),
+            (sync_webview_size, probe_webview_size_changed).chain(),
         );
         let terminal = spawn_terminal(&mut app);
         register_dyn(&mut app, "dash", terminal, true);
@@ -1706,7 +1706,7 @@ mod tests {
             !app.world().resource::<SizeChangeProbe>().0,
             "a second run with identical inputs must not change-flag WebviewSize"
         );
-        let child = inline_children_of(&app, terminal)[0];
+        let child = webview_children_of(&app, terminal)[0];
         assert_eq!(
             app.world().get::<WebviewSize>(child),
             Some(&WebviewSize(Vec2::new(320.0, 160.0))),
@@ -1755,7 +1755,7 @@ mod tests {
             .run_system_once(
                 move |children: Query<&Children>,
                       inline: Query<(&Webview, Has<NonInteractive>)>| {
-                    inline_hit_at(
+                    webview_hit_at(
                         &children, &inline, &overlays, terminal, local_phys, HIT_CELL_W,
                         HIT_CELL_H, scale,
                     )
@@ -1884,19 +1884,19 @@ mod tests {
     }
 
     #[test]
-    fn inline_local_dip_rejects_sentinel_and_out_of_range_slots() {
+    fn webview_local_dip_rejects_sentinel_and_out_of_range_slots() {
         let overlays = overlays_with(&[(0, IVec4::new(2, 3, 10, 40))]);
         assert_eq!(
-            inline_local_dip(&overlays, 0, Vec2::new(100.0, 100.0), 8.0, 16.0, 1.0),
+            webview_local_dip(&overlays, 0, Vec2::new(100.0, 100.0), 8.0, 16.0, 1.0),
             Some(Vec2::new(76.0, 68.0)),
         );
         assert_eq!(
-            inline_local_dip(&overlays, 1, Vec2::new(100.0, 100.0), 8.0, 16.0, 1.0),
+            webview_local_dip(&overlays, 1, Vec2::new(100.0, 100.0), 8.0, 16.0, 1.0),
             None,
             "a sentinel slot has no DIP mapping"
         );
         assert_eq!(
-            inline_local_dip(&overlays, OVERLAY_SLOTS as u8, Vec2::ZERO, 8.0, 16.0, 1.0),
+            webview_local_dip(&overlays, OVERLAY_SLOTS as u8, Vec2::ZERO, 8.0, 16.0, 1.0),
             None,
             "an out-of-range slot has no DIP mapping"
         );
@@ -1925,7 +1925,7 @@ mod tests {
 
         mount(&mut app, terminal, "DYN1", Some(test_anchor()));
 
-        let children = inline_children_of(&app, terminal);
+        let children = webview_children_of(&app, terminal);
         assert_eq!(
             children.len(),
             1,
@@ -2011,7 +2011,7 @@ mod tests {
 
         mount(&mut app, terminal, "HANDLE", Some(test_anchor()));
 
-        let children = inline_children_of(&app, terminal);
+        let children = webview_children_of(&app, terminal);
         assert_eq!(
             children.len(),
             1,
@@ -2055,7 +2055,7 @@ mod tests {
                 frame_seq: 7,
             },
         );
-        let fixed_entity = inline_children_of(&app, terminal)
+        let fixed_entity = webview_children_of(&app, terminal)
             .into_iter()
             .find(|e| {
                 matches!(
@@ -2073,7 +2073,7 @@ mod tests {
         app.world_mut().flush();
         app.update();
 
-        let remaining = inline_children_of(&app, terminal);
+        let remaining = webview_children_of(&app, terminal);
         assert_eq!(
             remaining.len(),
             1,
@@ -2143,7 +2143,7 @@ mod tests {
 
         mount(&mut app, terminal, "disp", Some(test_anchor()));
 
-        let children = inline_children_of(&app, terminal);
+        let children = webview_children_of(&app, terminal);
         assert_eq!(children.len(), 1);
         let child = children[0];
         match app
@@ -2181,7 +2181,7 @@ mod tests {
 
         mount(&mut app, terminal, "appv", Some(test_anchor()));
 
-        let child = inline_children_of(&app, terminal)[0];
+        let child = webview_children_of(&app, terminal)[0];
         let preload = app
             .world()
             .get::<PreloadScripts>(child)

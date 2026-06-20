@@ -21,7 +21,7 @@ use crate::input::hyperlink::{link_modifier_held, should_open_at, try_open_uri};
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
-use crate::webview::inline::{Webview, inline_hit_at, inline_local_dip};
+use crate::webview::inline::{Webview, webview_hit_at, webview_local_dip};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -859,7 +859,7 @@ struct TmuxInlineRouteParams<'w, 's> {
     focused_webview: Option<ResMut<'w, FocusedWebview>>,
     children: Query<'w, 's, &'static Children>,
     inline: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
-    inline_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
+    webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     browsers: Option<NonSend<'w, Browsers>>,
 }
@@ -925,7 +925,7 @@ fn route_tmux_inline_left_click(
         ButtonState::Pressed => {
             gesture.inline_press = None;
             let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
-                inline_hit_at(
+                webview_hit_at(
                     &route.children,
                     &route.inline,
                     overlays,
@@ -940,7 +940,7 @@ fn route_tmux_inline_left_click(
                 if let Some(focused) = route.focused_webview.as_deref_mut()
                     && focused
                         .0
-                        .is_some_and(|current| route.inline_parents.contains(current))
+                        .is_some_and(|current| route.webview_parents.contains(current))
                 {
                     focused.0 = None;
                 }
@@ -992,11 +992,11 @@ fn tmux_inline_release_dip(
     cell_h_phys: f32,
     scale: f32,
 ) -> Option<Vec2> {
-    let terminal = route.inline_parents.get(child).ok()?.parent();
+    let terminal = route.webview_parents.get(child).ok()?.parent();
     let (_, _, node, transform) = panes.get(terminal).ok()?;
     let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
     let (view, _) = route.inline.get(child).ok()?;
-    inline_local_dip(
+    webview_local_dip(
         route.overlay_rects.get(terminal).ok()?,
         view.slot,
         local_phys,
@@ -1044,7 +1044,7 @@ fn forward_tmux_inline_mouse_moves(
     let Ok(overlays) = overlay_rects.get(terminal) else {
         return;
     };
-    let Some(hit) = inline_hit_at(
+    let Some(hit) = webview_hit_at(
         &children, &inline, overlays, terminal, local_phys, cell_w, cell_h, scale,
     ) else {
         return;
@@ -1296,7 +1296,7 @@ mod tests {
         );
     }
 
-    fn make_arbiter_inline_app() -> (App, Entity, Entity) {
+    fn make_arbiter_webview_app() -> (App, Entity, Entity) {
         use bevy::window::WindowResolution;
         use tmux_control_parser::CellDims;
 
@@ -1388,7 +1388,7 @@ mod tests {
 
     #[test]
     fn inline_press_focuses_child_and_consumes() {
-        let (mut app, _pane, child) = make_arbiter_inline_app();
+        let (mut app, _pane, child) = make_arbiter_webview_app();
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_button(
             &mut app,
@@ -1412,7 +1412,7 @@ mod tests {
     fn move_resolves_inline_child_over_rect() {
         use bevy::ecs::system::RunSystemOnce;
 
-        let (mut app, _pane, child) = make_arbiter_inline_app();
+        let (mut app, _pane, child) = make_arbiter_webview_app();
         let hit = app
             .world_mut()
             .run_system_once(
@@ -1422,7 +1422,7 @@ mod tests {
                       overlays: Query<&TerminalOverlays>| {
                     let (terminal, _pane_id, local) =
                         tmux_pane_at_phys(&panes, Vec2::new(40.0, 48.0)).unwrap();
-                    inline_hit_at(
+                    webview_hit_at(
                         &children,
                         &inline,
                         overlays.get(terminal).unwrap(),
@@ -1447,7 +1447,7 @@ mod tests {
     fn move_resolves_nothing_off_rect() {
         use bevy::ecs::system::RunSystemOnce;
 
-        let (mut app, _pane, _child) = make_arbiter_inline_app();
+        let (mut app, _pane, _child) = make_arbiter_webview_app();
         let hit = app
             .world_mut()
             .run_system_once(
@@ -1457,7 +1457,7 @@ mod tests {
                  overlays: Query<&TerminalOverlays>| {
                     let (terminal, _pane_id, local) =
                         tmux_pane_at_phys(&panes, Vec2::new(400.0, 400.0)).unwrap();
-                    inline_hit_at(
+                    webview_hit_at(
                         &children,
                         &inline,
                         overlays.get(terminal).unwrap(),
@@ -1479,7 +1479,7 @@ mod tests {
 
     #[test]
     fn inline_off_rect_press_releases_focus_and_falls_through() {
-        let (mut app, pane, child) = make_arbiter_inline_app();
+        let (mut app, pane, child) = make_arbiter_webview_app();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_button(

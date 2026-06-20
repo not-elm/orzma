@@ -16,7 +16,7 @@ use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
-use crate::webview::inline::{Webview, PassthroughKeys, focused_inline_of, inline_hit_at};
+use crate::webview::inline::{Webview, PassthroughKeys, focused_webview_of, webview_hit_at};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -501,7 +501,7 @@ struct TmuxInlineWheelTarget {
 #[derive(SystemParam)]
 struct TmuxInlineWheelParams<'w, 's> {
     focused_webview: Res<'w, FocusedWebview>,
-    inline_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
+    webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
     panes: Query<
         'w,
         's,
@@ -563,13 +563,13 @@ fn resolve_tmux_inline_wheel_target(
     scale_factor: f32,
 ) -> Option<TmuxInlineWheelTarget> {
     let (terminal, _pane_id, local_phys) = tmux_pane_at_phys(&params.panes, cursor_phys)?;
-    let focused_child = focused_inline_of(
+    let focused_child = focused_webview_of(
         Some(&params.focused_webview),
-        &params.inline_parents,
+        &params.webview_parents,
         Some(terminal),
     )?;
     let overlays = params.overlay_rects.get(terminal).ok()?;
-    let hit = inline_hit_at(
+    let hit = webview_hit_at(
         &params.children,
         &params.inline,
         overlays,

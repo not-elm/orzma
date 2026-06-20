@@ -97,16 +97,16 @@ pub(crate) fn sync_focused_webview(
     active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
-    inline_parents: Query<&ChildOf, With<Webview>>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     tmux_panes: Query<(), With<TmuxPane>>,
 ) {
-    // NOTE: a despawned inline child fails `inline_parents.get` here and so
+    // NOTE: a despawned inline child fails `webview_parents.get` here and so
     // falls through to the clear path below, which resolves to `None` and
     // clears it — that fall-through is the GC for tmux-pane inline focus; a
     // later edit that short-circuits this arm before the despawn check would
     // leak focus.
     if let Some(child) = focused.0
-        && let Ok(parent) = inline_parents.get(child)
+        && let Ok(parent) = webview_parents.get(child)
         && tmux_panes.contains(parent.parent())
     {
         return;

@@ -9,7 +9,7 @@
 use crate::input::InputPhase;
 use crate::ozma::AppMode;
 use crate::ui::copy_mode::CopyModeState;
-use crate::webview::inline::{Webview, focused_inline_of};
+use crate::webview::inline::{Webview, focused_webview_of};
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
@@ -166,7 +166,7 @@ pub(crate) fn ime_policy_system(
     metrics: Res<TerminalCellMetricsResource>,
     focused_webview: Res<FocusedWebview>,
     webview_anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
-    inline_parents: Query<&ChildOf, With<Webview>>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     inline_slots: Query<&Webview>,
     overlays: Query<&TerminalOverlays>,
     current_mode: Res<State<AppMode>>,
@@ -193,13 +193,13 @@ pub(crate) fn ime_policy_system(
         // tab-webview `webview_anchors` arm below cannot anchor it. Derive the
         // candidate-window position from the owning terminal's node transform
         // plus the inline placement rect's origin — the SAME px conversion the
-        // wheel/click hit-test uses (`inline_local_dip`'s `origin_phys`), so
+        // wheel/click hit-test uses (`webview_local_dip`'s `origin_phys`), so
         // composition appears at the inline rect, not the terminal cursor.
         if let Some(child) =
-            focused_inline_of(Some(&focused_webview), &inline_parents, active_surface)
+            focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
             && let Some(pos) = inline_ime_position(
                 window.resolution.scale_factor(),
-                &inline_parents,
+                &webview_parents,
                 &inline_slots,
                 &anchors,
                 &overlays,
@@ -304,7 +304,7 @@ pub(crate) fn read_ime_events(
     connection: NonSend<TmuxConnection>,
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     focused_webview: Res<FocusedWebview>,
-    inline_parents: Query<&ChildOf, With<Webview>>,
+    webview_parents: Query<&ChildOf, With<Webview>>,
     current_mode: Res<State<AppMode>>,
     ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     copy_modes: Query<(), With<CopyModeState>>,
@@ -319,7 +319,7 @@ pub(crate) fn read_ime_events(
             // pane — doing so double-delivers the composition (once to the page,
             // once to the terminal). The state machine above still ran, so
             // `ImeState` stays consistent; only the pane write is skipped.
-            if focused_inline_of(Some(&focused_webview), &inline_parents, active_surface).is_some()
+            if focused_webview_of(Some(&focused_webview), &webview_parents, active_surface).is_some()
             {
                 continue;
             }
@@ -383,14 +383,14 @@ pub(crate) fn read_ime_events(
 /// caller then leaves `ime_position` unchanged rather than mis-anchoring.
 fn inline_ime_position(
     scale_factor: f32,
-    inline_parents: &Query<&ChildOf, With<Webview>>,
+    webview_parents: &Query<&ChildOf, With<Webview>>,
     inline_slots: &Query<&Webview>,
     anchors: &Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     overlays: &Query<&TerminalOverlays>,
     metrics: &TerminalCellMetricsResource,
     child: Entity,
 ) -> Option<Vec2> {
-    let terminal = inline_parents.get(child).ok()?.parent();
+    let terminal = webview_parents.get(child).ok()?.parent();
     let slot = inline_slots.get(child).ok()?.slot;
     let (node, ui_xform, _) = anchors.get(terminal).ok()?;
     let rect = *overlays.get(terminal).ok()?.rects.get(usize::from(slot))?;
