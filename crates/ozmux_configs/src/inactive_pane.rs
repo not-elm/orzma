@@ -111,6 +111,8 @@ mod tests {
         assert_eq!(cfg.tint_color, "#3a3b45");
         assert_eq!(cfg.tint, 0.85);
         assert_eq!(cfg.tint_color_rgb(), (0x3a, 0x3b, 0x45));
+        assert_eq!(cfg.webview_dim, 0.55);
+        assert_eq!(cfg.webview_desaturate, 0.6);
     }
 
     #[test]
