@@ -4,11 +4,12 @@
 //! `CursorIcon`.
 
 use crate::input::InputDisabled;
-use crate::mouse::{cell_at_cursor, protocol_mods};
+use crate::mouse::{OzmaTerminalMouseSet, cell_at_cursor, protocol_mods};
 use crate::spawn::OzmaTerminal;
+use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, Window};
+use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use ozma_tty_engine::ProtocolModifiers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid, is_allowed};
@@ -35,20 +36,27 @@ pub(crate) fn try_open_uri(uri: &str) {
     }
 }
 
-/// The cursor icon over the grid: pointer over a link with the modifier held,
-/// otherwise the I-beam. Off-grid cases return `Default` in `resolve_hover`
-/// before this is reached.
-fn cursor_decision(has_link: bool, modifier_held: bool) -> SystemCursorIcon {
-    if has_link && modifier_held {
-        SystemCursorIcon::Pointer
-    } else {
-        SystemCursorIcon::Text
+/// Registers the terminal's hyperlink hover-cursor feedback.
+///
+/// Adds `hyperlink_hover_cursor` to `OzmaTerminalMouseSet`, gated to run only
+/// when the pointer moves or a key is pressed. The click-open path lives in the
+/// mouse dispatcher, not here.
+pub(crate) struct HyperlinkPlugin;
+
+impl Plugin for HyperlinkPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<CursorMoved>().add_systems(
+            Update,
+            hyperlink_hover_cursor
+                .in_set(OzmaTerminalMouseSet)
+                .run_if(on_message::<KeyboardInput>.or(on_message::<CursorMoved>)),
+        );
     }
 }
 
 /// Updates `HyperlinkHoverState` and the window cursor as the pointer moves over
 /// the terminal grid. Gated to the single enabled `OzmaTerminal`.
-pub(crate) fn hyperlink_hover_cursor(
+fn hyperlink_hover_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     terminal: Query<
@@ -70,6 +78,17 @@ pub(crate) fn hyperlink_hover_cursor(
         if *icon != desired {
             *icon = desired;
         }
+    }
+}
+
+/// The cursor icon over the grid: pointer over a link with the modifier held,
+/// otherwise the I-beam. Off-grid cases return `Default` in `resolve_hover`
+/// before this is reached.
+fn cursor_decision(has_link: bool, modifier_held: bool) -> SystemCursorIcon {
+    if has_link && modifier_held {
+        SystemCursorIcon::Pointer
+    } else {
+        SystemCursorIcon::Text
     }
 }
 

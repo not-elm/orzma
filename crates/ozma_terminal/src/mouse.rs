@@ -5,7 +5,6 @@
 //! `TerminalHandle` / `Clipboard`. Gated per entity by `InputDisabled`.
 
 use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
@@ -21,7 +20,7 @@ use ozma_tty_renderer::schema::TerminalGrid;
 use std::time::Duration;
 
 use crate::clipboard::Clipboard;
-use crate::hyperlink::{hyperlink_hover_cursor, link_modifier_held, try_open_uri};
+use crate::hyperlink::{link_modifier_held, try_open_uri};
 use crate::input::{InputDisabled, current_terminal_modifiers};
 use crate::spawn::OzmaTerminal;
 
@@ -773,12 +772,6 @@ impl Plugin for OzmaMousePlugin {
             .add_message::<MouseWheel>()
             .add_message::<CursorMoved>()
             .add_observer(on_terminal_mouse_effects)
-            .add_systems(
-                Update,
-                hyperlink_hover_cursor
-                    .in_set(OzmaTerminalMouseSet)
-                    .run_if(on_message::<KeyboardInput>.or(on_message::<CursorMoved>)),
-            )
             .add_systems(
                 Update,
                 (dispatch_mouse_buttons, dispatch_mouse_wheel)
