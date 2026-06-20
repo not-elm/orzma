@@ -75,7 +75,6 @@ publish = false
 # part of bevy's default set via 2d/3d/ui → default_platform → default_font,
 # but listing it explicitly here protects against future "default-features = false".
 bevy = { version = "0.18", features = ["default_font"] }
-tokio = { version = "1.52" }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
