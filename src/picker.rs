@@ -891,7 +891,10 @@ mod tests {
         // it queued a transition back to Ozma.
         assert!(app.world().get_resource::<StartupDispatched>().is_some());
         app.update(); // apply the queued Ozmux -> Ozma transition
-        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Ozma);
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Ozma
+        );
     }
 
     #[test]
@@ -901,7 +904,10 @@ mod tests {
         enter_ozmux(&mut app);
         // run_if(not(resource_exists)) is false, so dispatch never ran and the
         // Ozma -> Ozmux transition is NOT bounced back to Ozma.
-        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Ozmux);
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Ozmux
+        );
     }
 
     #[test]
