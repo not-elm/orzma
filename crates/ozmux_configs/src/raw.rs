@@ -2,8 +2,6 @@
 //! and merges them onto a baseline `OzmuxConfigs::default()`.
 
 use crate::OzmuxConfigs;
-use crate::OzmuxConfigsError;
-use crate::OzmuxConfigsResult;
 use crate::font::FontPatch;
 use crate::inactive_pane::InactivePaneConfigPatch;
 use crate::keyboard::KeyboardPatch;
@@ -73,17 +71,6 @@ impl RawConfigs {
     }
 }
 
-/// Cross-section validation: chord conflicts, font size range, etc.
-pub(crate) fn validate(configs: &OzmuxConfigs) -> OzmuxConfigsResult {
-    if let Err(dupes) = configs.shortcuts.bindings.validate_no_conflicts() {
-        return Err(OzmuxConfigsError::DuplicateChords(dupes));
-    }
-    let size = configs.font.size;
-    if !(size > 0.0 && size <= 200.0) {
-        return Err(OzmuxConfigsError::InvalidFontSize { size });
-    }
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -222,25 +209,6 @@ program = "/usr/local/bin/tmux"
         let raw: RawConfigs = toml::from_str("").unwrap();
         let merged = raw.apply_to(OzmuxConfigs::default());
         assert_eq!(merged.tmux, crate::tmux::TmuxConfig::default());
-    }
-
-    #[test]
-    fn validate_detects_chord_conflict() {
-        let toml_str = r#"
-[shortcuts.bindings]
-release-inline-focus = "Cmd+V"
-"#;
-        let raw: RawConfigs = toml::from_str(toml_str).unwrap();
-        let merged = raw.apply_to(OzmuxConfigs::default());
-        let err = validate(&merged).unwrap_err();
-        match err {
-            OzmuxConfigsError::DuplicateChords(dupes) => {
-                assert_eq!(dupes.len(), 1);
-                assert!(dupes[0].actions.contains(&"paste"));
-                assert!(dupes[0].actions.contains(&"release-inline-focus"));
-            }
-            _ => panic!("expected DuplicateChords, got {err:?}"),
-        }
     }
 
     #[test]

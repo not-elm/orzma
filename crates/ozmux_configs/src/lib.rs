@@ -94,8 +94,19 @@ impl OzmuxConfigs {
                 source,
             })?;
         let merged = raw.apply_to(Self::default());
-        raw::validate(&merged)?;
+        merged.validate()?;
         Ok(merged)
+    }
+
+    fn validate(&self) -> OzmuxConfigsResult<()> {
+        if let Err(dupes) = self.shortcuts.bindings.validate_no_conflicts() {
+            return Err(OzmuxConfigsError::DuplicateChords(dupes));
+        }
+        let size = self.font.size;
+        if !(size > 0.0 && size <= 200.0) {
+            return Err(OzmuxConfigsError::InvalidFontSize { size });
+        }
+        Ok(())
     }
 }
 
@@ -138,6 +149,39 @@ pub mod test_support {
             home: home_dir,
         };
         OzmuxConfigs::load_with_env(&env)
+    }
+}
+
+#[cfg(test)]
+mod validate_tests {
+    use super::*;
+
+    #[test]
+    fn validate_rejects_font_size_out_of_range() {
+        let mut configs = OzmuxConfigs::default();
+        configs.font.size = 0.0;
+        assert!(configs.validate().is_err(), "size 0.0 must fail validation");
+        configs.font.size = 11.25;
+        assert!(configs.validate().is_ok(), "in-range size validates");
+    }
+
+    #[test]
+    fn validate_detects_chord_conflict() {
+        let toml_str = r#"
+[shortcuts.bindings]
+release-inline-focus = "Cmd+V"
+"#;
+        let raw: raw::RawConfigs = toml::from_str(toml_str).unwrap();
+        let merged = raw.apply_to(OzmuxConfigs::default());
+        let err = merged.validate().unwrap_err();
+        match err {
+            OzmuxConfigsError::DuplicateChords(dupes) => {
+                assert_eq!(dupes.len(), 1);
+                assert!(dupes[0].actions.contains(&"paste"));
+                assert!(dupes[0].actions.contains(&"release-inline-focus"));
+            }
+            _ => panic!("expected DuplicateChords, got {err:?}"),
+        }
     }
 }
 
