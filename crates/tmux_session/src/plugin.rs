@@ -139,7 +139,7 @@ fn drain_tmux_transport(
     batch.0 = drained;
 }
 
-/// Drains the live connection's transport events each frame: advances
+/// Applies this frame's drained `TmuxEventBatch`: advances
 /// `ConnectionState`, sends the `list-windows` enumeration once on attach, and
 /// triggers the global projection events (notifications + the enumeration
 /// reply, in stream order) the observers consume. On `Closed` it reclaims the
@@ -374,14 +374,12 @@ mod tests {
 
     #[test]
     fn drain_transport_clears_stale_batch_once_then_skips_idle() {
-        use crossbeam_channel::unbounded;
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
         app.insert_resource(TmuxPresence);
         app.insert_resource(TmuxEventBatch(vec![TransportEvent::Closed {
             reason: "x".into(),
         }]));
-        let _ = unbounded::<TransportEvent>();
         app.update();
         assert!(app.world().resource::<TmuxEventBatch>().0.is_empty());
         let changed_tick = app.world().resource_ref::<TmuxEventBatch>().last_changed();
