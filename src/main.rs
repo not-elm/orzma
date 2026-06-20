@@ -48,10 +48,11 @@ use ui::{
 
 fn main() {
     let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
-    // NOTE: Always start in AppMode::Ozmux so Startup deferred commands
-    // (e.g. init_atlas_image inserting AtlasImage) are flushed before any
-    // OnEnter(AppMode::Ozma) fires. on_enter_ozmux_picker handles
-    // StartupMode::Ozma by immediately transitioning to AppMode::Ozma.
+    // NOTE: start in AppMode::Ozmux as a boot-dispatch state; dispatch_startup_mode
+    // (OnEnter(Ozmux), gated to run once) routes to the real mode. Routing to Ozma
+    // via a queued NextState — rather than booting straight into Ozma — defers
+    // OnEnter(AppMode::Ozma) (spawn_terminal) to a post-Startup StateTransition, so
+    // Startup deferred commands (e.g. init_atlas_image inserting AtlasImage) flush first.
     let initial_mode = match pre_configs.startup_mode {
         StartupMode::Ozma | StartupMode::Ozmux | StartupMode::AutoAttach => AppMode::Ozmux,
     };
