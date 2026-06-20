@@ -420,6 +420,65 @@ fn tmux_with_ozma_sock(label: &str, value: &str) -> (TmuxServerGuard, String) {
 }
 
 #[test]
+fn reconnect_preserves_inbound_events() {
+    use std::time::Duration;
+    #[derive(serde::Deserialize, PartialEq, Debug)]
+    struct Hello {
+        message: String,
+    }
+
+    let pair = support::ReconnectPair::start("view-ev1", "view-ev2");
+    with_env(&pair.first.sock_path.clone(), || {
+        let ozma = Ozma::connect().unwrap();
+        let handle = ozma
+            .register(Webview::inline("x").add_event::<Hello>("hello"))
+            .unwrap();
+
+        let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let mut backend = OzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &ozma);
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        drop(pair.first);
+        std::thread::sleep(Duration::from_millis(200));
+        // NOTE: ENV_LOCK is held by with_env, serializing env var access.
+        unsafe { std::env::set_var("OZMA_SOCK", &pair.second.sock_path) };
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while handle.id() == "view-ev1" {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reconnect did not complete"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // The page emits to the NEW handle after reconnect; read_events must see it.
+        pair.second.send(json!({
+            "op": "event", "handle": "view-ev2", "event": "hello", "payload": { "message": "post" }
+        }));
+
+        let got = loop {
+            let evs = handle.read_events::<Hello>();
+            if !evs.is_empty() {
+                break evs;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "event never arrived after reconnect"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(
+            got,
+            vec![Hello {
+                message: "post".into()
+            }]
+        );
+    });
+}
+
+#[test]
 #[ignore = "requires a real tmux binary"]
 fn connect_prefers_live_tmux_value_over_stale_env() {
     // The reported bug: the pane inherited a STALE $OZMA_SOCK (an exited ozmux),

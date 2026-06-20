@@ -708,6 +708,10 @@ fn attempt_reconnect(
             map.remove(&old);
             map.insert(new_handle.clone(), reg.handlers.clone());
         }
+        if let Ok(mut map) = events.lock() {
+            map.remove(&old);
+            map.insert(new_handle.clone(), reg.events.clone());
+        }
         if let Ok(mut slot) = reg.handle_slot.lock() {
             *slot = new_handle;
         }
