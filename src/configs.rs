@@ -11,13 +11,12 @@ use ozmux_configs::OzmuxConfigs;
 pub(crate) struct OzmuxConfigsResource(pub(crate) OzmuxConfigs);
 
 /// Bevy Plugin that loads ozmux config from disk at `Plugin::build` and
-/// inserts it as [`OzmuxConfigsResource`]. Synchronous; uses `std::fs`,
-/// no tokio runtime is created here.
+/// inserts it as [`OzmuxConfigsResource`]. Synchronous; uses `std::fs`.
 pub(crate) struct OzmuxConfigsPlugin;
 
 impl Plugin for OzmuxConfigsPlugin {
     fn build(&self, app: &mut App) {
-        let configs = OzmuxConfigs::load_blocking().unwrap_or_else(|err| match &err {
+        let configs = OzmuxConfigs::load().unwrap_or_else(|err| match &err {
             // File-not-found: empty user config means use defaults. `OzmuxConfigsError::Io` is
             // { path, source }; drill into source.kind() to inspect ErrorKind.
             ozmux_configs::OzmuxConfigsError::Io { source, .. }
@@ -55,7 +54,7 @@ impl Plugin for OzmuxConfigsPlugin {
 /// Crate-internal mutex guarding `OZMUX_CONFIG` env-var mutations across
 /// tests. Any test (in any module) that mutates the process env BEFORE
 /// constructing `OzmuxConfigsPlugin` (or anything else that calls
-/// `OzmuxConfigs::load_blocking`) MUST acquire this guard for the duration
+/// `OzmuxConfigs::load`) MUST acquire this guard for the duration
 /// of the construction.
 #[cfg(test)]
 pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -158,7 +157,7 @@ mod tests {
             std::env::set_var("OZMUX_CONFIG", &tmp);
         }
 
-        let err = OzmuxConfigs::load_blocking().expect_err("must error on unknown field");
+        let err = OzmuxConfigs::load().expect_err("must error on unknown field");
         // The outer error must wrap an inner cause via Error::source().
         let source = std::error::Error::source(&err);
         // ParseToml carries a toml::de::Error as #[source]; assert that path
