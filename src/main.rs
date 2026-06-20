@@ -1,6 +1,7 @@
 //! ozmux Bevy GUI entry point.
 
 mod bootstrap;
+mod cef_profile;
 mod configs;
 mod control_plane;
 mod font;
@@ -16,6 +17,7 @@ mod tmux;
 mod ui;
 mod webview_render;
 
+use crate::cef_profile::CefProfileDir;
 use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::inline_webview::OzmuxInlineWebviewPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
@@ -54,6 +56,7 @@ fn main() {
         StartupMode::Ozma | StartupMode::Ozmux | StartupMode::AutoAttach => AppMode::Ozmux,
     };
     let dyn_registry = DynAssetRegistry::default();
+    let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
     App::new()
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
@@ -64,7 +67,7 @@ fn main() {
                 }),
                 ..default()
             }),
-            cef_plugin(dyn_registry.clone()),
+            cef_plugin(dyn_registry.clone(), cef_profile.path().to_path_buf()),
         ))
         .insert_state(initial_mode)
         .add_plugins((
