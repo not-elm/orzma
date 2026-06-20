@@ -4,7 +4,7 @@
 use super::window_bar::WindowEntry;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
-use ozmux_tmux::{TmuxConnection, select_window_command};
+use ozmux_tmux::{SelectWindow, TmuxCommand, TmuxConnection};
 
 /// Routes a press on a window entry to `select-window`: sends the tmux
 /// `select-window -t @N` command for the pressed entry's window id.
@@ -19,7 +19,7 @@ pub(super) fn switch_window_on_click(
         let Some(client) = connection.client() else {
             continue;
         };
-        let cmd = entry_command(entry);
+        let cmd = SelectWindow { id: entry.window }.into_raw_command();
         if let Err(e) = client.handle().send(&cmd) {
             tracing::warn!(?e, window = entry.window.0, "select-window send failed");
         }
@@ -48,10 +48,6 @@ pub(super) fn window_entry_hover_cursor(
     }
 }
 
-fn entry_command(entry: &WindowEntry) -> String {
-    select_window_command(entry.window)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,15 +55,9 @@ mod tests {
 
     #[test]
     fn entry_press_maps_to_select_window() {
-        assert_eq!(select_window_command(WindowId(2)), "select-window -t @2");
-    }
-
-    #[test]
-    fn entry_command_delegates_to_select_window_command() {
-        let entry = WindowEntry {
-            index: 3,
-            window: WindowId(5),
-        };
-        assert_eq!(entry_command(&entry), "select-window -t @5");
+        assert_eq!(
+            SelectWindow { id: WindowId(2) }.into_raw_command(),
+            "select-window -t @2"
+        );
     }
 }

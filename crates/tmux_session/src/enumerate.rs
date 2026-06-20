@@ -6,7 +6,7 @@ use crate::keybindings::PromptKind;
 use bevy::prelude::Resource;
 use std::collections::{HashMap, HashSet};
 use tmux_control::{CommandId, TmuxResult};
-use tmux_control_parser::{PaneId, SessionId, WindowId, WindowLayout};
+use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
 /// The `-F` format ozmux sends to enumerate windows. Tab-separated, with the
 /// free-text `window_name` LAST so a `splitn(7, '\t')` keeps it intact.
@@ -216,49 +216,8 @@ pub fn set_environment_in_session_command(session: &str, key: &str, value: &str)
     )
 }
 
-/// Builds `switch-client -t <name>` to repoint the attached control client at
-/// another session. The resulting `%session-changed` / `%client-session-changed`
-/// drives the projection rebuild; ozmux never mutates it optimistically.
-pub fn switch_client_command(name: &str) -> String {
-    format!("switch-client -t {}", quote(name))
-}
-
-/// Builds `select-window -t @<id>` to switch the client's active window.
-pub fn select_window_command(id: WindowId) -> String {
-    format!("select-window -t @{}", id.0)
-}
-
-/// Builds `rename-window -t @<id> -- <name>` (name tmux-quoted). The `--` guards
-/// names that begin with `-`; an explicit target id avoids renaming the wrong
-/// window if the current window changes between prompt-open and submit.
-pub fn rename_window_command(id: WindowId, name: &str) -> String {
-    rename_command("rename-window", '@', id.0, name)
-}
-
-/// Builds `rename-session -t $<id> -- <name>` (name tmux-quoted). The explicit
-/// target id avoids renaming the wrong session if the attached session changes
-/// between prompt-open and submit.
-pub fn rename_session_command(id: SessionId, name: &str) -> String {
-    rename_command("rename-session", '$', id.0, name)
-}
-
-fn rename_command(verb: &str, sigil: char, id: u32, name: &str) -> String {
+pub(crate) fn rename_command(verb: &str, sigil: char, id: u32, name: &str) -> String {
     format!("{verb} -t {sigil}{id} -- {}", quote(name))
-}
-
-/// Builds `select-pane -t %<id>` to focus a pane.
-pub fn select_pane_command(id: PaneId) -> String {
-    format!("select-pane -t %{}", id.0)
-}
-
-/// Builds `resize-pane -t %<id> -x <width>` (absolute, idempotent).
-pub fn resize_pane_x_command(id: PaneId, width: u32) -> String {
-    format!("resize-pane -t %{} -x {width}", id.0)
-}
-
-/// Builds `resize-pane -t %<id> -y <height>` (absolute, idempotent).
-pub fn resize_pane_y_command(id: PaneId, height: u32) -> String {
-    format!("resize-pane -t %{} -y {height}", id.0)
 }
 
 /// Builds `capture-pane -p -e -t %<id>` to fetch a pane's current visible
@@ -597,28 +556,6 @@ mod tests {
     }
 
     #[test]
-    fn select_window_command_targets_at_id() {
-        assert_eq!(select_window_command(WindowId(4)), "select-window -t @4");
-    }
-
-    #[test]
-    fn select_pane_command_targets_at_id() {
-        assert_eq!(select_pane_command(PaneId(3)), "select-pane -t %3");
-    }
-
-    #[test]
-    fn resize_pane_builders_format() {
-        assert_eq!(
-            resize_pane_x_command(PaneId(3), 80),
-            "resize-pane -t %3 -x 80"
-        );
-        assert_eq!(
-            resize_pane_y_command(PaneId(3), 24),
-            "resize-pane -t %3 -y 24"
-        );
-    }
-
-    #[test]
     fn capture_pane_command_targets_at_id_with_escapes() {
         assert_eq!(capture_pane_command(PaneId(5)), "capture-pane -p -e -t %5");
     }
@@ -652,15 +589,6 @@ mod tests {
         assert_eq!(
             set_environment_in_session_command("my work", "OZMA_SOCK", "/tmp/a b/ctl.sock"),
             "set-environment -t 'my work' OZMA_SOCK '/tmp/a b/ctl.sock'"
-        );
-    }
-
-    #[test]
-    fn switch_client_command_targets_quoted_name() {
-        assert_eq!(switch_client_command("main"), "switch-client -t main");
-        assert_eq!(
-            switch_client_command("my work"),
-            "switch-client -t 'my work'"
         );
     }
 
@@ -799,43 +727,6 @@ mod tests {
             (dims.width, dims.height),
             (80, 24),
             "fallback to window_layout"
-        );
-    }
-
-    #[test]
-    fn rename_window_command_targets_at_id_and_quotes_name() {
-        assert_eq!(
-            rename_window_command(WindowId(2), "editor"),
-            "rename-window -t @2 -- editor"
-        );
-        assert_eq!(
-            rename_window_command(WindowId(2), "my editor"),
-            "rename-window -t @2 -- 'my editor'"
-        );
-        assert_eq!(
-            rename_window_command(WindowId(2), ""),
-            "rename-window -t @2 -- ''"
-        );
-        assert_eq!(
-            rename_window_command(WindowId(7), "it's"),
-            r"rename-window -t @7 -- 'it'\''s'"
-        );
-    }
-
-    #[test]
-    fn rename_session_command_targets_dollar_id_and_quotes_name() {
-        use tmux_control_parser::SessionId;
-        assert_eq!(
-            rename_session_command(SessionId(0), "work"),
-            "rename-session -t $0 -- work"
-        );
-        assert_eq!(
-            rename_session_command(SessionId(3), "my work"),
-            "rename-session -t $3 -- 'my work'"
-        );
-        assert_eq!(
-            rename_session_command(SessionId(3), ""),
-            "rename-session -t $3 -- ''"
         );
     }
 

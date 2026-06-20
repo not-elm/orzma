@@ -22,8 +22,8 @@
 use bevy::prelude::*;
 use crossbeam_channel::RecvTimeoutError;
 use ozmux_tmux::{
-    ConnectionState, PaneId, TmuxConnection, TmuxPane, TmuxSessionPlugin, copy_state_query_command,
-    parse_copy_state, resize_pane_x_command, show_buffer_command,
+    ConnectionState, PaneId, ResizePaneX, TmuxCommand, TmuxConnection, TmuxPane, TmuxSessionPlugin,
+    copy_state_query_command, parse_copy_state, show_buffer_command,
 };
 use std::time::{Duration, Instant};
 use tmux_control::{ClientEvent, TmuxServer, TransportEvent};
@@ -213,7 +213,11 @@ fn resize_pane_settle() {
 
     // Request a wider left pane (ensure we don't exceed tmux's window width).
     let target_width = (initial_width + 10).min(60);
-    let cmd = resize_pane_x_command(pane_id, target_width);
+    let cmd = ResizePaneX {
+        id: pane_id,
+        width: target_width,
+    }
+    .into_raw_command();
     send_cmd(&app, &cmd);
 
     // Pump until the projected width for the first pane changes — the

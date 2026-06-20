@@ -33,8 +33,8 @@ use bevy_cef_core::prelude::Browsers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_tmux::{
-    ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, TmuxPane,
-    resize_pane_x_command, resize_pane_y_command, select_pane_command, show_buffer_command,
+    ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, ResizePaneX, ResizePaneY, SelectPane,
+    TmuxCommand, TmuxConnection, TmuxPane, show_buffer_command,
 };
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
@@ -344,7 +344,7 @@ fn arbiter(
                 if ev.state == ButtonState::Pressed
                     && let Ok((_, pane, _, _)) = panes.get(terminal)
                     && let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(&select_pane_command(pane.id))
+                    && let Err(e) = client.handle().send(SelectPane { id: pane.id })
                 {
                     tracing::warn!(?e, pane = pane.id.0, "inline-press select-pane send failed");
                 }
@@ -380,11 +380,10 @@ fn arbiter(
                         resized: false,
                     };
                 } else if let Some((pane, pane_id)) = pane_under {
-                    if let Some(client) = connection.client() {
-                        let cmd = select_pane_command(pane_id);
-                        if let Err(e) = client.handle().send(&cmd) {
-                            tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
-                        }
+                    if let Some(client) = connection.client()
+                        && let Err(e) = client.handle().send(SelectPane { id: pane_id })
+                    {
+                        tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
                     }
                     let now = time.elapsed();
                     let cursor_logical = cursor_phys / scale;
@@ -467,7 +466,7 @@ fn arbiter(
                         if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
                             && let Some((_, pane_id)) = pane_under_cursor(&panes, cursor_phys)
                             && let Some(client) = connection.client()
-                            && let Err(e) = client.handle().send(&select_pane_command(pane_id))
+                            && let Err(e) = client.handle().send(SelectPane { id: pane_id })
                         {
                             tracing::warn!(
                                 ?e,
@@ -658,8 +657,16 @@ fn arbiter(
         };
 
         let cmd = match divider.axis {
-            DividerAxis::Vertical => resize_pane_x_command(divider.primary, target),
-            DividerAxis::Horizontal => resize_pane_y_command(divider.primary, target),
+            DividerAxis::Vertical => ResizePaneX {
+                id: divider.primary,
+                width: target,
+            }
+            .into_raw_command(),
+            DividerAxis::Horizontal => ResizePaneY {
+                id: divider.primary,
+                height: target,
+            }
+            .into_raw_command(),
         };
 
         if let Err(e) = client.handle().send(&cmd) {

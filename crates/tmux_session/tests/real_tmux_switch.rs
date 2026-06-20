@@ -50,7 +50,7 @@ fn switch_client_emits_a_session_change() {
 
     client
         .handle()
-        .send(&ozmux_tmux::switch_client_command(&b))
+        .send(ozmux_tmux::SwitchClient { name: &b })
         .expect("switch-client");
     std::thread::sleep(Duration::from_millis(400));
 
