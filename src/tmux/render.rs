@@ -14,9 +14,8 @@ use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{
-    ActiveWindow, PaneOutput, TmuxConnection, TmuxPane, TmuxProjectionSet, TmuxWindow,
-    TmuxWindowLayout, WindowId, refresh_client_command, resize_window_command,
-    window_refresh_client_command,
+    ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxCommand, TmuxConnection, TmuxPane,
+    TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -477,14 +476,36 @@ fn rows_for_panes(total_rows: u16) -> u16 {
     total_rows.saturating_sub(1).max(1)
 }
 
-/// Returns the size-declaration command for `win` based on the tmux per-window
+/// Size-declaration command for `win` chosen by the tmux per-window
 /// `refresh-client` capability. `None` (capability not yet known) falls back to
 /// the global `refresh-client -C W,H`.
-fn pin_command(per_window: Option<bool>, win: WindowId, cols: u16, rows: u16) -> String {
-    match per_window {
-        Some(true) => window_refresh_client_command(win, cols, rows),
-        Some(false) => resize_window_command(win, cols, rows),
-        None => refresh_client_command(cols, rows),
+struct Pin {
+    per_window: Option<bool>,
+    win: WindowId,
+    cols: u16,
+    rows: u16,
+}
+impl TmuxCommand for Pin {
+    fn into_raw_command(self) -> String {
+        match self.per_window {
+            Some(true) => WindowRefreshClient {
+                win: self.win,
+                cols: self.cols,
+                rows: self.rows,
+            }
+            .into_raw_command(),
+            Some(false) => ResizeWindow {
+                win: self.win,
+                cols: self.cols,
+                rows: self.rows,
+            }
+            .into_raw_command(),
+            None => RefreshClient {
+                cols: self.cols,
+                rows: self.rows,
+            }
+            .into_raw_command(),
+        }
     }
 }
 
@@ -566,7 +587,13 @@ fn sync_client_size(
         }
         return;
     }
-    let cmd = pin_command(per_window, tmux_window.id, cols, rows);
+    let cmd = Pin {
+        per_window,
+        win: tmux_window.id,
+        cols,
+        rows,
+    }
+    .into_raw_command();
     // NOTE: only record the size as sent AFTER a successful send — otherwise a
     // transient send failure would poison the dedupe and permanently suppress
     // re-sending this size, leaving tmux stuck at the stale client dimensions.
@@ -611,15 +638,33 @@ mod tests {
     fn pin_command_selects_form_by_capability() {
         use ozmux_tmux::WindowId;
         assert_eq!(
-            pin_command(Some(true), WindowId(3), 80, 24),
+            Pin {
+                per_window: Some(true),
+                win: WindowId(3),
+                cols: 80,
+                rows: 24
+            }
+            .into_raw_command(),
             "refresh-client -C @3:80x24"
         );
         assert_eq!(
-            pin_command(Some(false), WindowId(3), 80, 24),
+            Pin {
+                per_window: Some(false),
+                win: WindowId(3),
+                cols: 80,
+                rows: 24
+            }
+            .into_raw_command(),
             "resize-window -x 80 -y 24 -t @3"
         );
         assert_eq!(
-            pin_command(None, WindowId(3), 80, 24),
+            Pin {
+                per_window: None,
+                win: WindowId(3),
+                cols: 80,
+                rows: 24
+            }
+            .into_raw_command(),
             "refresh-client -C 80,24"
         );
     }

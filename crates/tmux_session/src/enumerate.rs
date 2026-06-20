@@ -94,34 +94,6 @@ fn parse_window_id(field: &str) -> Option<WindowId> {
     Some(WindowId(field.strip_prefix('@')?.parse().ok()?))
 }
 
-/// Builds a `refresh-client -C <cols>,<rows>` control-mode command telling
-/// tmux this client's cell size. The bare `W,H` form is accepted by all tmux
-/// versions; the `WxH` form is only required for the `@id:WxH` per-window
-/// variant, which Phase 2b does not use.
-pub fn refresh_client_command(cols: u16, rows: u16) -> String {
-    format!("refresh-client -C {cols},{rows}")
-}
-
-/// Builds `refresh-client -C @<win>:<cols>x<rows>` — declares this control
-/// client's size for one specific window (tmux ≥ 3.4). Unlike the global
-/// `refresh-client -C W,H`, this sizes a single window without affecting the
-/// client's other windows.
-pub fn window_refresh_client_command(win: WindowId, cols: u16, rows: u16) -> String {
-    format!("refresh-client -C @{}:{cols}x{rows}", win.0)
-}
-
-/// Builds `resize-window -x <cols> -y <rows> -t @<win>` — the tmux < 3.4
-/// fallback for per-window sizing.
-///
-/// # Invariants
-///
-/// tmux sets the session's `window-size` option to `manual` as a side effect
-/// of `resize-window`; only used when the per-window `refresh-client -C` form
-/// is unavailable.
-pub fn resize_window_command(win: WindowId, cols: u16, rows: u16) -> String {
-    format!("resize-window -x {cols} -y {rows} -t @{}", win.0)
-}
-
 /// Builds `display-message -p '#{version}'` — prints the tmux server version
 /// (e.g. `3.6a`) as a one-line command reply.
 pub fn version_command() -> String {
@@ -527,11 +499,6 @@ mod tests {
     }
 
     #[test]
-    fn refresh_client_command_uses_comma_size_form() {
-        assert_eq!(refresh_client_command(80, 24), "refresh-client -C 80,24");
-    }
-
-    #[test]
     fn client_name_command_has_expected_format() {
         assert_eq!(client_name_command(), "display-message -p '#{client_name}'");
     }
@@ -727,22 +694,6 @@ mod tests {
             (dims.width, dims.height),
             (80, 24),
             "fallback to window_layout"
-        );
-    }
-
-    #[test]
-    fn window_refresh_client_command_uses_per_window_form() {
-        assert_eq!(
-            window_refresh_client_command(WindowId(2), 80, 24),
-            "refresh-client -C @2:80x24"
-        );
-    }
-
-    #[test]
-    fn resize_window_command_targets_window() {
-        assert_eq!(
-            resize_window_command(WindowId(2), 80, 24),
-            "resize-window -x 80 -y 24 -t @2"
         );
     }
 
