@@ -16,6 +16,7 @@ mod theme;
 mod tmux;
 mod ui;
 mod webview_render;
+mod window_title;
 
 use crate::cef_profile::CefProfileDir;
 use crate::control_plane::OzmuxControlPlanePlugin;
@@ -24,6 +25,7 @@ use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::osc_webview::OzmuxOscWebviewPlugin;
 use crate::ozma::{AppMode, OzmaModePlugin};
 use crate::webview_render::{OzmuxWebviewRenderPlugin, cef_plugin};
+use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
@@ -92,6 +94,7 @@ fn main() {
         .add_plugins(CopyPromptPlugin)
         .add_plugins(ConfirmPromptPlugin)
         .add_plugins(RenamePromptPlugin)
+        .add_plugins(WindowTitlePlugin)
         .add_plugins((
             HyperlinkInputPlugin,
             ImePlugin,
