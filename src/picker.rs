@@ -51,7 +51,16 @@ impl Plugin for OzmuxPickerPlugin {
             )
             .add_systems(
                 PostUpdate,
-                sync_picker_ui.run_if(resource_exists_and_changed::<SessionPicker>),
+                sync_picker_ui
+                    .before(UiSystems::Layout)
+                    .run_if(resource_exists_and_changed::<SessionPicker>),
+            )
+            .add_systems(
+                PostUpdate,
+                scroll_selected_into_view
+                    .after(UiSystems::Layout)
+                    .run_if(picker_is_open)
+                    .run_if(resource_exists_and_changed::<SessionPicker>),
             )
             .add_systems(
                 Update,
@@ -508,6 +517,56 @@ fn handle_picker_scroll(
     }
 }
 
+// NOTE: writes ScrollPosition after UiSystems::Layout, so the correction lands on
+// the next frame's render. Reads physical-px geometry (ComputedNode size +
+// UiGlobalTransform center) and converts to logical via inverse_scale_factor,
+// because ScrollPosition is in logical px.
+fn scroll_selected_into_view(
+    mut list: Query<(&mut ScrollPosition, &ComputedNode, &UiGlobalTransform, &Children), With<PickerList>>,
+    rows: Query<(&ComputedNode, &UiGlobalTransform, &PickerRowLabel)>,
+    picker: Res<SessionPicker>,
+) {
+    let Ok((mut pos, list_node, list_tf, children)) = list.single_mut() else {
+        return;
+    };
+    let viewport_h_phys = list_node.size().y;
+    if viewport_h_phys <= 0.0 {
+        return;
+    }
+
+    let mut selected: Option<(f32, f32)> = None;
+    for child in children.iter() {
+        let Ok((row_node, row_tf, label)) = rows.get(child) else {
+            continue;
+        };
+        if label.0 == picker.selected {
+            let h = row_node.size().y;
+            let top = row_tf.translation.y - h / 2.0;
+            selected = Some((top, h));
+            break;
+        }
+    }
+    let Some((row_top_global, row_h_phys)) = selected else {
+        return;
+    };
+    if row_h_phys <= 0.0 {
+        return;
+    }
+
+    let inv = list_node.inverse_scale_factor;
+    let list_top_global = list_tf.translation.y - viewport_h_phys / 2.0;
+    let current = pos.0.y;
+    let row_top = current + (row_top_global - list_top_global) * inv;
+    let row_h = row_h_phys * inv;
+    let viewport_h = viewport_h_phys * inv;
+    let max = (list_node.content_size().y - viewport_h_phys).max(0.0) * inv;
+
+    let next = reveal_offset(row_top, row_h, viewport_h, current, max);
+    if pos.0.y != next {
+        pos.0.y = next;
+    }
+}
+
 fn handle_picker_input(
     mut picker: ResMut<SessionPicker>,
     mut connection: NonSendMut<TmuxConnection>,
@@ -833,6 +892,21 @@ fn wheel_delta_px(unit: MouseScrollUnit, y: f32) -> f32 {
     }
 }
 
+/// The new vertical scroll offset (logical px) that brings the row spanning
+/// `[row_top, row_top + row_h]` fully into a `viewport_h`-tall viewport currently
+/// scrolled to `current`. Scrolls up if the row is above the viewport, down if
+/// below, else unchanged; the result is clamped to `[0, max]`.
+fn reveal_offset(row_top: f32, row_h: f32, viewport_h: f32, current: f32, max: f32) -> f32 {
+    let target = if row_top < current {
+        row_top
+    } else if row_top + row_h > current + viewport_h {
+        row_top + row_h - viewport_h
+    } else {
+        current
+    };
+    target.clamp(0.0, max.max(0.0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1156,6 +1230,30 @@ mod tests {
     fn wheel_pixel_delta_is_inverted_identity() {
         assert_eq!(wheel_delta_px(MouseScrollUnit::Pixel, 5.0), -5.0);
         assert_eq!(wheel_delta_px(MouseScrollUnit::Pixel, -3.0), 3.0);
+    }
+
+    #[test]
+    fn reveal_leaves_a_fully_visible_row_unchanged() {
+        // row [40,60] inside viewport [30,130]: unchanged.
+        assert_eq!(reveal_offset(40.0, 20.0, 100.0, 30.0, 200.0), 30.0);
+    }
+
+    #[test]
+    fn reveal_scrolls_up_so_row_top_is_flush() {
+        // row top 10 is above current 50: offset becomes 10.
+        assert_eq!(reveal_offset(10.0, 20.0, 100.0, 50.0, 200.0), 10.0);
+    }
+
+    #[test]
+    fn reveal_scrolls_down_so_row_bottom_is_flush() {
+        // row [180,200], viewport height 100, current 0: 200 - 100 = 100.
+        assert_eq!(reveal_offset(180.0, 20.0, 100.0, 0.0, 200.0), 100.0);
+    }
+
+    #[test]
+    fn reveal_clamps_to_zero_and_to_max() {
+        assert_eq!(reveal_offset(-10.0, 20.0, 100.0, 5.0, 200.0), 0.0);
+        assert_eq!(reveal_offset(180.0, 20.0, 100.0, 0.0, 50.0), 50.0);
     }
 
     #[test]
