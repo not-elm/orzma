@@ -162,9 +162,18 @@ impl App {
         }
     }
 
-    /// Updates the current URL (called by main.rs when `urlChanged` fires from the page).
-    pub(crate) fn set_url(&mut self, url: String) {
-        self.url = url;
+    /// Records a page-driven URL change reported via `urlChanged`. A change to a
+    /// new URL pushes the current URL onto the back-stack (an in-page navigation
+    /// ozbrowser did not initiate — e.g. an `f`-hint or link click); a change
+    /// that merely echoes the current URL (the load that follows an address-bar
+    /// / history / reload re-registration ozbrowser already accounted for)
+    /// updates nothing.
+    pub(crate) fn on_page_url_changed(&mut self, url: String) {
+        if url == self.url {
+            return;
+        }
+        let current = self.url.clone();
+        self.url = self.history.navigate(current, url);
     }
 
     /// Applies a `hintResult` reported by the page: a hint that focused a form
@@ -407,12 +416,32 @@ mod tests {
     }
 
     #[test]
-    fn set_url_updates_url_without_touching_history() {
+    fn page_url_change_to_new_url_pushes_history() {
         let mut a = app();
-        a.navigate("https://rust-lang.org".into());
-        a.set_url("https://docs.rs".into());
+        a.on_page_url_changed("https://b.com".into());
+        assert_eq!(a.url(), "https://b.com");
+        assert_eq!(a.go_back(), Some("https://example.com".into()));
+    }
+
+    #[test]
+    fn page_url_change_to_current_url_is_noop() {
+        let mut a = app();
+        a.on_page_url_changed("https://example.com".into());
+        assert_eq!(a.url(), "https://example.com");
+        assert_eq!(
+            a.go_back(),
+            None,
+            "an echo of the current url must not push history"
+        );
+    }
+
+    #[test]
+    fn page_navigation_then_back_returns_to_previous_page() {
+        let mut a = app();
+        a.on_page_url_changed("https://docs.rs".into());
         assert_eq!(a.url(), "https://docs.rs");
         assert_eq!(a.go_back(), Some("https://example.com".into()));
+        assert_eq!(a.url(), "https://example.com");
     }
 
     #[test]

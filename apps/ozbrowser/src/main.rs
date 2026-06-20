@@ -79,7 +79,7 @@ fn event_loop(
 
     loop {
         while let Ok(url) = url_rx.try_recv() {
-            app.set_url(url);
+            app.on_page_url_changed(url);
         }
         while let Ok(kind) = hint_rx.try_recv() {
             app.on_hint_result(&kind);
