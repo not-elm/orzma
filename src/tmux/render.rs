@@ -587,17 +587,15 @@ fn sync_client_size(
         }
         return;
     }
-    let cmd = Pin {
+    // NOTE: only record the size as sent AFTER a successful send — otherwise a
+    // transient send failure would poison the dedupe and permanently suppress
+    // re-sending this size, leaving tmux stuck at the stale client dimensions.
+    match client.handle().send(Pin {
         per_window,
         win: tmux_window.id,
         cols,
         rows,
-    }
-    .into_raw_command();
-    // NOTE: only record the size as sent AFTER a successful send — otherwise a
-    // transient send failure would poison the dedupe and permanently suppress
-    // re-sending this size, leaving tmux stuck at the stale client dimensions.
-    match client.handle().send(&cmd) {
+    }) {
         Ok(_) => {
             last.window = Some(tmux_window.id);
             last.cols = cols;

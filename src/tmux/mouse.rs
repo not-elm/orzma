@@ -34,7 +34,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozmux_tmux::{
     ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, ResizePaneX, ResizePaneY, SelectPane,
-    ShowBuffer, TmuxCommand, TmuxConnection, TmuxPane,
+    ShowBuffer, TmuxConnection, TmuxPane,
 };
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
@@ -656,20 +656,18 @@ fn arbiter(
             return;
         };
 
-        let cmd = match divider.axis {
-            DividerAxis::Vertical => ResizePaneX {
+        let result = match divider.axis {
+            DividerAxis::Vertical => client.handle().send(ResizePaneX {
                 id: divider.primary,
                 width: target,
-            }
-            .into_raw_command(),
-            DividerAxis::Horizontal => ResizePaneY {
+            }),
+            DividerAxis::Horizontal => client.handle().send(ResizePaneY {
                 id: divider.primary,
                 height: target,
-            }
-            .into_raw_command(),
+            }),
         };
 
-        if let Err(e) = client.handle().send(&cmd) {
+        if let Err(e) = result {
             tracing::warn!(?e, pane = divider.primary.0, "resize-pane send failed");
             return;
         }

@@ -245,15 +245,14 @@ fn forward_keys_to_tmux(
             if let (Some(target), Some(client)) = (target.as_deref(), connection.client()) {
                 let handle = client.handle();
                 for action in actions {
-                    let cmd = match action {
-                        Forwarded::Run(cmd) => cmd,
-                        Forwarded::Keys(names) => SendPaneKeys {
+                    let result = match action {
+                        Forwarded::Run(cmd) => handle.send(&cmd),
+                        Forwarded::Keys(names) => handle.send(SendPaneKeys {
                             pane: target,
                             names: &names,
-                        }
-                        .into_raw_command(),
+                        }),
                     };
-                    if let Err(e) = handle.send(&cmd) {
+                    if let Err(e) = result {
                         tracing::warn!(?e, "passthrough forward failed");
                         break;
                     }
@@ -428,15 +427,14 @@ fn forward_keys_to_tmux(
             break;
         }
         let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
-        let cmd = match action {
-            Forwarded::Run(command) => command,
-            Forwarded::Keys(names) => SendPaneKeys {
+        let result = match action {
+            Forwarded::Run(command) => handle.send(&command),
+            Forwarded::Keys(names) => handle.send(SendPaneKeys {
                 pane: target,
                 names: &names,
-            }
-            .into_raw_command(),
+            }),
         };
-        if let Err(e) = handle.send(&cmd) {
+        if let Err(e) = result {
             tracing::warn!(?e, "tmux forward send failed");
             break;
         }
@@ -463,6 +461,12 @@ fn is_copy_mode_entry(command: &str) -> bool {
 }
 
 /// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down` — one copy-mode wheel notch.
+///
+/// ozmux drives copy-mode wheel scrolling with this single, targeted command
+/// rather than relaying tmux's copy-table `WheelUpPane`/`WheelDownPane`
+/// bindings, which are `select-pane \; send-keys …` sequences: relaying a
+/// sequence as one control-mode command makes tmux emit an extra reply block
+/// the protocol client cannot correlate (the `no pending command` storm).
 struct Scroll<'a> {
     target: &'a str,
     up: bool,
