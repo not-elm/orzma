@@ -31,6 +31,7 @@ pub enum FineModifier {
 /// subset is mapped to `ozma_tty_engine::WheelConfig`, and the
 /// button-relevant subset to `ozma_tty_engine::ButtonConfig`.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(default)]
 pub struct MouseConfig {
     /// Lines scrolled per notch in the scrollback / alt-screen paths.
     pub lines_per_notch: u32,
@@ -95,66 +96,6 @@ impl Default for MouseConfig {
     }
 }
 
-/// Per-field-optional patch produced by parsing `[mouse]` from
-/// `config.toml`. Missing keys fall through to the defaults.
-#[derive(Deserialize, Default)]
-pub(crate) struct MousePatch {
-    pub(crate) lines_per_notch: Option<u32>,
-    pub(crate) fine_modifier: Option<FineModifier>,
-    pub(crate) fine_lines: Option<u32>,
-    pub(crate) max_protocol_events_per_frame: Option<u32>,
-    pub(crate) cells_per_notch: Option<f32>,
-    pub(crate) double_click_timeout_ms: Option<u32>,
-    pub(crate) click_drift_px: Option<f32>,
-    pub(crate) autoscroll_base_period_ms: Option<u32>,
-    pub(crate) autoscroll_min_period_ms: Option<u32>,
-    pub(crate) autoscroll_step_ms: Option<u32>,
-    pub(crate) drag_threshold_px: Option<f32>,
-    pub(crate) divider_grab_tolerance_px: Option<f32>,
-}
-
-impl MousePatch {
-    pub(crate) fn apply_to(self, mut base: MouseConfig) -> MouseConfig {
-        if let Some(v) = self.lines_per_notch {
-            base.lines_per_notch = v;
-        }
-        if let Some(v) = self.fine_modifier {
-            base.fine_modifier = v;
-        }
-        if let Some(v) = self.fine_lines {
-            base.fine_lines = v;
-        }
-        if let Some(v) = self.max_protocol_events_per_frame {
-            base.max_protocol_events_per_frame = v;
-        }
-        if let Some(v) = self.cells_per_notch {
-            base.cells_per_notch = v;
-        }
-        if let Some(v) = self.double_click_timeout_ms {
-            base.double_click_timeout_ms = v;
-        }
-        if let Some(v) = self.click_drift_px {
-            base.click_drift_px = v;
-        }
-        if let Some(v) = self.autoscroll_base_period_ms {
-            base.autoscroll_base_period_ms = v;
-        }
-        if let Some(v) = self.autoscroll_min_period_ms {
-            base.autoscroll_min_period_ms = v;
-        }
-        if let Some(v) = self.autoscroll_step_ms {
-            base.autoscroll_step_ms = v;
-        }
-        if let Some(v) = self.drag_threshold_px {
-            base.drag_threshold_px = v;
-        }
-        if let Some(v) = self.divider_grab_tolerance_px {
-            base.divider_grab_tolerance_px = v;
-        }
-        base
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,70 +113,35 @@ mod tests {
         assert_eq!(cfg.autoscroll_base_period_ms, 50);
         assert_eq!(cfg.autoscroll_min_period_ms, 16);
         assert_eq!(cfg.autoscroll_step_ms, 4);
-    }
-
-    #[test]
-    fn patch_overrides_only_present_fields() {
-        let patch = MousePatch {
-            lines_per_notch: Some(5),
-            click_drift_px: Some(12.0),
-            ..Default::default()
-        };
-        let merged = patch.apply_to(MouseConfig::default());
-        assert_eq!(merged.lines_per_notch, 5);
-        assert_eq!(merged.click_drift_px, 12.0);
-        assert_eq!(merged.fine_modifier, FineModifier::Alt);
-        assert_eq!(merged.fine_lines, 1);
-        assert_eq!(merged.double_click_timeout_ms, 400);
-    }
-
-    #[test]
-    fn fine_modifier_parses_lowercase_string() {
-        let patch: MousePatch = toml::from_str(r#"fine_modifier = "ctrl""#).unwrap();
-        assert_eq!(patch.fine_modifier, Some(FineModifier::Ctrl));
-    }
-
-    #[test]
-    fn fine_modifier_none_variant_parses() {
-        let patch: MousePatch = toml::from_str(r#"fine_modifier = "none""#).unwrap();
-        assert_eq!(patch.fine_modifier, Some(FineModifier::None));
-    }
-
-    #[test]
-    fn empty_patch_leaves_base_unchanged() {
-        let patch = MousePatch::default();
-        let merged = patch.apply_to(MouseConfig::default());
-        assert_eq!(merged, MouseConfig::default());
-    }
-
-    #[test]
-    fn autoscroll_fields_parse_from_toml() {
-        let toml = r#"
-            autoscroll_base_period_ms = 40
-            autoscroll_min_period_ms = 12
-            autoscroll_step_ms = 6
-        "#;
-        let patch: MousePatch = toml::from_str(toml).unwrap();
-        assert_eq!(patch.autoscroll_base_period_ms, Some(40));
-        assert_eq!(patch.autoscroll_min_period_ms, Some(12));
-        assert_eq!(patch.autoscroll_step_ms, Some(6));
-    }
-
-    #[test]
-    fn gesture_defaults_present() {
-        let cfg = MouseConfig::default();
         assert_eq!(cfg.drag_threshold_px, 4.0);
         assert_eq!(cfg.divider_grab_tolerance_px, 4.0);
     }
 
     #[test]
-    fn gesture_fields_parse_from_toml() {
-        let toml = r#"
-            drag_threshold_px = 6.0
-            divider_grab_tolerance_px = 5.0
-        "#;
-        let patch: MousePatch = toml::from_str(toml).unwrap();
-        assert_eq!(patch.drag_threshold_px, Some(6.0));
-        assert_eq!(patch.divider_grab_tolerance_px, Some(5.0));
+    fn partial_mouse_fills_missing_from_default() {
+        let cfg: MouseConfig =
+            toml::from_str("lines_per_notch = 5\nclick_drift_px = 12.0").unwrap();
+        assert_eq!(cfg.lines_per_notch, 5);
+        assert_eq!(cfg.click_drift_px, 12.0);
+        assert_eq!(cfg.fine_modifier, FineModifier::Alt);
+        assert_eq!(cfg.fine_lines, 1);
+    }
+
+    #[test]
+    fn fine_modifier_parses_lowercase() {
+        let cfg: MouseConfig = toml::from_str(r#"fine_modifier = "ctrl""#).unwrap();
+        assert_eq!(cfg.fine_modifier, FineModifier::Ctrl);
+    }
+
+    #[test]
+    fn fine_modifier_none_variant_parses() {
+        let cfg: MouseConfig = toml::from_str(r#"fine_modifier = "none""#).unwrap();
+        assert_eq!(cfg.fine_modifier, FineModifier::None);
+    }
+
+    #[test]
+    fn unknown_key_is_ignored() {
+        let cfg: MouseConfig = toml::from_str("lines_per_notch = 5\nbogus = 1").unwrap();
+        assert_eq!(cfg.lines_per_notch, 5);
     }
 }
