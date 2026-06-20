@@ -5,6 +5,23 @@ use std::path::{Path, PathBuf};
 
 const SUN_PATH_MAX: usize = if cfg!(target_os = "macos") { 104 } else { 108 };
 
+/// Error returned when resolving a [`RuntimeRoot`].
+#[derive(Debug, thiserror::Error)]
+pub enum RuntimeRootError {
+    /// The longest socket path under the chosen root would overflow `sun_path`.
+    #[error("'{name}' socket path exceeds {limit} bytes")]
+    SocketPathTooLong {
+        /// Webview handle name whose socket path overflowed.
+        name: String,
+        /// The `sun_path` byte limit that was exceeded.
+        limit: usize,
+    },
+
+    /// Creating or permissioning the runtime directories failed.
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+}
+
 /// A per-handle runtime directory tree (`<base>/<pid>/<name>/{sock,bin}/`), removed on drop.
 pub struct RuntimeRoot {
     root: PathBuf,
@@ -15,7 +32,7 @@ pub struct RuntimeRoot {
 impl RuntimeRoot {
     /// Resolves a runtime root under `parent/<pid>/<name>/`, falling back to
     /// `/tmp/ozmux-webview` when the socket path would overflow the `sun_path` limit.
-    pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> std::io::Result<Self> {
+    pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> Result<Self, RuntimeRootError> {
         // NOTE: measure the LONGEST socket filename a webview uses
         // (`<name>.handlers.sock`) so the sun_path fit check is not optimistic;
         // `socket_path` produces the shorter `<name>.sock`.
@@ -38,9 +55,10 @@ impl RuntimeRoot {
         if needed(fallback) <= SUN_PATH_MAX {
             return Self::new_in(fallback, pid, name);
         }
-        Err(std::io::Error::other(format!(
-            "'{name}' socket path exceeds {SUN_PATH_MAX} bytes"
-        )))
+        Err(RuntimeRootError::SocketPathTooLong {
+            name: name.to_owned(),
+            limit: SUN_PATH_MAX,
+        })
     }
 
     /// The socket path for the given `name` under this root.
@@ -63,7 +81,7 @@ impl RuntimeRoot {
         &self.bin_dir
     }
 
-    fn new_in(parent: &Path, pid: u32, name: &str) -> std::io::Result<Self> {
+    fn new_in(parent: &Path, pid: u32, name: &str) -> Result<Self, RuntimeRootError> {
         let root = parent.join(pid.to_string()).join(name);
         let sock_dir = root.join("sock");
         let bin_dir = root.join("bin");
@@ -175,5 +193,15 @@ mod tests {
             "expected /tmp fallback, got {:?}",
             rt.root()
         );
+    }
+
+    #[test]
+    fn runtime_root_errors_when_even_tmp_fallback_overflows() {
+        let long_name = "n".repeat(60);
+        let parent = tempfile::tempdir().unwrap();
+        assert!(matches!(
+            RuntimeRoot::resolve_in(parent.path(), 1, &long_name),
+            Err(RuntimeRootError::SocketPathTooLong { .. })
+        ));
     }
 }
