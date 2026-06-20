@@ -2,7 +2,7 @@
 //! selection + copy, wheel scrollback, and Cmd-click hyperlink open. Reads Bevy
 //! mouse input, hit-tests the cursor to a cell, and drives the engine's pure
 //! `ButtonAction` / `WheelAction` routers, applying the result to the
-//! `TerminalHandle` / `Clipboard`. Gated per entity by `InputDisabled`.
+//! `TerminalHandle` / `Clipboard`. Gated per entity by `MouseDisabled`.
 
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel};
@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use crate::clipboard::Clipboard;
 use crate::hyperlink::{link_modifier_held, try_open_uri};
-use crate::input::{InputDisabled, current_terminal_modifiers};
+use crate::input::current_terminal_modifiers;
 use crate::spawn::OzmaTerminal;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
@@ -75,9 +75,17 @@ impl Default for OzmaMouseConfig {
 }
 
 /// System set for the crate's three mouse systems. Hosts maintaining
-/// `InputDisabled` should schedule their maintainer `.before(OzmaTerminalMouseSet)`.
+/// `MouseDisabled` should schedule their maintainer `.before(OzmaTerminalMouseSet)`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OzmaTerminalMouseSet;
+
+/// When present on an `OzmaTerminal` entity, the crate's mouse dispatchers and
+/// hover-cursor system skip it — it is removed from the hit-test candidate set,
+/// so the pointer falls through to the next terminal below it. The host marks
+/// every terminal `MouseDisabled` for modal suppression (picker / IME / focused
+/// webview / unfocused window).
+#[derive(Component)]
+pub struct MouseDisabled;
 
 /// Phase of an in-progress left-drag: `Armed` after a single-click press (no
 /// selection started yet), `Started` once the pointer crossed into another cell.
@@ -102,11 +110,14 @@ pub(crate) struct DragGesture {
     pub(crate) phase: DragPhase,
 }
 
-/// A held mouse button and the last cell a drag was synthesized for. Tracked
+/// A held mouse button: the terminal the press landed on, the button, and the
+/// last cell a drag was synthesized for. The `entity` locks drag/release to the
+/// press terminal even when the pointer wanders onto another terminal. Tracked
 /// for BOTH local selection and app-forward drags — the forward path never sets
 /// `drag`, so drag-motion synthesis must not depend on it.
 #[derive(Clone, Copy)]
 pub(crate) struct HeldPointer {
+    pub(crate) entity: Entity,
     pub(crate) button: MouseButtonKind,
     pub(crate) last_cell: CellCoord,
 }
@@ -180,6 +191,22 @@ pub(crate) fn cell_at_cursor(
         .normalize_point(*transform, cursor_phys)
         .map(|n| (n + Vec2::splat(0.5)) * node.size)?;
     Some(cell_at_local(local, cell_w, cell_h, cols, rows))
+}
+
+/// The `Entity` of the topmost `OzmaTerminal` whose node contains `cursor_phys`,
+/// or `None` when the cursor is over none. "Topmost" is the highest
+/// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); a higher
+/// index is drawn later, i.e. on top. Equal stack indices (only possible before
+/// the first layout pass assigns them) are broken by `Entity` order so the
+/// result is deterministic rather than query-iteration dependent.
+pub(crate) fn topmost_terminal_at<'a>(
+    cursor_phys: Vec2,
+    candidates: impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)>,
+) -> Option<Entity> {
+    candidates
+        .filter(|&(_, node, transform)| node.contains_point(*transform, cursor_phys))
+        .max_by_key(|&(entity, node, _)| (node.stack_index(), entity))
+        .map(|(entity, _, _)| entity)
 }
 
 /// Converts a 1-indexed protocol `CellCoord` into the engine's viewport-relative
@@ -299,10 +326,23 @@ pub(crate) fn decide_button(
     effects
 }
 
-/// Carries the sub-notch wheel remainder across frames.
+/// Carries the sub-notch wheel remainder across frames, scoped to the last
+/// terminal the wheel targeted.
 #[derive(Resource, Default)]
 pub(crate) struct WheelAccumulator {
     residual_cells: f32,
+    last_target: Option<Entity>,
+}
+
+impl WheelAccumulator {
+    /// Resets the residual when the wheel target changes, so a sub-notch fraction
+    /// accumulated over one terminal cannot bleed into the next.
+    fn retarget(&mut self, entity: Entity) {
+        if self.last_target != Some(entity) {
+            self.residual_cells = 0.0;
+            self.last_target = Some(entity);
+        }
+    }
 }
 
 /// Cells of scroll for one wheel event: `Line` units count directly, `Pixel`
@@ -353,14 +393,16 @@ pub(crate) fn decide_wheel(
     }
 }
 
-/// The crate's mouse-button dispatcher. Resolves the cursor cell, tracks clicks
-/// and drag state, drives `decide_button`, and applies the effects. Skips the
-/// `OzmaTerminal` while it carries `InputDisabled`.
+/// The crate's mouse-button dispatcher. Hit-tests the topmost terminal under the
+/// cursor on press, locks drag/release to that terminal, tracks clicks and drag
+/// state, drives `decide_button`, and triggers `TerminalMouseEffects`. Skips any
+/// `OzmaTerminal` carrying `MouseDisabled`; an empty candidate set (modal
+/// suppression) drains events and resets the gesture.
 pub(crate) fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OzmaMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
-    terminal: Query<
+    terminals: Query<
         (
             Entity,
             &TerminalHandle,
@@ -368,7 +410,7 @@ pub(crate) fn dispatch_mouse_buttons(
             &UiGlobalTransform,
             &TerminalGrid,
         ),
-        (With<OzmaTerminal>, Without<InputDisabled>),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
     >,
     cfg: Res<OzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -376,19 +418,13 @@ pub(crate) fn dispatch_mouse_buttons(
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok((entity, handle, node, transform, grid)) = terminal.single() else {
-        buttons.clear();
-        gesture.drag = None;
-        gesture.held = None;
-        return;
-    };
     let Ok(window) = windows.single() else {
         buttons.clear();
         gesture.drag = None;
         gesture.held = None;
         return;
     };
-    if !window.focused {
+    if !window.focused || terminals.is_empty() {
         buttons.clear();
         gesture.drag = None;
         gesture.held = None;
@@ -401,19 +437,42 @@ pub(crate) fn dispatch_mouse_buttons(
         gesture.held = None;
         return;
     };
-    let ctx = CellContext {
-        node,
-        transform,
-        grid,
-        cell_w: metrics.metrics.advance_phys.floor().max(1.0),
-        cell_h: metrics.metrics.line_height_phys.floor().max(1.0),
-    };
-    let modes = handle.current_modes();
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
     let mods = protocol_mods(&keys);
     let modifier_held = link_modifier_held(&mods);
 
-    let mut effects: Vec<MouseEffect> = Vec::new();
     for ev in buttons.read() {
+        let kind = match ev.state {
+            ButtonState::Pressed => ButtonEventKind::Press,
+            ButtonState::Released => ButtonEventKind::Release,
+        };
+        let target = if kind == ButtonEventKind::Press {
+            topmost_terminal_at(
+                cursor_phys,
+                terminals
+                    .iter()
+                    .map(|(e, _, node, transform, _)| (e, node, transform)),
+            )
+        } else {
+            gesture.held.map(|h| h.entity)
+        };
+        let Some(target) = target else {
+            continue;
+        };
+        let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
+            gesture.held = None;
+            gesture.drag = None;
+            continue;
+        };
+        let ctx = CellContext {
+            node,
+            transform,
+            grid,
+            cell_w,
+            cell_h,
+        };
+        let modes = handle.current_modes();
         let Some((evt, link)) = resolve_button_event(
             &mut gesture,
             &ctx,
@@ -436,10 +495,10 @@ pub(crate) fn dispatch_mouse_buttons(
             &cfg.buttons,
         );
         let opened = matches!(decided.as_slice(), [MouseEffect::OpenUri(_)]);
-        effects.extend(decided);
         match evt.kind {
             ButtonEventKind::Press if !opened => {
                 gesture.held = Some(HeldPointer {
+                    entity: target,
                     button: evt.button,
                     last_cell: evt.cell,
                 });
@@ -447,8 +506,30 @@ pub(crate) fn dispatch_mouse_buttons(
             ButtonEventKind::Release => gesture.held = None,
             _ => {}
         }
+        if !decided.is_empty() {
+            commands.trigger(TerminalMouseEffects {
+                entity: target,
+                effects: decided,
+            });
+        }
     }
 
+    let Some(held) = gesture.held else {
+        return;
+    };
+    let Ok((_, handle, node, transform, grid)) = terminals.get(held.entity) else {
+        gesture.held = None;
+        gesture.drag = None;
+        return;
+    };
+    let ctx = CellContext {
+        node,
+        transform,
+        grid,
+        cell_w,
+        cell_h,
+    };
+    let modes = handle.current_modes();
     if let Some((drag_effects, new_cell)) = synthesize_drag(
         &mut gesture,
         &ctx,
@@ -458,24 +539,27 @@ pub(crate) fn dispatch_mouse_buttons(
         modifier_held,
         &cfg.buttons,
     ) {
-        effects.extend(drag_effects);
         if let Some(h) = gesture.held.as_mut() {
             h.last_cell = new_cell;
         }
-    }
-
-    if !effects.is_empty() {
-        commands.trigger(TerminalMouseEffects { entity, effects });
+        if !drag_effects.is_empty() {
+            commands.trigger(TerminalMouseEffects {
+                entity: held.entity,
+                effects: drag_effects,
+            });
+        }
     }
 }
 
-/// The crate's wheel dispatcher: accumulates notches, drives `decide_wheel`, and
-/// triggers `TerminalMouseEffects` for the apply observer.
+/// The crate's wheel dispatcher: routes to the topmost terminal under the cursor,
+/// resets the accumulator on a target change, accumulates notches, drives
+/// `decide_wheel`, and triggers `TerminalMouseEffects`. Skips `MouseDisabled`
+/// terminals; an empty candidate set drains the wheel events.
 pub(crate) fn dispatch_mouse_wheel(
     mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,
     mut wheel: MessageReader<MouseWheel>,
-    terminal: Query<
+    terminals: Query<
         (
             Entity,
             &TerminalHandle,
@@ -483,33 +567,49 @@ pub(crate) fn dispatch_mouse_wheel(
             &UiGlobalTransform,
             &TerminalGrid,
         ),
-        (With<OzmaTerminal>, Without<InputDisabled>),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
     >,
     cfg: Res<OzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok((entity, handle, node, transform, grid)) = terminal.single() else {
-        wheel.clear();
-        return;
-    };
     let Ok(window) = windows.single() else {
         wheel.clear();
         return;
     };
-    if !window.focused {
+    if !window.focused || terminals.is_empty() {
         wheel.clear();
         return;
     }
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let Some(cursor_phys) = window.cursor_position().map(|c| c * window.scale_factor()) else {
+        wheel.clear();
+        return;
+    };
+    let Some(target) = topmost_terminal_at(
+        cursor_phys,
+        terminals
+            .iter()
+            .map(|(e, _, node, transform, _)| (e, node, transform)),
+    ) else {
+        wheel.clear();
+        return;
+    };
+    let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
+        wheel.clear();
+        return;
+    };
     let ctx = CellContext {
         node,
         transform,
         grid,
-        cell_w: metrics.metrics.advance_phys.floor().max(1.0),
-        cell_h: metrics.metrics.line_height_phys.floor().max(1.0),
+        cell_w,
+        cell_h,
     };
 
+    gesture_acc.retarget(target);
     let delta_cells: f32 = wheel
         .read()
         .map(|ev| wheel_delta_cells(ev.unit, ev.y, ctx.cell_h))
@@ -520,16 +620,17 @@ pub(crate) fn dispatch_mouse_wheel(
     }
     // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
     let notches = -raw;
-    let cell = window
-        .cursor_position()
-        .map(|c| c * window.scale_factor())
-        .and_then(|p| ctx.hit(p))
+    let cell = ctx
+        .hit(cursor_phys)
         .map(|(cell, _)| cell)
         .unwrap_or(CellCoord { col: 1, row: 1 });
     let mods = build_wheel_modifiers(&keys, &cfg);
     let effects = decide_wheel(handle.current_modes(), notches, cell, mods, &cfg.wheel);
     if !effects.is_empty() {
-        commands.trigger(TerminalMouseEffects { entity, effects });
+        commands.trigger(TerminalMouseEffects {
+            entity: target,
+            effects,
+        });
     }
 }
 
@@ -792,7 +893,85 @@ mod tests {
     use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind};
 
     #[test]
-    fn input_disabled_terminal_drains_without_arming_a_gesture() {
+    fn topmost_terminal_at_picks_highest_stack_index_among_containing() {
+        let mut world = World::new();
+        let a = world.spawn_empty().id();
+        let b = world.spawn_empty().id();
+        let c = world.spawn_empty().id();
+        // A: left half (x 0..400), stack 5. B: right half (x 400..800), stack 3.
+        // C: left half, stack 9 — overlaps A and sits on top.
+        let node_a = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 5,
+            ..ComputedNode::DEFAULT
+        };
+        let tf_a = UiGlobalTransform::from_xy(200.0, 300.0);
+        let node_b = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 3,
+            ..ComputedNode::DEFAULT
+        };
+        let tf_b = UiGlobalTransform::from_xy(600.0, 300.0);
+        let node_c = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 9,
+            ..ComputedNode::DEFAULT
+        };
+        let tf_c = UiGlobalTransform::from_xy(200.0, 300.0);
+        let candidates = [
+            (a, &node_a, &tf_a),
+            (b, &node_b, &tf_b),
+            (c, &node_c, &tf_c),
+        ];
+
+        assert_eq!(
+            topmost_terminal_at(Vec2::new(600.0, 300.0), candidates.iter().copied()),
+            Some(b),
+            "a point only B contains must resolve to B"
+        );
+        assert_eq!(
+            topmost_terminal_at(Vec2::new(100.0, 300.0), candidates.iter().copied()),
+            Some(c),
+            "where A and C overlap, the higher stack_index (C) wins"
+        );
+        assert_eq!(
+            topmost_terminal_at(Vec2::new(2000.0, 2000.0), candidates.iter().copied()),
+            None,
+            "a point outside every node resolves to None"
+        );
+    }
+
+    #[test]
+    fn topmost_terminal_at_breaks_stack_index_ties_deterministically() {
+        let mut world = World::new();
+        let lower = world.spawn_empty().id();
+        let higher = world.spawn_empty().id();
+        // Two fully-overlapping nodes with the SAME stack_index (only reachable
+        // before the first layout pass assigns indices). The winner must not
+        // depend on candidate iteration order.
+        let node = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 0,
+            ..ComputedNode::DEFAULT
+        };
+        let tf = UiGlobalTransform::from_xy(200.0, 300.0);
+        let forward = [(lower, &node, &tf), (higher, &node, &tf)];
+        let reversed = [(higher, &node, &tf), (lower, &node, &tf)];
+        let winner = topmost_terminal_at(Vec2::new(100.0, 300.0), forward.iter().copied());
+        assert_eq!(
+            winner,
+            topmost_terminal_at(Vec2::new(100.0, 300.0), reversed.iter().copied()),
+            "tie resolution must not depend on iteration order"
+        );
+        assert_eq!(
+            winner,
+            Some(lower.max(higher)),
+            "a stack_index tie resolves by Entity order, deterministically"
+        );
+    }
+
+    #[test]
+    fn mouse_disabled_terminal_drains_without_arming_a_gesture() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<MouseButtonInput>()
@@ -802,7 +981,7 @@ mod tests {
             .init_resource::<Clipboard>()
             .insert_resource(test_metrics())
             .add_systems(Update, dispatch_mouse_buttons);
-        app.world_mut().spawn((OzmaTerminal, InputDisabled));
+        app.world_mut().spawn((OzmaTerminal, MouseDisabled));
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -1281,6 +1460,28 @@ mod tests {
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1);
         assert_eq!(accumulate_notches(&mut acc, -1.0, 0.5), -2);
+    }
+
+    #[test]
+    fn wheel_accumulator_resets_residual_on_target_change() {
+        let mut world = World::new();
+        let a = world.spawn_empty().id();
+        let b = world.spawn_empty().id();
+        let mut acc = WheelAccumulator::default();
+        acc.retarget(a);
+        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
+        acc.retarget(a);
+        assert_eq!(
+            accumulate_notches(&mut acc, 0.3, 0.5),
+            1,
+            "0.3 + 0.3 = 0.6 → one notch on the same target"
+        );
+        acc.retarget(b);
+        assert_eq!(
+            accumulate_notches(&mut acc, 0.3, 0.5),
+            0,
+            "switching target clears the carried residual"
+        );
     }
 
     #[test]

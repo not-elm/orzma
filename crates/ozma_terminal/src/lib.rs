@@ -18,8 +18,8 @@ use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 pub use action::PasteAction;
 use bevy::prelude::*;
 pub use clipboard::{Clipboard, build_paste_bytes};
-pub use input::{InputDisabled, OzmaTerminalInputSet, ReservedChord, TerminalInputBindings};
-pub use mouse::{FineModifier, OzmaMouseConfig, OzmaTerminalMouseSet};
+pub use input::{KeyboardDisabled, OzmaTerminalInputSet, ReservedChord, TerminalInputBindings};
+pub use mouse::{FineModifier, MouseDisabled, OzmaMouseConfig, OzmaTerminalMouseSet};
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
     resolve_shell,

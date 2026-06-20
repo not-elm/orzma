@@ -3,8 +3,9 @@
 //! system updates `HyperlinkHoverState` (renderer underline) and the window
 //! `CursorIcon`.
 
-use crate::input::InputDisabled;
-use crate::mouse::{OzmaTerminalMouseSet, cell_at_cursor, protocol_mods};
+use crate::mouse::{
+    MouseDisabled, OzmaTerminalMouseSet, cell_at_cursor, protocol_mods, topmost_terminal_at,
+};
 use crate::spawn::OzmaTerminal;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -55,13 +56,14 @@ impl Plugin for HyperlinkPlugin {
 }
 
 /// Updates `HyperlinkHoverState` and the window cursor as the pointer moves over
-/// the terminal grid. Gated to the single enabled `OzmaTerminal`.
+/// the terminal grid. Resolves the hover against the topmost enabled
+/// `OzmaTerminal` under the cursor.
 fn hyperlink_hover_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
-    terminal: Query<
+    terminals: Query<
         (Entity, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
-        (With<OzmaTerminal>, Without<InputDisabled>),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
     >,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -72,7 +74,7 @@ fn hyperlink_hover_cursor(
     hover.hyperlink_id = None;
     hover.modifier_held = modifier_held;
 
-    let decision = resolve_hover(&mut hover, &terminal, &metrics, &windows, modifier_held);
+    let decision = resolve_hover(&mut hover, &terminals, &metrics, &windows, modifier_held);
     if let Ok(mut icon) = cursor_icons.single_mut() {
         let desired = CursorIcon::System(decision);
         if *icon != desired {
@@ -94,9 +96,9 @@ fn cursor_decision(has_link: bool, modifier_held: bool) -> SystemCursorIcon {
 
 fn resolve_hover(
     hover: &mut HyperlinkHoverState,
-    terminal: &Query<
+    terminals: &Query<
         (Entity, &ComputedNode, &UiGlobalTransform, &TerminalGrid),
-        (With<OzmaTerminal>, Without<InputDisabled>),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
     >,
     metrics: &TerminalCellMetricsResource,
     windows: &Query<&Window, With<PrimaryWindow>>,
@@ -108,7 +110,15 @@ fn resolve_hover(
     let Some(cursor_phys) = window.cursor_position().map(|c| c * window.scale_factor()) else {
         return SystemCursorIcon::Default;
     };
-    let Ok((entity, node, transform, grid)) = terminal.single() else {
+    let Some(target) = topmost_terminal_at(
+        cursor_phys,
+        terminals
+            .iter()
+            .map(|(e, node, transform, _)| (e, node, transform)),
+    ) else {
+        return SystemCursorIcon::Default;
+    };
+    let Ok((entity, node, transform, grid)) = terminals.get(target) else {
         return SystemCursorIcon::Default;
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);

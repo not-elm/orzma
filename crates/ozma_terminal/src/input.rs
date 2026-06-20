@@ -1,7 +1,7 @@
 //! Default terminal keyboard dispatcher. Reads `KeyboardInput` and, per press,
 //! fires `PasteAction`, forwards a raw key as `TerminalKeyInput`, or skips it:
 //! host-reserved chords and unhandled meta/Cmd chords are dropped. Gated per
-//! entity by the `InputDisabled` marker.
+//! entity by the `KeyboardDisabled` marker.
 
 use crate::action::PasteAction;
 use crate::spawn::OzmaTerminal;
@@ -11,11 +11,11 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 
-/// When present on an `OzmaTerminal` entity, the crate's default input
-/// dispatcher skips it entirely — the host routes input elsewhere (tmux, a
-/// focused webview, an open picker, IME composition).
+/// When present on an `OzmaTerminal` entity, the crate's default keyboard
+/// dispatcher skips it entirely — the host routes keyboard input elsewhere
+/// (tmux, a focused webview, an open picker, IME composition).
 #[derive(Component)]
-pub struct InputDisabled;
+pub struct KeyboardDisabled;
 
 /// A keyboard chord, as a physical `KeyCode` plus the four modifier bits.
 /// Config-agnostic plain data the host supplies in `TerminalInputBindings`.
@@ -64,7 +64,7 @@ impl Default for TerminalInputBindings {
 }
 
 /// System set containing the default terminal keyboard dispatcher. Hosts that
-/// maintain `InputDisabled` should schedule their maintainer
+/// maintain `KeyboardDisabled` should schedule their maintainer
 /// `.before(OzmaTerminalInputSet)`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OzmaTerminalInputSet;
@@ -90,8 +90,11 @@ fn dispatch_input(
     mut events: MessageReader<KeyboardInput>,
     bindings: Res<TerminalInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
-    terminal: Query<Entity, (With<OzmaTerminal>, Without<InputDisabled>)>,
+    terminal: Query<Entity, (With<OzmaTerminal>, Without<KeyboardDisabled>)>,
 ) {
+    // NOTE: keyboard keeps the single-terminal model — a future multi-terminal
+    // host MUST keep exactly one OzmaTerminal un-`KeyboardDisabled`, or this
+    // `.single()` returns Err and every keypress is silently dropped.
     let Ok(entity) = terminal.single() else {
         events.clear();
         return;
@@ -264,9 +267,9 @@ mod tests {
     }
 
     #[test]
-    fn input_disabled_entity_fires_nothing() {
+    fn keyboard_disabled_entity_fires_nothing() {
         let mut app = test_app();
-        app.world_mut().spawn((OzmaTerminal, InputDisabled));
+        app.world_mut().spawn((OzmaTerminal, KeyboardDisabled));
         press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         let c = app.world().resource::<Captured>();
