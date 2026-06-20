@@ -7,7 +7,7 @@ use crate::ozma::AppMode;
 use crate::theme;
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::message::MessageReader;
-use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
+use bevy::ecs::schedule::common_conditions::{not, resource_exists_and_changed};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -27,7 +27,10 @@ impl Plugin for OzmuxPickerPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SessionPicker>()
             .add_systems(Startup, spawn_picker_ui)
-            .add_systems(OnEnter(AppMode::Ozmux), on_enter_ozmux_picker)
+            .add_systems(
+                OnEnter(AppMode::Ozmux),
+                dispatch_startup_mode.run_if(not(resource_exists::<StartupDispatched>)),
+            )
             .add_systems(
                 Update,
                 handle_picker_input.after(crate::input::InputPhase::FocusedKey),
@@ -68,6 +71,11 @@ pub(crate) struct SessionPicker {
     pub(crate) open: bool,
     last_open: bool,
 }
+
+/// Inserted on the first `OnEnter(AppMode::Ozmux)` (boot) so the startup-mode
+/// dispatch routes only once and later Ozmux entries skip it.
+#[derive(Resource)]
+struct StartupDispatched;
 
 #[derive(Component)]
 struct PickerBackdrop;
@@ -130,7 +138,12 @@ fn refresh_picker_on_open(mut picker: ResMut<SessionPicker>, configs: Res<OzmuxC
     }
 }
 
-fn on_enter_ozmux_picker(
+/// Boot-time startup-mode routing, run once. Registered on `OnEnter(Ozmux)`
+/// behind `run_if(not(resource_exists::<StartupDispatched>))`; it inserts
+/// `StartupDispatched` on its first (boot) run so later Ozmux entries skip it
+/// and do not bounce a picker-driven Ozma -> Ozmux transition back to Ozma.
+fn dispatch_startup_mode(
+    mut commands: Commands,
     mut connection: NonSendMut<TmuxConnection>,
     mut picker: ResMut<SessionPicker>,
     mut state: ResMut<ConnectionState>,
@@ -138,6 +151,7 @@ fn on_enter_ozmux_picker(
     configs: Res<OzmuxConfigsResource>,
     control: Option<Res<ControlPlaneHandle>>,
 ) {
+    commands.insert_resource(StartupDispatched);
     match &configs.startup_mode {
         StartupMode::Ozma => {
             next_mode.set(AppMode::Ozma);
@@ -847,6 +861,47 @@ mod tests {
         assert_eq!(v[1].2, Color::NONE);
         assert_eq!(v[1].1, theme::MUTED);
         assert_eq!(v[2].1, theme::FOREGROUND);
+    }
+
+    fn dispatch_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.insert_state(AppMode::Ozma);
+        app.init_resource::<SessionPicker>();
+        app.init_resource::<ConnectionState>();
+        app.init_resource::<OzmuxConfigsResource>();
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.add_systems(
+            OnEnter(AppMode::Ozmux),
+            dispatch_startup_mode.run_if(not(resource_exists::<StartupDispatched>)),
+        );
+        app
+    }
+
+    fn enter_ozmux(app: &mut App) {
+        app.insert_resource(bevy::prelude::NextState::Pending(AppMode::Ozmux));
+        app.update();
+    }
+
+    #[test]
+    fn dispatch_runs_once_at_boot_and_marks_dispatched() {
+        let mut app = dispatch_app();
+        enter_ozmux(&mut app);
+        // The boot dispatch ran: marker inserted, and (default startup_mode = Ozma)
+        // it queued a transition back to Ozma.
+        assert!(app.world().get_resource::<StartupDispatched>().is_some());
+        app.update(); // apply the queued Ozmux -> Ozma transition
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Ozma);
+    }
+
+    #[test]
+    fn dispatch_skipped_when_already_dispatched_does_not_bounce() {
+        let mut app = dispatch_app();
+        app.insert_resource(StartupDispatched);
+        enter_ozmux(&mut app);
+        // run_if(not(resource_exists)) is false, so dispatch never ran and the
+        // Ozma -> Ozmux transition is NOT bounced back to Ozma.
+        assert_eq!(*app.world().resource::<State<AppMode>>().get(), AppMode::Ozmux);
     }
 
     #[test]
