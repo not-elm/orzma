@@ -19,7 +19,7 @@ use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
-use crate::webview::inline::{InlineWebview, PassthroughKeys, focused_inline_of, inline_hit_at};
+use crate::webview::inline::{ForwardKeys, InlineWebview, focused_inline_of, inline_hit_at};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -136,7 +136,7 @@ fn forward_keys_to_tmux(
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    passthrough_keys: Query<&PassthroughKeys>,
+    forward_keys: Query<&ForwardKeys>,
 ) {
     // NOTE: while the picker is open it owns the keyboard; forwarding would
     // leak picker-navigation keys to the active tmux pane. Drain (don't replay).
@@ -213,12 +213,12 @@ fn forward_keys_to_tmux(
     // so this drain is load-bearing whenever an inline webview is focused —
     // removing it would double-send keystrokes to the page and the pane.
     if let Some(focused_entity) = focused_webview.0 {
-        let pass_chords = passthrough_keys
+        let forward_chords = forward_keys
             .get(focused_entity)
             .map(|pk| pk.0.as_slice())
             .unwrap_or(&[]);
 
-        let mut pass_names: Vec<String> = Vec::new();
+        let mut forward_names: Vec<String> = Vec::new();
         for ev in events.read() {
             if ev.state != ButtonState::Pressed {
                 continue;
@@ -227,8 +227,8 @@ fn forward_keys_to_tmux(
                 focused_webview.0 = None;
                 break;
             }
-            if !pass_chords.is_empty()
-                && pass_chords.iter().any(|c| {
+            if !forward_chords.is_empty()
+                && forward_chords.iter().any(|c| {
                     c.code == ev.key_code
                         && c.ctrl == mods.ctrl
                         && c.shift == mods.shift
@@ -237,12 +237,12 @@ fn forward_keys_to_tmux(
                 })
                 && let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods)
             {
-                pass_names.push(name);
+                forward_names.push(name);
             }
         }
 
-        if !pass_names.is_empty() {
-            let actions = plan_forward(&mut prefix_pending, &bindings, pass_names);
+        if !forward_names.is_empty() {
+            let actions = plan_forward(&mut prefix_pending, &bindings, forward_names);
             if let (Some(target), Some(client)) = (target.as_deref(), connection.client()) {
                 let handle = client.handle();
                 for action in actions {
@@ -251,7 +251,7 @@ fn forward_keys_to_tmux(
                         Forwarded::Keys(names) => send_pane_keys_command(target, &names),
                     };
                     if let Err(e) = handle.send(&cmd) {
-                        tracing::warn!(?e, "passthrough forward failed");
+                        tracing::warn!(?e, "forward-key send failed");
                         break;
                     }
                 }

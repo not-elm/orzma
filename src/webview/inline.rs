@@ -24,11 +24,11 @@ use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
 use ozma_tty_renderer::schema::TerminalGrid;
 
-/// The normalized passthrough chords for a mounted inline webview, copied from
+/// The normalized forward-key chords for a mounted inline webview, copied from
 /// its registration. Read by the focused-key filter-fill and PTY-forward
 /// systems (Phase 4) off the focused child entity.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct PassthroughKeys(pub(crate) Vec<NormalizedChord>);
+pub(crate) struct ForwardKeys(pub(crate) Vec<NormalizedChord>);
 
 /// Marks an inline webview entity and records its identity: the mounted
 /// `view_id` and the overlay texture `slot` (0..`OVERLAY_SLOTS`) it occupies
@@ -154,10 +154,10 @@ pub(crate) struct ResolvedWebviewMount {
     /// the registration is bridged; a display-only `Url` view leaves it `None`,
     /// which is the gate that also withholds the preload at mount.
     pub(crate) owner: Option<(u64, String)>,
-    /// The normalized passthrough chords copied from the registration, stamped
-    /// as a `PassthroughKeys` component so the focused-key systems read them off
+    /// The normalized forward-key chords copied from the registration, stamped
+    /// as a `ForwardKeys` component so the focused-key systems read them off
     /// the webview entity without a registry lookup (design spec §C).
-    pub(crate) passthrough: Vec<NormalizedChord>,
+    pub(crate) forward_keys: Vec<NormalizedChord>,
 }
 
 /// Resolves a `mount-inline` `<handle>` against the `DynamicRegistry` (Tier 1).
@@ -189,7 +189,7 @@ pub(crate) fn resolve_mount(
         url: Some(url),
         interactive: view.interactive,
         owner,
-        passthrough: view.passthrough.clone(),
+        forward_keys: view.forward_keys.clone(),
     })
 }
 
@@ -304,7 +304,7 @@ pub(crate) fn mount_inline(
     params
         .commands
         .entity(webview)
-        .insert(PassthroughKeys(resolved.passthrough.clone()));
+        .insert(ForwardKeys(resolved.forward_keys.clone()));
     tracing::debug!(
         view_id = %ctx.view_id,
         terminal = ?ctx.terminal_surface,
@@ -717,7 +717,7 @@ mod tests {
                 interactive,
                 owner_surface,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
     }
@@ -735,7 +735,7 @@ mod tests {
                 interactive: true,
                 owner_surface,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
     }
@@ -1912,7 +1912,7 @@ mod tests {
                 interactive: true,
                 owner_surface,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
     }
@@ -1956,7 +1956,7 @@ mod tests {
                 interactive: false,
                 owner_surface: owner,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
 
@@ -1984,7 +1984,7 @@ mod tests {
                 interactive: true,
                 owner_surface: owner,
                 connection_id: 1,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         let r = resolve_mount("INLINEH", owner, &dynamic).expect("inline resolves");
@@ -2005,7 +2005,7 @@ mod tests {
                 interactive: true,
                 owner_surface: terminal,
                 connection_id: 42,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
 
@@ -2108,7 +2108,7 @@ mod tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 7,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
         reg.insert(
@@ -2122,7 +2122,7 @@ mod tests {
                 interactive: true,
                 owner_surface: surface,
                 connection_id: 7,
-                passthrough: vec![],
+                forward_keys: vec![],
             },
         );
 
