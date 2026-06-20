@@ -89,7 +89,12 @@ fn decset_bytes_reach_pane_output() {
         *app.world().resource::<ConnectionState>() == ConnectionState::Attached
             && pane_q.iter(app.world()).next().is_some()
     });
-    assert!(ready, "tmux should attach and project a pane within 5s");
+    if !ready {
+        // NOTE: tear the tmux -CC server down before unwinding, else the early
+        // failure leaks the spawned server/socket across (ignored) test runs.
+        teardown(&mut app);
+        panic!("tmux should attach and project a pane within 5s");
+    }
 
     let target = pane_q
         .iter(app.world())

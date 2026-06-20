@@ -1,8 +1,8 @@
 //! Per-pane input gating for `AppMode::Ozmux`: every pane is `KeyboardDisabled`
 //! (keys pass through to tmux), and `MouseDisabled` whenever a modal owns input,
-//! the pane is in copy mode, a webview is interacting, or an interactive inline
-//! webview under the cursor claims the press — so `ozma_terminal`'s shared mouse
-//! systems yield to the tmux-specific gestures.
+//! the pane is in copy mode, the focused inline webview belongs to the pane, or
+//! an interactive inline webview under the cursor claims the press — so
+//! `ozma_terminal`'s shared mouse systems yield to the tmux-specific gestures.
 
 use super::pane_hit::tmux_pane_at_phys;
 use crate::inline_webview::{InlineWebview, inline_hit_at};
@@ -11,6 +11,8 @@ use crate::osc_webview::NonInteractive;
 use crate::ozma::AppMode;
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
+use crate::ui::copy_search::CopyPrompt;
+use crate::ui::rename_prompt::RenamePrompt;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
@@ -39,6 +41,8 @@ fn maintain_tmux_input_gates(
     mut commands: Commands,
     picker: Res<SessionPicker>,
     ime: Res<ImeState>,
+    copy_prompt: Res<CopyPrompt>,
+    rename_prompt: Option<Res<RenamePrompt>>,
     focused_webview: Res<FocusedWebview>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -59,7 +63,18 @@ fn maintain_tmux_input_gates(
 ) {
     let window = windows.single().ok();
     let window_focused = window.map(|w| w.focused).unwrap_or(false);
-    let modal = picker.open || ime.is_composing() || !window_focused;
+    let modal = picker.open
+        || ime.is_composing()
+        || !window_focused
+        || copy_prompt.open.is_some()
+        || rename_prompt.is_some();
+    // NOTE: gate only the focused webview's OWNING pane, not all panes — a
+    // global `focused_webview.0.is_some()` would kill scroll/selection on every
+    // other pane while any inline webview is focused.
+    let focused_webview_pane = focused_webview
+        .0
+        .and_then(|webview| inline_parents.get(webview).ok())
+        .map(|childof| childof.parent());
     // TODO: a press within `divider_grab_tolerance_px` of a divider can still
     // both resize the pane and start an `ozma_terminal` selection — the
     // divider-band claim is not folded in here yet. Adding it requires the
@@ -83,7 +98,7 @@ fn maintain_tmux_input_gates(
         let disable_mouse = should_disable_pane_mouse(
             modal,
             in_copy_mode,
-            focused_webview.0.is_some(),
+            Some(entity) == focused_webview_pane,
             region_claimed,
         );
         if disable_mouse && !has_mouse {
@@ -97,10 +112,10 @@ fn maintain_tmux_input_gates(
 fn should_disable_pane_mouse(
     modal: bool,
     in_copy_mode: bool,
-    webview_active: bool,
+    webview_focused_here: bool,
     region_claimed: bool,
 ) -> bool {
-    modal || in_copy_mode || webview_active || region_claimed
+    modal || in_copy_mode || webview_focused_here || region_claimed
 }
 
 /// The parent `TmuxPane` entity of the interactive inline webview currently

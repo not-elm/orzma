@@ -501,9 +501,9 @@ fn arbiter(
         };
         let cols = p.dims.width as u16;
         let rows = p.dims.height as u16;
-        // A drag for a pane NOT in copy mode is owned by `ozma_terminal`'s VT
-        // selection; the arbiter only relays copy-mode selection. Reset to Idle
-        // so a non-copy drag does not linger in `Pressed`.
+        // NOTE: a non-copy-mode drag is owned by `ozma_terminal`'s VT selection;
+        // reset to Idle here so the gesture does not linger in `Pressed` (the
+        // arbiter only relays copy-mode selection).
         if copy_gate.copy_modes.get(pane).is_ok() {
             let Some(anchor) =
                 cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
