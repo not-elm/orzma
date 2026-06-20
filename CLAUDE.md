@@ -13,7 +13,7 @@ The workspace root package is the one and only binary; library crates live under
 - `ozmux-gui` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.18 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "ozmux") plus `cef_plugin(&asset_endpoint)` (from `bevy_cef`), then the ozmux plugins:
   - `TerminalHandlePlugin` (from `ozma_tty_engine`), `TerminalRendererPlugin` (from `ozma_tty_renderer`), `TmuxSessionPlugin` (from `ozmux_tmux`, the sole multiplexer), `OzmuxTmuxPickerPlugin`, `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmuxWebviewPlugin`, `CopyModePlugin`, `CopyModeIndicatorPlugin`, and the tmux UI/IO plugins `CopyPromptPlugin`, `ConfirmPromptPlugin`, `TmuxDialogPlugin`, `OzmuxTmuxRenderPlugin`, `OzmuxTmuxInputPlugin`, `OzmuxTmuxWindowBarPlugin`, `OzmuxTmuxPaneFocusPlugin`, `OzmuxTmuxCopyModePlugin`, `OzmuxTmuxMousePlugin`, `OzmuxTmuxDividerHandlePlugin`;
   - the input plugins `HyperlinkInputPlugin`, `ImePlugin`, and `ImeOverlayPlugin`;
-  - and `OzmuxControlPlanePlugin` (the control-socket listener that mints Tier 1 dynamic webview handles). The in-process webview feature — CEF render wiring, the `window.ozma` back-channel, OSC 5379 `mount-inline` / `unmount-inline`, and inline webviews — is aggregated under `OzmuxWebviewPlugin` (above).
+  - and `OzmuxControlPlanePlugin` (the control-socket listener that mints Tier 1 dynamic webview handles). The in-process webview feature — CEF render wiring, the `window.ozma` back-channel, OSC 5379 `mount` / `unmount`, and inline webviews — is aggregated under `OzmuxWebviewPlugin` (above).
 
   The root `Cargo.toml` depends on `bevy_cef` (path dep, `features = ["debug"]`) and on `ozmux_webview_host` with the `cef` feature enabled. A root `[features] debug` flag enables the CEF `remote-debugging-port` (a local Chromium DevTools / CDP endpoint on `127.0.0.1:9222`) for inspecting the embedded webview; it is off by default (`cargo run --features debug`).
 
@@ -34,7 +34,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 ### How the pieces connect at runtime
 
 1. `ozmux-gui` boots a single Bevy `App`. `TmuxSessionPlugin` (`ozmux_tmux`) attaches to (or creates) a `tmux -CC` session and projects its session/window/pane state as ECS entities; `ozma_tty_engine` runs the PTY/VT emulation behind it, emitting frame snapshots/deltas that `ozma_tty_renderer` (and the tmux render plugins in `src/`) draw on the GPU. Layout, input, copy-mode, IME, and shortcuts are all plugins in the same world.
-2. A program registers webview content over the control socket (Tier 1, `OzmuxControlPlanePlugin`) to mint an opaque handle, then writes an OSC 5379 `mount-inline;<handle>` sequence to mount it as an in-process `bevy_cef` inline webview (assets served from disk/memory via `ozma-dyn://`, one origin per handle). The page talks back to the registering program through `window.ozma.call/on` routed over the control socket.
+2. A program registers webview content over the control socket (Tier 1, `OzmuxControlPlanePlugin`) to mint an opaque handle, then writes an OSC 5379 `mount;<handle>` sequence to mount it as an in-process `bevy_cef` inline webview (assets served from disk/memory via `ozma-dyn://`, one origin per handle). The page talks back to the registering program through `window.ozma.call/on` routed over the control socket.
 
 ### `src/` module map
 

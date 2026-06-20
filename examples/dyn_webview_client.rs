@@ -2,7 +2,7 @@
 //! ozmux pane: it resolves `$OZMA_SOCK` (falling back to `tmux show-environment`
 //! for a pre-existing tmux pane) and the pane identity (`$OZMA_TOKEN`, else
 //! `$TMUX_PANE`), registers an inline HTML
-//! view over the control socket, prints the `mount-inline` OSC at the cursor,
+//! view over the control socket, prints the `mount` OSC at the cursor,
 //! then demonstrates the back-channel by:
 //!   - replying to `ping` calls from the page (`window.ozma.call`)
 //!   - emitting a `tick` event every second (`window.ozma.on`)
@@ -71,7 +71,7 @@ fn main() -> std::io::Result<()> {
 
     let rows = 8u16;
     let cols = 48u16;
-    print!("dynamic webview:\n\x1b]5379;mount-inline;{handle};{rows};{cols}\x1b\\");
+    print!("dynamic webview:\n\x1b]5379;mount;{handle};{rows};{cols}\x1b\\");
     for _ in 0..rows {
         println!();
     }

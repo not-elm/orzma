@@ -1,7 +1,7 @@
 //! Inline webviews: `ChildOf` children of a terminal surface that render a
 //! registered view into the terminal's text flow. This module owns the
-//! components, the mount/unmount policy executed by the `MountInline` /
-//! `UnmountInline` arms of `osc::on_osc_webview_request`, and the
+//! components, the mount/unmount policy executed by the `Mount` /
+//! `Unmount` arms of `osc::on_osc_webview_request`, and the
 //! `InlinePlugin` runtime systems that keep `WebviewSize` in
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
@@ -110,7 +110,7 @@ impl Plugin for InlinePlugin {
     }
 }
 
-/// Everything the `MountInline` verb carries into `mount_inline`: the target
+/// Everything the `Mount` verb carries into `mount`: the target
 /// terminal surface and the parsed verb + anchor payload.
 pub(crate) struct InlineMountContext<'a> {
     /// The requesting terminal surface — the `ChildOf` parent of the mount.
@@ -127,7 +127,7 @@ pub(crate) struct InlineMountContext<'a> {
     pub(crate) anchor: Option<InlineAnchor>,
 }
 
-/// The system params `mount_inline` / `unmount_inline` need, bundled so the
+/// The system params `mount` / `unmount` need, bundled so the
 /// `on_osc_webview_request` observer gains a single extra parameter.
 #[derive(SystemParam)]
 pub(crate) struct InlineWebviewParams<'w, 's> {
@@ -140,7 +140,7 @@ pub(crate) struct InlineWebviewParams<'w, 's> {
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
 }
 
-/// The resolved content + trust facts for a `mount-inline;<handle>`: the URL to
+/// The resolved content + trust facts for a `mount;<handle>`: the URL to
 /// load (an `ozma-dyn://<handle>/…` origin for `Dir`/`Inline` sources, or the
 /// verbatim remote URL for a `Url` source), the input policy, and the
 /// registering program's `(connection_id, handle)` for back-channel routing.
@@ -160,7 +160,7 @@ pub(crate) struct ResolvedWebviewMount {
     pub(crate) passthrough: Vec<NormalizedChord>,
 }
 
-/// Resolves a `mount-inline` `<handle>` against the `DynamicRegistry` (Tier 1).
+/// Resolves a `mount` `<handle>` against the `DynamicRegistry` (Tier 1).
 /// `Dir`/`Inline` handles resolve to an `ozma-dyn://<handle>/…` URL (one origin
 /// per handle); a `Url` handle resolves to its verbatim remote URL. A handle
 /// resolves ONLY when `requesting_surface` is its `owner_surface` — the scoping
@@ -211,13 +211,13 @@ pub(crate) fn resolve_mount(
 /// primary window; when neither exists yet (headless tests, pre-first-render)
 /// a placeholder cell of 8×16 physical px at scale 1.0 is used —
 /// `sync_inline_webview_size` corrects it once real metrics arrive.
-pub(crate) fn mount_inline(
+pub(crate) fn mount(
     params: &mut InlineWebviewParams,
     dynamic: &DynamicRegistry,
     ctx: InlineMountContext<'_>,
 ) {
     let Some(anchor) = ctx.anchor else {
-        tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline without anchor, dropping");
+        tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount without anchor, dropping");
         return;
     };
     let live = live_inline_children(&params.children, &params.views, ctx.terminal_surface);
@@ -239,7 +239,7 @@ pub(crate) fn mount_inline(
         return;
     }
     let Some(resolved) = resolve_mount(ctx.view_id, ctx.terminal_surface, dynamic) else {
-        tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount-inline for unregistered or unowned id, dropping");
+        tracing::debug!(view_id = %ctx.view_id, "osc-webview: mount for unregistered or unowned id, dropping");
         return;
     };
     let Some(slot) = smallest_free_slot(&live) else {
@@ -319,9 +319,9 @@ pub(crate) fn mount_inline(
 /// Despawns the inline child(ren) of `terminal_surface` matching the scope:
 /// `(Some(vid), Some(inst))` removes that one instance; `(Some(vid), None)`
 /// removes every instance of `vid`; `(None, _)` removes all inline children
-/// (the VT-synthesized fold/saturation `UnmountInline { view_id: None }`
+/// (the VT-synthesized fold/saturation `Unmount { view_id: None }`
 /// frames take this path).
-pub(crate) fn unmount_inline(
+pub(crate) fn unmount(
     params: &mut InlineWebviewParams,
     terminal_surface: Entity,
     view_id: Option<&str>,
@@ -756,7 +756,7 @@ mod tests {
     fn mount(app: &mut App, terminal: Entity, view_id: &str, anchor: Option<InlineAnchor>) {
         app.world_mut().trigger(OscWebviewRequest {
             entity: terminal,
-            verb: OscWebviewVerb::MountInline {
+            verb: OscWebviewVerb::Mount {
                 view_id: view_id.into(),
                 rows: 10,
                 cols: 40,
@@ -770,7 +770,7 @@ mod tests {
     fn unmount(app: &mut App, terminal: Entity, view_id: Option<&str>) {
         app.world_mut().trigger(OscWebviewRequest {
             entity: terminal,
-            verb: OscWebviewVerb::UnmountInline {
+            verb: OscWebviewVerb::Unmount {
                 view_id: view_id.map(str::to_string),
                 instance_id: None,
             },
@@ -814,7 +814,7 @@ mod tests {
     ) {
         app.world_mut().trigger(OscWebviewRequest {
             entity: terminal,
-            verb: OscWebviewVerb::MountInline {
+            verb: OscWebviewVerb::Mount {
                 view_id: view_id.into(),
                 rows: 10,
                 cols: 40,
@@ -828,7 +828,7 @@ mod tests {
     fn unmount_instance(app: &mut App, terminal: Entity, view_id: &str, instance_id: &str) {
         app.world_mut().trigger(OscWebviewRequest {
             entity: terminal,
-            verb: OscWebviewVerb::UnmountInline {
+            verb: OscWebviewVerb::Unmount {
                 view_id: Some(view_id.into()),
                 instance_id: Some(instance_id.into()),
             },
@@ -934,7 +934,7 @@ mod tests {
         // Re-mount the same handle with a different anchor.
         app.world_mut().trigger(OscWebviewRequest {
             entity: terminal,
-            verb: OscWebviewVerb::MountInline {
+            verb: OscWebviewVerb::Mount {
                 view_id: "dash".into(),
                 rows: 12,
                 cols: 50,
@@ -1073,7 +1073,7 @@ mod tests {
 
         assert!(
             inline_children_of(&app, terminal).is_empty(),
-            "a mount-inline without an anchor must be dropped"
+            "a mount without an anchor must be dropped"
         );
     }
 
@@ -1086,7 +1086,7 @@ mod tests {
 
         assert!(
             inline_children_of(&app, terminal).is_empty(),
-            "a mount-inline for an unregistered view must be dropped"
+            "a mount for an unregistered view must be dropped"
         );
     }
 

@@ -47,10 +47,10 @@ cargo run               # or: make run
 A program in the shell can render a webview **inline in the terminal text flow**
 (a live CEF webview composited in the terminal shader, scrolling with the text).
 It registers content over the control plane to mint a handle, then writes an OSC
-5379 `mount-inline;<handle>` sequence:
+5379 `mount;<handle>` sequence:
 
 ```sh
-printf '\033]5379;mount-inline;%s;12;48\033\\' "$handle"
+printf '\033]5379;mount;%s;12;48\033\\' "$handle"
 printf '\n%.0s' $(seq 12)
 ```
 

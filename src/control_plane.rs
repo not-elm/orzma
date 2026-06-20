@@ -84,7 +84,7 @@ pub(crate) struct DynamicView {
     pub(crate) entry: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
     pub(crate) interactive: bool,
-    /// The terminal surface a `mount-inline;<handle>` must originate from. The
+    /// The terminal surface a `mount;<handle>` must originate from. The
     /// registering program's PTY env token resolved to this surface, so only
     /// that surface may mount the handle (tighter than the spec's pane wording).
     pub(crate) owner_surface: Entity,
@@ -286,7 +286,7 @@ impl ConnectionWriters {
 
 /// Mints an opaque 128-bit identifier (CSPRNG), base32-encoded (unpadded) and
 /// lowercased. The alphabet `a-z2-7` is a subset of the OSC `view_id` charset
-/// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount-inline;<id>`.
+/// `^[A-Za-z0-9._-]{1,128}$`, so a minted handle is a valid `mount;<id>`.
 ///
 /// # Invariants
 /// The output MUST be lowercase. A handle is used as the host of the

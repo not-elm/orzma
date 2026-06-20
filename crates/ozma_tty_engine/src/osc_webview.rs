@@ -73,7 +73,7 @@ impl Perform for OscWebviewCapture {
             return;
         }
         let verb = match params.get(1).copied() {
-            Some(b"mount-inline") => {
+            Some(b"mount") => {
                 let Some(view_id) = params.get(2).copied().and_then(valid_view_id) else {
                     return;
                 };
@@ -90,17 +90,17 @@ impl Perform for OscWebviewCapture {
                     },
                     None => None,
                 };
-                OscWebviewVerb::MountInline {
+                OscWebviewVerb::Mount {
                     view_id,
                     rows,
                     cols,
                     instance_id,
                 }
             }
-            Some(b"unmount-inline") => {
+            Some(b"unmount") => {
                 // NOTE: a present-but-invalid view id is malformed, not "unmount
                 // any"; only an ABSENT third param means "all inline on this
-                // terminal". An empty third param (`unmount-inline ; ;`) is
+                // terminal". An empty third param (`unmount ; ;`) is
                 // rejected by valid_view_id.
                 let view_id = match params.get(2).copied() {
                     Some(raw) => match valid_view_id(raw) {
@@ -122,7 +122,7 @@ impl Perform for OscWebviewCapture {
                     },
                     None => None,
                 };
-                OscWebviewVerb::UnmountInline {
+                OscWebviewVerb::Unmount {
                     view_id,
                     instance_id,
                 }
@@ -149,7 +149,7 @@ mod tests {
     fn gate_off_drops_sequence() {
         let mut c = cap(false);
         c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"],
             true,
         );
         assert!(c.take_pending().is_none());
@@ -160,13 +160,13 @@ mod tests {
         let mut c = cap(true);
         assert!(!Perform::terminated(&c));
         c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"],
             true,
         );
         assert!(Perform::terminated(&c), "pending verb must set terminated");
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::MountInline {
+            Some(OscWebviewVerb::Mount {
                 view_id: "memo".into(),
                 rows: 3,
                 cols: 20,
@@ -192,7 +192,7 @@ mod tests {
         c.osc_dispatch(
             &[
                 OSC_WEBVIEW_CODE,
-                b"mount-inline",
+                b"mount",
                 b"../etc/passwd",
                 b"3",
                 b"20",
@@ -203,15 +203,15 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_parses_rows_cols() {
+    fn mount_parses_rows_cols() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"],
             true,
         );
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::MountInline {
+            Some(OscWebviewVerb::Mount {
                 view_id: "memo".into(),
                 rows: 3,
                 cols: 20,
@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_out_of_range_dims_dropped() {
+    fn mount_out_of_range_dims_dropped() {
         for (r, w) in [
             ("0", "20"),
             ("201", "20"),
@@ -233,7 +233,7 @@ mod tests {
             c.osc_dispatch(
                 &[
                     OSC_WEBVIEW_CODE,
-                    b"mount-inline",
+                    b"mount",
                     b"memo",
                     r.as_bytes(),
                     w.as_bytes(),
@@ -248,15 +248,15 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_minimum_dims_accepted() {
+    fn mount_minimum_dims_accepted() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"1", b"1"],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"1", b"1"],
             true,
         );
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::MountInline {
+            Some(OscWebviewVerb::Mount {
                 view_id: "memo".into(),
                 rows: 1,
                 cols: 1,
@@ -266,15 +266,15 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_maximum_dims_accepted() {
+    fn mount_maximum_dims_accepted() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"200", b"400"],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"200", b"400"],
             true,
         );
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::MountInline {
+            Some(OscWebviewVerb::Mount {
                 view_id: "memo".into(),
                 rows: 200,
                 cols: 400,
@@ -284,13 +284,13 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_non_digit_dims_dropped() {
+    fn mount_non_digit_dims_dropped() {
         for (r, w) in [("3", "y"), ("+3", "20"), ("3", "+20")] {
             let mut c = cap(true);
             c.osc_dispatch(
                 &[
                     OSC_WEBVIEW_CODE,
-                    b"mount-inline",
+                    b"mount",
                     b"memo",
                     r.as_bytes(),
                     w.as_bytes(),
@@ -305,22 +305,22 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_missing_dims_dropped() {
+    fn mount_missing_dims_dropped() {
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount-inline", b"memo"], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo"], true);
         assert!(c.take_pending().is_none());
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3"], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3"], true);
         assert!(c.take_pending().is_none());
     }
 
     #[test]
-    fn mount_inline_parses_instance_id() {
+    fn mount_parses_instance_id() {
         let mut c = cap(true);
         c.osc_dispatch(
             &[
                 OSC_WEBVIEW_CODE,
-                b"mount-inline",
+                b"mount",
                 b"memo",
                 b"3",
                 b"20",
@@ -330,7 +330,7 @@ mod tests {
         );
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::MountInline {
+            Some(OscWebviewVerb::Mount {
                 view_id: "memo".into(),
                 rows: 3,
                 cols: 20,
@@ -340,15 +340,15 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_absent_instance_id_is_none() {
+    fn mount_absent_instance_id_is_none() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20"],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"],
             true,
         );
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::MountInline {
+            Some(OscWebviewVerb::Mount {
                 view_id: "memo".into(),
                 rows: 3,
                 cols: 20,
@@ -358,25 +358,25 @@ mod tests {
     }
 
     #[test]
-    fn mount_inline_trailing_empty_instance_id_dropped() {
+    fn mount_trailing_empty_instance_id_dropped() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"mount-inline", b"memo", b"3", b"20", b""],
+            &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20", b""],
             true,
         );
         assert!(
             c.take_pending().is_none(),
-            "a trailing empty instance id (mount-inline;memo;3;20;) is malformed"
+            "a trailing empty instance id (mount;memo;3;20;) is malformed"
         );
     }
 
     #[test]
-    fn mount_inline_bad_instance_id_dropped() {
+    fn mount_bad_instance_id_dropped() {
         let mut c = cap(true);
         c.osc_dispatch(
             &[
                 OSC_WEBVIEW_CODE,
-                b"mount-inline",
+                b"mount",
                 b"memo",
                 b"3",
                 b"20",
@@ -391,27 +391,27 @@ mod tests {
     }
 
     #[test]
-    fn unmount_inline_absent_param_is_all_but_empty_param_is_malformed() {
+    fn unmount_absent_param_is_all_but_empty_param_is_malformed() {
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline"], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount"], true);
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::UnmountInline {
+            Some(OscWebviewVerb::Unmount {
                 view_id: None,
                 instance_id: None,
             })
         );
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b""], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b""], true);
         assert!(
             c.take_pending().is_none(),
             "empty third param is malformed, not unmount-all"
         );
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo"], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo"], true);
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::UnmountInline {
+            Some(OscWebviewVerb::Unmount {
                 view_id: Some("memo".into()),
                 instance_id: None,
             })
@@ -419,12 +419,12 @@ mod tests {
     }
 
     #[test]
-    fn unmount_inline_parses_view_and_instance() {
+    fn unmount_parses_view_and_instance() {
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b"a"], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo", b"a"], true);
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::UnmountInline {
+            Some(OscWebviewVerb::Unmount {
                 view_id: Some("memo".into()),
                 instance_id: Some("a".into()),
             })
@@ -432,12 +432,12 @@ mod tests {
     }
 
     #[test]
-    fn unmount_inline_view_only_has_no_instance() {
+    fn unmount_view_only_has_no_instance() {
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo"], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo"], true);
         assert_eq!(
             c.take_pending(),
-            Some(OscWebviewVerb::UnmountInline {
+            Some(OscWebviewVerb::Unmount {
                 view_id: Some("memo".into()),
                 instance_id: None,
             })
@@ -445,30 +445,30 @@ mod tests {
     }
 
     #[test]
-    fn unmount_inline_trailing_empty_instance_dropped() {
+    fn unmount_trailing_empty_instance_dropped() {
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b""], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo", b""], true);
         assert!(
             c.take_pending().is_none(),
-            "unmount-inline;memo; (empty instance) is malformed"
+            "unmount;memo; (empty instance) is malformed"
         );
     }
 
     #[test]
-    fn unmount_inline_empty_view_with_instance_dropped() {
+    fn unmount_empty_view_with_instance_dropped() {
         let mut c = cap(true);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount-inline", b"", b"a"], true);
+        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"", b"a"], true);
         assert!(
             c.take_pending().is_none(),
-            "unmount-inline;;a (empty view id + instance) is malformed"
+            "unmount;;a (empty view id + instance) is malformed"
         );
     }
 
     #[test]
-    fn unmount_inline_bad_instance_dropped() {
+    fn unmount_bad_instance_dropped() {
         let mut c = cap(true);
         c.osc_dispatch(
-            &[OSC_WEBVIEW_CODE, b"unmount-inline", b"memo", b"../x"],
+            &[OSC_WEBVIEW_CODE, b"unmount", b"memo", b"../x"],
             true,
         );
         assert!(

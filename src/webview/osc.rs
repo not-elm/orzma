@@ -1,8 +1,8 @@
 //! Observes `OscWebviewRequest` and mounts/unmounts an inline dynamic webview
-//! at the requesting terminal's cursor (the `MountInline` / `UnmountInline`
+//! at the requesting terminal's cursor (the `Mount` / `Unmount`
 //! verbs).
 
-use super::inline::{InlineMountContext, InlineWebviewParams, mount_inline, unmount_inline};
+use super::inline::{InlineMountContext, InlineWebviewParams, mount, unmount};
 use crate::control_plane::DynamicRegistry;
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
@@ -45,13 +45,13 @@ pub(crate) fn on_osc_webview_request(
     let req = ev.event();
     let terminal_surface = req.entity;
     match &req.verb {
-        OscWebviewVerb::MountInline {
+        OscWebviewVerb::Mount {
             view_id,
             rows,
             cols,
             instance_id,
         } => {
-            mount_inline(
+            mount(
                 &mut inline,
                 &dynamic,
                 InlineMountContext {
@@ -64,11 +64,11 @@ pub(crate) fn on_osc_webview_request(
                 },
             );
         }
-        OscWebviewVerb::UnmountInline {
+        OscWebviewVerb::Unmount {
             view_id,
             instance_id,
         } => {
-            unmount_inline(
+            unmount(
                 &mut inline,
                 terminal_surface,
                 view_id.as_deref(),

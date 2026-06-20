@@ -7,9 +7,9 @@ pub(crate) const MAX_ROWS: u16 = 200;
 /// Max inline-webview cols accepted by the VT layer (`1..=MAX_COLS`).
 pub(crate) const MAX_COLS: u16 = 400;
 
-/// Returns the `mount-inline` OSC 5379 sequence, or an error if the handle
+/// Returns the `mount` OSC 5379 sequence, or an error if the handle
 /// charset is invalid or the dimensions are out of range.
-pub(crate) fn mount_inline(handle: &str, rows: u16, cols: u16) -> OzmaResult<String> {
+pub(crate) fn mount(handle: &str, rows: u16, cols: u16) -> OzmaResult<String> {
     validate_handle(handle)?;
     if !(1..=MAX_ROWS).contains(&rows) || !(1..=MAX_COLS).contains(&cols) {
         return Err(OzmaError::Register {
@@ -17,13 +17,13 @@ pub(crate) fn mount_inline(handle: &str, rows: u16, cols: u16) -> OzmaResult<Str
         });
     }
     Ok(format!(
-        "\x1b]5379;mount-inline;{handle};{rows};{cols}\x1b\\"
+        "\x1b]5379;mount;{handle};{rows};{cols}\x1b\\"
     ))
 }
 
-/// Returns the `unmount-inline` OSC 5379 sequence for a single view handle.
-pub(crate) fn unmount_inline(handle: &str) -> String {
-    format!("\x1b]5379;unmount-inline;{handle}\x1b\\")
+/// Returns the `unmount` OSC 5379 sequence for a single view handle.
+pub(crate) fn unmount(handle: &str) -> String {
+    format!("\x1b]5379;unmount;{handle}\x1b\\")
 }
 
 /// Returns a CUP (cursor position) sequence for a 0-based viewport cell.
@@ -60,15 +60,15 @@ mod tests {
 
     #[test]
     fn mount_sequence_is_canonical() {
-        let s = mount_inline("memo.main", 12, 48).unwrap();
-        assert_eq!(s, "\x1b]5379;mount-inline;memo.main;12;48\x1b\\");
+        let s = mount("memo.main", 12, 48).unwrap();
+        assert_eq!(s, "\x1b]5379;mount;memo.main;12;48\x1b\\");
     }
 
     #[test]
     fn unmount_sequence_is_canonical() {
         assert_eq!(
-            unmount_inline("memo.main"),
-            "\x1b]5379;unmount-inline;memo.main\x1b\\"
+            unmount("memo.main"),
+            "\x1b]5379;unmount;memo.main\x1b\\"
         );
     }
 
@@ -80,15 +80,15 @@ mod tests {
 
     #[test]
     fn rejects_out_of_range_dims() {
-        assert!(mount_inline("h", 0, 10).is_err());
-        assert!(mount_inline("h", 201, 10).is_err());
-        assert!(mount_inline("h", 10, 401).is_err());
+        assert!(mount("h", 0, 10).is_err());
+        assert!(mount("h", 201, 10).is_err());
+        assert!(mount("h", 10, 401).is_err());
     }
 
     #[test]
     fn rejects_bad_handle_charset() {
-        assert!(mount_inline("bad handle", 10, 10).is_err());
-        assert!(mount_inline("", 10, 10).is_err());
+        assert!(mount("bad handle", 10, 10).is_err());
+        assert!(mount("", 10, 10).is_err());
     }
 
     #[test]

@@ -14,7 +14,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OscWebviewVerb {
     /// Mount a registered webview INLINE at the cursor anchor, sized in cells.
-    MountInline {
+    Mount {
         view_id: String,
         rows: u16,
         cols: u16,
@@ -28,7 +28,7 @@ pub enum OscWebviewVerb {
     /// # Invariants
     /// `view_id == None` implies `instance_id == None` (an instance is
     /// addressable only alongside its view id; enforced at the capture stage).
-    UnmountInline {
+    Unmount {
         view_id: Option<String>,
         instance_id: Option<String>,
     },
@@ -56,7 +56,7 @@ pub enum AnchorMode {
 }
 
 /// Anchor stamped by the VT thread at the exact byte position of a
-/// `mount-inline` OSC: the anchor mode (scrollback vs alternate-screen) and
+/// `mount` OSC: the anchor mode (scrollback vs alternate-screen) and
 /// the `frame_seq` the next grid emit will carry (used by the GUI to defer
 /// first projection until the grid catches up).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,7 +81,7 @@ pub(crate) enum ControlFrame {
     /// A new current working directory reported via OSC 7.
     CurrentDir(PathBuf),
     /// An OSC-driven webview mount/unmount request from the PTY.
-    /// `anchor` is `Some` only for `MountInline` (stamped in `handle.rs`).
+    /// `anchor` is `Some` only for `Mount` (stamped in `handle.rs`).
     OscWebview {
         verb: OscWebviewVerb,
         anchor: Option<InlineAnchor>,
