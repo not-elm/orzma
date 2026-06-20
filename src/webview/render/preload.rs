@@ -41,6 +41,7 @@ mod tests {
             OZMA_BRIDGE_JS.contains("window, 'ozma'") && OZMA_BRIDGE_JS.contains("defineProperty")
         );
         assert!(OZMA_BRIDGE_JS.contains("kind: 'ozma.call'"));
+        assert!(OZMA_BRIDGE_JS.contains("kind: 'ozma.emit'"));
     }
 
     #[test]

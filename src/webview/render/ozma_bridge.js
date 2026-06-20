@@ -72,6 +72,9 @@
       var hs = listeners.get(event);
       if (hs) listeners.set(event, hs.filter(function (h) { return h !== handler; }));
     },
+    emit: function (event, payload) {
+      cef.emit({ kind: 'ozma.emit', event: event, payload: encodeParam(payload) });
+    },
   };
 
   Object.defineProperty(window, 'ozma', { value: Object.freeze(api), configurable: false, writable: false });
