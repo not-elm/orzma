@@ -491,7 +491,7 @@ struct TmuxWheelAccumulator {
 /// A focused inline webview claiming the wheel: the child to forward to and
 /// the pointer in its webview-local DIP.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct TmuxInlineWheelTarget {
+struct TmuxWebviewWheelTarget {
     child: Entity,
     position_dip: Vec2,
 }
@@ -499,7 +499,7 @@ struct TmuxInlineWheelTarget {
 /// Wheel-routing params bundled to stay within Bevy's system-parameter limit.
 /// `browsers` is optional so CEF-less tests construct the system.
 #[derive(SystemParam)]
-struct TmuxInlineWheelParams<'w, 's> {
+struct TmuxWebviewWheelParams<'w, 's> {
     focused_webview: Res<'w, FocusedWebview>,
     webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
     panes: Query<
@@ -555,13 +555,13 @@ fn resolve_rename_subject(kind: RenameKind, rename: &RenameParams) -> Option<Ren
 /// path runs). `Some` only when `FocusedWebview` holds an inline child of the
 /// pane under the pointer AND the pointer is over that child's rect — the tmux
 /// analog of native `resolve_inline_wheel_target`.
-fn resolve_tmux_inline_wheel_target(
-    params: &TmuxInlineWheelParams,
+fn resolve_tmux_webview_wheel_target(
+    params: &TmuxWebviewWheelParams,
     cursor_phys: Vec2,
     cell_w_phys: f32,
     cell_h_phys: f32,
     scale_factor: f32,
-) -> Option<TmuxInlineWheelTarget> {
+) -> Option<TmuxWebviewWheelTarget> {
     let (terminal, _pane_id, local_phys) = tmux_pane_at_phys(&params.panes, cursor_phys)?;
     let focused_child = focused_webview_of(
         Some(&params.focused_webview),
@@ -579,7 +579,7 @@ fn resolve_tmux_inline_wheel_target(
         cell_h_phys,
         scale_factor,
     )?;
-    (hit.child == focused_child).then_some(TmuxInlineWheelTarget {
+    (hit.child == focused_child).then_some(TmuxWebviewWheelTarget {
         child: hit.child,
         position_dip: hit.local_dip,
     })
@@ -587,7 +587,7 @@ fn resolve_tmux_inline_wheel_target(
 
 /// Converts one `MouseWheel` event to the RAW CEF wheel delta (`Line → ×120`,
 /// `Pixel` unchanged, NO sign flip) — identical to native `inline_wheel_delta`.
-fn tmux_inline_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
+fn tmux_webview_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
     match unit {
         MouseScrollUnit::Line => Vec2::new(x, y) * 120.0,
         MouseScrollUnit::Pixel => Vec2::new(x, y),
@@ -597,7 +597,7 @@ fn tmux_inline_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
 /// Forwards mouse-wheel events to the active tmux pane.
 ///
 /// A focused inline webview under the pointer claims the wheel first
-/// (`resolve_tmux_inline_wheel_target`): each event is forwarded RAW to that
+/// (`resolve_tmux_webview_wheel_target`): each event is forwarded RAW to that
 /// child's CEF browser and dropped before the tmux accumulator.
 ///
 /// Otherwise events are accumulated into a cell-delta and quantized into integer
@@ -610,7 +610,7 @@ fn forward_wheel_to_tmux(
     mut wheel: MessageReader<MouseWheel>,
     mut accumulator: ResMut<TmuxWheelAccumulator>,
     mut handles: Query<&mut TerminalHandle>,
-    inline: TmuxInlineWheelParams,
+    inline: TmuxWebviewWheelParams,
     connection: NonSend<TmuxConnection>,
     picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
@@ -631,7 +631,7 @@ fn forward_wheel_to_tmux(
     let cursor_phys = window.cursor_position().map(|c| c * dpr);
 
     let target = cursor_phys
-        .and_then(|c| resolve_tmux_inline_wheel_target(&inline, c, cell_w_phys, cell_h_phys, dpr));
+        .and_then(|c| resolve_tmux_webview_wheel_target(&inline, c, cell_w_phys, cell_h_phys, dpr));
 
     let Some(delta_cells) = aggregate_tmux_wheel_cells(
         &mut wheel,
@@ -722,10 +722,10 @@ const MAX_NOTCHES_PER_FRAME: usize = 10;
 /// scroll up / toward older lines); `Pixel` units (macOS trackpads,
 /// high-resolution wheels) are divided by the cell height so a fixed pixel
 /// travel maps to a consistent number of lines. Inline-routed events are
-/// forwarded RAW to CEF via `tmux_inline_wheel_delta` (no sign flip).
+/// forwarded RAW to CEF via `tmux_webview_wheel_delta` (no sign flip).
 fn aggregate_tmux_wheel_cells(
     wheel: &mut MessageReader<MouseWheel>,
-    target: Option<TmuxInlineWheelTarget>,
+    target: Option<TmuxWebviewWheelTarget>,
     browsers: Option<&Browsers>,
     cell_h_logical: f32,
 ) -> Option<f32> {
@@ -737,7 +737,7 @@ fn aggregate_tmux_wheel_cells(
                 browsers.send_mouse_wheel(
                     &target.child,
                     target.position_dip,
-                    tmux_inline_wheel_delta(ev.unit, ev.x, ev.y),
+                    tmux_webview_wheel_delta(ev.unit, ev.x, ev.y),
                 );
             }
             continue;
@@ -911,10 +911,10 @@ mod tests {
         (app, pane, child)
     }
 
-    fn run_resolve_wheel_target(app: &mut App, cursor_phys: Vec2) -> Option<TmuxInlineWheelTarget> {
+    fn run_resolve_wheel_target(app: &mut App, cursor_phys: Vec2) -> Option<TmuxWebviewWheelTarget> {
         app.world_mut()
-            .run_system_once(move |params: TmuxInlineWheelParams| {
-                resolve_tmux_inline_wheel_target(&params, cursor_phys, 8.0, 16.0, 1.0)
+            .run_system_once(move |params: TmuxWebviewWheelParams| {
+                resolve_tmux_webview_wheel_target(&params, cursor_phys, 8.0, 16.0, 1.0)
             })
             .unwrap()
     }

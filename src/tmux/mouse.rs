@@ -60,7 +60,7 @@ impl Plugin for MousePlugin {
         );
         app.add_systems(
             Update,
-            forward_tmux_inline_mouse_moves
+            forward_tmux_webview_mouse_moves
                 .in_set(InputPhase::Hover)
                 .in_set(super::OzmuxActiveSet),
         );
@@ -70,7 +70,7 @@ impl Plugin for MousePlugin {
 /// Modal-input gate: the resources whose presence means another surface owns
 /// input and the arbiter must drain events without mutating tmux. The
 /// focused-webview case is NOT gated here — the inline click pre-step
-/// (`route_tmux_inline_left_click`) owns webview focus instead.
+/// (`route_tmux_webview_left_click`) owns webview focus instead.
 #[derive(SystemParam)]
 struct ModalGate<'w> {
     picker: Res<'w, SessionPicker>,
@@ -169,7 +169,7 @@ pub(crate) struct TmuxMouseGesture {
     /// The in-flight inline-webview press: the child a left press inside an
     /// interactive inline rect was forwarded to, so the matching release's
     /// click-up routes to the SAME child even if the pointer drifted off-rect.
-    inline_press: Option<Entity>,
+    webview_press: Option<Entity>,
 }
 
 /// Tracks consecutive-click count using a timeout + positional drift gate.
@@ -261,7 +261,7 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 /// queued events are drained and the state is reset.
 ///
 /// Each left press/release is first offered to the inline-webview layer
-/// (`route_tmux_inline_left_click`): a press inside an interactive inline rect
+/// (`route_tmux_webview_left_click`): a press inside an interactive inline rect
 /// focuses + forwards to the child's CEF browser and never reaches the tmux
 /// gesture pipeline; a press outside every rect drops inline focus and falls
 /// through to the normal pane gesture.
@@ -270,7 +270,7 @@ fn arbiter(
     mut buttons: MessageReader<MouseButtonInput>,
     mut commands: Commands,
     mut queries: ResMut<CopyModeQueries>,
-    mut inline_route: TmuxInlineRouteParams,
+    mut webview_route: TmuxWebviewRouteParams,
     mut vt_select: VtSelectionParams,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -292,7 +292,7 @@ fn arbiter(
         // NOTE: no window means no cursor/scale to synthesize the CEF mouse-up,
         // so just drop any in-flight inline press — leaving it set would let a
         // later release act on a stale child.
-        gesture.inline_press = None;
+        gesture.webview_press = None;
         if let GestureState::SelectingVt { pane, .. } = gesture.state
             && let Ok(mut handle) = vt_select.handles.get_mut(pane)
         {
@@ -308,9 +308,9 @@ fn arbiter(
     let guard_cursor_phys = window.cursor_position().map(|c| c * scale);
     if !window.focused {
         buttons.clear();
-        release_inline_press(
+        release_webview_press(
             &mut gesture,
-            &inline_route,
+            &webview_route,
             &panes,
             guard_cursor_phys,
             cell_w,
@@ -333,9 +333,9 @@ fn arbiter(
     // the focused page does not stay logically pressed (no matching mouse-up).
     if picker.open || copy_prompt.open.is_some() {
         buttons.clear();
-        release_inline_press(
+        release_webview_press(
             &mut gesture,
-            &inline_route,
+            &webview_route,
             &panes,
             guard_cursor_phys,
             cell_w,
@@ -377,9 +377,9 @@ fn arbiter(
         if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
             && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
         {
-            let consumed = route_tmux_inline_left_click(
+            let consumed = route_tmux_webview_left_click(
                 &mut gesture,
-                &mut inline_route,
+                &mut webview_route,
                 &panes,
                 terminal,
                 local_phys,
@@ -855,7 +855,7 @@ fn arbiter(
 /// system-parameter limit. `focused_webview` / `browsers` are optional so
 /// CEF-less tests construct the system (state effects still apply).
 #[derive(SystemParam)]
-struct TmuxInlineRouteParams<'w, 's> {
+struct TmuxWebviewRouteParams<'w, 's> {
     focused_webview: Option<ResMut<'w, FocusedWebview>>,
     children: Query<'w, 's, &'static Children>,
     inline: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
@@ -868,21 +868,21 @@ struct TmuxInlineRouteParams<'w, 's> {
 /// cursor) and clears the marker. Called when an arbiter guard drains the
 /// queued release (modal open / window unfocused) so the focused web page is
 /// not left logically pressed with no matching mouse-up.
-fn release_inline_press(
+fn release_webview_press(
     gesture: &mut TmuxMouseGesture,
-    route: &TmuxInlineRouteParams,
+    route: &TmuxWebviewRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     cursor_phys: Option<Vec2>,
     cell_w_phys: f32,
     cell_h_phys: f32,
     scale: f32,
 ) {
-    let Some(child) = gesture.inline_press.take() else {
+    let Some(child) = gesture.webview_press.take() else {
         return;
     };
     if let Some(cursor_phys) = cursor_phys
         && let Some(browsers) = route.browsers.as_deref()
-        && let Some(dip) = tmux_inline_release_dip(
+        && let Some(dip) = tmux_webview_release_dip(
             route,
             panes,
             child,
@@ -909,9 +909,9 @@ fn release_inline_press(
     clippy::too_many_arguments,
     reason = "inline routing needs the gesture state, route params, and pointer geometry"
 )]
-fn route_tmux_inline_left_click(
+fn route_tmux_webview_left_click(
     gesture: &mut TmuxMouseGesture,
-    route: &mut TmuxInlineRouteParams,
+    route: &mut TmuxWebviewRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     terminal: Entity,
     local_phys: Vec2,
@@ -923,7 +923,7 @@ fn route_tmux_inline_left_click(
 ) -> bool {
     match button_state {
         ButtonState::Pressed => {
-            gesture.inline_press = None;
+            gesture.webview_press = None;
             let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
                 webview_hit_at(
                     &route.children,
@@ -955,15 +955,15 @@ fn route_tmux_inline_left_click(
                 browsers.set_focus(&hit.child, true);
                 browsers.send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
             }
-            gesture.inline_press = Some(hit.child);
+            gesture.webview_press = Some(hit.child);
             true
         }
         ButtonState::Released => {
-            let Some(child) = gesture.inline_press.take() else {
+            let Some(child) = gesture.webview_press.take() else {
                 return false;
             };
             if let Some(browsers) = route.browsers.as_deref()
-                && let Some(dip) = tmux_inline_release_dip(
+                && let Some(dip) = tmux_webview_release_dip(
                     route,
                     panes,
                     child,
@@ -983,8 +983,8 @@ fn route_tmux_inline_left_click(
 /// Webview-local DIP for a release on `child`, WITHOUT containment (a pointer
 /// that drifted off the rect still produces a release position). `None` when
 /// the child/terminal/rect chain is gone.
-fn tmux_inline_release_dip(
-    route: &TmuxInlineRouteParams,
+fn tmux_webview_release_dip(
+    route: &TmuxWebviewRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     child: Entity,
     cursor_phys: Vec2,
@@ -1012,7 +1012,7 @@ fn tmux_inline_release_dip(
 /// in-rect drag. `CursorMoved`-driven (one forward per frame, latest position), and
 /// focus-gated inside `bevy_cef` so motion over an unfocused browser is
 /// dropped browser-side. `Browsers` is optional so CEF-less tests construct it.
-fn forward_tmux_inline_mouse_moves(
+fn forward_tmux_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     children: Query<&Children>,

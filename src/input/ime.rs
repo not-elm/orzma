@@ -156,7 +156,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// translation + `TerminalGrid.cursor` × cell pitch, then divided by
 /// the window scale factor. When the focused webview is an INLINE child of
 /// the active pane, the anchor instead comes from that child's overlay
-/// rect origin (`inline_ime_position`), since inline entities carry no UI
+/// rect origin (`webview_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
 pub(crate) fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
@@ -167,7 +167,7 @@ pub(crate) fn ime_policy_system(
     focused_webview: Res<FocusedWebview>,
     webview_anchors: Query<(&ComputedNode, &UiGlobalTransform)>,
     webview_parents: Query<&ChildOf, With<Webview>>,
-    inline_slots: Query<&Webview>,
+    webview_slots: Query<&Webview>,
     overlays: Query<&TerminalOverlays>,
     current_mode: Res<State<AppMode>>,
     ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
@@ -197,10 +197,10 @@ pub(crate) fn ime_policy_system(
         // composition appears at the inline rect, not the terminal cursor.
         if let Some(child) =
             focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
-            && let Some(pos) = inline_ime_position(
+            && let Some(pos) = webview_ime_position(
                 window.resolution.scale_factor(),
                 &webview_parents,
-                &inline_slots,
+                &webview_slots,
                 &anchors,
                 &overlays,
                 &metrics,
@@ -381,17 +381,17 @@ pub(crate) fn read_ime_events(
 /// divided by the window scale factor. `None` when the focus chain is gone
 /// (child/terminal despawned, no terminal node, or a sentinel rect) — the
 /// caller then leaves `ime_position` unchanged rather than mis-anchoring.
-fn inline_ime_position(
+fn webview_ime_position(
     scale_factor: f32,
     webview_parents: &Query<&ChildOf, With<Webview>>,
-    inline_slots: &Query<&Webview>,
+    webview_slots: &Query<&Webview>,
     anchors: &Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     overlays: &Query<&TerminalOverlays>,
     metrics: &TerminalCellMetricsResource,
     child: Entity,
 ) -> Option<Vec2> {
     let terminal = webview_parents.get(child).ok()?.parent();
-    let slot = inline_slots.get(child).ok()?.slot;
+    let slot = webview_slots.get(child).ok()?.slot;
     let (node, ui_xform, _) = anchors.get(terminal).ok()?;
     let rect = *overlays.get(terminal).ok()?.rects.get(usize::from(slot))?;
     if rect.z == 0 {
