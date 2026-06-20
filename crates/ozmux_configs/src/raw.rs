@@ -2,7 +2,7 @@
 //! and merges them onto a baseline `OzmuxConfigs::default()`.
 
 use crate::OzmuxConfigs;
-use crate::font::FontPatch;
+use crate::font::FontConfig;
 use crate::inactive_pane::InactivePaneConfig;
 use crate::keyboard::KeyboardConfig;
 use crate::mouse::MouseConfig;
@@ -21,7 +21,7 @@ use serde::Deserialize;
 pub(crate) struct RawConfigs {
     pub(crate) shortcuts: Option<Shortcuts>,
     pub(crate) theme: Option<Theme>,
-    pub(crate) font: Option<FontPatch>,
+    pub(crate) font: Option<FontConfig>,
     pub(crate) mouse: Option<MouseConfig>,
     pub(crate) keyboard: Option<KeyboardConfig>,
     pub(crate) inactive_pane: Option<InactivePaneConfig>,
@@ -45,8 +45,8 @@ impl RawConfigs {
         if let Some(theme) = self.theme {
             base.theme = theme;
         }
-        if let Some(patch) = self.font {
-            base.font = patch.apply_to(base.font);
+        if let Some(font) = self.font {
+            base.font = font;
         }
         if let Some(mouse) = self.mouse {
             base.mouse = mouse;

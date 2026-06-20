@@ -124,31 +124,20 @@ fn bridge_font_config(
     // (already inserted by TerminalFontPlugin) and feed the same bundled
     // regular bytes to Assets<Font>. Skips ~52 MB of needless allocations
     // and ~5 redundant ab_glyph / bevy_text parses on the common cold path.
-    let no_override = font.normal_path.is_none()
-        && font.bold_path.is_none()
-        && font.italic_path.is_none()
-        && font.bold_italic_path.is_none();
+    let no_override = font.normal.is_none()
+        && font.bold.is_none()
+        && font.italic.is_none()
+        && font.bold_italic.is_none();
     if no_override {
         commands.insert_resource(TerminalUiFont(powerline));
         return;
     }
 
-    let regular_bytes = load_face_bytes(
-        font.normal_path.as_deref(),
-        bundled::REGULAR,
-        FontFace::Regular,
-    );
-    let bold_bytes = load_face_bytes(font.bold_path.as_deref(), bundled::BOLD, FontFace::Bold);
-    let italic_bytes = load_face_bytes(
-        font.italic_path.as_deref(),
-        bundled::ITALIC,
-        FontFace::Italic,
-    );
-    let bold_italic_bytes = load_face_bytes(
-        font.bold_italic_path.as_deref(),
-        bundled::BOLD_ITALIC,
-        FontFace::BoldItalic,
-    );
+    let regular_bytes = load_face_bytes(font.normal.as_deref(), bundled::REGULAR, FontFace::Regular);
+    let bold_bytes = load_face_bytes(font.bold.as_deref(), bundled::BOLD, FontFace::Bold);
+    let italic_bytes = load_face_bytes(font.italic.as_deref(), bundled::ITALIC, FontFace::Italic);
+    let bold_italic_bytes =
+        load_face_bytes(font.bold_italic.as_deref(), bundled::BOLD_ITALIC, FontFace::BoldItalic);
 
     // NOTE: validate-per-face is load-bearing. Without it, a corrupt
     // override on ANY face drops ALL overrides — the all-or-nothing
@@ -327,12 +316,7 @@ mod tests {
 
         let toml_path = tmp_dir.join("config.toml");
         let mut f = std::fs::File::create(&toml_path).expect("create toml");
-        writeln!(
-            f,
-            "[font.normal]\npath = \"{}\"\n",
-            ttf_path.to_string_lossy()
-        )
-        .expect("write toml");
+        writeln!(f, "[font]\nnormal = \"{}\"\n", ttf_path.to_string_lossy()).expect("write toml");
         drop(f);
 
         let _guard = crate::configs::env_guard();
@@ -372,10 +356,7 @@ mod tests {
         let toml = std::env::temp_dir().join("ozmux_font_bridge_test_missing.toml");
         std::fs::write(
             &toml,
-            format!(
-                "[font.normal]\npath = \"{}\"\n",
-                nonexistent.to_string_lossy()
-            ),
+            format!("[font]\nnormal = \"{}\"\n", nonexistent.to_string_lossy()),
         )
         .expect("write toml");
 
@@ -416,10 +397,7 @@ mod tests {
         let toml = tmp_dir.join("config.toml");
         std::fs::write(
             &toml,
-            format!(
-                "[font.normal]\npath = \"{}\"\n",
-                normal_path.to_string_lossy()
-            ),
+            format!("[font]\nnormal = \"{}\"\n", normal_path.to_string_lossy()),
         )
         .expect("write toml");
 
@@ -504,7 +482,7 @@ mod tests {
         std::fs::write(
             &toml,
             format!(
-                "[font.normal]\npath = \"{}\"\n[font.bold]\npath = \"{}\"\n",
+                "[font]\nnormal = \"{}\"\nbold = \"{}\"\n",
                 normal_path.to_string_lossy(),
                 bold_path.to_string_lossy(),
             ),
