@@ -86,6 +86,8 @@ fn apply_title(window: &mut Window, desired: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::state::app::StatesPlugin;
+    use ozmux_tmux::{SessionId, WindowId};
 
     #[test]
     fn ozma_some_title_gets_suffix() {
@@ -121,5 +123,59 @@ mod tests {
     fn ozmux_empty_session_is_app_name() {
         assert_eq!(format_ozmux("", Some("vim")), "ozmux");
         assert_eq!(format_ozmux("", None), "ozmux");
+    }
+
+    fn primary_window_title(app: &mut App) -> String {
+        let world = app.world_mut();
+        let mut windows = world.query_filtered::<&Window, With<PrimaryWindow>>();
+        windows
+            .iter(world)
+            .next()
+            .expect("primary window exists")
+            .title
+            .clone()
+    }
+
+    #[test]
+    fn ozma_system_sets_focused_terminal_title() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(AppMode::Ozma);
+        app.add_plugins(WindowTitlePlugin);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        app.world_mut().spawn((
+            OzmaTerminal,
+            KeyboardFocused,
+            TerminalTitle(Some("vim".to_string())),
+        ));
+
+        app.update();
+
+        assert_eq!(primary_window_title(&mut app), "vim — ozmux");
+    }
+
+    #[test]
+    fn ozmux_system_sets_session_and_active_window() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(AppMode::Ozmux);
+        app.add_plugins(WindowTitlePlugin);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        app.world_mut().spawn(TmuxSession {
+            id: SessionId(1),
+            name: "main".to_string(),
+        });
+        app.world_mut().spawn((
+            TmuxWindow {
+                id: WindowId(2),
+                index: 1,
+                name: "vim".to_string(),
+            },
+            ActiveWindow,
+        ));
+
+        app.update();
+
+        assert_eq!(primary_window_title(&mut app), "main:vim — ozmux");
     }
 }
