@@ -324,10 +324,23 @@ pub(crate) fn decide_button(
     effects
 }
 
-/// Carries the sub-notch wheel remainder across frames.
+/// Carries the sub-notch wheel remainder across frames, scoped to the last
+/// terminal the wheel targeted.
 #[derive(Resource, Default)]
 pub(crate) struct WheelAccumulator {
     residual_cells: f32,
+    last_target: Option<Entity>,
+}
+
+impl WheelAccumulator {
+    /// Resets the residual when the wheel target changes, so a sub-notch fraction
+    /// accumulated over one terminal cannot bleed into the next.
+    fn retarget(&mut self, entity: Entity) {
+        if self.last_target != Some(entity) {
+            self.residual_cells = 0.0;
+            self.last_target = Some(entity);
+        }
+    }
 }
 
 /// Cells of scroll for one wheel event: `Line` units count directly, `Pixel`
@@ -534,13 +547,15 @@ pub(crate) fn dispatch_mouse_buttons(
     }
 }
 
-/// The crate's wheel dispatcher: accumulates notches, drives `decide_wheel`, and
-/// triggers `TerminalMouseEffects` for the apply observer.
+/// The crate's wheel dispatcher: routes to the topmost terminal under the cursor,
+/// resets the accumulator on a target change, accumulates notches, drives
+/// `decide_wheel`, and triggers `TerminalMouseEffects`. Skips `MouseDisabled`
+/// terminals; an empty candidate set drains the wheel events.
 pub(crate) fn dispatch_mouse_wheel(
     mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,
     mut wheel: MessageReader<MouseWheel>,
-    terminal: Query<
+    terminals: Query<
         (
             Entity,
             &TerminalHandle,
@@ -555,26 +570,40 @@ pub(crate) fn dispatch_mouse_wheel(
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok((entity, handle, node, transform, grid)) = terminal.single() else {
-        wheel.clear();
-        return;
-    };
     let Ok(window) = windows.single() else {
         wheel.clear();
         return;
     };
-    if !window.focused {
+    if !window.focused || terminals.is_empty() {
         wheel.clear();
         return;
     }
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let Some(cursor_phys) = window.cursor_position().map(|c| c * window.scale_factor()) else {
+        wheel.clear();
+        return;
+    };
+    let Some(target) = topmost_terminal_at(
+        cursor_phys,
+        terminals.iter().map(|(e, _, node, transform, _)| (e, node, transform)),
+    ) else {
+        wheel.clear();
+        return;
+    };
+    let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
+        wheel.clear();
+        return;
+    };
     let ctx = CellContext {
         node,
         transform,
         grid,
-        cell_w: metrics.metrics.advance_phys.floor().max(1.0),
-        cell_h: metrics.metrics.line_height_phys.floor().max(1.0),
+        cell_w,
+        cell_h,
     };
 
+    gesture_acc.retarget(target);
     let delta_cells: f32 = wheel
         .read()
         .map(|ev| wheel_delta_cells(ev.unit, ev.y, ctx.cell_h))
@@ -585,16 +614,17 @@ pub(crate) fn dispatch_mouse_wheel(
     }
     // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
     let notches = -raw;
-    let cell = window
-        .cursor_position()
-        .map(|c| c * window.scale_factor())
-        .and_then(|p| ctx.hit(p))
+    let cell = ctx
+        .hit(cursor_phys)
         .map(|(cell, _)| cell)
         .unwrap_or(CellCoord { col: 1, row: 1 });
     let mods = build_wheel_modifiers(&keys, &cfg);
     let effects = decide_wheel(handle.current_modes(), notches, cell, mods, &cfg.wheel);
     if !effects.is_empty() {
-        commands.trigger(TerminalMouseEffects { entity, effects });
+        commands.trigger(TerminalMouseEffects {
+            entity: target,
+            effects,
+        });
     }
 }
 
@@ -1379,6 +1409,20 @@ mod tests {
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
         assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1);
         assert_eq!(accumulate_notches(&mut acc, -1.0, 0.5), -2);
+    }
+
+    #[test]
+    fn wheel_accumulator_resets_residual_on_target_change() {
+        let mut world = World::new();
+        let a = world.spawn_empty().id();
+        let b = world.spawn_empty().id();
+        let mut acc = WheelAccumulator::default();
+        acc.retarget(a);
+        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
+        acc.retarget(a);
+        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1, "0.3 + 0.3 = 0.6 → one notch on the same target");
+        acc.retarget(b);
+        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0, "switching target clears the carried residual");
     }
 
     #[test]
