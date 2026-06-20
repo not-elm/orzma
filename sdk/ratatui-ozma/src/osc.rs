@@ -2,9 +2,9 @@
 
 use crate::error::{OzmaError, OzmaResult};
 
-/// Max inline-webview rows accepted by the VT layer (`1..=MAX_ROWS`).
+/// Max webview rows accepted by the VT layer (`1..=MAX_ROWS`).
 pub(crate) const MAX_ROWS: u16 = 200;
-/// Max inline-webview cols accepted by the VT layer (`1..=MAX_COLS`).
+/// Max webview cols accepted by the VT layer (`1..=MAX_COLS`).
 pub(crate) const MAX_COLS: u16 = 400;
 
 /// Returns the `mount` OSC 5379 sequence, or an error if the handle

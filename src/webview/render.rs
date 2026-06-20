@@ -84,11 +84,11 @@ impl Plugin for RenderPlugin {
 /// CEF focus when `FocusedWebview` becomes `None`).
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
-/// inline webview child (`Webview`) whose `ChildOf` parent is a live
+/// webview child (`Webview`) whose `ChildOf` parent is a live
 /// `TmuxPane` — active or not — that inline focus stands (spec §7, single
 /// focus source). This covers click-granted focus and the app-declared focus
 /// set via the control-plane `SetFocus` op, and means switching the active
-/// pane does NOT clear an inline webview's focus: the webview keeps keyboard
+/// pane does NOT clear a webview's focus: the webview keeps keyboard
 /// focus until its child despawns (or focus moves off it), at which point the
 /// sync falls through to the clear path below, which maps the active terminal
 /// pane to `None`.

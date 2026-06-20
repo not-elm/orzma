@@ -288,7 +288,7 @@ pub(crate) fn ime_policy_system(
 }
 
 /// Drains `Ime` events, mutates `ImeState`, and forwards `Ime::Commit`
-/// text to the active tmux pane — UNLESS an inline webview owns focus, in
+/// text to the active tmux pane — UNLESS a webview owns focus, in
 /// which case the commit-to-pane write is suppressed (bevy_cef commits it to
 /// the page; see spec §7).
 ///
@@ -375,7 +375,7 @@ pub(crate) fn read_ime_events(
     }
 }
 
-/// The logical-pixel anchor for the OS candidate window when an inline webview
+/// The logical-pixel anchor for the OS candidate window when a webview
 /// owns focus: the owning terminal node's top-left (physical px) plus the
 /// child's active overlay rect origin (`rect.y × cell_w`, `rect.x × cell_h`),
 /// divided by the window scale factor. `None` when the focus chain is gone
@@ -855,7 +855,7 @@ mod tests {
         let window = q.single(app.world()).expect("primary window");
         assert!(
             window.ime_enabled,
-            "IME must stay enabled while an inline webview owns focus"
+            "IME must stay enabled while a webview owns focus"
         );
         assert!(
             window.ime_position.abs_diff_eq(Vec2::new(24.0, 32.0), 1e-3),

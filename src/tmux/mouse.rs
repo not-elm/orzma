@@ -166,7 +166,7 @@ enum GestureState {
 pub(crate) struct TmuxMouseGesture {
     state: GestureState,
     click: ClickTracker,
-    /// The in-flight inline-webview press: the child a left press inside an
+    /// The in-flight webview press: the child a left press inside an
     /// interactive inline rect was forwarded to, so the matching release's
     /// click-up routes to the SAME child even if the pointer drifted off-rect.
     webview_press: Option<Entity>,
@@ -260,7 +260,7 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 /// window is not focused, or a modal (picker / copy-search prompt) owns input,
 /// queued events are drained and the state is reset.
 ///
-/// Each left press/release is first offered to the inline-webview layer
+/// Each left press/release is first offered to the webview layer
 /// (`route_tmux_webview_left_click`): a press inside an interactive inline rect
 /// focuses + forwards to the child's CEF browser and never reaches the tmux
 /// gesture pipeline; a press outside every rect drops inline focus and falls
@@ -390,7 +390,7 @@ fn arbiter(
                 scale,
             );
             if consumed {
-                // NOTE: a press that focused an inline webview must also make its
+                // NOTE: a press that focused a webview must also make its
                 // host pane the tmux-active pane. ActivePane is the keyboard/paste
                 // target, so it has to follow the pane the user clicked into —
                 // without this, after focus is released keystrokes route to the
@@ -864,7 +864,7 @@ struct TmuxWebviewRouteParams<'w, 's> {
     browsers: Option<NonSend<'w, Browsers>>,
 }
 
-/// Releases an in-flight inline-webview press to CEF (mouse-up at the last
+/// Releases an in-flight webview press to CEF (mouse-up at the last
 /// cursor) and clears the marker. Called when an arbiter guard drains the
 /// queued release (modal open / window unfocused) so the focused web page is
 /// not left logically pressed with no matching mouse-up.
@@ -896,7 +896,7 @@ fn release_webview_press(
     }
 }
 
-/// Routes a left press/release through the inline-webview layer, returning
+/// Routes a left press/release through the webview layer, returning
 /// `true` when the event was consumed and must NOT reach the tmux gesture
 /// pipeline. A press inside an
 /// interactive rect sets `FocusedWebview`, issues the UNGATED `set_focus`

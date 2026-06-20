@@ -24,13 +24,13 @@ use ozma_tty_renderer::material::{TerminalMaterialSystems, TerminalUiMaterial};
 use ozma_tty_renderer::prelude::{OVERLAY_SLOTS, TerminalOverlays};
 use ozma_tty_renderer::schema::TerminalGrid;
 
-/// The normalized passthrough chords for a mounted inline webview, copied from
+/// The normalized passthrough chords for a mounted webview, copied from
 /// its registration. Read by the focused-key filter-fill and PTY-forward
 /// systems (Phase 4) off the focused child entity.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct PassthroughKeys(pub(crate) Vec<NormalizedChord>);
 
-/// Marks an inline webview entity and records its identity: the mounted
+/// Marks a webview entity and records its identity: the mounted
 /// `view_id` and the overlay texture `slot` (0..`OVERLAY_SLOTS`) it occupies
 /// on its parent terminal. The owning terminal surface is NOT duplicated
 /// here — it is the `ChildOf` parent, per the multiplexer's "no typed
@@ -38,7 +38,7 @@ pub(crate) struct PassthroughKeys(pub(crate) Vec<NormalizedChord>);
 /// truth for slot allocation (no separate allocation table).
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Webview {
-    /// The registered view id this inline webview was mounted from.
+    /// The registered view id this webview was mounted from.
     pub(crate) view_id: String,
     /// The client-assigned instance id; `None` is the implicit default
     /// instance. `(view_id, instance_id)` is the per-terminal address.
@@ -47,7 +47,7 @@ pub(crate) struct Webview {
     pub(crate) slot: u8,
 }
 
-/// Where an inline webview sits: its anchor mode (scrollback line vs fixed
+/// Where a webview sits: its anchor mode (scrollback line vs fixed
 /// viewport cell), the rect extent in cells, and the VT `frame_seq` the next
 /// grid emit carries (`project_webview_overlays` defers first projection until
 /// the grid catches up).
@@ -64,16 +64,16 @@ pub(crate) struct WebviewPlacement {
     pub(crate) frame_seq: u32,
 }
 
-/// Marks a bridged inline webview entity after it has produced its first
+/// Marks a bridged webview entity after it has produced its first
 /// successful projection into `TerminalOverlays` and the `Compositing { active:
 /// true }` push notification has been sent. Prevents duplicate start
 /// notifications on subsequent frames where the same rect re-projects.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CompositeNotified;
 
-/// Registers the inline-webview runtime systems: the `WebviewSize` size sync
+/// Registers the webview runtime systems: the `WebviewSize` size sync
 /// (`Update`), the per-frame projection that derives `TerminalOverlays` from
-/// inline-webview children (spec §5), and the render-world ordering edge that
+/// webview children (spec §5), and the render-world ordering edge that
 /// keeps webview GPU texture injection ahead of the terminal material's
 /// bind-group rebuild.
 ///
@@ -193,7 +193,7 @@ pub(crate) fn resolve_mount(
     })
 }
 
-/// Mounts a registered view as an inline webview child of the requesting
+/// Mounts a registered view as a webview child of the requesting
 /// terminal surface, applying the policy gates in order (each rejection is a
 /// `tracing::debug!` + return): missing anchor, unregistered view, duplicate
 /// `view_id` on this terminal, overlay-slot exhaustion.
@@ -312,7 +312,7 @@ pub(crate) fn mount(
         rows = ctx.rows,
         cols = ctx.cols,
         anchor = ?anchor.mode,
-        "osc-webview: inline webview mounted"
+        "osc-webview: webview mounted"
     );
 }
 
@@ -344,7 +344,7 @@ pub(crate) fn unmount(
     }
 }
 
-/// Returns the inline webview entity that currently holds keyboard focus on
+/// Returns the webview entity that currently holds keyboard focus on
 /// `active_surface`: `Some(e)` iff `FocusedWebview` points at `e`, `e` carries
 /// `Webview`, and its `ChildOf` parent is the active surface. The input
 /// dispatcher uses this to hoist the release-chord check, restrict the Escape
@@ -359,11 +359,11 @@ pub(crate) fn focused_webview_of(
     (Some(parent) == active_surface).then_some(candidate)
 }
 
-/// A pointer hit on an interactive inline webview rect: the child entity that
+/// A pointer hit on an interactive webview rect: the child entity that
 /// owns the rect and the pointer position in webview-local DIP (logical px).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct WebviewHit {
-    /// The interactive inline webview child under the pointer.
+    /// The interactive webview child under the pointer.
     pub(crate) child: Entity,
     /// `(local_phys − rect_origin_phys) / scale_factor` — the pointer in
     /// webview-local DIP, the coordinate space CEF mouse events expect.
@@ -474,7 +474,7 @@ fn despawn_fixed_screen_on_alt_exit(
     }
 }
 
-/// The live inline-webview children of a terminal surface.
+/// The live webview children of a terminal surface.
 fn live_webview_children<'a>(
     children: &Query<&Children>,
     views: &'a Query<&'static Webview>,
@@ -521,7 +521,7 @@ fn seed_logical_size(
         / scale_factor.max(f32::EPSILON)
 }
 
-/// Recomputes every inline webview's `WebviewSize` from the current cell
+/// Recomputes every webview's `WebviewSize` from the current cell
 /// metrics and primary-window scale factor (spec §6.5), writing only when the
 /// value differs — `bevy_cef` commits sizes to CEF on `Changed<WebviewSize>`,
 /// so a spurious write each frame would re-commit (and re-create the
@@ -555,7 +555,7 @@ fn sync_webview_size(
 /// `TermMode::ALT_SCREEN`.
 const ALT_SCREEN_MODE: &str = "alt-screen";
 
-/// Derives each terminal's `TerminalOverlays` from its live inline-webview
+/// Derives each terminal's `TerminalOverlays` from its live webview
 /// children, every frame, starting from the all-sentinel default (spec §5).
 ///
 /// Per-child projection rules, in order:
@@ -665,7 +665,7 @@ fn project_webview_overlays(
 }
 
 /// Sends a `Compositing { active: false }` push notification when a bridged
-/// inline webview entity is despawned after having been notified at least once
+/// webview entity is despawned after having been notified at least once
 /// (i.e., after its first successful projection). Entities that were never
 /// projected (never stamped `CompositeNotified`) are silently ignored.
 fn on_placement_removed(
@@ -869,7 +869,7 @@ mod tests {
         assert_eq!(
             app.world().get::<ChildOf>(child).map(|c| c.parent()),
             Some(terminal),
-            "the inline webview must be a ChildOf the terminal surface"
+            "the webview must be a ChildOf the terminal surface"
         );
         assert_eq!(
             app.world().get::<Webview>(child),
@@ -891,19 +891,19 @@ mod tests {
         match app
             .world()
             .get::<WebviewSource>(child)
-            .expect("inline webview must carry WebviewSource")
+            .expect("webview must carry WebviewSource")
         {
             WebviewSource::Url(url) => assert_eq!(url, "ozma-dyn://dash/index.html"),
             other => panic!("unexpected WebviewSource: {other:?}"),
         }
         assert!(
             app.world().get::<WebviewTextureTarget>(child).is_some(),
-            "inline webview must carry a headless WebviewTextureTarget"
+            "webview must carry a headless WebviewTextureTarget"
         );
         let preload = app
             .world()
             .get::<PreloadScripts>(child)
-            .expect("inline webview must carry PreloadScripts");
+            .expect("webview must carry PreloadScripts");
         assert!(
             !preload.0.is_empty(),
             "an inline (bridged) webview must carry the populated window.ozma preload"

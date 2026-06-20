@@ -384,7 +384,7 @@ pub struct Bindings {
     /// Paste the system clipboard into the active terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub paste: Option<KeyChord>,
-    /// Releases keyboard focus from a focused inline webview back to the terminal.
+    /// Releases keyboard focus from a focused webview back to the terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub release_webview_focus: Option<KeyChord>,
     /// Deprecated and ignored: renamed to `release_webview_focus`. Accepted so
@@ -524,7 +524,7 @@ impl Bindings {
 pub enum ShortcutAction {
     /// Paste the system clipboard into the active terminal.
     Paste,
-    /// Releases keyboard focus from a focused inline webview back to the terminal.
+    /// Releases keyboard focus from a focused webview back to the terminal.
     ReleaseWebviewFocus,
     /// Opens the tmux session/window picker overlay.
     OpenPicker,

@@ -96,7 +96,7 @@ pub(crate) struct DynamicView {
     pub(crate) passthrough: Vec<NormalizedChord>,
 }
 
-/// Stamped on a Tier 1 inline webview entity at mount: the control-plane
+/// Stamped on a Tier 1 webview entity at mount: the control-plane
 /// connection that registered it (back-channel routing target) and its handle.
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct WebviewOwner {

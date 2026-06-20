@@ -27,7 +27,7 @@ pub(crate) struct ResolvedShortcuts(Vec<ResolvedShortcut>);
 
 impl ResolvedShortcuts {
     /// Returns the GUI action bound to `(keycode, mods)`, if any. Excludes
-    /// `ReleaseWebviewFocus`, which is meaningful only while an inline webview
+    /// `ReleaseWebviewFocus`, which is meaningful only while a webview
     /// holds focus and is matched separately via `is_release_webview_focus`.
     pub(crate) fn match_gui_action(
         &self,

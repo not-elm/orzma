@@ -1139,7 +1139,7 @@ impl TerminalHandle {
     }
 
     /// Saturation policy (spec §3): once `history_size` reaches the
-    /// scrollback cap, trims become unobservable, so all inline webviews
+    /// scrollback cap, trims become unobservable, so all webviews
     /// are unmounted once and further mounts are rejected until the
     /// history shrinks below the cap again (e.g. CSI 3 J).
     ///
@@ -1150,7 +1150,7 @@ impl TerminalHandle {
         if self.scroll_cap > 0 && history_size >= self.scroll_cap {
             if !self.saturated {
                 self.saturated = true;
-                tracing::debug!("scrollback saturated: unmounting all inline webviews");
+                tracing::debug!("scrollback saturated: unmounting all webviews");
                 self.send_synthetic_unmount_all();
             }
         } else {

@@ -8,7 +8,7 @@
 //!   - emitting a `tick` event every second (`window.ozma.on`)
 //!
 //! The page also has an `<input>`, so clicking it shows the focus ring and typing
-//! (routed to the focused inline webview) echoes back into the page.
+//! (routed to the focused webview) echoes back into the page.
 //!
 //! Usage (inside an ozmux pane, with the control plane up):
 //!   cargo run --example dyn_webview_client

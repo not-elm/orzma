@@ -1,6 +1,6 @@
 //! In-process webview feature: CEF render wiring and the window.ozma Tier 1
-//! back-channel (render), OSC mount/unmount of inline webviews (osc), and
-//! inline webviews rendered into the terminal text flow (mount). Aggregated
+//! back-channel (render), OSC mount/unmount of webviews (osc), and
+//! webviews rendered into the terminal text flow (mount). Aggregated
 //! behind OzmuxWebviewPlugin.
 
 pub(crate) mod mount;

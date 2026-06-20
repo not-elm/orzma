@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[derive(Resource, Clone)]
 pub(crate) struct OscWebviewGate(pub(crate) Arc<AtomicBool>);
 
-/// Marks an inline webview as render-only (no pointer or keyboard input
+/// Marks a webview as render-only (no pointer or keyboard input
 /// forwarded to the embedded page).
 #[derive(Component, Debug, Default)]
 pub(crate) struct NonInteractive;

@@ -202,12 +202,12 @@ fn forward_keys_to_tmux(
         None => (None, None, None),
     };
 
-    // When an inline webview holds focus it owns the keyboard (bevy_cef routes
+    // When a webview holds focus it owns the keyboard (bevy_cef routes
     // keystrokes to it); forwarding to tmux too would double-send. The configured
     // release-webview-focus chord releases focus back to the terminal. NOTE: under the tmux backend
     // `FocusedWebview` is live (set by the inline-click router, the control-plane
     // `SetFocus` op, and the focus-preservation arm in `sync_focused_webview`),
-    // so this drain is load-bearing whenever an inline webview is focused —
+    // so this drain is load-bearing whenever a webview is focused —
     // removing it would double-send keystrokes to the page and the pane.
     if let Some(focused_entity) = focused_webview.0 {
         let pass_chords = passthrough_keys
@@ -488,7 +488,7 @@ struct TmuxWheelAccumulator {
     last_pane: Option<Entity>,
 }
 
-/// A focused inline webview claiming the wheel: the child to forward to and
+/// A focused webview claiming the wheel: the child to forward to and
 /// the pointer in its webview-local DIP.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct TmuxWebviewWheelTarget {
@@ -551,7 +551,7 @@ fn resolve_rename_subject(kind: RenameKind, rename: &RenameParams) -> Option<Ren
     }
 }
 
-/// Resolves the focused inline webview under the pointer, or `None` (the tmux
+/// Resolves the focused webview under the pointer, or `None` (the tmux
 /// path runs). `Some` only when `FocusedWebview` holds an inline child of the
 /// pane under the pointer AND the pointer is over that child's rect — the tmux
 /// analog of native `resolve_inline_wheel_target`.
@@ -596,7 +596,7 @@ fn tmux_webview_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
 
 /// Forwards mouse-wheel events to the active tmux pane.
 ///
-/// A focused inline webview under the pointer claims the wheel first
+/// A focused webview under the pointer claims the wheel first
 /// (`resolve_tmux_webview_wheel_target`): each event is forwarded RAW to that
 /// child's CEF browser and dropped before the tmux accumulator.
 ///

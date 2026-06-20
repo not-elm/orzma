@@ -22,7 +22,7 @@ pub enum OscWebviewVerb {
         /// implicit default instance. `(view_id, instance_id)` is the address.
         instance_id: Option<String>,
     },
-    /// Unmount inline webview(s): a specific `(view_id, instance_id)`, all
+    /// Unmount webview(s): a specific `(view_id, instance_id)`, all
     /// instances of a `view_id`, or all for this terminal.
     ///
     /// # Invariants
@@ -34,7 +34,7 @@ pub enum OscWebviewVerb {
     },
 }
 
-/// How an inline webview is anchored to its terminal.
+/// How a webview is anchored to its terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AnchorMode {
     /// Anchored to an absolute scrollback line; scrolls with the text

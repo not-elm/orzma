@@ -42,7 +42,7 @@ cargo run               # or: make run
 - `crates/` — `ozma_tty_engine`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
 - `sdk/ozma-web` — `@ozma/web` (in-page `window.ozma` bridge client for webview pages)
 
-## Inline webviews
+## Webviews
 
 A program in the shell can render a webview **inline in the terminal text flow**
 (a live CEF webview composited in the terminal shader, scrolling with the text).
@@ -59,7 +59,7 @@ see [`examples/dyn_webview_client.rs`](examples/dyn_webview_client.rs). Click th
 view to focus it; keys, wheel, and IME then route to the page; `Ctrl+Shift+Escape`
 returns focus to the terminal. Full protocol, focus model, and limits:
 [`docs/dyn-webview.md`](docs/dyn-webview.md) and
-[`docs/inline-webview.md`](docs/inline-webview.md).
+[`docs/webview.md`](docs/webview.md).
 
 ## Development
 
