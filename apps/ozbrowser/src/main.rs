@@ -38,7 +38,8 @@ fn run() -> anyhow::Result<()> {
     })?;
 
     let (url_tx, url_rx) = crossbeam_channel::unbounded::<String>();
-    let view = register_view(&ozma, &initial_url, url_tx.clone())?;
+    let (hint_tx, hint_rx) = crossbeam_channel::unbounded::<String>();
+    let view = register_view(&ozma, &initial_url, url_tx.clone(), hint_tx.clone())?;
 
     enable_raw_mode()?;
     if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
@@ -49,7 +50,15 @@ fn run() -> anyhow::Result<()> {
     }
     install_panic_hook();
 
-    let result = event_loop(view, App::new(initial_url), &ozma, url_tx, &url_rx);
+    let result = event_loop(
+        view,
+        App::new(initial_url),
+        &ozma,
+        url_tx,
+        &url_rx,
+        hint_tx,
+        &hint_rx,
+    );
 
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen);
@@ -62,6 +71,8 @@ fn event_loop(
     ozma: &Ozma,
     url_tx: Sender<String>,
     url_rx: &Receiver<String>,
+    hint_tx: Sender<String>,
+    hint_rx: &Receiver<String>,
 ) -> anyhow::Result<()> {
     let backend = OzmaBackend::new(CrosstermBackend::new(stdout()), ozma);
     let mut terminal = Terminal::new(backend)?;
@@ -69,6 +80,9 @@ fn event_loop(
     loop {
         while let Ok(url) = url_rx.try_recv() {
             app.set_url(url);
+        }
+        while let Ok(kind) = hint_rx.try_recv() {
+            app.on_hint_result(&kind);
         }
 
         terminal.draw(|f| {
@@ -84,28 +98,37 @@ fn event_loop(
                     Cmd::Quit => return Ok(()),
                     Cmd::Navigate(url) => {
                         let url = app.navigate(url);
-                        view = register_view(ozma, &url, url_tx.clone())?;
+                        view = register_view(ozma, &url, url_tx.clone(), hint_tx.clone())?;
                     }
                     Cmd::HistoryBack => {
                         if let Some(url) = app.go_back() {
-                            view = register_view(ozma, &url, url_tx.clone())?;
+                            view = register_view(ozma, &url, url_tx.clone(), hint_tx.clone())?;
                         }
                     }
                     Cmd::HistoryForward => {
                         if let Some(url) = app.go_forward() {
-                            view = register_view(ozma, &url, url_tx.clone())?;
+                            view = register_view(ozma, &url, url_tx.clone(), hint_tx.clone())?;
                         }
                     }
                     Cmd::Reload => {
-                        view = register_view(ozma, app.url(), url_tx.clone())?;
+                        view = register_view(ozma, app.url(), url_tx.clone(), hint_tx.clone())?;
                     }
                     Cmd::Scroll(action) => {
                         let _ = view.emit("scroll", &scroll_payload(action));
                     }
-                    Cmd::HintShow => {}
-                    Cmd::HintKey(_) => {}
-                    Cmd::HintBackspace => {}
-                    Cmd::HintHide => {}
+                    Cmd::HintShow => {
+                        let _ = view.emit("hints:show", &serde_json::json!({}));
+                    }
+                    Cmd::HintKey(c) => {
+                        let _ =
+                            view.emit("hints:key", &serde_json::json!({ "key": c.to_string() }));
+                    }
+                    Cmd::HintBackspace => {
+                        let _ = view.emit("hints:key", &serde_json::json!({ "backspace": true }));
+                    }
+                    Cmd::HintHide => {
+                        let _ = view.emit("hints:hide", &serde_json::json!({}));
+                    }
                 }
             }
         }
@@ -115,7 +138,12 @@ fn event_loop(
 // TODO: each call to register_view mints a new WebviewHandle registration that is never
 // unregistered — the old handle is dropped but the server-side entry persists because the
 // SDK has no unregister/Drop path yet. Fix this when the SDK exposes one.
-fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Result<WebviewHandle> {
+fn register_view(
+    ozma: &Ozma,
+    url: &str,
+    url_tx: Sender<String>,
+    hint_tx: Sender<String>,
+) -> anyhow::Result<WebviewHandle> {
     let pass = [
         KeyChord {
             mods: KeyModifiers::NONE,
@@ -202,15 +230,29 @@ fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Resu
             code: KeyCode::Char('c'),
         },
     ];
-    let view = ozma.register(Webview::url(url).interactive(true).passthrough(pass).on(
-        "urlChanged",
-        move |args: serde_json::Value| -> Result<(), RpcError> {
-            if let Some(u) = args["url"].as_str() {
-                let _ = url_tx.send(u.to_owned());
-            }
-            Ok(())
-        },
-    ))?;
+    let view = ozma.register(
+        Webview::url(url)
+            .interactive(true)
+            .passthrough(pass)
+            .on(
+                "urlChanged",
+                move |args: serde_json::Value| -> Result<(), RpcError> {
+                    if let Some(u) = args["url"].as_str() {
+                        let _ = url_tx.send(u.to_owned());
+                    }
+                    Ok(())
+                },
+            )
+            .on(
+                "hintResult",
+                move |args: serde_json::Value| -> Result<(), RpcError> {
+                    if let Some(kind) = args["kind"].as_str() {
+                        let _ = hint_tx.send(kind.to_owned());
+                    }
+                    Ok(())
+                },
+            ),
+    )?;
     Ok(view)
 }
 

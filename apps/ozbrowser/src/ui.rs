@@ -78,6 +78,7 @@ fn draw_help_modal(frame: &mut Frame<'_>) {
         Line::from("  o / :          open address bar"),
         Line::from("  r              reload"),
         Line::from("  i              insert mode (focus webview)"),
+        Line::from("  f              follow link / hint"),
         Line::from("  ?              this help"),
         Line::from("  q / Ctrl-c     quit"),
         Line::from(""),
