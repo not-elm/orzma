@@ -48,7 +48,7 @@ pub(super) fn on_tmux_mouse_effects(
                 };
                 if let Err(e) = handle.send(&cmd) {
                     tracing::warn!(?e, pane = primary.0, "resize-pane send failed");
-                    return;
+                    continue;
                 }
                 if let super::GestureState::Resizing {
                     last_sent, resized, ..
