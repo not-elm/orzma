@@ -10,7 +10,7 @@ use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
 use ozmux_tmux::{ActivePane, TmuxPane};
-use ozmux_webview_host::DynAssetRegistry;
+use ozmux_webview_host::WebviewAssetRegistry;
 use ozmux_webview_host::dyn_scheme::custom_dyn_scheme;
 use serde_json::Value;
 use std::path::Path;
@@ -33,9 +33,9 @@ struct OzmuxFrame(serde_json::Value);
 const OZMA_CALL_KIND: &str = "ozma.call";
 
 /// Builds the `CefPlugin` with the `ozma-dyn://` (dynamic, Tier 1) scheme bound
-/// to its shared `DynAssetRegistry`, using `root_cache_path` as this process's
+/// to its shared `WebviewAssetRegistry`, using `root_cache_path` as this process's
 /// unique CEF profile directory (one Chromium singleton lock per instance).
-pub(crate) fn cef_plugin(dyn_registry: DynAssetRegistry, root_cache_path: &Path) -> CefPlugin {
+pub(crate) fn cef_plugin(dyn_registry: WebviewAssetRegistry, root_cache_path: &Path) -> CefPlugin {
     CefPlugin {
         custom_schemes: vec![custom_dyn_scheme(dyn_registry)],
         command_line_config: cef_command_line_config(),

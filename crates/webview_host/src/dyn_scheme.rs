@@ -1,6 +1,6 @@
 //! `ozma-dyn://<handle>/<path>` custom-scheme handler for Tier 1 dynamic
 //! webviews. Resolves `<handle>` to a registered asset (`Dir` root or inline
-//! HTML bytes) via a shared `DynAssetRegistry` and serves files through
+//! HTML bytes) via a shared `WebviewAssetRegistry` and serves files through
 //! `serve_static_asset` or directly from memory. Behind the `cef` feature.
 
 #[cfg(feature = "cef")]
@@ -16,22 +16,22 @@ use std::sync::{Arc, RwLock};
 
 /// The content backing one dynamic handle.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DynAsset {
+pub enum WebviewAsset {
     /// Files served under this absolute root directory.
     Dir(PathBuf),
     /// A single inline HTML document served from memory.
     Inline(Vec<u8>),
 }
 
-/// A shared, interior-mutable map of dynamic `handle → DynAsset` for
+/// A shared, interior-mutable map of dynamic `handle → WebviewAsset` for
 /// Tier 1 dynamic webview registrations. The CEF scheme handler is constructed
 /// at `CefPlugin::build()` and reads handles registered after its construction.
 #[derive(Clone, Default)]
-pub struct DynAssetRegistry(Arc<RwLock<HashMap<String, DynAsset>>>);
+pub struct WebviewAssetRegistry(Arc<RwLock<HashMap<String, WebviewAsset>>>);
 
-impl DynAssetRegistry {
+impl WebviewAssetRegistry {
     /// Returns (cloning) the asset for `handle`, if registered.
-    pub fn get(&self, handle: &str) -> Option<DynAsset> {
+    pub fn get(&self, handle: &str) -> Option<WebviewAsset> {
         self.0.read().unwrap().get(handle).cloned()
     }
 
@@ -40,7 +40,7 @@ impl DynAssetRegistry {
         self.0
             .write()
             .unwrap()
-            .insert(handle.into(), DynAsset::Dir(root));
+            .insert(handle.into(), WebviewAsset::Dir(root));
     }
 
     /// Inserts/replaces inline HTML bytes for `handle`.
@@ -48,7 +48,7 @@ impl DynAssetRegistry {
         self.0
             .write()
             .unwrap()
-            .insert(handle.into(), DynAsset::Inline(html));
+            .insert(handle.into(), WebviewAsset::Inline(html));
     }
 
     /// Removes `handle`, if present.
@@ -89,16 +89,19 @@ enum ResolvedDyn<'a> {
 /// Resolves an `ozma-dyn://<handle>/<path>` URL via the registry, or `Err(404)`
 /// for an unknown or unparseable handle.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
-fn resolve_request<'a>(registry: &DynAssetRegistry, url: &'a str) -> Result<ResolvedDyn<'a>, u16> {
+fn resolve_request<'a>(
+    registry: &WebviewAssetRegistry,
+    url: &'a str,
+) -> Result<ResolvedDyn<'a>, u16> {
     let (handle, path) = parse_dyn_url(url).ok_or(404u16)?;
     match registry.get(handle).ok_or(404u16)? {
-        DynAsset::Dir(root) => Ok(ResolvedDyn::Dir { root, path }),
+        WebviewAsset::Dir(root) => Ok(ResolvedDyn::Dir { root, path }),
         // NOTE: an inline registration is a single self-contained document served
         // at the canonical entry only. A relative subresource request gets 404
         // rather than the document body under a mismatched MIME type — use a Dir
         // registration for multi-file content.
-        DynAsset::Inline(html) if path == "index.html" => Ok(ResolvedDyn::Inline(html)),
-        DynAsset::Inline(_) => Err(404),
+        WebviewAsset::Inline(html) if path == "index.html" => Ok(ResolvedDyn::Inline(html)),
+        WebviewAsset::Inline(_) => Err(404),
     }
 }
 
@@ -136,15 +139,15 @@ fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
 pub const SCHEME_NAME: &str = "ozma-dyn";
 
 /// Serves `ozma-dyn://<handle>/<path>` by dispatching `<handle>` through a
-/// shared `DynAssetRegistry` to `serve_static_asset` (Dir) or memory (Inline).
+/// shared `WebviewAssetRegistry` to `serve_static_asset` (Dir) or memory (Inline).
 #[cfg(feature = "cef")]
 struct OzmuxDynScheme {
-    registry: DynAssetRegistry,
+    registry: WebviewAssetRegistry,
 }
 
 #[cfg(feature = "cef")]
 impl OzmuxDynScheme {
-    fn new(registry: DynAssetRegistry) -> Self {
+    fn new(registry: WebviewAssetRegistry) -> Self {
         Self { registry }
     }
 }
@@ -198,9 +201,9 @@ impl CefSchemeHandler for OzmuxDynScheme {
 }
 
 /// Builds the `ozma-dyn` scheme registration to pass to `CefPlugin`, dispatching
-/// every `ozma-dyn://<handle>/…` URL through the shared `DynAssetRegistry`.
+/// every `ozma-dyn://<handle>/…` URL through the shared `WebviewAssetRegistry`.
 #[cfg(feature = "cef")]
-pub fn custom_dyn_scheme(registry: DynAssetRegistry) -> CefCustomScheme {
+pub fn custom_dyn_scheme(registry: WebviewAssetRegistry) -> CefCustomScheme {
     CefCustomScheme {
         name: SCHEME_NAME.to_string(),
         options: CefSchemeOptions::STANDARD
@@ -258,13 +261,13 @@ mod tests {
 
     #[test]
     fn registry_holds_dir_and_inline_variants() {
-        let reg = DynAssetRegistry::default();
+        let reg = WebviewAssetRegistry::default();
         reg.insert_dir("d1", PathBuf::from("/abs/ui"));
         reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
         assert!(
-            matches!(reg.get("d1"), Some(DynAsset::Dir(p)) if *p == *std::path::Path::new("/abs/ui"))
+            matches!(reg.get("d1"), Some(WebviewAsset::Dir(p)) if *p == *std::path::Path::new("/abs/ui"))
         );
-        assert!(matches!(reg.get("i1"), Some(DynAsset::Inline(b)) if b == b"<h1>hi</h1>"));
+        assert!(matches!(reg.get("i1"), Some(WebviewAsset::Inline(b)) if b == b"<h1>hi</h1>"));
         assert!(reg.get("missing").is_none());
         reg.remove("i1");
         assert!(reg.get("i1").is_none());
@@ -272,7 +275,7 @@ mod tests {
 
     #[test]
     fn resolve_request_returns_inline_bytes_as_html() {
-        let reg = DynAssetRegistry::default();
+        let reg = WebviewAssetRegistry::default();
         reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
         match resolve_request(&reg, "ozma-dyn://i1/index.html").expect("registered") {
             ResolvedDyn::Inline(html) => assert_eq!(html, b"<h1>hi</h1>"),
@@ -282,7 +285,7 @@ mod tests {
 
     #[test]
     fn inline_404s_subresource_paths_other_than_the_index() {
-        let reg = DynAssetRegistry::default();
+        let reg = WebviewAssetRegistry::default();
         reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
         assert!(resolve_request(&reg, "ozma-dyn://i1/").is_ok());
         assert!(resolve_request(&reg, "ozma-dyn://i1/index.html").is_ok());
@@ -298,7 +301,7 @@ mod tests {
 
     #[test]
     fn resolves_registered_dir_and_404s_unknown() {
-        let reg = DynAssetRegistry::default();
+        let reg = WebviewAssetRegistry::default();
         assert_eq!(
             resolve_request(&reg, "ozma-dyn://ghost/index.html").err(),
             Some(404)
@@ -315,7 +318,7 @@ mod tests {
 
     #[test]
     fn remove_drops_the_handle() {
-        let reg = DynAssetRegistry::default();
+        let reg = WebviewAssetRegistry::default();
         reg.insert_dir("h1", PathBuf::from("/abs/ui"));
         reg.remove("h1");
         assert_eq!(
