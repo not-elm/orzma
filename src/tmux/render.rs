@@ -601,6 +601,7 @@ fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<Tm
 mod tests {
     use super::*;
     use bevy::math::{Rect, Vec2};
+    use ozma_terminal::OzmaTerminalPlugin;
     use ozma_tty_renderer::material::TerminalUiMaterial;
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
@@ -704,17 +705,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
-        app.add_observer(
-            |ev: On<Add, OzmaTerminal>,
-             mut commands: Commands,
-             mut materials: ResMut<Assets<TerminalUiMaterial>>| {
-                let material = materials.add(TerminalUiMaterial::default());
-                commands.entity(ev.event_target()).insert(
-                    ozma_tty_renderer::prelude::TerminalRenderBundle::new(material),
-                );
-            },
-        );
         app.add_message::<PaneOutput>();
         app.insert_non_send_resource(TmuxConnection::default());
 
@@ -770,17 +762,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
-        app.add_observer(
-            |ev: On<Add, OzmaTerminal>,
-             mut commands: Commands,
-             mut materials: ResMut<Assets<TerminalUiMaterial>>| {
-                let material = materials.add(TerminalUiMaterial::default());
-                commands.entity(ev.event_target()).insert(
-                    ozma_tty_renderer::prelude::TerminalRenderBundle::new(material),
-                );
-            },
-        );
         app.add_message::<PaneOutput>();
         app.insert_non_send_resource(TmuxConnection::default());
 
@@ -1586,17 +1569,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
-        app.add_observer(
-            |ev: On<Add, OzmaTerminal>,
-             mut commands: Commands,
-             mut materials: ResMut<Assets<TerminalUiMaterial>>| {
-                let material = materials.add(TerminalUiMaterial::default());
-                commands.entity(ev.event_target()).insert(
-                    ozma_tty_renderer::prelude::TerminalRenderBundle::new(material),
-                );
-            },
-        );
         app.insert_non_send_resource(TmuxConnection::default());
 
         let pane_entity = app
