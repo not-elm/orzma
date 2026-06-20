@@ -301,7 +301,9 @@ Behavior is preserved except for these, each carrying a `// NOTE:`:
   the plugin wiring (`add_message::<TmuxClientAttached>()`, the chained
   `add_systems`). Bulky arms extracted into named helper `fn`s so each system
   body reads as gate → collect → trigger.
-- `TmuxClientAttached` lives with the other tmux events in `events.rs`.
+- `TmuxClientAttached` lives in `plugin.rs` next to its emit/gate sites. It is a
+  buffered `Message` (like `PaneOutput` / `CopyModeReply`), not an observer
+  `Event`, so it does not belong in `events.rs` (which is observer-`Event`-only).
 
 ## Testing
 
