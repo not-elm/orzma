@@ -36,7 +36,7 @@ use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozmux_configs::StartupMode;
-use ozmux_webview_host::DynAssetRegistry;
+use ozmux_webview_host::WebviewAssetRegistry;
 use picker::OzmuxPickerPlugin;
 use tmux::OzmuxTmuxPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
@@ -56,7 +56,7 @@ fn main() {
     let initial_mode = match pre_configs.startup_mode {
         StartupMode::Ozma | StartupMode::Ozmux | StartupMode::AutoAttach => AppMode::Ozmux,
     };
-    let dyn_registry = DynAssetRegistry::default();
+    let dyn_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
     App::new()
         .add_plugins((

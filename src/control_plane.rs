@@ -13,7 +13,7 @@ use bevy_cef::prelude::HostEmitEvent;
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
 use ozmux_tmux::TmuxPane;
-use ozmux_webview_host::DynAssetRegistry;
+use ozmux_webview_host::WebviewAssetRegistry;
 use ozmux_webview_host::host::RuntimeRoot;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -47,11 +47,11 @@ pub(crate) struct NormalizedChord {
 pub(crate) enum DynSource {
     /// Files served under this absolute root via `ozma-dyn://`.
     Dir(PathBuf),
-    /// A single inline HTML document, registered into `DynAssetRegistry` and
+    /// A single inline HTML document, registered into `WebviewAssetRegistry` and
     /// served under `ozma-dyn://<handle>/`.
     Inline(String),
     /// A remote `http(s)` URL loaded directly by CEF (no `ozma-dyn://` origin,
-    /// no `DynAssetRegistry` entry). `bridge` records whether the registering
+    /// no `WebviewAssetRegistry` entry). `bridge` records whether the registering
     /// program opted into the `window.ozma` back-channel.
     Url {
         /// The validated `http(s)` URL.
@@ -107,7 +107,7 @@ pub(crate) struct WebviewOwner {
 }
 
 /// Maps an opaque `handle` to its dynamic registration. The single Bevy-side
-/// registry for Tier 1 (the CEF scheme handler reads the thin `DynAssetRegistry`
+/// registry for Tier 1 (the CEF scheme handler reads the thin `WebviewAssetRegistry`
 /// separately). Carries scoped removal for teardown.
 #[derive(Resource, Default)]
 pub(crate) struct DynamicRegistry {
@@ -131,13 +131,13 @@ impl DynamicRegistry {
     }
 
     /// Removes every handle owned by `connection_id`, returning the removed
-    /// handles (so the caller can purge the `DynAssetRegistry` too).
+    /// handles (so the caller can purge the `WebviewAssetRegistry` too).
     pub(crate) fn remove_by_connection(&mut self, connection_id: u64) -> Vec<String> {
         self.drain_where(|v| v.connection_id == connection_id)
     }
 
     /// Removes every handle owned by `owner_surface`, returning the removed
-    /// handles (so the caller can purge the `DynAssetRegistry` too).
+    /// handles (so the caller can purge the `WebviewAssetRegistry` too).
     pub(crate) fn remove_by_surface(&mut self, owner_surface: Entity) -> Vec<String> {
         self.drain_where(|v| v.owner_surface == owner_surface)
     }
@@ -292,7 +292,7 @@ impl ConnectionWriters {
 /// The output MUST be lowercase. A handle is used as the host of the
 /// `ozma-dyn://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
 /// of a STANDARD-scheme URL before it reaches the scheme handler; an uppercase
-/// handle would then miss the case-sensitive `DynAssetRegistry` lookup → 404.
+/// handle would then miss the case-sensitive `WebviewAssetRegistry` lookup → 404.
 fn mint_id() -> String {
     let mut bytes = [0u8; 16];
     getrandom::getrandom(&mut bytes).expect("OS CSPRNG is available");
@@ -303,10 +303,10 @@ fn mint_id() -> String {
 #[derive(Resource)]
 pub(crate) struct ControlEvents(pub(crate) Receiver<ControlEvent>);
 
-/// The CEF-facing `DynAssetRegistry`, held as a resource so the apply system and
+/// The CEF-facing `WebviewAssetRegistry`, held as a resource so the apply system and
 /// teardown can populate/purge `Dir` handles the scheme handler reads.
 #[derive(Resource, Clone)]
-pub(crate) struct DynAssetRegistryRes(pub(crate) DynAssetRegistry);
+pub(crate) struct WebviewAssetRegistryRes(pub(crate) WebviewAssetRegistry);
 
 /// The bound control-socket path + token registry, surfaced so terminal-surface
 /// setup can mint per-surface tokens and inject `$OZMA_SOCK` / `$OZMA_TOKEN`.
@@ -319,14 +319,14 @@ pub(crate) struct ControlPlaneHandle {
 }
 
 /// Wires the control-plane listener, the event-apply system, and the teardown
-/// observer. Takes the `DynAssetRegistry` shared with the `ozma-dyn` scheme handler.
+/// observer. Takes the `WebviewAssetRegistry` shared with the `ozma-dyn` scheme handler.
 pub(crate) struct OzmuxControlPlanePlugin {
-    dyn_assets: DynAssetRegistry,
+    dyn_assets: WebviewAssetRegistry,
 }
 
 impl OzmuxControlPlanePlugin {
     /// Builds the plugin sharing `dyn_assets` with the `ozma-dyn` scheme handler.
-    pub(crate) fn new(dyn_assets: DynAssetRegistry) -> Self {
+    pub(crate) fn new(dyn_assets: WebviewAssetRegistry) -> Self {
         Self { dyn_assets }
     }
 }
@@ -352,7 +352,7 @@ impl Plugin for OzmuxControlPlanePlugin {
         app.insert_resource(writers);
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(OzmuxRpc::default());
-        app.insert_resource(DynAssetRegistryRes(self.dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(self.dyn_assets.clone()));
         app.add_systems(Update, (apply_control_events, sync_tmux_pane_tokens));
     }
 }
@@ -367,13 +367,13 @@ impl Plugin for OzmuxControlPlanePlugin {
 ///
 /// A despawned pane also owns any dynamic registrations whose `owner_surface`
 /// is that pane entity: those are purged from the [`DynamicRegistry`] and their
-/// assets from the [`DynAssetRegistry`] here.
+/// assets from the [`WebviewAssetRegistry`] here.
 fn sync_tmux_pane_tokens(
     mut registry: ResMut<DynamicRegistry>,
     mut closed: RemovedComponents<TmuxPane>,
     new_panes: Query<(Entity, &TmuxPane), Added<TmuxPane>>,
     handle: Option<Res<ControlPlaneHandle>>,
-    dyn_assets: Res<DynAssetRegistryRes>,
+    dyn_assets: Res<WebviewAssetRegistryRes>,
 ) {
     // NOTE: the registry/asset purge must run for every removed pane even when
     // the `ControlPlaneHandle` resource is absent; gating it behind the handle
@@ -406,7 +406,7 @@ struct ControlRuntime(
 );
 
 /// Drains queued `ControlEvent`s: mints handles for `register` and populates the
-/// `DynamicRegistry` (+ `DynAssetRegistry` for `Dir`), releases on `unregister`,
+/// `DynamicRegistry` (+ `WebviewAssetRegistry` for `Dir`), releases on `unregister`,
 /// and purges a connection's handles on `Disconnect`.
 fn apply_control_events(
     mut commands: Commands,
@@ -414,7 +414,7 @@ fn apply_control_events(
     mut rpc: ResMut<OzmuxRpc>,
     mut focused: Option<ResMut<FocusedWebview>>,
     events: Option<Res<ControlEvents>>,
-    dyn_assets: Res<DynAssetRegistryRes>,
+    dyn_assets: Res<WebviewAssetRegistryRes>,
     inline: Query<(Entity, &InlineWebview)>,
     child_of: Query<&ChildOf>,
     non_interactive: Query<(), With<NonInteractive>>,
@@ -832,7 +832,7 @@ mod token_tests {
         let tokens = handle.tokens.clone();
         app.insert_resource(handle);
         app.init_resource::<DynamicRegistry>();
-        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, sync_tmux_pane_tokens);
 
         let pane = app.world_mut().spawn(tmux_pane(5)).id();
@@ -847,7 +847,7 @@ mod token_tests {
     #[test]
     fn pane_despawn_purges_its_dynamic_registrations() {
         let mut app = App::new();
-        let dyn_assets = DynAssetRegistry::default();
+        let dyn_assets = WebviewAssetRegistry::default();
         let mut reg = DynamicRegistry::default();
         let pane = app.world_mut().spawn(tmux_pane(1)).id();
         reg.insert(
@@ -863,7 +863,7 @@ mod token_tests {
         );
         dyn_assets.insert_dir("h", "/x".into());
         app.insert_resource(reg);
-        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, sync_tmux_pane_tokens);
 
         app.update();
@@ -876,7 +876,7 @@ mod token_tests {
         );
         assert!(
             dyn_assets.get("h").is_none(),
-            "purged from DynAssetRegistry"
+            "purged from WebviewAssetRegistry"
         );
     }
 }
@@ -963,11 +963,11 @@ mod apply_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let dyn_assets = DynAssetRegistry::default();
+        let dyn_assets = WebviewAssetRegistry::default();
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
@@ -993,7 +993,7 @@ mod apply_tests {
         };
         assert!(
             dyn_assets.get(&handle).is_some(),
-            "DynAssetRegistry populated for Dir"
+            "WebviewAssetRegistry populated for Dir"
         );
         assert!(
             app.world()
@@ -1006,14 +1006,14 @@ mod apply_tests {
 
     #[test]
     fn apply_register_inline_populates_dyn_asset_registry_with_html_bytes() {
-        use ozmux_webview_host::DynAsset;
+        use ozmux_webview_host::WebviewAsset;
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let dyn_assets = DynAssetRegistry::default();
+        let dyn_assets = WebviewAssetRegistry::default();
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
@@ -1037,8 +1037,8 @@ mod apply_tests {
             ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
         };
         assert!(
-            matches!(dyn_assets.get(&handle), Some(DynAsset::Inline(bytes)) if bytes == b"<h1>x</h1>"),
-            "DynAssetRegistry must carry the inline HTML bytes for the minted handle"
+            matches!(dyn_assets.get(&handle), Some(WebviewAsset::Inline(bytes)) if bytes == b"<h1>x</h1>"),
+            "WebviewAssetRegistry must carry the inline HTML bytes for the minted handle"
         );
     }
 
@@ -1049,7 +1049,7 @@ mod apply_tests {
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
 
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
@@ -1077,7 +1077,7 @@ mod apply_tests {
     fn apply_disconnect_purges_that_connections_handles() {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let dyn_assets = DynAssetRegistry::default();
+        let dyn_assets = WebviewAssetRegistry::default();
         let mut reg = DynamicRegistry::default();
         reg.insert(
             "h".into(),
@@ -1094,7 +1094,7 @@ mod apply_tests {
         app.insert_resource(reg);
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
         ev_tx
@@ -1110,7 +1110,7 @@ mod apply_tests {
         let mut app = App::new();
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(OzmuxRpc::default());
-        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
         app.update();
         assert!(app.world().get_resource::<ControlEvents>().is_none());
@@ -1120,7 +1120,7 @@ mod apply_tests {
     fn disconnect_despawns_mounted_webviews_for_its_handles() {
         use crate::inline_webview::InlineWebview;
         let mut app = App::new();
-        let dyn_assets = DynAssetRegistry::default();
+        let dyn_assets = WebviewAssetRegistry::default();
         let mut reg = DynamicRegistry::default();
         reg.insert(
             "HMOUNT".into(),
@@ -1144,7 +1144,7 @@ mod apply_tests {
             .id();
         app.insert_resource(reg);
         app.insert_resource(OzmuxRpc::default());
-        app.insert_resource(DynAssetRegistryRes(dyn_assets));
+        app.insert_resource(WebviewAssetRegistryRes(dyn_assets));
         app.insert_resource(ControlEvents(ev_rx));
         app.add_systems(Update, apply_control_events);
         ev_tx
@@ -1175,7 +1175,7 @@ mod apply_tests {
         app.insert_resource(rpc);
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         #[derive(Resource, Default)]
         struct Caps(Vec<(Entity, String, serde_json::Value)>);
         app.insert_resource(Caps::default());
@@ -1218,7 +1218,7 @@ mod apply_tests {
         app.insert_resource(rpc);
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         #[derive(Resource, Default)]
         struct Caps(Vec<(Entity, String)>);
         app.insert_resource(Caps::default());
@@ -1285,7 +1285,7 @@ mod apply_tests {
         app.insert_resource(reg);
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         #[derive(Resource, Default)]
         struct Caps(Vec<Entity>);
         app.insert_resource(Caps::default());
@@ -1312,11 +1312,11 @@ mod apply_tests {
     fn apply_register_url_mints_handle_without_dyn_asset() {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let dyn_assets = DynAssetRegistry::default();
+        let dyn_assets = WebviewAssetRegistry::default();
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
@@ -1348,7 +1348,7 @@ mod apply_tests {
         );
         assert!(
             dyn_assets.get(&handle).is_none(),
-            "DynAssetRegistry must NOT be populated for a url handle"
+            "WebviewAssetRegistry must NOT be populated for a url handle"
         );
     }
 
@@ -1386,7 +1386,7 @@ mod apply_tests {
         app.insert_resource(reg);
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         #[derive(Resource, Default)]
         struct Caps(Vec<(Entity, String)>);
         app.insert_resource(Caps::default());
@@ -1432,7 +1432,7 @@ mod focus_tests {
             .init_resource::<DynamicRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
-            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+            .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
 
         let surface = app.world_mut().spawn_empty().id();
 
@@ -1498,7 +1498,7 @@ mod focus_tests {
             .init_resource::<DynamicRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
-            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+            .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         let surface = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<DynamicRegistry>().insert(
             "h1".into(),
@@ -1550,7 +1550,7 @@ mod focus_tests {
             .init_resource::<DynamicRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
-            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()));
+            .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
 
         let surface_a = app.world_mut().spawn_empty().id();
         let surface_b = app.world_mut().spawn_empty().id();
@@ -1647,7 +1647,7 @@ mod focus_tests {
             .init_resource::<FocusedWebview>()
             .init_resource::<DynamicRegistry>()
             .init_resource::<OzmuxRpc>()
-            .insert_resource(DynAssetRegistryRes(DynAssetRegistry::default()))
+            .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()))
             .add_systems(Update, sync_focused_webview);
 
         // The owner surface IS the active TmuxPane.
