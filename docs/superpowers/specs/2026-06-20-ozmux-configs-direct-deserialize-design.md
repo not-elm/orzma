@@ -150,6 +150,12 @@ impl OzmuxConfigs {
 「`Default::default()` と異なる既定値」は、コンテナ `#[serde(default)]` ＋ 既存 `impl Default`
 で正しく補完される（フィールド単位の `#[serde(default = "fn")]` ヘルパは不要）。
 
+注: `OzmaConfig` は resolved 型の中で**唯一 `Deserialize` 導出を持たない**（現状は `OzmaPatch`
+側にだけある, `ozma.rs:6`）。実装時は `OzmaConfig` 自体に `#[derive(Deserialize, …)]` ＋
+`#[serde(default, deny_unknown_fields)]` を追加する（`use serde::Deserialize;` は既存）。他の
+resolved 型（Theme/MouseConfig/KeyboardConfig/InactivePaneConfig/OscWebviewConfig/TmuxConfig/
+FontConfig）は既に `Deserialize` を導出済み。
+
 ### 4. font（flat スキーマ）
 
 family / style を既に削除し各 face テーブルが `path` のみになったため、ネストを廃し flat 化する。
@@ -264,10 +270,17 @@ fn norm_unit(v: f32, default: f32) -> f32 {
 - トップレベルでセクション名タイポ（`[shortucts]`）がエラーになることを検証。
 - `inactive_pane`: 既存の clamp/NaN/hex/非ASCII テストを `deser→normalize` 経路で再現。
 - font: `crates/ozmux_configs` の font テストと `src/font.rs` のテスト fixture（`[font.normal]\npath=`）を
-  新 flat 書式 `[font]\nnormal=` に更新。
+  新 flat 書式 `[font]\nnormal=` に更新（`src/font.rs` の corrupt_bold テストは `[font.normal]`/
+  `[font.bold]` の2テーブルを含むので両方変換）。
+- font（破壊的変更の固定化）: 旧ネスト `[font.normal] path=` を**`OzmuxConfigs` 全体**へ
+  デシリアライズしてロード失敗することを検証（`FontConfig` 単体でなくトップレベル経路で、
+  将来の互換シム混入を防ぐ）。
 - tmux: `auto_connect` 受理テストは削除し、代わりに `auto_connect` がエラーになることを検証。
 - `lib.rs` 統合テスト: 空 TOML→全 default、部分セクション、`validate` のハードエラー
   （font.size 範囲外、chord 衝突）を網羅。
+- `normalize()` / `validate()` は private だが、`lib.rs` の `#[cfg(test)] mod tests` から直接
+  呼び出せる。ファイル経由のフルパイプライン検証は `test_support::load_with_overrides` ＋
+  一時ファイルで行う（ユーザー決定どおり `parse_and_validate` ヘルパは設けない）。
 
 ## 影響範囲
 
