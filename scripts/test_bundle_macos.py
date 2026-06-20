@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import unittest
 from pathlib import Path
@@ -174,6 +175,67 @@ class ConfigResolution(unittest.TestCase):
             ]))
             with self.assertRaises(SystemExit):
                 bm.verify_prerequisites(cfg)
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
+class AssembleAndEmbed(unittest.TestCase):
+    def _macho(self, dest: Path) -> None:
+        # NOTE: shutil.copy (not copy2) avoids PermissionError from SIP-restricted flags on /usr/bin/true
+        shutil.copy("/usr/bin/true", dest)
+        dest.chmod(0o755)
+
+    def _fake_cef(self, root: Path) -> Path:
+        fw = root / "Chromium Embedded Framework.framework"
+        (fw / "Libraries").mkdir(parents=True)
+        self._macho(fw / "Chromium Embedded Framework")
+        self._macho(fw / "Libraries" / "libEGL.dylib")
+        (fw / "Resources").mkdir()
+        (fw / "Resources" / "icudtl.dat").write_bytes(b"fake")
+        return fw
+
+    def _cfg(self, d: Path) -> "bm.BundleConfig":
+        import shutil as _sh
+        self._macho(d / "ozmux-gui")
+        self._macho(d / "helper")
+        fw = self._fake_cef(d)
+        return bm.BundleConfig(
+            version="9.9.9", app_name="ozmux", bin_name="ozmux-gui",
+            bundle_id_base="not.elm.ozmux", arch="arm64", target_triple="aarch64-apple-darwin",
+            bin_source=d / "ozmux-gui", cef_framework=fw, helper_bin=d / "helper",
+            out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
+        )
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.d = Path(self._tmp.name)
+        self.cfg = self._cfg(self.d)
+        self.cfg.out_dir.mkdir(parents=True)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_assemble_then_embed(self):
+        import plistlib
+        bm.assemble_app(self.cfg)
+        bm.embed_cef(self.cfg)
+        contents = self.cfg.app_path / "Contents"
+        self.assertTrue((contents / "MacOS" / "ozmux-gui").is_file())
+        with open(contents / "Info.plist", "rb") as f:
+            plist = plistlib.load(f)
+        self.assertEqual(plist["CFBundleShortVersionString"], "9.9.9")
+        self.assertEqual(plist["LSEnvironment"]["MallocNanoZone"], "0")
+        self.assertTrue(plist["NSSupportsAutomaticGraphicsSwitching"])
+        fw = contents / "Frameworks" / "Chromium Embedded Framework.framework"
+        self.assertTrue((fw / "Chromium Embedded Framework").is_file())
+        for suffix, idsfx in [("", "helper"), (" (GPU)", "helper.gpu"),
+                              (" (Renderer)", "helper.renderer"), (" (Plugin)", "helper.plugin")]:
+            helper = contents / "Frameworks" / f"ozmux-gui Helper{suffix}.app"
+            self.assertTrue((helper / "Contents" / "MacOS" / f"ozmux-gui Helper{suffix}").is_file())
+            with open(helper / "Contents" / "Info.plist", "rb") as f:
+                hp = plistlib.load(f)
+            self.assertEqual(hp["CFBundleIdentifier"], f"not.elm.ozmux.{idsfx}")
+            self.assertTrue(hp["LSUIElement"])
 
 
 if __name__ == "__main__":

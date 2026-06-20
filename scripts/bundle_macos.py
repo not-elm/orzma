@@ -187,6 +187,91 @@ def verify_prerequisites(cfg: BundleConfig) -> None:
         )
 
 
+def run(argv: list[str]) -> None:
+    print(f"==> {' '.join(argv)}")
+    subprocess.run(argv, check=True)
+
+
+def lipo_archs(path: Path) -> set[str]:
+    out = subprocess.run(lipo_archs_argv(path), capture_output=True, text=True, check=True).stdout
+    return parse_lipo_archs(out)
+
+
+def assemble_app(cfg: BundleConfig) -> None:
+    app = cfg.app_path
+    if app.exists():
+        shutil.rmtree(app)
+    contents = app / "Contents"
+    (contents / "MacOS").mkdir(parents=True)
+    (contents / "Resources").mkdir(parents=True)
+    (contents / "Frameworks").mkdir(parents=True)
+
+    template = REPO_ROOT / "build" / "macos" / "Info.plist"
+    with open(template, "rb") as f:
+        plist = plistlib.load(f)
+    plist["CFBundleShortVersionString"] = cfg.version
+    plist["CFBundleVersion"] = cfg.version
+    with open(contents / "Info.plist", "wb") as f:
+        plistlib.dump(plist, f)
+
+    dest_bin = contents / "MacOS" / cfg.bin_name
+    shutil.copy2(cfg.bin_source, dest_bin)
+    dest_bin.chmod(0o755)
+
+    assets = REPO_ROOT / "assets"
+    if assets.is_dir():
+        shutil.copytree(assets, contents / "Resources" / "assets")
+
+    icns = REPO_ROOT / "build" / "macos" / "AppIcon.icns"
+    if icns.is_file():
+        shutil.copy2(icns, contents / "Resources" / "AppIcon.icns")
+
+    print(f"Assembled {app}")
+
+
+def embed_cef(cfg: BundleConfig) -> None:
+    contents = cfg.app_path / "Contents"
+    plist_path = contents / "Info.plist"
+    with open(plist_path, "rb") as f:
+        plist = plistlib.load(f)
+    merge_cef_keys(plist)
+    with open(plist_path, "wb") as f:
+        plistlib.dump(plist, f)
+
+    main_bin = contents / "MacOS" / cfg.bin_name
+    cef_bin = cfg.cef_framework / "Chromium Embedded Framework"
+    common = lipo_archs(main_bin) & lipo_archs(cfg.helper_bin) & lipo_archs(cef_bin)
+    if not common:
+        raise SystemExit(
+            "architecture mismatch: no common arch among main/helper/CEF binaries"
+        )
+    print(f"Architecture check passed (common: {', '.join(sorted(common))})")
+
+    frameworks = contents / "Frameworks"
+    old_cef = frameworks / "Chromium Embedded Framework.framework"
+    if old_cef.exists():
+        shutil.rmtree(old_cef)
+    for suffix in HELPER_SUFFIXES:
+        helper_app = frameworks / f"{cfg.bin_name} Helper{suffix}.app"
+        if helper_app.exists():
+            shutil.rmtree(helper_app)
+
+    run(["cp", "-R", str(cfg.cef_framework), str(frameworks)])
+
+    for suffix in HELPER_SUFFIXES:
+        helper_name = f"{cfg.bin_name} Helper{suffix}"
+        helper_app = frameworks / f"{helper_name}.app"
+        macos = helper_app / "Contents" / "MacOS"
+        macos.mkdir(parents=True)
+        dest = macos / helper_name
+        shutil.copy2(cfg.helper_bin, dest)
+        dest.chmod(0o755)
+        hp = build_helper_plist(helper_name, helper_bundle_id(cfg.bundle_id_base, suffix))
+        with open(helper_app / "Contents" / "Info.plist", "wb") as f:
+            plistlib.dump(hp, f)
+        print(f"  Created {helper_name}.app")
+
+
 @dataclass
 class BundleConfig:
     version: str
