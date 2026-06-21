@@ -5,8 +5,8 @@
 //! child under the cursor.
 
 use super::super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
-use super::TmuxGestureButtons;
 use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
+use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture};
 use crate::picker::SessionPicker;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
@@ -44,9 +44,9 @@ pub(super) struct TmuxWebviewRouteParams<'w, 's> {
 }
 
 /// Releases an in-flight webview press to CEF (mouse-up at the last
-/// cursor) and clears the marker. Called by `drain_tmux_pointer_when_suppressed`
-/// on the suppressed path (modal open / window unfocused) so the focused web
-/// page is not left logically pressed with no matching mouse-up.
+/// cursor) and clears the marker. Called by `tmux_webview_pointer` on the
+/// suppressed path (modal open / window unfocused) so the focused web page is
+/// not left logically pressed with no matching mouse-up.
 pub(super) fn release_webview_press(
     webview_press: &mut TmuxWebviewPress,
     route: &TmuxWebviewRouteParams,
@@ -79,39 +79,67 @@ pub(super) fn release_webview_press(
 /// `tmux_gesture` (`.chain()`), handing off the non-consumed ones through
 /// `TmuxGestureButtons`.
 ///
-/// `TmuxGestureButtons` is cleared at the start of every run (invariant 7) so
-/// non-consumed events never accumulate across frames. Non-`Left` events are
+/// This system owns the single `MouseButtonInput` reader for the tmux pointer
+/// pipeline and runs EVERY frame within `OzmuxActiveSet` (it is NOT gated by
+/// `pointer_active`); it computes the suppressed/active decision in-body. On a
+/// suppressed frame (no focused primary window, or a picker / copy-search prompt
+/// owns input) it drains the reader and the buffer, resets the gesture to
+/// `Idle`, and resolves an in-flight inline press: with no window it drops
+/// `TmuxWebviewPress` WITHOUT a CEF mouse-up (there is no cursor/scale to place
+/// it); with a window present it `release_webview_press`es so the focused page
+/// is not left logically pressed with no matching mouse-up.
+///
+/// On an active frame `TmuxGestureButtons` is cleared at the start (invariant 7)
+/// so non-consumed events never accumulate across frames. Non-`Left` events are
 /// skipped (never buffered). Each `Left` event is routed through
 /// `route_tmux_webview_left_click`; a consumed press additionally triggers
 /// `SelectPane(host_pane)` so the keyboard/paste target follows the click
 /// (invariant 3, `Pressed` only), and a non-consumed event is pushed into the
 /// buffer for `tmux_gesture` to drain.
-///
-/// Gated by `run_if(pointer_active)` (chained with `tmux_gesture`): this
-/// system runs only when a focused primary window exists and no modal (picker /
-/// copy-search prompt) owns input. The suppressed path — draining the
-/// `MouseButtonInput` reader and the buffer, resetting the gesture, and
-/// releasing or dropping an in-flight inline press — is owned by
-/// `drain_tmux_pointer_when_suppressed`.
+// NOTE: this system MUST run every frame and own the only `MouseButtonInput`
+// reader. Gating it with `run_if(pointer_active)` would freeze its reader cursor
+// while suppressed, so a press written during the last suppressed frame would be
+// re-read once the pointer reactivates — leaking a stale press into the active
+// pipeline (spurious select-pane / inline CEF click). The old single
+// always-running arbiter reader could never resurface a suppressed-frame press.
 pub(super) fn tmux_webview_pointer(
     mut commands: Commands,
     mut buffer: ResMut<TmuxGestureButtons>,
     mut webview_press: ResMut<TmuxWebviewPress>,
+    mut gesture: ResMut<TmuxMouseGesture>,
     mut webview_route: TmuxWebviewRouteParams,
     mut buttons: MessageReader<MouseButtonInput>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
+    picker: Res<SessionPicker>,
+    copy_prompt: Res<CopyPrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     buffer.0.clear();
     let Ok(window) = windows.single() else {
         buttons.clear();
+        webview_press.0 = None;
+        gesture.state = GestureState::Idle;
         return;
     };
     let scale = window.scale_factor();
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
     let cursor_phys = window.cursor_position().map(|c| c * scale);
+    if !window.focused || picker.open || copy_prompt.open.is_some() {
+        buttons.clear();
+        gesture.state = GestureState::Idle;
+        release_webview_press(
+            &mut webview_press,
+            &webview_route,
+            &panes,
+            cursor_phys,
+            cell_w,
+            cell_h,
+            scale,
+        );
+        return;
+    }
     for ev in buttons.read() {
         if ev.button != MouseButton::Left {
             continue;
