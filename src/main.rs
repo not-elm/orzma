@@ -84,7 +84,9 @@ fn main() {
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
-            OzmuxWebviewPlugin,
+            OzmuxWebviewPlugin {
+                osc_enabled: pre_configs.osc_webview.enabled,
+            },
             CopyModePlugin,
             CopyModeIndicatorPlugin,
         ))
