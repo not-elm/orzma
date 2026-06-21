@@ -105,6 +105,9 @@ pub(crate) enum RegisterKind {
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(default)]
+        preload: Vec<String>,
     },
     /// Serve a single dynamic HTML document supplied inline.
     Inline {
@@ -116,6 +119,9 @@ pub(crate) enum RegisterKind {
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(default)]
+        preload: Vec<String>,
     },
     /// Load a remote `http(s)` URL as the top-level document.
     Url {
@@ -130,6 +136,9 @@ pub(crate) enum RegisterKind {
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(default)]
+        preload: Vec<String>,
     },
 }
 
@@ -213,6 +222,7 @@ mod tests {
                 entry: "index.html".into(),
                 interactive: true,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -229,6 +239,7 @@ mod tests {
                 html: "<h1>x</h1>".into(),
                 interactive: false,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -344,6 +355,7 @@ mod tests {
                 interactive: true,
                 bridge: false,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -361,6 +373,7 @@ mod tests {
                 interactive: true,
                 bridge: true,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -376,6 +389,7 @@ mod tests {
                 interactive: true,
                 bridge: false,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -442,5 +456,31 @@ mod tests {
                 action: NavAction::To("https://example.com".into()),
             }
         );
+    }
+
+    #[test]
+    fn parses_register_with_preload() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"op":"register","kind":"inline","html":"x","preload":["window.A=1;"]}"#,
+        )
+        .unwrap();
+        match m {
+            ClientMsg::Register(RegisterKind::Inline { preload, .. }) => {
+                assert_eq!(preload, vec!["window.A=1;".to_string()]);
+            }
+            _ => panic!("expected inline register"),
+        }
+    }
+
+    #[test]
+    fn preload_defaults_empty_when_absent() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"op":"register","kind":"inline","html":"x"}"#).unwrap();
+        match m {
+            ClientMsg::Register(RegisterKind::Inline { preload, .. }) => {
+                assert!(preload.is_empty());
+            }
+            _ => panic!("expected inline register"),
+        }
     }
 }

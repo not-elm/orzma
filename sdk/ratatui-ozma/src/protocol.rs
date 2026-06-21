@@ -80,6 +80,9 @@ pub(crate) enum RegisterKind {
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         forward_keys: Vec<KeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        preload: Vec<String>,
     },
     /// A directory of assets served at `ozma-dyn://<handle>/`.
     Dir {
@@ -92,6 +95,9 @@ pub(crate) enum RegisterKind {
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         forward_keys: Vec<KeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        preload: Vec<String>,
     },
     /// Load a remote `http(s)` URL as the top-level document.
     Url {
@@ -104,6 +110,9 @@ pub(crate) enum RegisterKind {
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         forward_keys: Vec<KeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        preload: Vec<String>,
     },
 }
 
@@ -188,6 +197,7 @@ mod tests {
             html: "<h1>hi</h1>".into(),
             interactive: true,
             forward_keys: Vec::new(),
+            preload: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["op"], "register");
@@ -281,6 +291,7 @@ mod tests {
             interactive: true,
             bridge: false,
             forward_keys: Vec::new(),
+            preload: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["op"], "register");
@@ -301,6 +312,7 @@ mod tests {
             interactive: true,
             bridge: true,
             forward_keys: Vec::new(),
+            preload: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["kind"], "url");

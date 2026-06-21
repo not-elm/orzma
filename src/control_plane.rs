@@ -100,6 +100,11 @@ pub(crate) struct DynamicView {
     /// `register` wire payload. Copied onto the mounted webview entity as
     /// `ForwardKeys` so Phase-4 systems can read them off the focused child.
     pub(crate) forward_keys: Vec<NormalizedChord>,
+    /// User-supplied preload scripts, copied verbatim from the register wire
+    /// and injected onto the mounted webview's `PreloadScripts` after the host
+    /// bridge/hints. No size cap or validation (the registering program is
+    /// local and trusted).
+    pub(crate) preload: Vec<String>,
 }
 
 /// Stamped on a Tier 1 webview entity at mount: the control-plane
@@ -649,6 +654,7 @@ fn build_view(
             entry,
             interactive,
             forward_keys,
+            preload,
         } => {
             let root_path = PathBuf::from(&root);
             if !root_path.is_absolute() || !root_path.is_dir() {
@@ -664,12 +670,14 @@ fn build_view(
                 owner_surface,
                 connection_id,
                 forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                preload,
             })
         }
         RegisterKind::Inline {
             html,
             interactive,
             forward_keys,
+            preload,
         } => {
             if html.len() > MAX_INLINE_HTML {
                 return Err("html_too_large");
@@ -681,6 +689,7 @@ fn build_view(
                 owner_surface,
                 connection_id,
                 forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                preload,
             })
         }
         RegisterKind::Url {
@@ -688,6 +697,7 @@ fn build_view(
             interactive,
             bridge,
             forward_keys,
+            preload,
         } => {
             let url = validate_url_source(&url)?;
             Ok(DynamicView {
@@ -697,6 +707,7 @@ fn build_view(
                 owner_surface,
                 connection_id,
                 forward_keys: forward_keys.iter().filter_map(normalize_chord).collect(),
+                preload,
             })
         }
     }
@@ -919,6 +930,7 @@ mod token_tests {
                 owner_surface: pane,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -962,6 +974,7 @@ mod registry_tests {
                 owner_surface: surface(1),
                 connection_id: 7,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         assert_eq!(reg.get("h1").map(|v| v.interactive), Some(true));
@@ -1009,6 +1022,7 @@ mod registry_tests {
             owner_surface: owner,
             connection_id: conn,
             forward_keys: vec![],
+            preload: vec![],
         }
     }
 }
@@ -1040,6 +1054,7 @@ mod apply_tests {
                     entry: "index.html".into(),
                     interactive: true,
                     forward_keys: vec![],
+                    preload: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1085,6 +1100,7 @@ mod apply_tests {
                     html: "<h1>x</h1>".into(),
                     interactive: true,
                     forward_keys: vec![],
+                    preload: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1122,6 +1138,7 @@ mod apply_tests {
                     entry: "index.html".into(),
                     interactive: true,
                     forward_keys: vec![],
+                    preload: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1148,6 +1165,7 @@ mod apply_tests {
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         dyn_assets.insert_dir("h", "/x".into());
@@ -1191,6 +1209,7 @@ mod apply_tests {
                 owner_surface: Entity::from_bits(1),
                 connection_id: 9,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
@@ -1335,6 +1354,7 @@ mod apply_tests {
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         app.world_mut().spawn(Webview {
@@ -1389,6 +1409,7 @@ mod apply_tests {
                     interactive: true,
                     bridge: false,
                     forward_keys: vec![],
+                    preload: vec![],
                 },
                 reply: reply_tx,
             })
@@ -1427,6 +1448,7 @@ mod apply_tests {
                 owner_surface: Entity::from_bits(1),
                 connection_id: 5,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let mounted = app
@@ -1496,6 +1518,7 @@ mod apply_tests {
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let child = app
@@ -1551,6 +1574,7 @@ mod apply_tests {
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let child = app
@@ -1607,6 +1631,7 @@ mod apply_tests {
                 owner_surface: surface,
                 connection_id: 5,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let child = app
@@ -1673,6 +1698,7 @@ mod focus_tests {
                 owner_surface: surface,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let child = app
@@ -1737,6 +1763,7 @@ mod focus_tests {
                 owner_surface: surface,
                 connection_id: 99,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         // Spawn a VALID interactive inline child that WOULD be focused if the
@@ -1793,6 +1820,7 @@ mod focus_tests {
                 owner_surface: surface_a,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         // Spawn the matching interactive inline child on surface_a.
@@ -1904,6 +1932,7 @@ mod focus_tests {
                 owner_surface: surface,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let child = app
@@ -2127,6 +2156,7 @@ mod url_source_tests {
                 interactive: true,
                 bridge: true,
                 forward_keys: vec![],
+                preload: vec![],
             },
             Entity::from_bits(1),
             7,
@@ -2146,11 +2176,28 @@ mod url_source_tests {
                 interactive: true,
                 bridge: false,
                 forward_keys: vec![],
+                preload: vec![],
             },
             Entity::from_bits(1),
             7,
         )
         .unwrap_err();
         assert_eq!(err, "unsupported_scheme");
+    }
+
+    #[test]
+    fn build_view_copies_preload_through() {
+        let view = build_view(
+            RegisterKind::Inline {
+                html: "<h1>x</h1>".into(),
+                interactive: true,
+                forward_keys: vec![],
+                preload: vec!["window.A=1;".into()],
+            },
+            Entity::from_bits(1),
+            1,
+        )
+        .expect("valid inline");
+        assert_eq!(view.preload, vec!["window.A=1;".to_string()]);
     }
 }
