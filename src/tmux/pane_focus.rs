@@ -128,6 +128,18 @@ fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> PaneInactiveStyle {
 mod tests {
     use super::*;
     use ozmux_tmux::TmuxPane;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use tmux_control_parser::{CellDims, PaneId};
+
+    fn dims() -> CellDims {
+        CellDims {
+            width: 10,
+            height: 5,
+            xoff: 0,
+            yoff: 0,
+        }
+    }
 
     #[test]
     fn active_pane_gains_keyboard_focus_and_inactive_loses_it() {
@@ -175,7 +187,6 @@ mod tests {
             "inactive pane has none"
         );
 
-        // Move ActivePane to p2.
         app.world_mut().entity_mut(p1).remove::<ActivePane>();
         app.world_mut().entity_mut(p2).insert(ActivePane);
         app.update();
@@ -187,18 +198,6 @@ mod tests {
             app.world().entity(p2).contains::<KeyboardFocused>(),
             "new active gains focus"
         );
-    }
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-    use tmux_control_parser::{CellDims, PaneId};
-
-    fn dims() -> CellDims {
-        CellDims {
-            width: 10,
-            height: 5,
-            xoff: 0,
-            yoff: 0,
-        }
     }
 
     #[test]

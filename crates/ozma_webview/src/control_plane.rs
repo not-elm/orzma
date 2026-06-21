@@ -372,7 +372,7 @@ impl Plugin for ControlPlanePlugin {
 /// `RemovedComponents<OzmaTerminal>` so it fires for every terminal surface
 /// (tmux pane or standalone), with no multiplexer dependency.
 ///
-/// # NOTE
+/// # Invariants
 /// Must stay ungated and run every frame: `RemovedComponents` buffers clear at
 /// end of frame, so a skipped frame leaks registrations + assets. The purge
 /// also runs when `ControlPlaneHandle` is absent (token unbinding is then a
@@ -819,7 +819,6 @@ const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
 #[cfg(test)]
 mod gc_tests {
     use super::*;
-    use ozma_terminal::OzmaTerminal;
 
     #[test]
     fn gc_purges_registrations_when_owner_surface_despawns() {

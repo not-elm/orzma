@@ -9,8 +9,9 @@ use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-/// Shared default-off gate for the OSC-driven webview feature. The same atomic
-/// is cloned into every terminal's `SpawnOptions.osc_webview_gate`.
+/// Shared gate for the OSC-driven webview feature, seeded from the host's
+/// config. The same atomic is cloned into every terminal's
+/// `SpawnOptions.osc_webview_gate`.
 #[derive(Resource, Clone)]
 pub struct OscWebviewGate(pub Arc<AtomicBool>);
 
@@ -87,6 +88,19 @@ mod tests {
         assert!(
             gate.0.load(Ordering::Relaxed),
             "gate reflects osc_enabled=true"
+        );
+    }
+
+    #[test]
+    fn osc_plugin_initializes_gate_false_when_disabled() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(OscPlugin { osc_enabled: false });
+        app.update();
+        let gate = app.world().resource::<OscWebviewGate>();
+        assert!(
+            !gate.0.load(Ordering::Relaxed),
+            "gate reflects osc_enabled=false"
         );
     }
 }

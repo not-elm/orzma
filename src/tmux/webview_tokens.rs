@@ -34,7 +34,7 @@ fn bind_tmux_pane_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozma_webview::{ControlPlaneHandle, TokenRegistry};
+    use ozma_webview::TokenRegistry;
     use ozmux_tmux::PaneId;
     use std::path::PathBuf;
     use tmux_control_parser::CellDims;
