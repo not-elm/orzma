@@ -11,8 +11,6 @@ use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture, cell_dims};
 use crate::input::InputPhase;
 use crate::picker::SessionPicker;
 use crate::ui::copy_search::CopyPrompt;
-use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
-use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -24,6 +22,7 @@ use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
+use ozma_webview::{NonInteractive, Webview, webview_hit_at, webview_local_dip};
 use ozmux_tmux::TmuxPane;
 
 /// Plugin that registers the tmux webview pointer-routing systems and their

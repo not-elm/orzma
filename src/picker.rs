@@ -2,7 +2,6 @@
 //! overlay, and attaches only after the user selects an entry (or "New session").
 
 use crate::configs::OzmuxConfigsResource;
-use crate::control_plane::ControlPlaneHandle;
 use crate::input::InputPhase;
 use crate::ozma::AppMode;
 use crate::theme;
@@ -15,6 +14,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ScrollPosition, UiGlobalTransform, UiSystems};
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, WindowResized};
+use ozma_webview::ControlPlaneHandle;
 use ozmux_configs::StartupMode;
 use ozmux_tmux::{
     AttachTarget, ConnectionState, SelectWindow, SetEnvironmentInSession, SwitchClient,
@@ -854,8 +854,8 @@ fn refresh_session_ozmux_sock(
 /// path both emit `AppExit`). The env unset is best-effort via one-shot `tmux`
 /// subprocesses, which flush before the process exits — unlike a write over the
 /// `-CC` client, which races its teardown. The runtime dir is removed explicitly
-/// here rather than relying solely on [`crate::control_plane`]'s `RuntimeRoot`
-/// `Drop`, which can be skipped when noisy CEF teardown ends the process before
+/// here rather than relying solely on the `ozma_webview` control plane's
+/// `RuntimeRoot` `Drop`, which can be skipped when noisy CEF teardown ends the process before
 /// the world is dropped. A hard kill (SIGKILL / un-handled SIGTERM) skips all of
 /// this; the next attach overwrites every value via [`refresh_session_ozmux_sock`].
 fn cleanup_session_ozmux_sock(

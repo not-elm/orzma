@@ -4927,6 +4927,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "ozma_webview"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_cef",
+ "bevy_cef_core",
+ "crossbeam-channel",
+ "data-encoding",
+ "getrandom 0.2.17",
+ "libc",
+ "ozma_terminal",
+ "ozma_tty_engine",
+ "ozma_tty_renderer",
+ "ozmux_webview_host",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "url",
+]
+
+[[package]]
 name = "ozmd"
 version = "0.1.0"
 dependencies = [
@@ -4959,6 +4981,7 @@ dependencies = [
  "ozma_terminal",
  "ozma_tty_engine",
  "ozma_tty_renderer",
+ "ozma_webview",
  "ozmux_configs",
  "ozmux_tmux",
  "ozmux_webview_host",

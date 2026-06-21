@@ -19,8 +19,6 @@ use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
-use crate::webview::mount::{ForwardKeys, Webview, focused_webview_of, webview_hit_at};
-use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -34,6 +32,7 @@ use ozma_terminal::{Clipboard, build_paste_bytes};
 use ozma_tty_engine::{TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
+use ozma_webview::{ForwardKeys, NonInteractive, Webview, focused_webview_of, webview_hit_at};
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use ozmux_tmux::{
     ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
