@@ -160,7 +160,7 @@ pub(super) fn route_tmux_webview_left_click(
 /// Webview-local DIP for a release on `child`, WITHOUT containment (a pointer
 /// that drifted off the rect still produces a release position). `None` when
 /// the child/terminal/rect chain is gone.
-pub(super) fn tmux_webview_release_dip(
+fn tmux_webview_release_dip(
     route: &TmuxWebviewRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     child: Entity,
