@@ -4981,6 +4981,7 @@ dependencies = [
  "ozma_terminal",
  "ozma_tty_engine",
  "ozma_tty_renderer",
+ "ozma_webview",
  "ozmux_configs",
  "ozmux_tmux",
  "ozmux_webview_host",

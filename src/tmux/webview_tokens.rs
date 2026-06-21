@@ -4,8 +4,8 @@
 //! token resolution; the generic per-surface `$OZMA_TOKEN` path lives in the
 //! webview crate.
 
-use crate::control_plane::ControlPlaneHandle;
 use bevy::prelude::*;
+use ozma_webview::ControlPlaneHandle;
 use ozmux_tmux::TmuxPane;
 
 /// Registers the tmux `%N` token binder, gated to `AppMode::Ozmux` via
@@ -34,7 +34,7 @@ fn bind_tmux_pane_tokens(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::control_plane::{ControlPlaneHandle, TokenRegistry};
+    use ozma_webview::{ControlPlaneHandle, TokenRegistry};
     use ozmux_tmux::PaneId;
     use std::path::PathBuf;
     use tmux_control_parser::CellDims;

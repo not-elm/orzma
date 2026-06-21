@@ -448,13 +448,12 @@ fn continuation_ctx(
 mod tests {
     use super::*;
     use crate::tmux::pane_hit::tmux_pane_at_phys;
-    use crate::webview::mount::{Webview, webview_hit_at};
-    use crate::webview::osc::NonInteractive;
     use bevy::input::ButtonState;
     use bevy::input::mouse::MouseButtonInput;
     use bevy_cef::prelude::FocusedWebview;
     use ozma_tty_renderer::CellMetrics;
     use ozma_tty_renderer::prelude::TerminalOverlays;
+    use ozma_webview::{NonInteractive, Webview, webview_hit_at};
     use ozmux_tmux::{CopyModeQueries, TmuxConnection};
     use webview::TmuxWebviewPress;
 

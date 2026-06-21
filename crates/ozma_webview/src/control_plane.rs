@@ -30,17 +30,17 @@ pub(crate) use protocol::PushMsg;
 /// modifier booleans. Used to suppress CEF double-delivery and to match keys
 /// for PTY forwarding (design spec §E type normalization).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct NormalizedChord {
+pub struct NormalizedChord {
     /// The base key as a bevy `KeyCode`.
-    pub(crate) code: KeyCode,
+    pub code: KeyCode,
     /// Alt modifier active.
-    pub(crate) alt: bool,
+    pub alt: bool,
     /// Ctrl modifier active.
-    pub(crate) ctrl: bool,
+    pub ctrl: bool,
     /// Shift modifier active.
-    pub(crate) shift: bool,
+    pub shift: bool,
     /// The Super/Command/Meta modifier (bevy calls it Super/logo).
-    pub(crate) logo: bool,
+    pub logo: bool,
 }
 
 /// Where a dynamic view's content lives.
@@ -247,22 +247,22 @@ impl OzmuxRpc {
 /// written when a terminal surface is spawned. `Entity` is stored directly; it
 /// is only meaningful inside the same `World` generation.
 #[derive(Resource, Clone, Default)]
-pub(crate) struct TokenRegistry(Arc<RwLock<HashMap<String, Entity>>>);
+pub struct TokenRegistry(Arc<RwLock<HashMap<String, Entity>>>);
 
 impl TokenRegistry {
     /// Resolves a token to the surface that owns it.
-    pub(crate) fn resolve(&self, token: &str) -> Option<Entity> {
+    pub fn resolve(&self, token: &str) -> Option<Entity> {
         self.0.read().unwrap().get(token).copied()
     }
 
     /// Binds a token to a surface.
-    pub(crate) fn insert(&self, token: impl Into<String>, surface: Entity) {
+    pub fn insert(&self, token: impl Into<String>, surface: Entity) {
         self.0.write().unwrap().insert(token.into(), surface);
     }
 
     /// Drops every binding that resolves to `surface`. Called when a tmux pane
     /// despawns so a recycled `Entity` id cannot resolve a stale pane key.
-    pub(crate) fn remove_entity(&self, surface: Entity) {
+    pub fn remove_entity(&self, surface: Entity) {
         self.0.write().unwrap().retain(|_, bound| *bound != surface);
     }
 }
@@ -322,27 +322,27 @@ pub(crate) struct WebviewAssetRegistryRes(pub(crate) WebviewAssetRegistry);
 /// The bound control-socket path + token registry, surfaced so terminal-surface
 /// setup can mint per-surface tokens and inject `$OZMA_SOCK` / `$OZMA_TOKEN`.
 #[derive(Resource, Clone)]
-pub(crate) struct ControlPlaneHandle {
+pub struct ControlPlaneHandle {
     /// The bound listener socket path (`$OZMA_SOCK`).
-    pub(crate) sock_path: PathBuf,
+    pub sock_path: PathBuf,
     /// The shared `token → surface` registry.
-    pub(crate) tokens: TokenRegistry,
+    pub tokens: TokenRegistry,
 }
 
 /// Wires the control-plane listener, the event-apply system, and the teardown
 /// observer. Takes the `WebviewAssetRegistry` shared with the `ozma-dyn` scheme handler.
-pub(crate) struct OzmuxControlPlanePlugin {
+pub(crate) struct ControlPlanePlugin {
     dyn_assets: WebviewAssetRegistry,
 }
 
-impl OzmuxControlPlanePlugin {
+impl ControlPlanePlugin {
     /// Builds the plugin sharing `dyn_assets` with the `ozma-dyn` scheme handler.
     pub(crate) fn new(dyn_assets: WebviewAssetRegistry) -> Self {
         Self { dyn_assets }
     }
 }
 
-impl Plugin for OzmuxControlPlanePlugin {
+impl Plugin for ControlPlanePlugin {
     fn build(&self, app: &mut App) {
         let tokens = TokenRegistry::default();
         let writers = ConnectionWriters::default();

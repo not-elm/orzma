@@ -38,7 +38,7 @@ const OZMA_EMIT_KIND: &str = "ozma.emit";
 /// Builds the `CefPlugin` with the `ozma-dyn://` (dynamic, Tier 1) scheme bound
 /// to its shared `WebviewAssetRegistry`, using `root_cache_path` as this process's
 /// unique CEF profile directory (one Chromium singleton lock per instance).
-pub(crate) fn cef_plugin(dyn_registry: WebviewAssetRegistry, root_cache_path: &Path) -> CefPlugin {
+pub fn cef_plugin(dyn_registry: WebviewAssetRegistry, root_cache_path: &Path) -> CefPlugin {
     CefPlugin {
         custom_schemes: vec![custom_dyn_scheme(dyn_registry)],
         command_line_config: cef_command_line_config(),
@@ -62,7 +62,7 @@ fn cef_command_line_config() -> CommandLineConfig {
 /// Wires the `window.ozma` Tier 1 back-channel: the `ozma.call` frame
 /// observer, the webview-load loggers, and the focus sync that keeps
 /// `bevy_cef`'s `FocusedWebview` in step with the active pane.
-pub(super) struct RenderPlugin;
+pub(crate) struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {

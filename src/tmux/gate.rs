@@ -11,8 +11,6 @@ use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::rename_prompt::RenamePrompt;
-use crate::webview::mount::{Webview, webview_hit_at};
-use crate::webview::osc::NonInteractive;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
@@ -20,6 +18,7 @@ use bevy_cef::prelude::FocusedWebview;
 use ozma_terminal::{KeyboardDisabled, MouseDisabled, OzmaTerminalInputSet, OzmaTerminalMouseSet};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
+use ozma_webview::{NonInteractive, Webview, webview_hit_at};
 use ozmux_tmux::TmuxPane;
 
 /// Registers the Ozmux-mode per-pane input gate maintainer.

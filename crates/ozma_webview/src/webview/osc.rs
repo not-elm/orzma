@@ -12,16 +12,16 @@ use std::sync::atomic::AtomicBool;
 /// Shared default-off gate for the OSC-driven webview feature. The same atomic
 /// is cloned into every terminal's `SpawnOptions.osc_webview_gate`.
 #[derive(Resource, Clone)]
-pub(crate) struct OscWebviewGate(pub(crate) Arc<AtomicBool>);
+pub struct OscWebviewGate(pub Arc<AtomicBool>);
 
 /// Marks a webview as render-only (no pointer or keyboard input
 /// forwarded to the embedded page).
 #[derive(Component, Debug, Default)]
-pub(crate) struct NonInteractive;
+pub struct NonInteractive;
 
 /// Wires the OSC-webview mount/unmount observer and the host-supplied gate.
-pub(super) struct OscPlugin {
-    pub(super) osc_enabled: bool,
+pub(crate) struct OscPlugin {
+    pub(crate) osc_enabled: bool,
 }
 
 impl Plugin for OscPlugin {

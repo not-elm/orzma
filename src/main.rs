@@ -3,7 +3,6 @@
 mod bootstrap;
 mod cef_profile;
 mod configs;
-mod control_plane;
 mod font;
 mod input;
 mod ozma;
@@ -13,15 +12,11 @@ mod system_set;
 mod theme;
 mod tmux;
 mod ui;
-mod webview;
 mod window_title;
 
 use crate::cef_profile::CefProfileDir;
-use crate::control_plane::OzmuxControlPlanePlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::ozma::{AppMode, OzmaModePlugin};
-use crate::webview::OzmuxWebviewPlugin;
-use crate::webview::render::cef_plugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
@@ -34,6 +29,7 @@ use ozma_input::OzmaHostInputPlugin;
 use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
+use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
 use ozmux_configs::StartupMode;
 use ozmux_webview_host::WebviewAssetRegistry;
 use picker::OzmuxPickerPlugin;
@@ -84,8 +80,9 @@ fn main() {
             OzmuxBootstrapPlugin,
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
-            OzmuxWebviewPlugin {
+            OzmaWebviewPlugin {
                 osc_enabled: pre_configs.osc_webview.enabled,
+                dyn_assets: dyn_registry,
             },
             CopyModePlugin,
             CopyModeIndicatorPlugin,
@@ -100,7 +97,6 @@ fn main() {
             ImeOverlayPlugin,
             OptionAsAltPlugin,
             OzmaHostInputPlugin,
-            OzmuxControlPlanePlugin::new(dyn_registry),
         ))
         .run();
 }

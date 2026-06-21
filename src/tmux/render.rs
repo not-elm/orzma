@@ -4,7 +4,6 @@
 
 use crate::theme;
 use crate::ui::WorkspaceUiRoot;
-use crate::webview::osc::OscWebviewGate;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
@@ -13,6 +12,7 @@ use ozma_terminal::{OzmaTerminal, cells_for};
 use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
+use ozma_webview::OscWebviewGate;
 use ozmux_tmux::{
     ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxCommand, TmuxConnection, TmuxPane,
     TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,

@@ -29,7 +29,7 @@ use ozma_tty_renderer::schema::TerminalGrid;
 /// its registration. Read by the focused-key filter-fill and PTY-forward
 /// systems (Phase 4) off the focused child entity.
 #[derive(Component, Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct ForwardKeys(pub(crate) Vec<NormalizedChord>);
+pub struct ForwardKeys(pub Vec<NormalizedChord>);
 
 /// Marks a webview entity and records its identity: the mounted
 /// `view_id` and the overlay texture `slot` (0..`OVERLAY_SLOTS`) it occupies
@@ -38,14 +38,14 @@ pub(crate) struct ForwardKeys(pub(crate) Vec<NormalizedChord>);
 /// back-references" convention. Each child's `slot` is the single source of
 /// truth for slot allocation (no separate allocation table).
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Webview {
+pub struct Webview {
     /// The registered view id this webview was mounted from.
-    pub(crate) view_id: String,
+    pub view_id: String,
     /// The client-assigned instance id; `None` is the implicit default
     /// instance. `(view_id, instance_id)` is the per-terminal address.
-    pub(crate) instance_id: Option<String>,
+    pub instance_id: Option<String>,
     /// The overlay texture slot (0..`OVERLAY_SLOTS`) on the parent terminal.
-    pub(crate) slot: u8,
+    pub slot: u8,
 }
 
 /// Where a webview sits: its anchor mode (scrollback line vs fixed
@@ -83,7 +83,7 @@ pub(crate) struct CompositeNotified;
 /// `Update` (the PTY drain systems flush the `FrameSnapshot` / `FrameDelta`
 /// observers there), so projecting just before the material rebuild hands the
 /// same frame's overlays to the shader.
-pub(super) struct WebviewPlugin;
+pub(crate) struct WebviewPlugin;
 
 impl Plugin for WebviewPlugin {
     fn build(&self, app: &mut App) {
@@ -369,7 +369,7 @@ pub(crate) fn unmount(
 /// `Webview`, and its `ChildOf` parent is the active surface. The input
 /// dispatcher uses this to hoist the release-chord check, restrict the Escape
 /// scroll-to-bottom pre-handler, and suppress PTY key forwarding (spec §7).
-pub(crate) fn focused_webview_of(
+pub fn focused_webview_of(
     focused: Option<&FocusedWebview>,
     webview_parents: &Query<&ChildOf, With<Webview>>,
     active_surface: Option<Entity>,
@@ -382,12 +382,12 @@ pub(crate) fn focused_webview_of(
 /// A pointer hit on an interactive webview rect: the child entity that
 /// owns the rect and the pointer position in webview-local DIP (logical px).
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct WebviewHit {
+pub struct WebviewHit {
     /// The interactive webview child under the pointer.
-    pub(crate) child: Entity,
+    pub child: Entity,
     /// `(local_phys − rect_origin_phys) / scale_factor` — the pointer in
     /// webview-local DIP, the coordinate space CEF mouse events expect.
-    pub(crate) local_dip: Vec2,
+    pub local_dip: Vec2,
 }
 
 /// Hit-tests a terminal-local physical-pixel point against the terminal's
@@ -402,7 +402,7 @@ pub(crate) struct WebviewHit {
 /// visible cells (its DIP origin lies above the viewport, so `local_dip.y`
 /// lands past the clipped rows). `NonInteractive` children are invisible to
 /// the hit-test, so their rects pass through as plain terminal input.
-pub(crate) fn webview_hit_at(
+pub fn webview_hit_at(
     children: &Query<&Children>,
     webviews: &Query<(&Webview, Has<NonInteractive>)>,
     overlays: &TerminalOverlays,
@@ -449,7 +449,7 @@ pub(crate) fn webview_hit_at(
 /// drifted off the rect still produces a (possibly out-of-view) release
 /// position. Returns `None` for an out-of-range slot or a `rows == 0`
 /// sentinel rect.
-pub(crate) fn webview_local_dip(
+pub fn webview_local_dip(
     overlays: &TerminalOverlays,
     slot: u8,
     local_phys: Vec2,
