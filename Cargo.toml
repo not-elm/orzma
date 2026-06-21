@@ -12,7 +12,7 @@ name = "ozmux"
 path = "src/main.rs"
 
 [features]
-# Default-on for development: `cargo run` / `make run` load CEF from
+# Default-on for development: `cargo run` / `just run` load CEF from
 # ~/.local/share/cef via bevy_cef's debug loader. Distribution builds MUST
 # drop this — the bundler builds with `--no-default-features` so the release
 # binary loads CEF from the app's bundled Contents/Frameworks instead.

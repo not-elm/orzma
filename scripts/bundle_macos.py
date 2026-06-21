@@ -181,7 +181,7 @@ def verify_prerequisites(cfg: BundleConfig) -> None:
         raise SystemExit(f"binary not found: {cfg.bin_source} (build first or pass --bin)")
     if not cfg.cef_framework.is_dir():
         raise SystemExit(
-            f"CEF framework not found: {cfg.cef_framework} (run `make setup-cef-release`)"
+            f"CEF framework not found: {cfg.cef_framework} (run `just setup-cef-release`)"
         )
     if not cfg.helper_bin.is_file():
         raise SystemExit(

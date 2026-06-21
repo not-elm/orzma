@@ -23,7 +23,7 @@ The workspace root package is the one and only binary; library crates live under
 - `crates/tmux_session` (`ozmux_tmux`) — the sole multiplexer: owns a `tmux -CC` control-mode connection, drains its transport events into the Bevy world, tracks connection lifecycle, and projects tmux session/window/pane state as ECS entities (`TmuxSession` / `TmuxWindow` / `TmuxPane`). Rendering lives in `src/` (the tmux render/input/UI plugins), not here. Exposes `TmuxSessionPlugin`. (Built on `crates/tmux_control` and `crates/tmux_control_parser`, the sans-io tmux control-mode client and parser.)
 - `crates/ozmux_configs` (`ozmux_configs`) — config loader. Reads `~/.config/ozmux/config.toml` (or `$OZMUX_CONFIG` / `$XDG_CONFIG_HOME` overrides) and resolves it against built-in defaults.
 
-In-process webview rendering is provided by the external `bevy_cef` crate (a path dependency on CEF v145, pinned to `145.6.1+145.0.28` in the Makefile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `make setup-cef`.
+In-process webview rendering is provided by the external `bevy_cef` crate (a path dependency on CEF v145, pinned to `145.6.1+145.0.28` in the justfile). Both the renderer and the helper render process come from `bevy_cef` / `export-cef-dir`; see `just setup-cef`.
 
 ### TypeScript workspace (`pnpm-workspace.yaml`)
 
@@ -46,13 +46,13 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a pat
 
 | Action                  | Command                                                                            |
 | ----------------------- | ---------------------------------------------------------------------------------- |
-| Build the workspace     | `cargo build` (or `make build`)                                                    |
-| Run the app             | `cargo run` (or `make run`)                                                         |
+| Build the workspace     | `cargo build` (or `just build`)                                                    |
+| Run the app             | `cargo run` (or `just run`)                                                         |
 | Run all tests           | `cargo test`                                                                        |
 | Run one crate's tests   | `cargo test -p ozmux_tmux` (e.g. `cargo test -p ozmux_tmux <name>`)                |
 | Lint + format (Rust)    | `cargo clippy --workspace --fix --allow-dirty --allow-staged && cargo fmt`         |
-| Fix everything          | `make fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`)                     |
-| Provision CEF (one-time) | `make setup-cef` (installs the CEF framework + debug render process; macOS)        |
+| Fix everything          | `just fix-lint` (runs clippy fix, rustfmt, and `pnpm lint:fix`)                     |
+| Provision CEF (one-time) | `just setup-cef` (installs the CEF framework + debug render process; macOS)        |
 
 Logs go through `tracing-subscriber`; override the filter with `RUST_LOG`.
 

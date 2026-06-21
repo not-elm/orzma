@@ -134,7 +134,7 @@ Tool-enforced (biome):
 
 - Import ordering
 - `biome-ignore` requires a reason string (existing rule)
-- Run via `pnpm lint` / `pnpm lint:fix` / `make fix-lint`
+- Run via `pnpm lint` / `pnpm lint:fix` / `just fix-lint`
 
 Not tool-enforced — review-time check required. The following rules cannot
 be detected by biome and must be checked manually during code review (and
