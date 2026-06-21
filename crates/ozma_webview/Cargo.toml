@@ -1,0 +1,36 @@
+[package]
+name = "ozma_webview"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+# Forwarded by the binary's `debug` feature; enables bevy_cef's
+# remote-debugging-port (Chromium DevTools / CDP on 127.0.0.1:9222).
+debug = ["bevy_cef/debug"]
+
+[dependencies]
+bevy = { workspace = true }
+bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "passthrough" }
+bevy_cef_core = { workspace = true }
+ozma_terminal = { path = "../ozma_terminal" }
+ozma_tty_engine = { path = "../ozma_tty_engine" }
+ozma_tty_renderer = { path = "../ozma_tty_renderer" }
+ozmux_webview_host = { path = "../webview_host", features = ["cef"] }
+crossbeam-channel = "0.5"
+data-encoding = "2"
+getrandom = "0.2"
+libc = "0.2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+url = "2"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
