@@ -331,7 +331,7 @@ pub(crate) fn read_ime_events(
                 AppMode::Ozmux => {
                     let Some((entity, pane)) = active else {
                         tracing::warn!(
-                            target: "ozmux_gui::input::ime",
+                            target: "ozmux::input::ime",
                             "commit dropped: no active tmux pane",
                         );
                         continue;

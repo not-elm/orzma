@@ -32,9 +32,9 @@ class PureHelpers(unittest.TestCase):
 
     def test_config_paths(self):
         cfg = bm.BundleConfig(
-            version="1.2.3", app_name="ozmux", bin_name="ozmux-gui",
+            version="1.2.3", app_name="ozmux", bin_name="ozmux",
             bundle_id_base="not.elm.ozmux", arch="arm64", target_triple="aarch64-apple-darwin",
-            bin_source=Path("/tmp/ozmux-gui"), cef_framework=Path("/tmp/cef"),
+            bin_source=Path("/tmp/ozmux"), cef_framework=Path("/tmp/cef"),
             helper_bin=Path("/tmp/helper"), out_dir=Path("/tmp/out"),
             sign_identity="-", no_sign=False, notarize=False,
         )
@@ -71,9 +71,9 @@ class PlistLogic(unittest.TestCase):
             bm.merge_cef_keys({"LSEnvironment": "not-a-dict"})
 
     def test_build_helper_plist(self):
-        p = bm.build_helper_plist("ozmux-gui Helper (GPU)", "not.elm.ozmux.helper.gpu")
-        self.assertEqual(p["CFBundleExecutable"], "ozmux-gui Helper (GPU)")
-        self.assertEqual(p["CFBundleName"], "ozmux-gui Helper (GPU)")
+        p = bm.build_helper_plist("ozmux Helper (GPU)", "not.elm.ozmux.helper.gpu")
+        self.assertEqual(p["CFBundleExecutable"], "ozmux Helper (GPU)")
+        self.assertEqual(p["CFBundleName"], "ozmux Helper (GPU)")
         self.assertEqual(p["CFBundleIdentifier"], "not.elm.ozmux.helper.gpu")
         self.assertEqual(p["CFBundlePackageType"], "APPL")
         self.assertEqual(p["LSEnvironment"]["MallocNanoZone"], "0")
@@ -150,10 +150,10 @@ class ConfigResolution(unittest.TestCase):
     def test_resolve_defaults_with_explicit_version(self):
         cfg = bm.resolve_config(self._parse(["--version", "0.1.0", "--skip-build"]))
         self.assertEqual(cfg.version, "0.1.0")
-        self.assertEqual(cfg.bin_name, "ozmux-gui")
+        self.assertEqual(cfg.bin_name, "ozmux")
         self.assertEqual(cfg.sign_identity, "-")
         self.assertFalse(cfg.notarize)
-        self.assertEqual(cfg.bin_source.name, "ozmux-gui")
+        self.assertEqual(cfg.bin_source.name, "ozmux")
         self.assertIn("aarch64-apple-darwin", str(cfg.bin_source))
 
     def test_resolve_sign_identity_from_env(self):
@@ -195,13 +195,13 @@ class AssembleAndEmbed(unittest.TestCase):
         return fw
 
     def _cfg(self, d: Path) -> "bm.BundleConfig":
-        self._macho(d / "ozmux-gui")
+        self._macho(d / "ozmux")
         self._macho(d / "helper")
         fw = self._fake_cef(d)
         return bm.BundleConfig(
-            version="9.9.9", app_name="ozmux", bin_name="ozmux-gui",
+            version="9.9.9", app_name="ozmux", bin_name="ozmux",
             bundle_id_base="not.elm.ozmux", arch="arm64", target_triple="aarch64-apple-darwin",
-            bin_source=d / "ozmux-gui", cef_framework=fw, helper_bin=d / "helper",
+            bin_source=d / "ozmux", cef_framework=fw, helper_bin=d / "helper",
             out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
         )
 
@@ -219,7 +219,7 @@ class AssembleAndEmbed(unittest.TestCase):
         bm.assemble_app(self.cfg)
         bm.embed_cef(self.cfg)
         contents = self.cfg.app_path / "Contents"
-        self.assertTrue((contents / "MacOS" / "ozmux-gui").is_file())
+        self.assertTrue((contents / "MacOS" / "ozmux").is_file())
         with open(contents / "Info.plist", "rb") as f:
             plist = plistlib.load(f)
         self.assertEqual(plist["CFBundleShortVersionString"], "9.9.9")
@@ -229,8 +229,8 @@ class AssembleAndEmbed(unittest.TestCase):
         self.assertTrue((fw / "Chromium Embedded Framework").is_file())
         for suffix, idsfx in [("", "helper"), (" (GPU)", "helper.gpu"),
                               (" (Renderer)", "helper.renderer"), (" (Plugin)", "helper.plugin")]:
-            helper = contents / "Frameworks" / f"ozmux-gui Helper{suffix}.app"
-            self.assertTrue((helper / "Contents" / "MacOS" / f"ozmux-gui Helper{suffix}").is_file())
+            helper = contents / "Frameworks" / f"ozmux Helper{suffix}.app"
+            self.assertTrue((helper / "Contents" / "MacOS" / f"ozmux Helper{suffix}").is_file())
             with open(helper / "Contents" / "Info.plist", "rb") as f:
                 hp = plistlib.load(f)
             self.assertEqual(hp["CFBundleIdentifier"], f"not.elm.ozmux.{idsfx}")
@@ -254,13 +254,13 @@ class EndToEnd(unittest.TestCase):
     def test_main_adhoc_end_to_end(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            self._macho(d / "ozmux-gui")
+            self._macho(d / "ozmux")
             self._macho(d / "helper")
             fw = self._fake_cef(d)
             out = d / "out"
             bm.main([
                 "--skip-build", "--version", "9.9.9",
-                "--bin", str(d / "ozmux-gui"),
+                "--bin", str(d / "ozmux"),
                 "--cef-framework", str(fw),
                 "--helper-bin", str(d / "helper"),
                 "--out-dir", str(out),

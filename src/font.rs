@@ -104,7 +104,7 @@ fn register_cjk_fallback_with_cosmic(mut font_system: ResMut<CosmicFontSystem>) 
         as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>);
     font_system.db_mut().load_font_source(source);
     tracing::info!(
-        target: "ozmux_gui::font",
+        target: "ozmux::font",
         "registered UDEVGothic35-Regular into cosmic-text fontdb",
     );
 }

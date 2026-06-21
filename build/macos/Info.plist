@@ -7,7 +7,7 @@
     <key>CFBundleDisplayName</key>
     <string>ozmux</string>
     <key>CFBundleExecutable</key>
-    <string>ozmux-gui</string>
+    <string>ozmux</string>
     <key>CFBundleIdentifier</key>
     <string>not.elm.ozmux</string>
     <key>CFBundleInfoDictionaryVersion</key>

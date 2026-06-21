@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME = "ozmux"
-BIN_NAME = "ozmux-gui"
+BIN_NAME = "ozmux"
 BUNDLE_ID_BASE = "not.elm.ozmux"
 ARCH = "arm64"
 TARGET_TRIPLE = "aarch64-apple-darwin"

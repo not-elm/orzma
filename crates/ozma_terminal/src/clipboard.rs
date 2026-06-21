@@ -26,7 +26,7 @@ impl Clipboard {
             Ok(cb) => Self(Some(cb)),
             Err(e) => {
                 tracing::warn!(
-                    target: "ozmux_gui::clipboard",
+                    target: "ozmux::clipboard",
                     error = ?e,
                     "arboard init failed; clipboard writes will no-op",
                 );
@@ -41,14 +41,14 @@ impl Clipboard {
     pub fn write(&mut self, text: String) {
         let Some(cb) = self.0.as_mut() else {
             tracing::debug!(
-                target: "ozmux_gui::clipboard",
+                target: "ozmux::clipboard",
                 "clipboard write skipped: arboard unavailable",
             );
             return;
         };
         if let Err(e) = cb.set_text(text) {
             tracing::warn!(
-                target: "ozmux_gui::clipboard",
+                target: "ozmux::clipboard",
                 error = ?e,
                 "clipboard write failed",
             );
@@ -70,7 +70,7 @@ impl Clipboard {
     pub fn read(&mut self) -> Option<String> {
         let Some(cb) = self.0.as_mut() else {
             tracing::debug!(
-                target: "ozmux_gui::clipboard",
+                target: "ozmux::clipboard",
                 "clipboard read skipped: arboard unavailable",
             );
             return None;
@@ -79,14 +79,14 @@ impl Clipboard {
             Ok(text) => Some(text),
             Err(arboard::Error::ContentNotAvailable) => {
                 tracing::debug!(
-                    target: "ozmux_gui::clipboard",
+                    target: "ozmux::clipboard",
                     "clipboard read: nothing available (empty / non-text)",
                 );
                 None
             }
             Err(err) => {
                 tracing::warn!(
-                    target: "ozmux_gui::clipboard",
+                    target: "ozmux::clipboard",
                     error = ?err,
                     "clipboard read failed",
                 );

@@ -4942,7 +4942,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ozmux-gui"
+name = "ozmux"
 version = "0.1.0"
 dependencies = [
  "ab_glyph",
