@@ -1,5 +1,7 @@
-// NOTE: preload ordering — this script runs AFTER ozma_bridge.js, so window.ozma
-// is already defined and frozen; injected before the bridge it would throw on the
+// NOTE: preload ordering — ozbrowser supplies this script via the ratatui-ozma
+// `Webview::url(...).preload([...])` API, so it runs AFTER the host's
+// ozma_bridge.js (always preload entry 0). window.ozma is therefore already
+// defined and frozen; injected before the bridge it would throw on the
 // `window.ozma` reads below.
 (function () {
   var ozma = window.ozma;
