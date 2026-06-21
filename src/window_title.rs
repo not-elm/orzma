@@ -22,7 +22,7 @@ impl Plugin for WindowTitlePlugin {
                 update_default_window_title.run_if(in_state(AppMode::Default)),
                 update_tmux_window_title
                     .run_if(in_state(AppMode::Tmux))
-                    .run_if(ozmux_title_dirty)
+                    .run_if(tmux_title_dirty)
                     .after(TmuxProjectionSet),
             ),
         )
@@ -48,9 +48,9 @@ fn update_default_window_title(
     // at all, so a stale cross-mode title cannot linger after entering Default
     // before the deferred terminal spawn flushes.
     if let Ok(title) = focused.single() {
-        apply_title(&mut window, format_ozma(title.0.as_deref()));
+        apply_title(&mut window, format_default(title.0.as_deref()));
     } else if terminals.is_empty() {
-        apply_title(&mut window, format_ozma(None));
+        apply_title(&mut window, format_default(None));
     }
 }
 
@@ -73,12 +73,12 @@ fn update_tmux_window_title(
         .iter()
         .next()
         .map(|w| sanitize_title(&w.name));
-    apply_title(&mut window, format_ozmux(&session, active.as_deref()));
+    apply_title(&mut window, format_tmux(&session, active.as_deref()));
 }
 
 /// True when the tmux session name, the active window, or the active window's
 /// name may have changed this frame — the inputs to the Tmux window title.
-fn ozmux_title_dirty(
+fn tmux_title_dirty(
     mut removed_session: RemovedComponents<TmuxSession>,
     mut removed_active: RemovedComponents<ActiveWindow>,
     changed_session: Query<(), Changed<TmuxSession>>,
@@ -97,14 +97,14 @@ fn ozmux_title_dirty(
         || active_removed
 }
 
-fn format_ozma(title: Option<&str>) -> String {
+fn format_default(title: Option<&str>) -> String {
     match title.map(str::trim) {
         Some(t) if !t.is_empty() => format!("{t}{SUFFIX}"),
         _ => APP_NAME.to_string(),
     }
 }
 
-fn format_ozmux(session: &str, window: Option<&str>) -> String {
+fn format_tmux(session: &str, window: Option<&str>) -> String {
     let session = session.trim();
     if session.is_empty() {
         return APP_NAME.to_string();
@@ -128,60 +128,60 @@ mod tests {
     use ozmux_tmux::{SessionId, WindowId};
 
     #[test]
-    fn ozma_some_title_gets_suffix() {
-        assert_eq!(format_ozma(Some("vim")), "vim — ozmux");
+    fn default_some_title_gets_suffix() {
+        assert_eq!(format_default(Some("vim")), "vim — ozmux");
     }
 
     #[test]
-    fn ozma_empty_title_is_app_name() {
-        assert_eq!(format_ozma(Some("")), "ozmux");
+    fn default_empty_title_is_app_name() {
+        assert_eq!(format_default(Some("")), "ozmux");
     }
 
     #[test]
-    fn ozma_none_title_is_app_name() {
-        assert_eq!(format_ozma(None), "ozmux");
+    fn default_none_title_is_app_name() {
+        assert_eq!(format_default(None), "ozmux");
     }
 
     #[test]
-    fn ozmux_session_and_window() {
-        assert_eq!(format_ozmux("main", Some("vim")), "main:vim — ozmux");
+    fn tmux_session_and_window() {
+        assert_eq!(format_tmux("main", Some("vim")), "main:vim — ozmux");
     }
 
     #[test]
-    fn ozmux_session_only_when_window_absent() {
-        assert_eq!(format_ozmux("main", None), "main — ozmux");
+    fn tmux_session_only_when_window_absent() {
+        assert_eq!(format_tmux("main", None), "main — ozmux");
     }
 
     #[test]
-    fn ozmux_session_only_when_window_empty() {
-        assert_eq!(format_ozmux("main", Some("")), "main — ozmux");
+    fn tmux_session_only_when_window_empty() {
+        assert_eq!(format_tmux("main", Some("")), "main — ozmux");
     }
 
     #[test]
-    fn ozmux_empty_session_is_app_name() {
-        assert_eq!(format_ozmux("", Some("vim")), "ozmux");
-        assert_eq!(format_ozmux("", None), "ozmux");
+    fn tmux_empty_session_is_app_name() {
+        assert_eq!(format_tmux("", Some("vim")), "ozmux");
+        assert_eq!(format_tmux("", None), "ozmux");
     }
 
     #[test]
-    fn ozma_whitespace_only_title_is_app_name() {
-        assert_eq!(format_ozma(Some("   ")), "ozmux");
+    fn default_whitespace_only_title_is_app_name() {
+        assert_eq!(format_default(Some("   ")), "ozmux");
     }
 
     #[test]
-    fn ozma_trims_surrounding_whitespace() {
-        assert_eq!(format_ozma(Some("  vim  ")), "vim — ozmux");
+    fn default_trims_surrounding_whitespace() {
+        assert_eq!(format_default(Some("  vim  ")), "vim — ozmux");
     }
 
     #[test]
-    fn ozmux_whitespace_session_is_app_name() {
-        assert_eq!(format_ozmux("   ", Some("vim")), "ozmux");
+    fn tmux_whitespace_session_is_app_name() {
+        assert_eq!(format_tmux("   ", Some("vim")), "ozmux");
     }
 
     #[test]
-    fn ozmux_trims_session_and_window() {
+    fn tmux_trims_session_and_window() {
         assert_eq!(
-            format_ozmux("  main  ", Some("  vim  ")),
+            format_tmux("  main  ", Some("  vim  ")),
             "main:vim — ozmux"
         );
     }
@@ -198,7 +198,7 @@ mod tests {
     }
 
     #[test]
-    fn ozma_system_sets_focused_terminal_title() {
+    fn default_system_sets_focused_terminal_title() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Default);
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn ozmux_system_sets_session_and_active_window() {
+    fn tmux_system_sets_session_and_active_window() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Tmux);
@@ -241,7 +241,7 @@ mod tests {
     }
 
     #[test]
-    fn ozma_resets_to_app_name_when_no_terminal_exists() {
+    fn default_resets_to_app_name_when_no_terminal_exists() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Default);
@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn ozma_holds_last_title_when_terminal_exists_but_unfocused() {
+    fn default_holds_last_title_when_terminal_exists_but_unfocused() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Default);
@@ -281,7 +281,7 @@ mod tests {
     }
 
     #[test]
-    fn ozmux_sanitizes_window_name() {
+    fn tmux_sanitizes_window_name() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Tmux);
@@ -306,7 +306,7 @@ mod tests {
     }
 
     #[test]
-    fn ozmux_title_is_not_recomputed_when_nothing_changed() {
+    fn tmux_title_is_not_recomputed_when_nothing_changed() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Tmux);
