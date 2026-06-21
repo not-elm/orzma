@@ -63,6 +63,12 @@ pub(super) struct ContinuationCtx {
     pub(super) selecting_cell: Option<(u16, u16)>,
     /// `floor(cursor.major / cell.major)` on the divider's major axis (`Resizing`).
     pub(super) resize_pointer_cell: Option<i32>,
+    /// Whether a tmux client is connected this frame. Only the
+    /// `PendingMultiSelect` arm reads it: it leaves the state and emits
+    /// `MultiSelect` only with a client, so a snapshot-present-but-no-client
+    /// frame stays `PendingMultiSelect` and retries (the observer would
+    /// otherwise drop the multi-select+copy with no client).
+    pub(super) client_present: bool,
 }
 
 /// Tracks consecutive-click count using a timeout + positional drift gate.
@@ -179,7 +185,11 @@ pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<T
 ///
 /// Per behavior-preservation invariant 8, this never writes the send-confirmed
 /// fields (`begun` / `last_target` on the begin path, `last_sent`, `resized`);
-/// the apply observer commits those on send success.
+/// the apply observer commits those on send success. The `PendingMultiSelect`
+/// arm additionally requires `ctx.client_present`: with no client it stays
+/// `PendingMultiSelect` and emits nothing, since the observer would drop the
+/// multi-select+copy with no client (the `Selecting` / `Resizing` arms are
+/// already observer-committed-on-success, so they retry without a client).
 pub(super) fn decide_continuation(
     state: &mut GestureState,
     ctx: ContinuationCtx,
@@ -273,6 +283,9 @@ pub(super) fn decide_continuation(
             let Some(snapshot_cursor) = ctx.snapshot_cursor else {
                 return Vec::new();
             };
+            if !ctx.client_present {
+                return Vec::new();
+            }
             *state = GestureState::Idle;
             vec![TmuxMouseEffect::MultiSelect {
                 pane: pane_id,
@@ -363,6 +376,7 @@ mod tests {
             snapshot_cursor: None,
             selecting_cell: None,
             resize_pointer_cell: None,
+            client_present: true,
         }
     }
 
@@ -802,6 +816,7 @@ mod tests {
             snapshot_cursor: Some((0, 0)),
             selecting_cell: Some((5, 4)),
             resize_pointer_cell: None,
+            client_present: true,
         };
         let fx = decide_continuation(&mut st, ctx);
         assert_eq!(
@@ -958,6 +973,52 @@ mod tests {
         );
         assert!(fx.is_empty());
         assert!(matches!(st, GestureState::PendingMultiSelect { .. }));
+    }
+
+    #[test]
+    fn continuation_pending_multi_select_without_client_stays_then_retries() {
+        let mut st = GestureState::PendingMultiSelect {
+            pane: Entity::from_bits(1),
+            pane_id: PaneId(7),
+            cell: (6, 2),
+            kind: MultiSelectKind::Word,
+        };
+        let fx = decide_continuation(
+            &mut st,
+            ContinuationCtx {
+                snapshot_cursor: Some((0, 0)),
+                client_present: false,
+                ..base_ctx()
+            },
+        );
+        assert!(
+            fx.is_empty(),
+            "a snapshot-present-but-no-client frame must emit nothing"
+        );
+        assert!(
+            matches!(st, GestureState::PendingMultiSelect { .. }),
+            "with no client the gesture must stay PendingMultiSelect to retry next frame"
+        );
+
+        let fx = decide_continuation(
+            &mut st,
+            ContinuationCtx {
+                snapshot_cursor: Some((0, 0)),
+                client_present: true,
+                ..base_ctx()
+            },
+        );
+        assert_eq!(
+            fx,
+            vec![TmuxMouseEffect::MultiSelect {
+                pane: PaneId(7),
+                kind: MultiSelectKind::Word,
+                snapshot_cursor: (0, 0),
+                cell: (6, 2)
+            }],
+            "once a client is present the retry emits the multi-select"
+        );
+        assert!(matches!(st, GestureState::Idle));
     }
 
     #[test]

@@ -32,7 +32,7 @@ use decide::{
 };
 use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{ActiveWindow, PaneId, TmuxPane};
+use ozmux_tmux::{ActiveWindow, PaneId, TmuxConnection, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 
@@ -180,8 +180,10 @@ fn pane_under_cursor(
 /// `drag_threshold_px` transitions to `Selecting` when the pane is already in
 /// copy mode (drag/selection for a pane NOT in copy mode is owned by
 /// `ozma_terminal`). Multi-click (≥2) on a pane in copy mode enters
-/// `PendingMultiSelect` to wait for a copy-mode snapshot, then selects a
-/// word/line via copy-mode commands. Each frame while `Resizing` the pointer's
+/// `PendingMultiSelect` to wait for a copy-mode snapshot AND a connected client
+/// (it passes `connection.client().is_some()` to the decider so a no-client
+/// frame stays pending and retries), then selects a word/line via copy-mode
+/// commands. Each frame while `Resizing` the pointer's
 /// major-axis cell coordinate is mapped to an absolute target size and sent as
 /// `resize-pane -x/-y` whenever the target changes. On `Released` from
 /// `Selecting` a begun selection is copied to clipboard; from `Resizing` that
@@ -202,6 +204,7 @@ fn tmux_gesture(
     mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: ResMut<TmuxGestureButtons>,
+    connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -279,6 +282,7 @@ fn tmux_gesture(
         drag_threshold_phys,
         cell_w,
         cell_h,
+        connection.client().is_some(),
     );
     let entity = gesture_pane_entity(&gesture.state);
     effects.extend(decide_continuation(&mut gesture.state, ctx));
@@ -375,8 +379,8 @@ fn release_ctx(
 
 /// Resolves the per-frame `ContinuationCtx` for the gesture's current state,
 /// reading only the inputs the active arm needs (cursor + copy-mode + origin
-/// anchor for `Pressed`; snapshot + live cell for `Selecting`; snapshot for
-/// `PendingMultiSelect`; pointer cell for `Resizing`).
+/// anchor for `Pressed`; snapshot + live cell for `Selecting`; snapshot +
+/// client presence for `PendingMultiSelect`; pointer cell for `Resizing`).
 fn continuation_ctx(
     state: &GestureState,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -385,6 +389,7 @@ fn continuation_ctx(
     drag_threshold_phys: f32,
     cell_w: f32,
     cell_h: f32,
+    client_present: bool,
 ) -> ContinuationCtx {
     let mut ctx = ContinuationCtx {
         pane_alive: false,
@@ -395,6 +400,7 @@ fn continuation_ctx(
         snapshot_cursor: None,
         selecting_cell: None,
         resize_pointer_cell: None,
+        client_present,
     };
     match *state {
         GestureState::Pressed {
