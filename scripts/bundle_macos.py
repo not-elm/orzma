@@ -185,9 +185,7 @@ def verify_prerequisites(cfg: BundleConfig) -> None:
         )
     if not cfg.helper_bin.is_file():
         raise SystemExit(
-            f"render-process helper not found: {cfg.helper_bin}\n"
-            "Install it: cargo install --git https://github.com/not-elm/bevy_cef "
-            "--branch passthrough bevy_cef_render_process"
+            f"render-process helper not found: {cfg.helper_bin} (run `just setup-cef-release`)"
         )
 
 
