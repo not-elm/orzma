@@ -1,6 +1,6 @@
 //! A modal overlay shown when the tmux backend reports an error.
 
-use crate::ozma::AppMode;
+use crate::app_mode::AppMode;
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -23,12 +23,12 @@ pub(crate) struct DialogPlugin;
 impl Plugin for DialogPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, spawn_tmux_dialog)
-            .add_systems(OnExit(AppMode::Ozmux), hide_tmux_dialog)
+            .add_systems(OnExit(AppMode::Tmux), hide_tmux_dialog)
             .add_systems(
                 PostUpdate,
                 sync_tmux_dialog
                     .run_if(resource_exists_and_changed::<ConnectionState>)
-                    .run_if(in_state(AppMode::Ozmux)),
+                    .run_if(in_state(AppMode::Tmux)),
             );
     }
 }
@@ -103,7 +103,7 @@ mod tests {
     fn dialog_shows_on_error_and_detached() {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
-        app.insert_state(AppMode::Ozmux);
+        app.insert_state(AppMode::Tmux);
         app.init_resource::<ConnectionState>();
         app.add_plugins(DialogPlugin);
         app.update();
@@ -133,10 +133,10 @@ mod tests {
     }
 
     #[test]
-    fn dialog_hidden_on_exit_ozmux() {
+    fn dialog_hidden_on_exit_tmux() {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
-        app.insert_state(AppMode::Ozmux);
+        app.insert_state(AppMode::Tmux);
         app.init_resource::<ConnectionState>();
         app.add_plugins(DialogPlugin);
         app.update();
@@ -152,7 +152,7 @@ mod tests {
         app.update();
         assert_eq!(backdrop_display(&mut app), Display::Flex);
 
-        app.insert_resource(bevy::prelude::NextState::Pending(AppMode::Ozma));
+        app.insert_resource(bevy::prelude::NextState::Pending(AppMode::Default));
         app.update();
         assert_eq!(backdrop_display(&mut app), Display::None);
     }

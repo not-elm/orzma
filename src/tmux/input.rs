@@ -10,10 +10,10 @@
 //! same way the native terminal path does); every other case is ceded to ozma.
 
 use super::pane_hit::tmux_pane_at_phys;
+use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
-use crate::ozma::AppMode;
 use crate::picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
@@ -50,13 +50,13 @@ impl Plugin for InputPlugin {
             (
                 forward_keys_to_tmux
                     .in_set(InputPhase::FocusedKey)
-                    .run_if(in_state(AppMode::Ozmux))
+                    .run_if(in_state(AppMode::Tmux))
                     .run_if(on_message::<KeyboardInput>),
                 forward_wheel_to_tmux
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
             )
-                .in_set(super::OzmuxActiveSet),
+                .in_set(super::TmuxActiveSet),
         );
     }
 }
@@ -315,7 +315,7 @@ fn forward_keys_to_tmux(
                 }
                 ShortcutAction::ReleaseWebviewFocus => {}
                 ShortcutAction::DetachSession => {
-                    next_mode.set(AppMode::Ozma);
+                    next_mode.set(AppMode::Default);
                 }
             }
             continue;

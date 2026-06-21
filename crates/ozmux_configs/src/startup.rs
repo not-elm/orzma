@@ -8,9 +8,9 @@ use serde::Deserialize;
 pub enum StartupMode {
     /// Single PTY terminal, no tmux (default).
     #[default]
-    Ozma,
+    Default,
     /// Show the tmux session picker.
-    Ozmux,
+    Tmux,
     /// Auto-attach to the most recently active tmux session.
-    AutoAttach,
+    TmuxAutoAttach,
 }

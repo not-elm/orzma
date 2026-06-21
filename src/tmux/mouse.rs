@@ -51,7 +51,7 @@ impl Plugin for MousePlugin {
                     .run_if(pointer_active)
                     .after(tmux_webview_pointer)
                     .in_set(InputPhase::Dispatch)
-                    .in_set(super::OzmuxActiveSet),
+                    .in_set(super::TmuxActiveSet),
             )
             .add_plugins((webview::WebviewPointerPlugin, apply::ApplyPlugin));
     }

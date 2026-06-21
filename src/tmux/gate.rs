@@ -1,12 +1,12 @@
-//! Per-pane input gating for `AppMode::Ozmux`: every pane is `KeyboardDisabled`
+//! Per-pane input gating for `AppMode::Tmux`: every pane is `KeyboardDisabled`
 //! (keys pass through to tmux), and `MouseDisabled` whenever a modal owns input,
 //! the pane is in copy mode, the focused webview belongs to the pane, or
 //! an interactive webview under the cursor claims the press — so
 //! `ozma_terminal`'s shared mouse systems yield to the tmux-specific gestures.
 
 use super::pane_hit::tmux_pane_at_phys;
+use crate::app_mode::AppMode;
 use crate::input::ime::ImeState;
-use crate::ozma::AppMode;
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
@@ -21,7 +21,7 @@ use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview, webview_hit_at};
 use ozmux_tmux::TmuxPane;
 
-/// Registers the Ozmux-mode per-pane input gate maintainer.
+/// Registers the Tmux-mode per-pane input gate maintainer.
 pub(crate) struct GatePlugin;
 
 impl Plugin for GatePlugin {
@@ -31,7 +31,7 @@ impl Plugin for GatePlugin {
             maintain_tmux_input_gates
                 .before(OzmaTerminalInputSet)
                 .before(OzmaTerminalMouseSet)
-                .run_if(in_state(AppMode::Ozmux)),
+                .run_if(in_state(AppMode::Tmux)),
         );
     }
 }

@@ -27,7 +27,7 @@ impl Plugin for PaneFocusPlugin {
                 sync_inactive_pane_style.run_if(pane_active_state_changed),
                 sync_keyboard_focus_to_active_pane.run_if(pane_active_state_changed),
             )
-                .in_set(super::OzmuxActiveSet),
+                .in_set(super::TmuxActiveSet),
         );
     }
 }

@@ -77,7 +77,7 @@ impl Plugin for WindowBarPlugin {
             rebuild_window_bar
                 .run_if(window_bar_dirty)
                 .after(TmuxProjectionSet)
-                .in_set(super::OzmuxActiveSet),
+                .in_set(super::TmuxActiveSet),
         );
         app.add_systems(
             Update,
@@ -85,7 +85,7 @@ impl Plugin for WindowBarPlugin {
                 switch_window_on_click.in_set(InputPhase::Dispatch),
                 window_entry_hover_cursor.after(InputPhase::Hover),
             )
-                .in_set(super::OzmuxActiveSet),
+                .in_set(super::TmuxActiveSet),
         );
     }
 }

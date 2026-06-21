@@ -14,7 +14,7 @@ mod webview_tokens;
 mod window_bar;
 mod window_bar_input;
 
-use crate::ozma::AppMode;
+use crate::app_mode::AppMode;
 use bevy::prelude::*;
 use copy_mode::CopyModePlugin;
 use dialog::DialogPlugin;
@@ -31,18 +31,18 @@ use render::RenderPlugin;
 use webview_tokens::WebviewTokensPlugin;
 use window_bar::WindowBarPlugin;
 
-/// SystemSet applied to every tmux Update system. Runs only in `AppMode::Ozmux`.
+/// SystemSet applied to every tmux Update system. Runs only in `AppMode::Tmux`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct OzmuxActiveSet;
+pub(crate) struct TmuxActiveSet;
 
 /// Bevy plugin aggregating all tmux runtime sub-plugins.
 pub struct OzmuxTmuxPlugin;
 
 impl Plugin for OzmuxTmuxPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, OzmuxActiveSet.run_if(in_state(AppMode::Ozmux)))
-            .add_systems(OnEnter(AppMode::Ozmux), on_enter_ozmux)
-            .add_systems(OnExit(AppMode::Ozmux), on_exit_ozmux)
+        app.configure_sets(Update, TmuxActiveSet.run_if(in_state(AppMode::Tmux)))
+            .add_systems(OnEnter(AppMode::Tmux), on_enter_tmux)
+            .add_systems(OnExit(AppMode::Tmux), on_exit_tmux)
             .add_observer(on_tmux_connection_closed)
             .add_plugins((
                 TmuxSessionPlugin,
@@ -65,14 +65,14 @@ fn on_tmux_connection_closed(
     _ev: On<TmuxConnectionClosed>,
     mut next_mode: ResMut<NextState<AppMode>>,
 ) {
-    next_mode.set(AppMode::Ozma);
+    next_mode.set(AppMode::Default);
 }
 
-fn on_enter_ozmux(mut commands: Commands) {
+fn on_enter_tmux(mut commands: Commands) {
     commands.insert_resource(TmuxPresence);
 }
 
-fn on_exit_ozmux(mut commands: Commands, mut connection: NonSendMut<TmuxConnection>) {
+fn on_exit_tmux(mut commands: Commands, mut connection: NonSendMut<TmuxConnection>) {
     if let Some(client) = connection.client() {
         let _ = client.handle().send("detach-client");
     }

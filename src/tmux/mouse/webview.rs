@@ -4,7 +4,7 @@
 //! forward left-button press/release and pointer motion to the inline CEF
 //! child under the cursor.
 
-use super::super::OzmuxActiveSet;
+use super::super::TmuxActiveSet;
 use super::super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
 use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
 use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture, cell_dims};
@@ -36,13 +36,13 @@ impl Plugin for WebviewPointerPlugin {
                 Update,
                 tmux_webview_pointer
                     .in_set(InputPhase::Dispatch)
-                    .in_set(OzmuxActiveSet),
+                    .in_set(TmuxActiveSet),
             )
             .add_systems(
                 Update,
                 forward_tmux_webview_mouse_moves
                     .in_set(InputPhase::Hover)
-                    .in_set(OzmuxActiveSet),
+                    .in_set(TmuxActiveSet),
             );
     }
 }
@@ -71,7 +71,7 @@ pub(super) struct TmuxWebviewRouteParams<'w, 's> {
 /// handing off the non-consumed ones through `TmuxGestureButtons`.
 ///
 /// This system owns the single `MouseButtonInput` reader for the tmux pointer
-/// pipeline and runs EVERY frame within `OzmuxActiveSet` (it is NOT gated by
+/// pipeline and runs EVERY frame within `TmuxActiveSet` (it is NOT gated by
 /// `pointer_active`); it computes the suppressed/active decision in-body. On a
 /// suppressed frame (no focused primary window, or a picker / copy-search prompt
 /// owns input) it drains the reader and the buffer, resets the gesture to

@@ -8,13 +8,13 @@ use bevy::prelude::*;
 use ozma_webview::ControlPlaneHandle;
 use ozmux_tmux::TmuxPane;
 
-/// Registers the tmux `%N` token binder, gated to `AppMode::Ozmux` via
-/// `OzmuxActiveSet`.
+/// Registers the tmux `%N` token binder, gated to `AppMode::Tmux` via
+/// `TmuxActiveSet`.
 pub(crate) struct WebviewTokensPlugin;
 
 impl Plugin for WebviewTokensPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, bind_tmux_pane_tokens.in_set(super::OzmuxActiveSet));
+        app.add_systems(Update, bind_tmux_pane_tokens.in_set(super::TmuxActiveSet));
     }
 }
 

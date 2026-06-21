@@ -290,21 +290,21 @@ resize-pane-down = "Cmd+Shift+J"
     }
 
     #[test]
-    fn startup_mode_defaults_to_ozma() {
+    fn startup_mode_defaults_to_default() {
         let c = parse("");
-        assert_eq!(c.startup_mode, StartupMode::Ozma);
+        assert_eq!(c.startup_mode, StartupMode::Default);
     }
 
     #[test]
-    fn startup_mode_auto_attach_parses() {
-        let c = parse(r#"startup_mode = "auto-attach""#);
-        assert_eq!(c.startup_mode, StartupMode::AutoAttach);
+    fn startup_mode_tmux_auto_attach_parses() {
+        let c = parse(r#"startup_mode = "tmux-auto-attach""#);
+        assert_eq!(c.startup_mode, StartupMode::TmuxAutoAttach);
     }
 
     #[test]
-    fn startup_mode_ozmux_parses() {
-        let c = parse(r#"startup_mode = "ozmux""#);
-        assert_eq!(c.startup_mode, StartupMode::Ozmux);
+    fn startup_mode_tmux_parses() {
+        let c = parse(r#"startup_mode = "tmux""#);
+        assert_eq!(c.startup_mode, StartupMode::Tmux);
     }
 
     #[test]

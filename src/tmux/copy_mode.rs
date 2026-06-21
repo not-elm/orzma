@@ -49,7 +49,7 @@ impl Plugin for CopyModePlugin {
                     .after(consume_copy_reply),
             )
                 .after(TmuxProjectionSet)
-                .in_set(super::OzmuxActiveSet),
+                .in_set(super::TmuxActiveSet),
         );
     }
 }

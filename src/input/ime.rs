@@ -6,8 +6,8 @@
 //! the active tmux pane), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
+use crate::app_mode::AppMode;
 use crate::input::InputPhase;
-use crate::ozma::AppMode;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
@@ -148,7 +148,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
 /// IME through bevy_cef's `Ime` → CEF bridge), OR a surface exists that does
 /// NOT have `CopyModeState`. The surface is the active tmux pane, or — in
-/// `AppMode::Ozma` with no active pane — the `KeyboardFocused` terminal; both
+/// `AppMode::Default` with no active pane — the `KeyboardFocused` terminal; both
 /// flow through the same copy-mode gate below.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
@@ -225,8 +225,8 @@ pub(crate) fn ime_policy_system(
 
     let surface = match active_surface {
         Some(entity) => Some(entity),
-        // NOTE: Ozma mode has no tmux ActivePane; fall back to the focused terminal.
-        None if *current_mode.get() == AppMode::Ozma => ozma_terminal.single().ok(),
+        // NOTE: Default mode has no tmux ActivePane; fall back to the focused terminal.
+        None if *current_mode.get() == AppMode::Default => ozma_terminal.single().ok(),
         None => None,
     };
     let Some(entity) = surface else {
@@ -328,7 +328,7 @@ pub(crate) fn read_ime_events(
                 continue;
             }
             match current_mode.get() {
-                AppMode::Ozmux => {
+                AppMode::Tmux => {
                     let Some((entity, pane)) = active else {
                         tracing::warn!(
                             target: "ozmux::input::ime",
@@ -353,7 +353,7 @@ pub(crate) fn read_ime_events(
                         tracing::warn!(?e, "IME commit send failed");
                     }
                 }
-                AppMode::Ozma => {
+                AppMode::Default => {
                     // NOTE: bevy_cef delivers the commit to the webview independently; suppress here to prevent duplicate input.
                     if focused_webview.0.is_some() {
                         continue;

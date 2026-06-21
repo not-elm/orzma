@@ -432,7 +432,7 @@ pub struct Bindings {
     /// `deny_unknown_fields`. Remove after one release.
     #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub copy: Option<KeyChord>,
-    /// Detach the current tmux session and switch to Ozma mode.
+    /// Detach the current tmux session and switch to Default mode.
     #[serde(deserialize_with = "deser_chord_or_unbind", default)]
     pub detach_session: Option<KeyChord>,
 }
@@ -530,7 +530,7 @@ pub enum ShortcutAction {
     OpenPicker,
     /// Quits the ozmux application.
     Quit,
-    /// Detaches from the tmux session and returns to Ozma single-terminal mode.
+    /// Detaches from the tmux session and returns to Default single-terminal mode.
     DetachSession,
 }
 

@@ -1,12 +1,12 @@
 //! ozmux Bevy GUI entry point.
 
+mod app_mode;
 mod bootstrap;
 mod cef_profile;
 mod configs;
+mod default_input;
 mod font;
 mod input;
-mod ozma;
-mod ozma_input;
 mod picker;
 mod system_set;
 mod theme;
@@ -14,18 +14,18 @@ mod tmux;
 mod ui;
 mod window_title;
 
+use crate::app_mode::{AppMode, DefaultModePlugin};
 use crate::cef_profile::CefProfileDir;
 use crate::input::hyperlink::HyperlinkInputPlugin;
-use crate::ozma::{AppMode, OzmaModePlugin};
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
+use default_input::DefaultHostInputPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
-use ozma_input::OzmaHostInputPlugin;
 use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
@@ -43,13 +43,13 @@ use ui::{
 
 fn main() {
     let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
-    // NOTE: start in AppMode::Ozmux as a boot-dispatch state; dispatch_startup_mode
-    // (OnEnter(Ozmux), gated to run once) routes to the real mode. Routing to Ozma
-    // via a queued NextState — rather than booting straight into Ozma — defers
-    // OnEnter(AppMode::Ozma) (spawn_terminal) to a post-Startup StateTransition, so
+    // NOTE: start in AppMode::Tmux as a boot-dispatch state; dispatch_startup_mode
+    // (OnEnter(Tmux), gated to run once) routes to the real mode. Routing to Default
+    // via a queued NextState — rather than booting straight into Default — defers
+    // OnEnter(AppMode::Default) (spawn_terminal) to a post-Startup StateTransition, so
     // Startup deferred commands (e.g. init_atlas_image inserting AtlasImage) flush first.
     let initial_mode = match pre_configs.startup_mode {
-        StartupMode::Ozma | StartupMode::Ozmux | StartupMode::AutoAttach => AppMode::Ozmux,
+        StartupMode::Default | StartupMode::Tmux | StartupMode::TmuxAutoAttach => AppMode::Tmux,
     };
     let dyn_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
@@ -70,7 +70,7 @@ fn main() {
             OzmaTerminalPlugin {
                 config_shell: pre_configs.ozma.shell.clone(),
             },
-            OzmaModePlugin,
+            DefaultModePlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,
@@ -96,7 +96,7 @@ fn main() {
             ImePlugin,
             ImeOverlayPlugin,
             OptionAsAltPlugin,
-            OzmaHostInputPlugin,
+            DefaultHostInputPlugin,
         ))
         .run();
 }

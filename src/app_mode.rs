@@ -1,34 +1,34 @@
-//! AppMode state enum and the Ozma single-terminal lifecycle plugin.
+//! AppMode state enum and the Default-mode single-terminal lifecycle plugin.
 
 use bevy::prelude::*;
 use ozma_terminal::{
     KeyboardFocused, OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig,
 };
 
-/// Application mode. `Ozma` is the default (single PTY, no tmux).
-/// `Ozmux` activates the tmux multiplexer backend.
+/// Application mode. `Default` is the default (single PTY, no tmux).
+/// `Tmux` activates the tmux multiplexer backend.
 #[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub(crate) enum AppMode {
     /// Single PTY terminal, Alacritty VT emulation, no tmux.
     #[default]
-    Ozma,
+    Default,
     /// tmux backend, multiplexer layout.
-    Ozmux,
+    Tmux,
 }
 
-/// Bevy plugin that registers the `AppMode::Ozma` spawn/despawn lifecycle.
+/// Bevy plugin that registers the `AppMode::Default` spawn/despawn lifecycle.
 ///
 /// Spawns one `OzmaTerminal` entity (marked `KeyboardFocused`, the keyboard
-/// target) on `OnEnter(AppMode::Ozma)` and despawns it on
-/// `OnExit(AppMode::Ozma)`. Requires `AppMode` to be inserted via
+/// target) on `OnEnter(AppMode::Default)` and despawns it on
+/// `OnExit(AppMode::Default)`. Requires `AppMode` to be inserted via
 /// `App::insert_state` before this plugin runs, and `OzmaTerminalPlugin` must
 /// be added first (it inserts `OzmaTerminalConfig` that `spawn_terminal` reads).
-pub(crate) struct OzmaModePlugin;
+pub(crate) struct DefaultModePlugin;
 
-impl Plugin for OzmaModePlugin {
+impl Plugin for DefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppMode::Ozma), spawn_terminal)
-            .add_systems(OnExit(AppMode::Ozma), despawn_terminal);
+        app.add_systems(OnEnter(AppMode::Default), spawn_terminal)
+            .add_systems(OnExit(AppMode::Default), despawn_terminal);
     }
 }
 
