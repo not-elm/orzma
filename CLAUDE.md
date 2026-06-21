@@ -10,7 +10,7 @@ ozmux is a terminal multiplexer that runs as a single native GUI application. It
 
 The workspace root package is the one and only binary; library crates live under `crates/`. Edition 2024, toolchain pinned to `1.95` (`rust-toolchain.toml`).
 
-- `ozmux-gui` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.18 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "ozmux") plus `cef_plugin(&asset_endpoint)` (from `bevy_cef`), then the ozmux plugins:
+- `ozmux` (workspace root, `src/main.rs`) — the single binary: a Bevy 0.18 app. `main()` builds one `App` and adds `DefaultPlugins` (configured with a `WindowPlugin` titled "ozmux") plus `cef_plugin(&asset_endpoint)` (from `bevy_cef`), then the ozmux plugins:
   - `TerminalHandlePlugin` (from `ozma_tty_engine`), `TerminalRendererPlugin` (from `ozma_tty_renderer`), `TmuxSessionPlugin` (from `ozmux_tmux`, the sole multiplexer), `OzmuxTmuxPickerPlugin`, `OzmuxConfigsPlugin`, `FontBridgePlugin`, `OzmuxBootstrapPlugin`, `OzmuxShortcutPlugin`, `OzmuxUiPlugin`, `OzmaWebviewPlugin` (from `ozma_webview`), `CopyModePlugin`, `CopyModeIndicatorPlugin`, and the tmux UI/IO plugins `CopyPromptPlugin`, `ConfirmPromptPlugin`, `TmuxDialogPlugin`, `OzmuxTmuxRenderPlugin`, `OzmuxTmuxInputPlugin`, `OzmuxTmuxWindowBarPlugin`, `OzmuxTmuxPaneFocusPlugin`, `OzmuxTmuxCopyModePlugin`, `OzmuxTmuxMousePlugin`, `OzmuxTmuxDividerHandlePlugin`;
   - the input plugins `HyperlinkInputPlugin`, `ImePlugin`, and `ImeOverlayPlugin`.
   - The in-process webview feature — CEF render wiring, the control-socket listener, the `window.ozma` back-channel, OSC 5379 `mount` / `unmount`, and webviews — is aggregated under `OzmaWebviewPlugin` (from `crates/ozma_webview`).
@@ -34,7 +34,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a git
 
 ### How the pieces connect at runtime
 
-1. `ozmux-gui` boots a single Bevy `App`. `TmuxSessionPlugin` (`ozmux_tmux`) attaches to (or creates) a `tmux -CC` session and projects its session/window/pane state as ECS entities; `ozma_tty_engine` runs the PTY/VT emulation behind it, emitting frame snapshots/deltas that `ozma_tty_renderer` (and the tmux render plugins in `src/`) draw on the GPU. Layout, input, copy-mode, IME, and shortcuts are all plugins in the same world.
+1. `ozmux` boots a single Bevy `App`. `TmuxSessionPlugin` (`ozmux_tmux`) attaches to (or creates) a `tmux -CC` session and projects its session/window/pane state as ECS entities; `ozma_tty_engine` runs the PTY/VT emulation behind it, emitting frame snapshots/deltas that `ozma_tty_renderer` (and the tmux render plugins in `src/`) draw on the GPU. Layout, input, copy-mode, IME, and shortcuts are all plugins in the same world.
 2. A program registers webview content over the control socket (`OzmaWebviewPlugin`, from `crates/ozma_webview`) to mint an opaque handle, then writes an OSC 5379 `mount;<handle>` sequence to mount it as an in-process `bevy_cef` webview (assets served from disk/memory via `ozma-dyn://`, one origin per handle). The page talks back to the registering program through `window.ozma.call/on` routed over the control socket.
 
 ### `src/` module map

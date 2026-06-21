@@ -23,7 +23,7 @@ impl Plugin for OzmuxUiRootPlugin {
 fn spawn_camera(mut commands: Commands, primary: Query<Entity, With<PrimaryWindow>>) {
     let Ok(window_entity) = primary.single() else {
         tracing::error!(
-            target: "ozmux_gui::ui",
+            target: "ozmux::ui",
             "setup_root_camera_and_ui_root: primary window missing",
         );
         return;

@@ -17,6 +17,10 @@ use ratatui_ozma::{KeyChord, Ozma, OzmaBackend, OzmaError, RpcError, Webview, We
 use std::io::stdout;
 use std::time::Duration;
 
+/// The Vimium-style link-hint engine, supplied to the URL webview as a preload
+/// script. Runs after the host's `window.ozma` bridge, which it depends on.
+const OZMA_HINTS_JS: &str = include_str!("ozma_hints.js");
+
 /// A hint activation reported by the page over `hintResult`: the outcome `kind`
 /// (`navigated`/`clicked`/`focusedInput`/`empty`) plus, for a real http(s) link,
 /// the URL to load via a host browser-initiated navigation (so back/forward
@@ -222,6 +226,7 @@ fn register_view(
         Webview::url(url)
             .interactive(true)
             .forward_keys(forward)
+            .preload([OZMA_HINTS_JS])
             .on(
                 "urlChanged",
                 move |args: serde_json::Value| -> Result<(), RpcError> {
@@ -268,4 +273,21 @@ fn install_panic_hook() {
         let _ = execute!(stdout(), LeaveAlternateScreen);
         prev(info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::OZMA_HINTS_JS;
+
+    #[test]
+    fn hint_engine_asset_carries_the_protocol_handlers() {
+        assert!(
+            OZMA_HINTS_JS.contains("hints:show"),
+            "the moved hint engine must register the hints:show handler"
+        );
+        assert!(
+            OZMA_HINTS_JS.contains("hintResult"),
+            "the moved hint engine must report via hintResult"
+        );
+    }
 }

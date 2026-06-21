@@ -104,10 +104,9 @@ impl Webview {
     }
 
     /// Declares JavaScript injected before the page's own scripts run, in the
-    /// order supplied. Runs after the host's `window.ozma` bridge (and the
-    /// link-hint engine for url views), so a script may use `window.ozma` when
-    /// the view is bridged. Additive across calls; applies to all view kinds,
-    /// including display-only `url` views.
+    /// order supplied. Runs after the host's `window.ozma` bridge, so a script
+    /// may use `window.ozma` when the view is bridged. Additive across calls;
+    /// applies to all view kinds, including display-only `url` views.
     ///
     /// Each entry should be a complete, self-contained statement: the host
     /// concatenates all preload scripts with `;` and evaluates them as one

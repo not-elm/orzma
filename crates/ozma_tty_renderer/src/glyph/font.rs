@@ -119,7 +119,7 @@ pub struct CellMetrics {
 }
 
 /// Cross-crate public Resource exposing the current `CellMetrics` for
-/// `ozmux-gui::resize_terminals_to_node` and any other consumer that needs
+/// `ozmux::resize_terminals_to_node` and any other consumer that needs
 /// the canonical cell pitch / advance values.
 ///
 /// Inserted at `Startup` by `init_cell_metrics_from_primary_window` based

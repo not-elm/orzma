@@ -45,9 +45,9 @@ jobs:
           CARGO_VERSION="$(cargo metadata --format-version 1 --no-deps | python3 -c '
           import json, sys
           pkgs = json.load(sys.stdin)["packages"]
-          v = next((p["version"] for p in pkgs if p["name"] == "ozmux-gui"), None)
+          v = next((p["version"] for p in pkgs if p["name"] == "ozmux"), None)
           if v is None:
-              sys.exit("package ozmux-gui not found in cargo metadata")
+              sys.exit("package ozmux not found in cargo metadata")
           print(v)')"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             TAG_VERSION="${GITHUB_REF_NAME#v}"

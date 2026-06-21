@@ -26,7 +26,7 @@ mod state;
 /// rasterized this frame are mirrored into the `Image` asset before the
 /// next ExtractSchedule, keeping atlas pixels and material params in
 /// lock-step with the bind group rebuild. Exposed `pub` so consumers
-/// (e.g., ozmux-gui's `resize_terminals_to_node`) can sequence
+/// (e.g., ozmux's `resize_terminals_to_node`) can sequence
 /// layout-driven grid resizes `.before(Self::UpdateMaterial)`.
 #[derive(SystemSet, Debug, Hash, PartialEq, Eq, Clone)]
 pub enum TerminalMaterialSystems {
@@ -52,7 +52,7 @@ impl Plugin for TerminalMaterialPlugin {
             // NOTE: Scheduled in `PostUpdate` (not `Update`) so it runs after
             // `ui_layout_system` has written the current frame's
             // `ComputedNode.size`. The downstream consumer
-            // `resize_terminals_to_node` in ozmux-gui depends on layout being
+            // `resize_terminals_to_node` in ozmux depends on layout being
             // settled before terminal grid params propagate; keeping the
             // material write in the same schedule avoids a cross-frame split
             // where `grid_size`/`cell_size_px` lag layout by one tick.
@@ -110,7 +110,7 @@ impl TerminalUiMaterial {
 /// `tint` (rgb = target color in LINEAR space, `a` = blend amount) and a
 /// brightness `dim`. The shader blends each background source toward `tint.rgb`
 /// by `tint.a` before glyphs/overlays paint (background only), then multiplies
-/// the final color by `dim`. The consumer (e.g. ozmux-gui) sets this on a
+/// the final color by `dim`. The consumer (e.g. ozmux) sets this on a
 /// terminal host from its active-pane state; `update_terminal_material` bakes
 /// both into the uniform each frame. An absent component is treated as
 /// `{ dim: 1.0, tint: ZERO }` (full-bright, untinted / active).
@@ -147,7 +147,7 @@ impl Default for PaneInactiveStyle {
 pub const OVERLAY_SLOTS: usize = 4;
 
 /// Per-terminal overlay placements + textures, derived every frame by the
-/// consumer (e.g. ozmux-gui's webview projection) and consumed by
+/// consumer (e.g. ozmux's webview projection) and consumed by
 /// `update_terminal_material` — the only material mutation site. The renderer
 /// knows nothing about what the textures contain.
 ///

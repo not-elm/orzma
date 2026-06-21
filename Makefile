@@ -3,7 +3,7 @@
 OZMUX_EXTENSION_ROOT := $(CURDIR)/extensions
 CARGO_BIN_DIR := $(if $(CARGO_HOME),$(CARGO_HOME)/bin,$(HOME)/.cargo/bin)
 
-# bevy_cef (ozmux-gui) CEF integration. The version is pinned by bevy_cef's
+# bevy_cef (ozmux) CEF integration. The version is pinned by bevy_cef's
 # `cef` workspace dep; keep these in sync with /Users/watanabe/workspace/bevy_cef.
 CEF_VERSION := 145.6.1+145.0.28
 CEF_FRAMEWORK_LIB := $(HOME)/.local/share/cef/Chromium Embedded Framework.framework/Libraries
@@ -11,9 +11,9 @@ CEF_DEBUG_RENDER_PROCESS := bevy_cef_debug_render_process
 
 help:
 	@echo "Targets:"
-	@echo "  run            - Run the ozmux-gui Bevy app (cargo run)"
+	@echo "  run            - Run the ozmux Bevy app (cargo run)"
 	@echo "  build          - Build the workspace (cargo build)"
-	@echo "  setup-cef      - Install the CEF framework + debug render process for ozmux-gui (macOS, one-time)"
+	@echo "  setup-cef      - Install the CEF framework + debug render process for ozmux (macOS, one-time)"
 	@echo "  setup-cef-release - Install arm64 CEF + release render process (for bundling)"
 	@echo "  bundle-macos   - Build and package the ozmux .app (pass BUNDLE_ARGS=...)"
 	@echo "  release-macos  - setup-cef-release then bundle with notarization"

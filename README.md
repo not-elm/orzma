@@ -1,7 +1,7 @@
 # ozmux
 
 A terminal multiplexer built as a single
-[Bevy](https://bevyengine.org/) application (`ozmux-gui`). Terminal emulation,
+[Bevy](https://bevyengine.org/) application (`ozmux`). Terminal emulation,
 GPU rendering, layout, input, and in-process CEF webview rendering all run in
 one ECS world.
 
@@ -38,7 +38,7 @@ cargo run               # or: make run
 
 ## Layout
 
-- `src/` — the `ozmux-gui` Bevy binary
+- `src/` — the `ozmux` Bevy binary
 - `crates/` — `ozma_tty_engine`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
 - `sdk/ozma-web` — `@ozma/web` (in-page `window.ozma` bridge client for webview pages)
 

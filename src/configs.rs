@@ -26,7 +26,7 @@ impl Plugin for OzmuxConfigsPlugin {
             }
             // Chord conflicts are an architectural failure that must be surfaced loudly.
             ozmux_configs::OzmuxConfigsError::DuplicateChords(_) => {
-                eprintln!("ozmux-gui: shortcut config has duplicate chords:\n  {err}");
+                eprintln!("ozmux: shortcut config has duplicate chords:\n  {err}");
                 std::process::exit(2);
             }
             // Any other error (TOML syntax error, stale schema, IO failure): warn + default.
@@ -34,7 +34,7 @@ impl Plugin for OzmuxConfigsPlugin {
             // the problem in logs.
             _ => {
                 tracing::warn!(?err, "configs: load failed, falling back to defaults");
-                eprintln!("ozmux-gui: shortcut config could not be loaded; using defaults.");
+                eprintln!("ozmux: shortcut config could not be loaded; using defaults.");
                 eprintln!("  {err}");
                 let mut source = std::error::Error::source(&err);
                 while let Some(cause) = source {
