@@ -1,4 +1,4 @@
-//! Host-side input for `AppMode::Ozma`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
+//! Host-side input for `AppMode::Default`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
 //! markers from the coarse guards (picker, IME, focus, webview), and handles the
 //! application-level GUI shortcuts the terminal crate does not own (Quit,
 //! OpenPicker, DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
@@ -19,7 +19,7 @@ use ozma_terminal::{
 };
 use ozmux_configs::shortcuts::ShortcutAction;
 
-/// Registers the host-side input systems for `AppMode::Ozma`.
+/// Registers the host-side input systems for `AppMode::Default`.
 pub(crate) struct OzmaHostInputPlugin;
 
 impl Plugin for OzmaHostInputPlugin {
@@ -29,13 +29,13 @@ impl Plugin for OzmaHostInputPlugin {
             maintain_input_gates
                 .before(OzmaTerminalInputSet)
                 .before(OzmaTerminalMouseSet)
-                .run_if(in_state(AppMode::Ozma)),
+                .run_if(in_state(AppMode::Default)),
         )
         .add_systems(
             Update,
             app_shortcut_handler
                 .in_set(InputPhase::FocusedKey)
-                .run_if(in_state(AppMode::Ozma))
+                .run_if(in_state(AppMode::Default))
                 .run_if(on_message::<KeyboardInput>),
         );
     }

@@ -43,13 +43,13 @@ use ui::{
 
 fn main() {
     let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
-    // NOTE: start in AppMode::Ozmux as a boot-dispatch state; dispatch_startup_mode
+    // NOTE: start in AppMode::Tmux as a boot-dispatch state; dispatch_startup_mode
     // (OnEnter(Ozmux), gated to run once) routes to the real mode. Routing to Ozma
     // via a queued NextState — rather than booting straight into Ozma — defers
-    // OnEnter(AppMode::Ozma) (spawn_terminal) to a post-Startup StateTransition, so
+    // OnEnter(AppMode::Default) (spawn_terminal) to a post-Startup StateTransition, so
     // Startup deferred commands (e.g. init_atlas_image inserting AtlasImage) flush first.
     let initial_mode = match pre_configs.startup_mode {
-        StartupMode::Default | StartupMode::Tmux | StartupMode::TmuxAutoAttach => AppMode::Ozmux,
+        StartupMode::Default | StartupMode::Tmux | StartupMode::TmuxAutoAttach => AppMode::Tmux,
     };
     let dyn_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");

@@ -32,7 +32,7 @@ impl Plugin for OzmuxPickerPlugin {
         app.init_resource::<SessionPicker>()
             .add_systems(Startup, spawn_picker_ui)
             .add_systems(
-                OnEnter(AppMode::Ozmux),
+                OnEnter(AppMode::Tmux),
                 dispatch_startup_mode.run_if(not(resource_exists::<StartupDispatched>)),
             )
             .add_systems(
@@ -97,7 +97,7 @@ pub(crate) struct SessionPicker {
     last_open: bool,
 }
 
-/// Inserted on the first `OnEnter(AppMode::Ozmux)` (boot) so the startup-mode
+/// Inserted on the first `OnEnter(AppMode::Tmux)` (boot) so the startup-mode
 /// dispatch routes only once and later Ozmux entries skip it.
 #[derive(Resource)]
 struct StartupDispatched;
@@ -179,7 +179,7 @@ fn dispatch_startup_mode(
     commands.insert_resource(StartupDispatched);
     match &configs.startup_mode {
         StartupMode::Default => {
-            next_mode.set(AppMode::Ozma);
+            next_mode.set(AppMode::Default);
         }
         StartupMode::Tmux => {
             let server = build_server(&configs);
@@ -663,7 +663,7 @@ fn activate_row(
     } else {
         let attached = apply_attach(connection, state, configs, control, picker, row);
         if should_enter_ozmux(attached, current_mode) {
-            next_mode.set(AppMode::Ozmux);
+            next_mode.set(AppMode::Tmux);
         }
     }
 }
@@ -782,15 +782,15 @@ fn apply_attach(
 }
 
 /// Whether a successful picker attach should transition the app into
-/// [`AppMode::Ozmux`]: true only when the attach succeeded and the app is
-/// currently in [`AppMode::Ozma`].
+/// [`AppMode::Tmux`]: true only when the attach succeeded and the app is
+/// currently in [`AppMode::Default`].
 ///
 /// The `Ozma` guard is correctness-critical, not an optimization: under Bevy
 /// 0.18 `NextState::set` to the current value re-runs `OnExit`/`OnEnter`, so
 /// setting `Ozmux` while already in `Ozmux` would run `on_exit_ozmux`
 /// (`connection.take()` + `detach-client`) and tear down the live client.
 fn should_enter_ozmux(attached: bool, current: &AppMode) -> bool {
-    attached && *current == AppMode::Ozma
+    attached && *current == AppMode::Default
 }
 
 /// Refreshes `$OZMA_SOCK` to this ozmux's live control socket across the whole
@@ -1030,10 +1030,10 @@ mod tests {
 
     #[test]
     fn should_enter_ozmux_only_when_attached_from_ozma() {
-        assert!(should_enter_ozmux(true, &AppMode::Ozma));
-        assert!(!should_enter_ozmux(false, &AppMode::Ozma));
-        assert!(!should_enter_ozmux(true, &AppMode::Ozmux));
-        assert!(!should_enter_ozmux(false, &AppMode::Ozmux));
+        assert!(should_enter_ozmux(true, &AppMode::Default));
+        assert!(!should_enter_ozmux(false, &AppMode::Default));
+        assert!(!should_enter_ozmux(true, &AppMode::Tmux));
+        assert!(!should_enter_ozmux(false, &AppMode::Tmux));
     }
 
     fn key_press(code: KeyCode) -> bevy::input::keyboard::KeyboardInput {
@@ -1050,7 +1050,7 @@ mod tests {
     fn picker_input_app() -> App {
         let mut app = App::new();
         app.add_plugins(StatesPlugin);
-        app.insert_state(AppMode::Ozma);
+        app.insert_state(AppMode::Default);
         app.add_message::<bevy::input::keyboard::KeyboardInput>();
         app.insert_resource(SessionPicker {
             sessions: vec![fake_session(0, "alpha"), fake_session(1, "beta")],
@@ -1130,20 +1130,20 @@ mod tests {
     fn dispatch_app() -> App {
         let mut app = App::new();
         app.add_plugins(StatesPlugin);
-        app.insert_state(AppMode::Ozma);
+        app.insert_state(AppMode::Default);
         app.init_resource::<SessionPicker>();
         app.init_resource::<ConnectionState>();
         app.init_resource::<OzmuxConfigsResource>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.add_systems(
-            OnEnter(AppMode::Ozmux),
+            OnEnter(AppMode::Tmux),
             dispatch_startup_mode.run_if(not(resource_exists::<StartupDispatched>)),
         );
         app
     }
 
     fn enter_ozmux(app: &mut App) {
-        app.insert_resource(NextState::Pending(AppMode::Ozmux));
+        app.insert_resource(NextState::Pending(AppMode::Tmux));
         app.update();
     }
 
@@ -1157,7 +1157,7 @@ mod tests {
         app.update(); // apply the queued Ozmux -> Ozma transition
         assert_eq!(
             *app.world().resource::<State<AppMode>>().get(),
-            AppMode::Ozma
+            AppMode::Default
         );
     }
 
@@ -1170,7 +1170,7 @@ mod tests {
         // Ozma -> Ozmux transition is NOT bounced back to Ozma.
         assert_eq!(
             *app.world().resource::<State<AppMode>>().get(),
-            AppMode::Ozmux
+            AppMode::Tmux
         );
     }
 
@@ -1186,7 +1186,7 @@ mod tests {
     fn hover_moves_selection_only_after_the_mouse_moves() {
         let mut app = App::new();
         app.add_plugins(StatesPlugin);
-        app.insert_state(AppMode::Ozma);
+        app.insert_state(AppMode::Default);
         app.add_message::<CursorMoved>();
         app.insert_resource(SessionPicker {
             sessions: vec![fake_session(0, "alpha"), fake_session(1, "beta")],

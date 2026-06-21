@@ -50,7 +50,7 @@ impl Plugin for InputPlugin {
             (
                 forward_keys_to_tmux
                     .in_set(InputPhase::FocusedKey)
-                    .run_if(in_state(AppMode::Ozmux))
+                    .run_if(in_state(AppMode::Tmux))
                     .run_if(on_message::<KeyboardInput>),
                 forward_wheel_to_tmux
                     .in_set(InputPhase::Dispatch)
@@ -315,7 +315,7 @@ fn forward_keys_to_tmux(
                 }
                 ShortcutAction::ReleaseWebviewFocus => {}
                 ShortcutAction::DetachSession => {
-                    next_mode.set(AppMode::Ozma);
+                    next_mode.set(AppMode::Default);
                 }
             }
             continue;

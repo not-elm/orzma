@@ -1,4 +1,4 @@
-//! Per-pane input gating for `AppMode::Ozmux`: every pane is `KeyboardDisabled`
+//! Per-pane input gating for `AppMode::Tmux`: every pane is `KeyboardDisabled`
 //! (keys pass through to tmux), and `MouseDisabled` whenever a modal owns input,
 //! the pane is in copy mode, the focused webview belongs to the pane, or
 //! an interactive webview under the cursor claims the press — so
@@ -31,7 +31,7 @@ impl Plugin for GatePlugin {
             maintain_tmux_input_gates
                 .before(OzmaTerminalInputSet)
                 .before(OzmaTerminalMouseSet)
-                .run_if(in_state(AppMode::Ozmux)),
+                .run_if(in_state(AppMode::Tmux)),
         );
     }
 }

@@ -31,7 +31,7 @@ use render::RenderPlugin;
 use webview_tokens::WebviewTokensPlugin;
 use window_bar::WindowBarPlugin;
 
-/// SystemSet applied to every tmux Update system. Runs only in `AppMode::Ozmux`.
+/// SystemSet applied to every tmux Update system. Runs only in `AppMode::Tmux`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct OzmuxActiveSet;
 
@@ -40,9 +40,9 @@ pub struct OzmuxTmuxPlugin;
 
 impl Plugin for OzmuxTmuxPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, OzmuxActiveSet.run_if(in_state(AppMode::Ozmux)))
-            .add_systems(OnEnter(AppMode::Ozmux), on_enter_ozmux)
-            .add_systems(OnExit(AppMode::Ozmux), on_exit_ozmux)
+        app.configure_sets(Update, OzmuxActiveSet.run_if(in_state(AppMode::Tmux)))
+            .add_systems(OnEnter(AppMode::Tmux), on_enter_ozmux)
+            .add_systems(OnExit(AppMode::Tmux), on_exit_ozmux)
             .add_observer(on_tmux_connection_closed)
             .add_plugins((
                 TmuxSessionPlugin,
@@ -65,7 +65,7 @@ fn on_tmux_connection_closed(
     _ev: On<TmuxConnectionClosed>,
     mut next_mode: ResMut<NextState<AppMode>>,
 ) {
-    next_mode.set(AppMode::Ozma);
+    next_mode.set(AppMode::Default);
 }
 
 fn on_enter_ozmux(mut commands: Commands) {

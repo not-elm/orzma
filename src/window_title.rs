@@ -19,14 +19,14 @@ impl Plugin for WindowTitlePlugin {
         app.add_systems(
             Update,
             (
-                update_ozma_window_title.run_if(in_state(AppMode::Ozma)),
+                update_ozma_window_title.run_if(in_state(AppMode::Default)),
                 update_ozmux_window_title
-                    .run_if(in_state(AppMode::Ozmux))
+                    .run_if(in_state(AppMode::Tmux))
                     .run_if(ozmux_title_dirty)
                     .after(TmuxProjectionSet),
             ),
         )
-        .add_systems(OnEnter(AppMode::Ozmux), update_ozmux_window_title);
+        .add_systems(OnEnter(AppMode::Tmux), update_ozmux_window_title);
     }
 }
 
@@ -201,7 +201,7 @@ mod tests {
     fn ozma_system_sets_focused_terminal_title() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Ozma);
+        app.insert_state(AppMode::Default);
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         app.world_mut().spawn((
@@ -219,7 +219,7 @@ mod tests {
     fn ozmux_system_sets_session_and_active_window() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Ozmux);
+        app.insert_state(AppMode::Tmux);
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         app.world_mut().spawn(TmuxSession {
@@ -244,7 +244,7 @@ mod tests {
     fn ozma_resets_to_app_name_when_no_terminal_exists() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Ozma);
+        app.insert_state(AppMode::Default);
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((
             Window {
@@ -263,7 +263,7 @@ mod tests {
     fn ozma_holds_last_title_when_terminal_exists_but_unfocused() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Ozma);
+        app.insert_state(AppMode::Default);
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((
             Window {
@@ -284,7 +284,7 @@ mod tests {
     fn ozmux_sanitizes_window_name() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Ozmux);
+        app.insert_state(AppMode::Tmux);
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         app.world_mut().spawn(TmuxSession {
@@ -309,7 +309,7 @@ mod tests {
     fn ozmux_title_is_not_recomputed_when_nothing_changed() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Ozmux);
+        app.insert_state(AppMode::Tmux);
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         let session = app
