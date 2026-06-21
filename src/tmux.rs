@@ -10,6 +10,7 @@ mod mouse;
 mod pane_focus;
 pub(crate) mod pane_hit;
 mod render;
+mod webview_tokens;
 mod window_bar;
 mod window_bar_input;
 
@@ -27,6 +28,7 @@ use ozmux_tmux::{
 };
 use pane_focus::PaneFocusPlugin;
 use render::RenderPlugin;
+use webview_tokens::WebviewTokensPlugin;
 use window_bar::WindowBarPlugin;
 
 /// SystemSet applied to every tmux Update system. Runs only in `AppMode::Ozmux`.
@@ -54,6 +56,7 @@ impl Plugin for OzmuxTmuxPlugin {
                 DividerHandlePlugin,
                 PaneFocusPlugin,
                 GatePlugin,
+                WebviewTokensPlugin,
             ));
     }
 }

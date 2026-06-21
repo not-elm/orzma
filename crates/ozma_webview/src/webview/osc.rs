@@ -7,34 +7,29 @@ use crate::control_plane::DynamicRegistry;
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 
-/// Shared default-off gate for the OSC-driven webview feature. The same atomic
-/// is cloned into every terminal's `SpawnOptions.osc_webview_gate`.
+/// Shared gate for the OSC-driven webview feature, seeded from the host's
+/// config. The same atomic is cloned into every terminal's
+/// `SpawnOptions.osc_webview_gate`.
 #[derive(Resource, Clone)]
-pub(crate) struct OscWebviewGate(pub(crate) Arc<AtomicBool>);
+pub struct OscWebviewGate(pub Arc<AtomicBool>);
 
 /// Marks a webview as render-only (no pointer or keyboard input
 /// forwarded to the embedded page).
 #[derive(Component, Debug, Default)]
-pub(crate) struct NonInteractive;
+pub struct NonInteractive;
 
-/// Wires the OSC-webview mount/unmount observer and the config-driven gate.
-pub(super) struct OscPlugin;
+/// Wires the OSC-webview mount/unmount observer and the host-supplied gate.
+pub(crate) struct OscPlugin {
+    pub(crate) osc_enabled: bool,
+}
 
 impl Plugin for OscPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(false))))
-            .add_systems(Startup, init_gate_from_config)
+        app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(self.osc_enabled))))
             .add_observer(on_osc_webview_request);
     }
-}
-
-fn init_gate_from_config(
-    gate: Res<OscWebviewGate>,
-    configs: Res<crate::configs::OzmuxConfigsResource>,
-) {
-    gate.0.store(configs.osc_webview.enabled, Ordering::Relaxed);
 }
 
 pub(crate) fn on_osc_webview_request(
@@ -75,5 +70,37 @@ pub(crate) fn on_osc_webview_request(
                 instance_id.as_deref(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn osc_plugin_initializes_gate_from_param() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(OscPlugin { osc_enabled: true });
+        app.update();
+        let gate = app.world().resource::<OscWebviewGate>();
+        assert!(
+            gate.0.load(Ordering::Relaxed),
+            "gate reflects osc_enabled=true"
+        );
+    }
+
+    #[test]
+    fn osc_plugin_initializes_gate_false_when_disabled() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(OscPlugin { osc_enabled: false });
+        app.update();
+        let gate = app.world().resource::<OscWebviewGate>();
+        assert!(
+            !gate.0.load(Ordering::Relaxed),
+            "gate reflects osc_enabled=false"
+        );
     }
 }

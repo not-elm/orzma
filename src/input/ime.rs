@@ -9,7 +9,6 @@
 use crate::input::InputPhase;
 use crate::ozma::AppMode;
 use crate::ui::copy_mode::CopyModeState;
-use crate::webview::mount::{Webview, focused_webview_of};
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
@@ -26,6 +25,7 @@ use ozma_terminal::{KeyboardFocused, OzmaTerminal};
 use ozma_tty_engine::{TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
+use ozma_webview::{Webview, focused_webview_of};
 use ozmux_tmux::{ActivePane, SendBytes, TmuxConnection, TmuxPane};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
