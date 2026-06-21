@@ -5,13 +5,15 @@
 //! child under the cursor.
 
 use super::super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
+use super::TmuxGestureButtons;
+use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
 use crate::picker::SessionPicker;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
 use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::mouse::MouseButton;
+use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -73,6 +75,138 @@ pub(super) fn release_webview_press(
     }
 }
 
+/// Offers each frame's left-button events to the inline webview layer BEFORE the
+/// tmux gesture arbiter (`.chain()`), handing off the non-consumed ones through
+/// `TmuxGestureButtons`.
+///
+/// `TmuxGestureButtons` is cleared at the start of every run (invariant 7) so
+/// non-consumed events never accumulate across frames. Non-`Left` events are
+/// skipped (matching the arbiter's per-event `continue`, never buffered). Each
+/// `Left` event is routed through `route_tmux_webview_left_click`; a consumed
+/// press additionally triggers `SelectPane(host_pane)` so the keyboard/paste
+/// target follows the click (invariant 3, `Pressed` only), and a non-consumed
+/// event is pushed into the buffer for the arbiter to drain.
+///
+/// The same modal/focus gate the arbiter applies guards routing here too: with
+/// no window, an unfocused window, or an open picker / copy-search prompt, the
+/// `MouseButtonInput` reader is drained and the run returns WITHOUT routing or
+/// buffering — so a gated frame produces no webview focus change, CEF click, or
+/// `SelectPane`, exactly as today. Releasing an in-flight webview press on those
+/// gates stays with the arbiter's gate branches (until Task 8 consolidates both
+/// into a `pointer_active` run condition).
+pub(super) fn tmux_webview_pointer(
+    mut commands: Commands,
+    mut buffer: ResMut<TmuxGestureButtons>,
+    mut webview_press: ResMut<TmuxWebviewPress>,
+    mut webview_route: TmuxWebviewRouteParams,
+    mut buttons: MessageReader<MouseButtonInput>,
+    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    metrics: Res<TerminalCellMetricsResource>,
+    picker: Res<SessionPicker>,
+    copy_prompt: Res<CopyPrompt>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    buffer.0.clear();
+    let Ok(window) = windows.single() else {
+        buttons.clear();
+        return;
+    };
+    if !window.focused || picker.open || copy_prompt.open.is_some() {
+        buttons.clear();
+        return;
+    }
+    let scale = window.scale_factor();
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cursor_phys = window.cursor_position().map(|c| c * scale);
+    for ev in buttons.read() {
+        if ev.button != MouseButton::Left {
+            continue;
+        }
+        if let Some(cursor_phys) = cursor_phys
+            && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
+        {
+            let consumed = route_tmux_webview_left_click(
+                &mut webview_press,
+                &mut webview_route,
+                &panes,
+                terminal,
+                local_phys,
+                cursor_phys,
+                ev.state,
+                cell_w,
+                cell_h,
+                scale,
+            );
+            if consumed {
+                if ev.state == ButtonState::Pressed
+                    && let Ok((_, pane, _, _)) = panes.get(terminal)
+                {
+                    commands.trigger(TmuxMouseEffects {
+                        entity: terminal,
+                        effects: vec![TmuxMouseEffect::SelectPane(pane.id)],
+                    });
+                }
+                continue;
+            }
+        }
+        buffer.0.push(*ev);
+    }
+}
+
+/// Forwards pointer motion over an interactive inline rect of a tmux pane to
+/// the child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
+/// whatever mouse buttons are held so the one system serves both hover and an
+/// in-rect drag. `CursorMoved`-driven (one forward per frame, latest position), and
+/// focus-gated inside `bevy_cef` so motion over an unfocused browser is
+/// dropped browser-side. `Browsers` is optional so CEF-less tests construct it.
+pub(super) fn forward_tmux_webview_mouse_moves(
+    mut cursor_msg: MessageReader<CursorMoved>,
+    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    children: Query<&Children>,
+    webviews: Query<(&Webview, Has<NonInteractive>)>,
+    overlay_rects: Query<&TerminalOverlays>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    metrics: Res<TerminalCellMetricsResource>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    picker: Res<SessionPicker>,
+    copy_prompt: Res<CopyPrompt>,
+    browsers: Option<NonSend<Browsers>>,
+) {
+    let Some(moved) = cursor_msg.read().last() else {
+        return;
+    };
+    if picker.open || copy_prompt.open.is_some() {
+        return;
+    }
+    let Ok(window) = windows.single() else {
+        return;
+    };
+    let scale = window.scale_factor();
+    let cursor_phys = moved.position * scale;
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys) else {
+        return;
+    };
+    let Ok(overlays) = overlay_rects.get(terminal) else {
+        return;
+    };
+    let Some(hit) = webview_hit_at(
+        &children, &webviews, overlays, terminal, local_phys, cell_w, cell_h, scale,
+    ) else {
+        return;
+    };
+    if let Some(browsers) = browsers.as_ref() {
+        browsers.send_mouse_move(
+            &hit.child,
+            mouse_buttons.get_pressed(),
+            hit.local_dip,
+            false,
+        );
+    }
+}
+
 /// Routes a left press/release through the webview layer, returning
 /// `true` when the event was consumed and must NOT reach the tmux gesture
 /// pipeline. A press inside an
@@ -86,7 +220,7 @@ pub(super) fn release_webview_press(
     clippy::too_many_arguments,
     reason = "inline routing needs the webview press state, route params, and pointer geometry"
 )]
-pub(super) fn route_tmux_webview_left_click(
+fn route_tmux_webview_left_click(
     webview_press: &mut TmuxWebviewPress,
     route: &mut TmuxWebviewRouteParams,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -181,57 +315,4 @@ fn tmux_webview_release_dip(
         cell_h_phys,
         scale,
     )
-}
-
-/// Forwards pointer motion over an interactive inline rect of a tmux pane to
-/// the child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
-/// whatever mouse buttons are held so the one system serves both hover and an
-/// in-rect drag. `CursorMoved`-driven (one forward per frame, latest position), and
-/// focus-gated inside `bevy_cef` so motion over an unfocused browser is
-/// dropped browser-side. `Browsers` is optional so CEF-less tests construct it.
-pub(super) fn forward_tmux_webview_mouse_moves(
-    mut cursor_msg: MessageReader<CursorMoved>,
-    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    children: Query<&Children>,
-    webviews: Query<(&Webview, Has<NonInteractive>)>,
-    overlay_rects: Query<&TerminalOverlays>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    metrics: Res<TerminalCellMetricsResource>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    picker: Res<SessionPicker>,
-    copy_prompt: Res<CopyPrompt>,
-    browsers: Option<NonSend<Browsers>>,
-) {
-    let Some(moved) = cursor_msg.read().last() else {
-        return;
-    };
-    if picker.open || copy_prompt.open.is_some() {
-        return;
-    }
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let scale = window.scale_factor();
-    let cursor_phys = moved.position * scale;
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys) else {
-        return;
-    };
-    let Ok(overlays) = overlay_rects.get(terminal) else {
-        return;
-    };
-    let Some(hit) = webview_hit_at(
-        &children, &webviews, overlays, terminal, local_phys, cell_w, cell_h, scale,
-    ) else {
-        return;
-    };
-    if let Some(browsers) = browsers.as_ref() {
-        browsers.send_mouse_move(
-            &hit.child,
-            mouse_buttons.get_pressed(),
-            hit.local_dip,
-            false,
-        );
-    }
 }

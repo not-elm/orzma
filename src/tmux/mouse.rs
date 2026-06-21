@@ -1,7 +1,8 @@
 //! Mouse gesture arbiter for the tmux backend.
 //!
-//! Owns a single left-button state machine (`TmuxMouseGesture`) that reads raw
-//! `MouseButtonInput` messages and issues `select-pane` on a focused press. When
+//! Owns a single left-button state machine (`TmuxMouseGesture`) driven by the
+//! non-consumed `MouseButtonInput` events `tmux_webview_pointer` hands off
+//! through `TmuxGestureButtons`, and issues `select-pane` on a focused press. When
 //! the pane is in copy mode, a press that drags past `drag_threshold_px` enters
 //! `Selecting` and multi-click (≥2) enters `PendingMultiSelect`; both relay the
 //! tmux copy-mode path with pane-targeted `send-keys -X` commands. Text selection,
@@ -17,7 +18,6 @@ mod effect;
 mod webview;
 
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane};
-use super::pane_hit::tmux_pane_at_phys;
 use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
@@ -26,7 +26,7 @@ use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::mouse::{MouseButton, MouseButtonInput};
+use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
@@ -40,9 +40,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{ActiveWindow, PaneId, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
-use webview::{
-    TmuxWebviewPress, TmuxWebviewRouteParams, release_webview_press, route_tmux_webview_left_click,
-};
+use webview::{TmuxWebviewPress, TmuxWebviewRouteParams, release_webview_press};
 
 /// Bevy plugin that registers the tmux mouse gesture arbiter.
 pub(crate) struct MousePlugin;
@@ -50,10 +48,12 @@ pub(crate) struct MousePlugin;
 impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxMouseGesture>()
+            .init_resource::<TmuxGestureButtons>()
             .init_resource::<webview::TmuxWebviewPress>()
             .add_systems(
                 Update,
-                arbiter
+                (webview::tmux_webview_pointer, arbiter)
+                    .chain()
                     .in_set(InputPhase::Dispatch)
                     .in_set(super::OzmuxActiveSet),
             )
@@ -69,8 +69,8 @@ impl Plugin for MousePlugin {
 
 /// Modal-input gate: the resources whose presence means another surface owns
 /// input and the arbiter must drain events without mutating tmux. The
-/// focused-webview case is NOT gated here — the inline click pre-step
-/// (`route_tmux_webview_left_click`) owns webview focus instead.
+/// focused-webview case is NOT gated here — the upstream `tmux_webview_pointer`
+/// pre-step owns webview focus instead.
 #[derive(SystemParam)]
 struct ModalGate<'w> {
     picker: Res<'w, SessionPicker>,
@@ -137,6 +137,15 @@ pub(crate) struct TmuxMouseGesture {
     click: ClickTracker,
 }
 
+/// Hand-off buffer from `tmux_webview_pointer` to the gesture `arbiter`: the
+/// frame's left-button events the webview layer did NOT consume.
+///
+/// `tmux_webview_pointer` clears it at the start of every run and pushes each
+/// non-consumed event; the `arbiter` drains it via `std::mem::take`. It holds
+/// only non-consumed `Left` events and never accumulates across frames.
+#[derive(Resource, Default)]
+pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
+
 /// Returns the `(Entity, PaneId)` of the first `TmuxPane` whose `ComputedNode`
 /// contains `cursor_phys` (physical px), or `None` when no pane covers the point.
 fn pane_under_cursor(
@@ -149,8 +158,9 @@ fn pane_under_cursor(
         .map(|(entity, pane, _, _)| (entity, pane.id))
 }
 
-/// Interprets raw left-button messages into tmux `select-pane`, `resize-pane`,
-/// or selection commands.
+/// Interprets the non-consumed left-button events handed off by
+/// `tmux_webview_pointer` (via `TmuxGestureButtons`) into tmux `select-pane`,
+/// `resize-pane`, or selection commands.
 ///
 /// On each `Pressed` event the cursor's physical position is hit-tested: a
 /// press within a divider's grab zone (whose primary pane has geometry) enters
@@ -166,19 +176,20 @@ fn pane_under_cursor(
 /// `Selecting` a begun selection is copied to clipboard; from `Resizing` that
 /// never dragged, the pane under the cursor is focused as a fallback click. When
 /// the primary window is not focused, or a modal (picker / copy-search prompt)
-/// owns input, queued events are drained and the state is reset.
+/// owns input, the buffer is cleared and the state is reset (an in-flight inline
+/// press is released to CEF / dropped — see the gate branches).
 ///
-/// Each left press/release is first offered to the webview layer
-/// (`route_tmux_webview_left_click`): a press inside an interactive inline rect
-/// focuses + forwards to the child's CEF browser and never reaches the tmux
-/// gesture pipeline; a press outside every rect drops inline focus and falls
-/// through to the normal pane gesture.
+/// The webview pre-step runs UPSTREAM in `tmux_webview_pointer` (chained before
+/// this system): a press inside an interactive inline rect focuses + forwards to
+/// the child's CEF browser and is consumed (it never reaches this buffer, but its
+/// host pane is still `select-pane`d); a press outside every rect drops inline
+/// focus and is buffered here as a normal pane gesture.
 fn arbiter(
     mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
     mut webview_press: ResMut<TmuxWebviewPress>,
-    mut buttons: MessageReader<MouseButtonInput>,
-    mut webview_route: TmuxWebviewRouteParams,
+    mut buttons: ResMut<TmuxGestureButtons>,
+    webview_route: TmuxWebviewRouteParams,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -193,7 +204,7 @@ fn arbiter(
         copy_prompt,
     } = &modals;
     let Ok(window) = windows.single() else {
-        buttons.clear();
+        buttons.0.clear();
         // NOTE: no window means no cursor/scale to synthesize the CEF mouse-up,
         // so just drop any in-flight inline press — leaving it set would let a
         // later release act on a stale child.
@@ -206,7 +217,7 @@ fn arbiter(
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
     let cursor_phys = window.cursor_position().map(|c| c * scale);
     if !window.focused {
-        buttons.clear();
+        buttons.0.clear();
         release_webview_press(
             &mut webview_press,
             &webview_route,
@@ -220,12 +231,12 @@ fn arbiter(
         return;
     }
     // NOTE: a gesture behind a picker / copy-search prompt must not mutate
-    // tmux. The focused-webview case is NOT drained here — the inline click
-    // pre-step below owns focus (in-rect press keeps it, off-rect press
-    // releases it and drives tmux). An in-flight inline press IS released so
-    // the focused page does not stay logically pressed (no matching mouse-up).
+    // tmux. The focused-webview case is NOT drained here — the upstream
+    // tmux_webview_pointer pre-step owns focus (in-rect press keeps it, off-rect
+    // press releases it and drives tmux). An in-flight inline press IS released
+    // so the focused page does not stay logically pressed (no matching mouse-up).
     if picker.open || copy_prompt.open.is_some() {
-        buttons.clear();
+        buttons.0.clear();
         release_webview_press(
             &mut webview_press,
             &webview_route,
@@ -260,39 +271,7 @@ fn arbiter(
 
     let mut effects: Vec<TmuxMouseEffect> = Vec::new();
 
-    for ev in buttons.read() {
-        if ev.button != MouseButton::Left {
-            continue;
-        }
-        if let Some(cursor_phys) = cursor_phys
-            && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
-        {
-            let consumed = route_tmux_webview_left_click(
-                &mut webview_press,
-                &mut webview_route,
-                &panes,
-                terminal,
-                local_phys,
-                cursor_phys,
-                ev.state,
-                cell_w,
-                cell_h,
-                scale,
-            );
-            if consumed {
-                // NOTE: a press that focused a webview must also make its
-                // host pane the tmux-active pane. ActivePane is the keyboard/paste
-                // target, so it has to follow the pane the user clicked into —
-                // without this, after focus is released keystrokes route to the
-                // previously-active pane.
-                if ev.state == ButtonState::Pressed
-                    && let Ok((_, pane, _, _)) = panes.get(terminal)
-                {
-                    effects.push(TmuxMouseEffect::SelectPane(pane.id));
-                }
-                continue;
-            }
-        }
+    for ev in std::mem::take(&mut buttons.0) {
         match ev.state {
             ButtonState::Pressed => {
                 // A press with no cursor cannot hit-test; skip it without
@@ -538,6 +517,7 @@ fn effect_pane_id(effect: &TmuxMouseEffect) -> Option<PaneId> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tmux::pane_hit::tmux_pane_at_phys;
     use crate::webview::mount::{Webview, webview_hit_at};
     use crate::webview::osc::NonInteractive;
     use bevy::input::ButtonState;
@@ -575,13 +555,14 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
+        app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<TmuxWebviewPress>();
         app.init_resource::<CopyModeQueries>();
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
-        app.add_systems(Update, arbiter);
+        app.add_systems(Update, (webview::tmux_webview_pointer, arbiter).chain());
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -612,13 +593,14 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
+        app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<TmuxWebviewPress>();
         app.init_resource::<CopyModeQueries>();
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
-        app.add_systems(Update, arbiter);
+        app.add_systems(Update, (webview::tmux_webview_pointer, arbiter).chain());
         app.add_observer(apply::on_tmux_mouse_effects);
 
         // Pane host node at window center (400, 300), size 800x600 → top-left
@@ -806,6 +788,56 @@ mod tests {
                 GestureState::Pressed { pane: p, .. } if p == pane
             ),
             "an off-rect press must fall through to the normal pane gesture"
+        );
+    }
+
+    #[test]
+    fn modal_open_suppresses_webview_routing_and_gesture() {
+        let (mut app, _pane, _child) = make_arbiter_webview_app();
+        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "a press while a modal is open must not route to the webview layer"
+        );
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle,
+            "a press while a modal is open must not arm a gesture"
+        );
+        assert!(
+            app.world().resource::<TmuxGestureButtons>().0.is_empty(),
+            "a gated frame must buffer no events"
+        );
+    }
+
+    #[test]
+    fn non_consumed_press_is_handed_off_and_buffer_drained() {
+        let (mut app, pane, _child) = make_arbiter_webview_app();
+        set_cursor(&mut app, Vec2::new(400.0, 400.0));
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert!(
+            matches!(
+                app.world().resource::<TmuxMouseGesture>().state,
+                GestureState::Pressed { pane: p, .. } if p == pane
+            ),
+            "a non-consumed press must reach the arbiter through the buffer and arm the gesture"
+        );
+        assert!(
+            app.world().resource::<TmuxGestureButtons>().0.is_empty(),
+            "the arbiter must drain the hand-off buffer (invariant 7: no cross-frame accumulation)"
         );
     }
 }
