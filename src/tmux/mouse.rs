@@ -1,16 +1,11 @@
-//! Mouse gesture arbiter for the tmux backend.
+//! Tmux mouse gesture system.
 //!
-//! Owns a single left-button state machine (`TmuxMouseGesture`) driven by the
-//! non-consumed `MouseButtonInput` events `tmux_webview_pointer` hands off
-//! through `TmuxGestureButtons`, and issues `select-pane` on a focused press. When
-//! the pane is in copy mode, a press that drags past `drag_threshold_px` enters
-//! `Selecting` and multi-click (≥2) enters `PendingMultiSelect`; both relay the
-//! tmux copy-mode path with pane-targeted `send-keys -X` commands. Text selection,
-//! word/line copy, and hyperlink hover/open for a pane NOT in copy mode are owned
-//! by `ozma_terminal`'s shared mouse systems, not here.
-//! Divider-drag-to-resize is also here: a press within `divider_grab_tolerance_px`
-//! of a divider line enters `Resizing` state; the pointer's major-axis cell
-//! coordinate maps to an absolute target size sent as `resize-pane -x/-y`.
+//! Implements a gather→decide→apply pipeline for left-button gestures over tmux panes.
+//! `tmux_webview_pointer` gathers raw events and hands unconsumed ones to
+//! `TmuxGestureButtons`; `tmux_gesture` reads that buffer and calls the pure
+//! deciders (`decide_press`, `decide_release`, `decide_continuation`) which return
+//! `TmuxMouseEffect`s; `on_tmux_mouse_effects` (observer in `apply`) applies them
+//! by sending tmux control-mode commands.
 
 mod apply;
 mod decide;
@@ -43,7 +38,7 @@ use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 use webview::{TmuxWebviewPress, TmuxWebviewRouteParams, release_webview_press};
 
-/// Bevy plugin that registers the tmux mouse gesture arbiter.
+/// Bevy plugin that registers the tmux mouse gesture system.
 pub(crate) struct MousePlugin;
 
 impl Plugin for MousePlugin {
@@ -53,7 +48,7 @@ impl Plugin for MousePlugin {
             .init_resource::<webview::TmuxWebviewPress>()
             .add_systems(
                 Update,
-                (webview::tmux_webview_pointer, arbiter)
+                (webview::tmux_webview_pointer, tmux_gesture)
                     .chain()
                     .run_if(pointer_active)
                     .in_set(InputPhase::Dispatch)
@@ -79,7 +74,7 @@ impl Plugin for MousePlugin {
 /// Run condition for the active tmux pointer pipeline: `true` iff a focused
 /// primary window exists AND no modal (picker / copy-search prompt) owns input.
 ///
-/// Gates the chained `(tmux_webview_pointer, arbiter)` set; its negation gates
+/// Gates the chained `(tmux_webview_pointer, tmux_gesture)` set; its negation gates
 /// `drain_tmux_pointer_when_suppressed`. The focused-webview case is NOT a
 /// suppressor here — the `tmux_webview_pointer` pre-step owns webview focus.
 ///
@@ -98,7 +93,7 @@ fn pointer_active(
         && copy_prompt.open.is_none()
 }
 
-/// Bundles the two immutable copy-mode query reads used by the gesture arbiter.
+/// Bundles the two immutable copy-mode query reads used by `tmux_gesture`.
 #[derive(SystemParam)]
 struct CopyModeGate<'w, 's> {
     copy_modes: Query<'w, 's, (), With<CopyModeState>>,
@@ -108,7 +103,7 @@ struct CopyModeGate<'w, 's> {
 /// The current phase of a left-button gesture over a tmux pane.
 #[derive(Default, Debug, PartialEq)]
 enum GestureState {
-    /// No button is held; the arbiter is waiting for the next press.
+    /// No button is held; `tmux_gesture` is waiting for the next press.
     #[default]
     Idle,
     /// Left button is held; `pane`/`pane_id` is the pane that received the press
@@ -153,16 +148,16 @@ enum GestureState {
 
 /// Tracks the current left-button gesture over a tmux pane.
 #[derive(Resource, Default)]
-pub(crate) struct TmuxMouseGesture {
+struct TmuxMouseGesture {
     state: GestureState,
     click: ClickTracker,
 }
 
-/// Hand-off buffer from `tmux_webview_pointer` to the gesture `arbiter`: the
+/// Hand-off buffer from `tmux_webview_pointer` to `tmux_gesture`: the
 /// frame's left-button events the webview layer did NOT consume.
 ///
 /// `tmux_webview_pointer` clears it at the start of every run and pushes each
-/// non-consumed event; the `arbiter` drains it via `std::mem::take`. It holds
+/// non-consumed event; `tmux_gesture` drains it via `std::mem::take`. It holds
 /// only non-consumed `Left` events and never accumulates across frames.
 #[derive(Resource, Default)]
 pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
@@ -208,7 +203,7 @@ fn pane_under_cursor(
 /// the child's CEF browser and is consumed (it never reaches this buffer, but its
 /// host pane is still `select-pane`d); a press outside every rect drops inline
 /// focus and is buffered here as a normal pane gesture.
-fn arbiter(
+fn tmux_gesture(
     mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: ResMut<TmuxGestureButtons>,
@@ -252,8 +247,6 @@ fn arbiter(
     for ev in std::mem::take(&mut buttons.0) {
         match ev.state {
             ButtonState::Pressed => {
-                // A press with no cursor cannot hit-test; skip it without
-                // disturbing the gesture (matches the pre-refactor `continue`).
                 let Some(cursor_phys) = cursor_phys else {
                     continue;
                 };
@@ -309,7 +302,7 @@ fn arbiter(
 /// tmux.
 ///
 /// Replaces the in-body gate branches that previously lived in BOTH
-/// `tmux_webview_pointer` and `arbiter`. It clears the frame's
+/// `tmux_webview_pointer` and `tmux_gesture`. It clears the frame's
 /// `MouseButtonInput` reader and the `TmuxGestureButtons` hand-off buffer (so no
 /// event survives to the active path next frame), resets the gesture to `Idle`,
 /// and resolves an in-flight inline press:
@@ -591,7 +584,7 @@ mod tests {
         app.insert_resource(test_metrics());
         app.add_systems(
             Update,
-            (webview::tmux_webview_pointer, arbiter)
+            (webview::tmux_webview_pointer, tmux_gesture)
                 .chain()
                 .run_if(pointer_active),
         );
@@ -638,7 +631,7 @@ mod tests {
         app.insert_resource(test_metrics());
         app.add_systems(
             Update,
-            (webview::tmux_webview_pointer, arbiter)
+            (webview::tmux_webview_pointer, tmux_gesture)
                 .chain()
                 .run_if(pointer_active),
         );
@@ -930,11 +923,11 @@ mod tests {
                 app.world().resource::<TmuxMouseGesture>().state,
                 GestureState::Pressed { pane: p, .. } if p == pane
             ),
-            "a non-consumed press must reach the arbiter through the buffer and arm the gesture"
+            "a non-consumed press must reach tmux_gesture through the buffer and arm the gesture"
         );
         assert!(
             app.world().resource::<TmuxGestureButtons>().0.is_empty(),
-            "the arbiter must drain the hand-off buffer (invariant 7: no cross-frame accumulation)"
+            "tmux_gesture must drain the hand-off buffer (invariant 7: no cross-frame accumulation)"
         );
     }
 }

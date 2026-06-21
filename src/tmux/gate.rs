@@ -119,8 +119,8 @@ fn should_disable_pane_mouse(
 }
 
 /// The parent `TmuxPane` entity of the interactive webview currently
-/// under the cursor, or `None`. Mirrors the press-routing hit-test in the mouse
-/// arbiter (`route_tmux_webview_left_click`): `cursor_phys = cursor × scale`,
+/// under the cursor, or `None`. Mirrors the press-routing hit-test in
+/// `tmux_webview_pointer`: `cursor_phys = cursor × scale`,
 /// `tmux_pane_at_phys` → `local_phys`, then `webview_hit_at` against the pane's
 /// active overlays. `webview_hit_at` already skips `NonInteractive` webviews, so
 /// only an interactive one claims. Returns `None` when metrics are absent (no

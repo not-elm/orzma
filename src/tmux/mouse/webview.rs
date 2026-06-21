@@ -1,4 +1,4 @@
-//! Webview pointer routing for the tmux mouse arbiter.
+//! Webview pointer routing for the tmux mouse gesture system.
 //!
 //! Owns `TmuxWebviewPress`, `TmuxWebviewRouteParams`, and the systems that
 //! forward left-button press/release and pointer motion to the inline CEF
@@ -30,9 +30,9 @@ use ozmux_tmux::TmuxPane;
 #[derive(Resource, Default)]
 pub(super) struct TmuxWebviewPress(pub(super) Option<Entity>);
 
-/// Inline-routing params for the arbiter, bundled to stay within Bevy's
-/// system-parameter limit. `focused_webview` / `browsers` are optional so
-/// CEF-less tests construct the system (state effects still apply).
+/// Inline-routing params for `tmux_webview_pointer`, bundled to stay within
+/// Bevy's system-parameter limit. `focused_webview` / `browsers` are optional
+/// so CEF-less tests construct the system (state effects still apply).
 #[derive(SystemParam)]
 pub(super) struct TmuxWebviewRouteParams<'w, 's> {
     pub(super) focused_webview: Option<ResMut<'w, FocusedWebview>>,
@@ -75,23 +75,24 @@ pub(super) fn release_webview_press(
     }
 }
 
-/// Offers each frame's left-button events to the inline webview layer BEFORE the
-/// tmux gesture arbiter (`.chain()`), handing off the non-consumed ones through
+/// Offers each frame's left-button events to the inline webview layer BEFORE
+/// `tmux_gesture` (`.chain()`), handing off the non-consumed ones through
 /// `TmuxGestureButtons`.
 ///
 /// `TmuxGestureButtons` is cleared at the start of every run (invariant 7) so
 /// non-consumed events never accumulate across frames. Non-`Left` events are
-/// skipped (matching the arbiter's per-event `continue`, never buffered). Each
-/// `Left` event is routed through `route_tmux_webview_left_click`; a consumed
-/// press additionally triggers `SelectPane(host_pane)` so the keyboard/paste
-/// target follows the click (invariant 3, `Pressed` only), and a non-consumed
-/// event is pushed into the buffer for the arbiter to drain.
+/// skipped (never buffered). Each `Left` event is routed through
+/// `route_tmux_webview_left_click`; a consumed press additionally triggers
+/// `SelectPane(host_pane)` so the keyboard/paste target follows the click
+/// (invariant 3, `Pressed` only), and a non-consumed event is pushed into the
+/// buffer for `tmux_gesture` to drain.
 ///
-/// Gated by `run_if(pointer_active)` (chained with `arbiter`): this system runs
-/// only when a focused primary window exists and no modal (picker / copy-search
-/// prompt) owns input. The suppressed path — draining the `MouseButtonInput`
-/// reader and the buffer, resetting the gesture, and releasing or dropping an
-/// in-flight inline press — is owned by `drain_tmux_pointer_when_suppressed`.
+/// Gated by `run_if(pointer_active)` (chained with `tmux_gesture`): this
+/// system runs only when a focused primary window exists and no modal (picker /
+/// copy-search prompt) owns input. The suppressed path — draining the
+/// `MouseButtonInput` reader and the buffer, resetting the gesture, and
+/// releasing or dropping an in-flight inline press — is owned by
+/// `drain_tmux_pointer_when_suppressed`.
 pub(super) fn tmux_webview_pointer(
     mut commands: Commands,
     mut buffer: ResMut<TmuxGestureButtons>,

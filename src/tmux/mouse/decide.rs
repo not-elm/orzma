@@ -1,4 +1,4 @@
-//! Pure decision functions for the tmux mouse gesture arbiter.
+//! Pure decision functions for the tmux mouse gesture system.
 //!
 //! Each `decide_*` function takes the gesture state plus plain, pre-resolved
 //! input data and returns the `TmuxMouseEffect`s to apply this frame, mutating
@@ -335,7 +335,7 @@ pub(crate) fn divider_at(
 /// New absolute size (cells) for a divider's primary pane given the pointer's
 /// cell coordinate on the major axis. The pane's near edge stays fixed; its far
 /// edge follows the pointer. Clamped to at least 1.
-pub(super) fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
+fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
     (pointer_cell - near).max(1) as u32
 }
 

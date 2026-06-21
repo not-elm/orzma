@@ -1,9 +1,8 @@
 //! Apply observer for tmux mouse effects.
 //!
-//! Receives `TmuxMouseEffects` triggered by the arbiter and sends the
-//! corresponding tmux control-mode commands in the same order as the
-//! pre-refactor `arbiter` body. Bookkeeping on `TmuxMouseGesture` is done
-//! here exactly when a send succeeds, preserving invariant 8.
+//! Receives `TmuxMouseEffects` triggered by `tmux_gesture` and sends the
+//! corresponding tmux control-mode commands. Bookkeeping on `TmuxMouseGesture`
+//! is done here exactly when a send succeeds, preserving invariant 8.
 
 use super::TmuxMouseGesture;
 use super::effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
