@@ -20,9 +20,9 @@ use ozma_terminal::{
 use ozmux_configs::shortcuts::ShortcutAction;
 
 /// Registers the host-side input systems for `AppMode::Default`.
-pub(crate) struct OzmaHostInputPlugin;
+pub(crate) struct DefaultHostInputPlugin;
 
-impl Plugin for OzmaHostInputPlugin {
+impl Plugin for DefaultHostInputPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,

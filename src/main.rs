@@ -6,7 +6,7 @@ mod configs;
 mod font;
 mod input;
 mod app_mode;
-mod ozma_input;
+mod default_input;
 mod picker;
 mod system_set;
 mod theme;
@@ -25,7 +25,7 @@ use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
-use ozma_input::OzmaHostInputPlugin;
+use default_input::DefaultHostInputPlugin;
 use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
@@ -96,7 +96,7 @@ fn main() {
             ImePlugin,
             ImeOverlayPlugin,
             OptionAsAltPlugin,
-            OzmaHostInputPlugin,
+            DefaultHostInputPlugin,
         ))
         .run();
 }
