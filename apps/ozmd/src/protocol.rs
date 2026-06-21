@@ -35,7 +35,7 @@ pub(crate) struct Content {
     pub(crate) base_dir: String,
 }
 
-/// Search-result counts the page reports back (`searchCount` call).
+/// Search-result counts the page reports back (`searchCount` event).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SearchCount {
@@ -45,7 +45,7 @@ pub(crate) struct SearchCount {
     pub(crate) current: usize,
 }
 
-/// Viewport state the page reports back (`scrollState` call).
+/// Viewport state the page reports back (`scrollState` event).
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ScrollState {

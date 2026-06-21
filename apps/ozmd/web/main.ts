@@ -75,7 +75,7 @@ function reportScrollState(): void {
       currentHeadingIndex = i;
     }
   }
-  void ozma.call('scrollState', { ratio, currentHeadingIndex });
+  ozma.emit('scrollState', { ratio, currentHeadingIndex });
 }
 
 async function renderMermaid(): Promise<void> {
@@ -163,11 +163,11 @@ ozma.on('scrollToHeading', (p) => {
 });
 ozma.on('search', (p) => {
   const { query } = p as { query: string };
-  void ozma.call('searchCount', search.run(content, query));
+  ozma.emit('searchCount', search.run(content, query));
 });
 ozma.on('searchNav', (p) => {
   const { dir } = p as { dir: 'next' | 'prev' };
-  void ozma.call('searchCount', search.navigate(dir));
+  ozma.emit('searchCount', search.navigate(dir));
 });
 ozma.on('clearSearch', () => {
   search.clear(content);
