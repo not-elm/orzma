@@ -178,10 +178,10 @@ fn dispatch_startup_mode(
 ) {
     commands.insert_resource(StartupDispatched);
     match &configs.startup_mode {
-        StartupMode::Ozma => {
+        StartupMode::Default => {
             next_mode.set(AppMode::Ozma);
         }
-        StartupMode::Ozmux => {
+        StartupMode::Tmux => {
             let server = build_server(&configs);
             match server.list_sessions() {
                 Ok(sessions) => {
@@ -196,7 +196,7 @@ fn dispatch_startup_mode(
                 }
             }
         }
-        StartupMode::AutoAttach => {
+        StartupMode::TmuxAutoAttach => {
             let mut server = build_server(&configs);
             if let Some(handle) = &control {
                 server = server.env("OZMA_SOCK", &handle.sock_path.to_string_lossy());

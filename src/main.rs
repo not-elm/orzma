@@ -49,7 +49,7 @@ fn main() {
     // OnEnter(AppMode::Ozma) (spawn_terminal) to a post-Startup StateTransition, so
     // Startup deferred commands (e.g. init_atlas_image inserting AtlasImage) flush first.
     let initial_mode = match pre_configs.startup_mode {
-        StartupMode::Ozma | StartupMode::Ozmux | StartupMode::AutoAttach => AppMode::Ozmux,
+        StartupMode::Default | StartupMode::Tmux | StartupMode::TmuxAutoAttach => AppMode::Ozmux,
     };
     let dyn_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
