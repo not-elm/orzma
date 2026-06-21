@@ -8,6 +8,7 @@
 
 mod backend;
 mod error;
+mod events;
 mod handler;
 mod keychord;
 mod osc;

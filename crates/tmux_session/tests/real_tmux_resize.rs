@@ -22,8 +22,8 @@
 use bevy::prelude::*;
 use crossbeam_channel::RecvTimeoutError;
 use ozmux_tmux::{
-    ConnectionState, PaneId, TmuxConnection, TmuxPane, TmuxSessionPlugin, copy_state_query_command,
-    parse_copy_state, resize_pane_x_command, show_buffer_command,
+    ConnectionState, CopyStateQuery, PaneId, ResizePaneX, ShowBuffer, TmuxCommand, TmuxConnection,
+    TmuxPane, TmuxSessionPlugin, parse_copy_state,
 };
 use std::time::{Duration, Instant};
 use tmux_control::{ClientEvent, TmuxServer, TransportEvent};
@@ -108,7 +108,7 @@ fn pane_width(app: &mut App, id: PaneId) -> Option<u32> {
 /// here while the app is NOT being updated so there is no contention.
 fn read_show_buffer_reply(app: &mut App, timeout: Duration) -> Option<String> {
     let handle = handle_of(app);
-    let id = handle.send(&show_buffer_command()).expect("show-buffer");
+    let id = handle.send(ShowBuffer).expect("show-buffer");
     let deadline = Instant::now() + timeout;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -143,10 +143,10 @@ fn read_show_buffer_reply(app: &mut App, timeout: Duration) -> Option<String> {
     }
 }
 
-/// Waits for a `copy_state_query_command` reply on the raw transport channel.
+/// Waits for a `CopyStateQuery` reply on the raw transport channel.
 fn read_copy_state_reply(app: &mut App, pane_id: PaneId, timeout: Duration) -> Option<String> {
     let handle = handle_of(app);
-    let cmd = copy_state_query_command(pane_id);
+    let cmd = CopyStateQuery { pane: pane_id }.into_raw_command();
     let id = handle.send(&cmd).expect("copy-state-query");
     let deadline = Instant::now() + timeout;
     loop {
@@ -213,7 +213,11 @@ fn resize_pane_settle() {
 
     // Request a wider left pane (ensure we don't exceed tmux's window width).
     let target_width = (initial_width + 10).min(60);
-    let cmd = resize_pane_x_command(pane_id, target_width);
+    let cmd = ResizePaneX {
+        id: pane_id,
+        width: target_width,
+    }
+    .into_raw_command();
     send_cmd(&app, &cmd);
 
     // Pump until the projected width for the first pane changes — the
@@ -463,7 +467,7 @@ fn wheel_binding_enters_copy_mode() {
 /// Proves the wheel-in-copy-mode fix end to end. ozmux no longer relays tmux's
 /// copy-mode `WheelUpPane` binding (a `select-pane \; send-keys …` sequence that
 /// desyncs the control protocol); instead it sends a single pane-targeted
-/// `send-keys -X -t %id -N <n> scroll-up` (`tmux_input::scroll_command`). That
+/// `send-keys -X -t %id -N <n> scroll-up` (`tmux_input::Scroll`). That
 /// command must scroll the copy-mode viewport.
 #[test]
 #[ignore = "requires a real tmux binary and a controlling PTY"]

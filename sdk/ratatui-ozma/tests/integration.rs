@@ -138,6 +138,43 @@ fn emit_reaches_the_server() {
 }
 
 #[test]
+fn inbound_event_is_buffered_and_read() {
+    use std::time::{Duration, Instant};
+    #[derive(serde::Deserialize, PartialEq, Debug)]
+    struct Hello {
+        message: String,
+    }
+
+    let server = FakeServer::start("view-ev");
+    with_env(&server.sock_path.clone(), || {
+        let ozma = Ozma::connect().unwrap();
+        let handle = ozma
+            .register(Webview::inline("x").add_event::<Hello>("hello"))
+            .unwrap();
+
+        server.send(json!({
+            "op": "event", "handle": "view-ev", "event": "hello", "payload": { "message": "hi" }
+        }));
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let events = loop {
+            let evs = handle.read_events::<Hello>();
+            if !evs.is_empty() {
+                break evs;
+            }
+            assert!(Instant::now() < deadline, "inbound event never arrived");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(
+            events,
+            vec![Hello {
+                message: "hi".into()
+            }]
+        );
+    });
+}
+
+#[test]
 fn register_returns_disconnected_when_socket_closes() {
     // Regression: a register whose reply never arrives because the socket closes
     // must return Disconnected, not block forever on the pending reply.
@@ -417,6 +454,68 @@ fn tmux_with_ozma_sock(label: &str, value: &str) -> (TmuxServerGuard, String) {
     let sid = sid.trim_start_matches('$');
     let pid = field("#{pid}");
     (tmux, format!("{},{},{}", tmux_socket.display(), pid, sid))
+}
+
+#[test]
+fn reconnect_preserves_inbound_events() {
+    use std::time::Duration;
+    #[derive(serde::Deserialize, PartialEq, Debug)]
+    struct Hello {
+        message: String,
+    }
+
+    let pair = support::ReconnectPair::start("view-ev1", "view-ev2");
+    with_env(&pair.first.sock_path.clone(), || {
+        let ozma = Ozma::connect().unwrap();
+        let handle = ozma
+            .register(Webview::inline("x").add_event::<Hello>("hello"))
+            .unwrap();
+
+        let term_bytes = SharedBuf(Arc::new(Mutex::new(Vec::new())));
+        let mut backend = OzmaBackend::new(CrosstermBackend::new(term_bytes.clone()), &ozma);
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        drop(pair.first);
+        std::thread::sleep(Duration::from_millis(200));
+        // NOTE: ENV_LOCK is held by with_env, serializing env var access.
+        unsafe { std::env::set_var("OZMA_SOCK", &pair.second.sock_path) };
+        Backend::draw(&mut backend, std::iter::empty::<(u16, u16, &Cell)>()).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while handle.id() == "view-ev1" {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "reconnect did not complete"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        // The page emits to the NEW handle after reconnect; read_events must see it.
+        pair.second.send(json!({
+            "op": "event", "handle": "view-ev2", "event": "hello", "payload": { "message": "post" }
+        }));
+
+        // A fresh deadline: the reconnect loop above may have consumed most of the
+        // first budget on a slow machine, which must not starve this wait.
+        let event_deadline = std::time::Instant::now() + Duration::from_secs(5);
+        let got = loop {
+            let evs = handle.read_events::<Hello>();
+            if !evs.is_empty() {
+                break evs;
+            }
+            assert!(
+                std::time::Instant::now() < event_deadline,
+                "event never arrived after reconnect"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(
+            got,
+            vec![Hello {
+                message: "post".into()
+            }]
+        );
+    });
 }
 
 #[test]

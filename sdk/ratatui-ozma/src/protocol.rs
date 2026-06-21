@@ -41,6 +41,30 @@ pub(crate) enum ClientMsg {
         /// The mount instance id, or `None` for the default instance.
         instance: Option<String>,
     },
+    /// Navigate a handle's mounted webview in place (no re-registration).
+    Navigate {
+        /// The target handle.
+        handle: String,
+        /// What to do.
+        action: NavAction,
+    },
+}
+
+/// A navigation action on an already-registered handle's mounted webview.
+// NOTE: rename_all must match the host's NavAction (snake_case) so the wire
+// contract agrees for any future multi-word variant, not just the current
+// single-word ones where lowercase and snake_case coincide.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NavAction {
+    /// Go back in the webview's native session history.
+    Back,
+    /// Go forward in the webview's native session history.
+    Forward,
+    /// Reload the current page.
+    Reload,
+    /// Navigate the existing webview to a new URL.
+    To(String),
 }
 
 /// The content variants of a `register` request.
@@ -56,6 +80,9 @@ pub(crate) enum RegisterKind {
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         forward_keys: Vec<KeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        preload: Vec<String>,
     },
     /// A directory of assets served at `ozma-dyn://<handle>/`.
     Dir {
@@ -68,6 +95,9 @@ pub(crate) enum RegisterKind {
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         forward_keys: Vec<KeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        preload: Vec<String>,
     },
     /// Load a remote `http(s)` URL as the top-level document.
     Url {
@@ -80,6 +110,9 @@ pub(crate) enum RegisterKind {
         /// Chords the page lets through to the app while focused.
         #[serde(skip_serializing_if = "Vec::is_empty")]
         forward_keys: Vec<KeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        preload: Vec<String>,
     },
 }
 
@@ -109,6 +142,18 @@ pub(crate) struct IncomingCall {
     /// The single params value (any JSON shape; absent deserializes as null).
     #[serde(default)]
     pub(crate) params: Value,
+}
+
+/// An inbound one-way `event` frame forwarded from a page's `window.ozma.emit`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct IncomingEvent {
+    /// The view handle the event targets.
+    pub(crate) handle: String,
+    /// The declared event name (`add_event::<T>(name)`).
+    pub(crate) event: String,
+    /// The single payload value (any JSON shape; absent deserializes as null).
+    #[serde(default)]
+    pub(crate) payload: Value,
 }
 
 mod reply_result {
@@ -152,6 +197,7 @@ mod tests {
             html: "<h1>hi</h1>".into(),
             interactive: true,
             forward_keys: Vec::new(),
+            preload: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["op"], "register");
@@ -245,6 +291,7 @@ mod tests {
             interactive: true,
             bridge: false,
             forward_keys: Vec::new(),
+            preload: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["op"], "register");
@@ -265,9 +312,51 @@ mod tests {
             interactive: true,
             bridge: true,
             forward_keys: Vec::new(),
+            preload: Vec::new(),
         }))
         .unwrap();
         assert_eq!(v["kind"], "url");
         assert_eq!(v["bridge"], true);
+    }
+
+    #[test]
+    fn navigate_back_serializes() {
+        let v = serde_json::to_value(ClientMsg::Navigate {
+            handle: "H".into(),
+            action: NavAction::Back,
+        })
+        .unwrap();
+        assert_eq!(v["op"], "navigate");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["action"], "back");
+    }
+
+    #[test]
+    fn navigate_to_serializes_url_under_to() {
+        let v = serde_json::to_value(ClientMsg::Navigate {
+            handle: "H".into(),
+            action: NavAction::To("https://example.com/x".into()),
+        })
+        .unwrap();
+        assert_eq!(v["op"], "navigate");
+        assert_eq!(v["action"]["to"], "https://example.com/x");
+    }
+
+    #[test]
+    fn incoming_event_deserializes() {
+        let e: IncomingEvent = serde_json::from_str(
+            r#"{"op":"event","handle":"h","event":"hello","payload":{"message":"hi"}}"#,
+        )
+        .unwrap();
+        assert_eq!(e.handle, "h");
+        assert_eq!(e.event, "hello");
+        assert_eq!(e.payload, serde_json::json!({"message":"hi"}));
+    }
+
+    #[test]
+    fn incoming_event_without_payload_is_null() {
+        let e: IncomingEvent =
+            serde_json::from_str(r#"{"op":"event","handle":"h","event":"ping"}"#).unwrap();
+        assert_eq!(e.payload, Value::Null);
     }
 }

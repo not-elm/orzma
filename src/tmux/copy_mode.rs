@@ -22,9 +22,8 @@ use ozma_tty_renderer::schema::{
     SelectionKind, SelectionRange, TerminalGrid, ViCursor, ViewportPoint,
 };
 use ozmux_tmux::{
-    CopyModeQueries, CopyModeReply, CopyQueryKind, CopyState, PaneId, TmuxConnection, TmuxPane,
-    TmuxProjectionSet, absolute_to_visible_row, copy_mode_capture_command,
-    copy_state_query_command, parse_copy_state,
+    CopyModeCapture, CopyModeQueries, CopyModeReply, CopyQueryKind, CopyState, CopyStateQuery,
+    PaneId, TmuxConnection, TmuxPane, TmuxProjectionSet, absolute_to_visible_row, parse_copy_state,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -150,7 +149,7 @@ fn issue_copy_state(
         if !send_now {
             continue;
         }
-        match client.handle().send(&copy_state_query_command(pane.id)) {
+        match client.handle().send(CopyStateQuery { pane: pane.id }) {
             Ok(id) => {
                 queries.register(id, pane.id, CopyQueryKind::State);
                 refresh.state_in_flight.insert(pane.id, 0);
@@ -256,11 +255,11 @@ fn apply_state_reply(
     let Some(client) = connection.client() else {
         return;
     };
-    match client.handle().send(&copy_mode_capture_command(
-        reply.pane,
-        state.scroll_position,
-        state.pane_height,
-    )) {
+    match client.handle().send(CopyModeCapture {
+        pane: reply.pane,
+        scroll_position: state.scroll_position,
+        pane_height: state.pane_height,
+    }) {
         Ok(id) => {
             queries.register(id, reply.pane, CopyQueryKind::Capture);
             refresh
@@ -1181,9 +1180,7 @@ mod tests {
         handle
             .send(&format!("send-keys -X -t {target} copy-selection"))
             .expect("copy-selection");
-        let show_id = handle
-            .send(&ozmux_tmux::show_buffer_command())
-            .expect("show-buffer");
+        let show_id = handle.send(ozmux_tmux::ShowBuffer).expect("show-buffer");
         // Register the show-buffer command so consume_copy_reply routes it as Buffer.
         app.world_mut().resource_mut::<CopyModeQueries>().register(
             show_id,

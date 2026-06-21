@@ -2,11 +2,10 @@
 
 use crate::components::WindowFlags;
 use crate::input::quote;
-use crate::keybindings::PromptKind;
 use bevy::prelude::Resource;
 use std::collections::{HashMap, HashSet};
 use tmux_control::{CommandId, TmuxResult};
-use tmux_control_parser::{PaneId, SessionId, WindowId, WindowLayout};
+use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
 /// The `-F` format ozmux sends to enumerate windows. Tab-separated, with the
 /// free-text `window_name` LAST so a `splitn(7, '\t')` keeps it intact.
@@ -94,40 +93,6 @@ fn parse_window_id(field: &str) -> Option<WindowId> {
     Some(WindowId(field.strip_prefix('@')?.parse().ok()?))
 }
 
-/// Builds a `refresh-client -C <cols>,<rows>` control-mode command telling
-/// tmux this client's cell size. The bare `W,H` form is accepted by all tmux
-/// versions; the `WxH` form is only required for the `@id:WxH` per-window
-/// variant, which Phase 2b does not use.
-pub fn refresh_client_command(cols: u16, rows: u16) -> String {
-    format!("refresh-client -C {cols},{rows}")
-}
-
-/// Builds `refresh-client -C @<win>:<cols>x<rows>` — declares this control
-/// client's size for one specific window (tmux ≥ 3.4). Unlike the global
-/// `refresh-client -C W,H`, this sizes a single window without affecting the
-/// client's other windows.
-pub fn window_refresh_client_command(win: WindowId, cols: u16, rows: u16) -> String {
-    format!("refresh-client -C @{}:{cols}x{rows}", win.0)
-}
-
-/// Builds `resize-window -x <cols> -y <rows> -t @<win>` — the tmux < 3.4
-/// fallback for per-window sizing.
-///
-/// # Invariants
-///
-/// tmux sets the session's `window-size` option to `manual` as a side effect
-/// of `resize-window`; only used when the per-window `refresh-client -C` form
-/// is unavailable.
-pub fn resize_window_command(win: WindowId, cols: u16, rows: u16) -> String {
-    format!("resize-window -x {cols} -y {rows} -t @{}", win.0)
-}
-
-/// Builds `display-message -p '#{version}'` — prints the tmux server version
-/// (e.g. `3.6a`) as a one-line command reply.
-pub fn version_command() -> String {
-    "display-message -p '#{version}'".to_string()
-}
-
 /// Returns whether `version` supports per-window `refresh-client -C @win:WxH`
 /// (tmux ≥ 3.4). Parses leniently: the leading `major.minor`, tolerating a
 /// `next-` prefix and a trailing letter suffix like `3.6a`.
@@ -150,144 +115,17 @@ fn parse_major_minor(version: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-/// Builds `display-message -p '#{client_name}'` — prints the control
-/// client's name as a one-line command reply (correlated like `list-windows`).
-pub(crate) fn client_name_command() -> String {
-    "display-message -p '#{client_name}'".to_string()
-}
-
-/// Builds `display-message -p '#{window_id} #{pane_id}'` — prints the attached
-/// client's active window and pane as one reply line (`@N %M`).
-///
-/// tmux does not emit `%window-pane-changed` on attach, so the active pane is
-/// queried explicitly to seed the `ActivePane` marker (which drives pane dim).
-pub(crate) fn active_pane_command() -> String {
-    "display-message -p '#{window_id} #{pane_id}'".to_string()
-}
-
-/// Builds the `list-windows` command ozmux sends on attach to enumerate the
-/// session's existing windows.
-///
-/// The `-F` format is double-quoted so its embedded tab field-separators
-/// survive tmux's control-mode command tokenizer (which otherwise splits the
-/// argument on whitespace).
-pub(crate) fn list_windows_command() -> String {
-    format!("list-windows -F \"{LIST_WINDOWS_FORMAT}\"")
-}
-
 /// The name of the control-mode subscription that streams every window's
 /// `#{window_raw_flags}` back as `%subscription-changed`.
 pub(crate) const WINDOW_FLAGS_SUBSCRIPTION: &str = "ozmux-window-flags";
 
-/// Builds the control-mode command that subscribes this client to every
-/// window's `#{window_raw_flags}`. `@*` selects all windows, so tmux pushes a
-/// `%subscription-changed` whenever any window's flags change (coalesced to at
-/// most once per second).
-pub(crate) fn subscribe_window_flags_command() -> String {
-    format!("refresh-client -B {WINDOW_FLAGS_SUBSCRIPTION}:@*:#{{window_raw_flags}}")
-}
-
-/// Builds `set-environment <key> <value>` (session-scoped) to set an
-/// environment variable on the control client's current session, so panes the
-/// session spawns afterward inherit it. Session-scoped (no `-g`) to avoid
-/// polluting the server-global environment of an attached, user-owned tmux
-/// server. Used to propagate `$OZMA_SOCK` to panes created after attach —
-/// already-running panes cannot be updated.
-pub fn set_environment_command(key: &str, value: &str) -> String {
-    format!("set-environment {} {}", quote(key), quote(value))
-}
-
-/// Builds `set-environment -t <session> <key> <value>` to set an environment
-/// variable on a specific session rather than the control client's current one,
-/// so panes that session spawns afterward inherit it.
-///
-/// Used when the client switches to another session: the attach path's
-/// current-session [`set_environment_command`] does not re-run on
-/// `switch-client`, so the target session would otherwise never receive
-/// `$OZMA_SOCK`. Session-scoped (no `-g`) for the same reason as
-/// [`set_environment_command`]; already-running panes recover the value via
-/// `tmux show-environment`.
-pub fn set_environment_in_session_command(session: &str, key: &str, value: &str) -> String {
-    format!(
-        "set-environment -t {} {} {}",
-        quote(session),
-        quote(key),
-        quote(value)
-    )
-}
-
-/// Builds `switch-client -t <name>` to repoint the attached control client at
-/// another session. The resulting `%session-changed` / `%client-session-changed`
-/// drives the projection rebuild; ozmux never mutates it optimistically.
-pub fn switch_client_command(name: &str) -> String {
-    format!("switch-client -t {}", quote(name))
-}
-
-/// Builds `select-window -t @<id>` to switch the client's active window.
-pub fn select_window_command(id: WindowId) -> String {
-    format!("select-window -t @{}", id.0)
-}
-
-/// Builds `rename-window -t @<id> -- <name>` (name tmux-quoted). The `--` guards
-/// names that begin with `-`; an explicit target id avoids renaming the wrong
-/// window if the current window changes between prompt-open and submit.
-pub fn rename_window_command(id: WindowId, name: &str) -> String {
-    rename_command("rename-window", '@', id.0, name)
-}
-
-/// Builds `rename-session -t $<id> -- <name>` (name tmux-quoted). The explicit
-/// target id avoids renaming the wrong session if the attached session changes
-/// between prompt-open and submit.
-pub fn rename_session_command(id: SessionId, name: &str) -> String {
-    rename_command("rename-session", '$', id.0, name)
-}
-
-fn rename_command(verb: &str, sigil: char, id: u32, name: &str) -> String {
+pub(crate) fn rename_command(verb: &str, sigil: char, id: u32, name: &str) -> String {
     format!("{verb} -t {sigil}{id} -- {}", quote(name))
-}
-
-/// Builds `select-pane -t %<id>` to focus a pane.
-pub fn select_pane_command(id: PaneId) -> String {
-    format!("select-pane -t %{}", id.0)
-}
-
-/// Builds `resize-pane -t %<id> -x <width>` (absolute, idempotent).
-pub fn resize_pane_x_command(id: PaneId, width: u32) -> String {
-    format!("resize-pane -t %{} -x {width}", id.0)
-}
-
-/// Builds `resize-pane -t %<id> -y <height>` (absolute, idempotent).
-pub fn resize_pane_y_command(id: PaneId, height: u32) -> String {
-    format!("resize-pane -t %{} -y {height}", id.0)
-}
-
-/// Builds `capture-pane -p -e -t %<id>` to fetch a pane's current visible
-/// content (with SGR escapes) as a command reply.
-///
-/// tmux `-CC` does not replay existing pane content on attach — it only streams
-/// new `%output`. So on attach each projected pane is captured once to seed its
-/// initial screen; the reply bytes are fed into the pane like ordinary output.
-pub(crate) fn capture_pane_command(id: PaneId) -> String {
-    format!("capture-pane -p -e -t %{}", id.0)
-}
-
-/// Builds `display-message -p -t %<id> '#{cursor_x} #{cursor_y}'` to query the
-/// real cursor position of a pane.
-///
-/// Sent immediately after [`capture_pane_command`] for the same pane. Because
-/// tmux CC-mode replies are FIFO-ordered, this reply always arrives after the
-/// capture reply, so the capture content can be held until both are available and
-/// a cursor-positioning escape appended before the `PaneOutput` is emitted.
-pub(crate) fn cursor_query_command(id: PaneId) -> String {
-    format!(
-        "display-message -p -t %{} '#{{cursor_x}} #{{cursor_y}}'",
-        id.0
-    )
 }
 
 /// The tab-separated `display-message -F` format ozmux reads each refresh while
 /// a pane is in copy mode. Field order is fixed; `parse_copy_state` depends on it.
-const COPY_STATE_FORMAT: &str = "#{pane_in_mode}\t#{scroll_position}\t#{pane_height}\t#{history_size}\t#{copy_cursor_x}\t#{copy_cursor_y}\t#{selection_present}\t#{rectangle_toggle}\t#{selection_start_x}\t#{selection_start_y}\t#{selection_end_x}\t#{selection_end_y}";
+pub(crate) const COPY_STATE_FORMAT: &str = "#{pane_in_mode}\t#{scroll_position}\t#{pane_height}\t#{history_size}\t#{copy_cursor_x}\t#{copy_cursor_y}\t#{selection_present}\t#{rectangle_toggle}\t#{selection_start_x}\t#{selection_start_y}\t#{selection_end_x}\t#{selection_end_y}";
 
 /// One snapshot of a pane's copy-mode state from `COPY_STATE_FORMAT`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -366,16 +204,10 @@ pub fn parse_copy_state(line: &str) -> Option<CopyState> {
 /// Returns the `capture-pane -S/-E` offsets for the scrolled copy-mode view:
 /// `(-scroll_position, pane_height - 1 - scroll_position)`. Verified against
 /// tmux 3.6a.
-fn capture_offsets(scroll_position: u32, pane_height: u16) -> (i32, i32) {
+pub(crate) fn capture_offsets(scroll_position: u32, pane_height: u16) -> (i32, i32) {
     let start = -(scroll_position as i32);
     let end = pane_height as i32 - 1 - scroll_position as i32;
     (start, end)
-}
-
-/// Builds `capture-pane -p -e -t %N -S {start} -E {end}` for the scrolled view.
-pub fn copy_mode_capture_command(pane: PaneId, scroll_position: u32, pane_height: u16) -> String {
-    let (start, end) = capture_offsets(scroll_position, pane_height);
-    format!("capture-pane -p -e -t %{} -S {start} -E {end}", pane.0)
 }
 
 /// Maps an absolute (history-relative) grid line to a visible viewport row:
@@ -383,39 +215,6 @@ pub fn copy_mode_capture_command(pane: PaneId, scroll_position: u32, pane_height
 pub fn absolute_to_visible_row(absolute_y: u32, history_size: u32, scroll_position: u32) -> i32 {
     let top = history_size as i32 - scroll_position as i32;
     absolute_y as i32 - top
-}
-
-/// Builds the per-refresh `display-message -p -t %N "<COPY_STATE_FORMAT>"`.
-pub fn copy_state_query_command(pane: PaneId) -> String {
-    format!("display-message -p -t %{} \"{COPY_STATE_FORMAT}\"", pane.0)
-}
-
-/// Builds `display-message -p '#{mode-keys}'` to read the active copy table.
-pub(crate) fn mode_keys_command() -> String {
-    "display-message -p '#{mode-keys}'".to_string()
-}
-
-/// Builds `send-keys -X -t %N <copy-command> -- '<text>'` for an ozmux prompt
-/// submit (search regex or jump char). The text is tmux-quoted.
-pub fn prompt_command(pane: PaneId, kind: PromptKind, text: &str) -> String {
-    format!(
-        "send-keys -X -t %{} {} -- {}",
-        pane.0,
-        kind.copy_command(),
-        quote(text)
-    )
-}
-
-/// Builds `show-buffer` to read tmux's top paste buffer for the clipboard bridge.
-pub fn show_buffer_command() -> String {
-    "show-buffer".to_string()
-}
-
-/// Builds `show-options -wqv -t @<win> aggressive-resize` — reads the per-window
-/// `aggressive-resize` option value (`on`/`off`/empty). `-q` suppresses errors,
-/// `-v` prints only the value.
-pub(crate) fn aggressive_resize_command(win: WindowId) -> String {
-    format!("show-options -wqv -t @{} aggressive-resize", win.0)
 }
 
 /// What an in-flight command's reply will populate, keyed by its `CommandId`.
@@ -560,32 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn list_windows_command_quotes_the_format() {
-        let cmd = list_windows_command();
-        assert!(cmd.starts_with("list-windows -F \""));
-        assert!(cmd.ends_with('"'));
-        assert!(cmd.contains(LIST_WINDOWS_FORMAT));
-    }
-
-    #[test]
-    fn refresh_client_command_uses_comma_size_form() {
-        assert_eq!(refresh_client_command(80, 24), "refresh-client -C 80,24");
-    }
-
-    #[test]
-    fn client_name_command_has_expected_format() {
-        assert_eq!(client_name_command(), "display-message -p '#{client_name}'");
-    }
-
-    #[test]
-    fn active_pane_command_queries_window_and_pane() {
-        assert_eq!(
-            active_pane_command(),
-            "display-message -p '#{window_id} #{pane_id}'"
-        );
-    }
-
-    #[test]
     fn parse_row_captures_window_index() {
         // Format order: active \t id \t index \t layout \t visible \t raw_flags \t name
         let line = "1\t@2\t3\tb25d,80x24,0,0,0\tb25d,80x24,0,0,0\t\tmy-win";
@@ -597,85 +370,9 @@ mod tests {
     }
 
     #[test]
-    fn select_window_command_targets_at_id() {
-        assert_eq!(select_window_command(WindowId(4)), "select-window -t @4");
-    }
-
-    #[test]
-    fn select_pane_command_targets_at_id() {
-        assert_eq!(select_pane_command(PaneId(3)), "select-pane -t %3");
-    }
-
-    #[test]
-    fn resize_pane_builders_format() {
-        assert_eq!(
-            resize_pane_x_command(PaneId(3), 80),
-            "resize-pane -t %3 -x 80"
-        );
-        assert_eq!(
-            resize_pane_y_command(PaneId(3), 24),
-            "resize-pane -t %3 -y 24"
-        );
-    }
-
-    #[test]
-    fn capture_pane_command_targets_at_id_with_escapes() {
-        assert_eq!(capture_pane_command(PaneId(5)), "capture-pane -p -e -t %5");
-    }
-
-    #[test]
-    fn set_environment_command_is_session_scoped() {
-        assert_eq!(
-            set_environment_command("OZMA_SOCK", "/tmp/ctl.sock"),
-            "set-environment OZMA_SOCK /tmp/ctl.sock"
-        );
-    }
-
-    #[test]
-    fn set_environment_command_quotes_paths_with_spaces() {
-        assert_eq!(
-            set_environment_command("OZMA_SOCK", "/tmp/a b/ctl.sock"),
-            "set-environment OZMA_SOCK '/tmp/a b/ctl.sock'"
-        );
-    }
-
-    #[test]
-    fn set_environment_in_session_command_targets_named_session() {
-        assert_eq!(
-            set_environment_in_session_command("work", "OZMA_SOCK", "/tmp/ctl.sock"),
-            "set-environment -t work OZMA_SOCK /tmp/ctl.sock"
-        );
-    }
-
-    #[test]
-    fn set_environment_in_session_command_quotes_session_and_value() {
-        assert_eq!(
-            set_environment_in_session_command("my work", "OZMA_SOCK", "/tmp/a b/ctl.sock"),
-            "set-environment -t 'my work' OZMA_SOCK '/tmp/a b/ctl.sock'"
-        );
-    }
-
-    #[test]
-    fn switch_client_command_targets_quoted_name() {
-        assert_eq!(switch_client_command("main"), "switch-client -t main");
-        assert_eq!(
-            switch_client_command("my work"),
-            "switch-client -t 'my work'"
-        );
-    }
-
-    #[test]
     fn capture_offsets_match_verified_formula() {
         assert_eq!(capture_offsets(12, 8), (-12, -5));
         assert_eq!(capture_offsets(0, 8), (0, 7));
-    }
-
-    #[test]
-    fn copy_mode_capture_command_uses_scroll_offsets() {
-        assert_eq!(
-            copy_mode_capture_command(PaneId(3), 12, 8),
-            "capture-pane -p -e -t %3 -S -12 -E -5"
-        );
     }
 
     #[test]
@@ -734,27 +431,6 @@ mod tests {
     }
 
     #[test]
-    fn copy_state_query_command_targets_pane() {
-        assert_eq!(
-            copy_state_query_command(PaneId(4)),
-            format!("display-message -p -t %4 \"{COPY_STATE_FORMAT}\"")
-        );
-    }
-
-    #[test]
-    fn prompt_search_command_quotes_text_and_targets_pane() {
-        assert_eq!(
-            prompt_command(PaneId(2), PromptKind::SearchForward, "foo bar"),
-            "send-keys -X -t %2 search-forward -- 'foo bar'"
-        );
-    }
-
-    #[test]
-    fn mode_keys_query_reads_format() {
-        assert_eq!(mode_keys_command(), "display-message -p '#{mode-keys}'");
-    }
-
-    #[test]
     fn parse_row_reads_raw_flags_before_name() {
         // active, id, index, layout, visible_layout, raw_flags, name
         let line = "1\t@2\t0\tb25f,80x24,0,0,1\tb25f,80x24,0,0,1\t*Z\tmy editor".to_string();
@@ -764,14 +440,6 @@ mod tests {
         assert!(rows[0].active);
         assert_eq!(rows[0].name, "my editor");
         assert_eq!(rows[0].flags, WindowFlags::ZOOM);
-    }
-
-    #[test]
-    fn subscribe_window_flags_command_uses_all_windows_raw_flags() {
-        assert_eq!(
-            subscribe_window_flags_command(),
-            format!("refresh-client -B {WINDOW_FLAGS_SUBSCRIPTION}:@*:#{{window_raw_flags}}")
-        );
     }
 
     #[test]
@@ -803,67 +471,6 @@ mod tests {
     }
 
     #[test]
-    fn rename_window_command_targets_at_id_and_quotes_name() {
-        assert_eq!(
-            rename_window_command(WindowId(2), "editor"),
-            "rename-window -t @2 -- editor"
-        );
-        assert_eq!(
-            rename_window_command(WindowId(2), "my editor"),
-            "rename-window -t @2 -- 'my editor'"
-        );
-        assert_eq!(
-            rename_window_command(WindowId(2), ""),
-            "rename-window -t @2 -- ''"
-        );
-        assert_eq!(
-            rename_window_command(WindowId(7), "it's"),
-            r"rename-window -t @7 -- 'it'\''s'"
-        );
-    }
-
-    #[test]
-    fn rename_session_command_targets_dollar_id_and_quotes_name() {
-        use tmux_control_parser::SessionId;
-        assert_eq!(
-            rename_session_command(SessionId(0), "work"),
-            "rename-session -t $0 -- work"
-        );
-        assert_eq!(
-            rename_session_command(SessionId(3), "my work"),
-            "rename-session -t $3 -- 'my work'"
-        );
-        assert_eq!(
-            rename_session_command(SessionId(3), ""),
-            "rename-session -t $3 -- ''"
-        );
-    }
-
-    #[test]
-    fn window_refresh_client_command_uses_per_window_form() {
-        assert_eq!(
-            window_refresh_client_command(WindowId(2), 80, 24),
-            "refresh-client -C @2:80x24"
-        );
-    }
-
-    #[test]
-    fn resize_window_command_targets_window() {
-        assert_eq!(
-            resize_window_command(WindowId(2), 80, 24),
-            "resize-window -x 80 -y 24 -t @2"
-        );
-    }
-
-    #[test]
-    fn aggressive_resize_command_targets_window() {
-        assert_eq!(
-            aggressive_resize_command(WindowId(1)),
-            "show-options -wqv -t @1 aggressive-resize"
-        );
-    }
-
-    #[test]
     fn version_supports_per_window_refresh_is_lenient_about_suffixes() {
         assert!(version_supports_per_window_refresh("3.6a"));
         assert!(version_supports_per_window_refresh("3.4"));
@@ -871,11 +478,6 @@ mod tests {
         assert!(!version_supports_per_window_refresh("3.3"));
         assert!(!version_supports_per_window_refresh("2.9"));
         assert!(!version_supports_per_window_refresh("garbage"));
-    }
-
-    #[test]
-    fn version_command_has_expected_format() {
-        assert_eq!(version_command(), "display-message -p '#{version}'");
     }
 
     #[test]

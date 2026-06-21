@@ -1,7 +1,6 @@
 //! ozbrowser — a TUI browser for remote URLs in ozmux panes.
 
 mod app;
-mod history;
 mod keymap;
 mod ui;
 
@@ -17,6 +16,15 @@ use ratatui::crossterm::terminal::{
 use ratatui_ozma::{KeyChord, Ozma, OzmaBackend, OzmaError, RpcError, Webview, WebviewHandle};
 use std::io::stdout;
 use std::time::Duration;
+
+/// A hint activation reported by the page over `hintResult`: the outcome `kind`
+/// (`navigated`/`clicked`/`focusedInput`/`empty`) plus, for a real http(s) link,
+/// the URL to load via a host browser-initiated navigation (so back/forward
+/// history is built — a page-side `el.click()` would not record a back entry).
+struct HintOutcome {
+    kind: String,
+    url: Option<String>,
+}
 
 fn main() {
     if let Err(e) = run() {
@@ -38,7 +46,8 @@ fn run() -> anyhow::Result<()> {
     })?;
 
     let (url_tx, url_rx) = crossbeam_channel::unbounded::<String>();
-    let view = register_view(&ozma, &initial_url, url_tx.clone())?;
+    let (hint_tx, hint_rx) = crossbeam_channel::unbounded::<HintOutcome>();
+    let view = register_view(&ozma, &initial_url, url_tx, hint_tx)?;
 
     enable_raw_mode()?;
     if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
@@ -49,7 +58,7 @@ fn run() -> anyhow::Result<()> {
     }
     install_panic_hook();
 
-    let result = event_loop(view, App::new(initial_url), &ozma, url_tx, &url_rx);
+    let result = event_loop(view, App::new(initial_url), &ozma, &url_rx, &hint_rx);
 
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen);
@@ -57,18 +66,27 @@ fn run() -> anyhow::Result<()> {
 }
 
 fn event_loop(
-    mut view: WebviewHandle,
+    view: WebviewHandle,
     mut app: App,
     ozma: &Ozma,
-    url_tx: Sender<String>,
     url_rx: &Receiver<String>,
+    hint_rx: &Receiver<HintOutcome>,
 ) -> anyhow::Result<()> {
     let backend = OzmaBackend::new(CrosstermBackend::new(stdout()), ozma);
     let mut terminal = Terminal::new(backend)?;
 
     loop {
         while let Ok(url) = url_rx.try_recv() {
-            app.set_url(url);
+            app.on_page_url_changed(url);
+        }
+        while let Ok(outcome) = hint_rx.try_recv() {
+            app.on_hint_result(&outcome.kind);
+            // A link hint reports its target URL so the host performs a
+            // browser-initiated navigation (which builds back/forward history);
+            // a page-side el.click() would record no back entry.
+            if let Some(url) = outcome.url {
+                view.navigate(url)?;
+            }
         }
 
         terminal.draw(|f| {
@@ -82,25 +100,25 @@ fn event_loop(
             for cmd in app.on_action(action) {
                 match cmd {
                     Cmd::Quit => return Ok(()),
-                    Cmd::Navigate(url) => {
-                        let url = app.navigate(url);
-                        view = register_view(ozma, &url, url_tx.clone())?;
-                    }
-                    Cmd::HistoryBack => {
-                        if let Some(url) = app.go_back() {
-                            view = register_view(ozma, &url, url_tx.clone())?;
-                        }
-                    }
-                    Cmd::HistoryForward => {
-                        if let Some(url) = app.go_forward() {
-                            view = register_view(ozma, &url, url_tx.clone())?;
-                        }
-                    }
-                    Cmd::Reload => {
-                        view = register_view(ozma, app.url(), url_tx.clone())?;
-                    }
+                    Cmd::Navigate(url) => view.navigate(url)?,
+                    Cmd::HistoryBack => view.go_back()?,
+                    Cmd::HistoryForward => view.go_forward()?,
+                    Cmd::Reload => view.reload()?,
                     Cmd::Scroll(action) => {
                         let _ = view.emit("scroll", &scroll_payload(action));
+                    }
+                    Cmd::HintShow => {
+                        let _ = view.emit("hints:show", &serde_json::json!({}));
+                    }
+                    Cmd::HintKey(c) => {
+                        let _ =
+                            view.emit("hints:key", &serde_json::json!({ "key": c.to_string() }));
+                    }
+                    Cmd::HintBackspace => {
+                        let _ = view.emit("hints:key", &serde_json::json!({ "backspace": true }));
+                    }
+                    Cmd::HintHide => {
+                        let _ = view.emit("hints:hide", &serde_json::json!({}));
                     }
                 }
             }
@@ -108,10 +126,12 @@ fn event_loop(
     }
 }
 
-// TODO: each call to register_view mints a new WebviewHandle registration that is never
-// unregistered — the old handle is dropped but the server-side entry persists because the
-// SDK has no unregister/Drop path yet. Fix this when the SDK exposes one.
-fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Result<WebviewHandle> {
+fn register_view(
+    ozma: &Ozma,
+    url: &str,
+    url_tx: Sender<String>,
+    hint_tx: Sender<HintOutcome>,
+) -> anyhow::Result<WebviewHandle> {
     let forward = [
         KeyChord {
             mods: KeyModifiers::NONE,
@@ -207,6 +227,18 @@ fn register_view(ozma: &Ozma, url: &str, url_tx: Sender<String>) -> anyhow::Resu
                 move |args: serde_json::Value| -> Result<(), RpcError> {
                     if let Some(u) = args["url"].as_str() {
                         let _ = url_tx.send(u.to_owned());
+                    }
+                    Ok(())
+                },
+            )
+            .on(
+                "hintResult",
+                move |args: serde_json::Value| -> Result<(), RpcError> {
+                    if let Some(kind) = args["kind"].as_str() {
+                        let _ = hint_tx.send(HintOutcome {
+                            kind: kind.to_owned(),
+                            url: args["url"].as_str().map(str::to_owned),
+                        });
                     }
                     Ok(())
                 },

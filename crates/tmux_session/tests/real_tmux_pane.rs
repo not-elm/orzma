@@ -6,8 +6,8 @@
 
 use bevy::prelude::*;
 use ozmux_tmux::{
-    ActivePane, ActiveWindow, ConnectionState, PaneId, TmuxConnection, TmuxPane, TmuxSessionPlugin,
-    select_pane_command,
+    ActivePane, ActiveWindow, ConnectionState, PaneId, SelectPane, TmuxCommand, TmuxConnection,
+    TmuxPane, TmuxSessionPlugin,
 };
 use std::time::{Duration, Instant};
 use tmux_control::TmuxServer;
@@ -110,7 +110,7 @@ fn select_pane_round_trips_active_pane() {
         "split-window should shift the active pane off first_active"
     );
 
-    let cmd = select_pane_command(first_active);
+    let cmd = SelectPane { id: first_active }.into_raw_command();
     app.world()
         .get_non_send_resource::<TmuxConnection>()
         .unwrap()

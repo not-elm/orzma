@@ -11,7 +11,7 @@ use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ozmux_tmux::{PaneId, PromptKind, TmuxConnection, prompt_command};
+use ozmux_tmux::{PaneId, Prompt, PromptKind, TmuxConnection};
 
 const PROMPT_Z: i32 = 320;
 
@@ -184,9 +184,12 @@ fn handle_prompt_input(
         match step {
             PromptStep::Continue => {}
             PromptStep::Submit => {
-                let cmd = prompt_command(state.pane, state.kind, &state.text);
                 if let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(&cmd)
+                    && let Err(e) = client.handle().send(Prompt {
+                        pane: state.pane,
+                        kind: state.kind,
+                        text: &state.text,
+                    })
                 {
                     tracing::warn!(?e, "copy-mode prompt submit failed");
                 }

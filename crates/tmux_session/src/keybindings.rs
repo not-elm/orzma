@@ -199,17 +199,6 @@ pub fn copy_mode_dispatch(bindings: &KeyBindings, key_name: &str) -> CopyAction 
     CopyAction::Relay(command)
 }
 
-/// Builds `list-keys -T <table>` to list one key table's bindings.
-pub(crate) fn list_keys_command(table: &str) -> String {
-    format!("list-keys -T {table}")
-}
-
-/// Builds `display-message -p '#{prefix} #{prefix2}'`. `prefix`/`prefix2` are
-/// session options; tmux expands an option name placed inside `#{}`.
-pub(crate) fn prefix_options_command() -> String {
-    "display-message -p '#{prefix} #{prefix2}'".to_string()
-}
-
 /// Which tmux key table a binding belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Table {
@@ -400,20 +389,6 @@ fn copy_command_is_cancel(command: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn list_keys_command_targets_table() {
-        assert_eq!(list_keys_command("root"), "list-keys -T root");
-        assert_eq!(list_keys_command("prefix"), "list-keys -T prefix");
-    }
-
-    #[test]
-    fn prefix_options_command_reads_both_prefixes() {
-        assert_eq!(
-            prefix_options_command(),
-            "display-message -p '#{prefix} #{prefix2}'"
-        );
-    }
 
     #[test]
     fn parses_root_binding() {

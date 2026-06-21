@@ -7,6 +7,10 @@
 //! `event::read`) and suppresses them from the page even while the webview is
 //! focused. `WebviewWidget::focused` tells the SDK the current focus; the
 //! `OzmaBackend` wrapping the terminal emits the control-plane focus op on change.
+//!
+//! The inline page emits a `hello` event when the user presses Enter in the input;
+//! the app drains `view.read_events::<HelloMsg>()` each frame and displays the
+//! latest message in the status line.
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
@@ -23,6 +27,11 @@ use std::time::{Duration, Instant};
 
 type Backend = OzmaBackend<CrosstermBackend<Stdout>>;
 
+#[derive(serde::Deserialize)]
+struct HelloMsg {
+    message: String,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut ozma = Ozma::connect()?;
     let html = concat!(
@@ -32,7 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "<script>",
         "window.ozma.call('ping','hi').then(v=>out.textContent='ping → '+v);",
         "window.ozma.on('tick',n=>tick.textContent='tick #'+n);",
-        "document.getElementById('in').focus();",
+        "var inp=document.getElementById('in');",
+        "inp.addEventListener('keydown',function(e){",
+        "  if(e.key==='Enter'){ window.ozma.emit('hello',{message:inp.value}); inp.value=''; }",
+        "});",
+        "inp.focus();",
         "</script></body>"
     );
 
@@ -50,7 +63,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ])
             .on("ping", |arg: String| {
                 Ok::<_, RpcError>(format!("pong:{arg}"))
-            }),
+            })
+            .add_event::<HelloMsg>("hello"),
     )?;
 
     enable_raw_mode()?;
@@ -78,6 +92,7 @@ fn run(
     view: &WebviewHandle,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut web_focused = false;
+    let mut last_msg = String::new();
     let mut n: u64 = 0;
     let mut last = Instant::now();
     loop {
@@ -85,7 +100,9 @@ fn run(
             let rows =
                 Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(f.area());
             f.render_widget(
-                Paragraph::new("Alt+l focus webview · Alt+h leave · q quit (when not focused)"),
+                Paragraph::new(format!(
+                    "Alt+l focus webview · Alt+h leave · q quit · last: {last_msg}"
+                )),
                 rows[0],
             );
             f.render_stateful_widget(
@@ -101,6 +118,10 @@ fn run(
             n += 1;
             let _ = view.emit("tick", &n);
             last = Instant::now();
+        }
+
+        for HelloMsg { message } in view.read_events::<HelloMsg>() {
+            last_msg = message;
         }
 
         if event::poll(Duration::from_millis(50))?

@@ -9,8 +9,8 @@ use super::effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use crate::tmux::copy_mode::cursor_deltas;
 use bevy::prelude::*;
 use ozmux_tmux::{
-    CopyModeQueries, CopyQueryKind, PaneId, TmuxConnection, resize_pane_x_command,
-    resize_pane_y_command, select_pane_command, show_buffer_command,
+    CopyModeQueries, CopyQueryKind, PaneId, ResizePaneX, ResizePaneY, SelectPane, ShowBuffer,
+    TmuxConnection,
 };
 use tmux_control_parser::DividerAxis;
 
@@ -31,8 +31,7 @@ pub(super) fn on_tmux_mouse_effects(
     for effect in &ev.effects {
         match *effect {
             TmuxMouseEffect::SelectPane(pane_id) => {
-                let cmd = select_pane_command(pane_id);
-                if let Err(e) = handle.send(&cmd) {
+                if let Err(e) = handle.send(SelectPane { id: pane_id }) {
                     tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
                 }
             }
@@ -41,11 +40,17 @@ pub(super) fn on_tmux_mouse_effects(
                 primary,
                 size,
             } => {
-                let cmd = match axis {
-                    DividerAxis::Vertical => resize_pane_x_command(primary, size),
-                    DividerAxis::Horizontal => resize_pane_y_command(primary, size),
+                let result = match axis {
+                    DividerAxis::Vertical => handle.send(ResizePaneX {
+                        id: primary,
+                        width: size,
+                    }),
+                    DividerAxis::Horizontal => handle.send(ResizePaneY {
+                        id: primary,
+                        height: size,
+                    }),
                 };
-                if let Err(e) = handle.send(&cmd) {
+                if let Err(e) = result {
                     tracing::warn!(?e, pane = primary.0, "resize-pane send failed");
                     continue;
                 }
@@ -103,7 +108,7 @@ pub(super) fn on_tmux_mouse_effects(
                         tracing::warn!(?e, pane = pane.0, "multi-select cmd send failed");
                     }
                 }
-                match handle.send(&show_buffer_command()) {
+                match handle.send(ShowBuffer) {
                     Ok(id) => queries.register(id, pane, CopyQueryKind::Buffer),
                     Err(e) => {
                         tracing::warn!(?e, pane = pane.0, "multi-select show-buffer send failed")
@@ -115,7 +120,7 @@ pub(super) fn on_tmux_mouse_effects(
                 if let Err(e) = handle.send(&copy) {
                     tracing::warn!(?e, pane = pane.0, "drag-select copy-selection send failed");
                 } else {
-                    match handle.send(&show_buffer_command()) {
+                    match handle.send(ShowBuffer) {
                         Ok(id) => queries.register(id, pane, CopyQueryKind::Buffer),
                         Err(e) => {
                             tracing::warn!(?e, pane = pane.0, "drag-select show-buffer send failed")

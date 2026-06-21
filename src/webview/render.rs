@@ -32,6 +32,10 @@ struct OzmuxFrame(serde_json::Value);
 /// back-channel (`on_ozmux_call_frame`). The page side emits it in `ozma_bridge.js`.
 const OZMA_CALL_KIND: &str = "ozma.call";
 
+/// The `kind` discriminator routing a `Receive<OzmuxFrame>` to the one-way
+/// inbound-event forwarder (`on_ozmux_emit_frame`). Emitted by `ozma_bridge.js`.
+const OZMA_EMIT_KIND: &str = "ozma.emit";
+
 /// Builds the `CefPlugin` with the `ozma-dyn://` (dynamic, Tier 1) scheme bound
 /// to its shared `WebviewAssetRegistry`, using `root_cache_path` as this process's
 /// unique CEF profile directory (one Chromium singleton lock per instance).
@@ -65,6 +69,8 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(JsEmitEventPlugin::<OzmuxFrame>::default())
             .add_observer(on_ozmux_call_frame)
+            .add_observer(on_ozmux_emit_frame)
+            .add_observer(on_webview_address_changed)
             .add_observer(drop_ozmux_inflight_on_webview_despawn)
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
@@ -173,6 +179,84 @@ fn on_ozmux_call_frame(
 fn reject_ozmux_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
     let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
     commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
+}
+
+/// Inbound (one-way): a `window.ozma.emit` arrives as a `Receive<OzmuxFrame>`
+/// with `kind:"ozma.emit"`. The trusted caller is `frame.webview` (bound per
+/// webview by `bevy_cef`); its `WebviewOwner` names the registering connection.
+/// The event is forwarded as a fire-and-forget `{op:"event"}` line — no reqId,
+/// no reply, no `OzmuxRpc` tracking. A missing owner or unavailable connection
+/// drops the event (debug-logged); there is no page Promise to settle.
+///
+/// Registered on the shared `Receive<OzmuxFrame>` event (not a second
+/// `JsEmitEventPlugin`); frames whose `kind` is not `ozma.emit` are ignored.
+fn on_ozmux_emit_frame(
+    frame: On<Receive<OzmuxFrame>>,
+    writers: Res<ConnectionWriters>,
+    owners: Query<&WebviewOwner>,
+) {
+    let payload = &frame.payload.0;
+    if payload.get("kind").and_then(Value::as_str) != Some(OZMA_EMIT_KIND) {
+        return;
+    }
+    let event = payload
+        .get("event")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if event.is_empty() {
+        tracing::debug!("ozma.emit frame with an empty event name; dropping");
+        return;
+    }
+
+    let Ok(owner) = owners.get(frame.webview) else {
+        tracing::debug!("ozma.emit frame for a webview with no owner; dropping");
+        return;
+    };
+    let body = payload.get("payload").cloned().unwrap_or(Value::Null);
+    let line = serde_json::json!({
+        "op": "event", "handle": owner.handle, "event": event, "payload": body
+    })
+    .to_string();
+    if !writers.send(owner.connection_id, line) {
+        tracing::debug!(
+            handle = owner.handle,
+            "ozma.emit owner connection unavailable; dropping"
+        );
+    }
+}
+
+/// Outbound (Tier 1 back-channel): when a webview's top-level URL changes (CEF
+/// `OnAddressChange` — link clicks, hint activations, redirects, hash/pushState),
+/// forwards a `urlChanged` call to the registering program so it can track
+/// page-driven navigation (e.g. ozbrowser's history + URL bar). Scoped to remote
+/// `http(s)` webviews; `ozma-dyn://` dir/inline views (which register no
+/// `urlChanged` handler) are skipped. Fire-and-forget: the minted reqId is not
+/// recorded, so the program's reply finds no in-flight entry and is dropped by
+/// `OzmuxRpc::take_for_connection`.
+fn on_webview_address_changed(
+    addr: On<AddressChanged>,
+    mut rpc: ResMut<OzmuxRpc>,
+    writers: Res<ConnectionWriters>,
+    views: Query<(&WebviewOwner, &WebviewSource)>,
+) {
+    let Ok((owner, source)) = views.get(addr.webview) else {
+        return;
+    };
+    let WebviewSource::Url(source_url) = source else {
+        return;
+    };
+    if !(source_url.starts_with("http://") || source_url.starts_with("https://")) {
+        return;
+    }
+    let line = serde_json::json!({
+        "op": "call",
+        "handle": owner.handle,
+        "reqId": rpc.mint(),
+        "method": "urlChanged",
+        "params": { "url": addr.url },
+    })
+    .to_string();
+    let _ = writers.send(owner.connection_id, line);
 }
 
 /// Despawn prune: drop a despawned webview's in-flight back-channel calls.
@@ -414,6 +498,97 @@ mod tests {
     }
 
     #[test]
+    fn ozmux_emit_frame_pushes_event_to_owner_connection() {
+        use crossbeam_channel::unbounded;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_ozmux_emit_frame);
+
+        let webview = app
+            .world_mut()
+            .spawn(WebviewOwner {
+                connection_id: 7,
+                handle: "H".into(),
+            })
+            .id();
+
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "ozma.emit", "event": "hello", "payload": {"message": "hi"}
+            })),
+        });
+
+        let line = rx.try_recv().expect("an event was pushed");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["op"], "event");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["event"], "hello");
+        assert_eq!(v["payload"]["message"], "hi");
+    }
+
+    #[test]
+    fn ozmux_emit_frame_without_owner_is_dropped() {
+        use crossbeam_channel::unbounded;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_ozmux_emit_frame);
+
+        // A webview entity with no WebviewOwner component.
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "ozma.emit", "event": "hello", "payload": null
+            })),
+        });
+
+        assert!(rx.try_recv().is_err(), "no owner ⇒ nothing forwarded");
+    }
+
+    #[test]
+    fn ozmux_emit_frame_with_empty_event_is_dropped() {
+        use crossbeam_channel::unbounded;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_ozmux_emit_frame);
+
+        let webview = app
+            .world_mut()
+            .spawn(WebviewOwner {
+                connection_id: 7,
+                handle: "H".into(),
+            })
+            .id();
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "ozma.emit", "event": "", "payload": {"message": "hi"}
+            })),
+        });
+
+        assert!(
+            rx.try_recv().is_err(),
+            "an empty event name must be dropped, not forwarded"
+        );
+    }
+
+    #[test]
     fn ozmux_call_frame_pushes_call_to_owner_connection() {
         use crossbeam_channel::unbounded;
 
@@ -453,6 +628,82 @@ mod tests {
                 .resource::<OzmuxRpc>()
                 .count_in_flight_for_test(),
             1
+        );
+    }
+
+    fn address_changed_app() -> (App, crossbeam_channel::Receiver<String>) {
+        use crossbeam_channel::unbounded;
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(OzmuxRpc::default());
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_webview_address_changed);
+        (app, rx)
+    }
+
+    #[test]
+    fn address_change_pushes_urlchanged_call_to_owner_for_http_url() {
+        let (mut app, rx) = address_changed_app();
+        let webview = app
+            .world_mut()
+            .spawn((
+                WebviewOwner {
+                    connection_id: 7,
+                    handle: "H".into(),
+                },
+                WebviewSource::new("https://example.com"),
+            ))
+            .id();
+
+        app.world_mut().trigger(AddressChanged {
+            webview,
+            url: "https://example.com/next".into(),
+            can_go_back: true,
+            can_go_forward: false,
+        });
+
+        let line = rx.try_recv().expect("a urlChanged call was pushed");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["op"], "call");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["method"], "urlChanged");
+        assert_eq!(v["params"]["url"], "https://example.com/next");
+        assert_eq!(
+            app.world()
+                .resource::<OzmuxRpc>()
+                .count_in_flight_for_test(),
+            0,
+            "urlChanged is fire-and-forget: it records no in-flight call"
+        );
+    }
+
+    #[test]
+    fn address_change_on_dyn_view_pushes_nothing() {
+        let (mut app, rx) = address_changed_app();
+        let webview = app
+            .world_mut()
+            .spawn((
+                WebviewOwner {
+                    connection_id: 7,
+                    handle: "H".into(),
+                },
+                WebviewSource::new("ozma-dyn://H/index.html"),
+            ))
+            .id();
+
+        app.world_mut().trigger(AddressChanged {
+            webview,
+            url: "ozma-dyn://H/index.html#section".into(),
+            can_go_back: false,
+            can_go_forward: false,
+        });
+
+        assert!(
+            rx.try_recv().is_err(),
+            "an ozma-dyn:// dir/inline view must report no urlChanged"
         );
     }
 }

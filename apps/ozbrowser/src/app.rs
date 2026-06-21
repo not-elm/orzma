@@ -1,7 +1,6 @@
 //! App state machine for ozbrowser. `on_action` is the single entry point;
 //! it returns the [`Cmd`] side-effects for `main.rs` to execute.
 
-use crate::history::History;
 use crate::keymap::{Action, Mode};
 
 /// Scroll direction / magnitude for the webview.
@@ -38,6 +37,14 @@ pub(crate) enum Cmd {
     Reload,
     /// Scroll the webview.
     Scroll(ScrollAction),
+    /// Show the link-hint overlay on the page.
+    HintShow,
+    /// Forward a typed hint-label character to the page.
+    HintKey(char),
+    /// Forward a hint-label backspace to the page.
+    HintBackspace,
+    /// Tear down the link-hint overlay on the page.
+    HintHide,
     /// Exit the app.
     Quit,
 }
@@ -49,7 +56,6 @@ pub(crate) struct App {
     pending_prefix: Option<char>,
     url: String,
     address_buf: String,
-    history: History,
 }
 
 impl App {
@@ -60,7 +66,6 @@ impl App {
             pending_prefix: None,
             url: initial_url,
             address_buf: String::new(),
-            history: History::new(),
         }
     }
 
@@ -118,23 +123,37 @@ impl App {
                 vec![]
             }
             Action::AddressConfirm => {
-                let url = self.address_buf.trim().to_owned();
+                let input = self.address_buf.trim();
+                let empty = input.is_empty();
+                let url = normalize_url(input);
                 self.mode = Mode::Normal;
-                if url.is_empty() || url == self.url {
+                self.address_buf.clear();
+                if empty || url == self.url {
                     vec![]
                 } else {
                     vec![Cmd::Navigate(url)]
                 }
             }
             Action::Escape => {
+                let was_hint = self.mode == Mode::Hint;
                 self.mode = Mode::Normal;
                 self.address_buf.clear();
-                vec![]
+                if was_hint {
+                    vec![Cmd::HintHide]
+                } else {
+                    vec![]
+                }
             }
             Action::EnterInsert => {
                 self.mode = Mode::Insert;
                 vec![]
             }
+            Action::EnterHint => {
+                self.mode = Mode::Hint;
+                vec![Cmd::HintShow]
+            }
+            Action::HintKey(c) => vec![Cmd::HintKey(c)],
+            Action::HintBackspace => vec![Cmd::HintBackspace],
             Action::OpenHelp => {
                 self.mode = Mode::Help;
                 vec![]
@@ -143,35 +162,25 @@ impl App {
         }
     }
 
-    /// Updates the current URL (called by main.rs when `urlChanged` fires from the page).
-    pub(crate) fn set_url(&mut self, url: String) {
+    /// Records a page-driven URL change reported via `urlChanged` (CEF owns the
+    /// session history now, so this only updates the displayed URL).
+    pub(crate) fn on_page_url_changed(&mut self, url: String) {
         self.url = url;
     }
 
-    /// Called by main.rs for `Cmd::Navigate`: pushes current URL onto history, updates self.url.
-    /// Returns the URL to load.
-    pub(crate) fn navigate(&mut self, new_url: String) -> String {
-        let current = self.url.clone();
-        self.url = self.history.navigate(current, new_url);
-        self.url.clone()
-    }
-
-    /// Called by main.rs for `Cmd::HistoryBack`: pops from back stack, updates self.url.
-    /// Returns the URL to load, or None if already at the beginning.
-    pub(crate) fn go_back(&mut self) -> Option<String> {
-        let current = self.url.clone();
-        let prev = self.history.back(current)?;
-        self.url = prev.clone();
-        Some(prev)
-    }
-
-    /// Called by main.rs for `Cmd::HistoryForward`: pops from forward stack, updates self.url.
-    /// Returns the URL to load, or None if no forward history.
-    pub(crate) fn go_forward(&mut self) -> Option<String> {
-        let current = self.url.clone();
-        let next = self.history.forward(current)?;
-        self.url = next.clone();
-        Some(next)
+    /// Applies a `hintResult` reported by the page: a hint that focused a form
+    /// field switches to Insert mode; any other resolution returns to Normal.
+    /// A no-op unless currently in Hint mode (guards against a late result
+    /// arriving after the user already cancelled with Esc).
+    pub(crate) fn on_hint_result(&mut self, kind: &str) {
+        if self.mode != Mode::Hint {
+            return;
+        }
+        self.mode = if kind == "focusedInput" {
+            Mode::Insert
+        } else {
+            Mode::Normal
+        };
     }
 
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
@@ -179,6 +188,17 @@ impl App {
             'g' => vec![Cmd::Scroll(ScrollAction::Top)],
             _ => vec![],
         }
+    }
+}
+
+/// Prepends `https://` to a scheme-less address-bar input so a bare hostname
+/// (`github.com`) navigates instead of being rejected by the host's URL
+/// validation. Input already carrying a `scheme://` is returned unchanged.
+fn normalize_url(input: &str) -> String {
+    if input.contains("://") {
+        input.to_owned()
+    } else {
+        format!("https://{input}")
     }
 }
 
@@ -289,6 +309,21 @@ mod tests {
     }
 
     #[test]
+    fn address_confirm_prepends_https_to_bare_host_and_clears_buffer() {
+        let mut a = app();
+        a.on_action(Action::OpenAddress);
+        for _ in 0.."https://example.com".len() {
+            a.on_action(Action::AddressBackspace);
+        }
+        for c in "github.com".chars() {
+            a.on_action(Action::AddressChar(c));
+        }
+        let cmds = a.on_action(Action::AddressConfirm);
+        assert_eq!(cmds, vec![Cmd::Navigate("https://github.com".into())]);
+        assert_eq!(a.address_buf(), "", "buffer cleared after confirm");
+    }
+
+    #[test]
     fn address_confirm_with_empty_buf_is_noop() {
         let mut a = app();
         a.on_action(Action::OpenAddress);
@@ -322,35 +357,10 @@ mod tests {
     }
 
     #[test]
-    fn go_back_with_empty_stack_returns_none() {
+    fn page_url_changed_updates_displayed_url() {
         let mut a = app();
-        assert_eq!(a.go_back(), None);
-        assert_eq!(a.url(), "https://example.com");
-    }
-
-    #[test]
-    fn go_forward_with_empty_stack_returns_none() {
-        let mut a = app();
-        assert_eq!(a.go_forward(), None);
-    }
-
-    #[test]
-    fn go_back_navigates_to_previous_url() {
-        let mut a = app();
-        a.navigate("https://b.com".into());
-        let prev = a.go_back();
-        assert_eq!(prev, Some("https://example.com".into()));
-        assert_eq!(a.url(), "https://example.com");
-    }
-
-    #[test]
-    fn go_forward_after_back_restores_url() {
-        let mut a = app();
-        a.navigate("https://b.com".into());
-        a.go_back();
-        let next = a.go_forward();
-        assert_eq!(next, Some("https://b.com".into()));
-        assert_eq!(a.url(), "https://b.com");
+        a.on_page_url_changed("https://docs.rs".into());
+        assert_eq!(a.url(), "https://docs.rs");
     }
 
     #[test]
@@ -360,25 +370,6 @@ mod tests {
         let cmds = a.on_action(Action::AddressConfirm);
         assert_eq!(cmds, vec![]);
         assert_eq!(a.mode(), Mode::Normal);
-    }
-
-    #[test]
-    fn navigate_updates_url_and_history() {
-        let mut a = app();
-        let url = a.navigate("https://rust-lang.org".into());
-        assert_eq!(url, "https://rust-lang.org");
-        assert_eq!(a.url(), "https://rust-lang.org");
-        let prev = a.go_back().unwrap();
-        assert_eq!(prev, "https://example.com");
-    }
-
-    #[test]
-    fn set_url_updates_url_without_touching_history() {
-        let mut a = app();
-        a.navigate("https://rust-lang.org".into());
-        a.set_url("https://docs.rs".into());
-        assert_eq!(a.url(), "https://docs.rs");
-        assert_eq!(a.go_back(), Some("https://example.com".into()));
     }
 
     #[test]
@@ -419,5 +410,59 @@ mod tests {
     fn ignore_produces_no_cmds() {
         let mut a = app();
         assert_eq!(a.on_action(Action::Ignore), vec![]);
+    }
+
+    #[test]
+    fn enter_hint_sets_hint_mode_and_emits_show() {
+        let mut a = app();
+        assert_eq!(a.on_action(Action::EnterHint), vec![Cmd::HintShow]);
+        assert_eq!(a.mode(), Mode::Hint);
+    }
+
+    #[test]
+    fn hint_key_and_backspace_emit_commands_without_mode_change() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_action(Action::HintKey('a')), vec![Cmd::HintKey('a')]);
+        assert_eq!(a.mode(), Mode::Hint);
+        assert_eq!(a.on_action(Action::HintBackspace), vec![Cmd::HintBackspace]);
+        assert_eq!(a.mode(), Mode::Hint);
+    }
+
+    #[test]
+    fn escape_from_hint_mode_hides_and_returns_to_normal() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        assert_eq!(a.on_action(Action::Escape), vec![Cmd::HintHide]);
+        assert_eq!(a.mode(), Mode::Normal);
+    }
+
+    #[test]
+    fn hint_result_focused_input_switches_to_insert() {
+        let mut a = app();
+        a.on_action(Action::EnterHint);
+        a.on_hint_result("focusedInput");
+        assert_eq!(a.mode(), Mode::Insert);
+    }
+
+    #[test]
+    fn hint_result_non_input_kinds_return_to_normal() {
+        for kind in ["navigated", "clicked", "empty"] {
+            let mut a = app();
+            a.on_action(Action::EnterHint);
+            a.on_hint_result(kind);
+            assert_eq!(
+                a.mode(),
+                Mode::Normal,
+                "kind {kind:?} must return to Normal"
+            );
+        }
+    }
+
+    #[test]
+    fn hint_result_is_ignored_when_not_in_hint_mode() {
+        let mut a = app();
+        a.on_hint_result("focusedInput");
+        assert_eq!(a.mode(), Mode::Normal);
     }
 }

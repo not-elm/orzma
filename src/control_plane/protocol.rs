@@ -57,6 +57,27 @@ pub(crate) enum ClientMsg {
         #[serde(default)]
         instance: Option<String>,
     },
+    /// Navigate a handle's mounted webview in place.
+    Navigate {
+        /// The target handle.
+        handle: String,
+        /// What to do.
+        action: NavAction,
+    },
+}
+
+/// A navigation action on an already-registered handle's mounted webview.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum NavAction {
+    /// Go back in the webview's native session history.
+    Back,
+    /// Go forward in the webview's native session history.
+    Forward,
+    /// Reload the current page.
+    Reload,
+    /// Navigate the existing webview to a new URL.
+    To(String),
 }
 
 /// A forward-key chord as received on the register wire (host side).
@@ -84,6 +105,9 @@ pub(crate) enum RegisterKind {
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(default)]
+        preload: Vec<String>,
     },
     /// Serve a single dynamic HTML document supplied inline.
     Inline {
@@ -95,6 +119,9 @@ pub(crate) enum RegisterKind {
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(default)]
+        preload: Vec<String>,
     },
     /// Load a remote `http(s)` URL as the top-level document.
     Url {
@@ -109,6 +136,9 @@ pub(crate) enum RegisterKind {
         /// Chords the host passes through to PTY instead of consuming in CEF.
         #[serde(default)]
         forward_keys: Vec<HostKeyChord>,
+        /// User-supplied scripts injected before the page's own scripts run.
+        #[serde(default)]
+        preload: Vec<String>,
     },
 }
 
@@ -192,6 +222,7 @@ mod tests {
                 entry: "index.html".into(),
                 interactive: true,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -208,6 +239,7 @@ mod tests {
                 html: "<h1>x</h1>".into(),
                 interactive: false,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -323,6 +355,7 @@ mod tests {
                 interactive: true,
                 bridge: false,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -340,6 +373,7 @@ mod tests {
                 interactive: true,
                 bridge: true,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -355,6 +389,7 @@ mod tests {
                 interactive: true,
                 bridge: false,
                 forward_keys: vec![],
+                preload: vec![],
             })
         );
     }
@@ -393,5 +428,59 @@ mod tests {
             serde_json::to_string(&msg).unwrap(),
             r#"{"op":"compositing","handle":"abc123","active":false}"#
         );
+    }
+
+    #[test]
+    fn parses_navigate_back() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"op":"navigate","handle":"H","action":"back"}"#).unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Navigate {
+                handle: "H".into(),
+                action: NavAction::Back,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_navigate_to_url() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"op":"navigate","handle":"H","action":{"to":"https://example.com"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            m,
+            ClientMsg::Navigate {
+                handle: "H".into(),
+                action: NavAction::To("https://example.com".into()),
+            }
+        );
+    }
+
+    #[test]
+    fn parses_register_with_preload() {
+        let m: ClientMsg = serde_json::from_str(
+            r#"{"op":"register","kind":"inline","html":"x","preload":["window.A=1;"]}"#,
+        )
+        .unwrap();
+        match m {
+            ClientMsg::Register(RegisterKind::Inline { preload, .. }) => {
+                assert_eq!(preload, vec!["window.A=1;".to_string()]);
+            }
+            _ => panic!("expected inline register"),
+        }
+    }
+
+    #[test]
+    fn preload_defaults_empty_when_absent() {
+        let m: ClientMsg =
+            serde_json::from_str(r#"{"op":"register","kind":"inline","html":"x"}"#).unwrap();
+        match m {
+            ClientMsg::Register(RegisterKind::Inline { preload, .. }) => {
+                assert!(preload.is_empty());
+            }
+            _ => panic!("expected inline register"),
+        }
     }
 }

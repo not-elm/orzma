@@ -70,7 +70,7 @@ pub(crate) struct TmuxActivePaneChanged {
     /// True when sourced from a live `%window-pane-changed` notification (which
     /// tmux broadcasts to every control client server-wide, possibly for a
     /// foreign session); false when from the trusted own-session
-    /// `active_pane_command` reply.
+    /// `ActivePane` query reply.
     pub(crate) from_notification: bool,
 }
 

@@ -26,7 +26,7 @@ use ozma_terminal::{KeyboardFocused, OzmaTerminal};
 use ozma_tty_engine::{TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
-use ozmux_tmux::{ActivePane, TmuxConnection, TmuxPane, send_bytes_command};
+use ozmux_tmux::{ActivePane, SendBytes, TmuxConnection, TmuxPane};
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
@@ -292,7 +292,7 @@ pub(crate) fn ime_policy_system(
 /// which case the commit-to-pane write is suppressed (bevy_cef commits it to
 /// the page; see spec §7).
 ///
-/// The commit text is sent verbatim via `send_bytes_command`
+/// The commit text is sent verbatim via `SendBytes`
 /// (`send-keys -H -t %<id> <hex…>`), which is byte-safe for UTF-8 multibyte
 /// commits — including the macOS Character Viewer emoji path — without any
 /// modifier interpretation.
@@ -346,10 +346,10 @@ pub(crate) fn read_ime_events(
                         continue;
                     };
                     let target = format!("%{}", pane.id.0);
-                    if let Err(e) = client
-                        .handle()
-                        .send(&send_bytes_command(&target, commit_text.as_bytes()))
-                    {
+                    if let Err(e) = client.handle().send(SendBytes {
+                        pane: &target,
+                        bytes: commit_text.as_bytes(),
+                    }) {
                         tracing::warn!(?e, "IME commit send failed");
                     }
                 }

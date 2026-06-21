@@ -1,15 +1,14 @@
 //! The `TmuxSessionPlugin`: connection state, the projection observers, and the
 //! per-frame transport-drain system that triggers the projection events.
 
+use crate::command::{
+    ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListKeys, ListWindows,
+    ModeKeys as ModeKeysCmd, PrefixOptions, SubscribeWindowFlags, Version,
+};
 use crate::components::{TmuxPane, TmuxSession};
 use crate::connection::TmuxConnection;
 use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
-use crate::enumerate::{
-    EnumerationState, PendingReply, active_pane_command, aggressive_resize_command,
-    capture_pane_command, client_name_command, cursor_query_command, list_windows_command,
-    mode_keys_command, subscribe_window_flags_command, version_command,
-    version_supports_per_window_refresh,
-};
+use crate::enumerate::{EnumerationState, PendingReply, version_supports_per_window_refresh};
 use crate::event_pump::{
     advance_state, capture_to_bytes, capture_to_bytes_with_cursor, detect_session_switch,
     detect_window_added, detect_window_switch, drain_transport, first_reply_line,
@@ -18,9 +17,7 @@ use crate::event_pump::{
 use crate::events::{
     TmuxActivePaneChanged, TmuxConnectionClosed, TmuxConnectionReset, TmuxWindowsRetained,
 };
-use crate::keybindings::{
-    KeyBindings, ModeKeys, list_keys_command, parse_list_keys, parse_prefix, prefix_options_command,
-};
+use crate::keybindings::{KeyBindings, ModeKeys, parse_list_keys, parse_prefix};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
 use crate::state::ConnectionState;
@@ -107,12 +104,12 @@ fn request_pane_captures(
         return;
     };
     for pane in new_panes.iter() {
-        match client.handle().send(&capture_pane_command(pane.id)) {
+        match client.handle().send(CapturePane { id: pane.id }) {
             Ok(cap_id) => {
                 enumeration
                     .pending
                     .insert(cap_id, PendingReply::Capture { pane: pane.id });
-                match client.handle().send(&cursor_query_command(pane.id)) {
+                match client.handle().send(CursorQuery { id: pane.id }) {
                     Ok(cur_id) => {
                         enumeration
                             .pending
@@ -176,38 +173,31 @@ fn send_attach_enumeration(
         return;
     };
     send_session_enumeration(&mut enumeration, client);
+    enumeration.register(client.handle().send(ClientName), PendingReply::ClientName);
     enumeration.register(
-        client.handle().send(&client_name_command()),
-        PendingReply::ClientName,
-    );
-    enumeration.register(
-        client.handle().send(&list_keys_command("root")),
+        client.handle().send(ListKeys { table: "root" }),
         PendingReply::KeyBindings,
     );
     enumeration.register(
-        client.handle().send(&list_keys_command("prefix")),
+        client.handle().send(ListKeys { table: "prefix" }),
         PendingReply::KeyBindings,
     );
     enumeration.register(
-        client.handle().send(&prefix_options_command()),
+        client.handle().send(PrefixOptions),
         PendingReply::PrefixKeys,
     );
     enumeration.register(
-        client.handle().send(&list_keys_command("copy-mode")),
+        client.handle().send(ListKeys { table: "copy-mode" }),
         PendingReply::KeyBindings,
     );
     enumeration.register(
-        client.handle().send(&list_keys_command("copy-mode-vi")),
+        client.handle().send(ListKeys {
+            table: "copy-mode-vi",
+        }),
         PendingReply::KeyBindings,
     );
-    enumeration.register(
-        client.handle().send(&mode_keys_command()),
-        PendingReply::ModeKeys,
-    );
-    enumeration.register(
-        client.handle().send(&version_command()),
-        PendingReply::Version,
-    );
+    enumeration.register(client.handle().send(ModeKeysCmd), PendingReply::ModeKeys);
+    enumeration.register(client.handle().send(Version), PendingReply::Version);
 }
 
 /// Re-enumerates topology when the batch contains a session-switch, window-add,
@@ -247,16 +237,10 @@ fn send_tmux_reenumeration(
         send_session_enumeration(&mut enumeration, client);
     } else if let Some(client) = connection.client() {
         if detect_window_added(events) {
-            enumeration.register(
-                client.handle().send(&list_windows_command()),
-                PendingReply::ListWindows,
-            );
+            enumeration.register(client.handle().send(ListWindows), PendingReply::ListWindows);
         }
         if detect_window_switch(events, current_session) {
-            enumeration.register(
-                client.handle().send(&active_pane_command()),
-                PendingReply::ActivePane,
-            );
+            enumeration.register(client.handle().send(ActivePane), PendingReply::ActivePane);
         }
     }
     if matches!(*state, ConnectionState::Attached)
@@ -264,10 +248,7 @@ fn send_tmux_reenumeration(
         && !enumeration.has_pending(PendingReply::ClientName)
         && let Some(client) = connection.client()
     {
-        enumeration.register(
-            client.handle().send(&client_name_command()),
-            PendingReply::ClientName,
-        );
+        enumeration.register(client.handle().send(ClientName), PendingReply::ClientName);
     }
 }
 
@@ -393,7 +374,7 @@ fn apply_reply(
                 && let Some(client) = connection.client()
             {
                 enumeration.register(
-                    client.handle().send(&aggressive_resize_command(window)),
+                    client.handle().send(AggressiveResize { win: window }),
                     PendingReply::AggressiveResize,
                 );
             }
@@ -472,15 +453,9 @@ fn apply_reply(
 /// the two paths cannot drift (a switched-to session would otherwise risk stale
 /// windows or a missing active-pane marker).
 fn send_session_enumeration(enumeration: &mut EnumerationState, client: &TmuxClient) {
-    enumeration.register(
-        client.handle().send(&list_windows_command()),
-        PendingReply::ListWindows,
-    );
-    enumeration.register(
-        client.handle().send(&active_pane_command()),
-        PendingReply::ActivePane,
-    );
-    if let Err(error) = client.handle().send(&subscribe_window_flags_command()) {
+    enumeration.register(client.handle().send(ListWindows), PendingReply::ListWindows);
+    enumeration.register(client.handle().send(ActivePane), PendingReply::ActivePane);
+    if let Err(error) = client.handle().send(SubscribeWindowFlags) {
         tracing::warn!(?error, "failed to subscribe to window flags");
     }
 }

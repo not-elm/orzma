@@ -1,9 +1,10 @@
 //! The Ozma session: socket connection, reader thread, flush.
 
 use crate::error::{OzmaError, OzmaResult};
+use crate::events::{EventQueues, EventRegistry};
 use crate::handler::BoxedHandler;
 use crate::osc::{clamp_dims, cursor_to, mount, unmount, valid_handle};
-use crate::protocol::{ClientMsg, IncomingCall, RegisterKind, RegisterReply};
+use crate::protocol::{ClientMsg, IncomingCall, IncomingEvent, RegisterKind, RegisterReply};
 use crate::webview::{SharedWriter, Webview, WebviewHandle};
 use crossbeam_channel::{Sender, bounded};
 use ratatui::layout::Rect;
@@ -107,10 +108,12 @@ type HandlerRegistry = Arc<Mutex<HashMap<String, Arc<HashMap<String, BoxedHandle
 type PendingRegisters = Arc<Mutex<VecDeque<PendingRegister>>>;
 
 /// One in-flight `register` awaiting its untagged reply: the oneshot to wake the
-/// caller, plus the handlers to install once the control plane mints the handle.
+/// caller, plus the handlers and event queues to install once the control plane
+/// mints the handle.
 struct PendingRegister {
     reply: Sender<OzmaResult<String>>,
     handlers: Arc<HashMap<String, BoxedHandler>>,
+    events: Arc<EventQueues>,
 }
 
 type PendingCompositing = Arc<Mutex<HashMap<String, bool>>>;
@@ -120,6 +123,7 @@ struct Registration {
     kind: RegisterKind,
     handle_slot: Arc<Mutex<String>>,
     handlers: Arc<HashMap<String, BoxedHandler>>,
+    events: Arc<EventQueues>,
 }
 
 /// The minimal shared state passed to [`OzmaBackend`] for reconnect signalling.
@@ -170,6 +174,7 @@ impl Ozma {
         let disconnected: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
         let generation: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
         let registrations: Arc<Mutex<Vec<Registration>>> = Arc::new(Mutex::new(Vec::new()));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::new()));
         let (reconnect_tx, reconnect_rx) = crossbeam_channel::bounded::<()>(1);
 
         {
@@ -187,6 +192,7 @@ impl Ozma {
             handlers.clone(),
             pending.clone(),
             pending_compositing.clone(),
+            events.clone(),
             disconnected.clone(),
         );
 
@@ -198,6 +204,7 @@ impl Ozma {
             let disconnected2 = disconnected.clone();
             let generation2 = generation.clone();
             let registrations2 = registrations.clone();
+            let events2 = events.clone();
             let token2 = token.clone();
             thread::spawn(move || {
                 while let Ok(()) = reconnect_rx.recv() {
@@ -209,6 +216,7 @@ impl Ozma {
                         &disconnected2,
                         &generation2,
                         &registrations2,
+                        &events2,
                         &token2,
                     );
                 }
@@ -229,8 +237,13 @@ impl Ozma {
 
     /// Registers a webview, blocking until the control plane mints its handle.
     pub fn register(&self, webview: Webview) -> OzmaResult<WebviewHandle> {
-        let Webview { kind, handlers } = webview;
+        let Webview {
+            kind,
+            handlers,
+            event_decls,
+        } = webview;
         let handlers = Arc::new(handlers);
+        let events = Arc::new(EventQueues::from_decls(&event_decls));
         let (tx, rx) = bounded(1);
         let line = serde_json::to_string(&ClientMsg::Register(kind.clone()))?;
         {
@@ -241,6 +254,7 @@ impl Ozma {
             self.pending.lock()?.push_back(PendingRegister {
                 reply: tx,
                 handlers: handlers.clone(),
+                events: events.clone(),
             });
             if let Err(e) = writeln!(w, "{line}").and_then(|()| w.flush()) {
                 // The register never went out, so no reply will arrive for this
@@ -250,6 +264,10 @@ impl Ozma {
             }
         }
 
+        // NOTE: the reader thread installs the event queues under the minted
+        // handle BEFORE sending this reply (mirroring the handler install), so an
+        // event pipelined right behind the register reply finds its queues rather
+        // than racing this main thread; do not move the install back here.
         let handle = rx.recv().map_err(|_| OzmaError::Disconnected)??;
         let handle_slot = Arc::new(Mutex::new(handle));
         if let Ok(mut regs) = self.registrations.lock() {
@@ -257,9 +275,14 @@ impl Ozma {
                 kind,
                 handle_slot: handle_slot.clone(),
                 handlers: handlers.clone(),
+                events: events.clone(),
             });
         }
-        Ok(WebviewHandle::new_shared(handle_slot, self.writer.clone()))
+        Ok(WebviewHandle::new_shared(
+            handle_slot,
+            events,
+            self.writer.clone(),
+        ))
     }
 
     /// Locks and clears the per-frame placement collector for `render_stateful_widget`.
@@ -463,6 +486,7 @@ fn spawn_reader(
     handlers: HandlerRegistry,
     pending: PendingRegisters,
     pending_compositing: PendingCompositing,
+    events: EventRegistry,
     disconnected: Arc<AtomicBool>,
 ) {
     thread::spawn(move || {
@@ -492,6 +516,29 @@ fn spawn_reader(
                 {
                     map.insert(handle.to_owned(), active);
                 }
+            } else if op == "event" {
+                if let Ok(ev) = serde_json::from_str::<IncomingEvent>(trimmed) {
+                    match events
+                        .lock()
+                        .ok()
+                        .and_then(|map| map.get(&ev.handle).cloned())
+                    {
+                        Some(queues) => {
+                            if !queues.ingest(&ev.event, ev.payload) {
+                                tracing::debug!(
+                                    handle = ev.handle,
+                                    event = ev.event,
+                                    "inbound event for an undeclared name dropped"
+                                );
+                            }
+                        }
+                        None => tracing::debug!(
+                            handle = ev.handle,
+                            event = ev.event,
+                            "inbound event for an unknown handle dropped"
+                        ),
+                    }
+                }
             } else if let Ok(reply) = serde_json::from_str::<RegisterReply>(trimmed)
                 && let Some(reg) = pending.lock().ok().and_then(|mut q| q.pop_front())
             {
@@ -504,6 +551,9 @@ fn spawn_reader(
                         Some(h) => {
                             if let Ok(mut map) = handlers.lock() {
                                 map.insert(h.clone(), reg.handlers);
+                            }
+                            if let Ok(mut map) = events.lock() {
+                                map.insert(h.clone(), reg.events);
                             }
                             Ok(h)
                         }
@@ -569,6 +619,7 @@ fn attempt_reconnect(
     disconnected: &Arc<AtomicBool>,
     generation: &Arc<AtomicU64>,
     registrations: &Arc<Mutex<Vec<Registration>>>,
+    events: &EventRegistry,
     token: &str,
 ) {
     let candidates = resolve_ozma_sock_candidates();
@@ -617,6 +668,7 @@ fn attempt_reconnect(
         handlers.clone(),
         pending.clone(),
         pending_compositing.clone(),
+        events.clone(),
         disconnected.clone(),
     );
     let Ok(regs) = registrations.lock() else {
@@ -633,6 +685,7 @@ fn attempt_reconnect(
             pq.push_back(PendingRegister {
                 reply: tx,
                 handlers: reg.handlers.clone(),
+                events: reg.events.clone(),
             });
         }
         let line = match serde_json::to_string(&ClientMsg::Register(reg.kind.clone())) {
@@ -667,6 +720,10 @@ fn attempt_reconnect(
         if let Ok(mut map) = handlers.lock() {
             map.remove(&old);
             map.insert(new_handle.clone(), reg.handlers.clone());
+        }
+        if let Ok(mut map) = events.lock() {
+            map.remove(&old);
+            map.insert(new_handle.clone(), reg.events.clone());
         }
         if let Ok(mut slot) = reg.handle_slot.lock() {
             *slot = new_handle;
@@ -952,6 +1009,7 @@ mod tests {
             handlers,
             pending,
             pending_compositing.clone(),
+            Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
         );
 
@@ -993,6 +1051,7 @@ mod tests {
             handlers,
             pending,
             pending_compositing.clone(),
+            Arc::new(Mutex::new(HashMap::new())),
             Arc::new(AtomicBool::new(false)),
         );
 
@@ -1009,5 +1068,62 @@ mod tests {
 
         let map = pending_compositing.lock().unwrap();
         assert_eq!(map.get("h1"), Some(&false));
+    }
+
+    #[test]
+    fn reader_thread_routes_event_into_registered_queues() {
+        use crate::events::{EventDecl, EventQueues, EventRegistry};
+        use std::any::TypeId;
+        use std::io::Write;
+        use std::os::unix::net::UnixListener;
+
+        struct Hello;
+        let dir = tempfile::tempdir().unwrap();
+        let sock_path = dir.path().join("ev.sock");
+        let listener = UnixListener::bind(&sock_path).unwrap();
+
+        let decls = vec![EventDecl {
+            name: "hello".into(),
+            type_id: TypeId::of::<Hello>(),
+        }];
+        let queues = Arc::new(EventQueues::from_decls(&decls));
+        let events: EventRegistry = Arc::new(Mutex::new(HashMap::new()));
+        events
+            .lock()
+            .unwrap()
+            .insert("h1".to_owned(), queues.clone());
+
+        let handlers: HandlerRegistry = Arc::new(Mutex::new(HashMap::new()));
+        let pending: PendingRegisters = Arc::new(Mutex::new(VecDeque::new()));
+        let pending_compositing: PendingCompositing = Arc::new(Mutex::new(HashMap::new()));
+
+        let client = UnixStream::connect(&sock_path).unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(client.try_clone().unwrap()));
+        let (server_conn, _) = listener.accept().unwrap();
+
+        spawn_reader(
+            client,
+            writer.clone(),
+            handlers,
+            pending,
+            pending_compositing,
+            events.clone(),
+            Arc::new(AtomicBool::new(false)),
+        );
+
+        let mut server = server_conn;
+        writeln!(
+            server,
+            r#"{{"op":"event","handle":"h1","event":"hello","payload":{{"n":7}}}}"#
+        )
+        .unwrap();
+        server.flush().unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        assert_eq!(
+            queues.drain_type(TypeId::of::<Hello>()),
+            vec![serde_json::json!({"n":7})]
+        );
     }
 }

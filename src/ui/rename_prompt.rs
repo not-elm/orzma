@@ -15,9 +15,7 @@ use bevy::ecs::schedule::common_conditions::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ozmux_tmux::{
-    SessionId, TmuxConnection, WindowId, rename_session_command, rename_window_command,
-};
+use ozmux_tmux::{RenameSession, RenameWindow, SessionId, TmuxCommand, TmuxConnection, WindowId};
 
 const RENAME_Z: i32 = 340;
 
@@ -118,8 +116,16 @@ impl RenamePrompt {
     /// Builds the tmux command sent on submit from the subject and typed text.
     fn submit_command(&self) -> String {
         match &self.subject {
-            RenameSubject::Window { id, .. } => rename_window_command(*id, &self.text),
-            RenameSubject::Session { id, .. } => rename_session_command(*id, &self.text),
+            RenameSubject::Window { id, .. } => RenameWindow {
+                id: *id,
+                name: &self.text,
+            }
+            .into_raw_command(),
+            RenameSubject::Session { id, .. } => RenameSession {
+                id: *id,
+                name: &self.text,
+            }
+            .into_raw_command(),
         }
     }
 }

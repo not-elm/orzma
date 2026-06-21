@@ -6,7 +6,7 @@
 //! sync with cell metrics and project placements into `TerminalOverlays`.
 
 use super::osc::NonInteractive;
-use super::render::preload::build_dynamic_preload;
+use super::render::preload::{build_dynamic_preload, build_url_preload};
 use crate::control_plane::{
     ConnectionWriters, DynSource, DynamicRegistry, NormalizedChord, PushMsg, WebviewOwner,
 };
@@ -16,7 +16,8 @@ use bevy::render::{Render, RenderApp, render_asset::prepare_assets};
 use bevy::ui_render::PreparedUiMaterial;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{
-    FocusedWebview, WebviewGpuImageInjectSet, WebviewSize, WebviewSource, WebviewTextureTarget,
+    FocusedWebview, PreloadScripts, WebviewGpuImageInjectSet, WebviewSize, WebviewSource,
+    WebviewTextureTarget,
 };
 use ozma_tty_engine::{AnchorMode, InlineAnchor, TerminalModeChanged};
 use ozma_tty_renderer::TerminalCellMetricsResource;
@@ -154,10 +155,16 @@ pub(crate) struct ResolvedWebviewMount {
     /// the registration is bridged; a display-only `Url` view leaves it `None`,
     /// which is the gate that also withholds the preload at mount.
     pub(crate) owner: Option<(u64, String)>,
+    /// Whether the resolved source is a remote `Url` (vs `Dir`/`Inline`). A
+    /// bridged URL view additionally receives the link-hint preload.
+    pub(crate) is_url: bool,
     /// The normalized forward-key chords copied from the registration, stamped
     /// as a `ForwardKeys` component so the focused-key systems read them off
     /// the webview entity without a registry lookup (design spec §C).
     pub(crate) forward_keys: Vec<NormalizedChord>,
+    /// User-supplied preload scripts, injected after the host bridge/hints
+    /// (and as the only scripts for a display-only view).
+    pub(crate) preload: Vec<String>,
 }
 
 /// Resolves a `mount` `<handle>` against the `DynamicRegistry` (Tier 1).
@@ -181,6 +188,7 @@ pub(crate) fn resolve_mount(
         DynSource::Inline(_) => format!("ozma-dyn://{id}/index.html"),
         DynSource::Url { url, .. } => url.clone(),
     };
+    let is_url = view.source.is_url();
     let owner = view
         .source
         .is_bridged()
@@ -189,7 +197,9 @@ pub(crate) fn resolve_mount(
         url: Some(url),
         interactive: view.interactive,
         owner,
+        is_url,
         forward_keys: view.forward_keys.clone(),
+        preload: view.preload.clone(),
     })
 }
 
@@ -288,18 +298,28 @@ pub(crate) fn mount(
         params.commands.entity(webview).insert(NonInteractive);
     }
     // NOTE: the ozma bridge script (window.ozma) and WebviewOwner (the
-    // inbound-call gate) are inserted only for a bridged registration. A
-    // display-only view (owner None) gets no bridge script (PreloadScripts
-    // remains the empty default from WebviewSource #[require]) and no
-    // WebviewOwner.
+    // inbound-call gate) are inserted only for a bridged registration; the
+    // user's preload scripts ride after the bridge/hints. A display-only view
+    // (owner None) gets no bridge and no WebviewOwner, but still receives its
+    // own preload scripts when it declared any.
     if let Some((connection_id, handle)) = resolved.owner {
+        let preload = if resolved.is_url {
+            build_url_preload(&resolved.preload)
+        } else {
+            build_dynamic_preload(&resolved.preload)
+        };
         params.commands.entity(webview).insert((
-            build_dynamic_preload(),
+            preload,
             WebviewOwner {
                 connection_id,
                 handle,
             },
         ));
+    } else if !resolved.preload.is_empty() {
+        params
+            .commands
+            .entity(webview)
+            .insert(PreloadScripts::from(resolved.preload.clone()));
     }
     params
         .commands
@@ -718,6 +738,7 @@ mod tests {
                 owner_surface,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
     }
@@ -736,6 +757,7 @@ mod tests {
                 owner_surface,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
     }
@@ -1911,6 +1933,7 @@ mod tests {
                 owner_surface,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
     }
@@ -1938,6 +1961,10 @@ mod tests {
             !preload.0.iter().any(|s| s.contains("__ozmuxGranted")),
             "a dynamic view must carry no capability grant / host bridge"
         );
+        assert!(
+            !preload.0.iter().any(|s| s.contains("hints:show")),
+            "a dir/inline view must not carry the link-hint engine (build_dynamic_preload)"
+        );
     }
 
     #[test]
@@ -1955,6 +1982,7 @@ mod tests {
                 owner_surface: owner,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
 
@@ -1983,6 +2011,7 @@ mod tests {
                 owner_surface: owner,
                 connection_id: 1,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         let r = resolve_mount("INLINEH", owner, &dynamic).expect("inline resolves");
@@ -2004,6 +2033,7 @@ mod tests {
                 owner_surface: terminal,
                 connection_id: 42,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
 
@@ -2107,6 +2137,7 @@ mod tests {
                 owner_surface: surface,
                 connection_id: 7,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
         reg.insert(
@@ -2121,6 +2152,7 @@ mod tests {
                 owner_surface: surface,
                 connection_id: 7,
                 forward_keys: vec![],
+                preload: vec![],
             },
         );
 
@@ -2187,6 +2219,10 @@ mod tests {
         assert!(
             !preload.0.is_empty(),
             "a bridged url must carry the ozmux bridge scripts"
+        );
+        assert!(
+            preload.0.iter().any(|s| s.contains("hints:show")),
+            "a bridged url view must carry the link-hint engine (build_url_preload)"
         );
         assert_eq!(
             app.world().get::<WebviewOwner>(child),
@@ -2363,6 +2399,117 @@ mod tests {
         assert!(
             rx.try_recv().is_err(),
             "despawning a never-projected entity must NOT send a stop notification"
+        );
+    }
+
+    #[test]
+    fn mount_bridged_inline_appends_user_preload_after_bridge() {
+        use crate::control_plane::{DynSource, DynamicView};
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "h".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: terminal,
+                connection_id: 1,
+                forward_keys: vec![],
+                preload: vec!["window.USER = 1;".into()],
+            },
+        );
+
+        mount(&mut app, terminal, "h", Some(test_anchor()));
+
+        let child = webview_children_of(&app, terminal)[0];
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts present");
+        assert!(preload.0.len() >= 2, "bridge + user script");
+        assert_eq!(
+            preload.0.last().map(String::as_str),
+            Some("window.USER = 1;"),
+            "the user script must come last, after the ozma bridge"
+        );
+    }
+
+    #[test]
+    fn mount_bridged_url_appends_user_preload_after_bridge_and_hints() {
+        use crate::control_plane::{DynSource, DynamicView};
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "u".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://app.example.com".into(),
+                    bridge: true,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: terminal,
+                connection_id: 1,
+                forward_keys: vec![],
+                preload: vec!["window.USER = 1;".into()],
+            },
+        );
+
+        mount(&mut app, terminal, "u", Some(test_anchor()));
+
+        let child = webview_children_of(&app, terminal)[0];
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts present");
+        assert!(
+            preload.0.iter().any(|s| s.contains("hints:show")),
+            "a bridged url view keeps the link-hint engine"
+        );
+        assert_eq!(
+            preload.0.last().map(String::as_str),
+            Some("window.USER = 1;"),
+            "the user script must come last, after bridge + hints"
+        );
+    }
+
+    #[test]
+    fn mount_display_only_url_with_preload_injects_user_scripts_only() {
+        use crate::control_plane::{DynSource, DynamicView, WebviewOwner};
+        let mut app = make_test_app();
+        let terminal = spawn_terminal(&mut app);
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "disp".into(),
+            DynamicView {
+                source: DynSource::Url {
+                    url: "https://example.com".into(),
+                    bridge: false,
+                },
+                entry: String::new(),
+                interactive: true,
+                owner_surface: terminal,
+                connection_id: 1,
+                forward_keys: vec![],
+                preload: vec!["window.USER = 1;".into()],
+            },
+        );
+
+        mount(&mut app, terminal, "disp", Some(test_anchor()));
+
+        let child = webview_children_of(&app, terminal)[0];
+        let preload = app
+            .world()
+            .get::<PreloadScripts>(child)
+            .expect("PreloadScripts present");
+        assert_eq!(
+            preload.0,
+            vec!["window.USER = 1;".to_string()],
+            "a display-only url with preload must carry only the user scripts"
+        );
+        assert!(
+            app.world().get::<WebviewOwner>(child).is_none(),
+            "a display-only url must carry no WebviewOwner even with preload"
         );
     }
 }
