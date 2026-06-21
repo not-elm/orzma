@@ -495,13 +495,16 @@ fn reconnect_preserves_inbound_events() {
             "op": "event", "handle": "view-ev2", "event": "hello", "payload": { "message": "post" }
         }));
 
+        // A fresh deadline: the reconnect loop above may have consumed most of the
+        // first budget on a slow machine, which must not starve this wait.
+        let event_deadline = std::time::Instant::now() + Duration::from_secs(5);
         let got = loop {
             let evs = handle.read_events::<Hello>();
             if !evs.is_empty() {
                 break evs;
             }
             assert!(
-                std::time::Instant::now() < deadline,
+                std::time::Instant::now() < event_deadline,
                 "event never arrived after reconnect"
             );
             std::thread::sleep(Duration::from_millis(20));

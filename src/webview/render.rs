@@ -203,12 +203,16 @@ fn on_ozmux_emit_frame(
         .get("event")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let body = payload.get("payload").cloned().unwrap_or(Value::Null);
+    if event.is_empty() {
+        tracing::debug!("ozma.emit frame with an empty event name; dropping");
+        return;
+    }
 
     let Ok(owner) = owners.get(frame.webview) else {
         tracing::debug!("ozma.emit frame for a webview with no owner; dropping");
         return;
     };
+    let body = payload.get("payload").cloned().unwrap_or(Value::Null);
     let line = serde_json::json!({
         "op": "event", "handle": owner.handle, "event": event, "payload": body
     })
@@ -550,6 +554,38 @@ mod tests {
         });
 
         assert!(rx.try_recv().is_err(), "no owner ⇒ nothing forwarded");
+    }
+
+    #[test]
+    fn ozmux_emit_frame_with_empty_event_is_dropped() {
+        use crossbeam_channel::unbounded;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_ozmux_emit_frame);
+
+        let webview = app
+            .world_mut()
+            .spawn(WebviewOwner {
+                connection_id: 7,
+                handle: "H".into(),
+            })
+            .id();
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "ozma.emit", "event": "", "payload": {"message": "hi"}
+            })),
+        });
+
+        assert!(
+            rx.try_recv().is_err(),
+            "an empty event name must be dropped, not forwarded"
+        );
     }
 
     #[test]

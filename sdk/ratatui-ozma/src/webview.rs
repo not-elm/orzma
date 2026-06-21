@@ -120,9 +120,7 @@ impl Webview {
             "method {method:?} uses the reserved __ozma. namespace"
         );
         self.handlers.insert(method, make_handler(f));
-        if let RegisterKind::Url { bridge, .. } = &mut self.kind {
-            *bridge = true;
-        }
+        self.enable_bridge_for_url();
         self
     }
 
@@ -149,10 +147,17 @@ impl Webview {
             std::any::type_name::<T>()
         );
         self.event_decls.push(EventDecl { name, type_id });
+        self.enable_bridge_for_url();
+        self
+    }
+
+    /// Force-enables the `window.ozma` bridge for a `url` webview; a no-op for
+    /// `inline`/`dir`, which are always bridged. Shared by `on` and `add_event`,
+    /// both of which require the bridge for the page-side channel they wire.
+    fn enable_bridge_for_url(&mut self) {
         if let RegisterKind::Url { bridge, .. } = &mut self.kind {
             *bridge = true;
         }
-        self
     }
 }
 
@@ -385,7 +390,7 @@ mod tests {
         let writer: SharedWriter = Arc::new(Mutex::new(a));
         let handle = WebviewHandle::new_shared(
             slot.clone(),
-            Arc::new(crate::events::EventQueues::default()),
+            Arc::new(crate::events::EventQueues::from_decls(&[])),
             writer,
         );
         assert_eq!(handle.id(), "old-id");

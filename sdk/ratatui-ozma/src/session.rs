@@ -108,10 +108,12 @@ type HandlerRegistry = Arc<Mutex<HashMap<String, Arc<HashMap<String, BoxedHandle
 type PendingRegisters = Arc<Mutex<VecDeque<PendingRegister>>>;
 
 /// One in-flight `register` awaiting its untagged reply: the oneshot to wake the
-/// caller, plus the handlers to install once the control plane mints the handle.
+/// caller, plus the handlers and event queues to install once the control plane
+/// mints the handle.
 struct PendingRegister {
     reply: Sender<OzmaResult<String>>,
     handlers: Arc<HashMap<String, BoxedHandler>>,
+    events: Arc<EventQueues>,
 }
 
 type PendingCompositing = Arc<Mutex<HashMap<String, bool>>>;
@@ -140,7 +142,6 @@ pub struct Ozma {
     disconnected: Arc<AtomicBool>,
     generation: Arc<AtomicU64>,
     registrations: Arc<Mutex<Vec<Registration>>>,
-    events: EventRegistry,
     reconnect_tx: crossbeam_channel::Sender<()>,
 }
 
@@ -230,7 +231,6 @@ impl Ozma {
             disconnected,
             generation,
             registrations,
-            events,
             reconnect_tx,
         })
     }
@@ -254,6 +254,7 @@ impl Ozma {
             self.pending.lock()?.push_back(PendingRegister {
                 reply: tx,
                 handlers: handlers.clone(),
+                events: events.clone(),
             });
             if let Err(e) = writeln!(w, "{line}").and_then(|()| w.flush()) {
                 // The register never went out, so no reply will arrive for this
@@ -263,10 +264,11 @@ impl Ozma {
             }
         }
 
+        // NOTE: the reader thread installs the event queues under the minted
+        // handle BEFORE sending this reply (mirroring the handler install), so an
+        // event pipelined right behind the register reply finds its queues rather
+        // than racing this main thread; do not move the install back here.
         let handle = rx.recv().map_err(|_| OzmaError::Disconnected)??;
-        if let Ok(mut map) = self.events.lock() {
-            map.insert(handle.clone(), events.clone());
-        }
         let handle_slot = Arc::new(Mutex::new(handle));
         if let Ok(mut regs) = self.registrations.lock() {
             regs.push(Registration {
@@ -516,18 +518,25 @@ fn spawn_reader(
                 }
             } else if op == "event" {
                 if let Ok(ev) = serde_json::from_str::<IncomingEvent>(trimmed) {
-                    let queues = events
+                    match events
                         .lock()
                         .ok()
-                        .and_then(|map| map.get(&ev.handle).cloned());
-                    if let Some(queues) = queues
-                        && !queues.ingest(&ev.event, ev.payload)
+                        .and_then(|map| map.get(&ev.handle).cloned())
                     {
-                        tracing::debug!(
+                        Some(queues) => {
+                            if !queues.ingest(&ev.event, ev.payload) {
+                                tracing::debug!(
+                                    handle = ev.handle,
+                                    event = ev.event,
+                                    "inbound event for an undeclared name dropped"
+                                );
+                            }
+                        }
+                        None => tracing::debug!(
                             handle = ev.handle,
                             event = ev.event,
-                            "inbound event for an undeclared name dropped"
-                        );
+                            "inbound event for an unknown handle dropped"
+                        ),
                     }
                 }
             } else if let Ok(reply) = serde_json::from_str::<RegisterReply>(trimmed)
@@ -542,6 +551,9 @@ fn spawn_reader(
                         Some(h) => {
                             if let Ok(mut map) = handlers.lock() {
                                 map.insert(h.clone(), reg.handlers);
+                            }
+                            if let Ok(mut map) = events.lock() {
+                                map.insert(h.clone(), reg.events);
                             }
                             Ok(h)
                         }
@@ -673,6 +685,7 @@ fn attempt_reconnect(
             pq.push_back(PendingRegister {
                 reply: tx,
                 handlers: reg.handlers.clone(),
+                events: reg.events.clone(),
             });
         }
         let line = match serde_json::to_string(&ClientMsg::Register(reg.kind.clone())) {

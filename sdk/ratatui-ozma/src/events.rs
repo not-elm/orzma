@@ -108,12 +108,6 @@ impl EventQueues {
     }
 }
 
-impl Default for EventQueues {
-    fn default() -> Self {
-        Self::from_decls(&[])
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
