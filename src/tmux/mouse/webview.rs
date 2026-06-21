@@ -6,7 +6,7 @@
 
 use super::super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
 use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
-use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture};
+use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture, cell_dims};
 use crate::picker::SessionPicker;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
@@ -123,8 +123,7 @@ pub(super) fn tmux_webview_pointer(
         return;
     };
     let scale = window.scale_factor();
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let (cell_w, cell_h) = cell_dims(&metrics);
     let cursor_phys = window.cursor_position().map(|c| c * scale);
     if !window.focused || picker.open || copy_prompt.open.is_some() {
         buttons.clear();
@@ -205,8 +204,7 @@ pub(super) fn forward_tmux_webview_mouse_moves(
     };
     let scale = window.scale_factor();
     let cursor_phys = moved.position * scale;
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let (cell_w, cell_h) = cell_dims(&metrics);
     let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys) else {
         return;
     };

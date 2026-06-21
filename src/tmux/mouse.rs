@@ -13,6 +13,7 @@ mod effect;
 mod webview;
 
 use super::copy_mode::{CopyModeSnapshot, cell_at_pane};
+use super::pane_hit::tmux_pane_at_phys;
 use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
@@ -35,6 +36,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{ActiveWindow, PaneId, TmuxConnection, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
+use webview::{TmuxWebviewPress, forward_tmux_webview_mouse_moves, tmux_webview_pointer};
 
 /// Bevy plugin that registers the tmux mouse gesture system.
 pub(crate) struct MousePlugin;
@@ -43,20 +45,17 @@ impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxMouseGesture>()
             .init_resource::<TmuxGestureButtons>()
-            .init_resource::<webview::TmuxWebviewPress>()
+            .init_resource::<TmuxWebviewPress>()
             .add_systems(
                 Update,
-                (
-                    webview::tmux_webview_pointer,
-                    tmux_gesture.run_if(pointer_active),
-                )
+                (tmux_webview_pointer, tmux_gesture.run_if(pointer_active))
                     .chain()
                     .in_set(InputPhase::Dispatch)
                     .in_set(super::OzmuxActiveSet),
             )
             .add_systems(
                 Update,
-                webview::forward_tmux_webview_mouse_moves
+                forward_tmux_webview_mouse_moves
                     .in_set(InputPhase::Hover)
                     .in_set(super::OzmuxActiveSet),
             )
@@ -68,8 +67,9 @@ impl Plugin for MousePlugin {
 /// frame's left-button events the webview layer did NOT consume.
 ///
 /// `tmux_webview_pointer` clears it at the start of every run and pushes each
-/// non-consumed event; `tmux_gesture` drains it via `std::mem::take`. It holds
-/// only non-consumed `Left` events and never accumulates across frames.
+/// non-consumed event; `tmux_gesture` drains it via `drain(..)` (keeps the
+/// allocation for reuse). It holds only non-consumed `Left` events and never
+/// accumulates across frames.
 #[derive(Resource, Default)]
 pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
 
@@ -157,16 +157,15 @@ struct TmuxMouseGesture {
     click: ClickTracker,
 }
 
-/// Returns the `(Entity, PaneId)` of the first `TmuxPane` whose `ComputedNode`
-/// contains `cursor_phys` (physical px), or `None` when no pane covers the point.
-fn pane_under_cursor(
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    cursor_phys: Vec2,
-) -> Option<(Entity, PaneId)> {
-    panes
-        .iter()
-        .find(|(_, _, node, transform)| node.contains_point(**transform, cursor_phys))
-        .map(|(entity, pane, _, _)| (entity, pane.id))
+/// Physical-pixel cell dimensions derived from `TerminalCellMetricsResource`.
+///
+/// Returns `(cell_w, cell_h)`: advance and line-height, floored and clamped to at
+/// least 1.0 so callers never divide by zero.
+pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
+    (
+        metrics.metrics.advance_phys.floor().max(1.0),
+        metrics.metrics.line_height_phys.floor().max(1.0),
+    )
 }
 
 /// Interprets the non-consumed left-button events handed off by
@@ -217,8 +216,7 @@ fn tmux_gesture(
         return;
     };
     let scale = window.scale_factor();
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let (cell_w, cell_h) = cell_dims(&metrics);
     let cursor_phys = window.cursor_position().map(|c| c * scale);
 
     let (grab_tol_logical, drag_threshold_logical, dbl_click_ms, click_drift) = configs
@@ -242,7 +240,7 @@ fn tmux_gesture(
 
     let mut effects: Vec<TmuxMouseEffect> = Vec::new();
 
-    for ev in std::mem::take(&mut buttons.0) {
+    for ev in buttons.0.drain(..) {
         match ev.state {
             ButtonState::Pressed => {
                 let Some(cursor_phys) = cursor_phys else {
@@ -284,18 +282,16 @@ fn tmux_gesture(
         cell_h,
         connection.client().is_some(),
     );
-    let entity = gesture_pane_entity(&gesture.state);
     effects.extend(decide_continuation(&mut gesture.state, ctx));
 
     if !effects.is_empty() {
-        let entity = entity
-            .or_else(|| effect_target_entity(&panes, &effects))
-            // NOTE: Entity::PLACEHOLDER is safe here ONLY because on_tmux_mouse_effects is a global
-            // observer (app.add_observer) that never reads ev.entity() — every effect carries its own
-            // PaneId. If the observer is ever made entity-scoped or starts reading ev.entity(), this
-            // fallback must be revisited or effects will be silently dropped.
-            .unwrap_or(Entity::PLACEHOLDER);
-        commands.trigger(TmuxMouseEffects { entity, effects });
+        // NOTE: Entity::PLACEHOLDER is correct because on_tmux_mouse_effects is a global observer
+        // (app.add_observer) that never reads ev.entity() — every effect variant carries its own
+        // PaneId. Must be revisited if the observer becomes entity-scoped or starts reading ev.entity().
+        commands.trigger(TmuxMouseEffects {
+            entity: Entity::PLACEHOLDER,
+            effects,
+        });
     }
 }
 
@@ -328,7 +324,7 @@ fn press_hit(
             last_sent,
         });
     }
-    let (pane, pane_id) = pane_under_cursor(panes, cursor_phys)?;
+    let (pane, pane_id, _) = tmux_pane_at_phys(panes, cursor_phys)?;
     Some(PressHit::Pane {
         pane,
         pane_id,
@@ -367,7 +363,7 @@ fn release_ctx(
         GestureState::Resizing { .. } => ReleaseCtx {
             copy_mode: false,
             multi_cell: None,
-            pane_under: cursor_phys.and_then(|c| pane_under_cursor(panes, c).map(|(_, id)| id)),
+            pane_under: cursor_phys.and_then(|c| tmux_pane_at_phys(panes, c).map(|(_, id, _)| id)),
         },
         _ => ReleaseCtx {
             copy_mode: false,
@@ -451,43 +447,6 @@ fn continuation_ctx(
         GestureState::Idle => {}
     }
     ctx
-}
-
-/// The pane `Entity` carried by the active gesture state, used as the
-/// `TmuxMouseEffects` event target. `Resizing`/`Idle` carry no pane entity.
-fn gesture_pane_entity(state: &GestureState) -> Option<Entity> {
-    match *state {
-        GestureState::Pressed { pane, .. }
-        | GestureState::PendingMultiSelect { pane, .. }
-        | GestureState::Selecting { pane, .. } => Some(pane),
-        GestureState::Resizing { .. } | GestureState::Idle => None,
-    }
-}
-
-/// The first live pane `Entity` whose `PaneId` is targeted by an effect, used as
-/// a `TmuxMouseEffects` target fallback when the gesture state carries none
-/// (e.g. a `Resizing` resize or a consumed-press `SelectPane`).
-fn effect_target_entity(
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    effects: &[TmuxMouseEffect],
-) -> Option<Entity> {
-    let target = effects.iter().find_map(effect_pane_id)?;
-    panes
-        .iter()
-        .find(|(_, p, _, _)| p.id == target)
-        .map(|(e, _, _, _)| e)
-}
-
-/// The `PaneId` an effect targets.
-fn effect_pane_id(effect: &TmuxMouseEffect) -> Option<PaneId> {
-    match *effect {
-        TmuxMouseEffect::SelectPane(id)
-        | TmuxMouseEffect::ResizePane { primary: id, .. }
-        | TmuxMouseEffect::BeginCopyDrag { pane: id, .. }
-        | TmuxMouseEffect::ExtendCopyDrag { pane: id, .. }
-        | TmuxMouseEffect::MultiSelect { pane: id, .. }
-        | TmuxMouseEffect::CopySelection { pane: id } => Some(id),
-    }
 }
 
 #[cfg(test)]
