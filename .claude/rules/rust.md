@@ -411,6 +411,34 @@ Exception: a call that must be preceded by local logic (e.g., a conditional
 for the calls after the branch. Keep each such sub-chain as long as possible;
 do not split further than the branch requires.
 
+## Plugin registration — register in the defining file's plugin
+
+Systems and observers are registered by a `Plugin` defined in the SAME file
+that defines them, not by `add_systems` / `add_observer` in an upstream /
+aggregator plugin in another file. An aggregator plugin composes the per-file
+plugins with `add_plugins`.
+
+Rationale: a file's ECS registration stays self-contained and discoverable next
+to the systems it registers; parent plugins remain thin aggregators.
+
+Required:
+
+- A file that defines systems/observers also defines the `Plugin` that registers
+  them; parent modules include it via `add_plugins`.
+
+Forbidden:
+
+| Pattern | Why |
+| --- | --- |
+| `add_systems` / `add_observer` in a parent/aggregator plugin for a system or observer defined in a different file | Hoists registration away from the code it registers |
+
+Exception:
+
+- Cross-file ordering coupling (system A in file X must run before system B in
+  file Y) is expressed with `.after()` / `.before()` / a shared `SystemSet`
+  across the per-file plugins — NOT by hoisting both registrations into one
+  upstream plugin.
+
 ## System composition — keep systems focused; split by responsibility
 
 A Bevy system that, in one body, **gathers** input, **decides** what to do, and

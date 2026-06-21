@@ -36,7 +36,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{ActiveWindow, PaneId, TmuxConnection, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
-use webview::{TmuxWebviewPress, forward_tmux_webview_mouse_moves, tmux_webview_pointer};
+use webview::tmux_webview_pointer;
 
 /// Bevy plugin that registers the tmux mouse gesture system.
 pub(crate) struct MousePlugin;
@@ -45,21 +45,15 @@ impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxMouseGesture>()
             .init_resource::<TmuxGestureButtons>()
-            .init_resource::<TmuxWebviewPress>()
             .add_systems(
                 Update,
-                (tmux_webview_pointer, tmux_gesture.run_if(pointer_active))
-                    .chain()
+                tmux_gesture
+                    .run_if(pointer_active)
+                    .after(tmux_webview_pointer)
                     .in_set(InputPhase::Dispatch)
                     .in_set(super::OzmuxActiveSet),
             )
-            .add_systems(
-                Update,
-                forward_tmux_webview_mouse_moves
-                    .in_set(InputPhase::Hover)
-                    .in_set(super::OzmuxActiveSet),
-            )
-            .add_observer(apply::on_tmux_mouse_effects);
+            .add_plugins((webview::WebviewPointerPlugin, apply::ApplyPlugin));
     }
 }
 
@@ -194,8 +188,9 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// releasing or dropping an in-flight inline press — is owned by
 /// `tmux_webview_pointer`, which runs every frame upstream of this system.
 ///
-/// The webview pre-step runs UPSTREAM in `tmux_webview_pointer` (chained before
-/// this system): a press inside an interactive inline rect focuses + forwards to
+/// The webview pre-step runs UPSTREAM in `tmux_webview_pointer` (ordered before
+/// this system via `.after(tmux_webview_pointer)`): a press inside an interactive
+/// inline rect focuses + forwards to
 /// the child's CEF browser and is consumed (it never reaches this buffer, but its
 /// host pane is still `select-pane`d); a press outside every rect drops inline
 /// focus and is buffered here as a normal pane gesture.
@@ -550,7 +545,7 @@ mod tests {
             )
                 .chain(),
         );
-        app.add_observer(apply::on_tmux_mouse_effects);
+        app.add_plugins(apply::ApplyPlugin);
 
         // Pane host node at window center (400, 300), size 800x600 → top-left
         // at (0, 0). Rect rows 2..12, cols 3..43 → phys y 32..192, x 24..344 at

@@ -14,11 +14,20 @@ use ozmux_tmux::{
 };
 use tmux_control_parser::DividerAxis;
 
+/// Plugin that registers the tmux mouse-effects apply observer.
+pub(super) struct ApplyPlugin;
+
+impl Plugin for ApplyPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(on_tmux_mouse_effects);
+    }
+}
+
 /// Observer that applies a frame's decided `TmuxMouseEffects` by sending the
 /// corresponding tmux control-mode commands. Sends are gated on an active
 /// client; when none is present every effect is a no-op and the gesture state
 /// is left unchanged.
-pub(super) fn on_tmux_mouse_effects(
+fn on_tmux_mouse_effects(
     ev: On<TmuxMouseEffects>,
     mut queries: ResMut<CopyModeQueries>,
     mut gesture: ResMut<TmuxMouseGesture>,
