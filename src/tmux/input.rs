@@ -10,10 +10,10 @@
 //! same way the native terminal path does); every other case is ceded to ozma.
 
 use super::pane_hit::tmux_pane_at_phys;
+use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
-use crate::app_mode::AppMode;
 use crate::picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;

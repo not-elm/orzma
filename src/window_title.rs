@@ -180,10 +180,7 @@ mod tests {
 
     #[test]
     fn tmux_trims_session_and_window() {
-        assert_eq!(
-            format_tmux("  main  ", Some("  vim  ")),
-            "main:vim — ozmux"
-        );
+        assert_eq!(format_tmux("  main  ", Some("  vim  ")), "main:vim — ozmux");
     }
 
     fn primary_window_title(app: &mut App) -> String {
