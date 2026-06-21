@@ -291,6 +291,10 @@ fn tmux_gesture(
     if !effects.is_empty() {
         let entity = entity
             .or_else(|| effect_target_entity(&panes, &effects))
+            // NOTE: Entity::PLACEHOLDER is safe here ONLY because on_tmux_mouse_effects is a global
+            // observer (app.add_observer) that never reads ev.entity() — every effect carries its own
+            // PaneId. If the observer is ever made entity-scoped or starts reading ev.entity(), this
+            // fallback must be revisited or effects will be silently dropped.
             .unwrap_or(Entity::PLACEHOLDER);
         commands.trigger(TmuxMouseEffects { entity, effects });
     }
@@ -613,7 +617,7 @@ mod tests {
         );
     }
 
-    fn make_arbiter_webview_app() -> (App, Entity, Entity) {
+    fn make_gesture_webview_app() -> (App, Entity, Entity) {
         use bevy::window::WindowResolution;
         use tmux_control_parser::CellDims;
 
@@ -715,7 +719,7 @@ mod tests {
 
     #[test]
     fn webview_press_focuses_child_and_consumes() {
-        let (mut app, _pane, child) = make_arbiter_webview_app();
+        let (mut app, _pane, child) = make_gesture_webview_app();
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_button(
             &mut app,
@@ -739,7 +743,7 @@ mod tests {
     fn move_resolves_inline_child_over_rect() {
         use bevy::ecs::system::RunSystemOnce;
 
-        let (mut app, _pane, child) = make_arbiter_webview_app();
+        let (mut app, _pane, child) = make_gesture_webview_app();
         let hit = app
             .world_mut()
             .run_system_once(
@@ -774,7 +778,7 @@ mod tests {
     fn move_resolves_nothing_off_rect() {
         use bevy::ecs::system::RunSystemOnce;
 
-        let (mut app, _pane, _child) = make_arbiter_webview_app();
+        let (mut app, _pane, _child) = make_gesture_webview_app();
         let hit = app
             .world_mut()
             .run_system_once(
@@ -806,7 +810,7 @@ mod tests {
 
     #[test]
     fn inline_off_rect_press_releases_focus_and_falls_through() {
-        let (mut app, pane, child) = make_arbiter_webview_app();
+        let (mut app, pane, child) = make_gesture_webview_app();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_button(
@@ -831,7 +835,7 @@ mod tests {
 
     #[test]
     fn modal_open_suppresses_webview_routing_and_gesture() {
-        let (mut app, _pane, _child) = make_arbiter_webview_app();
+        let (mut app, _pane, _child) = make_gesture_webview_app();
         app.world_mut().resource_mut::<SessionPicker>().open = true;
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_button(
@@ -858,7 +862,7 @@ mod tests {
 
     #[test]
     fn closing_modal_resumes_pointer_handling() {
-        let (mut app, pane, _child) = make_arbiter_webview_app();
+        let (mut app, pane, _child) = make_gesture_webview_app();
         app.world_mut().resource_mut::<SessionPicker>().open = true;
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_button(
@@ -891,7 +895,7 @@ mod tests {
 
     #[test]
     fn suppressed_frame_releases_in_flight_webview_press() {
-        let (mut app, _pane, child) = make_arbiter_webview_app();
+        let (mut app, _pane, child) = make_gesture_webview_app();
         app.world_mut().resource_mut::<TmuxWebviewPress>().0 = Some(child);
         app.world_mut().resource_mut::<SessionPicker>().open = true;
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
@@ -910,7 +914,7 @@ mod tests {
 
     #[test]
     fn non_consumed_press_is_handed_off_and_buffer_drained() {
-        let (mut app, pane, _child) = make_arbiter_webview_app();
+        let (mut app, pane, _child) = make_gesture_webview_app();
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_button(
             &mut app,
