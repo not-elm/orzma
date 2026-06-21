@@ -132,3 +132,21 @@ covers here.
   `main`, re-point ozmux to `main` (post-merge `main ⊇ security`).
 - **Rollback:** revert the four-line branch change plus `Cargo.lock` —
   fully reversible, with no ozmux source changes in the base case.
+
+## Update (2026-06-22): finalized to published `bevy_cef 0.11.0`
+
+PR #61 merged into `bevy_cef`'s `main` on 2026-06-21 and was released as
+**`bevy_cef 0.11.0`** (crate `bevy_cef_core 0.11.0`, render processes
+`bevy_cef_render_process` / `bevy_cef_debug_render_process` 0.11.0; git tag
+`v0.11.0`). The released `0.11.0` was verified to contain both the security
+hardening (no hardcoded `disable-web-security` in child launch; `SandboxMode`
+and `risky_present` present) and the features ozmux relies on
+(`WebviewTextureTarget`, `CefKeyboardFilter`).
+
+ozmux therefore depends on the **published version** rather than a git branch:
+`bevy_cef = "0.11"` / `bevy_cef_core = "0.11"` in the manifests (pinned to
+`0.11.0` in `Cargo.lock`, registry source), and the `justfile` installs the
+render processes from crates.io pinned to `bevy_cef_version := "0.11.0"`
+(the `bevy_cef_git` / `bevy_cef_branch` variables are removed). This supersedes
+the "re-point to `main`" follow-up noted above — the published release is the
+durable target.

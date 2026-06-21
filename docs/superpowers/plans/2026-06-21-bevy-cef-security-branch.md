@@ -241,5 +241,5 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ## Notes for the executor
 
-- **Release bundling** (out of band): when next bundling the macOS `.app`, re-run `just setup-cef-release` so the release render process is rebuilt from the `security` branch (the `justfile:11` bump in Task 1 wires this). Dev runs (`cargo run --features debug`) use the crates.io debug render process and need no extra step.
-- **After PR #61 merges to `main`:** re-point the four `branch = "security"` strings to `"main"` and re-run `cargo update` (post-merge `main ⊇ security`). One-line follow-up; not part of this plan.
+- **Release bundling** (out of band): when next bundling the macOS `.app`, re-run `just setup-cef-release` so the release render process is installed from crates.io pinned to `bevy_cef_version` (`0.11.0`). Dev runs (`cargo run --features debug`) install the matching `bevy_cef_debug_render_process@0.11.0` via `just setup-cef`.
+- **Superseded — finalized to published `0.11.0` (2026-06-22):** PR #61 merged and released as `bevy_cef 0.11.0`. ozmux now depends on the published version (`bevy_cef = "0.11"` / `bevy_cef_core = "0.11"`, registry-pinned in `Cargo.lock`) instead of the `security` git branch, and the `justfile` installs the render processes from crates.io at `0.11.0`. See the spec's "Update (2026-06-22)" section. This replaces the earlier "re-point to `main`" follow-up.

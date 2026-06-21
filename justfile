@@ -7,8 +7,7 @@ cef_dir := home_directory() / ".local/share/cef"
 cef_framework_lib := cef_dir / "Chromium Embedded Framework.framework" / "Libraries"
 cef_debug_render_process := "bevy_cef_debug_render_process"
 bevy_cef_render_process := "bevy_cef_render_process"
-bevy_cef_git := "https://github.com/not-elm/bevy_cef"
-bevy_cef_branch := "security"
+bevy_cef_version := "0.11.0"
 
 # CARGO_HOME/bin when CARGO_HOME is set and non-empty, else ~/.cargo/bin.
 # env(key, default) returns the default only when the var is ABSENT, so the
@@ -53,7 +52,7 @@ ozmd: ozmd-web
 setup-cef:
     cargo install export-cef-dir@{{ cef_version }} --force
     export-cef-dir --force "{{ cef_dir }}"
-    cargo install {{ cef_debug_render_process }}
+    cargo install {{ cef_debug_render_process }}@{{ bevy_cef_version }}
     cp "{{ cargo_bin_dir }}/{{ cef_debug_render_process }}" "{{ cef_framework_lib }}/{{ cef_debug_render_process }}"
 
 # install arm64 CEF + release render process (for bundling)
@@ -61,7 +60,7 @@ setup-cef:
 setup-cef-release:
     cargo install export-cef-dir@{{ cef_version }} --force
     export-cef-dir --force "{{ cef_dir }}"
-    cargo install --git {{ bevy_cef_git }} --branch {{ bevy_cef_branch }} {{ bevy_cef_render_process }}
+    cargo install {{ bevy_cef_render_process }}@{{ bevy_cef_version }}
 
 # build and package the ozmux .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
