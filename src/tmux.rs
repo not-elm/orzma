@@ -33,14 +33,14 @@ use window_bar::WindowBarPlugin;
 
 /// SystemSet applied to every tmux Update system. Runs only in `AppMode::Tmux`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct OzmuxActiveSet;
+pub(crate) struct TmuxActiveSet;
 
 /// Bevy plugin aggregating all tmux runtime sub-plugins.
 pub struct OzmuxTmuxPlugin;
 
 impl Plugin for OzmuxTmuxPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, OzmuxActiveSet.run_if(in_state(AppMode::Tmux)))
+        app.configure_sets(Update, TmuxActiveSet.run_if(in_state(AppMode::Tmux)))
             .add_systems(OnEnter(AppMode::Tmux), on_enter_ozmux)
             .add_systems(OnExit(AppMode::Tmux), on_exit_ozmux)
             .add_observer(on_tmux_connection_closed)

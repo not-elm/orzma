@@ -42,7 +42,7 @@ impl Plugin for OzmuxPickerPlugin {
                     refresh_picker_on_open,
                     refresh_session_ozmux_sock
                         .run_if(resource_exists_and_changed::<ConnectionState>)
-                        .in_set(crate::tmux::OzmuxActiveSet),
+                        .in_set(crate::tmux::TmuxActiveSet),
                     // NOTE: handle_picker_row_interaction and picker_row_hover_cursor
                     // are deliberately NOT gated by run_if(picker_is_open): both must
                     // observe the picker's closed state to reset per-open state

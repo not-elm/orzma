@@ -56,7 +56,7 @@ impl Plugin for InputPlugin {
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
             )
-                .in_set(super::OzmuxActiveSet),
+                .in_set(super::TmuxActiveSet),
         );
     }
 }

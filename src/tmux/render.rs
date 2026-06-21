@@ -49,13 +49,13 @@ impl Plugin for RenderPlugin {
                 )
                     .chain()
                     .after(TmuxProjectionSet)
-                    .in_set(super::OzmuxActiveSet),
+                    .in_set(super::TmuxActiveSet),
             )
             .add_systems(
                 Update,
                 sync_client_size
                     .after(TmuxProjectionSet)
-                    .in_set(super::OzmuxActiveSet),
+                    .in_set(super::TmuxActiveSet),
             );
     }
 }
