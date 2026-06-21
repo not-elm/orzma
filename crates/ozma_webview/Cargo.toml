@@ -14,7 +14,7 @@ debug = ["bevy_cef/debug"]
 
 [dependencies]
 bevy = { workspace = true }
-bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "passthrough" }
+bevy_cef = { git = "https://github.com/not-elm/bevy_cef", branch = "security" }
 bevy_cef_core = { workspace = true }
 ozma_terminal = { path = "../ozma_terminal" }
 ozma_tty_engine = { path = "../ozma_tty_engine" }

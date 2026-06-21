@@ -8,7 +8,7 @@ cef_framework_lib := cef_dir / "Chromium Embedded Framework.framework" / "Librar
 cef_debug_render_process := "bevy_cef_debug_render_process"
 bevy_cef_render_process := "bevy_cef_render_process"
 bevy_cef_git := "https://github.com/not-elm/bevy_cef"
-bevy_cef_branch := "passthrough"
+bevy_cef_branch := "security"
 
 # CARGO_HOME/bin when CARGO_HOME is set and non-empty, else ~/.cargo/bin.
 # env(key, default) returns the default only when the var is ABSENT, so the
