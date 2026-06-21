@@ -29,8 +29,11 @@ jobs:
         with:
           shared-key: "release-macos"
 
+      - name: Install just
+        uses: taiki-e/install-action@just
+
       - name: Provision CEF + release render process
-        run: make setup-cef-release
+        run: just setup-cef-release
 
       - name: Import signing certificate
         if: env.MACOS_CERT_P12 != ''
