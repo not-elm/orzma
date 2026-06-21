@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn dialog_hidden_on_exit_ozmux() {
+    fn dialog_hidden_on_exit_tmux() {
         let mut app = App::new();
         app.add_plugins(bevy::state::app::StatesPlugin);
         app.insert_state(AppMode::Tmux);

@@ -41,8 +41,8 @@ pub struct OzmuxTmuxPlugin;
 impl Plugin for OzmuxTmuxPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, TmuxActiveSet.run_if(in_state(AppMode::Tmux)))
-            .add_systems(OnEnter(AppMode::Tmux), on_enter_ozmux)
-            .add_systems(OnExit(AppMode::Tmux), on_exit_ozmux)
+            .add_systems(OnEnter(AppMode::Tmux), on_enter_tmux)
+            .add_systems(OnExit(AppMode::Tmux), on_exit_tmux)
             .add_observer(on_tmux_connection_closed)
             .add_plugins((
                 TmuxSessionPlugin,
@@ -68,11 +68,11 @@ fn on_tmux_connection_closed(
     next_mode.set(AppMode::Default);
 }
 
-fn on_enter_ozmux(mut commands: Commands) {
+fn on_enter_tmux(mut commands: Commands) {
     commands.insert_resource(TmuxPresence);
 }
 
-fn on_exit_ozmux(mut commands: Commands, mut connection: NonSendMut<TmuxConnection>) {
+fn on_exit_tmux(mut commands: Commands, mut connection: NonSendMut<TmuxConnection>) {
     if let Some(client) = connection.client() {
         let _ = client.handle().send("detach-client");
     }

@@ -19,14 +19,14 @@ impl Plugin for WindowTitlePlugin {
         app.add_systems(
             Update,
             (
-                update_ozma_window_title.run_if(in_state(AppMode::Default)),
-                update_ozmux_window_title
+                update_default_window_title.run_if(in_state(AppMode::Default)),
+                update_tmux_window_title
                     .run_if(in_state(AppMode::Tmux))
                     .run_if(ozmux_title_dirty)
                     .after(TmuxProjectionSet),
             ),
         )
-        .add_systems(OnEnter(AppMode::Tmux), update_ozmux_window_title);
+        .add_systems(OnEnter(AppMode::Tmux), update_tmux_window_title);
     }
 }
 
@@ -34,7 +34,7 @@ const APP_NAME: &str = "ozmux";
 
 const SUFFIX: &str = " — ozmux";
 
-fn update_ozma_window_title(
+fn update_default_window_title(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
     focused: Query<&TerminalTitle, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     terminals: Query<(), With<OzmaTerminal>>,
@@ -54,7 +54,7 @@ fn update_ozma_window_title(
     }
 }
 
-fn update_ozmux_window_title(
+fn update_tmux_window_title(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
     sessions: Query<&TmuxSession>,
     active_windows: Query<&TmuxWindow, With<ActiveWindow>>,

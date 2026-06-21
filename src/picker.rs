@@ -662,7 +662,7 @@ fn activate_row(
         apply_switch(connection, state, configs, control, picker, row);
     } else {
         let attached = apply_attach(connection, state, configs, control, picker, row);
-        if should_enter_ozmux(attached, current_mode) {
+        if should_enter_tmux(attached, current_mode) {
             next_mode.set(AppMode::Tmux);
         }
     }
@@ -787,9 +787,9 @@ fn apply_attach(
 ///
 /// The `Ozma` guard is correctness-critical, not an optimization: under Bevy
 /// 0.18 `NextState::set` to the current value re-runs `OnExit`/`OnEnter`, so
-/// setting `Ozmux` while already in `Ozmux` would run `on_exit_ozmux`
+/// setting `Ozmux` while already in `Ozmux` would run `on_exit_tmux`
 /// (`connection.take()` + `detach-client`) and tear down the live client.
-fn should_enter_ozmux(attached: bool, current: &AppMode) -> bool {
+fn should_enter_tmux(attached: bool, current: &AppMode) -> bool {
     attached && *current == AppMode::Default
 }
 
@@ -1029,11 +1029,11 @@ mod tests {
     }
 
     #[test]
-    fn should_enter_ozmux_only_when_attached_from_ozma() {
-        assert!(should_enter_ozmux(true, &AppMode::Default));
-        assert!(!should_enter_ozmux(false, &AppMode::Default));
-        assert!(!should_enter_ozmux(true, &AppMode::Tmux));
-        assert!(!should_enter_ozmux(false, &AppMode::Tmux));
+    fn should_enter_tmux_only_when_attached_from_default() {
+        assert!(should_enter_tmux(true, &AppMode::Default));
+        assert!(!should_enter_tmux(false, &AppMode::Default));
+        assert!(!should_enter_tmux(true, &AppMode::Tmux));
+        assert!(!should_enter_tmux(false, &AppMode::Tmux));
     }
 
     fn key_press(code: KeyCode) -> bevy::input::keyboard::KeyboardInput {
@@ -1142,7 +1142,7 @@ mod tests {
         app
     }
 
-    fn enter_ozmux(app: &mut App) {
+    fn enter_tmux(app: &mut App) {
         app.insert_resource(NextState::Pending(AppMode::Tmux));
         app.update();
     }
@@ -1150,7 +1150,7 @@ mod tests {
     #[test]
     fn dispatch_runs_once_at_boot_and_marks_dispatched() {
         let mut app = dispatch_app();
-        enter_ozmux(&mut app);
+        enter_tmux(&mut app);
         // The boot dispatch ran: marker inserted, and (default startup_mode = Ozma)
         // it queued a transition back to Ozma.
         assert!(app.world().get_resource::<StartupDispatched>().is_some());
@@ -1165,7 +1165,7 @@ mod tests {
     fn dispatch_skipped_when_already_dispatched_does_not_bounce() {
         let mut app = dispatch_app();
         app.insert_resource(StartupDispatched);
-        enter_ozmux(&mut app);
+        enter_tmux(&mut app);
         // run_if(not(resource_exists)) is false, so dispatch never ran and the
         // Ozma -> Ozmux transition is NOT bounced back to Ozma.
         assert_eq!(
