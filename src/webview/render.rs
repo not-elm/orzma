@@ -6,10 +6,9 @@
 use super::mount::Webview;
 use super::osc::NonInteractive;
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
-use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use ozmux_tmux::{ActivePane, TmuxPane};
+use ozma_terminal::{KeyboardFocused, OzmaTerminal, OzmaTerminalInputSet};
 use ozmux_webview_host::WebviewAssetRegistry;
 use ozmux_webview_host::dyn_scheme::custom_dyn_scheme;
 use serde_json::Value;
@@ -75,7 +74,7 @@ impl Plugin for RenderPlugin {
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
             .add_observer(log_webview_load_error)
-            .add_systems(Update, sync_focused_webview.after(OzmuxSystems::Input));
+            .add_systems(Update, sync_focused_webview.after(OzmaTerminalInputSet));
     }
 }
 
@@ -91,7 +90,7 @@ impl Plugin for RenderPlugin {
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
 /// webview child (`Webview`) whose `ChildOf` parent is a live
-/// `TmuxPane` — active or not — that inline focus stands (spec §7, single
+/// `OzmaTerminal` surface — active or not — that inline focus stands (spec §7, single
 /// focus source). This covers click-granted focus and the app-declared focus
 /// set via the control-plane `SetFocus` op, and means switching the active
 /// pane does NOT clear a webview's focus: the webview keeps keyboard
@@ -100,20 +99,20 @@ impl Plugin for RenderPlugin {
 /// pane to `None`.
 pub(crate) fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
-    active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
+    active_pane: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
     webview_parents: Query<&ChildOf, With<Webview>>,
-    tmux_panes: Query<(), With<TmuxPane>>,
+    surfaces: Query<(), With<OzmaTerminal>>,
 ) {
     // NOTE: a despawned inline child fails `webview_parents.get` here and so
     // falls through to the clear path below, which resolves to `None` and
-    // clears it — that fall-through is the GC for tmux-pane inline focus; a
+    // clears it — that fall-through is the GC for surface inline focus; a
     // later edit that short-circuits this arm before the despawn check would
     // leak focus.
     if let Some(child) = focused.0
         && let Ok(parent) = webview_parents.get(child)
-        && tmux_panes.contains(parent.parent())
+        && surfaces.contains(parent.parent())
     {
         return;
     }
@@ -305,44 +304,29 @@ mod tests {
         // so bevy_cef blurs the webview (releasing its DOM text area
         // and stopping keyboard from routing to it). When the webview pane is
         // active, its webview must be focused.
-        use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
-        use tmux_control_parser::CellDims;
-
-        let dims = CellDims {
-            width: 80,
-            height: 24,
-            xoff: 0,
-            yoff: 0,
-        };
+        use ozma_terminal::{KeyboardFocused, OzmaTerminal};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        // The active TmuxPane IS the active surface. The webview pane carries a
+        // The active OzmaTerminal IS the active surface. The webview pane carries a
         // WebviewSource; the terminal pane does not.
-        let terminal_pane = app
-            .world_mut()
-            .spawn(TmuxPane {
-                id: PaneId(1),
-                dims,
-            })
-            .id();
+        let terminal_pane = app.world_mut().spawn(OzmaTerminal).id();
         let ext_pane = app
             .world_mut()
             .spawn((
-                TmuxPane {
-                    id: PaneId(2),
-                    dims,
-                },
+                OzmaTerminal,
                 WebviewSource::new("ozma-dyn://memo/index.html"),
             ))
             .id();
 
         let set_active = move |app: &mut App, active: Entity, inactive: Entity| {
-            app.world_mut().entity_mut(active).insert(ActivePane);
-            app.world_mut().entity_mut(inactive).remove::<ActivePane>();
+            app.world_mut().entity_mut(active).insert(KeyboardFocused);
+            app.world_mut()
+                .entity_mut(inactive)
+                .remove::<KeyboardFocused>();
             app.update();
         };
 
@@ -374,27 +358,18 @@ mod tests {
     #[test]
     fn non_interactive_webview_surface_never_takes_keyboard_focus() {
         use crate::webview::osc::NonInteractive;
-        use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
-        use tmux_control_parser::CellDims;
+        use ozma_terminal::{KeyboardFocused, OzmaTerminal};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        // The active TmuxPane carries a NonInteractive WebviewSource: it must
+        // The active OzmaTerminal carries a NonInteractive WebviewSource: it must
         // never be focused.
         app.world_mut().spawn((
-            TmuxPane {
-                id: PaneId(1),
-                dims: CellDims {
-                    width: 80,
-                    height: 24,
-                    xoff: 0,
-                    yoff: 0,
-                },
-            },
-            ActivePane,
+            OzmaTerminal,
+            KeyboardFocused,
             WebviewSource::new("ozma-dyn://memo/index.html"),
             NonInteractive,
         ));
@@ -410,26 +385,14 @@ mod tests {
 
     #[test]
     fn tmux_pane_inline_focus_is_preserved() {
-        use ozmux_tmux::{PaneId, TmuxPane};
-        use tmux_control_parser::CellDims;
+        use ozma_terminal::OzmaTerminal;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        let pane = app
-            .world_mut()
-            .spawn(TmuxPane {
-                id: PaneId(1),
-                dims: CellDims {
-                    width: 80,
-                    height: 24,
-                    xoff: 0,
-                    yoff: 0,
-                },
-            })
-            .id();
+        let pane = app.world_mut().spawn(OzmaTerminal).id();
         let child = app
             .world_mut()
             .spawn((
@@ -448,32 +411,20 @@ mod tests {
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             Some(child),
-            "an inline child of a live TmuxPane must keep FocusedWebview across the per-frame sync",
+            "an inline child of a live OzmaTerminal must keep FocusedWebview across the per-frame sync",
         );
     }
 
     #[test]
     fn tmux_pane_inline_focus_is_gc_on_despawn() {
-        use ozmux_tmux::{PaneId, TmuxPane};
-        use tmux_control_parser::CellDims;
+        use ozma_terminal::OzmaTerminal;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        let pane = app
-            .world_mut()
-            .spawn(TmuxPane {
-                id: PaneId(1),
-                dims: CellDims {
-                    width: 80,
-                    height: 24,
-                    xoff: 0,
-                    yoff: 0,
-                },
-            })
-            .id();
+        let pane = app.world_mut().spawn(OzmaTerminal).id();
         let child = app
             .world_mut()
             .spawn((

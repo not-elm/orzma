@@ -9,6 +9,7 @@
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
+use ozma_terminal::KeyboardFocused;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::material::PaneInactiveStyle;
 use ozmux_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
@@ -24,6 +25,7 @@ impl Plugin for PaneFocusPlugin {
             (
                 augment_tmux_pane.after(TmuxProjectionSet),
                 sync_inactive_pane_style.run_if(pane_active_state_changed),
+                sync_keyboard_focus_to_active_pane.run_if(pane_active_state_changed),
             )
                 .in_set(super::OzmuxActiveSet),
         );
@@ -84,6 +86,24 @@ fn sync_inactive_pane_style(
     }
 }
 
+/// Mirrors tmux's `ActivePane` onto the terminal-level `KeyboardFocused` marker:
+/// the active pane gains `KeyboardFocused`, every other pane loses it. This is
+/// the host's bridge from the multiplexer's active-pane notion to the terminal
+/// crate's single focus marker (which `ozma_webview` and IME/title read).
+/// Writes conditionally so change detection fires only on real changes.
+fn sync_keyboard_focus_to_active_pane(
+    mut commands: Commands,
+    panes: Query<(Entity, Has<ActivePane>, Has<KeyboardFocused>), With<TmuxPane>>,
+) {
+    for (entity, active, focused) in panes.iter() {
+        if active && !focused {
+            commands.entity(entity).insert(KeyboardFocused);
+        } else if !active && focused {
+            commands.entity(entity).remove::<KeyboardFocused>();
+        }
+    }
+}
+
 /// Returns the [`PaneInactiveStyle`] applied to inactive panes when the
 /// treatment is enabled: background tint (`tint_color` linearized + `tint`
 /// amount) and the webview overlay treatment (`webview_dim` /
@@ -108,6 +128,66 @@ fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> PaneInactiveStyle {
 mod tests {
     use super::*;
     use ozmux_tmux::TmuxPane;
+
+    #[test]
+    fn active_pane_gains_keyboard_focus_and_inactive_loses_it() {
+        use ozma_terminal::KeyboardFocused;
+        use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
+        use tmux_control_parser::CellDims;
+
+        let dims = CellDims {
+            width: 80,
+            height: 24,
+            xoff: 0,
+            yoff: 0,
+        };
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(
+            Update,
+            super::sync_keyboard_focus_to_active_pane.run_if(super::pane_active_state_changed),
+        );
+
+        let p1 = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims,
+                },
+                ActivePane,
+            ))
+            .id();
+        let p2 = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(2),
+                dims,
+            })
+            .id();
+        app.update();
+        assert!(
+            app.world().entity(p1).contains::<KeyboardFocused>(),
+            "active pane gets focus"
+        );
+        assert!(
+            !app.world().entity(p2).contains::<KeyboardFocused>(),
+            "inactive pane has none"
+        );
+
+        // Move ActivePane to p2.
+        app.world_mut().entity_mut(p1).remove::<ActivePane>();
+        app.world_mut().entity_mut(p2).insert(ActivePane);
+        app.update();
+        assert!(
+            !app.world().entity(p1).contains::<KeyboardFocused>(),
+            "former active loses focus"
+        );
+        assert!(
+            app.world().entity(p2).contains::<KeyboardFocused>(),
+            "new active gains focus"
+        );
+    }
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use tmux_control_parser::{CellDims, PaneId};

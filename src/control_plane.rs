@@ -1895,8 +1895,7 @@ mod focus_tests {
     #[test]
     fn sync_preserves_app_declared_focus_from_control_plane() {
         use crate::webview::render::sync_focused_webview;
-        use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
-        use tmux_control_parser::CellDims;
+        use ozma_terminal::OzmaTerminal;
 
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
@@ -1906,22 +1905,8 @@ mod focus_tests {
             .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()))
             .add_systems(Update, sync_focused_webview);
 
-        // The owner surface IS the active TmuxPane.
-        let surface = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 80,
-                        height: 24,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-                ActivePane,
-            ))
-            .id();
+        // The owner surface is an OzmaTerminal (the terminal-level focus marker).
+        let surface = app.world_mut().spawn(OzmaTerminal).id();
 
         app.world_mut().resource_mut::<DynamicRegistry>().insert(
             "h1".into(),
