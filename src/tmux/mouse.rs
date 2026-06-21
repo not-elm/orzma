@@ -71,6 +71,15 @@ impl Plugin for MousePlugin {
     }
 }
 
+/// Hand-off buffer from `tmux_webview_pointer` to `tmux_gesture`: the
+/// frame's left-button events the webview layer did NOT consume.
+///
+/// `tmux_webview_pointer` clears it at the start of every run and pushes each
+/// non-consumed event; `tmux_gesture` drains it via `std::mem::take`. It holds
+/// only non-consumed `Left` events and never accumulates across frames.
+#[derive(Resource, Default)]
+pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
+
 /// Run condition for the active tmux pointer pipeline: `true` iff a focused
 /// primary window exists AND no modal (picker / copy-search prompt) owns input.
 ///
@@ -152,15 +161,6 @@ struct TmuxMouseGesture {
     state: GestureState,
     click: ClickTracker,
 }
-
-/// Hand-off buffer from `tmux_webview_pointer` to `tmux_gesture`: the
-/// frame's left-button events the webview layer did NOT consume.
-///
-/// `tmux_webview_pointer` clears it at the start of every run and pushes each
-/// non-consumed event; `tmux_gesture` drains it via `std::mem::take`. It holds
-/// only non-consumed `Left` events and never accumulates across frames.
-#[derive(Resource, Default)]
-pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
 
 /// Returns the `(Entity, PaneId)` of the first `TmuxPane` whose `ComputedNode`
 /// contains `cursor_phys` (physical px), or `None` when no pane covers the point.
