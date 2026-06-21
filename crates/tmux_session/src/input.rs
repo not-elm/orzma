@@ -10,7 +10,6 @@
 //! adapter.
 
 use bevy::input::keyboard::{Key, KeyCode};
-use std::fmt::Write;
 
 /// Active keyboard modifiers for a key event.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -100,34 +99,6 @@ pub fn bevy_key_to_tmux_name(key: &Key, code: KeyCode, mods: KeyMods) -> Option<
     };
     let shift_prefix = !matches!(key, Key::Character(_));
     Some(prefix(&mods, shift_prefix, &base))
-}
-
-/// Builds a `send-keys -H -t <pane> <hex>…` command injecting raw bytes into a
-/// pane (used for terminal replies). `pane` is the tmux pane id like `%3`.
-pub fn send_bytes_command(pane: &str, bytes: &[u8]) -> String {
-    let mut cmd = format!("send-keys -H -t {}", quote(pane));
-    for b in bytes {
-        let _ = write!(cmd, " {b:02x}");
-    }
-    cmd
-}
-
-/// Builds a `send-keys -t <pane> -- <name>…` command delivering the given key
-/// names straight to a pane (one batched command per frame), bypassing tmux's
-/// client key tables. The `--` terminates options so a key whose name is `-`
-/// cannot be parsed as a flag; `pane` and each name are quoted.
-///
-/// NOTE: this is the forward path, NOT `send-keys -K`. Under `tmux -CC`, `-K`
-/// mis-encodes named keys (e.g. `Up` arrives at the pane as a literal `n`),
-/// so keys go directly to the pane, which tmux's pane-input encoder translates
-/// correctly (respecting the pane's application-cursor mode).
-pub fn send_pane_keys_command(pane: &str, names: &[String]) -> String {
-    let mut cmd = format!("send-keys -t {} --", quote(pane));
-    for n in names {
-        cmd.push(' ');
-        cmd.push_str(&quote(n));
-    }
-    cmd
 }
 
 /// Returns the base character a letter/digit/ASCII-punctuation physical key
@@ -407,40 +378,6 @@ mod tests {
         assert_eq!(
             bevy_key_to_tmux_name(&Key::Enter, KeyCode::Enter, m(false, false, false, true)),
             None
-        );
-    }
-
-    #[test]
-    fn send_pane_keys_targets_pane_with_double_dash() {
-        assert_eq!(
-            send_pane_keys_command("%3", &["a".into(), "C-c".into(), "Up".into()]),
-            "send-keys -t %3 -- a C-c Up"
-        );
-    }
-
-    #[test]
-    fn send_pane_keys_double_dash_guards_a_dash_named_key() {
-        // A key whose name is a bare '-' must reach the pane, not be parsed as a
-        // flag — the `--` terminator guarantees that.
-        assert_eq!(
-            send_pane_keys_command("%1", &["-".into()]),
-            "send-keys -t %1 -- -"
-        );
-    }
-
-    #[test]
-    fn send_pane_keys_quotes_metachars() {
-        assert_eq!(
-            send_pane_keys_command("%2", &[";".into()]),
-            "send-keys -t %2 -- ';'"
-        );
-    }
-
-    #[test]
-    fn send_bytes_hex_encodes() {
-        assert_eq!(
-            send_bytes_command("%3", &[0x1b, b'[', b'0', b'n']),
-            "send-keys -H -t %3 1b 5b 30 6e"
         );
     }
 }

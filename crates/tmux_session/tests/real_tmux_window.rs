@@ -6,8 +6,8 @@
 
 use bevy::prelude::*;
 use ozmux_tmux::{
-    ActiveWindow, ConnectionState, TmuxConnection, TmuxSession, TmuxSessionPlugin, TmuxWindow,
-    WindowId, select_window_command,
+    ActiveWindow, ConnectionState, SelectWindow, TmuxCommand, TmuxConnection, TmuxSession,
+    TmuxSessionPlugin, TmuxWindow, WindowId,
 };
 use std::time::{Duration, Instant};
 use tmux_control::TmuxServer;
@@ -127,7 +127,7 @@ fn window_switch_round_trips_via_select_window() {
         "new-window should shift the active window off first_active"
     );
 
-    let cmd = select_window_command(first_active);
+    let cmd = SelectWindow { id: first_active }.into_raw_command();
     app.world()
         .get_non_send_resource::<TmuxConnection>()
         .unwrap()

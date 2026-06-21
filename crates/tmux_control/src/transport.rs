@@ -1,6 +1,7 @@
 //! I/O transport: owns a `tmux -CC` process and pumps its output through a
 //! [`crate::ProtocolClient`].
 
+use crate::command::TmuxCommand;
 use crate::error::{TmuxError, TmuxResult};
 use crate::protocol::{ClientEvent, CommandId, ProtocolClient};
 use crate::session::{LIST_FORMAT, SessionInfo};
@@ -321,10 +322,13 @@ pub struct TmuxHandle {
 
 impl TmuxHandle {
     /// Encodes and writes `command` to tmux, returning its [`CommandId`].
-    ///
+    pub fn send(&self, command: impl TmuxCommand) -> TmuxResult<CommandId> {
+        self.send_raw(&command.into_raw_command())
+    }
+
     /// On write failure the pending registration is rolled back so later
     /// replies stay correctly correlated.
-    pub fn send(&self, command: &str) -> TmuxResult<CommandId> {
+    fn send_raw(&self, command: &str) -> TmuxResult<CommandId> {
         let mut protocol = self.protocol.lock().expect("tmux protocol mutex poisoned");
         let id = protocol.send(command)?;
         let bytes = protocol.take_outgoing();
