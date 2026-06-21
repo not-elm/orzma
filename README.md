@@ -24,16 +24,17 @@ brew upgrade --cask ozmux
 
 - Rust 1.95 (pinned by `rust-toolchain.toml`)
 - Node + `pnpm@10.30.2` (for the `@ozma/web` TypeScript package; dev/CI use Node 24)
+- [`just`](https://just.systems/) — the task runner (`brew install just` or `cargo install just`)
 - The Chromium Embedded Framework, installed once:
   ```bash
-  make setup-cef
+  just setup-cef
   ```
 
 ## Run
 
 ```bash
 pnpm install
-cargo run               # or: make run
+cargo run               # or: just run
 ```
 
 ## Layout

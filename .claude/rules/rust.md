@@ -513,7 +513,7 @@ When a rule is physically impossible to follow (e.g., trybuild fixtures, generat
 
 Tool-enforced:
 
-- `cargo clippy --fix --allow-dirty --allow-staged && cargo fmt`, or `make fix-lint`
+- `cargo clippy --fix --allow-dirty --allow-staged && cargo fmt`, or `just fix-lint`
 - Add `#![warn(missing_docs)]` to each crate's `lib.rs` / `main.rs` to enforce the doc requirement (rollout tracked separately)
 - CI runs the existing `clippy` and `fmt` checks
 
