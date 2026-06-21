@@ -225,7 +225,7 @@ pub(crate) fn ime_policy_system(
 
     let surface = match active_surface {
         Some(entity) => Some(entity),
-        // NOTE: Ozma mode has no tmux ActivePane; fall back to the focused terminal.
+        // NOTE: Default mode has no tmux ActivePane; fall back to the focused terminal.
         None if *current_mode.get() == AppMode::Default => ozma_terminal.single().ok(),
         None => None,
     };

@@ -21,7 +21,7 @@ use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview, webview_hit_at};
 use ozmux_tmux::TmuxPane;
 
-/// Registers the Ozmux-mode per-pane input gate maintainer.
+/// Registers the Tmux-mode per-pane input gate maintainer.
 pub(crate) struct GatePlugin;
 
 impl Plugin for GatePlugin {

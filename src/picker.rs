@@ -98,7 +98,7 @@ pub(crate) struct SessionPicker {
 }
 
 /// Inserted on the first `OnEnter(AppMode::Tmux)` (boot) so the startup-mode
-/// dispatch routes only once and later Ozmux entries skip it.
+/// dispatch routes only once and later Tmux entries skip it.
 #[derive(Resource)]
 struct StartupDispatched;
 
@@ -163,10 +163,10 @@ fn refresh_picker_on_open(mut picker: ResMut<SessionPicker>, configs: Res<OzmuxC
     }
 }
 
-/// Boot-time startup-mode routing, run once. Registered on `OnEnter(Ozmux)`
+/// Boot-time startup-mode routing, run once. Registered on `OnEnter(Tmux)`
 /// behind `run_if(not(resource_exists::<StartupDispatched>))`; it inserts
-/// `StartupDispatched` on its first (boot) run so later Ozmux entries skip it
-/// and do not bounce a picker-driven Ozma -> Ozmux transition back to Ozma.
+/// `StartupDispatched` on its first (boot) run so later Tmux entries skip it
+/// and do not bounce a picker-driven Default -> Tmux transition back to Default.
 fn dispatch_startup_mode(
     mut commands: Commands,
     mut connection: NonSendMut<TmuxConnection>,
@@ -785,9 +785,9 @@ fn apply_attach(
 /// [`AppMode::Tmux`]: true only when the attach succeeded and the app is
 /// currently in [`AppMode::Default`].
 ///
-/// The `Ozma` guard is correctness-critical, not an optimization: under Bevy
+/// The `Default` guard is correctness-critical, not an optimization: under Bevy
 /// 0.18 `NextState::set` to the current value re-runs `OnExit`/`OnEnter`, so
-/// setting `Ozmux` while already in `Ozmux` would run `on_exit_tmux`
+/// setting `Tmux` while already in `Tmux` would run `on_exit_tmux`
 /// (`connection.take()` + `detach-client`) and tear down the live client.
 fn should_enter_tmux(attached: bool, current: &AppMode) -> bool {
     attached && *current == AppMode::Default
@@ -1151,10 +1151,10 @@ mod tests {
     fn dispatch_runs_once_at_boot_and_marks_dispatched() {
         let mut app = dispatch_app();
         enter_tmux(&mut app);
-        // The boot dispatch ran: marker inserted, and (default startup_mode = Ozma)
-        // it queued a transition back to Ozma.
+        // The boot dispatch ran: marker inserted, and (default startup_mode = Default)
+        // it queued a transition back to Default.
         assert!(app.world().get_resource::<StartupDispatched>().is_some());
-        app.update(); // apply the queued Ozmux -> Ozma transition
+        app.update(); // apply the queued Tmux -> Default transition
         assert_eq!(
             *app.world().resource::<State<AppMode>>().get(),
             AppMode::Default
@@ -1167,7 +1167,7 @@ mod tests {
         app.insert_resource(StartupDispatched);
         enter_tmux(&mut app);
         // run_if(not(resource_exists)) is false, so dispatch never ran and the
-        // Ozma -> Ozmux transition is NOT bounced back to Ozma.
+        // Default -> Tmux transition is NOT bounced back to Default.
         assert_eq!(
             *app.world().resource::<State<AppMode>>().get(),
             AppMode::Tmux

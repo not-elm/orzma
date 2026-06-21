@@ -92,7 +92,7 @@ pub struct TmuxConnectionReset;
 
 /// Fired specifically when the tmux transport closes from the tmux side (not
 /// app-initiated). Consumed in `src/tmux.rs` to transition `AppMode` back to
-/// `Ozma`. Keeping this separate from `TmuxConnectionReset` avoids a double
+/// `Default`. Keeping this separate from `TmuxConnectionReset` avoids a double
 /// mode-set when the app itself initiates the detach.
 #[derive(Event, Debug, Clone)]
 pub struct TmuxConnectionClosed;

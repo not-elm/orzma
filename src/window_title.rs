@@ -1,6 +1,6 @@
 //! Dynamic OS window-title sync: reflects the active context per `AppMode`
-//! into the primary window's title bar — `session:window — ozmux` in Ozmux
-//! mode, the focused terminal's OSC title + ` — ozmux` in Ozma mode.
+//! into the primary window's title bar — `session:window — ozmux` in Tmux
+//! mode, the focused terminal's OSC title + ` — ozmux` in Default mode.
 
 use crate::app_mode::AppMode;
 use bevy::prelude::*;
@@ -10,8 +10,8 @@ use ozma_tty_engine::{TerminalTitle, sanitize_title};
 use ozmux_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow};
 
 /// Keeps the primary OS window title in sync with the active `AppMode`
-/// context: the tmux `session:window` in Ozmux mode, and the focused
-/// terminal's OSC title in Ozma mode.
+/// context: the tmux `session:window` in Tmux mode, and the focused
+/// terminal's OSC title in Default mode.
 pub(crate) struct WindowTitlePlugin;
 
 impl Plugin for WindowTitlePlugin {
@@ -45,7 +45,7 @@ fn update_default_window_title(
     // NOTE: the no-focus branch is deliberately asymmetric. Hold the last title
     // when terminals exist but focus is transiently absent (a handoff — avoids a
     // one-frame flicker); reset to the app-name fallback when no terminal exists
-    // at all, so a stale cross-mode title cannot linger after entering Ozma
+    // at all, so a stale cross-mode title cannot linger after entering Default
     // before the deferred terminal spawn flushes.
     if let Ok(title) = focused.single() {
         apply_title(&mut window, format_ozma(title.0.as_deref()));
@@ -77,7 +77,7 @@ fn update_tmux_window_title(
 }
 
 /// True when the tmux session name, the active window, or the active window's
-/// name may have changed this frame — the inputs to the Ozmux window title.
+/// name may have changed this frame — the inputs to the Tmux window title.
 fn ozmux_title_dirty(
     mut removed_session: RemovedComponents<TmuxSession>,
     mut removed_active: RemovedComponents<ActiveWindow>,
