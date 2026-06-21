@@ -13,7 +13,7 @@ use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
-use ozmux_tmux::TmuxPane;
+use ozma_terminal::OzmaTerminal;
 use ozmux_webview_host::WebviewAssetRegistry;
 use ozmux_webview_host::host::RuntimeRoot;
 use std::collections::HashMap;
@@ -364,31 +364,25 @@ impl Plugin for OzmuxControlPlanePlugin {
         app.insert_resource(DynamicRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(WebviewAssetRegistryRes(self.dyn_assets.clone()));
-        app.add_systems(Update, (apply_control_events, sync_tmux_pane_tokens));
+        app.add_systems(Update, (apply_control_events, gc_despawned_surfaces));
     }
 }
 
-/// Mirrors each projected tmux pane into the [`TokenRegistry`] keyed by its
-/// tmux pane id (`%N`, matching `$TMUX_PANE`), so a program's `hello` resolves
-/// to the pane entity that owns it. tmux injects `$TMUX_PANE` into every pane it
-/// spawns — including user-created ones — which the legacy per-surface
-/// `$OZMA_TOKEN` injection (terminal-surface spawn path) cannot reach under the
-/// tmux backend. Despawned panes are unbound first so a recycled `Entity` id
-/// cannot resolve a stale key.
+/// Purges a despawned surface's dynamic registrations + assets. Keyed on
+/// `RemovedComponents<OzmaTerminal>` so it fires for every terminal surface
+/// (tmux pane or standalone), with no multiplexer dependency.
 ///
-/// A despawned pane also owns any dynamic registrations whose `owner_surface`
-/// is that pane entity: those are purged from the [`DynamicRegistry`] and their
-/// assets from the [`WebviewAssetRegistry`] here.
-fn sync_tmux_pane_tokens(
+/// # NOTE
+/// Must stay ungated and run every frame: `RemovedComponents` buffers clear at
+/// end of frame, so a skipped frame leaks registrations + assets. The purge
+/// also runs when `ControlPlaneHandle` is absent (token unbinding is then a
+/// no-op) — gating it behind the handle would leak in that case.
+fn gc_despawned_surfaces(
     mut registry: ResMut<DynamicRegistry>,
-    mut closed: RemovedComponents<TmuxPane>,
-    new_panes: Query<(Entity, &TmuxPane), Added<TmuxPane>>,
+    mut closed: RemovedComponents<OzmaTerminal>,
     handle: Option<Res<ControlPlaneHandle>>,
     dyn_assets: Res<WebviewAssetRegistryRes>,
 ) {
-    // NOTE: the registry/asset purge must run for every removed pane even when
-    // the `ControlPlaneHandle` resource is absent; gating it behind the handle
-    // guard below would leak dynamic registrations + assets in that case.
     for entity in closed.read() {
         for handle_str in registry.remove_by_surface(entity) {
             dyn_assets.0.remove(&handle_str);
@@ -396,12 +390,6 @@ fn sync_tmux_pane_tokens(
         if let Some(handle) = handle.as_ref() {
             handle.tokens.remove_entity(entity);
         }
-    }
-    let Some(handle) = handle else {
-        return;
-    };
-    for (entity, pane) in new_panes.iter() {
-        handle.tokens.insert(format!("%{}", pane.id.0), entity);
     }
 }
 
@@ -829,6 +817,52 @@ fn normalize_chord(chord: &HostKeyChord) -> Option<NormalizedChord> {
 const MAX_INLINE_HTML: usize = 4 * 1024 * 1024;
 
 #[cfg(test)]
+mod gc_tests {
+    use super::*;
+    use ozma_terminal::OzmaTerminal;
+
+    #[test]
+    fn gc_purges_registrations_when_owner_surface_despawns() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
+        app.add_systems(Update, gc_despawned_surfaces);
+
+        let surface = app.world_mut().spawn(OzmaTerminal).id();
+        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+            "h0".into(),
+            DynamicView {
+                source: DynSource::Inline("<h1>x</h1>".into()),
+                entry: "index.html".into(),
+                interactive: true,
+                owner_surface: surface,
+                connection_id: 1,
+                forward_keys: vec![],
+                preload: vec![],
+            },
+        );
+        app.update(); // no despawn yet
+        assert!(
+            app.world()
+                .resource::<DynamicRegistry>()
+                .get("h0")
+                .is_some()
+        );
+
+        app.world_mut().entity_mut(surface).despawn();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<DynamicRegistry>()
+                .get("h0")
+                .is_none(),
+            "despawning the owner surface purges its registrations"
+        );
+    }
+}
+
+#[cfg(test)]
 mod token_tests {
     use super::*;
     use bevy::prelude::Entity;
@@ -879,77 +913,6 @@ mod token_tests {
         assert_eq!(reg.resolve("%1"), None);
         assert_eq!(reg.resolve("tok"), None);
         assert_eq!(reg.resolve("%2"), Some(Entity::from_bits(8)));
-    }
-
-    fn tmux_pane(id: u32) -> TmuxPane {
-        TmuxPane {
-            id: ozmux_tmux::PaneId(id),
-            dims: tmux_control_parser::CellDims {
-                width: 80,
-                height: 24,
-                xoff: 0,
-                yoff: 0,
-            },
-        }
-    }
-
-    #[test]
-    fn sync_binds_added_panes_and_unbinds_despawned_ones() {
-        let mut app = App::new();
-        let handle = ControlPlaneHandle {
-            sock_path: std::path::PathBuf::from("/tmp/test.sock"),
-            tokens: TokenRegistry::default(),
-        };
-        let tokens = handle.tokens.clone();
-        app.insert_resource(handle);
-        app.init_resource::<DynamicRegistry>();
-        app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
-        app.add_systems(Update, sync_tmux_pane_tokens);
-
-        let pane = app.world_mut().spawn(tmux_pane(5)).id();
-        app.update();
-        assert_eq!(tokens.resolve("%5"), Some(pane));
-
-        app.world_mut().entity_mut(pane).despawn();
-        app.update();
-        assert_eq!(tokens.resolve("%5"), None);
-    }
-
-    #[test]
-    fn pane_despawn_purges_its_dynamic_registrations() {
-        let mut app = App::new();
-        let dyn_assets = WebviewAssetRegistry::default();
-        let mut reg = DynamicRegistry::default();
-        let pane = app.world_mut().spawn(tmux_pane(1)).id();
-        reg.insert(
-            "h".into(),
-            DynamicView {
-                source: DynSource::Dir("/x".into()),
-                entry: "i".into(),
-                interactive: true,
-                owner_surface: pane,
-                connection_id: 1,
-                forward_keys: vec![],
-                preload: vec![],
-            },
-        );
-        dyn_assets.insert_dir("h", "/x".into());
-        app.insert_resource(reg);
-        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
-        app.add_systems(Update, sync_tmux_pane_tokens);
-
-        app.update();
-        app.world_mut().entity_mut(pane).despawn();
-        app.update();
-
-        assert!(
-            app.world().resource::<DynamicRegistry>().get("h").is_none(),
-            "purged from DynamicRegistry on pane despawn"
-        );
-        assert!(
-            dyn_assets.get("h").is_none(),
-            "purged from WebviewAssetRegistry"
-        );
     }
 }
 
