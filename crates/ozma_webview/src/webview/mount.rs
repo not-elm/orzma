@@ -209,11 +209,10 @@ pub(crate) fn resolve_mount(
 /// `view_id` on this terminal, overlay-slot exhaustion.
 ///
 /// The parent (`ctx.terminal_surface`, the `OscWebviewRequest` target) is the
-/// `TmuxPane` entity itself: `tmux_render::attach_tmux_pane_terminal` inserts
-/// both the `TerminalHandle` (which emits the OSC request) and the
-/// `TerminalRenderBundle` (`TerminalGrid`) onto that one entity, so the
-/// `ChildOf` parent is also the entity `project_webview_overlays` reads grid
-/// state from.
+/// owning `OzmaTerminal` surface entity: both the `TerminalHandle` (which emits
+/// the OSC request) and the `TerminalRenderBundle` (`TerminalGrid`) live on
+/// that one entity, so the `ChildOf` parent is also the entity
+/// `project_webview_overlays` reads grid state from.
 ///
 /// `WebviewSize` is seeded here because `bevy_cef` builds the CEF browser
 /// from it at creation. The seed is `(cols × cell_w, rows × cell_h) /
