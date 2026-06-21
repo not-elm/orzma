@@ -32,6 +32,10 @@ struct OzmuxFrame(serde_json::Value);
 /// back-channel (`on_ozmux_call_frame`). The page side emits it in `ozma_bridge.js`.
 const OZMA_CALL_KIND: &str = "ozma.call";
 
+/// The `kind` discriminator routing a `Receive<OzmuxFrame>` to the one-way
+/// inbound-event forwarder (`on_ozmux_emit_frame`). Emitted by `ozma_bridge.js`.
+const OZMA_EMIT_KIND: &str = "ozma.emit";
+
 /// Builds the `CefPlugin` with the `ozma-dyn://` (dynamic, Tier 1) scheme bound
 /// to its shared `WebviewAssetRegistry`, using `root_cache_path` as this process's
 /// unique CEF profile directory (one Chromium singleton lock per instance).
@@ -65,6 +69,7 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(JsEmitEventPlugin::<OzmuxFrame>::default())
             .add_observer(on_ozmux_call_frame)
+            .add_observer(on_ozmux_emit_frame)
             .add_observer(on_webview_address_changed)
             .add_observer(drop_ozmux_inflight_on_webview_despawn)
             .add_observer(log_webview_load_started)
@@ -174,6 +179,50 @@ fn on_ozmux_call_frame(
 fn reject_ozmux_call(commands: &mut Commands, webview: Entity, req_id: &str, error: &str) {
     let payload = serde_json::json!({ "reqId": req_id, "ok": false, "error": error });
     commands.trigger(HostEmitEvent::new(webview, "ozma", &payload));
+}
+
+/// Inbound (one-way): a `window.ozma.emit` arrives as a `Receive<OzmuxFrame>`
+/// with `kind:"ozma.emit"`. The trusted caller is `frame.webview` (bound per
+/// webview by `bevy_cef`); its `WebviewOwner` names the registering connection.
+/// The event is forwarded as a fire-and-forget `{op:"event"}` line — no reqId,
+/// no reply, no `OzmuxRpc` tracking. A missing owner or unavailable connection
+/// drops the event (debug-logged); there is no page Promise to settle.
+///
+/// Registered on the shared `Receive<OzmuxFrame>` event (not a second
+/// `JsEmitEventPlugin`); frames whose `kind` is not `ozma.emit` are ignored.
+fn on_ozmux_emit_frame(
+    frame: On<Receive<OzmuxFrame>>,
+    writers: Res<ConnectionWriters>,
+    owners: Query<&WebviewOwner>,
+) {
+    let payload = &frame.payload.0;
+    if payload.get("kind").and_then(Value::as_str) != Some(OZMA_EMIT_KIND) {
+        return;
+    }
+    let event = payload
+        .get("event")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if event.is_empty() {
+        tracing::debug!("ozma.emit frame with an empty event name; dropping");
+        return;
+    }
+
+    let Ok(owner) = owners.get(frame.webview) else {
+        tracing::debug!("ozma.emit frame for a webview with no owner; dropping");
+        return;
+    };
+    let body = payload.get("payload").cloned().unwrap_or(Value::Null);
+    let line = serde_json::json!({
+        "op": "event", "handle": owner.handle, "event": event, "payload": body
+    })
+    .to_string();
+    if !writers.send(owner.connection_id, line) {
+        tracing::debug!(
+            handle = owner.handle,
+            "ozma.emit owner connection unavailable; dropping"
+        );
+    }
 }
 
 /// Outbound (Tier 1 back-channel): when a webview's top-level URL changes (CEF
@@ -445,6 +494,97 @@ mod tests {
             app.world().resource::<FocusedWebview>().0,
             None,
             "a despawned inline child must be GC'd out of FocusedWebview",
+        );
+    }
+
+    #[test]
+    fn ozmux_emit_frame_pushes_event_to_owner_connection() {
+        use crossbeam_channel::unbounded;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_ozmux_emit_frame);
+
+        let webview = app
+            .world_mut()
+            .spawn(WebviewOwner {
+                connection_id: 7,
+                handle: "H".into(),
+            })
+            .id();
+
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "ozma.emit", "event": "hello", "payload": {"message": "hi"}
+            })),
+        });
+
+        let line = rx.try_recv().expect("an event was pushed");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["op"], "event");
+        assert_eq!(v["handle"], "H");
+        assert_eq!(v["event"], "hello");
+        assert_eq!(v["payload"]["message"], "hi");
+    }
+
+    #[test]
+    fn ozmux_emit_frame_without_owner_is_dropped() {
+        use crossbeam_channel::unbounded;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_ozmux_emit_frame);
+
+        // A webview entity with no WebviewOwner component.
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "ozma.emit", "event": "hello", "payload": null
+            })),
+        });
+
+        assert!(rx.try_recv().is_err(), "no owner ⇒ nothing forwarded");
+    }
+
+    #[test]
+    fn ozmux_emit_frame_with_empty_event_is_dropped() {
+        use crossbeam_channel::unbounded;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let writers = ConnectionWriters::default();
+        let (tx, rx) = unbounded::<String>();
+        writers.insert(7, tx);
+        app.insert_resource(writers);
+        app.add_observer(on_ozmux_emit_frame);
+
+        let webview = app
+            .world_mut()
+            .spawn(WebviewOwner {
+                connection_id: 7,
+                handle: "H".into(),
+            })
+            .id();
+        app.world_mut().trigger(Receive {
+            webview,
+            payload: OzmuxFrame(serde_json::json!({
+                "kind": "ozma.emit", "event": "", "payload": {"message": "hi"}
+            })),
+        });
+
+        assert!(
+            rx.try_recv().is_err(),
+            "an empty event name must be dropped, not forwarded"
         );
     }
 

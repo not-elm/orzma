@@ -12,7 +12,6 @@ mod watcher;
 use crate::app::{App, Cmd};
 use crate::protocol::{Content, Scroll, ScrollState, Search, SearchCount, SearchNav};
 use crate::ui::LiveStatus;
-use crossbeam_channel::{Receiver, Sender};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{self, Event};
@@ -26,12 +25,6 @@ use std::path::Path;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
-/// Messages forwarded from page→controller `.on` handlers to the main loop.
-enum PageMsg {
-    SearchCount(SearchCount),
-    ScrollState(ScrollState),
-}
 
 fn main() {
     if let Err(e) = run() {
@@ -57,8 +50,7 @@ fn run() -> anyhow::Result<()> {
 
     let asset_dir = assets::materialize()?;
 
-    let (page_tx, page_rx) = crossbeam_channel::unbounded::<PageMsg>();
-    let view = register_view(&ozma, &asset_dir, Arc::clone(&shared), page_tx)?;
+    let view = register_view(&ozma, &asset_dir, Arc::clone(&shared))?;
 
     let (reload_tx, reload_rx) = mpsc::channel::<()>();
     let _watcher = watcher::watch(&path, reload_tx)?;
@@ -70,7 +62,7 @@ fn run() -> anyhow::Result<()> {
     }
     install_panic_hook();
 
-    let result = event_loop(&ozma, &view, &shared, &path, &page_rx, &reload_rx);
+    let result = event_loop(&ozma, &view, &shared, &path, &reload_rx);
 
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen);
@@ -81,11 +73,8 @@ fn register_view(
     ozma: &Ozma,
     asset_dir: &tempfile::TempDir,
     shared: Arc<Mutex<document::Document>>,
-    page_tx: Sender<PageMsg>,
 ) -> anyhow::Result<WebviewHandle> {
     let ready_doc = Arc::clone(&shared);
-    let count_tx = page_tx.clone();
-    let state_tx = page_tx;
     let view = ozma.register(
         Webview::dir(asset_dir.path(), "index.html")
             .interactive(true)
@@ -93,20 +82,8 @@ fn register_view(
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
                 Ok(content_of(&doc))
             })
-            .on(
-                "searchCount",
-                move |c: SearchCount| -> Result<(), RpcError> {
-                    let _ = count_tx.send(PageMsg::SearchCount(c));
-                    Ok(())
-                },
-            )
-            .on(
-                "scrollState",
-                move |s: ScrollState| -> Result<(), RpcError> {
-                    let _ = state_tx.send(PageMsg::ScrollState(s));
-                    Ok(())
-                },
-            ),
+            .add_event::<SearchCount>("searchCount")
+            .add_event::<ScrollState>("scrollState"),
     )?;
     Ok(view)
 }
@@ -116,7 +93,6 @@ fn event_loop(
     view: &WebviewHandle,
     shared: &Arc<Mutex<document::Document>>,
     path: &Path,
-    page_rx: &Receiver<PageMsg>,
     reload_rx: &mpsc::Receiver<()>,
 ) -> anyhow::Result<()> {
     let backend = OzmaBackend::new(CrosstermBackend::new(stdout()), ozma);
@@ -134,14 +110,12 @@ fn event_loop(
         .unwrap_or_default();
 
     loop {
-        while let Ok(msg) = page_rx.try_recv() {
-            match msg {
-                PageMsg::SearchCount(c) => search_status = Some(c),
-                PageMsg::ScrollState(s) => {
-                    scroll_percent = (s.ratio.clamp(0.0, 1.0) * 100.0).round() as u16;
-                    state.set_current_heading_index(s.current_heading_index);
-                }
-            }
+        for c in view.read_events::<SearchCount>() {
+            search_status = Some(c);
+        }
+        for s in view.read_events::<ScrollState>() {
+            scroll_percent = (s.ratio.clamp(0.0, 1.0) * 100.0).round() as u16;
+            state.set_current_heading_index(s.current_heading_index);
         }
 
         let mut reload = false;

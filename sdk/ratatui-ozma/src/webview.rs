@@ -1,11 +1,13 @@
 //! Webview builder and registered handle.
 
 use crate::error::OzmaResult;
+use crate::events::{EventDecl, EventQueues};
 use crate::handler::{BoxedHandler, make_handler};
 use crate::keychord::KeyChord;
 use crate::protocol::{ClientMsg, NavAction, RegisterKind};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use std::any::TypeId;
 use std::collections::HashMap;
 use std::io::Write;
 use std::os::unix::net::UnixStream;
@@ -19,6 +21,7 @@ pub(crate) type SharedWriter = Arc<Mutex<UnixStream>>;
 pub struct Webview {
     pub(crate) kind: RegisterKind,
     pub(crate) handlers: HashMap<String, BoxedHandler>,
+    pub(crate) event_decls: Vec<EventDecl>,
 }
 
 impl Webview {
@@ -31,6 +34,7 @@ impl Webview {
                 forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
+            event_decls: Vec::new(),
         }
     }
 
@@ -48,6 +52,7 @@ impl Webview {
                 forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
+            event_decls: Vec::new(),
         }
     }
 
@@ -61,6 +66,7 @@ impl Webview {
                 forward_keys: Vec::new(),
             },
             handlers: HashMap::new(),
+            event_decls: Vec::new(),
         }
     }
 
@@ -114,10 +120,44 @@ impl Webview {
             "method {method:?} uses the reserved __ozma. namespace"
         );
         self.handlers.insert(method, make_handler(f));
+        self.enable_bridge_for_url();
+        self
+    }
+
+    /// Declares an inbound event the page may send via `window.ozma.emit(name, …)`,
+    /// binding the wire `name` to the Rust type `T`. The app later drains it with
+    /// [`WebviewHandle::read_events::<T>`]. Enables the `window.ozma` bridge for
+    /// `url` webviews (like [`Webview::on`]); a no-op for `inline`/`dir`, which
+    /// are always bridged.
+    ///
+    /// # Panics
+    /// Panics if `name` or the type `T` is already registered on this builder —
+    /// the type ↔ name mapping must be 1:1. (`on` silently overwrites a
+    /// duplicate method; `add_event` enforces uniqueness instead.)
+    pub fn add_event<T: DeserializeOwned + 'static>(mut self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        let type_id = TypeId::of::<T>();
+        assert!(
+            !self.event_decls.iter().any(|d| d.name == name),
+            "event name {name:?} is already registered"
+        );
+        assert!(
+            !self.event_decls.iter().any(|d| d.type_id == type_id),
+            "event type {} is already registered",
+            std::any::type_name::<T>()
+        );
+        self.event_decls.push(EventDecl { name, type_id });
+        self.enable_bridge_for_url();
+        self
+    }
+
+    /// Force-enables the `window.ozma` bridge for a `url` webview; a no-op for
+    /// `inline`/`dir`, which are always bridged. Shared by `on` and `add_event`,
+    /// both of which require the bridge for the page-side channel they wire.
+    fn enable_bridge_for_url(&mut self) {
         if let RegisterKind::Url { bridge, .. } = &mut self.kind {
             *bridge = true;
         }
-        self
     }
 }
 
@@ -125,6 +165,7 @@ impl Webview {
 #[derive(Clone, Debug)]
 pub struct WebviewHandle {
     id: Arc<Mutex<String>>,
+    events: Arc<EventQueues>,
     writer: SharedWriter,
 }
 
@@ -178,10 +219,31 @@ impl WebviewHandle {
         self.send_nav(NavAction::Reload)
     }
 
+    /// Drains and returns every buffered event of type `T`, oldest first.
+    /// Payloads that fail to deserialize into `T` are dropped and logged; the
+    /// result is empty if `T` was never declared via [`Webview::add_event`].
+    pub fn read_events<T: DeserializeOwned + 'static>(&self) -> Vec<T> {
+        self.events
+            .drain_type(TypeId::of::<T>())
+            .into_iter()
+            .filter_map(|v| match serde_json::from_value::<T>(v) {
+                Ok(t) => Some(t),
+                Err(e) => {
+                    tracing::warn!(error = %e, "dropping inbound event that failed to deserialize");
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Creates a handle from a pre-existing shared ID slot for callers that need
     /// to share the ID slot across threads.
-    pub(crate) fn new_shared(id: Arc<Mutex<String>>, writer: SharedWriter) -> Self {
-        Self { id, writer }
+    pub(crate) fn new_shared(
+        id: Arc<Mutex<String>>,
+        events: Arc<EventQueues>,
+        writer: SharedWriter,
+    ) -> Self {
+        Self { id, events, writer }
     }
 
     fn send_nav(&self, action: NavAction) -> OzmaResult<()> {
@@ -326,9 +388,93 @@ mod tests {
         let slot = Arc::new(Mutex::new("old-id".to_owned()));
         let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
         let writer: SharedWriter = Arc::new(Mutex::new(a));
-        let handle = WebviewHandle::new_shared(slot.clone(), writer);
+        let handle = WebviewHandle::new_shared(
+            slot.clone(),
+            Arc::new(crate::events::EventQueues::from_decls(&[])),
+            writer,
+        );
         assert_eq!(handle.id(), "old-id");
         *slot.lock().unwrap() = "new-id".to_owned();
         assert_eq!(handle.id(), "new-id");
+    }
+
+    #[test]
+    fn read_events_drains_and_deserializes_and_skips_bad() {
+        use crate::events::{EventDecl, EventQueues};
+        #[derive(serde::Deserialize, PartialEq, Debug)]
+        struct Hello {
+            message: String,
+        }
+        let decls = vec![EventDecl {
+            name: "hello".into(),
+            type_id: std::any::TypeId::of::<Hello>(),
+        }];
+        let events = Arc::new(EventQueues::from_decls(&decls));
+        events.ingest("hello", json!({"message": "a"}));
+        events.ingest("hello", json!({"nope": 1}));
+        events.ingest("hello", json!({"message": "b"}));
+
+        let (sock, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let writer: SharedWriter = Arc::new(Mutex::new(sock));
+        let handle =
+            WebviewHandle::new_shared(Arc::new(Mutex::new("h".to_owned())), events, writer);
+
+        let got = handle.read_events::<Hello>();
+        assert_eq!(
+            got,
+            vec![
+                Hello {
+                    message: "a".into()
+                },
+                Hello {
+                    message: "b".into()
+                }
+            ]
+        );
+        // Drained: a second read is empty.
+        assert!(handle.read_events::<Hello>().is_empty());
+    }
+
+    #[test]
+    fn add_event_records_decl() {
+        #[derive(serde::Deserialize)]
+        struct Hello;
+        let wv = Webview::inline("x").add_event::<Hello>("hello");
+        assert_eq!(wv.event_decls.len(), 1);
+        assert_eq!(wv.event_decls[0].name, "hello");
+        assert_eq!(wv.event_decls[0].type_id, std::any::TypeId::of::<Hello>());
+    }
+
+    #[test]
+    fn add_event_enables_bridge_for_url() {
+        #[derive(serde::Deserialize)]
+        struct Hello;
+        let wv = Webview::url("https://example.com").add_event::<Hello>("hello");
+        match &wv.kind {
+            RegisterKind::Url { bridge, .. } => assert!(*bridge),
+            _ => panic!("expected url"),
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered")]
+    fn add_event_rejects_duplicate_name() {
+        #[derive(serde::Deserialize)]
+        struct A;
+        #[derive(serde::Deserialize)]
+        struct B;
+        let _ = Webview::inline("x")
+            .add_event::<A>("dup")
+            .add_event::<B>("dup");
+    }
+
+    #[test]
+    #[should_panic(expected = "already registered")]
+    fn add_event_rejects_duplicate_type() {
+        #[derive(serde::Deserialize)]
+        struct A;
+        let _ = Webview::inline("x")
+            .add_event::<A>("one")
+            .add_event::<A>("two");
     }
 }

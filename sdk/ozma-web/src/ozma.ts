@@ -14,6 +14,8 @@ export interface OzmaApi {
   on(event: string, handler: (payload: unknown) => void): void;
   /** Removes a previously-registered event handler by reference equality. */
   off(event: string, handler: (payload: unknown) => void): void;
+  /** Sends a one-way event to the host app (fire-and-forget; no reply). */
+  emit(event: string, payload?: unknown): void;
 }
 
 // NOTE: augments `window.ozma` for browser consumers whose tsconfig includes the "dom" lib;
@@ -46,6 +48,9 @@ export const ozma: OzmaApi = {
   },
   off(event: string, handler: (payload: unknown) => void): void {
     resolve().off(event, handler);
+  },
+  emit(event: string, payload?: unknown): void {
+    resolve().emit(event, payload);
   },
 };
 

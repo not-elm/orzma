@@ -4931,7 +4931,6 @@ name = "ozmd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "crossbeam-channel",
  "notify-debouncer-full",
  "pulldown-cmark",
  "ratatui",
