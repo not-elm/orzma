@@ -24,6 +24,7 @@ use crate::input::InputPhase;
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
+use bevy::ecs::schedule::common_conditions::not;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::MouseButtonInput;
@@ -54,6 +55,14 @@ impl Plugin for MousePlugin {
                 Update,
                 (webview::tmux_webview_pointer, arbiter)
                     .chain()
+                    .run_if(pointer_active)
+                    .in_set(InputPhase::Dispatch)
+                    .in_set(super::OzmuxActiveSet),
+            )
+            .add_systems(
+                Update,
+                drain_tmux_pointer_when_suppressed
+                    .run_if(not(pointer_active))
                     .in_set(InputPhase::Dispatch)
                     .in_set(super::OzmuxActiveSet),
             )
@@ -67,14 +76,26 @@ impl Plugin for MousePlugin {
     }
 }
 
-/// Modal-input gate: the resources whose presence means another surface owns
-/// input and the arbiter must drain events without mutating tmux. The
-/// focused-webview case is NOT gated here — the upstream `tmux_webview_pointer`
-/// pre-step owns webview focus instead.
-#[derive(SystemParam)]
-struct ModalGate<'w> {
-    picker: Res<'w, SessionPicker>,
-    copy_prompt: Res<'w, CopyPrompt>,
+/// Run condition for the active tmux pointer pipeline: `true` iff a focused
+/// primary window exists AND no modal (picker / copy-search prompt) owns input.
+///
+/// Gates the chained `(tmux_webview_pointer, arbiter)` set; its negation gates
+/// `drain_tmux_pointer_when_suppressed`. The focused-webview case is NOT a
+/// suppressor here — the `tmux_webview_pointer` pre-step owns webview focus.
+///
+/// # Invariants
+///
+/// Must NOT read `NonSend<TmuxConnection>`: a run condition touching it is
+/// unsound (`bevyengine/bevy#21230`), which is why connection liveness stays an
+/// in-body guard in `on_tmux_mouse_effects` instead.
+fn pointer_active(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    picker: Res<SessionPicker>,
+    copy_prompt: Res<CopyPrompt>,
+) -> bool {
+    windows.single().is_ok_and(|window| window.focused)
+        && !picker.open
+        && copy_prompt.open.is_none()
 }
 
 /// Bundles the two immutable copy-mode query reads used by the gesture arbiter.
@@ -174,10 +195,13 @@ fn pane_under_cursor(
 /// major-axis cell coordinate is mapped to an absolute target size and sent as
 /// `resize-pane -x/-y` whenever the target changes. On `Released` from
 /// `Selecting` a begun selection is copied to clipboard; from `Resizing` that
-/// never dragged, the pane under the cursor is focused as a fallback click. When
-/// the primary window is not focused, or a modal (picker / copy-search prompt)
-/// owns input, the buffer is cleared and the state is reset (an in-flight inline
-/// press is released to CEF / dropped — see the gate branches).
+/// never dragged, the pane under the cursor is focused as a fallback click.
+///
+/// Gated by `run_if(pointer_active)`: this system runs only when a focused
+/// primary window exists and no modal (picker / copy-search prompt) owns input.
+/// The suppressed path — clearing the buffer, resetting the gesture, and
+/// releasing or dropping an in-flight inline press — is owned by
+/// `drain_tmux_pointer_when_suppressed`.
 ///
 /// The webview pre-step runs UPSTREAM in `tmux_webview_pointer` (chained before
 /// this system): a press inside an interactive inline rect focuses + forwards to
@@ -187,68 +211,22 @@ fn pane_under_cursor(
 fn arbiter(
     mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
-    mut webview_press: ResMut<TmuxWebviewPress>,
     mut buttons: ResMut<TmuxGestureButtons>,
-    webview_route: TmuxWebviewRouteParams,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OzmuxConfigsResource>>,
-    modals: ModalGate,
     copy_gate: CopyModeGate,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let ModalGate {
-        picker,
-        copy_prompt,
-    } = &modals;
     let Ok(window) = windows.single() else {
-        buttons.0.clear();
-        // NOTE: no window means no cursor/scale to synthesize the CEF mouse-up,
-        // so just drop any in-flight inline press — leaving it set would let a
-        // later release act on a stale child.
-        webview_press.0 = None;
-        gesture.state = GestureState::Idle;
         return;
     };
     let scale = window.scale_factor();
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
     let cursor_phys = window.cursor_position().map(|c| c * scale);
-    if !window.focused {
-        buttons.0.clear();
-        release_webview_press(
-            &mut webview_press,
-            &webview_route,
-            &panes,
-            cursor_phys,
-            cell_w,
-            cell_h,
-            scale,
-        );
-        gesture.state = GestureState::Idle;
-        return;
-    }
-    // NOTE: a gesture behind a picker / copy-search prompt must not mutate
-    // tmux. The focused-webview case is NOT drained here — the upstream
-    // tmux_webview_pointer pre-step owns focus (in-rect press keeps it, off-rect
-    // press releases it and drives tmux). An in-flight inline press IS released
-    // so the focused page does not stay logically pressed (no matching mouse-up).
-    if picker.open || copy_prompt.open.is_some() {
-        buttons.0.clear();
-        release_webview_press(
-            &mut webview_press,
-            &webview_route,
-            &panes,
-            cursor_phys,
-            cell_w,
-            cell_h,
-            scale,
-        );
-        gesture.state = GestureState::Idle;
-        return;
-    }
 
     let (grab_tol_logical, drag_threshold_logical, dbl_click_ms, click_drift) = configs
         .as_deref()
@@ -323,6 +301,55 @@ fn arbiter(
             .unwrap_or(Entity::PLACEHOLDER);
         commands.trigger(TmuxMouseEffects { entity, effects });
     }
+}
+
+/// Drains the tmux pointer pipeline while suppressed (gated by
+/// `run_if(not(pointer_active))`): a focused window is missing or a modal
+/// (picker / copy-search prompt) owns input, so no pointer event may mutate
+/// tmux.
+///
+/// Replaces the in-body gate branches that previously lived in BOTH
+/// `tmux_webview_pointer` and `arbiter`. It clears the frame's
+/// `MouseButtonInput` reader and the `TmuxGestureButtons` hand-off buffer (so no
+/// event survives to the active path next frame), resets the gesture to `Idle`,
+/// and resolves an in-flight inline press:
+///
+/// - **No primary window:** drop `TmuxWebviewPress` WITHOUT synthesizing a CEF
+///   mouse-up — there is no cursor/scale to place it, and leaving it set would
+///   let a later release act on a stale child.
+/// - **Window exists but suppressed (unfocused / modal):** `release_webview_press`
+///   sends the CEF mouse-up (when cursor / browser / release-DIP resolve) so the
+///   focused page is not left logically pressed with no matching mouse-up.
+fn drain_tmux_pointer_when_suppressed(
+    mut webview_press: ResMut<TmuxWebviewPress>,
+    mut gesture: ResMut<TmuxMouseGesture>,
+    mut buttons: ResMut<TmuxGestureButtons>,
+    mut mouse_reader: MessageReader<MouseButtonInput>,
+    webview_route: TmuxWebviewRouteParams,
+    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    metrics: Res<TerminalCellMetricsResource>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    mouse_reader.clear();
+    buttons.0.clear();
+    gesture.state = GestureState::Idle;
+    let Ok(window) = windows.single() else {
+        webview_press.0 = None;
+        return;
+    };
+    let scale = window.scale_factor();
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cursor_phys = window.cursor_position().map(|c| c * scale);
+    release_webview_press(
+        &mut webview_press,
+        &webview_route,
+        &panes,
+        cursor_phys,
+        cell_w,
+        cell_h,
+        scale,
+    );
 }
 
 /// Hit-tests a left press at `cursor_phys` into a `PressHit`: a divider grab
@@ -562,7 +589,16 @@ mod tests {
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
-        app.add_systems(Update, (webview::tmux_webview_pointer, arbiter).chain());
+        app.add_systems(
+            Update,
+            (webview::tmux_webview_pointer, arbiter)
+                .chain()
+                .run_if(pointer_active),
+        );
+        app.add_systems(
+            Update,
+            drain_tmux_pointer_when_suppressed.run_if(not(pointer_active)),
+        );
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -600,7 +636,16 @@ mod tests {
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
-        app.add_systems(Update, (webview::tmux_webview_pointer, arbiter).chain());
+        app.add_systems(
+            Update,
+            (webview::tmux_webview_pointer, arbiter)
+                .chain()
+                .run_if(pointer_active),
+        );
+        app.add_systems(
+            Update,
+            drain_tmux_pointer_when_suppressed.run_if(not(pointer_active)),
+        );
         app.add_observer(apply::on_tmux_mouse_effects);
 
         // Pane host node at window center (400, 300), size 800x600 → top-left
@@ -815,6 +860,58 @@ mod tests {
         assert!(
             app.world().resource::<TmuxGestureButtons>().0.is_empty(),
             "a gated frame must buffer no events"
+        );
+    }
+
+    #[test]
+    fn closing_modal_resumes_pointer_handling() {
+        let (mut app, pane, _child) = make_arbiter_webview_app();
+        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_cursor(&mut app, Vec2::new(400.0, 400.0));
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle,
+            "while the modal is open the suppressed drain keeps the gesture Idle"
+        );
+
+        app.world_mut().resource_mut::<SessionPicker>().open = false;
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert!(
+            matches!(
+                app.world().resource::<TmuxMouseGesture>().state,
+                GestureState::Pressed { pane: p, .. } if p == pane
+            ),
+            "closing the modal must let the active path arm the gesture again"
+        );
+    }
+
+    #[test]
+    fn suppressed_frame_releases_in_flight_webview_press() {
+        let (mut app, _pane, child) = make_arbiter_webview_app();
+        app.world_mut().resource_mut::<TmuxWebviewPress>().0 = Some(child);
+        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert_eq!(
+            app.world().resource::<TmuxWebviewPress>().0,
+            None,
+            "a window-exists-but-suppressed frame must release the in-flight inline press"
+        );
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle,
+            "the suppressed drain resets the gesture to Idle"
         );
     }
 

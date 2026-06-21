@@ -44,9 +44,9 @@ pub(super) struct TmuxWebviewRouteParams<'w, 's> {
 }
 
 /// Releases an in-flight webview press to CEF (mouse-up at the last
-/// cursor) and clears the marker. Called when an arbiter guard drains the
-/// queued release (modal open / window unfocused) so the focused web page is
-/// not left logically pressed with no matching mouse-up.
+/// cursor) and clears the marker. Called by `drain_tmux_pointer_when_suppressed`
+/// on the suppressed path (modal open / window unfocused) so the focused web
+/// page is not left logically pressed with no matching mouse-up.
 pub(super) fn release_webview_press(
     webview_press: &mut TmuxWebviewPress,
     route: &TmuxWebviewRouteParams,
@@ -87,13 +87,11 @@ pub(super) fn release_webview_press(
 /// target follows the click (invariant 3, `Pressed` only), and a non-consumed
 /// event is pushed into the buffer for the arbiter to drain.
 ///
-/// The same modal/focus gate the arbiter applies guards routing here too: with
-/// no window, an unfocused window, or an open picker / copy-search prompt, the
-/// `MouseButtonInput` reader is drained and the run returns WITHOUT routing or
-/// buffering — so a gated frame produces no webview focus change, CEF click, or
-/// `SelectPane`, exactly as today. Releasing an in-flight webview press on those
-/// gates stays with the arbiter's gate branches (until Task 8 consolidates both
-/// into a `pointer_active` run condition).
+/// Gated by `run_if(pointer_active)` (chained with `arbiter`): this system runs
+/// only when a focused primary window exists and no modal (picker / copy-search
+/// prompt) owns input. The suppressed path — draining the `MouseButtonInput`
+/// reader and the buffer, resetting the gesture, and releasing or dropping an
+/// in-flight inline press — is owned by `drain_tmux_pointer_when_suppressed`.
 pub(super) fn tmux_webview_pointer(
     mut commands: Commands,
     mut buffer: ResMut<TmuxGestureButtons>,
@@ -102,8 +100,6 @@ pub(super) fn tmux_webview_pointer(
     mut buttons: MessageReader<MouseButtonInput>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
-    picker: Res<SessionPicker>,
-    copy_prompt: Res<CopyPrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     buffer.0.clear();
@@ -111,10 +107,6 @@ pub(super) fn tmux_webview_pointer(
         buttons.clear();
         return;
     };
-    if !window.focused || picker.open || copy_prompt.open.is_some() {
-        buttons.clear();
-        return;
-    }
     let scale = window.scale_factor();
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
