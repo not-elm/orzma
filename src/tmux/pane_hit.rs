@@ -1,6 +1,6 @@
 //! Shared tmux pane hit-testing and cell geometry. One home for the pointer
-//! → (pane, local-physical-px, cell) math used by hyperlink hover, the mouse
-//! arbiter, webview pointer routing, and copy-mode.
+//! → (pane, local-physical-px, cell) math used by hyperlink hover, the tmux
+//! mouse gesture system, webview pointer routing, and copy-mode.
 
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Query;

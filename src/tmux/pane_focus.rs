@@ -3,7 +3,7 @@
 //! reaching webview surfaces), and tints the background of (and optionally dims)
 //! every inactive pane at the renderer via `PaneInactiveStyle` (the terminal
 //! shader blends inactive backgrounds toward a configured grey). `select-pane`
-//! on press is owned by the tmux mouse gesture arbiter
+//! on press is owned by the tmux mouse gesture system
 //! (`mouse::MousePlugin`).
 
 use crate::configs::OzmuxConfigsResource;
@@ -14,7 +14,7 @@ use ozma_tty_renderer::material::PaneInactiveStyle;
 use ozmux_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
 
 /// Registers the pane augmentation (adds `Button` + `FocusPolicy::Block`) and
-/// dim systems. `select-pane` on press is handled by the gesture arbiter.
+/// dim systems. `select-pane` on press is handled by `tmux_gesture`.
 pub(crate) struct PaneFocusPlugin;
 
 impl Plugin for PaneFocusPlugin {

@@ -1,93 +1,107 @@
-//! Mouse gesture arbiter for the tmux backend.
+//! Tmux mouse gesture system.
 //!
-//! Owns a single left-button state machine (`TmuxMouseGesture`) that reads raw
-//! `MouseButtonInput` messages and issues `select-pane` on a focused press. When
-//! the pane is in copy mode, a press that drags past `drag_threshold_px` enters
-//! `Selecting` and multi-click (≥2) enters `PendingMultiSelect`; both relay the
-//! tmux copy-mode path with pane-targeted `send-keys -X` commands. Text selection,
-//! word/line copy, and hyperlink hover/open for a pane NOT in copy mode are owned
-//! by `ozma_terminal`'s shared mouse systems, not here.
-//! Divider-drag-to-resize is also here: a press within `divider_grab_tolerance_px`
-//! of a divider line enters `Resizing` state; the pointer's major-axis cell
-//! coordinate maps to an absolute target size sent as `resize-pane -x/-y`.
+//! Implements a gather→decide→apply pipeline for left-button gestures over tmux panes.
+//! `tmux_webview_pointer` gathers raw events and hands unconsumed ones to
+//! `TmuxGestureButtons`; `tmux_gesture` reads that buffer and calls the pure
+//! deciders (`decide_press`, `decide_release`, `decide_continuation`) which return
+//! `TmuxMouseEffect`s; `on_tmux_mouse_effects` (observer in `apply`) applies them
+//! by sending tmux control-mode commands.
 
-use super::copy_mode::{CopyModeSnapshot, cell_at_pane, cursor_deltas};
-use super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
+mod apply;
+mod decide;
+mod effect;
+mod webview;
+
+use super::copy_mode::{CopyModeSnapshot, cell_at_pane};
+use super::pane_hit::tmux_pane_at_phys;
 use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
-use crate::webview::mount::{Webview, webview_hit_at, webview_local_dip};
-use crate::webview::osc::NonInteractive;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::mouse::{MouseButton, MouseButtonInput};
-use bevy::picking::pointer::PointerButton;
+use bevy::input::mouse::MouseButtonInput;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::{CursorMoved, PrimaryWindow};
-use bevy_cef::prelude::FocusedWebview;
-use bevy_cef_core::prelude::Browsers;
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozmux_tmux::{
-    ActiveWindow, CopyModeQueries, CopyQueryKind, PaneId, ResizePaneX, ResizePaneY, SelectPane,
-    ShowBuffer, TmuxConnection, TmuxPane,
+use bevy::window::PrimaryWindow;
+pub(crate) use decide::divider_at;
+use decide::{
+    ClickTracker, ContinuationCtx, PressHit, ReleaseCtx, decide_continuation, decide_press,
+    decide_release,
 };
+use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozmux_tmux::{ActiveWindow, PaneId, TmuxConnection, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
+use webview::tmux_webview_pointer;
 
-/// Bevy plugin that registers the tmux mouse gesture arbiter.
+/// Bevy plugin that registers the tmux mouse gesture system.
 pub(crate) struct MousePlugin;
 
 impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TmuxMouseGesture>();
-        app.add_systems(
-            Update,
-            arbiter
-                .in_set(InputPhase::Dispatch)
-                .in_set(super::OzmuxActiveSet),
-        );
-        app.add_systems(
-            Update,
-            forward_tmux_webview_mouse_moves
-                .in_set(InputPhase::Hover)
-                .in_set(super::OzmuxActiveSet),
-        );
+        app.init_resource::<TmuxMouseGesture>()
+            .init_resource::<TmuxGestureButtons>()
+            .add_systems(
+                Update,
+                tmux_gesture
+                    .run_if(pointer_active)
+                    .after(tmux_webview_pointer)
+                    .in_set(InputPhase::Dispatch)
+                    .in_set(super::OzmuxActiveSet),
+            )
+            .add_plugins((webview::WebviewPointerPlugin, apply::ApplyPlugin));
     }
 }
 
-/// Modal-input gate: the resources whose presence means another surface owns
-/// input and the arbiter must drain events without mutating tmux. The
-/// focused-webview case is NOT gated here — the inline click pre-step
-/// (`route_tmux_webview_left_click`) owns webview focus instead.
-#[derive(SystemParam)]
-struct ModalGate<'w> {
-    picker: Res<'w, SessionPicker>,
-    copy_prompt: Res<'w, CopyPrompt>,
+/// Hand-off buffer from `tmux_webview_pointer` to `tmux_gesture`: the
+/// frame's left-button events the webview layer did NOT consume.
+///
+/// `tmux_webview_pointer` clears it at the start of every run and pushes each
+/// non-consumed event; `tmux_gesture` drains it via `drain(..)` (keeps the
+/// allocation for reuse). It holds only non-consumed `Left` events and never
+/// accumulates across frames.
+#[derive(Resource, Default)]
+pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
+
+/// Run condition for the active tmux gesture pipeline: `true` iff a focused
+/// primary window exists AND no modal (picker / copy-search prompt) owns input.
+///
+/// Gates `tmux_gesture` only (which reads the hand-off buffer, not
+/// `MouseButtonInput`). `tmux_webview_pointer` is NOT gated by this — it owns the
+/// single `MouseButtonInput` reader and runs every frame, computing the same
+/// suppressed/active decision in-body. The focused-webview case is NOT a
+/// suppressor here — the `tmux_webview_pointer` pre-step owns webview focus.
+///
+/// # Invariants
+///
+/// Must NOT read `NonSend<TmuxConnection>`: a run condition touching it is
+/// unsound (`bevyengine/bevy#21230`), which is why connection liveness stays an
+/// in-body guard in `on_tmux_mouse_effects` instead.
+fn pointer_active(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    picker: Res<SessionPicker>,
+    copy_prompt: Res<CopyPrompt>,
+) -> bool {
+    windows.single().is_ok_and(|window| window.focused)
+        && !picker.open
+        && copy_prompt.open.is_none()
 }
 
-/// Bundles the two immutable copy-mode query reads used by the gesture arbiter.
+/// Bundles the two immutable copy-mode query reads used by `tmux_gesture`.
 #[derive(SystemParam)]
 struct CopyModeGate<'w, 's> {
     copy_modes: Query<'w, 's, (), With<CopyModeState>>,
     snapshots: Query<'w, 's, &'static CopyModeSnapshot>,
 }
 
-/// Word- vs line-granularity selection for a double/triple click.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum MultiSelectKind {
-    Word,
-    Line,
-}
-
 /// The current phase of a left-button gesture over a tmux pane.
 #[derive(Default, Debug, PartialEq)]
 enum GestureState {
-    /// No button is held; the arbiter is waiting for the next press.
+    /// No button is held; `tmux_gesture` is waiting for the next press.
     #[default]
     Idle,
     /// Left button is held; `pane`/`pane_id` is the pane that received the press
@@ -132,84 +146,25 @@ enum GestureState {
 
 /// Tracks the current left-button gesture over a tmux pane.
 #[derive(Resource, Default)]
-pub(crate) struct TmuxMouseGesture {
+struct TmuxMouseGesture {
     state: GestureState,
     click: ClickTracker,
-    /// The in-flight webview press: the child a left press inside an
-    /// interactive inline rect was forwarded to, so the matching release's
-    /// click-up routes to the SAME child even if the pointer drifted off-rect.
-    webview_press: Option<Entity>,
 }
 
-/// Tracks consecutive-click count using a timeout + positional drift gate.
-#[derive(Default)]
-struct ClickTracker {
-    last: Option<(Duration, Vec2, u8)>,
+/// Physical-pixel cell dimensions derived from `TerminalCellMetricsResource`.
+///
+/// Returns `(cell_w, cell_h)`: advance and line-height, floored and clamped to at
+/// least 1.0 so callers never divide by zero.
+pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
+    (
+        metrics.metrics.advance_phys.floor().max(1.0),
+        metrics.metrics.line_height_phys.floor().max(1.0),
+    )
 }
 
-impl ClickTracker {
-    /// Registers a press at `now` / `pos` and returns the resulting click count
-    /// (1 = single, 2 = double, 3 = triple, capped at 3). `cfg` is
-    /// `(double_click_timeout, click_drift_px)` in logical units.
-    fn register(&mut self, now: Duration, pos: Vec2, cfg: (Duration, f32)) -> u8 {
-        let (timeout, drift) = cfg;
-        let count = match self.last {
-            Some((t, p, c)) if now.saturating_sub(t) <= timeout && p.distance(pos) <= drift => {
-                (c + 1).min(3)
-            }
-            _ => 1,
-        };
-        self.last = Some((now, pos, count));
-        count
-    }
-}
-
-/// Returns the `(Entity, PaneId)` of the first `TmuxPane` whose `ComputedNode`
-/// contains `cursor_phys` (physical px), or `None` when no pane covers the point.
-fn pane_under_cursor(
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    cursor_phys: Vec2,
-) -> Option<(Entity, PaneId)> {
-    panes
-        .iter()
-        .find(|(_, _, node, transform)| node.contains_point(**transform, cursor_phys))
-        .map(|(entity, pane, _, _)| (entity, pane.id))
-}
-
-/// Returns the divider whose grab zone contains `cursor` (logical px), given a
-/// tolerance in logical px. The grab zone is the 1px gap at `[pos_px, pos_px+1)`
-/// on the major axis expanded by `tol` on each side, intersected with the
-/// divider's span on the perpendicular axis.
-pub(crate) fn divider_at(
-    dividers: &[DividerPixelRect],
-    cursor: Vec2,
-    tol: f32,
-) -> Option<DividerPixelRect> {
-    dividers.iter().copied().find(|d| match d.axis {
-        DividerAxis::Vertical => {
-            cursor.x >= d.pos_px - tol
-                && cursor.x <= d.pos_px + 1.0 + tol
-                && cursor.y >= d.span_start_px
-                && cursor.y < d.span_end_px
-        }
-        DividerAxis::Horizontal => {
-            cursor.y >= d.pos_px - tol
-                && cursor.y <= d.pos_px + 1.0 + tol
-                && cursor.x >= d.span_start_px
-                && cursor.x < d.span_end_px
-        }
-    })
-}
-
-/// New absolute size (cells) for a divider's primary pane given the pointer's
-/// cell coordinate on the major axis. The pane's near edge stays fixed; its far
-/// edge follows the pointer. Clamped to at least 1.
-fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
-    (pointer_cell - near).max(1) as u32
-}
-
-/// Interprets raw left-button messages into tmux `select-pane`, `resize-pane`,
-/// or selection commands.
+/// Interprets the non-consumed left-button events handed off by
+/// `tmux_webview_pointer` (via `TmuxGestureButtons`) into tmux `select-pane`,
+/// `resize-pane`, or selection commands.
 ///
 /// On each `Pressed` event the cursor's physical position is hit-tested: a
 /// press within a divider's grab zone (whose primary pane has geometry) enters
@@ -218,85 +173,46 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 /// `drag_threshold_px` transitions to `Selecting` when the pane is already in
 /// copy mode (drag/selection for a pane NOT in copy mode is owned by
 /// `ozma_terminal`). Multi-click (≥2) on a pane in copy mode enters
-/// `PendingMultiSelect` to wait for a copy-mode snapshot, then selects a
-/// word/line via copy-mode commands. Each frame while `Resizing` the pointer's
+/// `PendingMultiSelect` to wait for a copy-mode snapshot AND a connected client
+/// (it passes `connection.client().is_some()` to the decider so a no-client
+/// frame stays pending and retries), then selects a word/line via copy-mode
+/// commands. Each frame while `Resizing` the pointer's
 /// major-axis cell coordinate is mapped to an absolute target size and sent as
 /// `resize-pane -x/-y` whenever the target changes. On `Released` from
 /// `Selecting` a begun selection is copied to clipboard; from `Resizing` that
-/// never dragged, the pane under the cursor is focused as a fallback click. When
-/// the primary window is not focused, or a modal (picker / copy-search prompt)
-/// owns input, queued events are drained and the state is reset.
+/// never dragged, the pane under the cursor is focused as a fallback click.
 ///
-/// Each left press/release is first offered to the webview layer
-/// (`route_tmux_webview_left_click`): a press inside an interactive inline rect
-/// focuses + forwards to the child's CEF browser and never reaches the tmux
-/// gesture pipeline; a press outside every rect drops inline focus and falls
-/// through to the normal pane gesture.
-fn arbiter(
+/// Gated by `run_if(pointer_active)`: this system runs only when a focused
+/// primary window exists and no modal (picker / copy-search prompt) owns input.
+/// The suppressed path — clearing the buffer, resetting the gesture, and
+/// releasing or dropping an in-flight inline press — is owned by
+/// `tmux_webview_pointer`, which runs every frame upstream of this system.
+///
+/// The webview pre-step runs UPSTREAM in `tmux_webview_pointer` (ordered before
+/// this system via `.after(tmux_webview_pointer)`): a press inside an interactive
+/// inline rect focuses + forwards to
+/// the child's CEF browser and is consumed (it never reaches this buffer, but its
+/// host pane is still `select-pane`d); a press outside every rect drops inline
+/// focus and is buffered here as a normal pane gesture.
+fn tmux_gesture(
+    mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
-    mut buttons: MessageReader<MouseButtonInput>,
-    mut queries: ResMut<CopyModeQueries>,
-    mut webview_route: TmuxWebviewRouteParams,
+    mut buttons: ResMut<TmuxGestureButtons>,
     connection: NonSend<TmuxConnection>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OzmuxConfigsResource>>,
-    modals: ModalGate,
     copy_gate: CopyModeGate,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let ModalGate {
-        picker,
-        copy_prompt,
-    } = &modals;
     let Ok(window) = windows.single() else {
-        buttons.clear();
-        // NOTE: no window means no cursor/scale to synthesize the CEF mouse-up,
-        // so just drop any in-flight inline press — leaving it set would let a
-        // later release act on a stale child.
-        gesture.webview_press = None;
-        gesture.state = GestureState::Idle;
         return;
     };
     let scale = window.scale_factor();
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let guard_cursor_phys = window.cursor_position().map(|c| c * scale);
-    if !window.focused {
-        buttons.clear();
-        release_webview_press(
-            &mut gesture,
-            &webview_route,
-            &panes,
-            guard_cursor_phys,
-            cell_w,
-            cell_h,
-            scale,
-        );
-        gesture.state = GestureState::Idle;
-        return;
-    }
-    // NOTE: a gesture behind a picker / copy-search prompt must not mutate
-    // tmux. The focused-webview case is NOT drained here — the inline click
-    // pre-step below owns focus (in-rect press keeps it, off-rect press
-    // releases it and drives tmux). An in-flight inline press IS released so
-    // the focused page does not stay logically pressed (no matching mouse-up).
-    if picker.open || copy_prompt.open.is_some() {
-        buttons.clear();
-        release_webview_press(
-            &mut gesture,
-            &webview_route,
-            &panes,
-            guard_cursor_phys,
-            cell_w,
-            cell_h,
-            scale,
-        );
-        gesture.state = GestureState::Idle;
-        return;
-    }
+    let (cell_w, cell_h) = cell_dims(&metrics);
+    let cursor_phys = window.cursor_position().map(|c| c * scale);
 
     let (grab_tol_logical, drag_threshold_logical, dbl_click_ms, click_drift) = configs
         .as_deref()
@@ -310,712 +226,241 @@ fn arbiter(
         })
         .unwrap_or((4.0, 4.0, 400, 8.0));
     let drag_threshold_phys = drag_threshold_logical * scale;
+    let dbl_click = (Duration::from_millis(dbl_click_ms as u64), click_drift);
 
     let packed_dividers: &[DividerPixelRect] = packed_q
         .single()
         .map(|p| p.dividers.as_slice())
         .unwrap_or(&[]);
 
-    for ev in buttons.read() {
-        if ev.button != MouseButton::Left {
-            continue;
-        }
-        if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
-            && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
-        {
-            let consumed = route_tmux_webview_left_click(
-                &mut gesture,
-                &mut webview_route,
-                &panes,
-                terminal,
-                local_phys,
-                cursor_phys,
-                ev.state,
-                cell_w,
-                cell_h,
-                scale,
-            );
-            if consumed {
-                // NOTE: a press that focused a webview must also make its
-                // host pane the tmux-active pane. ActivePane is the keyboard/paste
-                // target, so it has to follow the pane the user clicked into —
-                // without this, after focus is released keystrokes route to the
-                // previously-active pane.
-                if ev.state == ButtonState::Pressed
-                    && let Ok((_, pane, _, _)) = panes.get(terminal)
-                    && let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(SelectPane { id: pane.id })
-                {
-                    tracing::warn!(?e, pane = pane.id.0, "inline-press select-pane send failed");
-                }
-                continue;
-            }
-        }
+    let mut effects: Vec<TmuxMouseEffect> = Vec::new();
+
+    for ev in buttons.0.drain(..) {
         match ev.state {
             ButtonState::Pressed => {
-                let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
+                let Some(cursor_phys) = cursor_phys else {
                     continue;
                 };
-                let pane_under = pane_under_cursor(&panes, cursor_phys);
-                // Resolve a divider grab to its primary pane's near edge + size.
-                // A divider whose primary pane has no projected geometry yet
-                // cannot be resized, so it falls through to a pane focus rather
-                // than entering Resizing with a bogus (0) baseline.
-                let cursor_logical = cursor_phys / scale;
-                let resize = divider_at(packed_dividers, cursor_logical, grab_tol_logical)
-                    .and_then(|d| {
-                        panes
-                            .iter()
-                            .find(|(_, p, _, _)| p.id == d.primary)
-                            .map(|(_, p, _, _)| match d.axis {
-                                DividerAxis::Vertical => (d, p.dims.xoff, p.dims.width),
-                                DividerAxis::Horizontal => (d, p.dims.yoff, p.dims.height),
-                            })
-                    });
-                if let Some((divider, near, last_sent)) = resize {
-                    gesture.state = GestureState::Resizing {
-                        divider,
-                        near,
-                        last_sent,
-                        resized: false,
-                    };
-                } else if let Some((pane, pane_id)) = pane_under {
-                    if let Some(client) = connection.client()
-                        && let Err(e) = client.handle().send(SelectPane { id: pane_id })
-                    {
-                        tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
-                    }
-                    let now = time.elapsed();
-                    let cursor_logical = cursor_phys / scale;
-                    let click_cfg = (Duration::from_millis(dbl_click_ms as u64), click_drift);
-                    let count = gesture.click.register(now, cursor_logical, click_cfg);
-                    gesture.state = GestureState::Pressed {
-                        pane,
-                        pane_id,
-                        origin_phys: cursor_phys,
-                        click_count: count,
-                    };
-                }
+                let Some(hit) = press_hit(
+                    &panes,
+                    packed_dividers,
+                    cursor_phys,
+                    scale,
+                    grab_tol_logical,
+                ) else {
+                    continue;
+                };
+                let TmuxMouseGesture { state, click, .. } = &mut *gesture;
+                effects.extend(decide_press(state, click, hit, time.elapsed(), dbl_click));
             }
             ButtonState::Released => {
-                let prior = std::mem::replace(&mut gesture.state, GestureState::Idle);
-                match prior {
-                    // Only copy when a selection was actually begun. A drag that
-                    // released before the copy-mode snapshot arrived never sent
-                    // `begin-selection`; copying then would clobber the system
-                    // clipboard with the stale paste buffer.
-                    GestureState::Selecting { pane_id, begun, .. } if begun => {
-                        if let Some(client) = connection.client() {
-                            let handle = client.handle();
-                            let copy = target_copy_cmd(pane_id, "send-keys -X copy-selection");
-                            if let Err(e) = handle.send(&copy) {
-                                tracing::warn!(
-                                    ?e,
-                                    pane = pane_id.0,
-                                    "drag-select copy-selection send failed"
-                                );
-                            } else {
-                                match handle.send(ShowBuffer) {
-                                    Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            ?e,
-                                            pane = pane_id.0,
-                                            "drag-select show-buffer send failed"
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    GestureState::Pressed {
-                        pane,
-                        pane_id,
-                        origin_phys,
-                        click_count,
-                    } if click_count >= 2 && copy_gate.copy_modes.get(pane).is_ok() => {
-                        // NOTE: resolve the click cell before entering PendingMultiSelect —
-                        // a failed lookup here exits the match cleanly; once in PendingMultiSelect,
-                        // the state persists until a snapshot arrives (or the pane is destroyed).
-                        let Ok((_, p, node, transform)) = panes.get(pane) else {
-                            break;
-                        };
-                        let cols = p.dims.width as u16;
-                        let rows = p.dims.height as u16;
-                        let Some(cell) =
-                            cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
-                        else {
-                            break;
-                        };
-                        let kind = if click_count == 2 {
-                            MultiSelectKind::Word
-                        } else {
-                            MultiSelectKind::Line
-                        };
-                        gesture.state = GestureState::PendingMultiSelect {
-                            pane,
-                            pane_id,
-                            cell,
-                            kind,
-                        };
-                    }
-                    // A divider press that never dragged is a click: the grab
-                    // zone overlaps the adjacent pane bodies, so focus the pane
-                    // under the cursor instead of silently doing nothing.
-                    GestureState::Resizing { resized, .. } if !resized => {
-                        if let Some(cursor_phys) = window.cursor_position().map(|c| c * scale)
-                            && let Some((_, pane_id)) = pane_under_cursor(&panes, cursor_phys)
-                            && let Some(client) = connection.client()
-                            && let Err(e) = client.handle().send(SelectPane { id: pane_id })
-                        {
-                            tracing::warn!(
-                                ?e,
-                                pane = pane_id.0,
-                                "divider-click select-pane failed"
-                            );
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    if let GestureState::Pressed {
-        pane,
-        pane_id,
-        origin_phys,
-        ..
-    } = gesture.state
-    {
-        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-            return;
-        };
-        if cursor_phys.distance(origin_phys) <= drag_threshold_phys {
-            return;
-        }
-        let Ok((_, p, node, transform)) = panes.get(pane) else {
-            gesture.state = GestureState::Idle;
-            return;
-        };
-        let cols = p.dims.width as u16;
-        let rows = p.dims.height as u16;
-        // NOTE: a non-copy-mode drag is owned by `ozma_terminal`'s VT selection;
-        // reset to Idle here so the gesture does not linger in `Pressed` (the
-        // arbiter only relays copy-mode selection).
-        if copy_gate.copy_modes.get(pane).is_ok() {
-            let Some(anchor) =
-                cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
-            else {
-                return;
-            };
-            gesture.state = GestureState::Selecting {
-                pane,
-                pane_id,
-                anchor,
-                begun: false,
-                last_target: None,
-            };
-        } else {
-            gesture.state = GestureState::Idle;
-        }
-        return;
-    }
-
-    if let GestureState::Selecting {
-        pane,
-        pane_id,
-        anchor,
-        begun,
-        last_target,
-    } = &mut gesture.state
-    {
-        let Ok((_, p, node, transform)) = panes.get(*pane) else {
-            gesture.state = GestureState::Idle;
-            return;
-        };
-        // NOTE: the snapshot is the copy cursor the relative cursor_deltas are
-        // computed from. copy-mode was just entered, so the first state refresh
-        // round-trips over a frame; without a snapshot, defer to a later frame
-        // rather than computing deltas off a stale/absent cursor.
-        let Ok(snapshot_cursor) = copy_gate
-            .snapshots
-            .get(*pane)
-            .map(|s| (s.0.cursor_x, s.0.cursor_y))
-        else {
-            return;
-        };
-        let Some(client) = connection.client() else {
-            return;
-        };
-        let handle = client.handle();
-        let cols = p.dims.width as u16;
-        let rows = p.dims.height as u16;
-        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-            return;
-        };
-        let Some(cell) = cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows)
-        else {
-            return;
-        };
-
-        if !*begun {
-            for cmd in cursor_deltas(snapshot_cursor, *anchor) {
-                if let Err(e) = handle.send(&target_copy_cmd(*pane_id, &cmd)) {
-                    tracing::warn!(?e, pane = pane_id.0, "drag-select anchor delta send failed");
-                }
-            }
-            if let Err(e) = handle.send(&target_copy_cmd(*pane_id, "send-keys -X begin-selection"))
-            {
-                tracing::warn!(
-                    ?e,
-                    pane = pane_id.0,
-                    "drag-select begin-selection send failed"
-                );
-                return;
-            }
-            *begun = true;
-            *last_target = Some(*anchor);
-        } else if Some(cell) != *last_target {
-            for cmd in cursor_deltas(snapshot_cursor, cell) {
-                if let Err(e) = handle.send(&target_copy_cmd(*pane_id, &cmd)) {
-                    tracing::warn!(?e, pane = pane_id.0, "drag-select extend delta send failed");
-                }
-            }
-            *last_target = Some(cell);
-        }
-        return;
-    }
-
-    if let GestureState::PendingMultiSelect {
-        pane,
-        pane_id,
-        cell,
-        kind,
-    } = gesture.state
-    {
-        if panes.get(pane).is_err() {
-            gesture.state = GestureState::Idle;
-            return;
-        }
-        let Ok(snapshot_cursor) = copy_gate
-            .snapshots
-            .get(pane)
-            .map(|s| (s.0.cursor_x, s.0.cursor_y))
-        else {
-            return;
-        };
-        let Some(client) = connection.client() else {
-            return;
-        };
-        let handle = client.handle();
-        for cmd in multi_select_commands(kind, snapshot_cursor, cell, pane_id) {
-            if let Err(e) = handle.send(&cmd) {
-                tracing::warn!(?e, pane = pane_id.0, "multi-select cmd send failed");
-            }
-        }
-        match handle.send(ShowBuffer) {
-            Ok(id) => queries.register(id, pane_id, CopyQueryKind::Buffer),
-            Err(e) => {
-                tracing::warn!(?e, pane = pane_id.0, "multi-select show-buffer send failed")
-            }
-        }
-        gesture.state = GestureState::Idle;
-        return;
-    }
-
-    if let GestureState::Resizing {
-        divider,
-        near,
-        last_sent,
-        resized,
-    } = &mut gesture.state
-    {
-        let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
-            return;
-        };
-
-        let pointer_cell = match divider.axis {
-            DividerAxis::Vertical => (cursor_phys.x / cell_w).floor() as i32,
-            DividerAxis::Horizontal => (cursor_phys.y / cell_h).floor() as i32,
-        };
-
-        let target = resize_target_size(*near, pointer_cell);
-
-        // The pointer drives the send (not `%layout-change`), so there is no
-        // resize feedback loop; emitting only on a new target cell yields at
-        // most one absolute (idempotent) resize per frame. We do NOT gate on
-        // the confirmed pane size catching up to `last_sent` — when tmux clamps
-        // a resize the size never reaches the request, and such a gate would
-        // wedge the drag for the rest of the gesture.
-        if target == *last_sent {
-            return;
-        }
-
-        let Some(client) = connection.client() else {
-            return;
-        };
-
-        let result = match divider.axis {
-            DividerAxis::Vertical => client.handle().send(ResizePaneX {
-                id: divider.primary,
-                width: target,
-            }),
-            DividerAxis::Horizontal => client.handle().send(ResizePaneY {
-                id: divider.primary,
-                height: target,
-            }),
-        };
-
-        if let Err(e) = result {
-            tracing::warn!(?e, pane = divider.primary.0, "resize-pane send failed");
-            return;
-        }
-
-        *last_sent = target;
-        *resized = true;
-    }
-}
-
-/// Inline-routing params for the arbiter, bundled to stay within Bevy's
-/// system-parameter limit. `focused_webview` / `browsers` are optional so
-/// CEF-less tests construct the system (state effects still apply).
-#[derive(SystemParam)]
-struct TmuxWebviewRouteParams<'w, 's> {
-    focused_webview: Option<ResMut<'w, FocusedWebview>>,
-    children: Query<'w, 's, &'static Children>,
-    webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
-    webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
-    overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
-    browsers: Option<NonSend<'w, Browsers>>,
-}
-
-/// Releases an in-flight webview press to CEF (mouse-up at the last
-/// cursor) and clears the marker. Called when an arbiter guard drains the
-/// queued release (modal open / window unfocused) so the focused web page is
-/// not left logically pressed with no matching mouse-up.
-fn release_webview_press(
-    gesture: &mut TmuxMouseGesture,
-    route: &TmuxWebviewRouteParams,
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    cursor_phys: Option<Vec2>,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale: f32,
-) {
-    let Some(child) = gesture.webview_press.take() else {
-        return;
-    };
-    if let Some(cursor_phys) = cursor_phys
-        && let Some(browsers) = route.browsers.as_deref()
-        && let Some(dip) = tmux_webview_release_dip(
-            route,
-            panes,
-            child,
-            cursor_phys,
-            cell_w_phys,
-            cell_h_phys,
-            scale,
-        )
-    {
-        browsers.send_mouse_click(&child, dip, PointerButton::Primary, true);
-    }
-}
-
-/// Routes a left press/release through the webview layer, returning
-/// `true` when the event was consumed and must NOT reach the tmux gesture
-/// pipeline. A press inside an
-/// interactive rect sets `FocusedWebview`, issues the UNGATED `set_focus`
-/// BEFORE the gated `send_mouse_click` (CEF drops clicks to a browser with no
-/// `focused_frame()`, so the first click would otherwise be swallowed),
-/// forwards the press in DIP, and records the in-flight press; a press outside
-/// every rect clears an inline `FocusedWebview` and returns `false`. Release
-/// forwards the click-up to the recorded child (drift-tolerant) and clears.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "inline routing needs the gesture state, route params, and pointer geometry"
-)]
-fn route_tmux_webview_left_click(
-    gesture: &mut TmuxMouseGesture,
-    route: &mut TmuxWebviewRouteParams,
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    terminal: Entity,
-    local_phys: Vec2,
-    cursor_phys: Vec2,
-    button_state: ButtonState,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale: f32,
-) -> bool {
-    match button_state {
-        ButtonState::Pressed => {
-            gesture.webview_press = None;
-            let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
-                webview_hit_at(
-                    &route.children,
-                    &route.webviews,
-                    overlays,
-                    terminal,
-                    local_phys,
-                    cell_w_phys,
-                    cell_h_phys,
-                    scale,
-                )
-            });
-            let Some(hit) = hit else {
-                if let Some(focused) = route.focused_webview.as_deref_mut()
-                    && focused
-                        .0
-                        .is_some_and(|current| route.webview_parents.contains(current))
-                {
-                    focused.0 = None;
-                }
-                return false;
-            };
-            if let Some(focused) = route.focused_webview.as_deref_mut()
-                && focused.0 != Some(hit.child)
-            {
-                focused.0 = Some(hit.child);
-            }
-            if let Some(browsers) = route.browsers.as_deref() {
-                browsers.set_focus(&hit.child, true);
-                browsers.send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
-            }
-            gesture.webview_press = Some(hit.child);
-            true
-        }
-        ButtonState::Released => {
-            let Some(child) = gesture.webview_press.take() else {
-                return false;
-            };
-            if let Some(browsers) = route.browsers.as_deref()
-                && let Some(dip) = tmux_webview_release_dip(
-                    route,
-                    panes,
-                    child,
+                let ctx = release_ctx(
+                    &gesture.state,
+                    &panes,
+                    &copy_gate,
                     cursor_phys,
-                    cell_w_phys,
-                    cell_h_phys,
-                    scale,
-                )
-            {
-                browsers.send_mouse_click(&child, dip, PointerButton::Primary, true);
+                    cell_w,
+                    cell_h,
+                );
+                effects.extend(decide_release(&mut gesture.state, ctx));
             }
-            true
         }
     }
+
+    let ctx = continuation_ctx(
+        &gesture.state,
+        &panes,
+        &copy_gate,
+        cursor_phys,
+        drag_threshold_phys,
+        cell_w,
+        cell_h,
+        connection.client().is_some(),
+    );
+    effects.extend(decide_continuation(&mut gesture.state, ctx));
+
+    if !effects.is_empty() {
+        // NOTE: Entity::PLACEHOLDER is correct because on_tmux_mouse_effects is a global observer
+        // (app.add_observer) that never reads ev.entity() — every effect variant carries its own
+        // PaneId. Must be revisited if the observer becomes entity-scoped or starts reading ev.entity().
+        commands.trigger(TmuxMouseEffects {
+            entity: Entity::PLACEHOLDER,
+            effects,
+        });
+    }
 }
 
-/// Webview-local DIP for a release on `child`, WITHOUT containment (a pointer
-/// that drifted off the rect still produces a release position). `None` when
-/// the child/terminal/rect chain is gone.
-fn tmux_webview_release_dip(
-    route: &TmuxWebviewRouteParams,
+/// Hit-tests a left press at `cursor_phys` into a `PressHit`: a divider grab
+/// (resolved to its primary pane's near edge + current size) takes priority over
+/// a pane-body focus. A divider whose primary pane has no projected geometry yet
+/// falls through to a pane focus rather than a bogus (0) resize baseline; `None`
+/// means the press landed on neither.
+fn press_hit(
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    child: Entity,
+    dividers: &[DividerPixelRect],
     cursor_phys: Vec2,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
     scale: f32,
-) -> Option<Vec2> {
-    let terminal = route.webview_parents.get(child).ok()?.parent();
-    let (_, _, node, transform) = panes.get(terminal).ok()?;
-    let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
-    let (view, _) = route.webviews.get(child).ok()?;
-    webview_local_dip(
-        route.overlay_rects.get(terminal).ok()?,
-        view.slot,
-        local_phys,
-        cell_w_phys,
-        cell_h_phys,
-        scale,
-    )
+    grab_tol_logical: f32,
+) -> Option<PressHit> {
+    let cursor_logical = cursor_phys / scale;
+    let resize = divider_at(dividers, cursor_logical, grab_tol_logical).and_then(|d| {
+        panes
+            .iter()
+            .find(|(_, p, _, _)| p.id == d.primary)
+            .map(|(_, p, _, _)| match d.axis {
+                DividerAxis::Vertical => (d, p.dims.xoff, p.dims.width),
+                DividerAxis::Horizontal => (d, p.dims.yoff, p.dims.height),
+            })
+    });
+    if let Some((divider, near, last_sent)) = resize {
+        return Some(PressHit::Divider {
+            divider,
+            near,
+            last_sent,
+        });
+    }
+    let (pane, pane_id, _) = tmux_pane_at_phys(panes, cursor_phys)?;
+    Some(PressHit::Pane {
+        pane,
+        pane_id,
+        origin_phys: cursor_phys,
+        cursor_logical,
+    })
 }
 
-/// Forwards pointer motion over an interactive inline rect of a tmux pane to
-/// the child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
-/// whatever mouse buttons are held so the one system serves both hover and an
-/// in-rect drag. `CursorMoved`-driven (one forward per frame, latest position), and
-/// focus-gated inside `bevy_cef` so motion over an unfocused browser is
-/// dropped browser-side. `Browsers` is optional so CEF-less tests construct it.
-fn forward_tmux_webview_mouse_moves(
-    mut cursor_msg: MessageReader<CursorMoved>,
-    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    children: Query<&Children>,
-    webviews: Query<(&Webview, Has<NonInteractive>)>,
-    overlay_rects: Query<&TerminalOverlays>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    metrics: Res<TerminalCellMetricsResource>,
-    mouse_buttons: Res<ButtonInput<MouseButton>>,
-    picker: Res<SessionPicker>,
-    copy_prompt: Res<CopyPrompt>,
-    browsers: Option<NonSend<Browsers>>,
-) {
-    let Some(moved) = cursor_msg.read().last() else {
-        return;
-    };
-    if picker.open || copy_prompt.open.is_some() {
-        return;
-    }
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let scale = window.scale_factor();
-    let cursor_phys = moved.position * scale;
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys) else {
-        return;
-    };
-    let Ok(overlays) = overlay_rects.get(terminal) else {
-        return;
-    };
-    let Some(hit) = webview_hit_at(
-        &children, &webviews, overlays, terminal, local_phys, cell_w, cell_h, scale,
-    ) else {
-        return;
-    };
-    if let Some(browsers) = browsers.as_ref() {
-        browsers.send_mouse_move(
-            &hit.child,
-            mouse_buttons.get_pressed(),
-            hit.local_dip,
-            false,
-        );
-    }
-}
-
-/// Inserts `-t %<id>` into a `send-keys -X ...` copy-mode command so it targets
-/// a specific pane instead of the client's active pane. Non-`send-keys -X`
-/// commands are returned unchanged.
-fn target_copy_cmd(pane: PaneId, cmd: &str) -> String {
-    match cmd.strip_prefix("send-keys -X") {
-        Some(rest) => format!("send-keys -X -t %{}{}", pane.0, rest),
-        None => cmd.to_string(),
+/// Resolves the `ReleaseCtx` for the gesture's current (pre-release) state:
+/// copy-mode + a `Pressed` multi-click's origin cell, and the pane under the
+/// cursor for a `Resizing`-click focus fallback.
+fn release_ctx(
+    state: &GestureState,
+    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    copy_gate: &CopyModeGate,
+    cursor_phys: Option<Vec2>,
+    cell_w: f32,
+    cell_h: f32,
+) -> ReleaseCtx {
+    match *state {
+        GestureState::Pressed {
+            pane, origin_phys, ..
+        } => {
+            let copy_mode = copy_gate.copy_modes.get(pane).is_ok();
+            let multi_cell = panes.get(pane).ok().and_then(|(_, p, node, transform)| {
+                let cols = p.dims.width as u16;
+                let rows = p.dims.height as u16;
+                cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
+            });
+            ReleaseCtx {
+                copy_mode,
+                multi_cell,
+                pane_under: None,
+            }
+        }
+        GestureState::Resizing { .. } => ReleaseCtx {
+            copy_mode: false,
+            multi_cell: None,
+            pane_under: cursor_phys.and_then(|c| tmux_pane_at_phys(panes, c).map(|(_, id, _)| id)),
+        },
+        _ => ReleaseCtx {
+            copy_mode: false,
+            multi_cell: None,
+            pane_under: None,
+        },
     }
 }
 
-/// Pane-targeted copy-mode commands to position the copy cursor at `cell`
-/// (relative to the snapshot cursor) and select a word/line. Does NOT include
-/// `show-buffer` — the caller sends that separately to register the reply.
-fn multi_select_commands(
-    kind: MultiSelectKind,
-    snapshot_cursor: (u16, u16),
-    cell: (u16, u16),
-    pane: PaneId,
-) -> Vec<String> {
-    let mut out: Vec<String> = cursor_deltas(snapshot_cursor, cell)
-        .iter()
-        .map(|c| target_copy_cmd(pane, c))
-        .collect();
-    let select = match kind {
-        MultiSelectKind::Word => "send-keys -X select-word",
-        MultiSelectKind::Line => "send-keys -X select-line",
+/// Resolves the per-frame `ContinuationCtx` for the gesture's current state,
+/// reading only the inputs the active arm needs (cursor + copy-mode + origin
+/// anchor for `Pressed`; snapshot + live cell for `Selecting`; snapshot +
+/// client presence for `PendingMultiSelect`; pointer cell for `Resizing`).
+fn continuation_ctx(
+    state: &GestureState,
+    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    copy_gate: &CopyModeGate,
+    cursor_phys: Option<Vec2>,
+    drag_threshold_phys: f32,
+    cell_w: f32,
+    cell_h: f32,
+    client_present: bool,
+) -> ContinuationCtx {
+    let mut ctx = ContinuationCtx {
+        pane_alive: false,
+        cursor_phys,
+        drag_threshold_phys,
+        copy_mode: false,
+        anchor_cell: None,
+        snapshot_cursor: None,
+        selecting_cell: None,
+        resize_pointer_cell: None,
+        client_present,
     };
-    out.push(target_copy_cmd(pane, select));
-    out.push(target_copy_cmd(pane, "send-keys -X copy-selection"));
-    out
+    match *state {
+        GestureState::Pressed {
+            pane, origin_phys, ..
+        } => {
+            ctx.copy_mode = copy_gate.copy_modes.get(pane).is_ok();
+            if let Ok((_, p, node, transform)) = panes.get(pane) {
+                ctx.pane_alive = true;
+                let cols = p.dims.width as u16;
+                let rows = p.dims.height as u16;
+                ctx.anchor_cell =
+                    cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows);
+            }
+        }
+        GestureState::Selecting { pane, .. } => {
+            if let Ok((_, p, node, transform)) = panes.get(pane) {
+                ctx.pane_alive = true;
+                ctx.snapshot_cursor = copy_gate
+                    .snapshots
+                    .get(pane)
+                    .map(|s| (s.0.cursor_x, s.0.cursor_y))
+                    .ok();
+                if let Some(cursor_phys) = cursor_phys {
+                    let cols = p.dims.width as u16;
+                    let rows = p.dims.height as u16;
+                    ctx.selecting_cell =
+                        cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows);
+                }
+            }
+        }
+        GestureState::PendingMultiSelect { pane, .. } => {
+            if panes.get(pane).is_ok() {
+                ctx.pane_alive = true;
+                ctx.snapshot_cursor = copy_gate
+                    .snapshots
+                    .get(pane)
+                    .map(|s| (s.0.cursor_x, s.0.cursor_y))
+                    .ok();
+            }
+        }
+        GestureState::Resizing { divider, .. } => {
+            ctx.pane_alive = true;
+            ctx.resize_pointer_cell = cursor_phys.map(|c| match divider.axis {
+                DividerAxis::Vertical => (c.x / cell_w).floor() as i32,
+                DividerAxis::Horizontal => (c.y / cell_h).floor() as i32,
+            });
+        }
+        GestureState::Idle => {}
+    }
+    ctx
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tmux::pane_hit::tmux_pane_at_phys;
+    use crate::webview::mount::{Webview, webview_hit_at};
+    use crate::webview::osc::NonInteractive;
     use bevy::input::ButtonState;
     use bevy::input::mouse::MouseButtonInput;
+    use bevy_cef::prelude::FocusedWebview;
     use ozma_tty_renderer::CellMetrics;
+    use ozma_tty_renderer::prelude::TerminalOverlays;
+    use ozmux_tmux::{CopyModeQueries, TmuxConnection};
+    use webview::TmuxWebviewPress;
 
     #[test]
     fn gesture_state_default_is_idle() {
         assert_eq!(GestureState::default(), GestureState::Idle);
-    }
-
-    fn pixel_vdiv(pos: f32, span_start: f32, span_end: f32) -> DividerPixelRect {
-        DividerPixelRect {
-            axis: DividerAxis::Vertical,
-            primary: PaneId(1),
-            pos_px: pos,
-            span_start_px: span_start,
-            span_end_px: span_end,
-        }
-    }
-
-    #[test]
-    fn pixel_hit_test_within_tolerance() {
-        let d = pixel_vdiv(320.0, 0.0, 384.0);
-        let hit = divider_at(&[d], Vec2::new(322.0, 100.0), 4.0);
-        assert!(hit.is_some());
-        assert_eq!(hit.unwrap().primary, PaneId(1));
-    }
-
-    #[test]
-    fn pixel_hit_test_outside_tolerance() {
-        let d = pixel_vdiv(320.0, 0.0, 384.0);
-        assert!(divider_at(&[d], Vec2::new(330.0, 100.0), 4.0).is_none());
-    }
-
-    #[test]
-    fn pixel_hit_test_outside_span() {
-        let d = pixel_vdiv(320.0, 0.0, 192.0);
-        assert!(divider_at(&[d], Vec2::new(320.0, 200.0), 4.0).is_none());
-    }
-
-    #[test]
-    fn pixel_hit_test_far_side_of_tolerance() {
-        let d = pixel_vdiv(320.0, 0.0, 384.0);
-        assert!(divider_at(&[d], Vec2::new(324.0, 100.0), 4.0).is_some());
-    }
-
-    #[test]
-    fn click_count_increments_within_timeout_and_drift() {
-        let mut t = ClickTracker::default();
-        let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(
-            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
-            1
-        );
-        assert_eq!(
-            t.register(Duration::from_millis(200), Vec2::new(11.0, 11.0), cfg),
-            2
-        );
-        assert_eq!(
-            t.register(Duration::from_millis(350), Vec2::new(12.0, 10.0), cfg),
-            3
-        );
-    }
-
-    #[test]
-    fn click_count_resets_after_timeout() {
-        let mut t = ClickTracker::default();
-        let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(
-            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
-            1
-        );
-        assert_eq!(
-            t.register(Duration::from_millis(500), Vec2::new(10.0, 10.0), cfg),
-            1
-        );
-    }
-
-    #[test]
-    fn click_count_resets_after_drift() {
-        let mut t = ClickTracker::default();
-        let cfg = (Duration::from_millis(400), 8.0f32);
-        assert_eq!(
-            t.register(Duration::from_millis(0), Vec2::new(10.0, 10.0), cfg),
-            1
-        );
-        assert_eq!(
-            t.register(Duration::from_millis(100), Vec2::new(40.0, 40.0), cfg),
-            1
-        );
-    }
-
-    #[test]
-    fn resize_target_size_follows_pointer() {
-        assert_eq!(resize_target_size(0, 50), 50);
-        assert_eq!(resize_target_size(10, 25), 15);
-        assert_eq!(resize_target_size(0, 0), 1);
     }
 
     fn test_metrics() -> TerminalCellMetricsResource {
@@ -1040,12 +485,21 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
+        app.init_resource::<TmuxGestureButtons>();
+        app.init_resource::<TmuxWebviewPress>();
         app.init_resource::<CopyModeQueries>();
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
-        app.add_systems(Update, arbiter);
+        app.add_systems(
+            Update,
+            (
+                webview::tmux_webview_pointer,
+                tmux_gesture.run_if(pointer_active),
+            )
+                .chain(),
+        );
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -1067,44 +521,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn multi_select_word_commands() {
-        let cmds = multi_select_commands(MultiSelectKind::Word, (0, 0), (3, 0), PaneId(2));
-        assert_eq!(
-            cmds,
-            vec![
-                "send-keys -X -t %2 -N 3 cursor-right".to_string(),
-                "send-keys -X -t %2 select-word".to_string(),
-                "send-keys -X -t %2 copy-selection".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_inserts_pane_target_after_send_keys_x() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "send-keys -X begin-selection"),
-            "send-keys -X -t %2 begin-selection",
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_preserves_flags_after_send_keys_x() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "send-keys -X -N 3 cursor-right"),
-            "send-keys -X -t %2 -N 3 cursor-right",
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_passes_non_matching_through() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "copy-mode -t %2"),
-            "copy-mode -t %2",
-        );
-    }
-
-    fn make_arbiter_webview_app() -> (App, Entity, Entity) {
+    fn make_gesture_webview_app() -> (App, Entity, Entity) {
         use bevy::window::WindowResolution;
         use tmux_control_parser::CellDims;
 
@@ -1113,12 +530,22 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
+        app.init_resource::<TmuxGestureButtons>();
+        app.init_resource::<TmuxWebviewPress>();
         app.init_resource::<CopyModeQueries>();
         app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
-        app.add_systems(Update, arbiter);
+        app.add_systems(
+            Update,
+            (
+                webview::tmux_webview_pointer,
+                tmux_gesture.run_if(pointer_active),
+            )
+                .chain(),
+        );
+        app.add_plugins(apply::ApplyPlugin);
 
         // Pane host node at window center (400, 300), size 800x600 → top-left
         // at (0, 0). Rect rows 2..12, cols 3..43 → phys y 32..192, x 24..344 at
@@ -1194,7 +621,7 @@ mod tests {
 
     #[test]
     fn webview_press_focuses_child_and_consumes() {
-        let (mut app, _pane, child) = make_arbiter_webview_app();
+        let (mut app, _pane, child) = make_gesture_webview_app();
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_button(
             &mut app,
@@ -1218,7 +645,7 @@ mod tests {
     fn move_resolves_inline_child_over_rect() {
         use bevy::ecs::system::RunSystemOnce;
 
-        let (mut app, _pane, child) = make_arbiter_webview_app();
+        let (mut app, _pane, child) = make_gesture_webview_app();
         let hit = app
             .world_mut()
             .run_system_once(
@@ -1253,7 +680,7 @@ mod tests {
     fn move_resolves_nothing_off_rect() {
         use bevy::ecs::system::RunSystemOnce;
 
-        let (mut app, _pane, _child) = make_arbiter_webview_app();
+        let (mut app, _pane, _child) = make_gesture_webview_app();
         let hit = app
             .world_mut()
             .run_system_once(
@@ -1285,7 +712,7 @@ mod tests {
 
     #[test]
     fn inline_off_rect_press_releases_focus_and_falls_through() {
-        let (mut app, pane, child) = make_arbiter_webview_app();
+        let (mut app, pane, child) = make_gesture_webview_app();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_button(
@@ -1305,6 +732,139 @@ mod tests {
                 GestureState::Pressed { pane: p, .. } if p == pane
             ),
             "an off-rect press must fall through to the normal pane gesture"
+        );
+    }
+
+    #[test]
+    fn modal_open_suppresses_webview_routing_and_gesture() {
+        let (mut app, _pane, _child) = make_gesture_webview_app();
+        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<FocusedWebview>().0,
+            None,
+            "a press while a modal is open must not route to the webview layer"
+        );
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle,
+            "a press while a modal is open must not arm a gesture"
+        );
+        assert!(
+            app.world().resource::<TmuxGestureButtons>().0.is_empty(),
+            "a gated frame must buffer no events"
+        );
+    }
+
+    #[test]
+    fn closing_modal_resumes_pointer_handling() {
+        let (mut app, pane, _child) = make_gesture_webview_app();
+        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_cursor(&mut app, Vec2::new(400.0, 400.0));
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle,
+            "while the modal is open the suppressed drain keeps the gesture Idle"
+        );
+
+        app.world_mut().resource_mut::<SessionPicker>().open = false;
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert!(
+            matches!(
+                app.world().resource::<TmuxMouseGesture>().state,
+                GestureState::Pressed { pane: p, .. } if p == pane
+            ),
+            "closing the modal must let the active path arm the gesture again"
+        );
+    }
+
+    #[test]
+    fn suppressed_frame_press_does_not_resurface_when_pointer_reactivates() {
+        let (mut app, _pane, _child) = make_gesture_webview_app();
+        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_cursor(&mut app, Vec2::new(400.0, 400.0));
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle,
+            "the suppressed frame must not arm a gesture"
+        );
+
+        app.world_mut().resource_mut::<SessionPicker>().open = false;
+        app.update();
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle,
+            "a press written during the suppressed frame must not resurface and arm a \
+             gesture once the pointer pipeline reactivates"
+        );
+        assert!(
+            app.world().resource::<TmuxGestureButtons>().0.is_empty(),
+            "no stale event may reach the hand-off buffer on the reactivated frame"
+        );
+    }
+
+    #[test]
+    fn suppressed_frame_releases_in_flight_webview_press() {
+        let (mut app, _pane, child) = make_gesture_webview_app();
+        app.world_mut().resource_mut::<TmuxWebviewPress>().0 = Some(child);
+        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_cursor(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert_eq!(
+            app.world().resource::<TmuxWebviewPress>().0,
+            None,
+            "a window-exists-but-suppressed frame must release the in-flight inline press"
+        );
+        assert_eq!(
+            app.world().resource::<TmuxMouseGesture>().state,
+            GestureState::Idle,
+            "the suppressed drain resets the gesture to Idle"
+        );
+    }
+
+    #[test]
+    fn non_consumed_press_is_handed_off_and_buffer_drained() {
+        let (mut app, pane, _child) = make_gesture_webview_app();
+        set_cursor(&mut app, Vec2::new(400.0, 400.0));
+        write_button(
+            &mut app,
+            bevy::input::mouse::MouseButton::Left,
+            ButtonState::Pressed,
+        );
+        app.update();
+        assert!(
+            matches!(
+                app.world().resource::<TmuxMouseGesture>().state,
+                GestureState::Pressed { pane: p, .. } if p == pane
+            ),
+            "a non-consumed press must reach tmux_gesture through the buffer and arm the gesture"
+        );
+        assert!(
+            app.world().resource::<TmuxGestureButtons>().0.is_empty(),
+            "tmux_gesture must drain the hand-off buffer (invariant 7: no cross-frame accumulation)"
         );
     }
 }

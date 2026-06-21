@@ -3,8 +3,8 @@
 //!
 //! For each `DividerPixelRect` stored on a window (`PackedTmuxLayout`), one
 //! handle node fills the 1px gap the divider occupies (subtle grey, brightening
-//! to the accent color on hover). A hover system reuses the arbiter's
-//! `divider_at` hit-test so the visible handle, the resize grab zone, and the
+//! to the accent color on hover). A hover system reuses the tmux mouse
+//! module's `divider_at` hit-test so the visible handle, the resize grab zone, and the
 //! cursor all coincide, and sets a `ColResize` / `RowResize` cursor on the
 //! primary window while the pointer is over a divider.
 
