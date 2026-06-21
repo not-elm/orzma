@@ -1,4 +1,4 @@
-//! AppMode state enum and the Ozma single-terminal lifecycle plugin.
+//! AppMode state enum and the Default-mode single-terminal lifecycle plugin.
 
 use bevy::prelude::*;
 use ozma_terminal::{
@@ -23,9 +23,9 @@ pub(crate) enum AppMode {
 /// `OnExit(AppMode::Default)`. Requires `AppMode` to be inserted via
 /// `App::insert_state` before this plugin runs, and `OzmaTerminalPlugin` must
 /// be added first (it inserts `OzmaTerminalConfig` that `spawn_terminal` reads).
-pub(crate) struct OzmaModePlugin;
+pub(crate) struct DefaultModePlugin;
 
-impl Plugin for OzmaModePlugin {
+impl Plugin for DefaultModePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(AppMode::Default), spawn_terminal)
             .add_systems(OnExit(AppMode::Default), despawn_terminal);

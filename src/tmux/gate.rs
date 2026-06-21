@@ -6,7 +6,7 @@
 
 use super::pane_hit::tmux_pane_at_phys;
 use crate::input::ime::ImeState;
-use crate::ozma::AppMode;
+use crate::app_mode::AppMode;
 use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;

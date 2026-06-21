@@ -7,7 +7,7 @@
 //! `Window::ime_enabled` and `.ime_position`).
 
 use crate::input::InputPhase;
-use crate::ozma::AppMode;
+use crate::app_mode::AppMode;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::hierarchy::ChildOf;

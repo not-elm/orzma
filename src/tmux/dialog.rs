@@ -1,6 +1,6 @@
 //! A modal overlay shown when the tmux backend reports an error.
 
-use crate::ozma::AppMode;
+use crate::app_mode::AppMode;
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;

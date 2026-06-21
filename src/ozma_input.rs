@@ -7,7 +7,7 @@
 use crate::input::ime::ImeState;
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
-use crate::ozma::AppMode;
+use crate::app_mode::AppMode;
 use crate::picker::SessionPicker;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;

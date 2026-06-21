@@ -5,7 +5,7 @@ mod cef_profile;
 mod configs;
 mod font;
 mod input;
-mod ozma;
+mod app_mode;
 mod ozma_input;
 mod picker;
 mod system_set;
@@ -16,7 +16,7 @@ mod window_title;
 
 use crate::cef_profile::CefProfileDir;
 use crate::input::hyperlink::HyperlinkInputPlugin;
-use crate::ozma::{AppMode, OzmaModePlugin};
+use crate::app_mode::{AppMode, DefaultModePlugin};
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
@@ -70,7 +70,7 @@ fn main() {
             OzmaTerminalPlugin {
                 config_shell: pre_configs.ozma.shell.clone(),
             },
-            OzmaModePlugin,
+            DefaultModePlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,

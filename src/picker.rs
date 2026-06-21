@@ -3,7 +3,7 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::ozma::AppMode;
+use crate::app_mode::AppMode;
 use crate::theme;
 use bevy::ecs::hierarchy::Children;
 use bevy::ecs::message::MessageReader;
