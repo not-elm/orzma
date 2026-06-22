@@ -476,6 +476,16 @@ fn rows_for_panes(total_rows: u16) -> u16 {
     total_rows.saturating_sub(1).max(1)
 }
 
+/// The pinned tmux pane cell size (`(cols, rows)`) for the current GUI window,
+/// with one row reserved for the ozmux status bar. [`sync_client_size`] pins
+/// tmux to this. The session picker deliberately births new sessions one row
+/// larger (the full window, no bar reservation) so reconciliation to this size
+/// is a shrink, never a grow — see `picker_client_size`.
+fn client_cell_size(phys_w: u32, phys_h: u32, cell_w_phys: f32, cell_h_phys: f32) -> (u16, u16) {
+    let (cols, rows) = cells_for(phys_w, phys_h, cell_w_phys, cell_h_phys);
+    (cols, rows_for_panes(rows))
+}
+
 /// Size-declaration command for `win` chosen by the tmux per-window
 /// `refresh-client` capability. `None` (capability not yet known) falls back to
 /// the global `refresh-client -C W,H`.
@@ -553,13 +563,12 @@ fn sync_client_size(
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let (cols, rows) = cells_for(
+    let (cols, rows) = client_cell_size(
         window.resolution.physical_width(),
         window.resolution.physical_height(),
         cell_w,
         cell_h,
     );
-    let rows = rows_for_panes(rows);
     let desired = (cols, rows);
     let reported = layout.map(|l| {
         let d = l.0.root.dims();
@@ -732,6 +741,17 @@ mod tests {
         assert_eq!(rows_for_panes(24), 23);
         assert_eq!(rows_for_panes(1), 1); // never zero
         assert_eq!(rows_for_panes(2), 1);
+    }
+
+    #[test]
+    fn client_cell_size_matches_the_pinned_size_one_row_reserved() {
+        // 1280x752 phys, 8x16 cells -> 160 cols x 47 rows; one row reserved for
+        // the ozmux status bar -> 46 pane rows. Birthing the new session's PTY at
+        // this size makes the first pane geometry equal the size sync_client_size
+        // will pin, so no grow happens.
+        assert_eq!(client_cell_size(1280, 752, 8.0, 16.0), (160, 46));
+        // Degenerate tiny window still yields a usable >=1 size.
+        assert_eq!(client_cell_size(1, 1, 8.0, 16.0), (1, 1));
     }
 
     fn dims() -> CellDims {

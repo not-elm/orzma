@@ -22,7 +22,9 @@ use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
 use crate::state::ConnectionState;
 use bevy::prelude::*;
+use std::collections::{HashMap, HashSet};
 use tmux_control::{ClientEvent, TmuxClient, TransportEvent};
+use tmux_control_parser::PaneId;
 
 /// Marker resource inserted when the tmux backend is active. Drain systems are
 /// gated on its presence; insert it to activate tmux mode, remove it to idle.
@@ -68,7 +70,7 @@ impl Plugin for TmuxSessionPlugin {
             )
             .add_systems(
                 Update,
-                request_pane_captures
+                (request_pane_captures, recapture_settled_panes)
                     .after(TmuxProjectionSet)
                     .run_if(resource_exists::<TmuxPresence>),
             );
@@ -104,26 +106,100 @@ fn request_pane_captures(
         return;
     };
     for pane in new_panes.iter() {
-        match client.handle().send(CapturePane { id: pane.id }) {
-            Ok(cap_id) => {
-                enumeration
-                    .pending
-                    .insert(cap_id, PendingReply::Capture { pane: pane.id });
-                match client.handle().send(CursorQuery { id: pane.id }) {
-                    Ok(cur_id) => {
-                        enumeration
-                            .pending
-                            .insert(cur_id, PendingReply::Cursor { pane: pane.id });
-                        enumeration.panes_with_cursor_pending.insert(pane.id);
-                    }
-                    Err(error) => {
-                        tracing::warn!(?error, pane = pane.id.0, "failed to send cursor query");
-                    }
+        request_pane_capture(&mut enumeration, client, pane.id);
+    }
+}
+
+/// Sends a `capture-pane` + cursor-position query for `pane` and registers the
+/// pending replies so [`apply_reply`] seeds the mirror from tmux's authoritative
+/// grid (clear-screen + rows + the real cursor position).
+fn request_pane_capture(enumeration: &mut EnumerationState, client: &TmuxClient, pane: PaneId) {
+    match client.handle().send(CapturePane { id: pane }) {
+        Ok(cap_id) => {
+            enumeration
+                .pending
+                .insert(cap_id, PendingReply::Capture { pane });
+            match client.handle().send(CursorQuery { id: pane }) {
+                Ok(cur_id) => {
+                    enumeration
+                        .pending
+                        .insert(cur_id, PendingReply::Cursor { pane });
+                    enumeration.panes_with_cursor_pending.insert(pane);
+                }
+                Err(error) => {
+                    tracing::warn!(?error, pane = pane.0, "failed to send cursor query");
                 }
             }
-            Err(error) => {
-                tracing::warn!(?error, pane = pane.id.0, "failed to send capture-pane")
-            }
+        }
+        Err(error) => {
+            tracing::warn!(?error, pane = pane.0, "failed to send capture-pane")
+        }
+    }
+}
+
+/// Per-pane state for [`recapture_settled_panes`].
+#[derive(Default)]
+struct PaneRecaptureState {
+    /// Last-seen cell dims, to detect size changes.
+    dims: (u32, u32),
+    /// Frames the dims have held steady since the last change.
+    stable: u8,
+    /// Whether this pane has already been re-seeded once.
+    done: bool,
+}
+
+/// Frames a pane's size must hold steady before its mirror is re-seeded from
+/// tmux. Lets a born-small pane finish growing (and a window-drag finish) before
+/// the one-shot re-seed fires.
+const RECAPTURE_SETTLE_FRAMES: u8 = 3;
+
+/// Re-seeds each pane's display mirror from tmux's authoritative grid exactly
+/// once, a few frames after the pane's size first settles.
+///
+/// NOTE: the display-only `alacritty_terminal` mirror diverges from tmux by one
+/// row on a fresh session's first prompt — zsh's `PROMPT_EOL_MARK` over-fills the
+/// line by one column and alacritty wraps the cursor to the next row where tmux
+/// does not, so the replayed `%output` lands the prompt one row low. A one-shot
+/// capture-pane + cursor seed after the pane settles overwrites the wrapped local
+/// cursor with tmux's real position. Fires once per pane — re-seeding on every
+/// later resize would flash the screen and discard local state, and an
+/// established pane's grow already matches tmux — and fires regardless of whether
+/// the size changed, since a pane born at its final size still wraps its first
+/// prompt. Skipped while an earlier capture for the pane is still in flight so
+/// the two capture/cursor pairs never collide.
+fn recapture_settled_panes(
+    mut watch: Local<HashMap<PaneId, PaneRecaptureState>>,
+    mut enumeration: ResMut<EnumerationState>,
+    connection: NonSend<TmuxConnection>,
+    panes: Query<&TmuxPane>,
+) {
+    // Prune departed panes every frame, even while the control client is absent,
+    // so a reconnect that reuses a pane id starts from a clean slate.
+    let present: HashSet<PaneId> = panes.iter().map(|pane| pane.id).collect();
+    watch.retain(|id, _| present.contains(id));
+
+    let Some(client) = connection.client() else {
+        return;
+    };
+    for pane in panes.iter() {
+        let dims = (pane.dims.width, pane.dims.height);
+        let state = watch.entry(pane.id).or_insert(PaneRecaptureState {
+            dims,
+            stable: 0,
+            done: false,
+        });
+        if state.dims != dims {
+            state.dims = dims;
+            state.stable = 0;
+        } else {
+            state.stable = state.stable.saturating_add(1);
+        }
+        if !state.done
+            && state.stable >= RECAPTURE_SETTLE_FRAMES
+            && !enumeration.panes_with_cursor_pending.contains(&pane.id)
+        {
+            state.done = true;
+            request_pane_capture(&mut enumeration, client, pane.id);
         }
     }
 }
