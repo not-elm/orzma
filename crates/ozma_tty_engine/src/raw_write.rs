@@ -2,10 +2,6 @@
 //! `pending_user_input` echo/coalescing side effect of `TerminalHandle::write`.
 
 use crate::pty::PtyHandle;
-use bevy::ecs::entity::Entity;
-use bevy::ecs::event::EntityEvent;
-use bevy::ecs::observer::On;
-use bevy::ecs::system::Query;
 use bevy::prelude::*;
 
 /// Requests a raw, side-effect-free write of `bytes` to `entity`'s PTY.
@@ -75,8 +71,8 @@ mod tests {
         let mut reader = pty_pair.master.try_clone_reader().expect("clone reader");
         let writer = pty_pair.master.take_writer().expect("take writer");
 
-        let (chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
-        let (exit_tx, exit_rx) = unbounded::<Option<i32>>();
+        let (_chunk_tx, chunk_rx) = unbounded::<Vec<u8>>();
+        let (_exit_tx, exit_rx) = unbounded::<Option<i32>>();
 
         // Drain PTY output on a background thread so the synchronous write
         // path doesn't deadlock waiting for the master buffer to drain.
@@ -123,15 +119,14 @@ mod tests {
             }
         }
 
-        // Drop channels so the background thread exits.
-        drop(chunk_tx);
-        drop(exit_tx);
-
         assert!(
             received.windows(b"hello".len()).any(|w| w == b"hello"),
-            "expected 'hello' in PTY output but got: {:?}",
-            received
+            "expected 'hello' in PTY output but got: {received:?}"
         );
+
+        // Despawn drops the PtyHandle, closing the master fd so the reader
+        // thread's blocking read() returns EOF and the thread exits cleanly.
+        app.world_mut().despawn(entity);
     }
 
     /// Triggering `TerminalRawWrite` on an entity with no `PtyHandle` must be
