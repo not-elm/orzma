@@ -5,6 +5,7 @@ use crate::events::{TerminalChildExit, TerminalKeyInput};
 use crate::handle::TerminalHandle;
 use crate::input_codec::encode_key;
 use crate::pty::PtyHandle;
+use crate::raw_write::RawWritePlugin;
 use crate::title::TerminalTitle;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::observer::On;
@@ -18,17 +19,18 @@ pub struct TerminalHandlePlugin;
 
 impl Plugin for TerminalHandlePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            (
-                drain_pty_chunks,
-                drain_pty_writes,
-                check_deadline_flush,
-                drain_pty_exits,
+        app.add_plugins(RawWritePlugin)
+            .add_systems(
+                Update,
+                (
+                    drain_pty_chunks,
+                    drain_pty_writes,
+                    check_deadline_flush,
+                    drain_pty_exits,
+                )
+                    .chain(),
             )
-                .chain(),
-        );
-        app.add_observer(on_terminal_key_input);
+            .add_observer(on_terminal_key_input);
     }
 }
 
