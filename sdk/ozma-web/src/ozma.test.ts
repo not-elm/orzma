@@ -36,7 +36,7 @@ describe('@ozma/web client', () => {
 
   it('reports bridge availability', () => {
     expect(isOzmaAvailable()).toBe(false);
-    g.ozma = { call: vi.fn(), on: vi.fn(), off: vi.fn() } as unknown as OzmaApi;
+    g.ozma = { call: vi.fn(), on: vi.fn(), off: vi.fn(), emit: vi.fn() } as unknown as OzmaApi;
     expect(isOzmaAvailable()).toBe(true);
   });
 });
