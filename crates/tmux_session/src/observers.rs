@@ -227,12 +227,15 @@ fn on_connection_reset(
     mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
 ) {
+    // NOTE: try_despawn, not despawn: on a mode exit DespawnOnExit(Tmux) may have already removed
+    // these window entities (they are ChildOf the WorkspaceUiRoot subtree); plain despawn would
+    // warn per already-gone entity.
     for (_, e) in index.windows.drain() {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     index.panes.clear();
     if let Some(e) = index.session.take() {
-        commands.entity(e).despawn();
+        commands.entity(e).try_despawn();
     }
     index.pending_active_pane = None;
     *enumeration = EnumerationState::default();
@@ -301,7 +304,7 @@ fn despawn_window(commands: &mut Commands, index: &mut TmuxProjection, id: Windo
         return;
     };
     index.panes.retain(|_, (_, w)| *w != id);
-    commands.entity(e).despawn();
+    commands.entity(e).try_despawn();
 }
 
 fn set_marker<T: Component + Default>(
@@ -322,7 +325,10 @@ mod tests {
 
     fn app() -> App {
         let mut app = App::new();
-        app.init_resource::<TmuxProjection>();
+        app.init_resource::<TmuxProjection>()
+            .init_resource::<EnumerationState>()
+            .init_resource::<KeyBindings>()
+            .init_resource::<CopyModeQueries>();
         register_observers(&mut app);
         app
     }
