@@ -11,6 +11,7 @@
 use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
+use std::mem::take;
 
 /// The tmux control-mode DCS introducer: `ESC P 1000 p`.
 pub const CONTROL_MODE_INTRODUCER: &[u8] = b"\x1bP1000p";
@@ -40,7 +41,7 @@ impl AdoptedControlMode {
     /// The returned slice begins at the introducer byte; downstream
     /// `ProtocolClient::feed` strips the introducer before parsing.
     pub fn take_captured(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.captured)
+        take(&mut self.captured)
     }
 }
 
@@ -71,7 +72,7 @@ pub(crate) enum Handover {
 /// the next call, so the VT never sees a partial introducer; a disproven
 /// match flushes the carried bytes into a later `vt`.
 pub(crate) fn scan_handover(watch: &mut ControlModeWatch, chunk: &[u8]) -> Handover {
-    let mut working = std::mem::take(&mut watch.carry);
+    let mut working = take(&mut watch.carry);
     working.extend_from_slice(chunk);
 
     if let Some(p) = find_introducer(&working) {
@@ -89,7 +90,7 @@ pub(crate) fn scan_handover(watch: &mut ControlModeWatch, chunk: &[u8]) -> Hando
 }
 
 /// Returns the index of the first full [`CONTROL_MODE_INTRODUCER`]
-/// occurrence in `haystack`, or `None`. Hand-rolled over the fixed 8-byte
+/// occurrence in `haystack`, or `None`. Hand-rolled over the fixed 7-byte
 /// needle to avoid a `memchr` dependency.
 fn find_introducer(haystack: &[u8]) -> Option<usize> {
     let needle = CONTROL_MODE_INTRODUCER;

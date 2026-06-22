@@ -425,4 +425,106 @@ mod tests {
 
         app.world_mut().despawn(entity);
     }
+
+    /// Exercises the empty-`vt` guard in `ingest_and_flush_or_arm`: a chunk that
+    /// is EXACTLY a proper introducer prefix yields `NotYet { vt: b"" }`, so the
+    /// VT path is handed zero bytes. The guard must keep that from arming the
+    /// coalescer or otherwise perturbing the bridge while the introducer is
+    /// still incomplete; the next chunk completes it and adoption fires.
+    ///
+    /// The terminal is primed with a normal line first (so `first_emit` is
+    /// false and the coalescer has settled disarmed) — that makes
+    /// `coalescer.is_armed()` a discriminating assertion: WITHOUT the guard the
+    /// empty-`vt` `ingest_chunk(&[])` classifies empty damage, does not flush
+    /// (no pending user input), and arms the coalescer. The `FrameSnapshot`
+    /// count is asserted too but is only a weak proxy here — on a non-fresh
+    /// idle terminal the no-op emit and the bootstrap rescue both suppress an
+    /// extra snapshot regardless of the guard, so `is_armed()` is the assertion
+    /// that genuinely fails without the fix.
+    #[test]
+    fn divert_empty_vt_prefix_does_not_arm_coalescer_then_adopts() {
+        use ozma_tty_renderer::schema::FrameSnapshot;
+
+        #[derive(Resource, Default)]
+        struct SnapshotCount(usize);
+
+        let mut app = App::new();
+        app.add_plugins(TerminalHandlePlugin)
+            .init_resource::<DetectedCount>()
+            .init_resource::<SnapshotCount>()
+            .add_observer(count_detected)
+            .add_observer(|_ev: On<FrameSnapshot>, mut count: ResMut<SnapshotCount>| {
+                count.0 += 1;
+            });
+
+        let handle = TerminalHandle::detached(80, 24, Arc::new(AtomicBool::new(false)));
+        let (pty, chunk_tx) = pty_handle_with_injector();
+        let entity = app
+            .world_mut()
+            .spawn((
+                handle,
+                pty,
+                Coalescer::new(),
+                TerminalTitle::default(),
+                ControlModeWatch::default(),
+            ))
+            .id();
+
+        // Prime: render one normal line so the terminal is non-fresh
+        // (first_emit == false) and the coalescer settles disarmed.
+        chunk_tx.send(b"$ tmux -CC\r\n".to_vec()).unwrap();
+        app.update();
+        let primed_snapshots = app.world().resource::<SnapshotCount>().0;
+        assert!(
+            !app.world().get::<Coalescer>(entity).unwrap().is_armed(),
+            "coalescer must be disarmed after the primed line emits"
+        );
+
+        // Feed EXACTLY a proper introducer prefix -> NotYet { vt: b"" }, carry
+        // is the full 6-byte prefix.
+        chunk_tx.send(b"\x1bP1000".to_vec()).unwrap();
+        app.update();
+
+        assert!(
+            app.world().get::<ControlModeWatch>(entity).is_some(),
+            "still watching while the introducer is incomplete"
+        );
+        assert!(
+            app.world().get::<AdoptedControlMode>(entity).is_none(),
+            "a bare introducer prefix must NOT adopt yet"
+        );
+        assert_eq!(
+            app.world().resource::<DetectedCount>().0,
+            0,
+            "no detection on a bare introducer prefix"
+        );
+        assert!(
+            !app.world().get::<Coalescer>(entity).unwrap().is_armed(),
+            "empty-vt guard: feeding zero bytes must NOT arm the coalescer"
+        );
+        assert_eq!(
+            app.world().resource::<SnapshotCount>().0,
+            primed_snapshots,
+            "empty-vt guard: no extra snapshot for a withheld-only chunk"
+        );
+
+        // Completion chunk closes the introducer and carries the first block.
+        chunk_tx
+            .send(b"p%begin 1 1 1\r\n%end 1 1 1\r\n".to_vec())
+            .unwrap();
+        app.update();
+
+        let adopted = app
+            .world()
+            .get::<AdoptedControlMode>(entity)
+            .expect("completion chunk adopts");
+        assert_eq!(
+            adopted.captured, b"\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n",
+            "captured rejoins the carried prefix and starts at the introducer"
+        );
+        assert!(app.world().get::<ControlModeWatch>(entity).is_none());
+        assert_eq!(app.world().resource::<DetectedCount>().0, 1);
+
+        app.world_mut().despawn(entity);
+    }
 }
