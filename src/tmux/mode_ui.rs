@@ -12,6 +12,12 @@ use bevy::ui::Val;
 #[derive(Component)]
 struct TmuxModeUi;
 
+/// Workspace container under `TmuxModeUi` where the tmux render layer parents
+/// each window container. Spawned with the Tmux subtree; removed with it via
+/// `DespawnOnExit`.
+#[derive(Component)]
+pub(super) struct WorkspaceUiRoot;
+
 /// Bevy plugin that ensures the Tmux-mode UI subtree exists while in Tmux mode.
 pub(crate) struct TmuxModeUiPlugin;
 
@@ -32,17 +38,31 @@ fn ensure_tmux_mode_ui(mut commands: Commands, ui_root: Query<Entity, With<UiRoo
     let Ok(ui_root) = ui_root.single() else {
         return;
     };
+    let tmux_ui = commands
+        .spawn((
+            Name::new("Tmux Mode UI"),
+            Node {
+                flex_direction: FlexDirection::Column,
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            DespawnOnExit(AppMode::Tmux),
+            TmuxModeUi,
+            ChildOf(ui_root),
+        ))
+        .id();
+
     commands.spawn((
-        Name::new("Tmux Mode UI"),
+        Name::new("Workspace UI Root"),
         Node {
-            flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
             width: Val::Percent(100.0),
             height: Val::Percent(100.0),
             ..default()
         },
-        DespawnOnExit(AppMode::Tmux),
-        TmuxModeUi,
-        ChildOf(ui_root),
+        WorkspaceUiRoot,
+        ChildOf(tmux_ui),
     ));
 }
 
@@ -59,6 +79,23 @@ mod tests {
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins(TmuxModeUiPlugin);
         app
+    }
+
+    #[test]
+    fn workspace_ui_root_is_child_of_tmux_mode_ui() {
+        let mut app = build_app();
+        app.update();
+        let world = app.world_mut();
+        let tmux_ui = world
+            .query_filtered::<Entity, With<TmuxModeUi>>()
+            .single(world)
+            .expect("TmuxModeUi present");
+        let parent = world
+            .query_filtered::<&ChildOf, With<WorkspaceUiRoot>>()
+            .single(world)
+            .expect("WorkspaceUiRoot present")
+            .parent();
+        assert_eq!(parent, tmux_ui, "WorkspaceUiRoot under TmuxModeUi");
     }
 
     #[test]
