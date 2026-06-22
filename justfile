@@ -29,6 +29,10 @@ run:
 build:
     cargo build
 
+install-apps:
+    cargo install --path ./apps/ozbrowser/
+    cargo install --path ./apps/ozmd/
+
 # remove the workspace target dir
 clean:
     cargo clean
