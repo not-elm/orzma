@@ -33,10 +33,9 @@ fn on_tmux_mouse_effects(
     mut gesture: ResMut<TmuxMouseGesture>,
     connection: NonSend<TmuxConnection>,
 ) {
-    let Some(client) = connection.client() else {
+    let Some(handle) = connection.handle() else {
         return;
     };
-    let handle = client.handle();
     for effect in &ev.effects {
         match *effect {
             TmuxMouseEffect::SelectPane(pane_id) => {

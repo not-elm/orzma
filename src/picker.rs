@@ -20,7 +20,7 @@ use ozma_webview::ControlPlaneHandle;
 use ozmux_configs::StartupMode;
 use ozmux_tmux::{
     AttachTarget, ConnectionState, SelectWindow, SetEnvironmentInSession, SwitchClient,
-    TmuxCommand, TmuxConnection, attach_or_create, select_attach_target,
+    TmuxCommand, TmuxConnection, select_attach_target,
 };
 use tmux_control::{SessionInfo, TmuxServer, WindowEntry};
 
@@ -202,7 +202,7 @@ fn refresh_picker_on_open(mut picker: ResMut<SessionPicker>, configs: Res<OzmuxC
 /// and do not bounce a picker-driven Default -> Tmux transition back to Default.
 fn dispatch_startup_mode(
     mut commands: Commands,
-    mut connection: NonSendMut<TmuxConnection>,
+    _connection: NonSendMut<TmuxConnection>,
     mut picker: ResMut<SessionPicker>,
     mut state: ResMut<ConnectionState>,
     mut next_mode: ResMut<NextState<AppMode>>,
@@ -239,18 +239,15 @@ fn dispatch_startup_mode(
             }
             match server.list_sessions() {
                 Ok(sessions) => {
-                    let target = select_attach_target(&sessions);
-                    match attach_or_create(&server, &target) {
-                        Ok(client) => {
-                            connection.set(client);
-                            *state = ConnectionState::Connecting;
-                        }
-                        Err(e) => {
-                            *state = ConnectionState::Error {
-                                reason: format!("auto-attach failed: {e}"),
-                            };
-                        }
-                    }
+                    let _target = select_attach_target(&sessions);
+                    // TODO(T8): the in-world drive adopts a gateway terminal's PTY
+                    // (`TmuxConnection::adopt`) instead of installing a spawned
+                    // `TmuxClient`; the picker entry path is rebuilt onto adoption
+                    // by the adoption-entry task. Until then auto-attach cannot
+                    // open a connection.
+                    *state = ConnectionState::Error {
+                        reason: "tmux auto-attach is pending adoption-entry wiring".to_string(),
+                    };
                 }
                 Err(e) => {
                     *state = ConnectionState::Error {
@@ -703,7 +700,7 @@ fn activate_row(
     client_size: Option<(u16, u16)>,
     row: PickerRow,
 ) {
-    if connection.client().is_some() {
+    if connection.is_connected() {
         apply_switch(
             connection,
             state,
@@ -741,7 +738,7 @@ fn apply_switch(
     client_size: Option<(u16, u16)>,
     row: PickerRow,
 ) {
-    if connection.client().is_none() {
+    if !connection.is_connected() {
         return;
     }
     // The attach path's current-session set-environment does not re-run on a
@@ -798,17 +795,17 @@ fn apply_switch(
     };
     let mut failure: Option<String> = None;
     for cmd in &cmds {
-        let Some(client) = connection.client() else {
+        let Some(handle) = connection.handle() else {
             return;
         };
-        if let Err(e) = client.handle().send(cmd) {
+        if let Err(e) = handle.send_raw(cmd) {
             tracing::warn!(?e, cmd = cmd.as_str(), "switch command send failed");
             failure = Some(format!("switch failed: {e}"));
             break;
         }
     }
     if let Some(reason) = failure {
-        connection.take();
+        connection.close();
         *state = ConnectionState::Error { reason };
     }
 }
@@ -837,19 +834,16 @@ fn apply_attach(
     if let Some(handle) = control {
         server = server.env("OZMA_SOCK", &handle.sock_path.to_string_lossy());
     }
-    match attach_or_create(&server, &target) {
-        Ok(client) => {
-            connection.set(client);
-            *state = ConnectionState::Connecting;
-            true
-        }
-        Err(e) => {
-            *state = ConnectionState::Error {
-                reason: format!("tmux connect failed: {e}"),
-            };
-            false
-        }
-    }
+    // TODO(T8): the in-world drive adopts a gateway terminal's PTY
+    // (`TmuxConnection::adopt`) rather than installing a spawned `TmuxClient`, so
+    // attach now starts a control-mode shell whose PTY a later task adopts. The
+    // picker entry path is rebuilt onto adoption by the adoption-entry task;
+    // until then the spawned client cannot be installed.
+    let _ = (&server, &target, &mut *connection);
+    *state = ConnectionState::Error {
+        reason: "tmux attach is pending adoption-entry wiring".to_string(),
+    };
+    false
 }
 
 /// Whether a successful picker attach should transition the app into
@@ -859,7 +853,7 @@ fn apply_attach(
 /// The `Default` guard is correctness-critical, not an optimization: under Bevy
 /// 0.18 `NextState::set` to the current value re-runs `OnExit`/`OnEnter`, so
 /// setting `Tmux` while already in `Tmux` would run `on_exit_tmux`
-/// (`connection.take()` + `detach-client`) and tear down the live client.
+/// (`connection.close()` + `detach-client`) and tear down the live client.
 fn should_enter_tmux(attached: bool, current: &AppMode) -> bool {
     attached && *current == AppMode::Default
 }

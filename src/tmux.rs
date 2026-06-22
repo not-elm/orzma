@@ -76,10 +76,10 @@ fn on_enter_tmux(mut commands: Commands) {
 }
 
 fn on_exit_tmux(mut commands: Commands, mut connection: NonSendMut<TmuxConnection>) {
-    if let Some(client) = connection.client() {
-        let _ = client.handle().send("detach-client");
+    if let Some(handle) = connection.handle() {
+        let _ = handle.send_raw("detach-client");
     }
-    connection.take();
+    connection.close();
     commands.remove_resource::<TmuxPresence>();
     commands.trigger(TmuxConnectionReset);
 }

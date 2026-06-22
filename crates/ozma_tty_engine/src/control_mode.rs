@@ -36,6 +36,14 @@ pub struct AdoptedControlMode {
 }
 
 impl AdoptedControlMode {
+    /// Returns a component pre-seeded with `captured` post-introducer bytes.
+    ///
+    /// Lets consumers of the in-world drive (and their tests) stage captured
+    /// bytes without reaching the private buffer field.
+    pub fn from_captured(captured: Vec<u8>) -> Self {
+        Self { captured }
+    }
+
     /// Removes and returns the buffered bytes, leaving the buffer empty.
     ///
     /// The returned slice begins at the introducer byte; downstream

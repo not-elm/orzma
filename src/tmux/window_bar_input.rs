@@ -16,10 +16,10 @@ pub(super) fn switch_window_on_click(
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let Some(client) = connection.client() else {
+        let Some(handle) = connection.handle() else {
             continue;
         };
-        if let Err(e) = client.handle().send(SelectWindow { id: entry.window }) {
+        if let Err(e) = handle.send(SelectWindow { id: entry.window }) {
             tracing::warn!(?e, window = entry.window.0, "select-window send failed");
         }
     }

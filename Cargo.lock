@@ -5017,7 +5017,7 @@ version = "0.1.0"
 dependencies = [
  "bevy",
  "bitflags 2.13.0",
- "crossbeam-channel",
+ "ozma_tty_engine",
  "tmux_control",
  "tmux_control_parser",
  "tracing",

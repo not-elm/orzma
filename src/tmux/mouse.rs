@@ -174,7 +174,7 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// copy mode (drag/selection for a pane NOT in copy mode is owned by
 /// `ozma_terminal`). Multi-click (≥2) on a pane in copy mode enters
 /// `PendingMultiSelect` to wait for a copy-mode snapshot AND a connected client
-/// (it passes `connection.client().is_some()` to the decider so a no-client
+/// (it passes `connection.is_connected()` to the decider so a no-client
 /// frame stays pending and retries), then selects a word/line via copy-mode
 /// commands. Each frame while `Resizing` the pointer's
 /// major-axis cell coordinate is mapped to an absolute target size and sent as
@@ -275,7 +275,7 @@ fn tmux_gesture(
         drag_threshold_phys,
         cell_w,
         cell_h,
-        connection.client().is_some(),
+        connection.is_connected(),
     );
     effects.extend(decide_continuation(&mut gesture.state, ctx));
 

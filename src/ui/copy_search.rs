@@ -184,8 +184,8 @@ fn handle_prompt_input(
         match step {
             PromptStep::Continue => {}
             PromptStep::Submit => {
-                if let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(Prompt {
+                if let Some(handle) = connection.handle()
+                    && let Err(e) = handle.send(Prompt {
                         pane: state.pane,
                         kind: state.kind,
                         text: &state.text,

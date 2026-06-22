@@ -241,8 +241,7 @@ fn forward_keys_to_tmux(
 
         if !forward_names.is_empty() {
             let actions = plan_forward(&mut prefix_pending, &bindings, forward_names);
-            if let (Some(target), Some(client)) = (target.as_deref(), connection.client()) {
-                let handle = client.handle();
+            if let (Some(target), Some(handle)) = (target.as_deref(), connection.handle()) {
                 for action in actions {
                     let result = match action {
                         Forwarded::Run(cmd) => handle.send(&cmd),
@@ -292,7 +291,7 @@ fn forward_keys_to_tmux(
                     if text.is_empty() {
                         continue;
                     }
-                    let (Some(target), Some(client)) = (target.as_deref(), connection.client())
+                    let (Some(target), Some(tmux)) = (target.as_deref(), connection.handle())
                     else {
                         continue;
                     };
@@ -304,7 +303,7 @@ fn forward_keys_to_tmux(
                     }
                     let bytes = build_paste_bytes(&text, false);
                     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
-                        if let Err(e) = client.handle().send(SendBytes {
+                        if let Err(e) = tmux.send(SendBytes {
                             pane: target,
                             bytes: chunk,
                         }) {
@@ -346,10 +345,9 @@ fn forward_keys_to_tmux(
     }
 
     if in_copy_mode {
-        let Some(client) = connection.client() else {
+        let Some(handle) = connection.handle() else {
             return;
         };
-        let handle = client.handle();
         for name in key_names {
             let outcome = outcome_of(copy_mode_dispatch(&bindings, &name));
             if let Some(cmd) = &outcome.command {
@@ -399,10 +397,9 @@ fn forward_keys_to_tmux(
     if actions.is_empty() {
         return;
     }
-    let (Some(target), Some(client)) = (target.as_deref(), connection.client()) else {
+    let (Some(target), Some(handle)) = (target.as_deref(), connection.handle()) else {
         return;
     };
-    let handle = client.handle();
     for action in actions {
         if let Forwarded::Run(command) = &action
             && let Some(kind) = RenameKind::parse(command)
@@ -773,10 +770,9 @@ fn forward_wheel_to_tmux(
     let lines = configs.mouse.lines_per_notch;
     let total_lines = count as u32 * lines;
 
-    let Some(client) = connection.client() else {
+    let Some(tmux) = connection.handle() else {
         return;
     };
-    let tmux = client.handle();
 
     let (cmd, failure) = match owner {
         WheelOwner::CopyMode => (

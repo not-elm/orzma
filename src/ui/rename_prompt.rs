@@ -256,8 +256,8 @@ fn handle_rename_input(
             RenameStep::Continue => {}
             RenameStep::Submit => {
                 let cmd = prompt.submit_command();
-                if let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(&cmd)
+                if let Some(handle) = connection.handle()
+                    && let Err(e) = handle.send_raw(&cmd)
                 {
                     tracing::warn!(?e, "rename submit failed");
                 }

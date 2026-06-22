@@ -228,8 +228,8 @@ fn handle_confirm_input(
         match confirm_step(&ev.logical_key) {
             None => {}
             Some(ConfirmStep::Confirm) => {
-                if let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(&state.command)
+                if let Some(handle) = connection.handle()
+                    && let Err(e) = handle.send_raw(&state.command)
                 {
                     tracing::warn!(?e, "confirm-before command send failed");
                 }

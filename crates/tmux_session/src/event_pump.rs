@@ -10,31 +10,8 @@ use crate::events::{
 };
 use crate::state::{ConnectionState, next_state};
 use bevy::prelude::Commands;
-use crossbeam_channel::Receiver;
 use tmux_control::{ClientEvent, ControlEvent, TransportEvent};
 use tmux_control_parser::{PaneId, SessionId, WindowId};
-
-/// Upper bound on events drained per frame, so a pane flooding `%output`
-/// cannot stall the schedule with unbounded parse/apply work in one tick;
-/// any remainder stays queued and is drained on the next frame.
-const MAX_EVENTS_PER_FRAME: usize = 4096;
-
-/// Drains up to [`MAX_EVENTS_PER_FRAME`] currently-available transport events
-/// from `events`, logging each. Non-blocking: returns once the channel is
-/// empty or the per-frame cap is hit.
-pub(crate) fn drain_transport(events: &Receiver<TransportEvent>) -> Vec<TransportEvent> {
-    let mut drained = Vec::new();
-    while drained.len() < MAX_EVENTS_PER_FRAME {
-        match events.try_recv() {
-            Ok(event) => {
-                log_transport_event(&event);
-                drained.push(event);
-            }
-            Err(_) => break,
-        }
-    }
-    drained
-}
 
 /// Folds `events` through [`next_state`] from `current`, returning the resulting
 /// `ConnectionState` if the batch changed it, or `None` if it ended unchanged.
@@ -300,7 +277,7 @@ pub(crate) fn trigger_seed(commands: &mut Commands, output: &[String]) {
 }
 
 /// Emits a `tracing` line describing a single transport event.
-fn log_transport_event(event: &TransportEvent) {
+pub(crate) fn log_transport_event(event: &TransportEvent) {
     match event {
         TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, .. }) => {
             tracing::debug!(?id, ok, "tmux command complete");
@@ -318,7 +295,6 @@ fn log_transport_event(event: &TransportEvent) {
 mod tests {
     use super::*;
     use bevy::prelude::*;
-    use crossbeam_channel::unbounded;
     use tmux_control::ControlEvent;
     use tmux_control_parser::{SessionId, WindowId};
 
@@ -329,10 +305,8 @@ mod tests {
     }
 
     #[test]
-    fn drain_then_advance_state_attaches() {
-        let (tx, rx) = unbounded();
-        tx.send(window_add(1)).unwrap();
-        let drained = drain_transport(&rx);
+    fn advance_state_attaches_on_first_notification() {
+        let drained = vec![window_add(1)];
         let next = advance_state(&ConnectionState::Connecting, &drained);
         assert_eq!(next, Some(ConnectionState::Attached));
     }

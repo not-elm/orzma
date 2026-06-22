@@ -59,11 +59,11 @@ fn forward_ime_commit(
 /// Sends `bytes` to tmux pane `pane` via `send-keys -H`, logging `context` on
 /// failure. No-op when the control client is absent.
 fn send_to_pane(connection: &TmuxConnection, pane: PaneId, bytes: &[u8], context: &str) {
-    let Some(client) = connection.client() else {
+    let Some(handle) = connection.handle() else {
         return;
     };
     let target = pane_target(pane);
-    if let Err(e) = client.handle().send(SendBytes {
+    if let Err(e) = handle.send(SendBytes {
         pane: &target,
         bytes,
     }) {
