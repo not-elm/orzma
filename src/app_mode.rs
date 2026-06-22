@@ -31,8 +31,8 @@ struct DefaultShell;
 /// Bevy plugin that ensures the Default-mode UI subtree (a single
 /// `OzmaTerminal` under `DefaultModeUi`) exists while in `AppMode::Default`.
 ///
-/// `ensure_default_mode_ui` runs once (`not(any_with_component::<DefaultModeUi>)`)
-/// to build the subtree; it is never despawned. `toggle_default_mode_ui_visibility`
+/// `ensure_default_mode_ui` runs once while in `AppMode::Default` to build the
+/// subtree; it is never despawned. `toggle_default_mode_ui_visibility`
 /// shows it in `AppMode::Default` and hides it in `AppMode::Tmux`.
 /// `OzmaTerminalPlugin` must be added first (it inserts the `OzmaTerminalConfig`
 /// this reads).
@@ -42,7 +42,8 @@ impl Plugin for DefaultModePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            ensure_default_mode_ui.run_if(not(any_with_component::<DefaultModeUi>)),
+            ensure_default_mode_ui
+                .run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>))),
         )
         .add_systems(
             Update,
@@ -101,8 +102,8 @@ fn ensure_default_mode_ui(
 /// Gated by `state_changed::<AppMode>` so it only runs on transitions.
 /// Mutates the `Node.display` field only when the value differs.
 fn toggle_default_mode_ui_visibility(
-    mode: Res<State<AppMode>>,
     mut mode_ui: Query<&mut Node, With<DefaultModeUi>>,
+    mode: Res<State<AppMode>>,
 ) {
     let want = match **mode {
         AppMode::Default => Display::Flex,
@@ -125,7 +126,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(initial_mode);
-        // Provide OzmaTerminalConfig so ensure_default_mode_ui can read it.
         app.insert_resource(OzmaTerminalConfig { shell: None });
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins(DefaultModePlugin);
@@ -135,12 +135,10 @@ mod tests {
     #[test]
     fn spawns_default_mode_ui_once() {
         let mut app = build_app(AppMode::Default);
-        // First update: ensure_default_mode_ui fires.
         app.update();
         let world = app.world_mut();
         let mut q = world.query_filtered::<(), With<DefaultModeUi>>();
         assert_eq!(q.iter(world).count(), 1, "exactly one DefaultModeUi");
-        // Second update: run condition blocks re-spawn.
         app.update();
         let world = app.world_mut();
         let mut q = world.query_filtered::<(), With<DefaultModeUi>>();
@@ -156,7 +154,6 @@ mod tests {
         let mut app = build_app(AppMode::Default);
         app.update();
 
-        // Record the DefaultShell entity.
         let shell_entity = {
             let world = app.world_mut();
             world
@@ -165,25 +162,21 @@ mod tests {
                 .expect("DefaultShell spawned")
         };
 
-        // Transition Default → Tmux.
         app.world_mut()
             .resource_mut::<NextState<AppMode>>()
             .set(AppMode::Tmux);
         app.update();
 
-        // Transition Tmux → Default.
         app.world_mut()
             .resource_mut::<NextState<AppMode>>()
             .set(AppMode::Default);
         app.update();
 
-        // The entity must still exist (not despawned).
         assert!(
             app.world_mut().get_entity(shell_entity).is_ok(),
             "DefaultShell entity survived Default → Tmux → Default round-trip"
         );
 
-        // Only one DefaultShell must exist.
         let world = app.world_mut();
         let count = world
             .query_filtered::<(), With<DefaultShell>>()
@@ -219,7 +212,6 @@ mod tests {
         let mut app = build_app(AppMode::Default);
         app.update();
 
-        // Transition to Tmux then back to Default.
         app.world_mut()
             .resource_mut::<NextState<AppMode>>()
             .set(AppMode::Tmux);
