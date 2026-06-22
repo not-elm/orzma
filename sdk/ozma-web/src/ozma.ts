@@ -57,16 +57,16 @@ function resolve(): OzmaApi {
 /** Typed accessor for the host-injected `window.ozma` bridge; throws if absent. */
 export const ozma: OzmaApi = {
   call<R = unknown, P = unknown>(method: string, params?: P): Promise<R> {
-    return resolve().call<R, P>(method, params);
+    return resolve().call<R>(method, params);
   },
   on<P = unknown>(event: string, handler: (payload: P) => void): void {
-    resolve().on<P>(event, handler);
+    resolve().on(event, handler);
   },
   off<P = unknown>(event: string, handler: (payload: P) => void): void {
-    resolve().off<P>(event, handler);
+    resolve().off(event, handler);
   },
   emit<P = unknown>(event: string, payload?: P): void {
-    resolve().emit<P>(event, payload);
+    resolve().emit(event, payload);
   },
 };
 
