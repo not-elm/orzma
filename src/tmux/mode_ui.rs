@@ -1,0 +1,94 @@
+//! Mode-scoped UI for `AppMode::Tmux`: spawns the Tmux subtree under `UiRoot`
+//! while in Tmux mode and relies on `DespawnOnExit` to remove it on exit.
+
+use crate::app_mode::AppMode;
+use crate::ui::UiRoot;
+use bevy::prelude::*;
+use bevy::ui::Val;
+
+/// Root of the Tmux-mode UI subtree, mounted under `UiRoot` while in
+/// `AppMode::Tmux`. Carries `DespawnOnExit(AppMode::Tmux)`, so leaving Tmux mode
+/// removes the whole subtree.
+#[derive(Component)]
+struct TmuxModeUi;
+
+/// Bevy plugin that ensures the Tmux-mode UI subtree exists while in Tmux mode.
+pub(crate) struct TmuxModeUiPlugin;
+
+impl Plugin for TmuxModeUiPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            ensure_tmux_mode_ui.run_if(in_state(AppMode::Tmux).and(no_tmux_mode_ui)),
+        );
+    }
+}
+
+fn no_tmux_mode_ui(roots: Query<(), With<TmuxModeUi>>) -> bool {
+    roots.is_empty()
+}
+
+fn ensure_tmux_mode_ui(mut commands: Commands, ui_root: Query<Entity, With<UiRoot>>) {
+    let Ok(ui_root) = ui_root.single() else {
+        return;
+    };
+    commands.spawn((
+        Name::new("Tmux Mode UI"),
+        Node {
+            flex_direction: FlexDirection::Column,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        },
+        DespawnOnExit(AppMode::Tmux),
+        TmuxModeUi,
+        ChildOf(ui_root),
+    ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::state::app::StatesPlugin;
+
+    fn build_app() -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(AppMode::Tmux);
+        app.world_mut().spawn((Node::default(), UiRoot));
+        app.add_plugins(TmuxModeUiPlugin);
+        app
+    }
+
+    #[test]
+    fn no_tmux_mode_ui_is_true_until_one_exists() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        assert!(app.world_mut().run_system_once(no_tmux_mode_ui).unwrap());
+        app.world_mut().spawn(TmuxModeUi);
+        assert!(!app.world_mut().run_system_once(no_tmux_mode_ui).unwrap());
+    }
+
+    #[test]
+    fn spawns_tmux_mode_ui_under_ui_root_in_tmux() {
+        let mut app = build_app();
+        app.update();
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<(), With<TmuxModeUi>>();
+        assert_eq!(q.iter(world).count(), 1, "exactly one TmuxModeUi");
+    }
+
+    #[test]
+    fn despawns_tmux_mode_ui_on_exit_to_default() {
+        let mut app = build_app();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Default);
+        app.update();
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<(), With<TmuxModeUi>>();
+        assert_eq!(q.iter(world).count(), 0, "TmuxModeUi removed on exit");
+    }
+}
