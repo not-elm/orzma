@@ -110,13 +110,13 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 
 fn forward_keys_to_tmux(
     mut commands: Commands,
-    mut picker: ResMut<SessionPicker>,
-    (mut copy_prompt, confirm_state, rename): (
+    (mut next_mode, picker, mut copy_prompt, mut exit): (
+        ResMut<NextState<AppMode>>,
+        ResMut<SessionPicker>,
         ResMut<CopyPrompt>,
-        Option<Res<ConfirmState>>,
-        RenameParams,
+        MessageWriter<AppExit>,
     ),
-    mut exit: MessageWriter<AppExit>,
+    (confirm_state, rename): (Option<Res<ConfirmState>>, RenameParams),
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
     mut focused_webview: ResMut<FocusedWebview>,
@@ -279,7 +279,9 @@ fn forward_keys_to_tmux(
             // A GUI action abandons any pending tmux prefix sequence.
             *prefix_pending = false;
             match action {
-                ShortcutAction::OpenPicker => picker.open = true,
+                ShortcutAction::ToggleTmuxView => {
+                    next_mode.set(AppMode::Default);
+                }
                 ShortcutAction::Quit => {
                     exit.write(AppExit::Success);
                 }

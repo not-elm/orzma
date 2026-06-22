@@ -261,8 +261,8 @@ mod tests {
             Some(ShortcutAction::Paste)
         );
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyP, mods(false, true, false, true)),
-            Some(ShortcutAction::OpenPicker)
+            r.match_gui_action(KeyCode::KeyT, mods(false, true, false, true)),
+            Some(ShortcutAction::ToggleTmuxView)
         );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyQ, mods(false, false, false, true)),
@@ -343,7 +343,7 @@ mod tests {
         assert_eq!(
             b.reserved.len(),
             4,
-            "Quit, OpenPicker, ReleaseWebviewFocus, DetachSession"
+            "Quit, ToggleTmuxView, ReleaseWebviewFocus, DetachSession"
         );
         assert!(
             !b.reserved

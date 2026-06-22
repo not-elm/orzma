@@ -392,8 +392,15 @@ pub struct Bindings {
     /// Remove after one release.
     #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub release_inline_focus: Option<KeyChord>,
-    /// Opens the tmux session/window picker overlay.
+    /// Toggles between Tmux view and the Default shell. In Default mode,
+    /// switches to Tmux when a background tmux session is connected; in
+    /// Tmux mode, returns to the Default shell without detaching.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub toggle_tmux_view: Option<KeyChord>,
+    /// Deprecated and ignored: renamed to `toggle_tmux_view`. Accepted so
+    /// existing configs carrying it still parse under `deny_unknown_fields`.
+    /// Remove after one release.
+    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub open_picker: Option<KeyChord>,
     /// Quits the ozmux application.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
@@ -459,7 +466,8 @@ impl Default for Bindings {
             paste: Some(parse_default_chord("Cmd+V")),
             release_webview_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
             release_inline_focus: None,
-            open_picker: Some(parse_default_chord("Cmd+Shift+P")),
+            toggle_tmux_view: Some(parse_default_chord("Cmd+Shift+T")),
+            open_picker: None,
             quit: Some(parse_default_chord("Cmd+Q")),
             close_surface: None,
             new_terminal_surface: None,
@@ -487,7 +495,11 @@ impl Bindings {
                 &self.release_webview_focus,
                 ShortcutAction::ReleaseWebviewFocus,
             ),
-            ("open-picker", &self.open_picker, ShortcutAction::OpenPicker),
+            (
+                "toggle-tmux-view",
+                &self.toggle_tmux_view,
+                ShortcutAction::ToggleTmuxView,
+            ),
             ("quit", &self.quit, ShortcutAction::Quit),
             (
                 "detach-session",
@@ -526,8 +538,8 @@ pub enum ShortcutAction {
     Paste,
     /// Releases keyboard focus from a focused webview back to the terminal.
     ReleaseWebviewFocus,
-    /// Opens the tmux session/window picker overlay.
-    OpenPicker,
+    /// Toggles between Tmux view and the Default shell without detaching.
+    ToggleTmuxView,
     /// Quits the ozmux application.
     Quit,
     /// Detaches from the tmux session and returns to Default single-terminal mode.
@@ -746,9 +758,19 @@ mod tests {
         let b = Bindings::default();
         assert!(b.paste.is_some());
         assert!(b.release_webview_focus.is_some());
-        assert!(b.open_picker.is_some());
+        assert!(b.toggle_tmux_view.is_some());
         assert!(b.quit.is_some());
         assert!(b.detach_session.is_some());
+    }
+
+    #[test]
+    fn bindings_default_has_toggle_tmux_view() {
+        let b = Bindings::default();
+        assert!(b.toggle_tmux_view.is_some());
+        let chord = b.toggle_tmux_view.as_ref().unwrap();
+        assert_eq!(chord.key, Key::Char('t'));
+        assert!(chord.modifiers.meta && chord.modifiers.shift);
+        assert!(!chord.modifiers.ctrl && !chord.modifiers.alt);
     }
 
     #[test]
@@ -798,7 +820,7 @@ mod tests {
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Deprecated fields carry
         // `skip_serializing`, so only the active bindings appear here.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"open-picker":{"key":"p","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"toggle-tmux-view":{"key":"t","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
         assert_eq!(json, expected);
     }
 
@@ -812,10 +834,10 @@ mod tests {
     }
 
     #[test]
-    fn bindings_default_open_picker_is_cmd_shift_p() {
+    fn bindings_default_toggle_tmux_view_is_cmd_shift_t() {
         let b = Bindings::default();
-        let chord = b.open_picker.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('p'));
+        let chord = b.toggle_tmux_view.as_ref().unwrap();
+        assert_eq!(chord.key, Key::Char('t'));
         assert!(chord.modifiers.meta && chord.modifiers.shift);
         assert!(!chord.modifiers.ctrl && !chord.modifiers.alt);
     }
@@ -859,6 +881,23 @@ copy = \"Cmd+C\"
             5,
             "ignored keys must not enter the active set"
         );
+    }
+
+    #[test]
+    fn deprecated_open_picker_key_still_parses_and_is_ignored() {
+        // Old configs carrying the removed open-picker key must still parse under
+        // deny_unknown_fields, and must not appear in the active binding set.
+        let toml = "[bindings]\nopen-picker = \"Cmd+Shift+P\"\n";
+        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated key must still parse");
+        assert!(
+            parsed
+                .bindings
+                .iter()
+                .all(|(label, _, _)| label != "open-picker"),
+            "deprecated key must not enter the active set"
+        );
+        // The new field falls back to its default chord.
+        assert!(parsed.bindings.toggle_tmux_view.is_some());
     }
 
     #[test]
