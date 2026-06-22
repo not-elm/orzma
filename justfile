@@ -66,6 +66,11 @@ setup-cef-release:
     export-cef-dir --force "{{ cef_dir }}"
     cargo install {{ bevy_cef_render_process }}@{{ bevy_cef_version }}
 
+# regenerate the macOS app icon (build/macos/AppIcon.icns) from the master SVG
+[macos]
+icon *args:
+    python3 scripts/build_icon.py {{ args }}
+
 # build and package the ozmux .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
 bundle-macos *args:

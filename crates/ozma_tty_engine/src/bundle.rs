@@ -44,10 +44,27 @@ pub struct TerminalBundle {
 }
 
 impl TerminalBundle {
-    /// Spawns a shell under a new PTY, builds an alacritty `Term`
-    /// matching the same cols/rows, and returns the fully wired
-    /// bundle.
+    /// Spawns the shell directly (its argv0 is the shell path) under a new PTY,
+    /// builds an alacritty `Term` matching the same cols/rows, and returns the
+    /// fully wired bundle.
     pub fn spawn(opts: SpawnOptions) -> anyhow::Result<Self> {
+        Self::spawn_inner(opts, false)
+    }
+
+    /// Spawns the shell as a LOGIN shell, otherwise identical to
+    /// [`TerminalBundle::spawn`].
+    ///
+    /// On macOS this wraps the shell in `/usr/bin/login` so it sources
+    /// `/etc/zprofile` (`path_helper`) and `~/.zprofile` (e.g. `brew shellenv`).
+    /// Without that, a `.app` launched from Finder runs under launchd's minimal
+    /// `PATH`, leaving `/opt/homebrew/bin` off `PATH` so user tools (nvim,
+    /// Homebrew) are not found. Falls back to a direct spawn on other platforms
+    /// and when `$USER`/`$HOME` are unavailable.
+    pub fn spawn_login_shell(opts: SpawnOptions) -> anyhow::Result<Self> {
+        Self::spawn_inner(opts, true)
+    }
+
+    fn spawn_inner(opts: SpawnOptions, login_shell: bool) -> anyhow::Result<Self> {
         let pty_pair = native_pty_system().openpty(PtySize {
             rows: opts.rows,
             cols: opts.cols,
@@ -55,7 +72,7 @@ impl TerminalBundle {
             pixel_height: 0,
         })?;
 
-        let mut cmd = CommandBuilder::new(&opts.shell);
+        let mut cmd = build_shell_command(&opts.shell, login_shell);
         if let Some(cwd) = opts.cwd.as_ref() {
             cmd.cwd(cwd);
         }
@@ -100,4 +117,40 @@ impl TerminalBundle {
             title: TerminalTitle::default(),
         })
     }
+}
+
+/// Builds the shell `CommandBuilder`: on macOS the login-shell case wraps the
+/// shell in `/usr/bin/login`; every other case spawns the shell directly.
+fn build_shell_command(shell: &str, login_shell: bool) -> CommandBuilder {
+    #[cfg(target_os = "macos")]
+    if login_shell {
+        return macos_login_command(shell);
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = login_shell;
+    CommandBuilder::new(shell)
+}
+
+/// `/usr/bin/login -flp <user> /bin/zsh -fc "exec -a -<name> <shell>"` — runs
+/// `shell` as a macOS login shell (so it sources the login profile). Falls back
+/// to a direct spawn when `$USER`/`$HOME` are unavailable.
+#[cfg(target_os = "macos")]
+fn macos_login_command(shell: &str) -> CommandBuilder {
+    let user = std::env::var("USER").ok().filter(|s| !s.is_empty());
+    let home = std::env::var("HOME").ok().filter(|s| !s.is_empty());
+    let (Some(user), Some(home)) = (user, home) else {
+        return CommandBuilder::new(shell);
+    };
+    let shell_name = shell.rsplit('/').next().unwrap_or(shell);
+    let exec = format!("exec -a -{shell_name} {shell}");
+    // NOTE: the inner shell must be zsh/bash, not sh — `exec -a` (which sets
+    // argv0 to `-<name>` to make a login shell) is unavailable in POSIX sh.
+    let flags = if PathBuf::from(&home).join(".hushlogin").exists() {
+        "-qflp"
+    } else {
+        "-flp"
+    };
+    let mut cmd = CommandBuilder::new("/usr/bin/login");
+    cmd.args([flags, user.as_str(), "/bin/zsh", "-fc", exec.as_str()]);
+    cmd
 }

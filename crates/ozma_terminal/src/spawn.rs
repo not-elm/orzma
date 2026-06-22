@@ -55,7 +55,7 @@ impl OzmaTerminalBundle {
             opts.shell.as_deref(),
             std::env::var("SHELL").ok().as_deref(),
         );
-        let terminal = TerminalBundle::spawn(SpawnOptions {
+        let terminal = TerminalBundle::spawn_login_shell(SpawnOptions {
             cols: 80,
             rows: 24,
             shell,
