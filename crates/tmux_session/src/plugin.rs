@@ -842,85 +842,64 @@ mod tests {
         );
     }
 
-    /// End-to-end integration: canned `tmux -CC` notification bytes are parsed
-    /// through [`ProtocolClient::feed`], their payloads dispatched via
-    /// [`trigger_notification`] (the exact function [`apply_tmux_replies`] calls
-    /// per-notification), and the resulting ECS state is asserted.
+    /// End-to-end integration: a canned `tmux -CC` byte transcript, staged in the
+    /// gateway's `AdoptedControlMode` buffer, is driven through the REAL drain
+    /// chain by `app.update()` and projected into ECS state.
     ///
-    /// Transcript path: Option A (notification-driven). Three notification lines
-    /// (`%window-add`, `%layout-change`, `%output`) are fed through the
-    /// sans-io protocol client and projected into the ECS world without a live
-    /// `TmuxClient` or PTY. This exercises the full parse-to-projection seam:
-    /// `ProtocolClient::feed` → `ClientEvent::Notification` → `trigger_notification`
-    /// → Bevy observers → `TmuxWindow`/`TmuxPane` entities + `TmuxProjection` index.
-    /// The `%output` branch of `drain_tmux_transport` (which calls
-    /// `collect_pane_outputs`) is also covered by asserting against the same
-    /// `TransportEvent` slice that the drain system would use.
+    /// Transcript path: Option A (notification-driven). The bytes are NOT
+    /// pre-parsed by the test; they flow through the production pipeline exactly
+    /// as live PTY output would:
+    /// `AdoptedControlMode.captured` -> `drain_tmux_transport`
+    /// (`ProtocolClient::feed` -> `TmuxEventBatch`, and `collect_pane_outputs`
+    /// -> `MessageWriter<PaneOutput>` for `%output`) -> `apply_tmux_replies`
+    /// (`trigger_notification` for `%window-add` / `%layout-change`) -> the
+    /// projection observers -> `TmuxWindow` / `TmuxPane` entities in the
+    /// `TmuxProjection` index. The leading DCS introducer plus a `%begin`/`%end`
+    /// block correlate with the external pending reply that `adopt` pre-registers
+    /// (mirroring the `tmux -CC` entry block); the three notification lines that
+    /// follow are the projected transcript.
     #[test]
     fn transcript_drives_ecs_projection_and_pane_output() {
-        use bevy::ecs::system::RunSystemOnce;
-        use tmux_control::{ClientEvent, ProtocolClient};
         use tmux_control_parser::{PaneId, WindowId};
 
-        // Canned notification-only transcript: window @1 with a single 80x24
-        // pane %1, plus one output chunk. "b25f" is a real tmux layout checksum;
-        // the visible_layout field repeats the layout string (>= tmux 3.2 format).
-        let transcript: &[u8] = concat!(
+        // Canned transcript fed verbatim through the drain chain:
+        //   * DCS introducer + initial %begin/%end block — the adopted tmux -CC
+        //     entry block, correlated by adopt()'s pre-registered external reply.
+        //   * %window-add @1, %layout-change @1 (single 80x24 pane %1) — project a
+        //     window and its pane. "b25f" is a real tmux layout checksum; the
+        //     visible_layout field repeats the layout string (>= tmux 3.2 format).
+        //   * %output %1 hello — routes to a PaneOutput message.
+        let transcript: Vec<u8> = concat!(
+            "\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n",
             "%window-add @1\r\n",
             "%layout-change @1 b25f,80x24,0,0,1 b25f,80x24,0,0,1\r\n",
             "%output %1 hello\r\n",
         )
-        .as_bytes();
+        .as_bytes()
+        .to_vec();
 
-        // Parse the canned bytes through the same sans-io client the transport
-        // layer uses to turn PTY output into `ClientEvent`s.
-        let mut proto = ProtocolClient::new();
-        let client_events = proto
-            .feed(transcript)
-            .expect("canned notification-only transcript must parse without error");
-
-        // Wrap each event as a `TransportEvent::Protocol` — the same wrapping
-        // `drain_tmux_transport` applies before writing `TmuxEventBatch`.
-        let transport_events: Vec<TransportEvent> = client_events
-            .into_iter()
-            .map(TransportEvent::Protocol)
-            .collect();
-
-        // Three notification lines must produce exactly three events.
-        assert_eq!(
-            transport_events.len(),
-            3,
-            "canned transcript must parse to exactly 3 events"
-        );
-
-        // `collect_pane_outputs` mirrors what `drain_tmux_transport` does with
-        // `%output` / `%extended-output` events: extract PaneOutput entries.
-        let pane_outputs = collect_pane_outputs(&transport_events);
-
-        // Build the app with the full projection pipeline registered.
+        // Build the app with the full projection pipeline registered: the plugin
+        // inits TmuxProjection / EnumerationState / KeyBindings / CopyModeQueries
+        // / TmuxEventBatch, the PaneOutput / CopyModeReply messages, the
+        // projection observers, and the NonSend TmuxConnection, plus the chained
+        // drain systems (gated on TmuxPresence).
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
+        app.insert_resource(TmuxPresence);
 
-        // Extract notification payloads and dispatch them through
-        // `trigger_notification` — the identical code path `apply_tmux_replies`
-        // uses for every `ClientEvent::Notification` in a batch.
-        // `run_system_once` flushes deferred `Commands` (including queued
-        // triggers) before returning, so observer-spawned entities are visible
-        // in subsequent assertions.
-        let notifications: Vec<_> = transport_events
-            .iter()
-            .filter_map(|ev| match ev {
-                TransportEvent::Protocol(ClientEvent::Notification(n)) => Some(n.clone()),
-                _ => None,
-            })
-            .collect();
+        // Stage the transcript in the gateway's capture buffer and adopt it, so
+        // drain_tmux_transport reads these bytes through the connection's own
+        // ProtocolClient — the same path live PTY output takes.
+        let gateway = app
+            .world_mut()
+            .spawn(AdoptedControlMode::from_captured(transcript))
+            .id();
         app.world_mut()
-            .run_system_once(move |mut commands: Commands| {
-                for notification in &notifications {
-                    trigger_notification(&mut commands, None, notification);
-                }
-            })
-            .unwrap();
+            .non_send_resource_mut::<TmuxConnection>()
+            .adopt(gateway);
+
+        // Drive the real chain: drain_tmux_transport -> apply_tmux_replies -> ...
+        app.update();
 
         // TmuxWindow for @1 must appear in the projection index.
         let index = app.world().resource::<TmuxProjection>();
@@ -960,11 +939,18 @@ mod tests {
             "pane dims from %layout-change must be 80x24"
         );
 
-        // Verify %output routing via `collect_pane_outputs`.
+        // Verify %output routing through the real message bus: the drain system's
+        // `MessageWriter<PaneOutput>` must have written exactly one message.
+        let pane_outputs: Vec<PaneOutput> = app
+            .world()
+            .resource::<Messages<PaneOutput>>()
+            .iter_current_update_messages()
+            .cloned()
+            .collect();
         assert_eq!(
             pane_outputs.len(),
             1,
-            "%output %1 must produce exactly one PaneOutput"
+            "%output %1 must produce exactly one PaneOutput message"
         );
         assert_eq!(pane_outputs[0].pane, PaneId(1));
         assert_eq!(
