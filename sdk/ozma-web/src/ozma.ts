@@ -5,17 +5,33 @@ export interface OzmaApi {
   /**
    * Invokes a host-routed method and resolves with its reply.
    *
-   * A top-level `Uint8Array` in `params` and in the resolved value round-trips
-   * (the bridge base64-tags it). NOTE: bytes nested inside an object or array do
-   * NOT round-trip and are silently lost.
+   * Supply `<R>` for the reply type — it sits in a return position and cannot be
+   * inferred; `<P>` (params) is inferred from the argument. A top-level
+   * `Uint8Array` in `params` and in the resolved value round-trips (the bridge
+   * base64-tags it). NOTE: bytes nested inside an object or array do NOT
+   * round-trip and are silently lost.
    */
-  call<R = unknown>(method: string, params?: unknown): Promise<R>;
-  /** Subscribes `handler` to a named host event. */
-  on(event: string, handler: (payload: unknown) => void): void;
-  /** Removes a previously-registered event handler by reference equality. */
-  off(event: string, handler: (payload: unknown) => void): void;
-  /** Sends a one-way event to the host app (fire-and-forget; no reply). */
-  emit(event: string, payload?: unknown): void;
+  call<R = unknown, P = unknown>(method: string, params?: P): Promise<R>;
+  /**
+   * Subscribes `handler` to a named host event.
+   *
+   * Annotate the handler parameter (`(payload: T) => …`) to type `payload`; `P`
+   * is inferred from that annotation and defaults to `unknown`.
+   */
+  on<P = unknown>(event: string, handler: (payload: P) => void): void;
+  /**
+   * Removes a previously-registered event handler by reference equality.
+   *
+   * `P` is generic so a typed handler stays assignable here under
+   * `strictFunctionTypes`; it should match the type used at `on`.
+   */
+  off<P = unknown>(event: string, handler: (payload: P) => void): void;
+  /**
+   * Sends a one-way event to the host app (fire-and-forget; no reply).
+   *
+   * `P` (payload) is inferred from the argument and defaults to `unknown`.
+   */
+  emit<P = unknown>(event: string, payload?: P): void;
 }
 
 // NOTE: augments `window.ozma` for browser consumers whose tsconfig includes the "dom" lib;
@@ -40,17 +56,17 @@ function resolve(): OzmaApi {
 
 /** Typed accessor for the host-injected `window.ozma` bridge; throws if absent. */
 export const ozma: OzmaApi = {
-  call<R = unknown>(method: string, params?: unknown): Promise<R> {
-    return resolve().call<R>(method, params);
+  call<R = unknown, P = unknown>(method: string, params?: P): Promise<R> {
+    return resolve().call<R, P>(method, params);
   },
-  on(event: string, handler: (payload: unknown) => void): void {
-    resolve().on(event, handler);
+  on<P = unknown>(event: string, handler: (payload: P) => void): void {
+    resolve().on<P>(event, handler);
   },
-  off(event: string, handler: (payload: unknown) => void): void {
-    resolve().off(event, handler);
+  off<P = unknown>(event: string, handler: (payload: P) => void): void {
+    resolve().off<P>(event, handler);
   },
-  emit(event: string, payload?: unknown): void {
-    resolve().emit(event, payload);
+  emit<P = unknown>(event: string, payload?: P): void {
+    resolve().emit<P>(event, payload);
   },
 };
 
