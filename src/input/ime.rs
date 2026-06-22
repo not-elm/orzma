@@ -142,14 +142,23 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
     }
 }
 
+/// Resolves the single keyboard-focused terminal surface — the active tmux pane
+/// or the Default `OzmaTerminal`, both of which carry `KeyboardFocused`. Returns
+/// `None` when zero or more than one entity is focused; both degrade to "no
+/// surface". The host maintains the "exactly one focused" invariant.
+pub(crate) fn resolve_focused_surface(
+    focused: &Query<Entity, With<KeyboardFocused>>,
+) -> Option<Entity> {
+    focused.single().ok()
+}
+
 /// Derives whether IME should be on this tick and writes
 /// `PrimaryWindow.ime_enabled` and `.ime_position`.
 ///
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
 /// IME through bevy_cef's `Ime` → CEF bridge), OR a surface exists that does
-/// NOT have `CopyModeState`. The surface is the active tmux pane, or — in
-/// `AppMode::Default` with no active pane — the `KeyboardFocused` terminal; both
-/// flow through the same copy-mode gate below.
+/// NOT have `CopyModeState`. The surface is the active tmux pane or the
+/// Default `OzmaTerminal`, both resolved uniformly via `KeyboardFocused`.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
 /// window — computed from the surface's `UiGlobalTransform`
@@ -160,7 +169,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// node for `webview_anchors` to read (spec §7).
 pub(crate) fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
-    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
+    focused: Query<Entity, With<KeyboardFocused>>,
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -169,16 +178,11 @@ pub(crate) fn ime_policy_system(
     webview_parents: Query<&ChildOf, With<Webview>>,
     webview_slots: Query<&Webview>,
     overlays: Query<&TerminalOverlays>,
-    current_mode: Res<State<AppMode>>,
-    ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
 ) {
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
-    let active_surface = active_pane.map(|single| {
-        let (entity, _) = *single;
-        entity
-    });
+    let surface = resolve_focused_surface(&focused);
 
     // NOTE: a focused CEF webview drives its own IME through bevy_cef's
     // `Ime` → CEF bridge. ozmux MUST keep `ime_enabled` true here, or
@@ -196,7 +200,7 @@ pub(crate) fn ime_policy_system(
         // wheel/click hit-test uses (`webview_local_dip`'s `origin_phys`), so
         // composition appears at the inline rect, not the terminal cursor.
         if let Some(child) =
-            focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
+            focused_webview_of(Some(&focused_webview), &webview_parents, surface)
             && let Some(pos) = webview_ime_position(
                 window.resolution.scale_factor(),
                 &webview_parents,
@@ -223,12 +227,6 @@ pub(crate) fn ime_policy_system(
         return;
     }
 
-    let surface = match active_surface {
-        Some(entity) => Some(entity),
-        // NOTE: Default mode has no tmux ActivePane; fall back to the focused terminal.
-        None if *current_mode.get() == AppMode::Default => ozma_terminal.single().ok(),
-        None => None,
-    };
     let Some(entity) = surface else {
         if window.ime_enabled {
             window.ime_enabled = false;
@@ -711,6 +709,7 @@ mod tests {
                 },
             },
             ActivePane,
+            KeyboardFocused,
             ComputedNode::default(),
             UiGlobalTransform::default(),
             TerminalGrid {
@@ -816,6 +815,7 @@ mod tests {
                     },
                 },
                 ActivePane,
+                KeyboardFocused,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
                     ..ComputedNode::DEFAULT
@@ -1010,6 +1010,55 @@ mod tests {
             window.ime_position,
             Vec2::new(0.0, 16.0),
             "candidate window anchors one row below the focused terminal's cursor"
+        );
+    }
+
+    #[test]
+    fn ime_enabled_for_keyboard_focused_terminal_without_tmux() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_resource::<FocusedWebview>();
+        app.init_state::<AppMode>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+        app.world_mut().spawn((
+            OzmaTerminal,
+            KeyboardFocused,
+            ComputedNode::default(),
+            UiGlobalTransform::default(),
+            TerminalGrid {
+                cursor: Some(Cursor::default()),
+                ..default()
+            },
+        ));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ime_enabled: false,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+
+        app.world_mut().run_system_once(ime_policy_system).unwrap();
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Window, With<PrimaryWindow>>();
+        assert!(
+            q.single(app.world()).expect("primary window").ime_enabled,
+            "IME must enable for a KeyboardFocused terminal with no tmux state",
         );
     }
 }
