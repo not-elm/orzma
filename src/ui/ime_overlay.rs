@@ -29,8 +29,9 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalFontInitSet;
 use ozma_tty_renderer::material::TerminalMaterialSystems;
 use ozma_tty_renderer::prelude::TerminalGrid;
-use ozmux_tmux::{ActivePane, TmuxPane};
+use ozma_terminal::KeyboardFocused;
 use unicode_width::UnicodeWidthStr;
+use crate::input::ime::resolve_focused_surface;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
@@ -176,7 +177,7 @@ fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
 /// `ImeState`.
 pub(crate) fn position_ime_overlay(
     state: Res<ImeState>,
-    active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
+    focused: Query<Entity, With<KeyboardFocused>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
@@ -219,7 +220,7 @@ pub(crate) fn position_ime_overlay(
     let Some(comp) = state.composition() else {
         return;
     };
-    let Some(entity) = active_pane.iter().next() else {
+    let Some(entity) = resolve_focused_surface(&focused) else {
         return;
     };
     let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
@@ -302,28 +303,28 @@ pub(crate) fn position_ime_overlay(
     }
 }
 
-/// Sets `TerminalGrid.suppress_cursor = true` on the currently-focused
-/// terminal entity while IME composition is active; clears it on all
+/// Sets `TerminalGrid.suppress_cursor = true` on the keyboard-focused
+/// terminal surface while IME composition is active; clears it on all
 /// other grids. Runs in `PostUpdate.before(TerminalMaterialSystems::UpdateMaterial)`
 /// so the override takes effect in the same frame the IME caret
 /// appears (and clears the same frame composition ends).
 ///
-/// If there is no active tmux pane while composition is active (e.g., a
+/// If there is no keyboard-focused surface while composition is active (e.g., a
 /// race window between focus loss and `Ime::Disabled`), every grid gets
 /// `suppress_cursor = false`. The safe default is "show cursors" rather
 /// than blanket-hide.
 fn suppress_terminal_cursor_during_ime(
     state: Res<ImeState>,
-    active_pane: Query<Entity, (With<TmuxPane>, With<ActivePane>)>,
+    focused: Query<Entity, With<KeyboardFocused>>,
     mut grids: Query<(Entity, &mut TerminalGrid)>,
 ) {
-    let focused = if state.is_composing() {
-        active_pane.iter().next()
+    let focused_surface = if state.is_composing() {
+        resolve_focused_surface(&focused)
     } else {
         None
     };
     for (entity, mut grid) in &mut grids {
-        let want = Some(entity) == focused;
+        let want = Some(entity) == focused_surface;
         if grid.suppress_cursor != want {
             grid.suppress_cursor = want;
         }
@@ -430,6 +431,8 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
+    use ozma_terminal::KeyboardFocused;
+    use ozmux_tmux::{ActivePane, TmuxPane};
     use ozmux_tmux::PaneId;
     use tmux_control_parser::CellDims;
 
@@ -463,6 +466,7 @@ mod tests {
                     },
                 },
                 ActivePane,
+                KeyboardFocused,
                 TerminalGrid::default(),
             ))
             .id();
@@ -475,6 +479,44 @@ mod tests {
         assert!(
             grid.suppress_cursor,
             "the active tmux pane must suppress its cursor while composing"
+        );
+    }
+
+    #[test]
+    fn suppresses_cursor_on_focused_terminal_without_tmux() {
+        use ozma_terminal::OzmaTerminal;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let mut state = ImeState::default();
+        apply_event(
+            &mut state,
+            &Ime::Preedit {
+                window: bevy::ecs::entity::Entity::PLACEHOLDER,
+                value: "あ".into(),
+                cursor: Some((3, 3)),
+            },
+        );
+        app.insert_resource(state);
+
+        let focused = app
+            .world_mut()
+            .spawn((OzmaTerminal, KeyboardFocused, TerminalGrid::default()))
+            .id();
+        let other = app.world_mut().spawn(TerminalGrid::default()).id();
+
+        app.world_mut()
+            .run_system_once(suppress_terminal_cursor_during_ime)
+            .unwrap();
+
+        assert!(
+            app.world().get::<TerminalGrid>(focused).unwrap().suppress_cursor,
+            "the focused terminal must suppress its cursor while composing"
+        );
+        assert!(
+            !app.world().get::<TerminalGrid>(other).unwrap().suppress_cursor,
+            "an unfocused terminal must not suppress its cursor"
         );
     }
 
