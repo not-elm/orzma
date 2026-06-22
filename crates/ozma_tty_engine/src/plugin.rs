@@ -9,6 +9,7 @@ use crate::handle::TerminalHandle;
 use crate::input_codec::encode_key;
 use crate::pty::PtyHandle;
 use crate::raw_write::RawWritePlugin;
+use crate::resize::ResizePlugin;
 use crate::title::TerminalTitle;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::observer::On;
@@ -22,7 +23,7 @@ pub struct TerminalHandlePlugin;
 
 impl Plugin for TerminalHandlePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(RawWritePlugin)
+        app.add_plugins((RawWritePlugin, ResizePlugin))
             .add_systems(
                 Update,
                 (
