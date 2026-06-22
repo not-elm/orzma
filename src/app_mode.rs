@@ -1,9 +1,8 @@
-//! AppMode state enum and the Default-mode single-terminal lifecycle plugin.
+//! AppMode state enum and the Default-mode UI subtree lifecycle plugin.
 
+use crate::ui::UiRoot;
 use bevy::prelude::*;
-use ozma_terminal::{
-    KeyboardFocused, OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig,
-};
+use ozma_terminal::{KeyboardFocused, OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 
 /// Application mode. `Default` is the default (single PTY, no tmux).
 /// `Tmux` activates the tmux multiplexer backend.
@@ -16,43 +15,70 @@ pub(crate) enum AppMode {
     Tmux,
 }
 
-/// Bevy plugin that registers the `AppMode::Default` spawn/despawn lifecycle.
+/// Root of the Default-mode UI subtree, mounted under `UiRoot` while in
+/// `AppMode::Default`. Carries `DespawnOnExit(AppMode::Default)`, so leaving
+/// Default mode removes the subtree (including its child terminal).
+#[derive(Component)]
+struct DefaultModeUi;
+
+/// Bevy plugin that ensures the Default-mode UI subtree (a single
+/// `OzmaTerminal` under `DefaultModeUi`) exists while in `AppMode::Default`.
 ///
-/// Spawns one `OzmaTerminal` entity (marked `KeyboardFocused`, the keyboard
-/// target) on `OnEnter(AppMode::Default)` and despawns it on
-/// `OnExit(AppMode::Default)`. Requires `AppMode` to be inserted via
-/// `App::insert_state` before this plugin runs, and `OzmaTerminalPlugin` must
-/// be added first (it inserts `OzmaTerminalConfig` that `spawn_terminal` reads).
+/// The subtree is built by `ensure_default_mode_ui`, gated
+/// `run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>)))`:
+/// it runs in `Update` (always after `Startup` spawns `UiRoot`) and re-fires on
+/// re-entry once the previous subtree is gone. Teardown is `DespawnOnExit`.
+/// `OzmaTerminalPlugin` must be added first (it inserts the `OzmaTerminalConfig`
+/// this reads).
 pub(crate) struct DefaultModePlugin;
 
 impl Plugin for DefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppMode::Default), spawn_terminal)
-            .add_systems(OnExit(AppMode::Default), despawn_terminal);
+        app.add_systems(
+            Update,
+            ensure_default_mode_ui
+                .run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>))),
+        );
     }
 }
 
-fn spawn_terminal(
+fn ensure_default_mode_ui(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
+    ui_root: Query<Entity, With<UiRoot>>,
     config: Res<OzmaTerminalConfig>,
 ) {
+    let Ok(ui_root) = ui_root.single() else {
+        return;
+    };
+    // NOTE: spawn the DefaultModeUi container before attempting the PTY spawn.
+    // The run condition gates on `DefaultModeUi` being absent; if the PTY spawn
+    // failed and we returned without the container, this Update system would
+    // re-fire every frame — re-attempting the PTY and re-writing AppExit.
+    // Spawning the container first makes a failure a single attempt.
+    let mode_ui = commands
+        .spawn((
+            Name::new("Default Mode UI"),
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            DespawnOnExit(AppMode::Default),
+            DefaultModeUi,
+            ChildOf(ui_root),
+        ))
+        .id();
     match OzmaTerminalBundle::spawn(OzmaSpawnOptions {
         shell: config.shell.clone(),
         ..default()
     }) {
         Ok(bundle) => {
-            commands.spawn((bundle, KeyboardFocused));
+            commands.spawn((bundle, KeyboardFocused, ChildOf(mode_ui)));
         }
         Err(e) => {
             tracing::error!(?e, "failed to spawn ozma terminal");
             exit.write(AppExit::Success);
         }
-    }
-}
-
-fn despawn_terminal(mut commands: Commands, terminals: Query<Entity, With<OzmaTerminal>>) {
-    for entity in terminals.iter() {
-        commands.entity(entity).despawn();
     }
 }
