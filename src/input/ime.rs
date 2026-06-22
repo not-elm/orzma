@@ -2,31 +2,41 @@
 //!
 //! Provides `Composition` (a validated preedit snapshot), `ImeState`
 //! (the active-composition resource), `read_ime_events` (the Bevy
-//! system that drains `Ime` events and forwards `Ime::Commit` text to
-//! the active tmux pane), and `ime_policy_system` (toggles
+//! system that drains `Ime` events and triggers `ImeCommit` to the
+//! keyboard-focused surface), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
-use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
+use bevy::ecs::entity::Entity;
+use bevy::ecs::event::EntityEvent;
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::{Commands, NonSend, Query, Res, ResMut, Single};
+use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
-use bevy::prelude::{Entity, State};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{KeyboardFocused, OzmaTerminal};
-use ozma_tty_engine::{TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
+use ozma_terminal::KeyboardFocused;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozma_webview::{Webview, focused_webview_of};
-use ozmux_tmux::{ActivePane, SendBytes, TmuxConnection, TmuxPane};
+
+/// IME-committed text destined for the keyboard-focused terminal surface.
+///
+/// Per-backend observers apply it: the tmux observer in `src/tmux/forward.rs`
+/// sends it over the control socket (targeting tmux panes); the Default observer
+/// in `src/default_input.rs` writes the local PTY via `TerminalKeyInput`.
+#[derive(EntityEvent, Debug, Clone)]
+pub(crate) struct ImeCommit {
+    #[event_target]
+    pub(crate) entity: Entity,
+    pub(crate) text: String,
+}
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
@@ -142,14 +152,23 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
     }
 }
 
+/// Resolves the single keyboard-focused terminal surface — the active tmux pane
+/// or the Default `OzmaTerminal`, both of which carry `KeyboardFocused`. Returns
+/// `None` when zero or more than one entity is focused; both degrade to "no
+/// surface". The host maintains the "exactly one focused" invariant.
+pub(crate) fn resolve_focused_surface(
+    focused: &Query<Entity, With<KeyboardFocused>>,
+) -> Option<Entity> {
+    focused.single().ok()
+}
+
 /// Derives whether IME should be on this tick and writes
 /// `PrimaryWindow.ime_enabled` and `.ime_position`.
 ///
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
 /// IME through bevy_cef's `Ime` → CEF bridge), OR a surface exists that does
-/// NOT have `CopyModeState`. The surface is the active tmux pane, or — in
-/// `AppMode::Default` with no active pane — the `KeyboardFocused` terminal; both
-/// flow through the same copy-mode gate below.
+/// NOT have `CopyModeState`. The surface is the active tmux pane or the
+/// Default `OzmaTerminal`, both resolved uniformly via `KeyboardFocused`.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
 /// window — computed from the surface's `UiGlobalTransform`
@@ -158,9 +177,9 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 /// the active pane, the anchor instead comes from that child's overlay
 /// rect origin (`webview_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
-pub(crate) fn ime_policy_system(
+fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
-    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
+    focused: Query<Entity, With<KeyboardFocused>>,
     copy_modes: Query<(), With<CopyModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -169,16 +188,11 @@ pub(crate) fn ime_policy_system(
     webview_parents: Query<&ChildOf, With<Webview>>,
     webview_slots: Query<&Webview>,
     overlays: Query<&TerminalOverlays>,
-    current_mode: Res<State<AppMode>>,
-    ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
 ) {
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
-    let active_surface = active_pane.map(|single| {
-        let (entity, _) = *single;
-        entity
-    });
+    let surface = resolve_focused_surface(&focused);
 
     // NOTE: a focused CEF webview drives its own IME through bevy_cef's
     // `Ime` → CEF bridge. ozmux MUST keep `ime_enabled` true here, or
@@ -195,8 +209,7 @@ pub(crate) fn ime_policy_system(
         // plus the inline placement rect's origin — the SAME px conversion the
         // wheel/click hit-test uses (`webview_local_dip`'s `origin_phys`), so
         // composition appears at the inline rect, not the terminal cursor.
-        if let Some(child) =
-            focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
+        if let Some(child) = focused_webview_of(Some(&focused_webview), &webview_parents, surface)
             && let Some(pos) = webview_ime_position(
                 window.resolution.scale_factor(),
                 &webview_parents,
@@ -223,12 +236,6 @@ pub(crate) fn ime_policy_system(
         return;
     }
 
-    let surface = match active_surface {
-        Some(entity) => Some(entity),
-        // NOTE: Default mode has no tmux ActivePane; fall back to the focused terminal.
-        None if *current_mode.get() == AppMode::Default => ozma_terminal.single().ok(),
-        None => None,
-    };
     let Some(entity) = surface else {
         if window.ime_enabled {
             window.ime_enabled = false;
@@ -287,92 +294,51 @@ pub(crate) fn ime_policy_system(
     }
 }
 
-/// Drains `Ime` events, mutates `ImeState`, and forwards `Ime::Commit`
-/// text to the active tmux pane — UNLESS a webview owns focus, in
-/// which case the commit-to-pane write is suppressed (bevy_cef commits it to
-/// the page; see spec §7).
-///
-/// The commit text is sent verbatim via `SendBytes`
-/// (`send-keys -H -t %<id> <hex…>`), which is byte-safe for UTF-8 multibyte
-/// commits — including the macOS Character Viewer emoji path — without any
-/// modifier interpretation.
-pub(crate) fn read_ime_events(
+/// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
+/// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
+/// state machine still runs, so `ImeState` stays consistent) when EITHER any
+/// webview owns keyboard focus OR the focused surface is in copy mode. The
+/// commit transport is applied by per-backend observers
+/// (`src/tmux/forward.rs`, `src/default_input.rs`).
+fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
-    mut handles: Query<&mut TerminalHandle>,
-    connection: NonSend<TmuxConnection>,
-    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
+    focused: Query<Entity, With<KeyboardFocused>>,
     focused_webview: Res<FocusedWebview>,
-    webview_parents: Query<&ChildOf, With<Webview>>,
-    current_mode: Res<State<AppMode>>,
-    ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     copy_modes: Query<(), With<CopyModeState>>,
 ) {
-    let active = active_pane.map(|single| *single);
-    let active_surface = active.map(|(e, _)| e);
+    let surface = resolve_focused_surface(&focused);
     for event in events.read() {
-        if let Some(commit_text) = apply_event(&mut state, event) {
-            // NOTE: Inline-focus commit suppression (spec §7): bevy_cef's own IME
-            // systems independently consume the winit `Ime` events for the
-            // focused webview, so ozmux must NOT also commit this text to the
-            // pane — doing so double-delivers the composition (once to the page,
-            // once to the terminal). The state machine above still ran, so
-            // `ImeState` stays consistent; only the pane write is skipped.
-            if focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
-                .is_some()
-            {
-                continue;
-            }
-            if commit_text.is_empty() {
-                continue;
-            }
-            match current_mode.get() {
-                AppMode::Tmux => {
-                    let Some((entity, pane)) = active else {
-                        tracing::warn!(
-                            target: "ozmux::input::ime",
-                            "commit dropped: no active tmux pane",
-                        );
-                        continue;
-                    };
-                    if !copy_modes.contains(entity)
-                        && let Ok(mut handle) = handles.get_mut(entity)
-                        && handle.snap_to_bottom_vt_only()
-                    {
-                        handle.flush_emit(&mut commands, entity);
-                    }
-                    let Some(client) = connection.client() else {
-                        continue;
-                    };
-                    let target = format!("%{}", pane.id.0);
-                    if let Err(e) = client.handle().send(SendBytes {
-                        pane: &target,
-                        bytes: commit_text.as_bytes(),
-                    }) {
-                        tracing::warn!(?e, "IME commit send failed");
-                    }
-                }
-                AppMode::Default => {
-                    // NOTE: bevy_cef delivers the commit to the webview independently; suppress here to prevent duplicate input.
-                    if focused_webview.0.is_some() {
-                        continue;
-                    }
-                    // NOTE: route the commit to the focused terminal but do NOT
-                    // also filter on `KeyboardDisabled` — IME composition itself
-                    // sets `KeyboardDisabled` (suppressing raw keys via
-                    // `dispatch_input`), yet the commit must still land here.
-                    let Ok(entity) = ozma_terminal.single() else {
-                        continue;
-                    };
-                    commands.trigger(TerminalKeyInput {
-                        entity,
-                        key: TerminalKey::Text(commit_text),
-                        modifiers: TerminalModifiers::default(),
-                    });
-                }
-            }
+        let Some(commit_text) = apply_event(&mut state, event) else {
+            continue;
+        };
+        // NOTE: gate on `FocusedWebview` itself, NOT on "is the focused webview a
+        // child of `surface`". A focused webview consumes the winit Ime events via
+        // bevy_cef, and `sync_focused_webview` deliberately keeps focus on an
+        // inline webview even when its pane is no longer the active surface — a
+        // surface-relative check would miss it and inject the commit into the
+        // newly-active pane's shell.
+        if focused_webview.0.is_some() {
+            continue;
         }
+        if commit_text.is_empty() {
+            continue;
+        }
+        let Some(entity) = surface else {
+            tracing::warn!(
+                target: "ozmux::input::ime",
+                "IME commit dropped: no keyboard-focused surface",
+            );
+            continue;
+        };
+        if copy_modes.contains(entity) {
+            continue;
+        }
+        commands.trigger(ImeCommit {
+            entity,
+            text: commit_text,
+        });
     }
 }
 
@@ -408,15 +374,17 @@ fn webview_ime_position(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_mode::AppMode;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::{AppExtStates, MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
+    use ozma_terminal::OzmaTerminal;
     use ozma_tty_renderer::CellMetrics;
     use ozma_tty_renderer::prelude::{Cursor, TerminalGrid};
-    use ozmux_tmux::{ActivePane, PaneId, TmuxConnection, TmuxPane};
+    use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
     use tmux_control_parser::CellDims;
 
     #[test]
@@ -602,11 +570,6 @@ mod tests {
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
-        // No live tmux client: `TmuxConnection::client()` returns None, so the
-        // commit send is skipped. Tests assert the state-machine side effects
-        // and the absence of a panic on the active-pane / suppression paths.
-        app.insert_non_send_resource(TmuxConnection::default());
         app.add_message::<Ime>();
 
         let pane_entity = app
@@ -622,6 +585,7 @@ mod tests {
                     },
                 },
                 ActivePane,
+                KeyboardFocused,
             ))
             .id();
 
@@ -711,6 +675,7 @@ mod tests {
                 },
             },
             ActivePane,
+            KeyboardFocused,
             ComputedNode::default(),
             UiGlobalTransform::default(),
             TerminalGrid {
@@ -816,6 +781,7 @@ mod tests {
                     },
                 },
                 ActivePane,
+                KeyboardFocused,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
                     ..ComputedNode::DEFAULT
@@ -923,11 +889,11 @@ mod tests {
     }
 
     #[test]
-    fn ime_commit_routes_to_focused_ozma_terminal() {
+    fn ime_commit_triggers_imecommit_for_focused_surface() {
         use bevy::prelude::On;
 
         #[derive(Resource, Default)]
-        struct Hits(Vec<Entity>);
+        struct Hits(Vec<(Entity, String)>);
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
@@ -935,13 +901,13 @@ mod tests {
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<Hits>();
-        app.init_state::<AppMode>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.add_message::<Ime>();
-        app.add_observer(|ev: On<TerminalKeyInput>, mut hits: ResMut<Hits>| {
-            hits.0.push(ev.entity);
+        app.add_observer(|ev: On<ImeCommit>, mut hits: ResMut<Hits>| {
+            hits.0.push((ev.entity, ev.text.clone()));
         });
 
+        // A second, unfocused terminal: the commit must route to the
+        // KeyboardFocused one, not merely "the only one".
         app.world_mut().spawn(OzmaTerminal);
         let focused = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
 
@@ -953,7 +919,10 @@ mod tests {
             });
         app.update();
 
-        assert_eq!(app.world().resource::<Hits>().0, vec![focused]);
+        let hits = &app.world().resource::<Hits>().0;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, focused);
+        assert_eq!(hits[0].1, "あ");
     }
 
     #[test]
@@ -1010,6 +979,55 @@ mod tests {
             window.ime_position,
             Vec2::new(0.0, 16.0),
             "candidate window anchors one row below the focused terminal's cursor"
+        );
+    }
+
+    #[test]
+    fn ime_enabled_for_keyboard_focused_terminal_without_tmux() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.init_resource::<FocusedWebview>();
+        app.init_state::<AppMode>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
+        app.world_mut().spawn((
+            OzmaTerminal,
+            KeyboardFocused,
+            ComputedNode::default(),
+            UiGlobalTransform::default(),
+            TerminalGrid {
+                cursor: Some(Cursor::default()),
+                ..default()
+            },
+        ));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ime_enabled: false,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+
+        app.world_mut().run_system_once(ime_policy_system).unwrap();
+
+        let mut q = app
+            .world_mut()
+            .query_filtered::<&Window, With<PrimaryWindow>>();
+        assert!(
+            q.single(app.world()).expect("primary window").ime_enabled,
+            "IME must enable for a KeyboardFocused terminal with no tmux state",
         );
     }
 }

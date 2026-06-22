@@ -5,7 +5,7 @@
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
 use crate::app_mode::AppMode;
-use crate::input::ime::ImeState;
+use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
 use crate::picker::SessionPicker;
@@ -17,7 +17,9 @@ use bevy_cef::prelude::FocusedWebview;
 use ozma_terminal::{
     KeyboardDisabled, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet,
 };
+use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::ShortcutAction;
+use ozmux_tmux::TmuxPane;
 
 /// Registers the host-side input systems for `AppMode::Default`.
 pub(crate) struct DefaultHostInputPlugin;
@@ -37,7 +39,8 @@ impl Plugin for DefaultHostInputPlugin {
                 .in_set(InputPhase::FocusedKey)
                 .run_if(in_state(AppMode::Default))
                 .run_if(on_message::<KeyboardInput>),
-        );
+        )
+        .add_observer(apply_ime_commit_to_terminal);
     }
 }
 
@@ -114,6 +117,25 @@ fn app_shortcut_handler(
     }
 }
 
+fn apply_ime_commit_to_terminal(
+    ev: On<ImeCommit>,
+    mut commands: Commands,
+    terminals: Query<(), (With<OzmaTerminal>, Without<TmuxPane>)>,
+) {
+    // NOTE: discriminate on TmuxPane absence — tmux panes are also OzmaTerminal
+    // entities (src/tmux/render.rs), and their commits go out via the tmux
+    // observer in src/tmux/forward.rs. Without this filter the commit would be
+    // double-delivered.
+    if terminals.get(ev.entity).is_err() {
+        return;
+    }
+    commands.trigger(TerminalKeyInput {
+        entity: ev.entity,
+        key: TerminalKey::Text(ev.text.clone()),
+        modifiers: TerminalModifiers::default(),
+    });
+}
+
 fn should_disable_input(
     picker_open: bool,
     composing: bool,
@@ -130,6 +152,80 @@ fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutActio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::app::App;
+    use bevy::ecs::resource::Resource;
+    use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
+    use ozma_tty_engine::TerminalKeyInput;
+    use ozmux_tmux::{PaneId, TmuxPane};
+    use tmux_control_parser::CellDims;
+
+    #[test]
+    fn ime_commit_fires_terminal_key_input_for_plain_terminal() {
+        use crate::input::ime::ImeCommit;
+        use ozma_terminal::OzmaTerminal;
+        use ozma_tty_engine::TerminalKey;
+
+        #[derive(Resource, Default)]
+        struct Hits(Vec<(Entity, TerminalKey)>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Hits>()
+            .add_observer(apply_ime_commit_to_terminal)
+            .add_observer(|ev: On<TerminalKeyInput>, mut h: ResMut<Hits>| {
+                h.0.push((ev.entity, ev.key.clone()));
+            });
+
+        let term = app.world_mut().spawn(OzmaTerminal).id();
+        app.world_mut().trigger(ImeCommit {
+            entity: term,
+            text: "あ".into(),
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Hits>().0,
+            vec![(term, TerminalKey::Text("あ".into()))]
+        );
+    }
+
+    #[test]
+    fn ime_commit_is_noop_for_tmux_pane_target() {
+        use crate::input::ime::ImeCommit;
+        use ozma_terminal::OzmaTerminal;
+
+        #[derive(Resource, Default)]
+        struct Hits(u32);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Hits>()
+            .add_observer(apply_ime_commit_to_terminal)
+            .add_observer(|_ev: On<TerminalKeyInput>, mut h: ResMut<Hits>| h.0 += 1);
+
+        let pane = app
+            .world_mut()
+            .spawn((
+                OzmaTerminal,
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 0,
+                        height: 0,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+            ))
+            .id();
+        app.world_mut().trigger(ImeCommit {
+            entity: pane,
+            text: "x".into(),
+        });
+        app.update();
+
+        assert_eq!(app.world().resource::<Hits>().0, 0);
+    }
 
     #[test]
     fn disables_input_on_any_guard() {

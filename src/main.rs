@@ -41,6 +41,21 @@ use ui::{
     rename_prompt::RenamePromptPlugin,
 };
 
+/// The primary window descriptor.
+///
+/// `ime_enabled` starts `false` deliberately: bevy_winit applies the IME state
+/// to the OS window only on a live `false -> true` change of `Window::ime_enabled`
+/// (`bevy_winit-0.18.1/src/system.rs:503-504`) and never at window creation, so
+/// starting `true` would leave the OS IME un-armed. `ime_policy_system` flips it
+/// to `true` on the first focused-surface tick, producing the arming transition.
+fn primary_window() -> Window {
+    Window {
+        title: "ozmux".to_string(),
+        ime_enabled: false,
+        ..default()
+    }
+}
+
 fn main() {
     // NOTE: must run before App::new() spawns any thread — it writes process
     // env vars, which is unsound once other threads may read the environment.
@@ -60,11 +75,7 @@ fn main() {
     App::new()
         .add_plugins((
             DefaultPlugins.set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "ozmux".to_string(),
-                    ime_enabled: true,
-                    ..default()
-                }),
+                primary_window: Some(primary_window()),
                 ..default()
             }),
             cef_plugin(ozma_registry.clone(), cef_profile.path()),
@@ -147,6 +158,14 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn primary_window_starts_with_ime_disabled() {
+        // NOTE: bevy_winit never applies `ime_enabled` at window creation; it
+        // calls `set_ime_allowed` only on a live `false -> true` change. Starting
+        // `true` means that transition never fires and the OS IME never arms.
+        assert!(!primary_window().ime_enabled);
+    }
 
     #[test]
     fn unset_term_gets_fallback() {
