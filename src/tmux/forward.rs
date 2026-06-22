@@ -25,16 +25,12 @@ fn forward_pane_input(
     let Ok(pane) = panes.get(ev.entity) else {
         return;
     };
-    let Some(client) = connection.client() else {
-        return;
-    };
-    let target = pane_target(pane.id);
-    if let Err(e) = client.handle().send(SendBytes {
-        pane: &target,
-        bytes: &ev.bytes,
-    }) {
-        tracing::warn!(?e, "tmux mouse-report forward failed");
-    }
+    send_to_pane(
+        &connection,
+        pane.id,
+        &ev.bytes,
+        "tmux mouse-report forward failed",
+    );
 }
 
 fn forward_ime_commit(
@@ -52,15 +48,26 @@ fn forward_ime_commit(
     {
         handle.flush_emit(&mut commands, ev.entity);
     }
+    send_to_pane(
+        &connection,
+        pane.id,
+        ev.text.as_bytes(),
+        "IME commit send failed",
+    );
+}
+
+/// Sends `bytes` to tmux pane `pane` via `send-keys -H`, logging `context` on
+/// failure. No-op when the control client is absent.
+fn send_to_pane(connection: &TmuxConnection, pane: PaneId, bytes: &[u8], context: &str) {
     let Some(client) = connection.client() else {
         return;
     };
-    let target = pane_target(pane.id);
+    let target = pane_target(pane);
     if let Err(e) = client.handle().send(SendBytes {
         pane: &target,
-        bytes: ev.text.as_bytes(),
+        bytes,
     }) {
-        tracing::warn!(?e, "IME commit send failed");
+        tracing::warn!(?e, "{context}");
     }
 }
 

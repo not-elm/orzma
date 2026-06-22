@@ -177,7 +177,7 @@ pub(crate) fn resolve_focused_surface(
 /// the active pane, the anchor instead comes from that child's overlay
 /// rect origin (`webview_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
-pub(crate) fn ime_policy_system(
+fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     focused: Query<Entity, With<KeyboardFocused>>,
     copy_modes: Query<(), With<CopyModeState>>,
@@ -295,18 +295,17 @@ pub(crate) fn ime_policy_system(
 }
 
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
-/// `ImeCommit` to the keyboard-focused surface. Suppressed when a webview that
-/// is an inline child of the focused surface owns focus (bevy_cef commits to the
-/// page; spec §7) and when the focused surface is in copy mode. The commit
-/// transport is applied by per-backend observers (`src/tmux/forward.rs`,
-/// `src/default_input.rs`).
-pub(crate) fn read_ime_events(
+/// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
+/// state machine still runs, so `ImeState` stays consistent) when EITHER any
+/// webview owns keyboard focus OR the focused surface is in copy mode. The
+/// commit transport is applied by per-backend observers
+/// (`src/tmux/forward.rs`, `src/default_input.rs`).
+fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
     focused: Query<Entity, With<KeyboardFocused>>,
     focused_webview: Res<FocusedWebview>,
-    webview_parents: Query<&ChildOf, With<Webview>>,
     copy_modes: Query<(), With<CopyModeState>>,
 ) {
     let surface = resolve_focused_surface(&focused);
@@ -314,16 +313,23 @@ pub(crate) fn read_ime_events(
         let Some(commit_text) = apply_event(&mut state, event) else {
             continue;
         };
-        // NOTE: a focused inline webview consumes the winit Ime events itself
-        // (bevy_cef); committing here too would double-deliver (page + terminal).
-        // The state machine above still ran, so ImeState stays consistent.
-        if focused_webview_of(Some(&focused_webview), &webview_parents, surface).is_some() {
+        // NOTE: gate on `FocusedWebview` itself, NOT on "is the focused webview a
+        // child of `surface`". A focused webview consumes the winit Ime events via
+        // bevy_cef, and `sync_focused_webview` deliberately keeps focus on an
+        // inline webview even when its pane is no longer the active surface — a
+        // surface-relative check would miss it and inject the commit into the
+        // newly-active pane's shell.
+        if focused_webview.0.is_some() {
             continue;
         }
         if commit_text.is_empty() {
             continue;
         }
         let Some(entity) = surface else {
+            tracing::warn!(
+                target: "ozmux::input::ime",
+                "IME commit dropped: no keyboard-focused surface",
+            );
             continue;
         };
         if copy_modes.contains(entity) {
@@ -900,6 +906,9 @@ mod tests {
             hits.0.push((ev.entity, ev.text.clone()));
         });
 
+        // A second, unfocused terminal: the commit must route to the
+        // KeyboardFocused one, not merely "the only one".
+        app.world_mut().spawn(OzmaTerminal);
         let focused = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
 
         app.world_mut()
