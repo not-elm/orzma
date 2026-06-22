@@ -106,6 +106,7 @@ def build_icon(svg: Path, out: Path, png_1024: Path, font: Path) -> None:
         for name, size in entries:
             shutil.copy2(renders[size], iconset / name)
         out.parent.mkdir(parents=True, exist_ok=True)
+        png_1024.parent.mkdir(parents=True, exist_ok=True)
         run(iconutil_argv(iconset, out))
         shutil.copy2(renders[1024], png_1024)
     print(f"wrote {out}")
