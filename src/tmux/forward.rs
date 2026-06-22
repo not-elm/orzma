@@ -2,7 +2,9 @@
 //! shared mouse apply observer) to the owning tmux pane via `send-keys -H`.
 
 use bevy::prelude::*;
+use crate::input::ime::ImeCommit;
 use ozma_terminal::TerminalForwardInput;
+use ozma_tty_engine::TerminalHandle;
 use ozmux_tmux::{PaneId, SendBytes, TmuxConnection, TmuxPane};
 
 /// Registers the `TerminalForwardInput` → tmux `send-keys -H` observer.
@@ -10,7 +12,8 @@ pub(crate) struct ForwardPlugin;
 
 impl Plugin for ForwardPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(forward_pane_input);
+        app.add_observer(forward_pane_input)
+            .add_observer(forward_ime_commit);
     }
 }
 
@@ -34,6 +37,33 @@ fn forward_pane_input(
     }
 }
 
+fn forward_ime_commit(
+    ev: On<ImeCommit>,
+    mut commands: Commands,
+    mut handles: Query<&mut TerminalHandle>,
+    panes: Query<&TmuxPane>,
+    connection: NonSend<TmuxConnection>,
+) {
+    let Ok(pane) = panes.get(ev.entity) else {
+        return;
+    };
+    if let Ok(mut handle) = handles.get_mut(ev.entity)
+        && handle.snap_to_bottom_vt_only()
+    {
+        handle.flush_emit(&mut commands, ev.entity);
+    }
+    let Some(client) = connection.client() else {
+        return;
+    };
+    let target = pane_target(pane.id);
+    if let Err(e) = client.handle().send(SendBytes {
+        pane: &target,
+        bytes: ev.text.as_bytes(),
+    }) {
+        tracing::warn!(?e, "IME commit send failed");
+    }
+}
+
 /// The tmux target string (`%<id>`) for a pane id.
 fn pane_target(pane: PaneId) -> String {
     format!("%{}", pane.0)
@@ -53,5 +83,33 @@ mod tests {
         }
         .into_raw_command();
         assert_eq!(cmd, "send-keys -H -t %3 1b 5b 3c 30 3b 31 3b 31 4d");
+    }
+
+    #[test]
+    fn ime_commit_observer_no_panic_without_client() {
+        use crate::input::ime::ImeCommit;
+        use ozma_tty_engine::TerminalHandle;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+        use tmux_control_parser::{CellDims, PaneId};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_non_send_resource(TmuxConnection::default());
+        app.add_observer(forward_ime_commit);
+
+        let pane = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims { width: 10, height: 5, xoff: 0, yoff: 0 },
+                },
+                TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false))),
+            ))
+            .id();
+        // No live tmux client: the send is skipped; assert no panic.
+        app.world_mut().trigger(ImeCommit { entity: pane, text: "あ".into() });
+        app.update();
     }
 }
