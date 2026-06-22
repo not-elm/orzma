@@ -233,10 +233,7 @@ fn dispatch_startup_mode(
             }
         }
         StartupMode::TmuxAutoAttach => {
-            let mut server = build_server(&configs);
-            if let Some((cols, rows)) = client_size {
-                server = server.initial_size(cols, rows);
-            }
+            let mut server = build_server(&configs).maybe_initial_size(client_size);
             if let Some(handle) = &control {
                 server = server.env("OZMA_SOCK", &handle.sock_path.to_string_lossy());
             }
@@ -782,14 +779,11 @@ fn apply_switch(
             cmds
         }
         None => {
-            let mut server = build_server(configs);
             // NOTE: birth the detached session at the real window size (`-x/-y`)
             // so switching the live client to it does not grow the per-pane
             // display grid — a grow pulls scrollback onto the screen and pushes
             // the fresh prompt down. See `picker_client_size`.
-            if let Some((cols, rows)) = client_size {
-                server = server.initial_size(cols, rows);
-            }
+            let mut server = build_server(configs).maybe_initial_size(client_size);
             if let Some(sock) = &ozma_sock {
                 server = server.env("OZMA_SOCK", sock);
             }
@@ -835,14 +829,11 @@ fn apply_attach(
         }
         PickerRow::NewSession => AttachTarget::CreateNew,
     };
-    let mut server = build_server(configs);
     // NOTE: birth the control-client PTY at the real GUI window size so a freshly
     // created session starts at the right size and the per-pane display grid is
     // never grown later — a grow pulls scrollback onto the screen and pushes the
     // fresh prompt down until the next repaint.
-    if let Some((cols, rows)) = client_size {
-        server = server.initial_size(cols, rows);
-    }
+    let mut server = build_server(configs).maybe_initial_size(client_size);
     if let Some(handle) = control {
         server = server.env("OZMA_SOCK", &handle.sock_path.to_string_lossy());
     }

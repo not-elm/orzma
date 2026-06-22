@@ -66,6 +66,16 @@ impl TmuxServer {
         self
     }
 
+    /// Like [`TmuxServer::initial_size`] but takes an optional `(cols, rows)`;
+    /// a `None` leaves the default unchanged. Lets call sites that compute the
+    /// size optionally apply it without an `if let` at every site.
+    pub fn maybe_initial_size(self, size: Option<(u16, u16)>) -> Self {
+        match size {
+            Some((cols, rows)) => self.initial_size(cols, rows),
+            None => self,
+        }
+    }
+
     /// Overrides the tmux binary path.
     pub fn program(mut self, path: &str) -> Self {
         self.program = path.to_string();

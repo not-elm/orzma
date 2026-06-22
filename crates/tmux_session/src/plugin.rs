@@ -137,60 +137,71 @@ fn request_pane_capture(enumeration: &mut EnumerationState, client: &TmuxClient,
     }
 }
 
-/// Per-pane size tracking for [`recapture_settled_panes`].
+/// Per-pane state for [`recapture_settled_panes`].
 #[derive(Default)]
-struct PaneSizeWatch {
-    last: HashMap<PaneId, (u32, u32)>,
-    settle: HashMap<PaneId, u8>,
+struct PaneRecaptureState {
+    /// Last-seen cell dims, to detect size changes.
+    dims: (u32, u32),
+    /// Frames the dims have held steady since the last change.
+    stable: u8,
+    /// Whether this pane has already been re-seeded once.
+    done: bool,
 }
 
-/// Frames a pane's size must hold steady after a change before its mirror is
-/// re-seeded from tmux. Debounces a window-drag resize so it re-seeds once the
-/// drag stops, not every frame.
+/// Frames a pane's size must hold steady before its mirror is re-seeded from
+/// tmux. Lets a born-small pane finish growing (and a window-drag finish) before
+/// the one-shot re-seed fires.
 const RECAPTURE_SETTLE_FRAMES: u8 = 3;
 
-/// Re-seeds a pane's display mirror from tmux's authoritative grid a few frames
-/// after its size settles following a change.
+/// Re-seeds each pane's display mirror from tmux's authoritative grid exactly
+/// once, a few frames after the pane's size first settles.
 ///
 /// NOTE: the display-only `alacritty_terminal` mirror diverges from tmux by one
 /// row on a fresh session's first prompt — zsh's `PROMPT_EOL_MARK` over-fills the
 /// line by one column and alacritty wraps the cursor to the next row where tmux
-/// does not, so the replayed `%output` lands the prompt one row low. A new
-/// session is born small and grown to the window, so this fires after that
-/// resize settles and overwrites the wrapped local cursor with tmux's real
-/// cursor position via the capture-pane + cursor seed. First sight of a pane is
-/// left to [`request_pane_captures`]; only a *change* arms the re-seed.
+/// does not, so the replayed `%output` lands the prompt one row low. A one-shot
+/// capture-pane + cursor seed after the pane settles overwrites the wrapped local
+/// cursor with tmux's real position. Fires once per pane — re-seeding on every
+/// later resize would flash the screen and discard local state, and an
+/// established pane's grow already matches tmux — and fires regardless of whether
+/// the size changed, since a pane born at its final size still wraps its first
+/// prompt. Skipped while an earlier capture for the pane is still in flight so
+/// the two capture/cursor pairs never collide.
 fn recapture_settled_panes(
-    mut watch: Local<PaneSizeWatch>,
+    mut watch: Local<HashMap<PaneId, PaneRecaptureState>>,
     mut enumeration: ResMut<EnumerationState>,
     connection: NonSend<TmuxConnection>,
     panes: Query<&TmuxPane>,
 ) {
+    // Prune departed panes every frame, even while the control client is absent,
+    // so a reconnect that reuses a pane id starts from a clean slate.
+    let present: HashSet<PaneId> = panes.iter().map(|pane| pane.id).collect();
+    watch.retain(|id, _| present.contains(id));
+
     let Some(client) = connection.client() else {
         return;
     };
-    let mut present: HashSet<PaneId> = HashSet::new();
     for pane in panes.iter() {
-        present.insert(pane.id);
         let dims = (pane.dims.width, pane.dims.height);
-        match watch.last.insert(pane.id, dims) {
-            Some(prev) if prev != dims => {
-                watch.settle.insert(pane.id, RECAPTURE_SETTLE_FRAMES);
-            }
-            Some(_) => {
-                if let Some(remaining) = watch.settle.get_mut(&pane.id) {
-                    *remaining -= 1;
-                    if *remaining == 0 {
-                        watch.settle.remove(&pane.id);
-                        request_pane_capture(&mut enumeration, client, pane.id);
-                    }
-                }
-            }
-            None => {}
+        let state = watch.entry(pane.id).or_insert(PaneRecaptureState {
+            dims,
+            stable: 0,
+            done: false,
+        });
+        if state.dims != dims {
+            state.dims = dims;
+            state.stable = 0;
+        } else {
+            state.stable = state.stable.saturating_add(1);
+        }
+        if !state.done
+            && state.stable >= RECAPTURE_SETTLE_FRAMES
+            && !enumeration.panes_with_cursor_pending.contains(&pane.id)
+        {
+            state.done = true;
+            request_pane_capture(&mut enumeration, client, pane.id);
         }
     }
-    watch.last.retain(|id, _| present.contains(id));
-    watch.settle.retain(|id, _| present.contains(id));
 }
 
 fn tmux_batch_pending(batch: Res<TmuxEventBatch>) -> bool {
