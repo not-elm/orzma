@@ -150,24 +150,21 @@ function scrollByAction(action: string): void {
   reportScrollState();
 }
 
-ozma.on('content', (p) => {
-  void setContent(p as ContentPayload).catch(console.error);
+ozma.on('content', (p: ContentPayload) => {
+  void setContent(p).catch(console.error);
 });
-ozma.on('scroll', (p) => {
-  scrollByAction((p as { action: string }).action);
+ozma.on('scroll', (p: { action: string }) => {
+  scrollByAction(p.action);
 });
-ozma.on('scrollToHeading', (p) => {
-  const { index } = p as { index: number };
-  document.getElementById(`h${index}`)?.scrollIntoView({ block: 'start' });
+ozma.on('scrollToHeading', (p: { index: number }) => {
+  document.getElementById(`h${p.index}`)?.scrollIntoView({ block: 'start' });
   reportScrollState();
 });
-ozma.on('search', (p) => {
-  const { query } = p as { query: string };
-  ozma.emit('searchCount', search.run(content, query));
+ozma.on('search', (p: { query: string }) => {
+  ozma.emit('searchCount', search.run(content, p.query));
 });
-ozma.on('searchNav', (p) => {
-  const { dir } = p as { dir: 'next' | 'prev' };
-  ozma.emit('searchCount', search.navigate(dir));
+ozma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
+  ozma.emit('searchCount', search.navigate(p.dir));
 });
 ozma.on('clearSearch', () => {
   search.clear(content);

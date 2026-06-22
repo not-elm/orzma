@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest';
 import { isOzmaAvailable, type OzmaApi, ozma } from './ozma.ts';
 
 const g = globalThis as typeof globalThis & { ozma?: OzmaApi };
@@ -36,7 +36,43 @@ describe('@ozma/web client', () => {
 
   it('reports bridge availability', () => {
     expect(isOzmaAvailable()).toBe(false);
-    g.ozma = { call: vi.fn(), on: vi.fn(), off: vi.fn() } as unknown as OzmaApi;
+    g.ozma = { call: vi.fn(), on: vi.fn(), off: vi.fn(), emit: vi.fn() } as unknown as OzmaApi;
     expect(isOzmaAvailable()).toBe(true);
+  });
+});
+
+describe('@ozma/web types (compile-time)', () => {
+  beforeEach(() => {
+    g.ozma = { call: vi.fn(), on: vi.fn(), off: vi.fn(), emit: vi.fn() } as unknown as OzmaApi;
+  });
+
+  it('infers the on() handler payload from a parameter annotation', () => {
+    ozma.on('content', (p: { markdown: string }) => {
+      expectTypeOf(p).toEqualTypeOf<{ markdown: string }>();
+    });
+  });
+
+  it('accepts an explicit payload generic on on()', () => {
+    ozma.on<{ x: number }>('e', (p) => {
+      expectTypeOf(p).toEqualTypeOf<{ x: number }>();
+    });
+  });
+
+  it('defaults the on() payload to unknown without a type', () => {
+    ozma.on('content', (p) => {
+      expectTypeOf(p).toBeUnknown();
+    });
+  });
+
+  it('types emit payloads and call params/results', () => {
+    ozma.emit('scrollState', { ratio: 0.5 });
+    ozma.emit<{ ratio: number }>('scrollState', { ratio: 0.5 });
+    void ozma.call<string, { path: string }>('save', { path: '/tmp' });
+    expectTypeOf(ozma.call<string>('ready')).resolves.toEqualTypeOf<string>();
+  });
+
+  it('rejects a payload that mismatches an explicit generic', () => {
+    // @ts-expect-error payload must satisfy the declared <{ ratio: number }> generic
+    ozma.emit<{ ratio: number }>('scrollState', { ratio: 'not-a-number' });
   });
 });
