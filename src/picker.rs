@@ -14,6 +14,8 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ScrollPosition, UiGlobalTransform, UiSystems};
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, WindowResized};
+use ozma_terminal::cells_for;
+use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_webview::ControlPlaneHandle;
 use ozmux_configs::StartupMode;
 use ozmux_tmux::{
@@ -137,6 +139,37 @@ fn build_server(configs: &OzmuxConfigsResource) -> TmuxServer {
     server
 }
 
+/// The control-client PTY birth size in cells for the current GUI window — the
+/// FULL window, with no status-bar row reserved.
+///
+/// NOTE: birth at the full window size, not the bar-reserved pane size that
+/// [`sync_client_size`] later pins. The PTY is the whole GUI window's terminal;
+/// reserving the bar row is the pin's job. Birthing at the full size keeps the
+/// birth size `>=` the eventual pinned pane size, so reconciliation is always a
+/// SHRINK — and `alacritty_terminal`'s shrink does not pull scrollback onto the
+/// screen, whereas a grow does. Birthing at the smaller pane size risks a 1-row
+/// GROW (status line, or a 1-row window-settle race at startup), which pulls one
+/// scrollback row and leaves a one-row top margin.
+///
+/// Returns `None` when the window or cell metrics are not yet available (e.g.
+/// the very first frames), in which case the caller falls back to tmux's default
+/// PTY size — the pre-existing behavior, so no regression.
+fn picker_client_size(
+    window: &Query<&Window, With<PrimaryWindow>>,
+    metrics: Option<&TerminalCellMetricsResource>,
+) -> Option<(u16, u16)> {
+    let window = window.single().ok()?;
+    let metrics = metrics?;
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    Some(cells_for(
+        window.resolution.physical_width(),
+        window.resolution.physical_height(),
+        cell_w,
+        cell_h,
+    ))
+}
+
 /// Refreshes the chooser's session + window lists on the closed→open edge via
 /// one-shot `TmuxServer` subprocess queries against the same socket. The
 /// subprocess sees the live server whether or not a control client is attached,
@@ -175,8 +208,11 @@ fn dispatch_startup_mode(
     mut next_mode: ResMut<NextState<AppMode>>,
     configs: Res<OzmuxConfigsResource>,
     control: Option<Res<ControlPlaneHandle>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
 ) {
     commands.insert_resource(StartupDispatched);
+    let client_size = picker_client_size(&window, metrics.as_deref());
     match &configs.startup_mode {
         StartupMode::Default => {
             next_mode.set(AppMode::Default);
@@ -198,6 +234,9 @@ fn dispatch_startup_mode(
         }
         StartupMode::TmuxAutoAttach => {
             let mut server = build_server(&configs);
+            if let Some((cols, rows)) = client_size {
+                server = server.initial_size(cols, rows);
+            }
             if let Some(handle) = &control {
                 server = server.env("OZMA_SOCK", &handle.sock_path.to_string_lossy());
             }
@@ -434,6 +473,8 @@ fn handle_picker_row_interaction(
     configs: Res<OzmuxConfigsResource>,
     current_mode: Res<State<AppMode>>,
     control: Option<Res<ControlPlaneHandle>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
 ) {
     let opened = picker.open && !*was_open;
     *was_open = picker.open;
@@ -447,6 +488,7 @@ fn handle_picker_row_interaction(
     if cursor_moved.read().count() > 0 {
         *hover_armed = true;
     }
+    let client_size = picker_client_size(&window, metrics.as_deref());
 
     for (interaction, label) in rows.iter() {
         match interaction {
@@ -465,6 +507,7 @@ fn handle_picker_row_interaction(
                     control.as_deref(),
                     &picker,
                     current_mode.get(),
+                    client_size,
                     row,
                 );
                 picker.open = false;
@@ -597,11 +640,14 @@ fn handle_picker_input(
     configs: Res<OzmuxConfigsResource>,
     current_mode: Res<State<AppMode>>,
     control: Option<Res<ControlPlaneHandle>>,
+    window: Query<&Window, With<PrimaryWindow>>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
 ) {
     if !picker.open {
         keys.clear();
         return;
     }
+    let client_size = picker_client_size(&window, metrics.as_deref());
     let rows = build_rows(&picker.sessions, &picker.windows);
     let entry_count = rows.len();
     for ev in keys.read() {
@@ -632,6 +678,7 @@ fn handle_picker_input(
                     control.as_deref(),
                     &picker,
                     current_mode.get(),
+                    client_size,
                     row,
                 );
                 picker.open = false;
@@ -656,12 +703,29 @@ fn activate_row(
     control: Option<&ControlPlaneHandle>,
     picker: &SessionPicker,
     current_mode: &AppMode,
+    client_size: Option<(u16, u16)>,
     row: PickerRow,
 ) {
     if connection.client().is_some() {
-        apply_switch(connection, state, configs, control, picker, row);
+        apply_switch(
+            connection,
+            state,
+            configs,
+            control,
+            picker,
+            client_size,
+            row,
+        );
     } else {
-        let attached = apply_attach(connection, state, configs, control, picker, row);
+        let attached = apply_attach(
+            connection,
+            state,
+            configs,
+            control,
+            picker,
+            client_size,
+            row,
+        );
         if should_enter_tmux(attached, current_mode) {
             next_mode.set(AppMode::Tmux);
         }
@@ -677,6 +741,7 @@ fn apply_switch(
     configs: &OzmuxConfigsResource,
     control: Option<&ControlPlaneHandle>,
     picker: &SessionPicker,
+    client_size: Option<(u16, u16)>,
     row: PickerRow,
 ) {
     if connection.client().is_none() {
@@ -718,6 +783,13 @@ fn apply_switch(
         }
         None => {
             let mut server = build_server(configs);
+            // NOTE: birth the detached session at the real window size (`-x/-y`)
+            // so switching the live client to it does not grow the per-pane
+            // display grid — a grow pulls scrollback onto the screen and pushes
+            // the fresh prompt down. See `picker_client_size`.
+            if let Some((cols, rows)) = client_size {
+                server = server.initial_size(cols, rows);
+            }
             if let Some(sock) = &ozma_sock {
                 server = server.env("OZMA_SOCK", sock);
             }
@@ -753,6 +825,7 @@ fn apply_attach(
     configs: &OzmuxConfigsResource,
     control: Option<&ControlPlaneHandle>,
     picker: &SessionPicker,
+    client_size: Option<(u16, u16)>,
     row: PickerRow,
 ) -> bool {
     let target = match row {
@@ -763,6 +836,13 @@ fn apply_attach(
         PickerRow::NewSession => AttachTarget::CreateNew,
     };
     let mut server = build_server(configs);
+    // NOTE: birth the control-client PTY at the real GUI window size so a freshly
+    // created session starts at the right size and the per-pane display grid is
+    // never grown later — a grow pulls scrollback onto the screen and pushes the
+    // fresh prompt down until the next repaint.
+    if let Some((cols, rows)) = client_size {
+        server = server.initial_size(cols, rows);
+    }
     if let Some(handle) = control {
         server = server.env("OZMA_SOCK", &handle.sock_path.to_string_lossy());
     }

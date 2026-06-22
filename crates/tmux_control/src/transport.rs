@@ -39,6 +39,7 @@ pub struct TmuxServer {
     program: String,
     socket: Socket,
     env: Vec<(String, String)>,
+    initial_size: Option<(u16, u16)>,
 }
 
 impl TmuxServer {
@@ -48,7 +49,21 @@ impl TmuxServer {
             program: "tmux".to_string(),
             socket: Socket::Default,
             env: Vec::new(),
+            initial_size: None,
         }
+    }
+
+    /// Sets the control-client PTY's birth size in cells (`(cols, rows)`).
+    ///
+    /// The PTY size is the size tmux uses for the client's initial window, so
+    /// births a `new-session` (or `attach`) at the real GUI window size instead
+    /// of the legacy 24x80 default. This avoids a later grow of the per-pane
+    /// display grid, which `alacritty_terminal`'s resize would otherwise satisfy
+    /// by pulling scrollback onto the screen — pushing a fresh prompt down to
+    /// mid-screen until the next repaint.
+    pub fn initial_size(mut self, cols: u16, rows: u16) -> Self {
+        self.initial_size = Some((cols, rows));
+        self
     }
 
     /// Overrides the tmux binary path.
@@ -227,6 +242,12 @@ impl TmuxServer {
         let mut argv = self.socket_args();
         argv.push("new-session".to_string());
         argv.push("-d".to_string());
+        if let Some((cols, rows)) = self.initial_size {
+            argv.push("-x".to_string());
+            argv.push(cols.to_string());
+            argv.push("-y".to_string());
+            argv.push(rows.to_string());
+        }
         self.push_env_flags(&mut argv);
         argv.push("-P".to_string());
         argv.push("-F".to_string());
@@ -251,12 +272,7 @@ impl TmuxServer {
 
     fn spawn(&self, subcommand: &[&str]) -> TmuxResult<TmuxClient> {
         let pair = native_pty_system()
-            .openpty(PtySize {
-                rows: 24,
-                cols: 80,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
+            .openpty(pty_size(self.initial_size))
             .map_err(spawn_err)?;
 
         // NOTE: disable PTY echo before tmux starts. Otherwise our command
@@ -389,6 +405,18 @@ fn spawn_err(e: impl std::fmt::Display) -> TmuxError {
     TmuxError::Spawn(std::io::Error::other(e.to_string()))
 }
 
+/// Builds the control-client PTY size from an optional `(cols, rows)` override,
+/// falling back to the legacy 24x80 default when unset.
+fn pty_size(initial: Option<(u16, u16)>) -> PtySize {
+    let (cols, rows) = initial.unwrap_or((80, 24));
+    PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    }
+}
+
 fn classify_list_result(ok: bool, stdout: &[u8], stderr: &[u8]) -> TmuxResult<Vec<SessionInfo>> {
     if ok {
         return SessionInfo::parse_list(stdout);
@@ -485,6 +513,20 @@ mod tests {
 
     fn argv(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn initial_size_overrides_the_default_pty_size() {
+        // A fresh server births its control-client PTY at the legacy 24x80
+        // default, so a new session starts small and must be grown later (the
+        // grow triggers the alacritty history-pull misrender).
+        let default = pty_size(TmuxServer::new().initial_size);
+        assert_eq!((default.cols, default.rows), (80, 24));
+
+        // Declaring the real window cell size births the PTY at that size, so
+        // the new session is the right size from the first frame — no grow.
+        let sized = pty_size(TmuxServer::new().initial_size(120, 40).initial_size);
+        assert_eq!((sized.cols, sized.rows), (120, 40));
     }
 
     struct ScriptedReader {
@@ -820,6 +862,30 @@ mod tests {
         assert_eq!(
             TmuxServer::new().create_detached_session_argv(),
             argv(&["new-session", "-d", "-P", "-F", "#{session_name}"])
+        );
+    }
+
+    #[test]
+    fn create_detached_session_argv_includes_initial_size() {
+        // Without an explicit size, `new-session -d` births the session at tmux's
+        // 80x24 default-size; switching the live client to it then grows the pane,
+        // and the per-pane display grid's grow pulls scrollback onto the screen.
+        // `-x/-y` births it at the real window size so reconciliation is a shrink.
+        assert_eq!(
+            TmuxServer::new()
+                .initial_size(182, 48)
+                .create_detached_session_argv(),
+            argv(&[
+                "new-session",
+                "-d",
+                "-x",
+                "182",
+                "-y",
+                "48",
+                "-P",
+                "-F",
+                "#{session_name}",
+            ])
         );
     }
 
