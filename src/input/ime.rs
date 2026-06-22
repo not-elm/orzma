@@ -10,6 +10,8 @@ use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
+use bevy::ecs::entity::Entity;
+use bevy::ecs::event::EntityEvent;
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
@@ -17,7 +19,7 @@ use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::system::{Commands, NonSend, Query, Res, ResMut, Single};
 use bevy::math::Vec2;
-use bevy::prelude::{Entity, State};
+use bevy::prelude::State;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
@@ -27,6 +29,19 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozma_webview::{Webview, focused_webview_of};
 use ozmux_tmux::{ActivePane, SendBytes, TmuxConnection, TmuxPane};
+
+/// IME-committed text destined for the keyboard-focused terminal surface.
+///
+/// Per-backend observers apply it, discriminating on `TmuxPane` presence
+/// (tmux panes are also `OzmaTerminal`): the tmux observer in
+/// `src/tmux/forward.rs` sends it over the control socket; the Default observer
+/// in `src/default_input.rs` writes the local PTY via `TerminalKeyInput`.
+#[derive(EntityEvent, Debug, Clone)]
+pub(crate) struct ImeCommit {
+    #[event_target]
+    pub(crate) entity: Entity,
+    pub(crate) text: String,
+}
 
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
