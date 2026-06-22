@@ -1,5 +1,5 @@
 //! CEF webview wiring for the `window.ozma` Tier 1 back-channel: registers the
-//! `ozma-dyn://` dynamic asset scheme, keeps `bevy_cef`'s `FocusedWebview` in
+//! `ozma://` dynamic asset scheme, keeps `bevy_cef`'s `FocusedWebview` in
 //! step with the active pane, and routes the `ozma.call` frames the page bridge
 //! emits to the registering program over the control socket.
 
@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy_cef::prelude::*;
 use ozma_terminal::{KeyboardFocused, OzmaTerminal, OzmaTerminalInputSet};
 use ozmux_webview_host::WebviewAssetRegistry;
-use ozmux_webview_host::dyn_scheme::custom_dyn_scheme;
+use ozmux_webview_host::ozma_scheme::custom_ozma_scheme;
 use serde_json::Value;
 use std::path::Path;
 
@@ -35,12 +35,12 @@ const OZMA_CALL_KIND: &str = "ozma.call";
 /// inbound-event forwarder (`on_ozmux_emit_frame`). Emitted by `ozma_bridge.js`.
 const OZMA_EMIT_KIND: &str = "ozma.emit";
 
-/// Builds the `CefPlugin` with the `ozma-dyn://` (dynamic, Tier 1) scheme bound
+/// Builds the `CefPlugin` with the `ozma://` (dynamic, Tier 1) scheme bound
 /// to its shared `WebviewAssetRegistry`, using `root_cache_path` as this process's
 /// unique CEF profile directory (one Chromium singleton lock per instance).
-pub fn cef_plugin(dyn_registry: WebviewAssetRegistry, root_cache_path: &Path) -> CefPlugin {
+pub fn cef_plugin(ozma_registry: WebviewAssetRegistry, root_cache_path: &Path) -> CefPlugin {
     CefPlugin {
-        custom_schemes: vec![custom_dyn_scheme(dyn_registry)],
+        custom_schemes: vec![custom_ozma_scheme(ozma_registry)],
         command_line_config: cef_command_line_config(),
         root_cache_path: Some(root_cache_path.to_string_lossy().into_owned()),
         ..Default::default()
@@ -228,7 +228,7 @@ fn on_ozmux_emit_frame(
 /// `OnAddressChange` — link clicks, hint activations, redirects, hash/pushState),
 /// forwards a `urlChanged` call to the registering program so it can track
 /// page-driven navigation (e.g. ozbrowser's history + URL bar). Scoped to remote
-/// `http(s)` webviews; `ozma-dyn://` dir/inline views (which register no
+/// `http(s)` webviews; `ozma://` dir/inline views (which register no
 /// `urlChanged` handler) are skipped. Fire-and-forget: the minted reqId is not
 /// recorded, so the program's reply finds no in-flight entry and is dropped by
 /// `OzmuxRpc::take_for_connection`.
@@ -316,10 +316,7 @@ mod tests {
         let terminal_pane = app.world_mut().spawn(OzmaTerminal).id();
         let ext_pane = app
             .world_mut()
-            .spawn((
-                OzmaTerminal,
-                WebviewSource::new("ozma-dyn://memo/index.html"),
-            ))
+            .spawn((OzmaTerminal, WebviewSource::new("ozma://memo/index.html")))
             .id();
 
         let set_active = move |app: &mut App, active: Entity, inactive: Entity| {
@@ -370,7 +367,7 @@ mod tests {
         app.world_mut().spawn((
             OzmaTerminal,
             KeyboardFocused,
-            WebviewSource::new("ozma-dyn://memo/index.html"),
+            WebviewSource::new("ozma://memo/index.html"),
             NonInteractive,
         ));
 
@@ -641,20 +638,20 @@ mod tests {
                     connection_id: 7,
                     handle: "H".into(),
                 },
-                WebviewSource::new("ozma-dyn://H/index.html"),
+                WebviewSource::new("ozma://H/index.html"),
             ))
             .id();
 
         app.world_mut().trigger(AddressChanged {
             webview,
-            url: "ozma-dyn://H/index.html#section".into(),
+            url: "ozma://H/index.html#section".into(),
             can_go_back: false,
             can_go_forward: false,
         });
 
         assert!(
             rx.try_recv().is_err(),
-            "an ozma-dyn:// dir/inline view must report no urlChanged"
+            "an ozma:// dir/inline view must report no urlChanged"
         );
     }
 }

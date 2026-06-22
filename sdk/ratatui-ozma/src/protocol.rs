@@ -84,7 +84,7 @@ pub(crate) enum RegisterKind {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         preload: Vec<String>,
     },
-    /// A directory of assets served at `ozma-dyn://<handle>/`.
+    /// A directory of assets served at `ozma://<handle>/`.
     Dir {
         /// Absolute asset root.
         root: String,

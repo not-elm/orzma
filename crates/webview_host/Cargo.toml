@@ -8,7 +8,7 @@ authors.workspace = true
 publish.workspace = true
 
 [features]
-# Pulls the bevy_cef_core path-dep + the ozma-dyn:// scheme handler.
+# Pulls the bevy_cef_core path-dep + the ozma:// scheme handler.
 # Off by default so the core builds/tests with std only.
 cef = ["dep:bevy_cef_core"]
 

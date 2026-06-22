@@ -1,6 +1,6 @@
 //! Native ozmux control plane: a local Unix-socket listener that accepts
 //! authenticated dynamic webview registrations (Tier 1) from local programs,
-//! mints opaque handles into the `DynamicRegistry`, and tears them down on
+//! mints opaque handles into the `OzmaRegistry`, and tears them down on
 //! disconnect or surface despawn. Uses a Tokio-free reader/writer thread model.
 
 use crate::control_plane::listener::{ControlEvent, spawn_listener};
@@ -45,13 +45,13 @@ pub struct NormalizedChord {
 
 /// Where a dynamic view's content lives.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DynSource {
-    /// Files served under this absolute root via `ozma-dyn://`.
+pub(crate) enum OzmaSource {
+    /// Files served under this absolute root via `ozma://`.
     Dir(PathBuf),
     /// A single inline HTML document, registered into `WebviewAssetRegistry` and
-    /// served under `ozma-dyn://<handle>/`.
+    /// served under `ozma://<handle>/`.
     Inline(String),
-    /// A remote `http(s)` URL loaded directly by CEF (no `ozma-dyn://` origin,
+    /// A remote `http(s)` URL loaded directly by CEF (no `ozma://` origin,
     /// no `WebviewAssetRegistry` entry). `bridge` records whether the registering
     /// program opted into the `window.ozma` back-channel.
     Url {
@@ -62,20 +62,20 @@ pub(crate) enum DynSource {
     },
 }
 
-impl DynSource {
+impl OzmaSource {
     /// Whether a mounted view of this source receives the `window.ozma`
     /// back-channel. Only a display-only (`bridge: false`) `Url` source is
     /// unbridged; `Dir`/`Inline` are always bridged.
     pub(crate) fn is_bridged(&self) -> bool {
         match self {
-            DynSource::Dir(_) | DynSource::Inline(_) => true,
-            DynSource::Url { bridge, .. } => *bridge,
+            OzmaSource::Dir(_) | OzmaSource::Inline(_) => true,
+            OzmaSource::Url { bridge, .. } => *bridge,
         }
     }
 
     /// Whether this source is a remote `http(s)` URL (vs `Dir`/`Inline`).
     pub(crate) fn is_url(&self) -> bool {
-        matches!(self, DynSource::Url { .. })
+        matches!(self, OzmaSource::Url { .. })
     }
 }
 
@@ -83,9 +83,9 @@ impl DynSource {
 /// the terminal surface + control-plane connection that own it (for scoped
 /// mount-gating and teardown).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DynamicView {
+pub(crate) struct OzmaView {
     /// The content source.
-    pub(crate) source: DynSource,
+    pub(crate) source: OzmaSource,
     /// HTML entry path relative to a `Dir` root (ignored for `Inline` and `Url`).
     pub(crate) entry: String,
     /// Whether the mounted webview accepts pointer/keyboard input.
@@ -121,18 +121,18 @@ pub(crate) struct WebviewOwner {
 /// registry for Tier 1 (the CEF scheme handler reads the thin `WebviewAssetRegistry`
 /// separately). Carries scoped removal for teardown.
 #[derive(Resource, Default)]
-pub(crate) struct DynamicRegistry {
-    by_handle: HashMap<String, DynamicView>,
+pub(crate) struct OzmaRegistry {
+    by_handle: HashMap<String, OzmaView>,
 }
 
-impl DynamicRegistry {
+impl OzmaRegistry {
     /// Resolves a `handle` to its registration, if any.
-    pub(crate) fn get(&self, handle: &str) -> Option<&DynamicView> {
+    pub(crate) fn get(&self, handle: &str) -> Option<&OzmaView> {
         self.by_handle.get(handle)
     }
 
     /// Inserts/replaces a registration.
-    pub(crate) fn insert(&mut self, handle: String, view: DynamicView) {
+    pub(crate) fn insert(&mut self, handle: String, view: OzmaView) {
         self.by_handle.insert(handle, view);
     }
 
@@ -153,7 +153,7 @@ impl DynamicRegistry {
         self.drain_where(|v| v.owner_surface == owner_surface)
     }
 
-    fn drain_where(&mut self, pred: impl Fn(&DynamicView) -> bool) -> Vec<String> {
+    fn drain_where(&mut self, pred: impl Fn(&OzmaView) -> bool) -> Vec<String> {
         let drained: Vec<String> = self
             .by_handle
             .iter()
@@ -301,7 +301,7 @@ impl ConnectionWriters {
 ///
 /// # Invariants
 /// The output MUST be lowercase. A handle is used as the host of the
-/// `ozma-dyn://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
+/// `ozma://<handle>/` URL, and Chromium canonicalizes (lowercases) the host
 /// of a STANDARD-scheme URL before it reaches the scheme handler; an uppercase
 /// handle would then miss the case-sensitive `WebviewAssetRegistry` lookup → 404.
 fn mint_id() -> String {
@@ -330,15 +330,15 @@ pub struct ControlPlaneHandle {
 }
 
 /// Wires the control-plane listener, the event-apply system, and the teardown
-/// observer. Takes the `WebviewAssetRegistry` shared with the `ozma-dyn` scheme handler.
+/// observer. Takes the `WebviewAssetRegistry` shared with the `ozma` scheme handler.
 pub(crate) struct ControlPlanePlugin {
-    dyn_assets: WebviewAssetRegistry,
+    ozma_assets: WebviewAssetRegistry,
 }
 
 impl ControlPlanePlugin {
-    /// Builds the plugin sharing `dyn_assets` with the `ozma-dyn` scheme handler.
-    pub(crate) fn new(dyn_assets: WebviewAssetRegistry) -> Self {
-        Self { dyn_assets }
+    /// Builds the plugin sharing `ozma_assets` with the `ozma` scheme handler.
+    pub(crate) fn new(ozma_assets: WebviewAssetRegistry) -> Self {
+        Self { ozma_assets }
     }
 }
 
@@ -361,9 +361,9 @@ impl Plugin for ControlPlanePlugin {
             Err(e) => tracing::error!(error = %e, "control-plane runtime dir failed"),
         }
         app.insert_resource(writers);
-        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(OzmuxRpc::default());
-        app.insert_resource(WebviewAssetRegistryRes(self.dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(self.ozma_assets.clone()));
         app.add_systems(Update, (apply_control_events, gc_despawned_surfaces));
     }
 }
@@ -378,14 +378,14 @@ impl Plugin for ControlPlanePlugin {
 /// also runs when `ControlPlaneHandle` is absent (token unbinding is then a
 /// no-op) — gating it behind the handle would leak in that case.
 fn gc_despawned_surfaces(
-    mut registry: ResMut<DynamicRegistry>,
+    mut registry: ResMut<OzmaRegistry>,
     mut closed: RemovedComponents<OzmaTerminal>,
     handle: Option<Res<ControlPlaneHandle>>,
-    dyn_assets: Res<WebviewAssetRegistryRes>,
+    ozma_assets: Res<WebviewAssetRegistryRes>,
 ) {
     for entity in closed.read() {
         for handle_str in registry.remove_by_surface(entity) {
-            dyn_assets.0.remove(&handle_str);
+            ozma_assets.0.remove(&handle_str);
         }
         if let Some(handle) = handle.as_ref() {
             handle.tokens.remove_entity(entity);
@@ -405,16 +405,16 @@ struct ControlRuntime(
 );
 
 /// Drains queued `ControlEvent`s: mints handles for `register` and populates the
-/// `DynamicRegistry` (+ `WebviewAssetRegistry` for `Dir`), releases on `unregister`,
+/// `OzmaRegistry` (+ `WebviewAssetRegistry` for `Dir`), releases on `unregister`,
 /// and purges a connection's handles on `Disconnect`.
 fn apply_control_events(
     mut commands: Commands,
-    mut registry: ResMut<DynamicRegistry>,
+    mut registry: ResMut<OzmaRegistry>,
     mut rpc: ResMut<OzmuxRpc>,
     mut focused: Option<ResMut<FocusedWebview>>,
     mut sources: Query<&mut WebviewSource>,
     events: Option<Res<ControlEvents>>,
-    dyn_assets: Res<WebviewAssetRegistryRes>,
+    ozma_assets: Res<WebviewAssetRegistryRes>,
     webviews: Query<(Entity, &Webview)>,
     child_of: Query<&ChildOf>,
     non_interactive: Query<(), With<NonInteractive>>,
@@ -439,13 +439,13 @@ fn apply_control_events(
                 };
                 let handle = mint_id();
                 match &view.source {
-                    DynSource::Dir(root) => dyn_assets.0.insert_dir(handle.clone(), root.clone()),
-                    DynSource::Inline(html) => {
-                        dyn_assets
+                    OzmaSource::Dir(root) => ozma_assets.0.insert_dir(handle.clone(), root.clone()),
+                    OzmaSource::Inline(html) => {
+                        ozma_assets
                             .0
                             .insert_inline(handle.clone(), html.clone().into_bytes());
                     }
-                    DynSource::Url { .. } => {}
+                    OzmaSource::Url { .. } => {}
                 }
                 registry.insert(handle.clone(), view);
                 let _ = reply.send(ServerMsg::ok(handle));
@@ -459,7 +459,7 @@ fn apply_control_events(
                     .is_some_and(|v| v.connection_id == connection_id)
                 {
                     registry.remove(&handle);
-                    dyn_assets.0.remove(&handle);
+                    ozma_assets.0.remove(&handle);
                     vec![handle]
                 } else {
                     vec![]
@@ -469,7 +469,7 @@ fn apply_control_events(
             ControlEvent::Disconnect { connection_id } => {
                 let removed = registry.remove_by_connection(connection_id);
                 for h in &removed {
-                    dyn_assets.0.remove(h);
+                    ozma_assets.0.remove(h);
                 }
                 despawn_mounted(&mut commands, &webviews, &removed);
                 for (webview, page_req) in rpc.drain_connection(connection_id) {
@@ -629,13 +629,13 @@ fn despawn_mounted(
     }
 }
 
-/// Validates a `RegisterKind` and builds a `DynamicView`. Returns a short error
+/// Validates a `RegisterKind` and builds a `OzmaView`. Returns a short error
 /// code for an unsafe entry, a missing/relative root, or oversized inline HTML.
 fn build_view(
     kind: RegisterKind,
     owner_surface: Entity,
     connection_id: u64,
-) -> Result<DynamicView, &'static str> {
+) -> Result<OzmaView, &'static str> {
     match kind {
         RegisterKind::Dir {
             root,
@@ -651,8 +651,8 @@ fn build_view(
             if !is_safe_entry(&entry) {
                 return Err("unsafe_entry");
             }
-            Ok(DynamicView {
-                source: DynSource::Dir(root_path),
+            Ok(OzmaView {
+                source: OzmaSource::Dir(root_path),
                 entry,
                 interactive,
                 owner_surface,
@@ -670,8 +670,8 @@ fn build_view(
             if html.len() > MAX_INLINE_HTML {
                 return Err("html_too_large");
             }
-            Ok(DynamicView {
-                source: DynSource::Inline(html),
+            Ok(OzmaView {
+                source: OzmaSource::Inline(html),
                 entry: "index.html".into(),
                 interactive,
                 owner_surface,
@@ -688,8 +688,8 @@ fn build_view(
             preload,
         } => {
             let url = validate_url_source(&url)?;
-            Ok(DynamicView {
-                source: DynSource::Url { url, bridge },
+            Ok(OzmaView {
+                source: OzmaSource::Url { url, bridge },
                 entry: String::new(),
                 interactive,
                 owner_surface,
@@ -824,15 +824,15 @@ mod gc_tests {
     fn gc_purges_registrations_when_owner_surface_despawns() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, gc_despawned_surfaces);
 
         let surface = app.world_mut().spawn(OzmaTerminal).id();
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "h0".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: surface,
@@ -842,20 +842,12 @@ mod gc_tests {
             },
         );
         app.update(); // no despawn yet
-        assert!(
-            app.world()
-                .resource::<DynamicRegistry>()
-                .get("h0")
-                .is_some()
-        );
+        assert!(app.world().resource::<OzmaRegistry>().get("h0").is_some());
 
         app.world_mut().entity_mut(surface).despawn();
         app.update();
         assert!(
-            app.world()
-                .resource::<DynamicRegistry>()
-                .get("h0")
-                .is_none(),
+            app.world().resource::<OzmaRegistry>().get("h0").is_none(),
             "despawning the owner surface purges its registrations"
         );
     }
@@ -881,7 +873,7 @@ mod token_tests {
             );
             assert!(
                 !id.chars().any(|c| c.is_ascii_uppercase()),
-                "minted id {id} must be lowercase — it is used as an ozma-dyn:// host that Chromium lowercases"
+                "minted id {id} must be lowercase — it is used as an ozma:// host that Chromium lowercases"
             );
         }
     }
@@ -926,11 +918,11 @@ mod registry_tests {
 
     #[test]
     fn insert_then_get_roundtrips() {
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "h1".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: surface(1),
@@ -945,7 +937,7 @@ mod registry_tests {
 
     #[test]
     fn remove_by_connection_drops_only_that_connections_handles() {
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert("a".into(), view(surface(1), 7));
         reg.insert("b".into(), view(surface(1), 7));
         reg.insert("c".into(), view(surface(2), 8));
@@ -958,7 +950,7 @@ mod registry_tests {
 
     #[test]
     fn remove_by_surface_drops_only_that_surfaces_handles() {
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert("a".into(), view(surface(1), 7));
         reg.insert("c".into(), view(surface(2), 8));
 
@@ -970,15 +962,15 @@ mod registry_tests {
 
     #[test]
     fn remove_one_returns_the_owner_surface_when_present() {
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert("a".into(), view(surface(3), 9));
         assert_eq!(reg.remove("a"), Some(surface(3)));
         assert_eq!(reg.remove("a"), None);
     }
 
-    fn view(owner: Entity, conn: u64) -> DynamicView {
-        DynamicView {
-            source: DynSource::Dir("/abs".into()),
+    fn view(owner: Entity, conn: u64) -> OzmaView {
+        OzmaView {
+            source: OzmaSource::Dir("/abs".into()),
             entry: "index.html".into(),
             interactive: true,
             owner_surface: owner,
@@ -999,11 +991,11 @@ mod apply_tests {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let dyn_assets = WebviewAssetRegistry::default();
-        app.insert_resource(DynamicRegistry::default());
+        let ozma_assets = WebviewAssetRegistry::default();
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(ozma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
@@ -1029,15 +1021,15 @@ mod apply_tests {
             ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
         };
         assert!(
-            dyn_assets.get(&handle).is_some(),
+            ozma_assets.get(&handle).is_some(),
             "WebviewAssetRegistry populated for Dir"
         );
         assert!(
             app.world()
-                .resource::<DynamicRegistry>()
+                .resource::<OzmaRegistry>()
                 .get(&handle)
                 .is_some(),
-            "DynamicRegistry populated"
+            "OzmaRegistry populated"
         );
     }
 
@@ -1046,11 +1038,11 @@ mod apply_tests {
         use ozmux_webview_host::WebviewAsset;
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let dyn_assets = WebviewAssetRegistry::default();
-        app.insert_resource(DynamicRegistry::default());
+        let ozma_assets = WebviewAssetRegistry::default();
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(ozma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
@@ -1075,7 +1067,7 @@ mod apply_tests {
             ServerMsg::Err { error, .. } => panic!("unexpected err: {error}"),
         };
         assert!(
-            matches!(dyn_assets.get(&handle), Some(WebviewAsset::Inline(bytes)) if bytes == b"<h1>x</h1>"),
+            matches!(ozma_assets.get(&handle), Some(WebviewAsset::Inline(bytes)) if bytes == b"<h1>x</h1>"),
             "WebviewAssetRegistry must carry the inline HTML bytes for the minted handle"
         );
     }
@@ -1084,7 +1076,7 @@ mod apply_tests {
     fn apply_register_invalid_root_replies_err() {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
@@ -1116,12 +1108,12 @@ mod apply_tests {
     fn apply_disconnect_purges_that_connections_handles() {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let dyn_assets = WebviewAssetRegistry::default();
-        let mut reg = DynamicRegistry::default();
+        let ozma_assets = WebviewAssetRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "h".into(),
-            DynamicView {
-                source: DynSource::Dir("/x".into()),
+            OzmaView {
+                source: OzmaSource::Dir("/x".into()),
                 entry: "i".into(),
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
@@ -1130,25 +1122,25 @@ mod apply_tests {
                 preload: vec![],
             },
         );
-        dyn_assets.insert_dir("h", "/x".into());
+        ozma_assets.insert_dir("h", "/x".into());
         app.insert_resource(reg);
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(ozma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
         ev_tx
             .send(ControlEvent::Disconnect { connection_id: 5 })
             .unwrap();
         app.update();
-        assert!(app.world().resource::<DynamicRegistry>().get("h").is_none());
-        assert!(dyn_assets.get("h").is_none());
+        assert!(app.world().resource::<OzmaRegistry>().get("h").is_none());
+        assert!(ozma_assets.get("h").is_none());
     }
 
     #[test]
     fn apply_is_a_noop_when_control_events_missing() {
         let mut app = App::new();
-        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, apply_control_events);
@@ -1160,12 +1152,12 @@ mod apply_tests {
     fn disconnect_despawns_mounted_webviews_for_its_handles() {
         use crate::webview::mount::Webview;
         let mut app = App::new();
-        let dyn_assets = WebviewAssetRegistry::default();
-        let mut reg = DynamicRegistry::default();
+        let ozma_assets = WebviewAssetRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "HMOUNT".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
@@ -1185,7 +1177,7 @@ mod apply_tests {
             .id();
         app.insert_resource(reg);
         app.insert_resource(OzmuxRpc::default());
-        app.insert_resource(WebviewAssetRegistryRes(dyn_assets));
+        app.insert_resource(WebviewAssetRegistryRes(ozma_assets));
         app.insert_resource(ControlEvents(ev_rx));
         app.add_systems(Update, apply_control_events);
         ev_tx
@@ -1198,7 +1190,7 @@ mod apply_tests {
         );
         assert!(
             app.world()
-                .resource::<DynamicRegistry>()
+                .resource::<OzmaRegistry>()
                 .get("HMOUNT")
                 .is_none()
         );
@@ -1214,7 +1206,7 @@ mod apply_tests {
         let g = rpc.mint();
         rpc.note(&g, webview, "p9", 5);
         app.insert_resource(rpc);
-        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         #[derive(Resource, Default)]
@@ -1257,7 +1249,7 @@ mod apply_tests {
         let g = rpc.mint();
         rpc.note(&g, webview, "p9", 5);
         app.insert_resource(rpc);
-        app.insert_resource(DynamicRegistry::default());
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(ControlEvents(ev_rx));
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         #[derive(Resource, Default)]
@@ -1303,11 +1295,11 @@ mod apply_tests {
         use bevy_cef::prelude::HostEmitEvent;
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "disp".into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: "https://example.com".into(),
                     bridge: false,
                 },
@@ -1354,11 +1346,11 @@ mod apply_tests {
     fn apply_register_url_mints_handle_without_dyn_asset() {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let dyn_assets = WebviewAssetRegistry::default();
-        app.insert_resource(DynamicRegistry::default());
+        let ozma_assets = WebviewAssetRegistry::default();
+        app.insert_resource(OzmaRegistry::default());
         app.insert_resource(OzmuxRpc::default());
         app.insert_resource(ControlEvents(ev_rx));
-        app.insert_resource(WebviewAssetRegistryRes(dyn_assets.clone()));
+        app.insert_resource(WebviewAssetRegistryRes(ozma_assets.clone()));
         app.add_systems(Update, apply_control_events);
 
         let (reply_tx, reply_rx) = bounded::<ServerMsg>(1);
@@ -1384,13 +1376,13 @@ mod apply_tests {
         };
         assert!(
             app.world()
-                .resource::<DynamicRegistry>()
+                .resource::<OzmaRegistry>()
                 .get(&handle)
                 .is_some(),
-            "DynamicRegistry populated"
+            "OzmaRegistry populated"
         );
         assert!(
-            dyn_assets.get(&handle).is_none(),
+            ozma_assets.get(&handle).is_none(),
             "WebviewAssetRegistry must NOT be populated for a url handle"
         );
     }
@@ -1400,11 +1392,11 @@ mod apply_tests {
         use bevy_cef::prelude::HostEmitEvent;
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "H".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: Entity::from_bits(1),
@@ -1467,11 +1459,11 @@ mod apply_tests {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let surface = app.world_mut().spawn_empty().id();
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "H".into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: "https://example.com".into(),
                     bridge: true,
                 },
@@ -1523,11 +1515,11 @@ mod apply_tests {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let surface = app.world_mut().spawn_empty().id();
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "H".into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: "https://example.com".into(),
                     bridge: true,
                 },
@@ -1580,11 +1572,11 @@ mod apply_tests {
         let mut app = App::new();
         let (ev_tx, ev_rx) = unbounded::<ControlEvent>();
         let surface = app.world_mut().spawn_empty().id();
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "H".into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: "https://example.com".into(),
                     bridge: true,
                 },
@@ -1644,17 +1636,17 @@ mod focus_tests {
     fn set_focus_points_focused_webview_at_the_owned_inline_child() {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
-            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmaRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
             .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
 
         let surface = app.world_mut().spawn_empty().id();
 
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "h1".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: surface,
@@ -1711,15 +1703,15 @@ mod focus_tests {
     fn set_focus_rejects_unowned_handle() {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
-            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmaRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
             .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         let surface = app.world_mut().spawn_empty().id();
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "h1".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: surface,
@@ -1764,7 +1756,7 @@ mod focus_tests {
     fn blur_does_not_clobber_another_surfaces_focus() {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
-            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmaRegistry>()
             .init_resource::<OzmuxRpc>()
             .init_resource::<FocusedWebview>()
             .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
@@ -1773,10 +1765,10 @@ mod focus_tests {
         let surface_b = app.world_mut().spawn_empty().id();
 
         // Register "ha" owned by connection 1 / surface_a.
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "ha".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>a</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>a</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: surface_a,
@@ -1862,7 +1854,7 @@ mod focus_tests {
         let mut app = bevy::app::App::new();
         app.add_plugins(bevy::MinimalPlugins)
             .init_resource::<FocusedWebview>()
-            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmaRegistry>()
             .init_resource::<OzmuxRpc>()
             .insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()))
             .add_systems(Update, sync_focused_webview);
@@ -1870,10 +1862,10 @@ mod focus_tests {
         // The owner surface is an OzmaTerminal (the terminal-level focus marker).
         let surface = app.world_mut().spawn(OzmaTerminal).id();
 
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "h1".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: surface,
@@ -2083,7 +2075,7 @@ mod url_source_tests {
             Err("unsupported_scheme")
         );
         assert_eq!(
-            validate_url_source("ozma-dyn://h/index.html"),
+            validate_url_source("ozma://h/index.html"),
             Err("unsupported_scheme")
         );
     }
@@ -2111,7 +2103,7 @@ mod url_source_tests {
         .expect("https accepted");
         assert!(matches!(
             v.source,
-            DynSource::Url { ref url, bridge: true } if url == "https://example.com/"
+            OzmaSource::Url { ref url, bridge: true } if url == "https://example.com/"
         ));
     }
 

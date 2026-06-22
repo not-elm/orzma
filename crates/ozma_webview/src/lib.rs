@@ -24,18 +24,18 @@ pub use webview::render::cef_plugin;
 /// `window.ozma` back-channel, OSC mount/unmount, and the control socket.
 ///
 /// The host supplies the OSC gate's initial state and the `WebviewAssetRegistry`
-/// shared with the `ozma-dyn://` scheme handler (built via [`cef_plugin`]).
+/// shared with the `ozma://` scheme handler (built via [`cef_plugin`]).
 pub struct OzmaWebviewPlugin {
     /// Initial state of the OSC-webview gate.
     pub osc_enabled: bool,
-    /// The registry shared with the `ozma-dyn://` scheme handler.
-    pub dyn_assets: WebviewAssetRegistry,
+    /// The registry shared with the `ozma://` scheme handler.
+    pub ozma_assets: WebviewAssetRegistry,
 }
 
 impl Plugin for OzmaWebviewPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            ControlPlanePlugin::new(self.dyn_assets.clone()),
+            ControlPlanePlugin::new(self.ozma_assets.clone()),
             RenderPlugin,
             OscPlugin {
                 osc_enabled: self.osc_enabled,
