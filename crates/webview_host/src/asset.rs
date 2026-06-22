@@ -1,5 +1,5 @@
 //! Static-asset resolution for the in-process custom-scheme asset path
-//! (`ozma-dyn://`): percent-decode a webview-supplied request path, reject
+//! (`ozma://`): percent-decode a webview-supplied request path, reject
 //! traversal, read the file under the registered asset root, and infer a bare
 //! MIME type. Pure (no `cef` dependency) so it is unit-testable on its own.
 

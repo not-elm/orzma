@@ -1,4 +1,4 @@
-//! `ozma-dyn://<handle>/<path>` custom-scheme handler for Tier 1 dynamic
+//! `ozma://<handle>/<path>` custom-scheme handler for Tier 1 dynamic
 //! webviews. Resolves `<handle>` to a registered asset (`Dir` root or inline
 //! HTML bytes) via a shared `WebviewAssetRegistry` and serves files through
 //! `serve_static_asset` or directly from memory. Behind the `cef` feature.
@@ -57,12 +57,12 @@ impl WebviewAssetRegistry {
     }
 }
 
-/// Parses `ozma-dyn://<handle>/<path>[?query]` into `(handle, path)`; strips
+/// Parses `ozma://<handle>/<path>[?query]` into `(handle, path)`; strips
 /// the query/fragment and defaults an empty path to `"index.html"`. Returns
-/// `None` unless it is a well-formed `ozma-dyn://` URL with a non-empty handle.
+/// `None` unless it is a well-formed `ozma://` URL with a non-empty handle.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
-fn parse_dyn_url(url: &str) -> Option<(&str, &str)> {
-    let rest = url.strip_prefix("ozma-dyn://")?;
+fn parse_ozma_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("ozma://")?;
     let rest = rest
         .split_once(['?', '#'])
         .map_or(rest, |(before, _)| before);
@@ -77,30 +77,30 @@ fn parse_dyn_url(url: &str) -> Option<(&str, &str)> {
     Some((handle, path))
 }
 
-/// The resolved outcome of an `ozma-dyn://` URL lookup.
+/// The resolved outcome of an `ozma://` URL lookup.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
-enum ResolvedDyn<'a> {
+enum ResolvedOzma<'a> {
     /// Serve files from this directory root; `path` is the relative file path.
     Dir { root: PathBuf, path: &'a str },
     /// Serve these inline HTML bytes directly from memory.
     Inline(Vec<u8>),
 }
 
-/// Resolves an `ozma-dyn://<handle>/<path>` URL via the registry, or `Err(404)`
+/// Resolves an `ozma://<handle>/<path>` URL via the registry, or `Err(404)`
 /// for an unknown or unparseable handle.
 #[cfg_attr(not(feature = "cef"), allow(dead_code))]
 fn resolve_request<'a>(
     registry: &WebviewAssetRegistry,
     url: &'a str,
-) -> Result<ResolvedDyn<'a>, u16> {
-    let (handle, path) = parse_dyn_url(url).ok_or(404u16)?;
+) -> Result<ResolvedOzma<'a>, u16> {
+    let (handle, path) = parse_ozma_url(url).ok_or(404u16)?;
     match registry.get(handle).ok_or(404u16)? {
-        WebviewAsset::Dir(root) => Ok(ResolvedDyn::Dir { root, path }),
+        WebviewAsset::Dir(root) => Ok(ResolvedOzma::Dir { root, path }),
         // NOTE: an inline registration is a single self-contained document served
         // at the canonical entry only. A relative subresource request gets 404
         // rather than the document body under a mismatched MIME type — use a Dir
         // registration for multi-file content.
-        WebviewAsset::Inline(html) if path == "index.html" => Ok(ResolvedDyn::Inline(html)),
+        WebviewAsset::Inline(html) if path == "index.html" => Ok(ResolvedOzma::Inline(html)),
         WebviewAsset::Inline(_) => Err(404),
     }
 }
@@ -136,38 +136,38 @@ fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
 
 /// The custom scheme name registered with CEF for dynamic Tier 1 webviews.
 #[cfg(feature = "cef")]
-pub const SCHEME_NAME: &str = "ozma-dyn";
+pub const SCHEME_NAME: &str = "ozma";
 
-/// Serves `ozma-dyn://<handle>/<path>` by dispatching `<handle>` through a
+/// Serves `ozma://<handle>/<path>` by dispatching `<handle>` through a
 /// shared `WebviewAssetRegistry` to `serve_static_asset` (Dir) or memory (Inline).
 #[cfg(feature = "cef")]
-struct OzmuxDynScheme {
+struct OzmaScheme {
     registry: WebviewAssetRegistry,
 }
 
 #[cfg(feature = "cef")]
-impl OzmuxDynScheme {
+impl OzmaScheme {
     fn new(registry: WebviewAssetRegistry) -> Self {
         Self { registry }
     }
 }
 
 #[cfg(feature = "cef")]
-impl CefSchemeHandler for OzmuxDynScheme {
+impl CefSchemeHandler for OzmaScheme {
     fn handle(&self, request: &CefSchemeRequest) -> CefSchemeResponse {
         match resolve_request(&self.registry, &request.url) {
             Err(_) => {
                 bevy::log::debug!(
                     url = %request.url,
-                    "ozma-dyn request unresolved (unknown handle or non-index inline path) -> 404"
+                    "ozma request unresolved (unknown handle or non-index inline path) -> 404"
                 );
                 CefSchemeResponse::not_found()
             }
-            Ok(ResolvedDyn::Inline(html)) => {
+            Ok(ResolvedOzma::Inline(html)) => {
                 bevy::log::debug!(
                     url = %request.url,
                     bytes = html.len(),
-                    "ozma-dyn inline html served"
+                    "ozma inline html served"
                 );
                 CefSchemeResponse {
                     status: 200,
@@ -176,14 +176,14 @@ impl CefSchemeHandler for OzmuxDynScheme {
                     body: CefSchemeBody::Bytes(html),
                 }
             }
-            Ok(ResolvedDyn::Dir { root, path }) => match serve_static_asset(&root, path) {
+            Ok(ResolvedOzma::Dir { root, path }) => match serve_static_asset(&root, path) {
                 AssetOutcome::Ok { content_type, body } => {
                     let mime = bare_mime(&content_type);
                     bevy::log::debug!(
                         url = %request.url,
                         mime = %mime,
                         bytes = body.len(),
-                        "ozma-dyn static asset served"
+                        "ozma static asset served"
                     );
                     CefSchemeResponse {
                         status: 200,
@@ -200,10 +200,10 @@ impl CefSchemeHandler for OzmuxDynScheme {
     }
 }
 
-/// Builds the `ozma-dyn` scheme registration to pass to `CefPlugin`, dispatching
-/// every `ozma-dyn://<handle>/…` URL through the shared `WebviewAssetRegistry`.
+/// Builds the `ozma` scheme registration to pass to `CefPlugin`, dispatching
+/// every `ozma://<handle>/…` URL through the shared `WebviewAssetRegistry`.
 #[cfg(feature = "cef")]
-pub fn custom_dyn_scheme(registry: WebviewAssetRegistry) -> CefCustomScheme {
+pub fn custom_ozma_scheme(registry: WebviewAssetRegistry) -> CefCustomScheme {
     CefCustomScheme {
         name: SCHEME_NAME.to_string(),
         options: CefSchemeOptions::STANDARD
@@ -212,7 +212,7 @@ pub fn custom_dyn_scheme(registry: WebviewAssetRegistry) -> CefCustomScheme {
             | CefSchemeOptions::FETCH_ENABLED
             | CefSchemeOptions::DISPLAY_ISOLATED,
         domain: None,
-        handler: Arc::new(OzmuxDynScheme::new(registry)),
+        handler: Arc::new(OzmaScheme::new(registry)),
     }
 }
 
@@ -223,40 +223,34 @@ mod tests {
     #[test]
     fn parses_handle_and_path() {
         assert_eq!(
-            parse_dyn_url("ozma-dyn://abc/index.html"),
+            parse_ozma_url("ozma://abc/index.html"),
             Some(("abc", "index.html"))
         );
         assert_eq!(
-            parse_dyn_url("ozma-dyn://abc/sub/app.js"),
+            parse_ozma_url("ozma://abc/sub/app.js"),
             Some(("abc", "sub/app.js"))
         );
     }
 
     #[test]
     fn empty_path_defaults_to_index() {
-        assert_eq!(
-            parse_dyn_url("ozma-dyn://abc/"),
-            Some(("abc", "index.html"))
-        );
-        assert_eq!(parse_dyn_url("ozma-dyn://abc"), Some(("abc", "index.html")));
+        assert_eq!(parse_ozma_url("ozma://abc/"), Some(("abc", "index.html")));
+        assert_eq!(parse_ozma_url("ozma://abc"), Some(("abc", "index.html")));
     }
 
     #[test]
     fn strips_query_and_fragment() {
+        assert_eq!(parse_ozma_url("ozma://abc/a.js?v=2"), Some(("abc", "a.js")));
         assert_eq!(
-            parse_dyn_url("ozma-dyn://abc/a.js?v=2"),
-            Some(("abc", "a.js"))
-        );
-        assert_eq!(
-            parse_dyn_url("ozma-dyn://abc/a.js#section"),
+            parse_ozma_url("ozma://abc/a.js#section"),
             Some(("abc", "a.js"))
         );
     }
 
     #[test]
     fn rejects_foreign_or_empty_handle() {
-        assert_eq!(parse_dyn_url("ozmux-ext://abc/x"), None);
-        assert_eq!(parse_dyn_url("ozma-dyn:///x"), None);
+        assert_eq!(parse_ozma_url("ozmux-ext://abc/x"), None);
+        assert_eq!(parse_ozma_url("ozma:///x"), None);
     }
 
     #[test]
@@ -277,9 +271,9 @@ mod tests {
     fn resolve_request_returns_inline_bytes_as_html() {
         let reg = WebviewAssetRegistry::default();
         reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
-        match resolve_request(&reg, "ozma-dyn://i1/index.html").expect("registered") {
-            ResolvedDyn::Inline(html) => assert_eq!(html, b"<h1>hi</h1>"),
-            ResolvedDyn::Dir { .. } => panic!("expected inline"),
+        match resolve_request(&reg, "ozma://i1/index.html").expect("registered") {
+            ResolvedOzma::Inline(html) => assert_eq!(html, b"<h1>hi</h1>"),
+            ResolvedOzma::Dir { .. } => panic!("expected inline"),
         }
     }
 
@@ -287,32 +281,26 @@ mod tests {
     fn inline_404s_subresource_paths_other_than_the_index() {
         let reg = WebviewAssetRegistry::default();
         reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
-        assert!(resolve_request(&reg, "ozma-dyn://i1/").is_ok());
-        assert!(resolve_request(&reg, "ozma-dyn://i1/index.html").is_ok());
-        assert_eq!(
-            resolve_request(&reg, "ozma-dyn://i1/app.js").err(),
-            Some(404)
-        );
-        assert_eq!(
-            resolve_request(&reg, "ozma-dyn://i1/logo.png").err(),
-            Some(404)
-        );
+        assert!(resolve_request(&reg, "ozma://i1/").is_ok());
+        assert!(resolve_request(&reg, "ozma://i1/index.html").is_ok());
+        assert_eq!(resolve_request(&reg, "ozma://i1/app.js").err(), Some(404));
+        assert_eq!(resolve_request(&reg, "ozma://i1/logo.png").err(), Some(404));
     }
 
     #[test]
     fn resolves_registered_dir_and_404s_unknown() {
         let reg = WebviewAssetRegistry::default();
         assert_eq!(
-            resolve_request(&reg, "ozma-dyn://ghost/index.html").err(),
+            resolve_request(&reg, "ozma://ghost/index.html").err(),
             Some(404)
         );
         reg.insert_dir("h1", PathBuf::from("/abs/ui"));
-        match resolve_request(&reg, "ozma-dyn://h1/app.js").expect("registered") {
-            ResolvedDyn::Dir { root, path } => {
+        match resolve_request(&reg, "ozma://h1/app.js").expect("registered") {
+            ResolvedOzma::Dir { root, path } => {
                 assert_eq!(root, PathBuf::from("/abs/ui"));
                 assert_eq!(path, "app.js");
             }
-            ResolvedDyn::Inline(_) => panic!("expected dir"),
+            ResolvedOzma::Inline(_) => panic!("expected dir"),
         }
     }
 
@@ -322,7 +310,7 @@ mod tests {
         reg.insert_dir("h1", PathBuf::from("/abs/ui"));
         reg.remove("h1");
         assert_eq!(
-            resolve_request(&reg, "ozma-dyn://h1/index.html").err(),
+            resolve_request(&reg, "ozma://h1/index.html").err(),
             Some(404)
         );
     }

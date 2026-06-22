@@ -51,7 +51,7 @@ fn main() {
     let initial_mode = match pre_configs.startup_mode {
         StartupMode::Default | StartupMode::Tmux | StartupMode::TmuxAutoAttach => AppMode::Tmux,
     };
-    let dyn_registry = WebviewAssetRegistry::default();
+    let ozma_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
     App::new()
         .add_plugins((
@@ -63,7 +63,7 @@ fn main() {
                 }),
                 ..default()
             }),
-            cef_plugin(dyn_registry.clone(), cef_profile.path()),
+            cef_plugin(ozma_registry.clone(), cef_profile.path()),
         ))
         .insert_state(initial_mode)
         .add_plugins((
@@ -82,7 +82,7 @@ fn main() {
             OzmuxUiPlugin,
             OzmaWebviewPlugin {
                 osc_enabled: pre_configs.osc_webview.enabled,
-                dyn_assets: dyn_registry,
+                ozma_assets: ozma_registry,
             },
             CopyModePlugin,
             CopyModeIndicatorPlugin,

@@ -3,7 +3,7 @@
 //! verbs).
 
 use super::mount::{WebviewMountContext, WebviewParams, mount, unmount};
-use crate::control_plane::DynamicRegistry;
+use crate::control_plane::OzmaRegistry;
 use bevy::prelude::*;
 use ozma_tty_engine::{OscWebviewRequest, OscWebviewVerb};
 use std::sync::Arc;
@@ -35,7 +35,7 @@ impl Plugin for OscPlugin {
 pub(crate) fn on_osc_webview_request(
     ev: On<OscWebviewRequest>,
     mut webview: WebviewParams,
-    dynamic: Res<DynamicRegistry>,
+    dynamic: Res<OzmaRegistry>,
 ) {
     let req = ev.event();
     let terminal_surface = req.entity;

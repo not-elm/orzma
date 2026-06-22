@@ -8,7 +8,7 @@
 use super::osc::NonInteractive;
 use super::render::preload::build_preload;
 use crate::control_plane::{
-    ConnectionWriters, DynSource, DynamicRegistry, NormalizedChord, PushMsg, WebviewOwner,
+    ConnectionWriters, NormalizedChord, OzmaRegistry, OzmaSource, PushMsg, WebviewOwner,
 };
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -142,7 +142,7 @@ pub(crate) struct WebviewParams<'w, 's> {
 }
 
 /// The resolved content + trust facts for a `mount;<handle>`: the URL to
-/// load (an `ozma-dyn://<handle>/…` origin for `Dir`/`Inline` sources, or the
+/// load (an `ozma://<handle>/…` origin for `Dir`/`Inline` sources, or the
 /// verbatim remote URL for a `Url` source), the input policy, and the
 /// registering program's `(connection_id, handle)` for back-channel routing.
 pub(crate) struct ResolvedWebviewMount {
@@ -164,8 +164,8 @@ pub(crate) struct ResolvedWebviewMount {
     pub(crate) preload: Vec<String>,
 }
 
-/// Resolves a `mount` `<handle>` against the `DynamicRegistry` (Tier 1).
-/// `Dir`/`Inline` handles resolve to an `ozma-dyn://<handle>/…` URL (one origin
+/// Resolves a `mount` `<handle>` against the `OzmaRegistry` (Tier 1).
+/// `Dir`/`Inline` handles resolve to an `ozma://<handle>/…` URL (one origin
 /// per handle); a `Url` handle resolves to its verbatim remote URL. A handle
 /// resolves ONLY when `requesting_surface` is its `owner_surface` — the scoping
 /// gate that stops one surface from mounting another's handle. `owner` is
@@ -174,16 +174,16 @@ pub(crate) struct ResolvedWebviewMount {
 pub(crate) fn resolve_mount(
     id: &str,
     requesting_surface: Entity,
-    dynamic: &DynamicRegistry,
+    dynamic: &OzmaRegistry,
 ) -> Option<ResolvedWebviewMount> {
     let view = dynamic.get(id)?;
     if view.owner_surface != requesting_surface {
         return None;
     }
     let url = match &view.source {
-        DynSource::Dir(_) => format!("ozma-dyn://{id}/{}", view.entry),
-        DynSource::Inline(_) => format!("ozma-dyn://{id}/index.html"),
-        DynSource::Url { url, .. } => url.clone(),
+        OzmaSource::Dir(_) => format!("ozma://{id}/{}", view.entry),
+        OzmaSource::Inline(_) => format!("ozma://{id}/index.html"),
+        OzmaSource::Url { url, .. } => url.clone(),
     };
     let owner = view
         .source
@@ -217,7 +217,7 @@ pub(crate) fn resolve_mount(
 /// `sync_webview_size` corrects it once real metrics arrive.
 pub(crate) fn mount(
     params: &mut WebviewParams,
-    dynamic: &DynamicRegistry,
+    dynamic: &OzmaRegistry,
     ctx: WebviewMountContext<'_>,
 ) {
     let Some(anchor) = ctx.anchor else {
@@ -708,7 +708,7 @@ mod tests {
     fn make_test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .init_resource::<DynamicRegistry>()
+            .init_resource::<OzmaRegistry>()
             .init_resource::<Assets<Image>>()
             .init_resource::<ConnectionWriters>()
             .add_observer(on_osc_webview_request)
@@ -716,12 +716,12 @@ mod tests {
         app
     }
 
-    fn register_dyn(app: &mut App, view_id: &str, owner_surface: Entity, interactive: bool) {
-        use crate::control_plane::DynamicView;
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+    fn register_ozma(app: &mut App, view_id: &str, owner_surface: Entity, interactive: bool) {
+        use crate::control_plane::OzmaView;
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             view_id.into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive,
                 owner_surface,
@@ -733,11 +733,11 @@ mod tests {
     }
 
     fn register_url(app: &mut App, view_id: &str, owner_surface: Entity, url: &str, bridge: bool) {
-        use crate::control_plane::DynamicView;
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        use crate::control_plane::OzmaView;
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             view_id.into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: url.into(),
                     bridge,
                 },
@@ -869,7 +869,7 @@ mod tests {
     fn mount_spawns_child_with_inline_components() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "dash", terminal, true);
+        register_ozma(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", Some(test_anchor()));
 
@@ -904,7 +904,7 @@ mod tests {
             .get::<WebviewSource>(child)
             .expect("webview must carry WebviewSource")
         {
-            WebviewSource::Url(url) => assert_eq!(url, "ozma-dyn://dash/index.html"),
+            WebviewSource::Url(url) => assert_eq!(url, "ozma://dash/index.html"),
             other => panic!("unexpected WebviewSource: {other:?}"),
         }
         assert!(
@@ -934,7 +934,7 @@ mod tests {
     fn duplicate_mount_updates_placement_in_place() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "dash", terminal, true);
+        register_ozma(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", Some(test_anchor()));
         let before = webview_children_of(&app, terminal);
@@ -986,7 +986,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         for id in ["a", "b", "c", "d", "e"] {
-            register_dyn(&mut app, id, terminal, true);
+            register_ozma(&mut app, id, terminal, true);
         }
 
         for id in ["a", "b", "c", "d"] {
@@ -1011,7 +1011,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         for id in ["a", "b", "c"] {
-            register_dyn(&mut app, id, terminal, true);
+            register_ozma(&mut app, id, terminal, true);
         }
 
         mount(&mut app, terminal, "a", Some(test_anchor()));
@@ -1037,7 +1037,7 @@ mod tests {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
         for id in ["a", "b"] {
-            register_dyn(&mut app, id, terminal, true);
+            register_ozma(&mut app, id, terminal, true);
         }
         mount(&mut app, terminal, "a", Some(test_anchor()));
         mount(&mut app, terminal, "b", Some(test_anchor()));
@@ -1062,7 +1062,7 @@ mod tests {
     fn non_interactive_view_is_stamped_non_interactive() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "hud", terminal, false);
+        register_ozma(&mut app, "hud", terminal, false);
 
         mount(&mut app, terminal, "hud", Some(test_anchor()));
 
@@ -1078,7 +1078,7 @@ mod tests {
     fn mount_without_anchor_is_dropped() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "dash", terminal, true);
+        register_ozma(&mut app, "dash", terminal, true);
 
         mount(&mut app, terminal, "dash", None);
 
@@ -1105,7 +1105,7 @@ mod tests {
     fn two_instances_of_same_view_both_mount_in_separate_slots() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "memo", terminal, true);
+        register_ozma(&mut app, "memo", terminal, true);
 
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
@@ -1123,7 +1123,7 @@ mod tests {
     fn duplicate_view_instance_tuple_is_rejected() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "memo", terminal, true);
+        register_ozma(&mut app, "memo", terminal, true);
 
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
@@ -1139,7 +1139,7 @@ mod tests {
     fn default_instance_and_named_instance_coexist() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "memo", terminal, true);
+        register_ozma(&mut app, "memo", terminal, true);
 
         mount(&mut app, terminal, "memo", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
@@ -1157,7 +1157,7 @@ mod tests {
     fn unmount_one_instance_leaves_the_other() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "memo", terminal, true);
+        register_ozma(&mut app, "memo", terminal, true);
 
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
@@ -1177,8 +1177,8 @@ mod tests {
     fn unmount_view_scope_despawns_every_instance_of_that_view() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "memo", terminal, true);
-        register_dyn(&mut app, "other", terminal, true);
+        register_ozma(&mut app, "memo", terminal, true);
+        register_ozma(&mut app, "other", terminal, true);
 
         mount_instance(&mut app, terminal, "memo", "a", Some(test_anchor()));
         mount_instance(&mut app, terminal, "memo", "b", Some(test_anchor()));
@@ -1198,7 +1198,7 @@ mod tests {
     fn slot_cap_counts_all_instances_together() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "memo", terminal, true);
+        register_ozma(&mut app, "memo", terminal, true);
 
         for inst in ["a", "b", "c", "d"] {
             mount_instance(&mut app, terminal, "memo", inst, Some(test_anchor()));
@@ -1601,7 +1601,7 @@ mod tests {
     fn stale_overlays_clear_after_unmount_all() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "dash", terminal, true);
+        register_ozma(&mut app, "dash", terminal, true);
         app.world_mut()
             .entity_mut(terminal)
             .insert(projection_grid(7));
@@ -1652,7 +1652,7 @@ mod tests {
     fn size_sync_updates_webview_size_when_metrics_change() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "dash", terminal, true);
+        register_ozma(&mut app, "dash", terminal, true);
         mount(&mut app, terminal, "dash", Some(test_anchor()));
         let child = webview_children_of(&app, terminal)[0];
         assert_eq!(
@@ -1701,7 +1701,7 @@ mod tests {
             (sync_webview_size, probe_webview_size_changed).chain(),
         );
         let terminal = spawn_terminal(&mut app);
-        register_dyn(&mut app, "dash", terminal, true);
+        register_ozma(&mut app, "dash", terminal, true);
         mount(&mut app, terminal, "dash", Some(test_anchor()));
 
         app.update();
@@ -1911,12 +1911,12 @@ mod tests {
         );
     }
 
-    fn register_dynamic_dir(app: &mut App, handle: &str, owner_surface: Entity) {
-        use crate::control_plane::DynamicView;
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+    fn register_ozma_dir(app: &mut App, handle: &str, owner_surface: Entity) {
+        use crate::control_plane::OzmaView;
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             handle.into(),
-            DynamicView {
-                source: DynSource::Dir("/abs/ui".into()),
+            OzmaView {
+                source: OzmaSource::Dir("/abs/ui".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface,
@@ -1928,10 +1928,10 @@ mod tests {
     }
 
     #[test]
-    fn mount_of_dynamic_handle_uses_ozmux_dyn_url_and_no_bridge() {
+    fn mount_of_dynamic_handle_uses_ozma_url_and_no_bridge() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        register_dynamic_dir(&mut app, "DYN1", terminal);
+        register_ozma_dir(&mut app, "DYN1", terminal);
 
         mount(&mut app, terminal, "DYN1", Some(test_anchor()));
 
@@ -1942,8 +1942,8 @@ mod tests {
             "dynamic mount must spawn one inline child"
         );
         match app.world().get::<WebviewSource>(children[0]).unwrap() {
-            WebviewSource::Url(u) => assert_eq!(u, "ozma-dyn://DYN1/index.html"),
-            other => panic!("expected ozma-dyn URL, got {other:?}"),
+            WebviewSource::Url(u) => assert_eq!(u, "ozma://DYN1/index.html"),
+            other => panic!("expected ozma URL, got {other:?}"),
         }
         let preload = app.world().get::<PreloadScripts>(children[0]).unwrap();
         assert!(
@@ -1954,14 +1954,14 @@ mod tests {
 
     #[test]
     fn resolve_mount_enforces_owner_surface() {
-        use crate::control_plane::{DynSource, DynamicRegistry, DynamicView};
+        use crate::control_plane::{OzmaRegistry, OzmaSource, OzmaView};
         let owner = Entity::from_bits(1);
         let other = Entity::from_bits(2);
-        let mut dynamic = DynamicRegistry::default();
+        let mut dynamic = OzmaRegistry::default();
         dynamic.insert(
             "DYNHANDLE".into(),
-            DynamicView {
-                source: DynSource::Dir("/abs/ui".into()),
+            OzmaView {
+                source: OzmaSource::Dir("/abs/ui".into()),
                 entry: "index.html".into(),
                 interactive: false,
                 owner_surface: owner,
@@ -1972,7 +1972,7 @@ mod tests {
         );
 
         let d = resolve_mount("DYNHANDLE", owner, &dynamic).expect("dynamic resolves");
-        assert_eq!(d.url.as_deref(), Some("ozma-dyn://DYNHANDLE/index.html"));
+        assert_eq!(d.url.as_deref(), Some("ozma://DYNHANDLE/index.html"));
         assert!(!d.interactive);
 
         assert!(
@@ -1983,14 +1983,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_mount_dynamic_inline_yields_ozmux_dyn_url_via_index_html() {
-        use crate::control_plane::{DynSource, DynamicRegistry, DynamicView};
+    fn resolve_mount_dynamic_inline_yields_ozma_url_via_index_html() {
+        use crate::control_plane::{OzmaRegistry, OzmaSource, OzmaView};
         let owner = Entity::from_bits(1);
-        let mut dynamic = DynamicRegistry::default();
+        let mut dynamic = OzmaRegistry::default();
         dynamic.insert(
             "INLINEH".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: owner,
@@ -2000,19 +2000,19 @@ mod tests {
             },
         );
         let r = resolve_mount("INLINEH", owner, &dynamic).expect("inline resolves");
-        assert_eq!(r.url.as_deref(), Some("ozma-dyn://INLINEH/index.html"));
+        assert_eq!(r.url.as_deref(), Some("ozma://INLINEH/index.html"));
         assert!(r.owner.is_some());
     }
 
     #[test]
     fn dynamic_mount_stamps_webview_owner() {
-        use crate::control_plane::{DynSource, DynamicView, WebviewOwner};
+        use crate::control_plane::{OzmaSource, OzmaView, WebviewOwner};
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "HANDLE".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>hi</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>hi</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: terminal,
@@ -2107,13 +2107,13 @@ mod tests {
 
     #[test]
     fn resolve_mount_url_returns_verbatim_url_and_gates_owner_on_bridge() {
-        use crate::control_plane::{DynSource, DynamicView};
+        use crate::control_plane::{OzmaSource, OzmaView};
         let surface = Entity::from_bits(1);
-        let mut reg = DynamicRegistry::default();
+        let mut reg = OzmaRegistry::default();
         reg.insert(
             "disp".into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: "https://example.com".into(),
                     bridge: false,
                 },
@@ -2127,8 +2127,8 @@ mod tests {
         );
         reg.insert(
             "appv".into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: "https://app.example.com".into(),
                     bridge: true,
                 },
@@ -2385,13 +2385,13 @@ mod tests {
 
     #[test]
     fn mount_bridged_inline_appends_user_preload_after_bridge() {
-        use crate::control_plane::{DynSource, DynamicView};
+        use crate::control_plane::{OzmaSource, OzmaView};
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "h".into(),
-            DynamicView {
-                source: DynSource::Inline("<h1>x</h1>".into()),
+            OzmaView {
+                source: OzmaSource::Inline("<h1>x</h1>".into()),
                 entry: "index.html".into(),
                 interactive: true,
                 owner_surface: terminal,
@@ -2418,13 +2418,13 @@ mod tests {
 
     #[test]
     fn mount_bridged_url_appends_user_preload_after_bridge() {
-        use crate::control_plane::{DynSource, DynamicView};
+        use crate::control_plane::{OzmaSource, OzmaView};
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "u".into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: "https://app.example.com".into(),
                     bridge: true,
                 },
@@ -2453,13 +2453,13 @@ mod tests {
 
     #[test]
     fn mount_display_only_url_with_preload_injects_user_scripts_only() {
-        use crate::control_plane::{DynSource, DynamicView, WebviewOwner};
+        use crate::control_plane::{OzmaSource, OzmaView, WebviewOwner};
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        app.world_mut().resource_mut::<DynamicRegistry>().insert(
+        app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "disp".into(),
-            DynamicView {
-                source: DynSource::Url {
+            OzmaView {
+                source: OzmaSource::Url {
                     url: "https://example.com".into(),
                     bridge: false,
                 },
