@@ -6,18 +6,17 @@ use super::window_bar_input::{switch_window_on_click, window_entry_hover_cursor}
 use crate::font::{PowerlineFont, TerminalUiFont};
 use crate::input::InputPhase;
 use crate::theme;
-use crate::ui::UiRoot;
 use crate::ui::palette;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow, WindowFlags, WindowId};
 
-/// Marker on the tmux window bar root Node — the fixed-height Row mounted at the
-/// bottom of `UiRoot`. `spawn_window_bar` inserts it once; `rebuild_window_bar`
+/// Marker on the tmux window bar root Node — the fixed-height Row mounted as a
+/// child of `TmuxModeUi`. `spawn_window_bar` inserts it once; `rebuild_window_bar`
 /// queries it to find the bar and despawn its children before rebuilding.
 #[derive(Component)]
-struct WindowBarRoot;
+pub(super) struct WindowBarRoot;
 
 /// On a window-list entry button: records the tmux window the entry selects.
 /// Read by the window-bar click handler (`switch_window_on_click`) to issue
@@ -52,34 +51,25 @@ pub(crate) struct WindowEntryActive(
 #[derive(Component)]
 struct SessionLabel;
 
-/// Wires the tmux window status bar: spawns the bar once after `UiRoot` exists
-/// and rebuilds its children whenever the window set, active window, or session
-/// name changes.
+/// Wires the tmux window status bar: rebuilds its children whenever the window
+/// set, active window, or session name changes. The bar itself is spawned by
+/// `spawn_window_bar`, called from `ensure_tmux_mode_ui`.
 pub(crate) struct WindowBarPlugin;
 
 impl Plugin for WindowBarPlugin {
     fn build(&self, app: &mut App) {
-        // NOTE: PostStartup, not Startup. `UiRoot` is spawned by `spawn_root_ui`
-        // (a different plugin) via deferred Commands in Startup; with no ordering
-        // edge between the two systems Bevy inserts no sync point, so a Startup
-        // `spawn_window_bar` queries `UiRoot` before that spawn flushes, finds
-        // nothing, and silently bails — the bar never mounts. PostStartup runs
-        // after Startup's command flush, when `UiRoot` is guaranteed to exist.
-        app.add_systems(PostStartup, spawn_window_bar);
         // NOTE: after the projection drain. `window_bar_dirty` reads
         // `RemovedComponents<TmuxWindow>` — one-frame events cleared at frame end.
-        // The drain despawns windows on close (`%window-close` /
-        // `%unlinked-window-close`); if the rebuild's run condition evaluated
-        // before the drain it would miss the removal (gone by the next frame) and
-        // a killed window's tab would linger in the bar.
+        // The drain despawns windows on close; gating the rebuild before the drain
+        // would miss the removal and leave a killed window's tab in the bar.
         app.add_systems(
             Update,
             rebuild_window_bar
                 .run_if(window_bar_dirty)
                 .after(TmuxProjectionSet)
                 .in_set(super::TmuxActiveSet),
-        );
-        app.add_systems(
+        )
+        .add_systems(
             Update,
             (
                 switch_window_on_click.in_set(InputPhase::Dispatch),
@@ -90,15 +80,15 @@ impl Plugin for WindowBarPlugin {
     }
 }
 
-fn spawn_window_bar(
-    mut commands: Commands,
-    ui_root: Query<Entity, With<UiRoot>>,
-    metrics: Option<Res<TerminalCellMetricsResource>>,
+/// Spawns the tmux window status bar (a fixed-height bottom row) as a child of
+/// `parent`. Called by the Tmux-mode UI builder; `rebuild_window_bar` fills its
+/// children.
+pub(super) fn spawn_window_bar(
+    commands: &mut Commands,
+    parent: Entity,
+    metrics: Option<&TerminalCellMetricsResource>,
 ) {
-    let Ok(ui_root) = ui_root.single() else {
-        return;
-    };
-    let height = bar_height_px(metrics.as_deref());
+    let height = bar_height_px(metrics);
     commands.spawn((
         Name::new("Tmux Window Bar"),
         Node {
@@ -112,7 +102,7 @@ fn spawn_window_bar(
         },
         BackgroundColor(palette::PANEL),
         WindowBarRoot,
-        ChildOf(ui_root),
+        ChildOf(parent),
     ));
 }
 
@@ -446,29 +436,24 @@ mod tests {
     }
 
     #[test]
-    fn bar_mounts_when_ui_root_is_spawned_in_startup() {
-        // Regression: UiRoot is created by another Startup system via deferred
-        // Commands. spawn_window_bar also ran in Startup, with no ordering edge,
-        // so it queried UiRoot before that spawn flushed and silently bailed —
-        // the bar never appeared. It must mount regardless of that race.
+    fn spawn_window_bar_mounts_under_parent() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.insert_resource(metrics_fixture());
-        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
-        app.add_systems(Startup, |mut commands: Commands| {
-            commands.spawn((Node::default(), UiRoot));
-        });
-        app.add_plugins(WindowBarPlugin);
-
-        app.update();
-
-        let world = app.world_mut();
-        let mut bar_q = world.query_filtered::<(), With<WindowBarRoot>>();
-        assert_eq!(
-            bar_q.iter(world).count(),
-            1,
-            "window bar root must mount even when UiRoot is spawned in Startup"
+        let parent = app.world_mut().spawn(Node::default()).id();
+        app.add_systems(
+            Startup,
+            move |mut commands: Commands, metrics: Option<Res<TerminalCellMetricsResource>>| {
+                spawn_window_bar(&mut commands, parent, metrics.as_deref());
+            },
         );
+        app.update();
+        let world = app.world_mut();
+        let child_of = world
+            .query_filtered::<&ChildOf, With<WindowBarRoot>>()
+            .single(world)
+            .expect("bar present");
+        assert_eq!(child_of.parent(), parent, "bar mounts under parent");
     }
 
     #[test]
@@ -519,7 +504,13 @@ mod tests {
         app.add_plugins(WindowBarPlugin);
         app.insert_resource(metrics_fixture());
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
-        app.world_mut().spawn((Node::default(), UiRoot));
+        app.add_systems(
+            Startup,
+            |mut commands: Commands, metrics: Option<Res<TerminalCellMetricsResource>>| {
+                let parent = commands.spawn(Node::default()).id();
+                spawn_window_bar(&mut commands, parent, metrics.as_deref());
+            },
+        );
         app.world_mut().spawn(TmuxSession {
             id: SessionId(1),
             name: "main".into(),
@@ -572,7 +563,13 @@ mod tests {
         app.add_plugins(WindowBarPlugin);
         app.insert_resource(metrics_fixture());
         app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
-        app.world_mut().spawn((Node::default(), UiRoot));
+        app.add_systems(
+            Startup,
+            |mut commands: Commands, metrics: Option<Res<TerminalCellMetricsResource>>| {
+                let parent = commands.spawn(Node::default()).id();
+                spawn_window_bar(&mut commands, parent, metrics.as_deref());
+            },
+        );
 
         app.world_mut().spawn(TmuxWindow {
             id: WindowId(1),

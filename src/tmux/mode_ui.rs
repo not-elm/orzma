@@ -2,9 +2,11 @@
 //! while in Tmux mode and relies on `DespawnOnExit` to remove it on exit.
 
 use crate::app_mode::AppMode;
+use crate::tmux::window_bar::spawn_window_bar;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use bevy::ui::Val;
+use ozma_tty_renderer::TerminalCellMetricsResource;
 
 /// Root of the Tmux-mode UI subtree, mounted under `UiRoot` while in
 /// `AppMode::Tmux`. Carries `DespawnOnExit(AppMode::Tmux)`, so leaving Tmux mode
@@ -34,7 +36,11 @@ fn no_tmux_mode_ui(roots: Query<(), With<TmuxModeUi>>) -> bool {
     roots.is_empty()
 }
 
-fn ensure_tmux_mode_ui(mut commands: Commands, ui_root: Query<Entity, With<UiRoot>>) {
+fn ensure_tmux_mode_ui(
+    mut commands: Commands,
+    ui_root: Query<Entity, With<UiRoot>>,
+    metrics: Option<Res<TerminalCellMetricsResource>>,
+) {
     let Ok(ui_root) = ui_root.single() else {
         return;
     };
@@ -64,18 +70,34 @@ fn ensure_tmux_mode_ui(mut commands: Commands, ui_root: Query<Entity, With<UiRoo
         WorkspaceUiRoot,
         ChildOf(tmux_ui),
     ));
+
+    spawn_window_bar(&mut commands, tmux_ui, metrics.as_deref());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tmux::window_bar::WindowBarRoot;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::state::app::StatesPlugin;
 
     fn build_app() -> App {
+        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Tmux);
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 12,
+        });
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins(TmuxModeUiPlugin);
         app
@@ -127,5 +149,29 @@ mod tests {
         let world = app.world_mut();
         let mut q = world.query_filtered::<(), With<TmuxModeUi>>();
         assert_eq!(q.iter(world).count(), 0, "TmuxModeUi removed on exit");
+    }
+
+    #[test]
+    fn tmux_subtree_includes_window_bar() {
+        let mut app = build_app();
+        app.update();
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<(), With<WindowBarRoot>>();
+        assert_eq!(q.iter(world).count(), 1, "window bar mounts in Tmux mode");
+    }
+
+    #[test]
+    fn leaving_tmux_removes_window_bar() {
+        let mut app = build_app();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Default);
+        app.update();
+        let world = app.world_mut();
+        let mut bar = world.query_filtered::<(), With<WindowBarRoot>>();
+        let mut ws = world.query_filtered::<(), With<WorkspaceUiRoot>>();
+        assert_eq!(bar.iter(world).count(), 0, "window bar removed on exit");
+        assert_eq!(ws.iter(world).count(), 0, "workspace removed on exit");
     }
 }
