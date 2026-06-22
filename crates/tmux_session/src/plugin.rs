@@ -93,7 +93,17 @@ struct TmuxClientAttached;
 /// Refreshed by [`drain_tmux_transport`] when the drain or the prior batch is
 /// non-empty; read-only downstream.
 #[derive(Resource, Default)]
-struct TmuxEventBatch(Vec<TransportEvent>);
+pub struct TmuxEventBatch(Vec<TransportEvent>);
+
+impl TmuxEventBatch {
+    /// Returns this frame's drained transport events.
+    ///
+    /// Lets the binary's adoption-lifecycle systems scan for the `%exit`
+    /// notification that drives teardown without owning the drain.
+    pub fn events(&self) -> &[TransportEvent] {
+        &self.0
+    }
+}
 
 /// Sends `capture-pane` and a companion cursor-position `display-message` once
 /// for each newly-projected pane so its current screen seeds the first paint

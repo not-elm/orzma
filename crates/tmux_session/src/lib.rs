@@ -42,8 +42,8 @@ pub use keybindings::{
     CopyAction, Forwarded, KeyBindings, PromptKind, copy_mode_dispatch, plan_forward,
 };
 pub use output::PaneOutput;
-pub use plugin::{TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
+pub use plugin::{TmuxEventBatch, TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
 pub use select::{AttachTarget, select_attach_target};
 pub use state::ConnectionState;
-pub use tmux_control::TmuxCommand;
+pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};
 pub use tmux_control_parser::{PaneId, SessionId, WindowId};

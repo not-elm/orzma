@@ -111,9 +111,8 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 fn forward_keys_to_tmux(
     mut commands: Commands,
     mut picker: ResMut<SessionPicker>,
-    (mut copy_prompt, mut next_mode, confirm_state, rename): (
+    (mut copy_prompt, confirm_state, rename): (
         ResMut<CopyPrompt>,
-        ResMut<NextState<AppMode>>,
         Option<Res<ConfirmState>>,
         RenameParams,
     ),
@@ -314,7 +313,7 @@ fn forward_keys_to_tmux(
                 }
                 ShortcutAction::ReleaseWebviewFocus => {}
                 ShortcutAction::DetachSession => {
-                    next_mode.set(AppMode::Default);
+                    super::request_detach(&connection);
                 }
             }
             continue;
