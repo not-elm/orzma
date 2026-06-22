@@ -96,6 +96,13 @@ impl ProtocolClient {
         Ok(events)
     }
 
+    /// Pre-registers the single reply block that an *adopted* `tmux -CC` stream
+    /// emits on entry (its introducer is glued to the first `%begin`), so the
+    /// in-world drive correlates it instead of dropping it as unsolicited.
+    pub fn register_external_pending(&mut self) -> CommandId {
+        self.register_pending()
+    }
+
     /// Pre-registers a pending command with no outgoing bytes.
     ///
     /// Used by the transport for tmux's launch subcommand (`new-session` /
@@ -624,6 +631,20 @@ mod tests {
                 output: vec!["hello world".to_string()],
             }]
         );
+    }
+
+    #[test]
+    fn external_pending_correlates_initial_reply_block() {
+        let mut c = ProtocolClient::new();
+        let id = c.register_external_pending();
+        // Introducer glued to the first %begin (as tmux -CC emits on entry).
+        let events = c
+            .feed(b"\x1bP1000p%begin 1 1 1\r\n0:work\r\n%end 1 1 1\r\n")
+            .expect("feed ok");
+        assert!(matches!(
+            events.as_slice(),
+            [ClientEvent::CommandComplete { id: got, ok: true, .. }] if *got == id
+        ));
     }
 
     #[test]
