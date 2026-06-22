@@ -1,9 +1,9 @@
-//! AppMode state enum and the Default-mode single-terminal lifecycle plugin.
+//! AppMode state enum and the Default-mode UI subtree lifecycle plugin.
 
+use crate::ui::UiRoot;
 use bevy::prelude::*;
-use ozma_terminal::{
-    KeyboardFocused, OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig,
-};
+use bevy::ui::Val;
+use ozma_terminal::{KeyboardFocused, OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 
 /// Application mode. `Default` is the default (single PTY, no tmux).
 /// `Tmux` activates the tmux multiplexer backend.
@@ -16,43 +16,82 @@ pub(crate) enum AppMode {
     Tmux,
 }
 
-/// Bevy plugin that registers the `AppMode::Default` spawn/despawn lifecycle.
+/// Root of the Default-mode UI subtree, mounted under `UiRoot` while in
+/// `AppMode::Default`. Carries `DespawnOnExit(AppMode::Default)`, so leaving
+/// Default mode removes the subtree (including its child terminal).
+#[derive(Component)]
+struct DefaultModeUi;
+
+/// Bevy plugin that ensures the Default-mode UI subtree (a single
+/// `OzmaTerminal` under `DefaultModeUi`) exists while in `AppMode::Default`.
 ///
-/// Spawns one `OzmaTerminal` entity (marked `KeyboardFocused`, the keyboard
-/// target) on `OnEnter(AppMode::Default)` and despawns it on
-/// `OnExit(AppMode::Default)`. Requires `AppMode` to be inserted via
-/// `App::insert_state` before this plugin runs, and `OzmaTerminalPlugin` must
-/// be added first (it inserts `OzmaTerminalConfig` that `spawn_terminal` reads).
+/// The subtree is built by `ensure_default_mode_ui`, gated
+/// `run_if(in_state(Default).and(no_default_mode_ui))` so it spawns once `UiRoot`
+/// exists (boot-safe: `Update` always runs after `Startup`) and re-fires on
+/// re-entry. Teardown is `DespawnOnExit`. `OzmaTerminalPlugin` must be added
+/// first (it inserts the `OzmaTerminalConfig` this reads).
 pub(crate) struct DefaultModePlugin;
 
 impl Plugin for DefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(AppMode::Default), spawn_terminal)
-            .add_systems(OnExit(AppMode::Default), despawn_terminal);
+        app.add_systems(
+            Update,
+            ensure_default_mode_ui.run_if(in_state(AppMode::Default).and(no_default_mode_ui)),
+        );
     }
 }
 
-fn spawn_terminal(
+fn no_default_mode_ui(roots: Query<(), With<DefaultModeUi>>) -> bool {
+    roots.is_empty()
+}
+
+fn ensure_default_mode_ui(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
+    ui_root: Query<Entity, With<UiRoot>>,
     config: Res<OzmaTerminalConfig>,
 ) {
-    match OzmaTerminalBundle::spawn(OzmaSpawnOptions {
+    let Ok(ui_root) = ui_root.single() else {
+        return;
+    };
+    let bundle = match OzmaTerminalBundle::spawn(OzmaSpawnOptions {
         shell: config.shell.clone(),
         ..default()
     }) {
-        Ok(bundle) => {
-            commands.spawn((bundle, KeyboardFocused));
-        }
+        Ok(bundle) => bundle,
         Err(e) => {
             tracing::error!(?e, "failed to spawn ozma terminal");
             exit.write(AppExit::Success);
+            return;
         }
-    }
+    };
+    let mode_ui = commands
+        .spawn((
+            Name::new("Default Mode UI"),
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            DespawnOnExit(AppMode::Default),
+            DefaultModeUi,
+            ChildOf(ui_root),
+        ))
+        .id();
+    commands.spawn((bundle, KeyboardFocused, ChildOf(mode_ui)));
 }
 
-fn despawn_terminal(mut commands: Commands, terminals: Query<Entity, With<OzmaTerminal>>) {
-    for entity in terminals.iter() {
-        commands.entity(entity).despawn();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+
+    #[test]
+    fn no_default_mode_ui_is_true_until_one_exists() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        assert!(app.world_mut().run_system_once(no_default_mode_ui).unwrap());
+        app.world_mut().spawn(DefaultModeUi);
+        assert!(!app.world_mut().run_system_once(no_default_mode_ui).unwrap());
     }
 }
