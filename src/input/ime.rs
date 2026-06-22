@@ -896,13 +896,12 @@ mod tests {
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<Hits>();
-        app.init_state::<AppMode>();
         app.add_message::<Ime>();
         app.add_observer(|ev: On<ImeCommit>, mut hits: ResMut<Hits>| {
             hits.0.push((ev.entity, ev.text.clone()));
         });
 
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        let focused = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
 
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<Ime>>()
@@ -914,6 +913,7 @@ mod tests {
 
         let hits = &app.world().resource::<Hits>().0;
         assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].0, focused);
         assert_eq!(hits[0].1, "あ");
     }
 
