@@ -958,4 +958,115 @@ mod tests {
             "%output body must reach PaneOutput.data verbatim"
         );
     }
+
+    /// A second adoption (after a teardown reset) must re-fire the attach edge and
+    /// re-send the on-attach enumeration. The attach edge is gated on a real
+    /// `ConnectionState` transition; teardown's `TmuxConnectionReset` must restore
+    /// `ConnectionState` to the initial `Idle` so the re-adoption folds
+    /// `Idle -> Attached` again. Without the reset, `ConnectionState` stays
+    /// `Attached`, `advance_state` folds to `None`, `TmuxClientAttached` never
+    /// fires the second time, and the re-adopted session never enumerates.
+    #[test]
+    fn second_adoption_after_reset_reattaches_and_reenumerates() {
+        use crate::events::TmuxConnectionReset;
+
+        // The DCS introducer + a %begin/%end block: the adopted tmux -CC entry
+        // block, which correlates with adopt()'s pre-registered external reply and
+        // produces one Protocol event that flips ConnectionState to Attached.
+        fn entry_block() -> Vec<u8> {
+            b"\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n".to_vec()
+        }
+
+        fn attached_count(app: &App) -> usize {
+            app.world()
+                .resource::<Messages<TmuxClientAttached>>()
+                .iter_current_update_messages()
+                .count()
+        }
+
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+        app.insert_resource(TmuxPresence);
+
+        // First adoption: stage the entry block in the gateway capture buffer and
+        // adopt, then drive the real chain so the attach edge fires.
+        let gateway1 = app
+            .world_mut()
+            .spawn(AdoptedControlMode::from_captured(entry_block()))
+            .id();
+        app.world_mut()
+            .non_send_resource_mut::<TmuxConnection>()
+            .adopt(gateway1);
+        app.update();
+
+        assert_eq!(
+            attached_count(&app),
+            1,
+            "first adoption must fire the attach edge once"
+        );
+        assert_eq!(
+            *app.world().resource::<ConnectionState>(),
+            ConnectionState::Attached,
+            "first adoption must reach Attached"
+        );
+        assert!(
+            !app.world()
+                .resource::<EnumerationState>()
+                .pending
+                .is_empty(),
+            "first adoption must send the on-attach enumeration"
+        );
+
+        // Teardown, mirroring src/tmux/adopt.rs::teardown's crate-facing effect:
+        // close the connection and trigger TmuxConnectionReset (which resets the
+        // projection AND ConnectionState back to Idle).
+        app.world_mut()
+            .non_send_resource_mut::<TmuxConnection>()
+            .close();
+        app.world_mut().trigger(TmuxConnectionReset);
+        app.update();
+
+        assert_eq!(
+            *app.world().resource::<ConnectionState>(),
+            ConnectionState::Idle,
+            "teardown reset must restore ConnectionState to Idle"
+        );
+        assert!(
+            app.world()
+                .resource::<EnumerationState>()
+                .pending
+                .is_empty(),
+            "teardown reset must clear the prior enumeration"
+        );
+
+        // Second adoption: a fresh gateway with a fresh entry block. With the
+        // reset in place this folds Idle -> Attached again and re-enumerates.
+        let gateway2 = app
+            .world_mut()
+            .spawn(AdoptedControlMode::from_captured(entry_block()))
+            .id();
+        app.world_mut()
+            .non_send_resource_mut::<TmuxConnection>()
+            .adopt(gateway2);
+        app.update();
+
+        assert_eq!(
+            attached_count(&app),
+            1,
+            "second adoption must fire the attach edge again (regressed before the \
+             ConnectionState reset: it stayed Attached so advance_state folded to None)"
+        );
+        assert_eq!(
+            *app.world().resource::<ConnectionState>(),
+            ConnectionState::Attached,
+            "second adoption must reach Attached again"
+        );
+        assert!(
+            !app.world()
+                .resource::<EnumerationState>()
+                .pending
+                .is_empty(),
+            "second adoption must re-send the on-attach enumeration"
+        );
+    }
 }

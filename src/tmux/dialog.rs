@@ -86,7 +86,7 @@ fn sync_tmux_dialog(
         ConnectionState::Detached => {
             node.display = Display::Flex;
             if let Ok(mut label) = text.single_mut() {
-                label.0 = "Disconnected — press \u{2318}\u{21e7}P to choose a session".to_string();
+                label.0 = "Disconnected — run `tmux -CC` to start a tmux session".to_string();
             }
         }
         _ => node.display = Display::None,
