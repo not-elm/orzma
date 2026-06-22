@@ -1,8 +1,8 @@
 //! Routes `ozma_terminal`'s `TerminalForwardInput` (backend-bound bytes from the
 //! shared mouse apply observer) to the owning tmux pane via `send-keys -H`.
 
-use bevy::prelude::*;
 use crate::input::ime::ImeCommit;
+use bevy::prelude::*;
 use ozma_terminal::TerminalForwardInput;
 use ozma_tty_engine::TerminalHandle;
 use ozmux_tmux::{PaneId, SendBytes, TmuxConnection, TmuxPane};
@@ -103,13 +103,21 @@ mod tests {
             .spawn((
                 TmuxPane {
                     id: PaneId(1),
-                    dims: CellDims { width: 10, height: 5, xoff: 0, yoff: 0 },
+                    dims: CellDims {
+                        width: 10,
+                        height: 5,
+                        xoff: 0,
+                        yoff: 0,
+                    },
                 },
                 TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false))),
             ))
             .id();
         // No live tmux client: the send is skipped; assert no panic.
-        app.world_mut().trigger(ImeCommit { entity: pane, text: "あ".into() });
+        app.world_mut().trigger(ImeCommit {
+            entity: pane,
+            text: "あ".into(),
+        });
         app.update();
     }
 }

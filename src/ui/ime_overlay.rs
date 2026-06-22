@@ -8,6 +8,7 @@
 
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
+use crate::input::ime::resolve_focused_surface;
 use bevy::app::{App, Plugin, PostUpdate, Startup};
 use bevy::color::Color;
 use bevy::ecs::component::Component;
@@ -24,14 +25,13 @@ use bevy::ui::{
     UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
+use ozma_terminal::KeyboardFocused;
 use ozma_tty_renderer::CellMetrics;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalFontInitSet;
 use ozma_tty_renderer::material::TerminalMaterialSystems;
 use ozma_tty_renderer::prelude::TerminalGrid;
-use ozma_terminal::KeyboardFocused;
 use unicode_width::UnicodeWidthStr;
-use crate::input::ime::resolve_focused_surface;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
@@ -432,8 +432,8 @@ mod tests {
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
     use ozma_terminal::KeyboardFocused;
-    use ozmux_tmux::{ActivePane, TmuxPane};
     use ozmux_tmux::PaneId;
+    use ozmux_tmux::{ActivePane, TmuxPane};
     use tmux_control_parser::CellDims;
 
     #[test]
@@ -511,11 +511,17 @@ mod tests {
             .unwrap();
 
         assert!(
-            app.world().get::<TerminalGrid>(focused).unwrap().suppress_cursor,
+            app.world()
+                .get::<TerminalGrid>(focused)
+                .unwrap()
+                .suppress_cursor,
             "the focused terminal must suppress its cursor while composing"
         );
         assert!(
-            !app.world().get::<TerminalGrid>(other).unwrap().suppress_cursor,
+            !app.world()
+                .get::<TerminalGrid>(other)
+                .unwrap()
+                .suppress_cursor,
             "an unfocused terminal must not suppress its cursor"
         );
     }

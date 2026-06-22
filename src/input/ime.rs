@@ -209,8 +209,7 @@ pub(crate) fn ime_policy_system(
         // plus the inline placement rect's origin — the SAME px conversion the
         // wheel/click hit-test uses (`webview_local_dip`'s `origin_phys`), so
         // composition appears at the inline rect, not the terminal cursor.
-        if let Some(child) =
-            focused_webview_of(Some(&focused_webview), &webview_parents, surface)
+        if let Some(child) = focused_webview_of(Some(&focused_webview), &webview_parents, surface)
             && let Some(pos) = webview_ime_position(
                 window.resolution.scale_factor(),
                 &webview_parents,
@@ -369,6 +368,7 @@ fn webview_ime_position(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app_mode::AppMode;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
     use bevy::ecs::system::RunSystemOnce;
@@ -380,7 +380,6 @@ mod tests {
     use ozma_tty_renderer::prelude::{Cursor, TerminalGrid};
     use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
     use tmux_control_parser::CellDims;
-    use crate::app_mode::AppMode;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {

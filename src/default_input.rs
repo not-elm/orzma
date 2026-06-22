@@ -17,8 +17,8 @@ use bevy_cef::prelude::FocusedWebview;
 use ozma_terminal::{
     KeyboardDisabled, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet,
 };
-use ozmux_configs::shortcuts::ShortcutAction;
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+use ozmux_configs::shortcuts::ShortcutAction;
 use ozmux_tmux::TmuxPane;
 
 /// Registers the host-side input systems for `AppMode::Default`.
@@ -209,11 +209,19 @@ mod tests {
                 OzmaTerminal,
                 TmuxPane {
                     id: PaneId(1),
-                    dims: CellDims { width: 0, height: 0, xoff: 0, yoff: 0 },
+                    dims: CellDims {
+                        width: 0,
+                        height: 0,
+                        xoff: 0,
+                        yoff: 0,
+                    },
                 },
             ))
             .id();
-        app.world_mut().trigger(ImeCommit { entity: pane, text: "x".into() });
+        app.world_mut().trigger(ImeCommit {
+            entity: pane,
+            text: "x".into(),
+        });
         app.update();
 
         assert_eq!(app.world().resource::<Hits>().0, 0);
