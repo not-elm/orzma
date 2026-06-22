@@ -2,11 +2,10 @@
 //!
 //! Provides `Composition` (a validated preedit snapshot), `ImeState`
 //! (the active-composition resource), `read_ime_events` (the Bevy
-//! system that drains `Ime` events and forwards `Ime::Commit` text to
-//! the active tmux pane), and `ime_policy_system` (toggles
+//! system that drains `Ime` events and triggers `ImeCommit` to the
+//! keyboard-focused surface), and `ime_policy_system` (toggles
 //! `Window::ime_enabled` and `.ime_position`).
 
-use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
@@ -17,24 +16,20 @@ use bevy::ecs::message::MessageReader;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::{Commands, NonSend, Query, Res, ResMut, Single};
+use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
-use bevy::prelude::State;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{KeyboardFocused, OzmaTerminal};
-use ozma_tty_engine::{TerminalHandle, TerminalKey, TerminalKeyInput, TerminalModifiers};
+use ozma_terminal::KeyboardFocused;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozma_webview::{Webview, focused_webview_of};
-use ozmux_tmux::{ActivePane, SendBytes, TmuxConnection, TmuxPane};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
-/// Per-backend observers apply it, discriminating on `TmuxPane` presence
-/// (tmux panes are also `OzmaTerminal`): the tmux observer in
-/// `src/tmux/forward.rs` sends it over the control socket; the Default observer
+/// Per-backend observers apply it: the tmux observer in `src/tmux/forward.rs`
+/// sends it over the control socket (targeting tmux panes); the Default observer
 /// in `src/default_input.rs` writes the local PTY via `TerminalKeyInput`.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ImeCommit {
@@ -300,92 +295,45 @@ pub(crate) fn ime_policy_system(
     }
 }
 
-/// Drains `Ime` events, mutates `ImeState`, and forwards `Ime::Commit`
-/// text to the active tmux pane — UNLESS a webview owns focus, in
-/// which case the commit-to-pane write is suppressed (bevy_cef commits it to
-/// the page; see spec §7).
-///
-/// The commit text is sent verbatim via `SendBytes`
-/// (`send-keys -H -t %<id> <hex…>`), which is byte-safe for UTF-8 multibyte
-/// commits — including the macOS Character Viewer emoji path — without any
-/// modifier interpretation.
+/// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
+/// `ImeCommit` to the keyboard-focused surface. Suppressed when a webview that
+/// is an inline child of the focused surface owns focus (bevy_cef commits to the
+/// page; spec §7) and when the focused surface is in copy mode. The commit
+/// transport is applied by per-backend observers (`src/tmux/forward.rs`,
+/// `src/default_input.rs`).
 pub(crate) fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,
     mut state: ResMut<ImeState>,
-    mut handles: Query<&mut TerminalHandle>,
-    connection: NonSend<TmuxConnection>,
-    active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
+    focused: Query<Entity, With<KeyboardFocused>>,
     focused_webview: Res<FocusedWebview>,
     webview_parents: Query<&ChildOf, With<Webview>>,
-    current_mode: Res<State<AppMode>>,
-    ozma_terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     copy_modes: Query<(), With<CopyModeState>>,
 ) {
-    let active = active_pane.map(|single| *single);
-    let active_surface = active.map(|(e, _)| e);
+    let surface = resolve_focused_surface(&focused);
     for event in events.read() {
-        if let Some(commit_text) = apply_event(&mut state, event) {
-            // NOTE: Inline-focus commit suppression (spec §7): bevy_cef's own IME
-            // systems independently consume the winit `Ime` events for the
-            // focused webview, so ozmux must NOT also commit this text to the
-            // pane — doing so double-delivers the composition (once to the page,
-            // once to the terminal). The state machine above still ran, so
-            // `ImeState` stays consistent; only the pane write is skipped.
-            if focused_webview_of(Some(&focused_webview), &webview_parents, active_surface)
-                .is_some()
-            {
-                continue;
-            }
-            if commit_text.is_empty() {
-                continue;
-            }
-            match current_mode.get() {
-                AppMode::Tmux => {
-                    let Some((entity, pane)) = active else {
-                        tracing::warn!(
-                            target: "ozmux::input::ime",
-                            "commit dropped: no active tmux pane",
-                        );
-                        continue;
-                    };
-                    if !copy_modes.contains(entity)
-                        && let Ok(mut handle) = handles.get_mut(entity)
-                        && handle.snap_to_bottom_vt_only()
-                    {
-                        handle.flush_emit(&mut commands, entity);
-                    }
-                    let Some(client) = connection.client() else {
-                        continue;
-                    };
-                    let target = format!("%{}", pane.id.0);
-                    if let Err(e) = client.handle().send(SendBytes {
-                        pane: &target,
-                        bytes: commit_text.as_bytes(),
-                    }) {
-                        tracing::warn!(?e, "IME commit send failed");
-                    }
-                }
-                AppMode::Default => {
-                    // NOTE: bevy_cef delivers the commit to the webview independently; suppress here to prevent duplicate input.
-                    if focused_webview.0.is_some() {
-                        continue;
-                    }
-                    // NOTE: route the commit to the focused terminal but do NOT
-                    // also filter on `KeyboardDisabled` — IME composition itself
-                    // sets `KeyboardDisabled` (suppressing raw keys via
-                    // `dispatch_input`), yet the commit must still land here.
-                    let Ok(entity) = ozma_terminal.single() else {
-                        continue;
-                    };
-                    commands.trigger(TerminalKeyInput {
-                        entity,
-                        key: TerminalKey::Text(commit_text),
-                        modifiers: TerminalModifiers::default(),
-                    });
-                }
-            }
+        let Some(commit_text) = apply_event(&mut state, event) else {
+            continue;
+        };
+        // NOTE: a focused inline webview consumes the winit Ime events itself
+        // (bevy_cef); committing here too would double-deliver (page + terminal).
+        // The state machine above still ran, so ImeState stays consistent.
+        if focused_webview_of(Some(&focused_webview), &webview_parents, surface).is_some() {
+            continue;
         }
+        if commit_text.is_empty() {
+            continue;
+        }
+        let Some(entity) = surface else {
+            continue;
+        };
+        if copy_modes.contains(entity) {
+            continue;
+        }
+        commands.trigger(ImeCommit {
+            entity,
+            text: commit_text,
+        });
     }
 }
 
@@ -427,10 +375,12 @@ mod tests {
     use bevy::prelude::{AppExtStates, MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
+    use ozma_terminal::OzmaTerminal;
     use ozma_tty_renderer::CellMetrics;
     use ozma_tty_renderer::prelude::{Cursor, TerminalGrid};
-    use ozmux_tmux::{ActivePane, PaneId, TmuxConnection, TmuxPane};
+    use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
     use tmux_control_parser::CellDims;
+    use crate::app_mode::AppMode;
 
     #[test]
     fn try_new_returns_none_for_empty_text() {
@@ -615,11 +565,6 @@ mod tests {
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
-        // No live tmux client: `TmuxConnection::client()` returns None, so the
-        // commit send is skipped. Tests assert the state-machine side effects
-        // and the absence of a panic on the active-pane / suppression paths.
-        app.insert_non_send_resource(TmuxConnection::default());
         app.add_message::<Ime>();
 
         let pane_entity = app
@@ -635,6 +580,7 @@ mod tests {
                     },
                 },
                 ActivePane,
+                KeyboardFocused,
             ))
             .id();
 
@@ -938,11 +884,11 @@ mod tests {
     }
 
     #[test]
-    fn ime_commit_routes_to_focused_ozma_terminal() {
+    fn ime_commit_triggers_imecommit_for_focused_surface() {
         use bevy::prelude::On;
 
         #[derive(Resource, Default)]
-        struct Hits(Vec<Entity>);
+        struct Hits(Vec<(Entity, String)>);
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin))
@@ -951,14 +897,12 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.init_resource::<Hits>();
         app.init_state::<AppMode>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.add_message::<Ime>();
-        app.add_observer(|ev: On<TerminalKeyInput>, mut hits: ResMut<Hits>| {
-            hits.0.push(ev.entity);
+        app.add_observer(|ev: On<ImeCommit>, mut hits: ResMut<Hits>| {
+            hits.0.push((ev.entity, ev.text.clone()));
         });
 
-        app.world_mut().spawn(OzmaTerminal);
-        let focused = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
 
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<Ime>>()
@@ -968,7 +912,9 @@ mod tests {
             });
         app.update();
 
-        assert_eq!(app.world().resource::<Hits>().0, vec![focused]);
+        let hits = &app.world().resource::<Hits>().0;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].1, "あ");
     }
 
     #[test]
