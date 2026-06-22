@@ -160,28 +160,32 @@ struct PaneRecaptureState {
     dims: (u32, u32),
     /// Frames the dims have held steady since the last change.
     stable: u8,
-    /// Whether this pane has already been re-seeded once.
+    /// Whether this pane has been re-seeded since its last size change.
     done: bool,
 }
 
 /// Frames a pane's size must hold steady before its mirror is re-seeded from
 /// tmux. Lets a born-small pane finish growing (and a window-drag finish) before
-/// the one-shot re-seed fires.
+/// the re-seed fires.
 const RECAPTURE_SETTLE_FRAMES: u8 = 3;
 
-/// Re-seeds each pane's display mirror from tmux's authoritative grid exactly
-/// once, a few frames after the pane's size first settles.
+/// Re-seeds each pane's display mirror from tmux's authoritative grid a few
+/// frames after the pane's size settles, re-arming on every size change.
 ///
-/// NOTE: the display-only `alacritty_terminal` mirror diverges from tmux by one
-/// row on a fresh session's first prompt — zsh's `PROMPT_EOL_MARK` over-fills the
-/// line by one column and alacritty wraps the cursor to the next row where tmux
-/// does not, so the replayed `%output` lands the prompt one row low. A one-shot
-/// capture-pane + cursor seed after the pane settles overwrites the wrapped local
-/// cursor with tmux's real position. Fires once per pane — re-seeding on every
-/// later resize would flash the screen and discard local state, and an
-/// established pane's grow already matches tmux — and fires regardless of whether
-/// the size changed, since a pane born at its final size still wraps its first
-/// prompt. Skipped while an earlier capture for the pane is still in flight so
+/// NOTE: two divergences make a re-seed necessary. (1) On a fresh session's
+/// first prompt the display-only `alacritty_terminal` mirror lands the prompt
+/// one row low — zsh's `PROMPT_EOL_MARK` over-fills the line by one column and
+/// alacritty wraps the cursor where tmux does not. (2) When a born-small pane is
+/// grown to the control client's size (the common case when an adopted
+/// `tmux -CC` session starts at tmux's default-size and the client then enlarges
+/// it), alacritty's grow pulls local scrollback onto the screen and pushes the
+/// prompt to mid-screen. A capture-pane + cursor seed (clear + tmux's rows + the
+/// real cursor) overwrites both. The seed re-arms whenever the pane's dims change
+/// (`done` is reset on a size change in the loop below), so the post-grow size is
+/// re-seeded too; the settle delay debounces a window-drag to one re-seed per
+/// settle. Re-seeding from tmux's authoritative grid is correct for a
+/// display-only mirror — it resyncs and never loses real state (tmux owns the
+/// content). Skipped while an earlier capture for the pane is still in flight so
 /// the two capture/cursor pairs never collide.
 fn recapture_settled_panes(
     mut watch: Local<HashMap<PaneId, PaneRecaptureState>>,
@@ -207,6 +211,10 @@ fn recapture_settled_panes(
         if state.dims != dims {
             state.dims = dims;
             state.stable = 0;
+            // Re-arm the one-shot: a size change (e.g. a born-small adopted pane
+            // grown to the client size) pulls scrollback onto the screen and
+            // needs a fresh re-seed once the new size settles.
+            state.done = false;
         } else {
             state.stable = state.stable.saturating_add(1);
         }
@@ -746,6 +754,74 @@ mod tests {
         app.add_systems(Update, drain_tmux_transport);
         app.update();
         assert!(!app.world().resource::<TmuxEventBatch>().0.is_empty());
+    }
+
+    #[test]
+    fn recapture_rearms_after_pane_size_change() {
+        // Regression for the adoption mid-screen-prompt bug: a born-small pane
+        // grown to the control client's size pulls local scrollback onto the
+        // screen and pushes the prompt mid-screen. The one-shot re-seed must
+        // re-arm on the size change so the post-grow size is re-captured from
+        // tmux's authoritative grid (otherwise the misrender persists).
+        use tmux_control_parser::CellDims;
+        let mut app = App::new();
+        app.init_resource::<EnumerationState>();
+        let gateway = app.world_mut().spawn_empty().id();
+        let mut conn = TmuxConnection::default();
+        let _ = conn.adopt(gateway);
+        app.insert_non_send_resource(conn);
+        let pane = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+        app.add_systems(Update, recapture_settled_panes);
+
+        let captured = |app: &App| {
+            app.world()
+                .resource::<EnumerationState>()
+                .pending
+                .values()
+                .any(|r| matches!(r, PendingReply::Capture { pane } if *pane == PaneId(1)))
+        };
+
+        // Settle at the born size -> the re-seed fires once.
+        for _ in 0..(RECAPTURE_SETTLE_FRAMES as usize + 1) {
+            app.update();
+        }
+        assert!(captured(&app), "first settle must seed the pane");
+
+        // Simulate the capture/cursor replies landing: clear the in-flight
+        // markers (so the next re-seed isn't blocked) and pending (so the second
+        // capture is detectable).
+        {
+            let mut enumeration = app.world_mut().resource_mut::<EnumerationState>();
+            enumeration.panes_with_cursor_pending.clear();
+            enumeration.pending.clear();
+        }
+
+        // Grow the pane, as when the client pins a larger size after adoption.
+        app.world_mut()
+            .get_mut::<TmuxPane>(pane)
+            .unwrap()
+            .dims
+            .height = 48;
+
+        // Settle at the new size -> the re-armed one-shot must fire AGAIN.
+        for _ in 0..(RECAPTURE_SETTLE_FRAMES as usize + 1) {
+            app.update();
+        }
+        assert!(
+            captured(&app),
+            "a pane size change must re-arm the re-seed so the grown size is re-captured"
+        );
     }
 
     #[test]
