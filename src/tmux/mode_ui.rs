@@ -5,7 +5,6 @@ use crate::app_mode::AppMode;
 use crate::tmux::window_bar::spawn_window_bar;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use bevy::ui::Val;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 
 /// Root of the Tmux-mode UI subtree, mounted under `UiRoot` while in
@@ -27,13 +26,10 @@ impl Plugin for TmuxModeUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            ensure_tmux_mode_ui.run_if(in_state(AppMode::Tmux).and(no_tmux_mode_ui)),
+            ensure_tmux_mode_ui
+                .run_if(in_state(AppMode::Tmux).and(not(any_with_component::<TmuxModeUi>))),
         );
     }
-}
-
-fn no_tmux_mode_ui(roots: Query<(), With<TmuxModeUi>>) -> bool {
-    roots.is_empty()
 }
 
 fn ensure_tmux_mode_ui(
@@ -78,11 +74,10 @@ fn ensure_tmux_mode_ui(
 mod tests {
     use super::*;
     use crate::tmux::window_bar::WindowBarRoot;
-    use bevy::ecs::system::RunSystemOnce;
     use bevy::state::app::StatesPlugin;
 
     fn build_app() -> App {
-        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+        use ozma_tty_renderer::CellMetrics;
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Tmux);
@@ -118,15 +113,6 @@ mod tests {
             .expect("WorkspaceUiRoot present")
             .parent();
         assert_eq!(parent, tmux_ui, "WorkspaceUiRoot under TmuxModeUi");
-    }
-
-    #[test]
-    fn no_tmux_mode_ui_is_true_until_one_exists() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        assert!(app.world_mut().run_system_once(no_tmux_mode_ui).unwrap());
-        app.world_mut().spawn(TmuxModeUi);
-        assert!(!app.world_mut().run_system_once(no_tmux_mode_ui).unwrap());
     }
 
     #[test]

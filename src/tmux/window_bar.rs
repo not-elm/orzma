@@ -107,7 +107,8 @@ pub(super) fn spawn_window_bar(
 }
 
 /// True when the window set, any window's metadata or flags, the active window,
-/// or the session name may have changed this frame.
+/// or the session name may have changed this frame — or when the bar itself was
+/// just spawned and must be populated from current state.
 fn window_bar_dirty(
     mut removed_windows: RemovedComponents<TmuxWindow>,
     mut removed_active: RemovedComponents<ActiveWindow>,
@@ -115,6 +116,7 @@ fn window_bar_dirty(
     changed_flags: Query<(), Changed<WindowFlags>>,
     added_active: Query<(), Added<ActiveWindow>>,
     changed_session: Query<(), Changed<TmuxSession>>,
+    added_bar: Query<(), Added<WindowBarRoot>>,
 ) -> bool {
     // NOTE: drain both RemovedComponents readers up front, not inside the `||`
     // chain — a short-circuit on an earlier `Changed`/`Added` term would leave
@@ -122,12 +124,21 @@ fn window_bar_dirty(
     // spurious rebuild) on the next frame.
     let window_removed = removed_windows.read().next().is_some();
     let active_removed = removed_active.read().next().is_some();
+    // NOTE: include `Added<WindowBarRoot>`. The bar is spawned lazily by
+    // `ensure_tmux_mode_ui` with no ordering edge to this rebuild; the first
+    // projection's one-shot `Changed`/`Added` signals can be consumed (by this
+    // run condition) on a frame the bar entity does not yet exist, after which
+    // they never re-fire. Triggering a rebuild when the bar first appears
+    // repopulates it from the full current window/session state, closing that
+    // race (`rebuild_window_bar` reads the full set, not just changes).
+    let bar_spawned = !added_bar.is_empty();
     !changed_windows.is_empty()
         || !changed_flags.is_empty()
         || !added_active.is_empty()
         || !changed_session.is_empty()
         || window_removed
         || active_removed
+        || bar_spawned
 }
 
 /// Despawns the window bar's children and rebuilds the powerline layout: a

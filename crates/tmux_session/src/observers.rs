@@ -227,15 +227,17 @@ fn on_connection_reset(
     mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
 ) {
-    // NOTE: try_despawn, not despawn: on a mode exit DespawnOnExit(Tmux) may have already removed
-    // these window entities (they are ChildOf the WorkspaceUiRoot subtree); plain despawn would
-    // warn per already-gone entity.
+    // NOTE: try_despawn for the window entities only. They are reparented
+    // ChildOf the WorkspaceUiRoot subtree, so on a mode exit DespawnOnExit(Tmux)
+    // may have already removed them and plain despawn would warn per already-gone
+    // entity. The session entity below is NOT under that subtree, so it keeps
+    // plain despawn — a warning there would flag a genuine index/world desync.
     for (_, e) in index.windows.drain() {
         commands.entity(e).try_despawn();
     }
     index.panes.clear();
     if let Some(e) = index.session.take() {
-        commands.entity(e).try_despawn();
+        commands.entity(e).despawn();
     }
     index.pending_active_pane = None;
     *enumeration = EnumerationState::default();
@@ -304,7 +306,7 @@ fn despawn_window(commands: &mut Commands, index: &mut TmuxProjection, id: Windo
         return;
     };
     index.panes.retain(|_, (_, w)| *w != id);
-    commands.entity(e).try_despawn();
+    commands.entity(e).despawn();
 }
 
 fn set_marker<T: Component + Default>(
