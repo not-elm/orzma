@@ -42,22 +42,9 @@ use ui::{
 };
 
 fn main() {
-    // Mirror alacritty_terminal::tty::setup_env: a child shell (a tmux pane or
-    // the native ozma PTY) whose TERM is empty/unset cannot load terminfo, so
-    // zsh's line editor (ZLE) — Backspace included — silently breaks. A bundled
-    // .app launched from Finder inherits launchd's empty TERM, so fill a portable
-    // default before any PTY child is spawned. `xterm-256color` is exactly what
-    // Alacritty falls back to when the `alacritty` terminfo is absent (it is, on
-    // stock macOS); `COLORTERM` advertises the 24-bit color that entry omits.
-    if let Some(term) = term_fallback(std::env::var("TERM").ok().as_deref()) {
-        // SAFETY: this runs at the very top of main(), before App::new() spawns
-        // any task-pool threads, so no other thread can read the environment
-        // concurrently with these writes.
-        unsafe {
-            std::env::set_var("TERM", term);
-            std::env::set_var("COLORTERM", "truecolor");
-        }
-    }
+    // NOTE: must run before App::new() spawns any thread — it writes process
+    // env vars, which is unsound once other threads may read the environment.
+    ensure_terminfo_env();
 
     let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
     // NOTE: start in AppMode::Tmux as a boot-dispatch state; dispatch_startup_mode
@@ -116,6 +103,35 @@ fn main() {
             DefaultHostInputPlugin,
         ))
         .run();
+}
+
+/// Fills `TERM`/`COLORTERM` with a portable default when the inherited `TERM`
+/// is unset or empty, mirroring `alacritty_terminal::tty::setup_env`.
+///
+/// A child shell (a tmux pane or the native ozma PTY) whose `TERM` is empty
+/// cannot load terminfo, so zsh's line editor (ZLE) — Backspace included —
+/// silently breaks; a bundled `.app` launched from Finder inherits launchd's
+/// empty `TERM`. `xterm-256color` is exactly Alacritty's fallback when the
+/// `alacritty` terminfo is absent (it is, on stock macOS); `COLORTERM`
+/// advertises the 24-bit color that entry omits. A usable inherited `TERM` is
+/// left untouched, so terminal launches are unchanged.
+///
+/// # Invariants
+///
+/// Must be called before any thread is spawned (i.e. at the very top of
+/// `main()`): it writes process environment variables, which is unsound once
+/// another thread may read the environment concurrently.
+fn ensure_terminfo_env() {
+    let Some(term) = term_fallback(std::env::var("TERM").ok().as_deref()) else {
+        return;
+    };
+    // SAFETY: the caller invokes this before App::new() spawns any task-pool
+    // thread, so no other thread can read the environment concurrently with
+    // these writes (see # Invariants).
+    unsafe {
+        std::env::set_var("TERM", term);
+        std::env::set_var("COLORTERM", "truecolor");
+    }
 }
 
 /// The portable `TERM` ozmux substitutes when the inherited one cannot resolve
