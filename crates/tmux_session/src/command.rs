@@ -9,7 +9,7 @@ mod size;
 mod target;
 
 pub use copymode::{CopyModeCapture, CopyStateQuery, Prompt, ShowBuffer};
-pub use env::SetEnvironmentInSession;
+pub use env::{SetEnvironmentGlobal, SetEnvironmentInSession, UnsetEnvironmentGlobal};
 pub use io::{SendBytes, SendPaneKeys};
 pub(crate) use query::{
     ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListKeys, ListWindows,
