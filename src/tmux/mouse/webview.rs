@@ -9,7 +9,6 @@ use super::super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
 use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
 use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture, cell_dims};
 use crate::input::InputPhase;
-use crate::picker::SessionPicker;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -102,7 +101,6 @@ pub(super) fn tmux_webview_pointer(
     mut buttons: MessageReader<MouseButtonInput>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
-    picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -116,7 +114,7 @@ pub(super) fn tmux_webview_pointer(
     let scale = window.scale_factor();
     let (cell_w, cell_h) = cell_dims(&metrics);
     let cursor_phys = window.cursor_position().map(|c| c * scale);
-    if !window.focused || picker.open || copy_prompt.open.is_some() {
+    if !window.focused || copy_prompt.open.is_some() {
         buttons.clear();
         gesture.state = GestureState::Idle;
         release_webview_press(
@@ -212,14 +210,13 @@ fn forward_tmux_webview_mouse_moves(
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
         return;
     };
-    if picker.open || copy_prompt.open.is_some() {
+    if copy_prompt.open.is_some() {
         return;
     }
     let Ok(window) = windows.single() else {

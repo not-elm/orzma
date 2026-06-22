@@ -1,5 +1,5 @@
 //! Host-side input for `AppMode::Default`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
-//! markers from the coarse guards (picker, IME, focus, webview), and handles the
+//! markers from the coarse guards (IME, focus, webview), and handles the
 //! application-level GUI shortcuts the terminal crate does not own (Quit,
 //! ToggleTmuxView, DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
@@ -8,7 +8,6 @@ use crate::app_mode::AppMode;
 use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
-use crate::picker::SessionPicker;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -46,19 +45,13 @@ impl Plugin for DefaultHostInputPlugin {
 
 fn maintain_input_gates(
     mut commands: Commands,
-    picker: Res<SessionPicker>,
     ime: Res<ImeState>,
     focused_webview: Res<FocusedWebview>,
     windows: Query<&Window, With<PrimaryWindow>>,
     terminals: Query<(Entity, Has<KeyboardDisabled>, Has<MouseDisabled>), With<OzmaTerminal>>,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    let disable = should_disable_input(
-        picker.open,
-        ime.is_composing(),
-        focused,
-        focused_webview.0.is_some(),
-    );
+    let disable = should_disable_input(ime.is_composing(), focused, focused_webview.0.is_some());
     for (entity, has_keyboard, has_mouse) in terminals.iter() {
         if disable && !has_keyboard {
             commands.entity(entity).insert(KeyboardDisabled);
@@ -79,14 +72,13 @@ fn app_shortcut_handler(
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
     connection: Option<NonSend<TmuxConnection>>,
-    picker: Res<SessionPicker>,
     shortcuts: Res<ResolvedShortcuts>,
     ime: Res<ImeState>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    if picker.open || ime.is_composing() || !focused {
+    if ime.is_composing() || !focused {
         events.clear();
         return;
     }
@@ -140,13 +132,8 @@ fn apply_ime_commit_to_terminal(
     });
 }
 
-fn should_disable_input(
-    picker_open: bool,
-    composing: bool,
-    window_focused: bool,
-    webview_focused: bool,
-) -> bool {
-    picker_open || composing || !window_focused || webview_focused
+fn should_disable_input(composing: bool, window_focused: bool, webview_focused: bool) -> bool {
+    composing || !window_focused || webview_focused
 }
 
 fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutAction) -> bool {
@@ -233,11 +220,10 @@ mod tests {
 
     #[test]
     fn disables_input_on_any_guard() {
-        assert!(!should_disable_input(false, false, true, false));
-        assert!(should_disable_input(true, false, true, false));
-        assert!(should_disable_input(false, true, true, false));
-        assert!(should_disable_input(false, false, false, false));
-        assert!(should_disable_input(false, false, true, true));
+        assert!(!should_disable_input(false, true, false));
+        assert!(should_disable_input(true, true, false));
+        assert!(should_disable_input(false, false, false));
+        assert!(should_disable_input(false, true, true));
     }
 
     #[test]

@@ -7,7 +7,6 @@
 use super::pane_hit::tmux_pane_at_phys;
 use crate::app_mode::AppMode;
 use crate::input::ime::ImeState;
-use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::rename_prompt::RenamePrompt;
@@ -38,7 +37,6 @@ impl Plugin for GatePlugin {
 
 fn maintain_tmux_input_gates(
     mut commands: Commands,
-    picker: Res<SessionPicker>,
     ime: Res<ImeState>,
     copy_prompt: Res<CopyPrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
@@ -62,8 +60,7 @@ fn maintain_tmux_input_gates(
 ) {
     let window = windows.single().ok();
     let window_focused = window.map(|w| w.focused).unwrap_or(false);
-    let modal = picker.open
-        || ime.is_composing()
+    let modal = ime.is_composing()
         || !window_focused
         || copy_prompt.open.is_some()
         || rename_prompt.is_some();

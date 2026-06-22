@@ -3,41 +3,35 @@
 use serde::{Deserialize, Serialize};
 
 /// tmux backend settings.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+///
+/// The control connection is now established by adopting the user's own
+/// `tmux -CC` process rather than spawning one, so this table no longer carries
+/// a binary path or socket name. It is retained (empty) as a stable, reserved
+/// `[tmux]` section: it still parses and, under `deny_unknown_fields`, rejects
+/// stale keys (`program`, `socket_name`, `auto_connect`) so old configs fail
+/// loudly instead of being silently ignored.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
-pub struct TmuxConfig {
-    /// tmux binary to run (looked up on `PATH` unless absolute).
-    pub program: String,
-    /// Optional named server socket (`tmux -L <name>`); `None` targets the
-    /// default server, which is what a normal CLI `tmux` uses.
-    pub socket_name: Option<String>,
-}
-
-impl Default for TmuxConfig {
-    fn default() -> Self {
-        Self {
-            program: "tmux".to_string(),
-            socket_name: None,
-        }
-    }
-}
+pub struct TmuxConfig {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn default_targets_path_tmux_default_socket() {
-        let c = TmuxConfig::default();
-        assert_eq!(c.program, "tmux");
-        assert_eq!(c.socket_name, None);
+    fn deprecated_program_now_errors() {
+        assert!(
+            toml::from_str::<TmuxConfig>(r#"program = "/opt/tmux""#).is_err(),
+            "program is removed; deny_unknown_fields must reject it"
+        );
     }
 
     #[test]
-    fn partial_overrides_program_only() {
-        let c: TmuxConfig = toml::from_str(r#"program = "/opt/tmux""#).unwrap();
-        assert_eq!(c.program, "/opt/tmux");
-        assert_eq!(c.socket_name, None);
+    fn deprecated_socket_name_now_errors() {
+        assert!(
+            toml::from_str::<TmuxConfig>(r#"socket_name = "work""#).is_err(),
+            "socket_name is removed; deny_unknown_fields must reject it"
+        );
     }
 
     #[test]

@@ -16,6 +16,18 @@ const DCS_TERMINATOR: &[u8] = b"\x1b\\";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CommandId(pub u64);
 
+/// A Layer-2 event: a Layer-1 protocol event, or transport termination.
+#[derive(Debug)]
+pub enum TransportEvent {
+    /// A protocol event from Layer 1 (kept I/O-agnostic).
+    Protocol(ClientEvent),
+    /// The transport closed (process exit / EOF / reader I/O error).
+    Closed {
+        /// Human-readable reason (EOF marker or the I/O error text).
+        reason: String,
+    },
+}
+
 /// A higher-level event surfaced to the consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientEvent {
@@ -105,25 +117,15 @@ impl ProtocolClient {
 
     /// Pre-registers a pending command with no outgoing bytes.
     ///
-    /// Used by the transport for tmux's launch subcommand (`new-session` /
-    /// `attach-session`), whose reply block arrives before any client `send`.
-    /// tmux assigns it an arbitrary command number, so correlation is by FIFO.
+    /// Backs [`register_external_pending`](Self::register_external_pending) for
+    /// the launch subcommand's (`new-session` / `attach-session`) reply block,
+    /// which arrives before any client `send`. tmux assigns it an arbitrary
+    /// command number, so correlation is by FIFO.
     pub(crate) fn register_pending(&mut self) -> CommandId {
         let id = CommandId(self.next_id);
         self.next_id += 1;
         self.pending.push_back(id);
         id
-    }
-
-    /// Removes `id` from the pending queue.
-    ///
-    /// Used to undo a [`send`](Self::send) registration when the subsequent
-    /// transport write fails; with the transport's separate protocol/writer
-    /// locks, a concurrent `send` may have pushed after `id`, so remove by value.
-    pub(crate) fn rollback_pending(&mut self, id: CommandId) {
-        if let Some(pos) = self.pending.iter().rposition(|x| *x == id) {
-            self.pending.remove(pos);
-        }
     }
 
     /// Number of commands awaiting a reply (test/diagnostic accessor).
@@ -231,15 +233,6 @@ mod tests {
         assert!(matches!(c.send("a\rb"), Err(TmuxError::InvalidCommand)));
         assert_eq!(c.pending_len(), 0);
         assert!(c.take_outgoing().is_empty());
-    }
-
-    #[test]
-    fn rollback_removes_last_pending() {
-        let mut c = ProtocolClient::new();
-        let id = c.send("x").unwrap();
-        let _ = c.take_outgoing();
-        c.rollback_pending(id);
-        assert_eq!(c.pending_len(), 0);
     }
 
     #[test]

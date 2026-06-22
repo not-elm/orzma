@@ -14,7 +14,6 @@ use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
-use crate::picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
@@ -115,7 +114,7 @@ fn forward_keys_to_tmux(
         ResMut<CopyPrompt>,
         MessageWriter<AppExit>,
     ),
-    (picker, confirm_state, rename): (Res<SessionPicker>, Option<Res<ConfirmState>>, RenameParams),
+    (confirm_state, rename): (Option<Res<ConfirmState>>, RenameParams),
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
     mut focused_webview: ResMut<FocusedWebview>,
@@ -134,13 +133,6 @@ fn forward_keys_to_tmux(
     windows: Query<&Window, With<PrimaryWindow>>,
     forward_keys: Query<&ForwardKeys>,
 ) {
-    // NOTE: while the picker is open it owns the keyboard; forwarding would
-    // leak picker-navigation keys to the active tmux pane. Drain (don't replay).
-    if picker.open {
-        *prefix_pending = false;
-        events.clear();
-        return;
-    }
     // NOTE: while the copy-mode prompt is open it owns the keyboard; the prompt's
     // own system handles raw keys. Drain here so no key leaks to tmux or the
     // prefix state machine.
@@ -685,7 +677,6 @@ fn forward_wheel_to_tmux(
     handles: Query<&TerminalHandle>,
     wheel_params: TmuxWebviewWheelParams,
     connection: NonSend<TmuxConnection>,
-    picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
     configs: Res<OzmuxConfigsResource>,
@@ -725,7 +716,7 @@ fn forward_wheel_to_tmux(
     // can't accumulate behind a modal / unfocused window and lurch on resume.
     // focused_webview is NOT a guard here — the pointer-gated target above owns
     // webview scrolling, so a focused webview must not steal terminal wheel.
-    if !window.focused || picker.open || copy_prompt.open.is_some() || rename_prompt.is_some() {
+    if !window.focused || copy_prompt.open.is_some() || rename_prompt.is_some() {
         accumulator.residual_cells = 0.0;
         return;
     }

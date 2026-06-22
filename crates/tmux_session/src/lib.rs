@@ -7,7 +7,6 @@
 
 mod command;
 mod components;
-mod connect;
 mod connection;
 mod copy_queries;
 mod enumerate;
@@ -18,7 +17,6 @@ mod keybindings;
 mod observers;
 mod output;
 mod plugin;
-mod select;
 mod state;
 
 pub use command::{
@@ -30,7 +28,6 @@ pub use command::{
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
 };
-pub use connect::attach_or_create;
 pub use connection::{AdoptedHandle, TmuxConnection};
 pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
@@ -44,7 +41,6 @@ pub use keybindings::{
 };
 pub use output::PaneOutput;
 pub use plugin::{TmuxEventBatch, TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
-pub use select::{AttachTarget, select_attach_target};
 pub use state::ConnectionState;
 pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};
 pub use tmux_control_parser::{PaneId, SessionId, WindowId};

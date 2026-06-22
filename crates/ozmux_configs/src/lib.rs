@@ -21,10 +21,8 @@ pub mod osc_webview;
 pub mod ozma;
 pub mod path;
 pub mod shortcuts;
-pub mod startup;
 pub mod theme;
 pub mod tmux;
-pub use startup::StartupMode;
 
 /// Fully-resolved ozmux configuration.
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -48,8 +46,6 @@ pub struct OzmuxConfigs {
     pub tmux: tmux::TmuxConfig,
     /// Ozma single-terminal mode configuration.
     pub ozma: ozma::OzmaConfig,
-    /// Startup mode: which application mode launches on boot.
-    pub startup_mode: StartupMode,
 }
 
 impl OzmuxConfigs {
@@ -277,10 +273,17 @@ resize-pane-down = "Cmd+Shift+J"
     }
 
     #[test]
-    fn tmux_section_merges_from_toml() {
-        let c = parse("[tmux]\nprogram = \"/usr/local/bin/tmux\"\n");
-        assert_eq!(c.tmux.program, "/usr/local/bin/tmux");
-        assert_eq!(c.tmux.socket_name, None);
+    fn empty_tmux_section_is_accepted() {
+        let c = parse("[tmux]\n");
+        assert_eq!(c.tmux, tmux::TmuxConfig::default());
+    }
+
+    #[test]
+    fn stale_tmux_program_key_is_rejected() {
+        assert!(
+            toml::from_str::<OzmuxConfigs>("[tmux]\nprogram = \"/usr/local/bin/tmux\"\n").is_err(),
+            "the removed [tmux] program key must be rejected under deny_unknown_fields"
+        );
     }
 
     #[test]
@@ -290,26 +293,11 @@ resize-pane-down = "Cmd+Shift+J"
     }
 
     #[test]
-    fn startup_mode_defaults_to_default() {
-        let c = parse("");
-        assert_eq!(c.startup_mode, StartupMode::Default);
-    }
-
-    #[test]
-    fn startup_mode_tmux_auto_attach_parses() {
-        let c = parse(r#"startup_mode = "tmux-auto-attach""#);
-        assert_eq!(c.startup_mode, StartupMode::TmuxAutoAttach);
-    }
-
-    #[test]
-    fn startup_mode_tmux_parses() {
-        let c = parse(r#"startup_mode = "tmux""#);
-        assert_eq!(c.startup_mode, StartupMode::Tmux);
-    }
-
-    #[test]
-    fn unknown_startup_mode_is_rejected() {
-        assert!(toml::from_str::<OzmuxConfigs>(r#"startup_mode = "invalid""#).is_err());
+    fn startup_mode_key_is_rejected() {
+        assert!(
+            toml::from_str::<OzmuxConfigs>(r#"startup_mode = "tmux""#).is_err(),
+            "startup_mode is removed; top-level deny_unknown_fields must reject it"
+        );
     }
 
     #[test]
