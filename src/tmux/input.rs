@@ -110,13 +110,12 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 
 fn forward_keys_to_tmux(
     mut commands: Commands,
-    (mut next_mode, picker, mut copy_prompt, mut exit): (
+    (mut next_mode, mut copy_prompt, mut exit): (
         ResMut<NextState<AppMode>>,
-        ResMut<SessionPicker>,
         ResMut<CopyPrompt>,
         MessageWriter<AppExit>,
     ),
-    (confirm_state, rename): (Option<Res<ConfirmState>>, RenameParams),
+    (picker, confirm_state, rename): (Res<SessionPicker>, Option<Res<ConfirmState>>, RenameParams),
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
     mut focused_webview: ResMut<FocusedWebview>,

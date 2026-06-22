@@ -834,15 +834,6 @@ mod tests {
     }
 
     #[test]
-    fn bindings_default_toggle_tmux_view_is_cmd_shift_t() {
-        let b = Bindings::default();
-        let chord = b.toggle_tmux_view.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('t'));
-        assert!(chord.modifiers.meta && chord.modifiers.shift);
-        assert!(!chord.modifiers.ctrl && !chord.modifiers.alt);
-    }
-
-    #[test]
     fn bindings_default_quit_is_cmd_q() {
         let b = Bindings::default();
         let chord = b.quit.as_ref().unwrap();
