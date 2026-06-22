@@ -1,6 +1,5 @@
-//! Bevy UI Plugin and shared UI markers. Spawns the singleton `UiRoot` /
-//! `WorkspaceUiRoot` Node tree (via `OzmuxUiRootPlugin`) that the tmux render
-//! layer attaches its window container under.
+//! Bevy UI Plugin and shared UI markers. Spawns the singleton `UiRoot` Node
+//! (via `OzmuxUiRootPlugin`) that each mode's UI subtree attaches under.
 
 use crate::ui::root::OzmuxUiRootPlugin;
 use bevy::prelude::*;
@@ -14,18 +13,11 @@ pub mod palette;
 pub(crate) mod rename_prompt;
 pub mod root;
 
-/// Marker for the single root UI Node entity. Spawned once in Startup,
-/// never despawned. Hosts `WorkspaceUiRoot` (the tmux window container's
-/// attachment point) and the tmux window status bar (`WindowBarRoot`) as
-/// direct children.
+/// Marker for the single root UI Node entity. Spawned once in Startup, never
+/// despawned. Hosts each mode's UI subtree (`DefaultModeUi` / `TmuxModeUi`) as a
+/// child while that mode is active.
 #[derive(Component)]
 pub struct UiRoot;
-
-/// Marker for the single attachment-point `Node` child of `UiRoot` under
-/// which the tmux render layer parents its window container. Spawned once in
-/// Startup; never despawned.
-#[derive(Component)]
-pub struct WorkspaceUiRoot;
 
 /// Bevy Plugin spawning the singleton UI root Node tree.
 pub struct OzmuxUiPlugin;

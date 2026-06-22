@@ -3,7 +3,7 @@
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
 use crate::theme;
-use crate::ui::WorkspaceUiRoot;
+use crate::tmux::mode_ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;

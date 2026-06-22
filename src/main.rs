@@ -44,10 +44,10 @@ use ui::{
 fn main() {
     let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
     // NOTE: start in AppMode::Tmux as a boot-dispatch state; dispatch_startup_mode
-    // (OnEnter(Tmux), gated to run once) routes to the real mode. Routing to Default
-    // via a queued NextState — rather than booting straight into Default — defers
-    // OnEnter(AppMode::Default) (spawn_terminal) to a post-Startup StateTransition, so
-    // Startup deferred commands (e.g. init_atlas_image inserting AtlasImage) flush first.
+    // (registered on OnEnter(Tmux), gated to run once) routes to the real startup
+    // mode. The initial state MUST be Tmux for that OnEnter(Tmux) hook to fire;
+    // routing out of it (to Default when configured) is a queued NextState applied
+    // at the first post-Startup StateTransition.
     let initial_mode = match pre_configs.startup_mode {
         StartupMode::Default | StartupMode::Tmux | StartupMode::TmuxAutoAttach => AppMode::Tmux,
     };
