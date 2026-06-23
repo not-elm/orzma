@@ -14,7 +14,7 @@ use bevy::ecs::event::EntityEvent;
 use std::mem::take;
 
 /// The tmux control-mode DCS introducer: `ESC P 1000 p`.
-pub const CONTROL_MODE_INTRODUCER: &[u8] = b"\x1bP1000p";
+const CONTROL_MODE_INTRODUCER: &[u8] = b"\x1bP1000p";
 
 /// Per-terminal handshake-watch state.
 ///

@@ -1,8 +1,7 @@
-//! Targeting / rename / resize-pane commands: select a window or pane, switch
-//! client, rename a window or session, resize a pane along one axis.
+//! Targeting / rename / resize-pane commands: select a window or pane, rename a
+//! window or session, resize a pane along one axis.
 
 use crate::enumerate::rename_command;
-use crate::input::quote;
 use tmux_control::TmuxCommand;
 use tmux_control_parser::{PaneId, SessionId, WindowId};
 
@@ -25,17 +24,6 @@ pub struct SelectPane {
 impl TmuxCommand for SelectPane {
     fn into_raw_command(self) -> String {
         format!("select-pane -t %{}", self.id.0)
-    }
-}
-
-/// `switch-client -t <name>` — repoints the attached control client at another session.
-pub struct SwitchClient<'a> {
-    /// Target session name.
-    pub name: &'a str,
-}
-impl TmuxCommand for SwitchClient<'_> {
-    fn into_raw_command(self) -> String {
-        format!("switch-client -t {}", quote(self.name))
     }
 }
 
@@ -108,18 +96,6 @@ mod tests {
         assert_eq!(
             SelectPane { id: PaneId(3) }.into_raw_command(),
             "select-pane -t %3"
-        );
-    }
-
-    #[test]
-    fn switch_client_quotes_name() {
-        assert_eq!(
-            SwitchClient { name: "main" }.into_raw_command(),
-            "switch-client -t main"
-        );
-        assert_eq!(
-            SwitchClient { name: "my work" }.into_raw_command(),
-            "switch-client -t 'my work'"
         );
     }
 

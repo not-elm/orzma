@@ -28,9 +28,7 @@ pub use alacritty_terminal::vi_mode::ViMotion;
 pub use bundle::{SpawnOptions, TerminalBundle};
 pub use buttons::{ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind};
 pub use coalescer::Coalescer;
-pub use control_mode::{
-    AdoptedControlMode, CONTROL_MODE_INTRODUCER, ControlModeDetected, ControlModeWatch,
-};
+pub use control_mode::{AdoptedControlMode, ControlModeDetected, ControlModeWatch};
 pub use events::{
     OscWebviewRequest, TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir,
     TerminalKey, TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,

@@ -16,6 +16,4 @@ pub(crate) use query::{
     ModeKeys, PrefixOptions, SubscribeWindowFlags, Version,
 };
 pub use size::{RefreshClient, ResizeWindow, WindowRefreshClient};
-pub use target::{
-    RenameSession, RenameWindow, ResizePaneX, ResizePaneY, SelectPane, SelectWindow, SwitchClient,
-};
+pub use target::{RenameSession, RenameWindow, ResizePaneX, ResizePaneY, SelectPane, SelectWindow};

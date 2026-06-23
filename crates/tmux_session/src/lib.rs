@@ -22,8 +22,8 @@ mod state;
 pub use command::{
     CopyModeCapture, CopyStateQuery, Prompt, RefreshClient, RenameSession, RenameWindow,
     ResizePaneX, ResizePaneY, ResizeWindow, SelectPane, SelectWindow, SendBytes, SendPaneKeys,
-    SetEnvironmentGlobal, SetEnvironmentInSession, ShowBuffer, SwitchClient,
-    UnsetEnvironmentGlobal, WindowRefreshClient,
+    SetEnvironmentGlobal, SetEnvironmentInSession, ShowBuffer, UnsetEnvironmentGlobal,
+    WindowRefreshClient,
 };
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
