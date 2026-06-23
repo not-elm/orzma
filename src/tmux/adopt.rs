@@ -19,8 +19,8 @@ use ozma_terminal::{KeyboardFocused, cells_for};
 use ozma_tty_engine::{ControlModeDetected, TerminalChildExit, TerminalResize};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{
-    ClientEvent, ControlEvent, TmuxConnection, TmuxConnectionClosed, TmuxConnectionReset,
-    TmuxEventBatch, TmuxPresence, TmuxProjectionSet, TransportEvent,
+    ClientEvent, ControlEvent, EnumerationState, TmuxConnection, TmuxConnectionClosed,
+    TmuxConnectionReset, TmuxEventBatch, TmuxPresence, TmuxProjectionSet, TransportEvent,
 };
 
 /// Registers the adoption observer and the teardown systems/observer.
@@ -134,6 +134,7 @@ fn on_control_mode_detected(
         commands.remove_resource::<TmuxPresence>();
     }
     connection.adopt(gateway);
+    commands.entity(gateway).insert(EnumerationState::default());
 
     // NOTE: reparent the gateway out of the Default view BEFORE despawning the
     // container. Inserting a new `ChildOf` breaks the old relationship (removing

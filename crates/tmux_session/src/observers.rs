@@ -5,7 +5,6 @@ use crate::components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
 };
 use crate::copy_queries::CopyModeQueries;
-use crate::enumerate::EnumerationState;
 use crate::events::{
     PaneGeom, TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxConnectionReset,
     TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed,
@@ -225,7 +224,6 @@ fn on_connection_reset(
     _ev: On<TmuxConnectionReset>,
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
-    mut enumeration: ResMut<EnumerationState>,
     mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut state: ResMut<ConnectionState>,
@@ -244,7 +242,6 @@ fn on_connection_reset(
         commands.entity(e).despawn();
     }
     index.pending_active_pane = None;
-    *enumeration = EnumerationState::default();
     keybindings.clear();
     copy_queries.clear();
     // NOTE: reset to the initial state so a second adoption folds Idle->Attached
@@ -342,7 +339,6 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.init_resource::<TmuxProjection>()
-            .init_resource::<EnumerationState>()
             .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
             .init_resource::<ConnectionState>()

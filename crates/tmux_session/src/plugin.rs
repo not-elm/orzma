@@ -52,7 +52,6 @@ impl Plugin for TmuxSessionPlugin {
         register_observers(app);
         app.init_resource::<ConnectionState>()
             .init_resource::<TmuxProjection>()
-            .init_resource::<EnumerationState>()
             .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
@@ -138,15 +137,16 @@ impl TmuxEventBatch {
 /// consumed by [`apply_reply`]'s `Capture`/`Cursor` arms and routed as
 /// `PaneOutput`.
 fn request_pane_captures(
-    mut enumeration: ResMut<EnumerationState>,
+    mut enumeration: Single<&mut EnumerationState>,
     connection: NonSend<TmuxConnection>,
     new_panes: Query<&TmuxPane, Added<TmuxPane>>,
 ) {
     let Some(handle) = connection.handle() else {
         return;
     };
+    let enumeration: &mut EnumerationState = &mut enumeration;
     for pane in new_panes.iter() {
-        request_pane_capture(&mut enumeration, &handle, pane.id);
+        request_pane_capture(enumeration, &handle, pane.id);
     }
 }
 
@@ -213,10 +213,11 @@ const RECAPTURE_SETTLE_FRAMES: u8 = 3;
 /// the two capture/cursor pairs never collide.
 fn recapture_settled_panes(
     mut watch: Local<HashMap<PaneId, PaneRecaptureState>>,
-    mut enumeration: ResMut<EnumerationState>,
+    mut enumeration: Single<&mut EnumerationState>,
     connection: NonSend<TmuxConnection>,
     panes: Query<&TmuxPane>,
 ) {
+    let enumeration: &mut EnumerationState = &mut enumeration;
     // NOTE: prune departed panes every frame, even while the control client is
     // absent, so a reconnect that reuses a pane id starts from a clean slate.
     let present: HashSet<PaneId> = panes.iter().map(|pane| pane.id).collect();
@@ -247,7 +248,7 @@ fn recapture_settled_panes(
             && !enumeration.panes_with_cursor_pending.contains(&pane.id)
         {
             state.done = true;
-            request_pane_capture(&mut enumeration, &handle, pane.id);
+            request_pane_capture(enumeration, &handle, pane.id);
         }
     }
 }
@@ -282,13 +283,14 @@ fn advance_tmux_connection(
 /// `list-keys` tables, prefix options, mode-keys, and version. Gated by
 /// `on_message::<TmuxClientAttached>` so it runs exactly once per attach edge.
 fn send_attach_enumeration(
-    mut enumeration: ResMut<EnumerationState>,
+    mut enumeration: Single<&mut EnumerationState>,
     connection: NonSend<TmuxConnection>,
 ) {
     let Some(handle) = connection.handle() else {
         return;
     };
-    send_session_enumeration(&mut enumeration, &handle);
+    let enumeration: &mut EnumerationState = &mut enumeration;
+    send_session_enumeration(enumeration, &handle);
     enumeration.register(handle.send(ClientName), PendingReply::ClientName);
     enumeration.register(
         handle.send(ListKeys { table: "root" }),
@@ -320,7 +322,7 @@ fn send_attach_enumeration(
 /// Body-guards on the live client (see [`apply_tmux_replies`]).
 fn send_tmux_reenumeration(
     mut commands: Commands,
-    mut enumeration: ResMut<EnumerationState>,
+    mut enumeration: Single<&mut EnumerationState>,
     connection: NonSend<TmuxConnection>,
     state: Res<ConnectionState>,
     index: Res<TmuxProjection>,
@@ -332,6 +334,7 @@ fn send_tmux_reenumeration(
     let Some(handle) = connection.handle() else {
         return;
     };
+    let enumeration: &mut EnumerationState = &mut enumeration;
     let events = &batch.0;
     let current_session = index
         .session
@@ -345,7 +348,7 @@ fn send_tmux_reenumeration(
         // session must be re-checked; clear_for_session_switch resets the
         // one-shot guard along with the now-stale enumeration/capture ids.
         enumeration.clear_for_session_switch();
-        send_session_enumeration(&mut enumeration, &handle);
+        send_session_enumeration(enumeration, &handle);
     } else {
         if detect_window_added(events) {
             enumeration.register(handle.send(ListWindows), PendingReply::ListWindows);
@@ -437,7 +440,7 @@ fn flush_tmux_outgoing(mut commands: Commands, connection: NonSend<TmuxConnectio
 /// Body-guards on the live client (see [`send_tmux_reenumeration`]).
 fn apply_tmux_replies(
     mut commands: Commands,
-    mut enumeration: ResMut<EnumerationState>,
+    mut enumeration: Single<&mut EnumerationState>,
     mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut connection: NonSendMut<TmuxConnection>,
@@ -450,6 +453,7 @@ fn apply_tmux_replies(
     if !connection.is_connected() {
         return;
     }
+    let enumeration: &mut EnumerationState = &mut enumeration;
     let connection = &mut *connection;
     let events = &batch.0;
     // NOTE: this MUST stay a single in-order pass. tmux CC-mode replies are
@@ -465,7 +469,7 @@ fn apply_tmux_replies(
                 };
                 apply_reply(
                     &mut commands,
-                    &mut enumeration,
+                    enumeration,
                     &mut keybindings,
                     &mut pane_output,
                     connection,
@@ -647,12 +651,6 @@ mod tests {
             *app.world().resource::<ConnectionState>(),
             ConnectionState::Idle
         );
-        assert!(
-            app.world()
-                .resource::<EnumerationState>()
-                .pending
-                .is_empty()
-        );
         let index = app.world().resource::<TmuxProjection>();
         assert!(index.windows.is_empty());
         assert!(index.panes.is_empty());
@@ -691,13 +689,23 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
         app.insert_resource(TmuxPresence);
+        let gateway = app.world_mut().spawn(EnumerationState::default()).id();
+        app.world_mut()
+            .non_send_resource_mut::<TmuxConnection>()
+            .adopt(gateway);
         app.world_mut().write_message(TmuxClientAttached);
         app.update();
+        let enumeration = app
+            .world_mut()
+            .query::<&EnumerationState>()
+            .single(app.world())
+            .expect("gateway entity must carry EnumerationState");
+        // send_attach_enumeration fires on TmuxClientAttached and issues the
+        // initial query suite; with a live adopt handle all registrations
+        // succeed, so pending is non-empty.
         assert!(
-            app.world()
-                .resource::<EnumerationState>()
-                .pending
-                .is_empty()
+            !enumeration.pending.is_empty(),
+            "send_attach_enumeration must have registered at least one query"
         );
     }
 
@@ -742,6 +750,10 @@ mod tests {
         use tmux_control_parser::WindowId;
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
+        // Spawn a gateway entity carrying EnumerationState so Single resolves,
+        // but do NOT adopt it — the connection has no handle, so both systems
+        // body-guard out.
+        app.world_mut().spawn(EnumerationState::default());
         // Non-empty batch but no live client: both systems must body-guard out.
         app.insert_resource(TmuxEventBatch(vec![TransportEvent::Protocol(
             ClientEvent::Notification(ControlEvent::WindowAdd {
@@ -753,12 +765,12 @@ mod tests {
             .unwrap();
         app.world_mut().run_system_once(apply_tmux_replies).unwrap();
         // No panic, and no enumeration was registered (nothing was sent).
-        assert!(
-            app.world()
-                .resource::<EnumerationState>()
-                .pending
-                .is_empty()
-        );
+        let enumeration = app
+            .world_mut()
+            .query::<&EnumerationState>()
+            .single(app.world())
+            .expect("gateway entity must carry EnumerationState");
+        assert!(enumeration.pending.is_empty());
     }
 
     #[test]
@@ -789,8 +801,7 @@ mod tests {
         // tmux's authoritative grid (otherwise the misrender persists).
         use tmux_control_parser::CellDims;
         let mut app = App::new();
-        app.init_resource::<EnumerationState>();
-        let gateway = app.world_mut().spawn_empty().id();
+        let gateway = app.world_mut().spawn(EnumerationState::default()).id();
         let mut conn = TmuxConnection::default();
         let _ = conn.adopt(gateway);
         app.insert_non_send_resource(conn);
@@ -808,9 +819,11 @@ mod tests {
             .id();
         app.add_systems(Update, recapture_settled_panes);
 
-        let captured = |app: &App| {
-            app.world()
-                .resource::<EnumerationState>()
+        let captured = |app: &mut App| {
+            app.world_mut()
+                .query::<&EnumerationState>()
+                .single(app.world())
+                .expect("gateway must carry EnumerationState")
                 .pending
                 .values()
                 .any(|r| matches!(r, PendingReply::Capture { pane } if *pane == PaneId(1)))
@@ -820,13 +833,17 @@ mod tests {
         for _ in 0..(RECAPTURE_SETTLE_FRAMES as usize + 1) {
             app.update();
         }
-        assert!(captured(&app), "first settle must seed the pane");
+        assert!(captured(&mut app), "first settle must seed the pane");
 
         // Simulate the capture/cursor replies landing: clear the in-flight
         // markers (so the next re-seed isn't blocked) and pending (so the second
         // capture is detectable).
         {
-            let mut enumeration = app.world_mut().resource_mut::<EnumerationState>();
+            let mut enumeration = app
+                .world_mut()
+                .query::<&mut EnumerationState>()
+                .single_mut(app.world_mut())
+                .expect("gateway must carry EnumerationState");
             enumeration.panes_with_cursor_pending.clear();
             enumeration.pending.clear();
         }
@@ -843,7 +860,7 @@ mod tests {
             app.update();
         }
         assert!(
-            captured(&app),
+            captured(&mut app),
             "a pane size change must re-arm the re-seed so the grown size is re-captured"
         );
     }
@@ -892,24 +909,27 @@ mod tests {
         app.add_observer(|ev: On<TmuxWindowAdded>, added: Res<Added>| {
             added.0.lock().unwrap().push(ev.window);
         });
-        let gateway = app.world_mut().spawn_empty().id();
+        let gateway = app.world_mut().spawn(EnumerationState::default()).id();
         app.world_mut()
             .non_send_resource_mut::<TmuxConnection>()
             .adopt(gateway);
 
         let mut system_state: SystemState<(
             Commands,
-            ResMut<EnumerationState>,
+            Query<&mut EnumerationState>,
             ResMut<KeyBindings>,
             MessageWriter<PaneOutput>,
             NonSendMut<TmuxConnection>,
         )> = SystemState::new(app.world_mut());
         {
-            let (mut commands, mut enumeration, mut keybindings, mut pane_output, mut connection) =
+            let (mut commands, mut enumeration_q, mut keybindings, mut pane_output, mut connection) =
                 system_state.get_mut(app.world_mut());
+            let mut enumeration = enumeration_q
+                .single_mut()
+                .expect("gateway entity must carry EnumerationState");
             apply_reply(
                 &mut commands,
-                &mut enumeration,
+                &mut *enumeration,
                 &mut keybindings,
                 &mut pane_output,
                 &mut connection,
@@ -919,7 +939,7 @@ mod tests {
             );
             apply_reply(
                 &mut commands,
-                &mut enumeration,
+                &mut *enumeration,
                 &mut keybindings,
                 &mut pane_output,
                 &mut connection,
@@ -979,20 +999,25 @@ mod tests {
         .to_vec();
 
         // Build the app with the full projection pipeline registered: the plugin
-        // inits TmuxProjection / EnumerationState / KeyBindings / CopyModeQueries
-        // / TmuxEventBatch, the PaneOutput / CopyModeReply messages, the
-        // projection observers, and the NonSend TmuxConnection, plus the chained
-        // drain systems (gated on TmuxPresence).
+        // inits TmuxProjection / KeyBindings / CopyModeQueries / TmuxEventBatch,
+        // the PaneOutput / CopyModeReply messages, the projection observers, and
+        // the NonSend TmuxConnection, plus the chained drain systems (gated on
+        // TmuxPresence). EnumerationState is a per-gateway Component, not a
+        // Resource, and is spawned on the gateway below.
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
         app.insert_resource(TmuxPresence);
 
         // Stage the transcript in the gateway's capture buffer and adopt it, so
         // drain_tmux_transport reads these bytes through the connection's own
-        // ProtocolClient — the same path live PTY output takes.
+        // ProtocolClient — the same path live PTY output takes. EnumerationState
+        // is inserted here as on_control_mode_detected does in production.
         let gateway = app
             .world_mut()
-            .spawn(AdoptedControlMode::from_captured(transcript))
+            .spawn((
+                AdoptedControlMode::from_captured(transcript),
+                EnumerationState::default(),
+            ))
             .id();
         app.world_mut()
             .non_send_resource_mut::<TmuxConnection>()
@@ -1084,15 +1109,28 @@ mod tests {
                 .count()
         }
 
+        fn enumeration_pending_nonempty(app: &mut App) -> bool {
+            !app.world_mut()
+                .query::<&EnumerationState>()
+                .single(app.world())
+                .expect("gateway entity must carry EnumerationState")
+                .pending
+                .is_empty()
+        }
+
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
         app.insert_resource(TmuxPresence);
 
-        // First adoption: stage the entry block in the gateway capture buffer and
-        // adopt, then drive the real chain so the attach edge fires.
+        // First adoption: spawn the gateway with EnumerationState (as
+        // on_control_mode_detected does in production), stage the entry block,
+        // and adopt so the attach edge fires.
         let gateway1 = app
             .world_mut()
-            .spawn(AdoptedControlMode::from_captured(entry_block()))
+            .spawn((
+                AdoptedControlMode::from_captured(entry_block()),
+                EnumerationState::default(),
+            ))
             .id();
         app.world_mut()
             .non_send_resource_mut::<TmuxConnection>()
@@ -1110,19 +1148,18 @@ mod tests {
             "first adoption must reach Attached"
         );
         assert!(
-            !app.world()
-                .resource::<EnumerationState>()
-                .pending
-                .is_empty(),
+            enumeration_pending_nonempty(&mut app),
             "first adoption must send the on-attach enumeration"
         );
 
         // Teardown, mirroring src/tmux/adopt.rs::teardown's crate-facing effect:
-        // close the connection and trigger TmuxConnectionReset (which resets the
-        // projection AND ConnectionState back to Idle).
+        // close the connection, despawn the gateway (taking its EnumerationState
+        // with it), and trigger TmuxConnectionReset (which resets the projection
+        // AND ConnectionState back to Idle).
         app.world_mut()
             .non_send_resource_mut::<TmuxConnection>()
             .close();
+        app.world_mut().entity_mut(gateway1).despawn();
         app.world_mut().trigger(TmuxConnectionReset);
         app.update();
 
@@ -1131,19 +1168,16 @@ mod tests {
             ConnectionState::Idle,
             "teardown reset must restore ConnectionState to Idle"
         );
-        assert!(
-            app.world()
-                .resource::<EnumerationState>()
-                .pending
-                .is_empty(),
-            "teardown reset must clear the prior enumeration"
-        );
 
-        // Second adoption: a fresh gateway with a fresh entry block. With the
-        // reset in place this folds Idle -> Attached again and re-enumerates.
+        // Second adoption: a fresh gateway with EnumerationState and a fresh
+        // entry block. With the reset in place this folds Idle -> Attached again
+        // and re-enumerates.
         let gateway2 = app
             .world_mut()
-            .spawn(AdoptedControlMode::from_captured(entry_block()))
+            .spawn((
+                AdoptedControlMode::from_captured(entry_block()),
+                EnumerationState::default(),
+            ))
             .id();
         app.world_mut()
             .non_send_resource_mut::<TmuxConnection>()
@@ -1162,10 +1196,7 @@ mod tests {
             "second adoption must reach Attached again"
         );
         assert!(
-            !app.world()
-                .resource::<EnumerationState>()
-                .pending
-                .is_empty(),
+            enumeration_pending_nonempty(&mut app),
             "second adoption must re-send the on-attach enumeration"
         );
     }

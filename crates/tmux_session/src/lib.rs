@@ -31,8 +31,8 @@ pub use components::{
 pub use connection::{AdoptedHandle, TmuxAttached, TmuxClient, TmuxClientMut, TmuxConnection};
 pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
-    CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, parse_copy_state,
-    parse_window_rows,
+    CopyState, EnumerationState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row,
+    parse_copy_state, parse_window_rows,
 };
 pub use events::{TmuxConnectionClosed, TmuxConnectionReset};
 pub use input::{KeyMods, bevy_key_to_tmux_name};

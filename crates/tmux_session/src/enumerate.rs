@@ -2,7 +2,7 @@
 
 use crate::components::WindowFlags;
 use crate::input::quote;
-use bevy::prelude::Resource;
+use bevy::ecs::component::Component;
 use std::collections::{HashMap, HashSet};
 use tmux_control::{CommandId, TmuxResult};
 use tmux_control_parser::{PaneId, WindowId, WindowLayout};
@@ -244,8 +244,8 @@ pub(crate) enum PendingReply {
 
 /// Correlates in-flight enumeration/query commands by [`CommandId`] and the
 /// capture/cursor pairing buffers, so each drained reply routes to its handler.
-#[derive(Resource, Default)]
-pub(crate) struct EnumerationState {
+#[derive(Component, Default)]
+pub struct EnumerationState {
     pub(crate) pending: HashMap<CommandId, PendingReply>,
     pub(crate) aggressive_resize_checked: bool,
     pub(crate) capture_awaiting_cursor: HashMap<PaneId, Vec<String>>,
