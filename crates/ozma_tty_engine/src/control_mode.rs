@@ -51,20 +51,6 @@ impl AdoptedControlMode {
     pub fn take_captured(&mut self) -> Vec<u8> {
         take(&mut self.captured)
     }
-
-    /// Drains up to `max` bytes from the front of the capture buffer, leaving the
-    /// remainder for the next frame.
-    ///
-    /// Bounds the per-frame protocol-parse work so a pane flooding `%output`
-    /// cannot make one tick parse the entire buffer and stall the schedule. Any
-    /// byte boundary is safe: the protocol client line-buffers a partial tail.
-    pub fn take_captured_up_to(&mut self, max: usize) -> Vec<u8> {
-        if self.captured.len() <= max {
-            return take(&mut self.captured);
-        }
-        let rest = self.captured.split_off(max);
-        std::mem::replace(&mut self.captured, rest)
-    }
 }
 
 /// Fired once on the terminal entity when the control-mode introducer is

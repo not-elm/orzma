@@ -256,8 +256,16 @@ mod tests {
             .non_send_resource_mut::<TmuxConnection>()
             .adopt(gateway);
 
+        // NOTE: cleanup_ozma_sock remove_dir_all's the sock_path's GRANDPARENT.
+        // This path must stay deep + under a non-existent temp subdir so that
+        // grandparent is a harmless absent dir — never a shallow system dir. A
+        // `/tmp/ctl.sock` here has grandparent `/`, i.e. `remove_dir_all("/")`.
         app.insert_resource(ControlPlaneHandle {
-            sock_path: PathBuf::from("/tmp/ctl.sock"),
+            sock_path: std::env::temp_dir()
+                .join("ozmux-cleanup-test-nonexistent")
+                .join("control")
+                .join("sock")
+                .join("control.sock"),
             tokens: TokenRegistry::default(),
         });
 

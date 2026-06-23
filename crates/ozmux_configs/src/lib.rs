@@ -31,8 +31,12 @@ pub struct OzmuxConfigs {
     /// Deprecated and ignored: the startup mode is now determined automatically
     /// (always tmux). Accepted so existing configs carrying it still parse under
     /// `deny_unknown_fields`. Remove after one release.
-    #[serde(default, skip_serializing)]
-    pub startup_mode: Option<String>,
+    #[serde(default)]
+    #[expect(
+        dead_code,
+        reason = "deprecated config key accepted only so existing configs still parse under deny_unknown_fields; never read"
+    )]
+    startup_mode: Option<String>,
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
     /// Theme configuration.

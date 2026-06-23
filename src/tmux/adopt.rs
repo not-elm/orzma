@@ -126,10 +126,13 @@ fn on_control_mode_detected(
             commands.entity(old).despawn();
         }
         commands.trigger(TmuxConnectionReset);
+        // NOTE: re-inserting an already-present `TmuxPresence` below does NOT fire
+        // `Added`, so `resource_added::<TmuxPresence>` consumers — notably
+        // `refresh_ozma_sock`, which re-propagates `$OZMA_SOCK` to the newly
+        // adopted tmux server — would silently skip this re-adoption. Remove it
+        // first so the insert re-arms them for the new gateway.
+        commands.remove_resource::<TmuxPresence>();
     }
-    // NOTE: the pending CommandId for the adopted stream's entry reply is
-    // intentionally dropped: it correlates at the ProtocolClient level and is
-    // harmless if it never matches an EnumerationState entry.
     connection.adopt(gateway);
 
     // NOTE: reparent the gateway out of the Default view BEFORE despawning the

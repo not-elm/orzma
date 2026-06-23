@@ -31,13 +31,6 @@ use tmux_control_parser::PaneId;
 /// would desync the FIFO command/reply correlation).
 const MAX_EVENTS_PER_FRAME: usize = 4096;
 
-/// Hard per-frame cap on bytes fed through `ProtocolClient::feed`. A pane
-/// flooding `%output` can buffer a very large `captured` chunk; feeding it all in
-/// one tick stalls the schedule (visible frame hitch). Drain at most this many
-/// bytes per frame, leaving the remainder for the next — the drive runs every
-/// frame while connected, so the backlog clears over a few ticks.
-const MAX_FEED_BYTES_PER_FRAME: usize = 256 * 1024;
-
 /// Marker resource inserted when the tmux backend is active. Drain systems are
 /// gated on its presence; insert it to activate tmux mode, remove it to idle.
 #[derive(Resource, Default)]
@@ -374,7 +367,7 @@ fn drain_tmux_transport(
     let bytes = match connection.gateway() {
         Some(gateway) => adopted
             .get_mut(gateway)
-            .map(|mut control| control.take_captured_up_to(MAX_FEED_BYTES_PER_FRAME))
+            .map(|mut control| control.take_captured())
             .unwrap_or_default(),
         None => Vec::new(),
     };
