@@ -47,13 +47,26 @@ pub fn cef_plugin(ozma_registry: WebviewAssetRegistry, root_cache_path: &Path) -
     }
 }
 
-/// CEF command-line switches for the embedded webview. The `debug` feature adds
-/// `remote-debugging-port` — a local Chromium DevTools (CDP) endpoint on
-/// `127.0.0.1:9222` for inspecting the embedded webview — and is off by default
-/// so that endpoint is never exposed in normal builds. `CommandLineConfig::default()`
-/// already carries the macOS `use-mock-keychain` switch in either case.
+/// CEF command-line switches for the embedded webview.
+///
+/// On macOS we always append `use-mock-keychain` so CEF's OSCrypt layer derives
+/// its cookie / Local State encryption key from a mock keychain rather than the
+/// real login keychain. Without it, release / bundled builds pop the "ozmux
+/// wants to use … Chromium Safe Storage" keychain prompt on launch:
+/// `bevy_cef_core`'s `CommandLineConfig::default()` only carries this switch under
+/// `debug_assertions`, so it is absent from the `dist` profile. ozmux's CEF
+/// profile is an ephemeral per-process temp dir (see `cef_profile`), so a mock
+/// key costs no real persistence. `effective_command_line_config` de-duplicates,
+/// so re-adding it on debug builds is harmless.
+///
+/// The `debug` feature additionally exposes `remote-debugging-port` — a local
+/// Chromium DevTools (CDP) endpoint on `127.0.0.1:9222` for inspecting the
+/// embedded webview — and is off by default so that endpoint is never exposed in
+/// normal builds.
 fn cef_command_line_config() -> CommandLineConfig {
     let config = CommandLineConfig::default();
+    #[cfg(target_os = "macos")]
+    let config = config.with_switch("use-mock-keychain");
     #[cfg(feature = "debug")]
     let config = config.with_switch_value("remote-debugging-port", "9222");
     config
