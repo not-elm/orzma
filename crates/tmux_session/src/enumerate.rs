@@ -245,7 +245,7 @@ pub(crate) enum PendingReply {
 /// Correlates in-flight enumeration/query commands by [`CommandId`] and the
 /// capture/cursor pairing buffers, so each drained reply routes to its handler.
 #[derive(Component, Default)]
-pub struct EnumerationState {
+pub(crate) struct EnumerationState {
     pub(crate) pending: HashMap<CommandId, PendingReply>,
     pub(crate) aggressive_resize_checked: bool,
     pub(crate) capture_awaiting_cursor: HashMap<PaneId, Vec<String>>,

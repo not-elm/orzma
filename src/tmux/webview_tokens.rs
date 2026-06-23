@@ -13,7 +13,9 @@
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalRawWrite;
 use ozma_webview::ControlPlaneHandle;
-use ozmux_tmux::{SetEnvironmentGlobal, TmuxClient, TmuxPane, UnsetEnvironmentGlobal};
+use ozmux_tmux::{
+    SetEnvironmentGlobal, TmuxClient, TmuxClientMut, TmuxPane, UnsetEnvironmentGlobal,
+};
 
 /// Registers the tmux `%N` token binder and `$OZMA_SOCK` propagation systems.
 pub(crate) struct WebviewTokensPlugin;
@@ -57,10 +59,7 @@ fn bind_tmux_pane_tokens(
 /// overwrites it.
 ///
 /// No-op when the control plane is absent (no `ControlPlaneHandle`).
-fn refresh_ozma_sock(
-    mut client: Single<&mut TmuxClient>,
-    control: Option<Res<ControlPlaneHandle>>,
-) {
+fn refresh_ozma_sock(mut client: TmuxClientMut<'_, '_>, control: Option<Res<ControlPlaneHandle>>) {
     let Some(control) = control else {
         return;
     };

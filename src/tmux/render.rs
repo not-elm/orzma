@@ -14,7 +14,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozma_webview::OscWebviewGate;
 use ozmux_tmux::{
-    ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxClient, TmuxCommand, TmuxPane,
+    ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxClientMut, TmuxCommand, TmuxPane,
     TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,
 };
 use std::collections::HashMap;
@@ -547,7 +547,7 @@ fn reconcile_decision(
 /// drift and recover without spinning when tmux refuses to grow the window.
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
-    mut client: Single<&mut TmuxClient>,
+    mut client: TmuxClientMut<'_, '_>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
     active: Query<(&TmuxWindow, Option<&TmuxWindowLayout>), With<ActiveWindow>>,

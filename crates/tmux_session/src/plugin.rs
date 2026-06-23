@@ -201,10 +201,20 @@ const RECAPTURE_SETTLE_FRAMES: u8 = 3;
 /// the two capture/cursor pairs never collide.
 fn recapture_settled_panes(
     mut watch: Local<HashMap<PaneId, PaneRecaptureState>>,
-    mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
+    mut last_gateway: Local<Option<Entity>>,
+    mut client: Single<(Entity, &mut TmuxClient, &mut EnumerationState)>,
     panes: Query<&TmuxPane>,
 ) {
-    let (client, enumeration) = &mut *client;
+    let (gateway, client, enumeration) = &mut *client;
+    let gateway = *gateway;
+    // NOTE: a re-adoption spawns a fresh gateway entity; stale `done: true` entries
+    // from the previous connection would suppress the one-shot re-seed on reconnect
+    // if a restarted tmux server reuses a pane id. Clear the watch whenever the
+    // gateway entity changes so every reconnect re-seeds all panes from scratch.
+    if *last_gateway != Some(gateway) {
+        watch.clear();
+        *last_gateway = Some(gateway);
+    }
     let present: HashSet<PaneId> = panes.iter().map(|pane| pane.id).collect();
     watch.retain(|id, _| present.contains(id));
 
@@ -1090,6 +1100,83 @@ mod tests {
         assert!(
             enumeration_pending_nonempty(&mut app),
             "second adoption must re-send the on-attach enumeration"
+        );
+    }
+
+    #[test]
+    fn recapture_clears_watch_on_gateway_change_so_reconnect_reseeds_reused_pane_id() {
+        // Regression: after teardown + re-adoption, recapture_settled_panes kept
+        // stale `done: true` entries in its Local<HashMap>. If a restarted tmux
+        // server reuses a pane id, the stale entry suppressed the one-shot re-seed
+        // on reconnect, leaving the pane blank until the user typed.
+        use tmux_control_parser::CellDims;
+
+        let mut app = App::new();
+
+        let dims = CellDims {
+            width: 80,
+            height: 24,
+            xoff: 0,
+            yoff: 0,
+        };
+
+        // First gateway + pane %1.
+        let gateway1 = app.world_mut().spawn(TmuxClient::new_adopted()).id();
+        let pane1 = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims,
+            })
+            .id();
+        app.add_systems(Update, recapture_settled_panes);
+
+        let pending_has_capture = |app: &mut App| {
+            app.world_mut()
+                .query::<&EnumerationState>()
+                .single(app.world())
+                .expect("gateway must carry EnumerationState")
+                .pending
+                .values()
+                .any(|r| matches!(r, PendingReply::Capture { pane } if *pane == PaneId(1)))
+        };
+
+        // Settle pane %1 on gateway1 so the re-seed fires and done=true.
+        for _ in 0..(RECAPTURE_SETTLE_FRAMES as usize + 1) {
+            app.update();
+        }
+        assert!(pending_has_capture(&mut app), "first settle must seed %1");
+
+        // Simulate replies landing + teardown: despawn gateway1 and its pane.
+        {
+            let mut enumeration = app
+                .world_mut()
+                .query::<&mut EnumerationState>()
+                .single_mut(app.world_mut())
+                .expect("gateway must carry EnumerationState");
+            enumeration.panes_with_cursor_pending.clear();
+            enumeration.pending.clear();
+        }
+        app.world_mut().entity_mut(pane1).despawn();
+        app.world_mut().entity_mut(gateway1).despawn();
+        // One update to flush despawns.
+        app.update();
+
+        // Re-adoption: fresh gateway entity + fresh pane reusing id %1.
+        let _gateway2 = app.world_mut().spawn(TmuxClient::new_adopted()).id();
+        app.world_mut().spawn(TmuxPane {
+            id: PaneId(1),
+            dims,
+        });
+
+        // Settle the reconnected pane — the watch.clear() on gateway change must
+        // re-arm the one-shot so the re-seed fires again.
+        for _ in 0..(RECAPTURE_SETTLE_FRAMES as usize + 1) {
+            app.update();
+        }
+        assert!(
+            pending_has_capture(&mut app),
+            "re-adoption with a reused pane id must re-seed even after the first gateway's done=true"
         );
     }
 }
