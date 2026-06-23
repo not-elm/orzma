@@ -72,18 +72,15 @@ fn drain_pty_chunks(
 /// Drains `reply_rx` (alacritty PtyWrite responses) and writes them
 /// back to the PTY. Concatenates per-entity into one `write_all` to
 /// minimize syscalls.
-fn drain_pty_writes(mut q: Query<(&TerminalHandle, &mut PtyHandle, Option<&AdoptedControlMode>)>) {
-    q.par_iter_mut().for_each(|(handle, mut pty, adopted)| {
+///
+/// NOTE: excludes adopted gateways via `Without<AdoptedControlMode>` — their PTY
+/// is the tmux -CC control stream, not a VT, so writing alacritty VT replies into
+/// it would corrupt the protocol. Their VT is frozen post-adoption (see
+/// `process_pty_chunks`), so no new replies accrue and skipping the drain is safe.
+fn drain_pty_writes(mut q: Query<(&TerminalHandle, &mut PtyHandle), Without<AdoptedControlMode>>) {
+    q.par_iter_mut().for_each(|(handle, mut pty)| {
         let mut buf: Vec<u8> = Vec::new();
         handle.drain_replies_into(&mut buf);
-        // NOTE: an adopted gateway's PTY is the tmux -CC control stream, not a
-        // VT. Its alacritty reply bytes (e.g. stale DSR/DA answers queued by the
-        // pre-tmux shell) must be drained-and-discarded, never written back, or
-        // they corrupt the control protocol. Drain still happens above to keep
-        // the unbounded reply channel from growing.
-        if adopted.is_some() {
-            return;
-        }
         if !buf.is_empty()
             && let Err(e) = pty.write_all(&buf)
         {
