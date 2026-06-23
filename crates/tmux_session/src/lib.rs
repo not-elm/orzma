@@ -28,7 +28,7 @@ pub use command::{
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
 };
-pub use connection::{AdoptedHandle, TmuxConnection};
+pub use connection::{AdoptedHandle, TmuxAttached, TmuxClient, TmuxClientMut, TmuxConnection};
 pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
     CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, parse_copy_state,

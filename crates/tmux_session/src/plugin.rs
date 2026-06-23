@@ -104,6 +104,15 @@ impl TmuxEventBatch {
         &self.0
     }
 
+    /// Returns whether this frame's batch contains any protocol event.
+    ///
+    /// Used by the attach-edge detector instead of re-scanning the batch.
+    pub fn has_protocol(&self) -> bool {
+        self.0
+            .iter()
+            .any(|e| matches!(e, TransportEvent::Protocol(_)))
+    }
+
     /// Drops any buffered events.
     ///
     /// Called on connection reset so a previous connection's events (notably a
