@@ -49,7 +49,7 @@ pub struct ExitCopyMode {
 
 /// Observer for `EnterCopyModeActionEvent`. Inserts `CopyModeState` on the
 /// target entity and calls `TerminalHandle::enter_vi_mode`.
-pub(crate) fn handle_enter_copy_mode_request(
+fn handle_enter_copy_mode_request(
     ev: On<EnterCopyModeActionEvent>,
     mut commands: Commands,
     mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,
@@ -66,7 +66,7 @@ pub(crate) fn handle_enter_copy_mode_request(
 /// Observer for `ExitCopyMode`. Removes `CopyModeState`, clears any
 /// selection, and calls `TerminalHandle::exit_vi_mode` (which snaps
 /// the viewport to the live tail).
-pub(crate) fn handle_exit_copy_mode(
+fn handle_exit_copy_mode(
     ev: On<ExitCopyMode>,
     mut commands: Commands,
     mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,

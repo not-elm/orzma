@@ -22,7 +22,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::Line;
 use alacritty_terminal::index::Side as ASide;
 use alacritty_terminal::term::{Config, TermMode};
-use alacritty_terminal::vi_mode::ViMotion;
+use alacritty_terminal::vi_mode::{ViModeCursor, ViMotion};
 use alacritty_terminal::vte::ansi::Processor;
 use alacritty_terminal::vte::ansi::{Color as AColor, Rgb};
 use bevy::ecs::component::Component;
@@ -331,7 +331,10 @@ impl TerminalHandle {
     /// and the coalescer is armed so the new viewport reaches the
     /// renderer even when the shell is idle.
     pub fn scroll(&mut self, coalescer: &mut Coalescer, delta: i32) {
+        let before = self.term.grid().display_offset() as i32;
+        let original = self.term.vi_mode_cursor;
         self.term.scroll_display(Scroll::Delta(delta));
+        self.track_vi_cursor_after_scroll(before, original);
         self.stage_full_damage_and_arm(coalescer);
     }
 
@@ -451,16 +454,34 @@ impl TerminalHandle {
     /// clamps the vi cursor into the new viewport automatically. Stages
     /// a Full damage emit.
     pub fn scroll_page_up(&mut self, coalescer: &mut Coalescer) {
-        self.term
-            .scroll_display(alacritty_terminal::grid::Scroll::PageUp);
+        let before = self.term.grid().display_offset() as i32;
+        let original = self.term.vi_mode_cursor;
+        self.term.scroll_display(Scroll::PageUp);
+        self.track_vi_cursor_after_scroll(before, original);
         self.stage_full_damage_and_arm(coalescer);
     }
 
     /// Scrolls the viewport one page down (`Scroll::PageDown`).
     pub fn scroll_page_down(&mut self, coalescer: &mut Coalescer) {
-        self.term
-            .scroll_display(alacritty_terminal::grid::Scroll::PageDown);
+        let before = self.term.grid().display_offset() as i32;
+        let original = self.term.vi_mode_cursor;
+        self.term.scroll_display(Scroll::PageDown);
+        self.track_vi_cursor_after_scroll(before, original);
         self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Moves the vi cursor to track a viewport scroll, keeping it on the same
+    /// screen row before snapping to the first occupied cell — mirroring
+    /// alacritty's per-scroll vi-cursor handling. `Term::scroll_display` only
+    /// clamps the vi cursor into the viewport, so without this a relative scroll
+    /// (half/line/page) would leave the cursor stuck at the viewport edge
+    /// instead of moving with the content. No-op outside vi mode.
+    fn track_vi_cursor_after_scroll(&mut self, before_offset: i32, original: ViModeCursor) {
+        if !self.term.mode().contains(TermMode::VI) {
+            return;
+        }
+        let moved = self.term.grid().display_offset() as i32 - before_offset;
+        self.term.vi_mode_cursor = original.scroll(&self.term, moved);
     }
 
     /// Start a selection of `ty` anchored at `viewport_point` with
@@ -1524,6 +1545,50 @@ mod tests {
             h.term.grid().display_offset(),
             0,
             "scroll_to_bottom must pin the viewport to the live tail",
+        );
+    }
+
+    #[test]
+    fn page_scroll_in_vi_mode_keeps_cursor_screen_row() {
+        use alacritty_terminal::vi_mode::ViMotion;
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut coalescer = Coalescer::default();
+        let mut payload = Vec::new();
+        for i in 1..=40 {
+            payload.extend_from_slice(format!("L{i}\r\n").as_bytes());
+        }
+        h.advance(&payload);
+        h.enter_vi_mode(&mut coalescer);
+        // Move to a middle screen row without scrolling (stays within the viewport).
+        h.vi_motion(&mut coalescer, ViMotion::Up);
+        h.vi_motion(&mut coalescer, ViMotion::Up);
+        let before_offset = h.term.grid().display_offset() as i32;
+        let before_row = h.term.vi_mode_cursor.point.line.0 + before_offset;
+        h.scroll_page_up(&mut coalescer);
+        let after_row = h.term.vi_mode_cursor.point.line.0 + h.term.grid().display_offset() as i32;
+        assert!(
+            h.term.grid().display_offset() as i32 > before_offset,
+            "page-up must scroll further into history",
+        );
+        assert_eq!(
+            after_row, before_row,
+            "vi cursor must move with the viewport (same screen row), \
+             not snap to the viewport edge",
         );
     }
 

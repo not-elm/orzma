@@ -6,6 +6,7 @@
 //! keys handled WHILE copy mode is active.
 
 use crate::app_mode::AppMode;
+use crate::default_input::should_disable_input;
 use crate::input::InputPhase;
 use crate::input::current_modifiers;
 use crate::input::ime::ImeState;
@@ -60,10 +61,9 @@ enum SelectionOp {
 enum CopyModeIntent {
     Motion(ViMotion),
     Scroll(ScrollKind),
-    Selection(SelectionOp),
+    SelectionToggle(SelectionType),
     Yank,
     Exit,
-    Ignore,
 }
 
 #[derive(EntityEvent, Debug)]
@@ -85,42 +85,42 @@ fn resolve_selection_toggle(
     }
 }
 
-/// Maps one keypress to a copy-mode intent. Pure (no world access).
-/// `meta`/`alt` chords are app shortcuts (or Option-as-Meta), never vi keys.
+/// Maps one keypress to a copy-mode intent, or `None` when the key is unbound
+/// in copy mode. Pure (no world access). `meta`/`alt` chords are app shortcuts
+/// (or Option-as-Meta), never vi keys.
 fn decide_copy_mode_key(
     logical_key: &Key,
     key_code: KeyCode,
     mods: Modifiers,
-    selection: Option<SelectionType>,
-) -> CopyModeIntent {
+) -> Option<CopyModeIntent> {
     if mods.meta || mods.alt {
-        return CopyModeIntent::Ignore;
+        return None;
     }
     if mods.ctrl {
         return match key_code {
-            KeyCode::KeyF => CopyModeIntent::Scroll(ScrollKind::PageDown),
-            KeyCode::KeyB => CopyModeIntent::Scroll(ScrollKind::PageUp),
-            KeyCode::KeyD => CopyModeIntent::Scroll(ScrollKind::HalfDown),
-            KeyCode::KeyU => CopyModeIntent::Scroll(ScrollKind::HalfUp),
-            KeyCode::KeyE => CopyModeIntent::Scroll(ScrollKind::LineDown),
-            KeyCode::KeyY => CopyModeIntent::Scroll(ScrollKind::LineUp),
-            KeyCode::KeyC => CopyModeIntent::Exit,
-            _ => CopyModeIntent::Ignore,
+            KeyCode::KeyF => Some(CopyModeIntent::Scroll(ScrollKind::PageDown)),
+            KeyCode::KeyB => Some(CopyModeIntent::Scroll(ScrollKind::PageUp)),
+            KeyCode::KeyD => Some(CopyModeIntent::Scroll(ScrollKind::HalfDown)),
+            KeyCode::KeyU => Some(CopyModeIntent::Scroll(ScrollKind::HalfUp)),
+            KeyCode::KeyE => Some(CopyModeIntent::Scroll(ScrollKind::LineDown)),
+            KeyCode::KeyY => Some(CopyModeIntent::Scroll(ScrollKind::LineUp)),
+            KeyCode::KeyC => Some(CopyModeIntent::Exit),
+            _ => None,
         };
     }
     match logical_key {
-        Key::Escape => return CopyModeIntent::Exit,
-        Key::Enter => return CopyModeIntent::Yank,
-        Key::ArrowLeft => return CopyModeIntent::Motion(ViMotion::Left),
-        Key::ArrowDown => return CopyModeIntent::Motion(ViMotion::Down),
-        Key::ArrowUp => return CopyModeIntent::Motion(ViMotion::Up),
-        Key::ArrowRight => return CopyModeIntent::Motion(ViMotion::Right),
+        Key::Escape => return Some(CopyModeIntent::Exit),
+        Key::Enter => return Some(CopyModeIntent::Yank),
+        Key::ArrowLeft => return Some(CopyModeIntent::Motion(ViMotion::Left)),
+        Key::ArrowDown => return Some(CopyModeIntent::Motion(ViMotion::Down)),
+        Key::ArrowUp => return Some(CopyModeIntent::Motion(ViMotion::Up)),
+        Key::ArrowRight => return Some(CopyModeIntent::Motion(ViMotion::Right)),
         _ => {}
     }
     let Key::Character(s) = logical_key else {
-        return CopyModeIntent::Ignore;
+        return None;
     };
-    match s.as_str() {
+    Some(match s.as_str() {
         "h" => CopyModeIntent::Motion(ViMotion::Left),
         "j" => CopyModeIntent::Motion(ViMotion::Down),
         "k" => CopyModeIntent::Motion(ViMotion::Up),
@@ -142,20 +142,19 @@ fn decide_copy_mode_key(
         "%" => CopyModeIntent::Motion(ViMotion::Bracket),
         "g" => CopyModeIntent::Scroll(ScrollKind::Top),
         "G" => CopyModeIntent::Scroll(ScrollKind::Bottom),
-        "v" => {
-            CopyModeIntent::Selection(resolve_selection_toggle(selection, SelectionType::Simple))
-        }
-        "V" => CopyModeIntent::Selection(resolve_selection_toggle(selection, SelectionType::Lines)),
+        "v" => CopyModeIntent::SelectionToggle(SelectionType::Simple),
+        "V" => CopyModeIntent::SelectionToggle(SelectionType::Lines),
         "y" => CopyModeIntent::Yank,
         "q" => CopyModeIntent::Exit,
-        _ => CopyModeIntent::Ignore,
-    }
+        _ => return None,
+    })
 }
 
 /// Gather system: reads `KeyboardInput` for the focused copy-mode terminal,
 /// decides an intent per key, and triggers `CopyModeKeyAction`. Suspends
-/// (and drains events) while the picker is open, IME is composing, a webview
-/// holds focus, or the window is unfocused.
+/// (and drains events) while input is disabled (picker open, IME composing,
+/// webview focused, or window unfocused) — the same coarse guard
+/// `maintain_input_gates` uses (`should_disable_input`).
 fn copy_mode_keys(
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
@@ -165,7 +164,7 @@ fn copy_mode_keys(
     bevy_keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     terminal: Query<
-        (Entity, &TerminalHandle),
+        Entity,
         (
             With<OzmaTerminal>,
             With<KeyboardFocused>,
@@ -173,31 +172,36 @@ fn copy_mode_keys(
         ),
     >,
 ) {
-    let Ok((entity, handle)) = terminal.single() else {
+    let Ok(entity) = terminal.single() else {
         events.clear();
         return;
     };
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    if picker.open || ime.is_composing() || focused_webview.0.is_some() || !focused {
+    if should_disable_input(
+        picker.open,
+        ime.is_composing(),
+        focused,
+        focused_webview.0.is_some(),
+    ) {
         events.clear();
         return;
     }
     let mods = current_modifiers(&bevy_keys);
-    let selection = handle.selection_type();
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        let intent = decide_copy_mode_key(&ev.logical_key, ev.key_code, mods, selection);
-        if intent == CopyModeIntent::Ignore {
-            continue;
+        if let Some(intent) = decide_copy_mode_key(&ev.logical_key, ev.key_code, mods) {
+            commands.trigger(CopyModeKeyAction { entity, intent });
         }
-        commands.trigger(CopyModeKeyAction { entity, intent });
     }
 }
 
 /// Observer: applies a `CopyModeKeyAction` to the target terminal's engine
-/// handle. `Yank`/`Exit` additionally trigger `ExitCopyMode`.
+/// handle. The `v`/`V` toggle resolves against the LIVE selection at apply
+/// time (observers for queued triggers run sequentially, so two same-frame
+/// toggles see each other's effect). `Yank`/`Exit` additionally trigger
+/// `ExitCopyMode`.
 fn on_copy_mode_key_action(
     ev: On<CopyModeKeyAction>,
     mut commands: Commands,
@@ -210,7 +214,10 @@ fn on_copy_mode_key_action(
     match ev.intent {
         CopyModeIntent::Motion(m) => handle.vi_motion(&mut coalescer, m),
         CopyModeIntent::Scroll(kind) => apply_scroll(&mut handle, &mut coalescer, kind),
-        CopyModeIntent::Selection(op) => apply_selection(&mut handle, &mut coalescer, op),
+        CopyModeIntent::SelectionToggle(kind) => {
+            let op = resolve_selection_toggle(handle.selection_type(), kind);
+            apply_selection(&mut handle, &mut coalescer, op);
+        }
         CopyModeIntent::Yank => {
             if let Some(text) = handle.selection_to_string() {
                 clipboard.write(text);
@@ -220,25 +227,34 @@ fn on_copy_mode_key_action(
         CopyModeIntent::Exit => {
             commands.trigger(ExitCopyMode { entity: ev.entity });
         }
-        CopyModeIntent::Ignore => {}
     }
 }
 
-/// Applies a scroll intent. Half-page uses half the visible row count;
-/// positive deltas move into history, negative toward the live tail.
+/// Applies a scroll intent. Relative scrolls (half/line/page) move the vi
+/// cursor with the viewport; `Top`/`Bottom` snap it to the buffer extremes.
 fn apply_scroll(handle: &mut TerminalHandle, coalescer: &mut Coalescer, kind: ScrollKind) {
-    let rows = handle.read_geometry().1 as i32;
-    let half = (rows / 2).max(1);
     match kind {
         ScrollKind::PageUp => handle.scroll_page_up(coalescer),
         ScrollKind::PageDown => handle.scroll_page_down(coalescer),
-        ScrollKind::HalfUp => handle.scroll(coalescer, half),
-        ScrollKind::HalfDown => handle.scroll(coalescer, -half),
+        ScrollKind::HalfUp => {
+            let half = half_page(handle);
+            handle.scroll(coalescer, half);
+        }
+        ScrollKind::HalfDown => {
+            let half = half_page(handle);
+            handle.scroll(coalescer, -half);
+        }
         ScrollKind::LineUp => handle.scroll(coalescer, 1),
         ScrollKind::LineDown => handle.scroll(coalescer, -1),
         ScrollKind::Top => handle.scroll_to_top(coalescer),
         ScrollKind::Bottom => handle.scroll_to_bottom(coalescer),
     }
+}
+
+/// Half the visible row count (at least 1), for half-page scrolling. Read
+/// lazily so the non-half scroll keys do not pay for a geometry read.
+fn half_page(handle: &TerminalHandle) -> i32 {
+    (handle.read_geometry().1 as i32 / 2).max(1)
 }
 
 /// Applies a selection op. `Change` falls back to `Start` when no selection
@@ -277,25 +293,20 @@ mod tests {
     fn plain_motions_map_to_vi_motions() {
         let n = mods(false, false, false, false);
         assert_eq!(
-            decide_copy_mode_key(&ch("h"), KeyCode::KeyH, n, None),
-            CopyModeIntent::Motion(ViMotion::Left)
+            decide_copy_mode_key(&ch("h"), KeyCode::KeyH, n),
+            Some(CopyModeIntent::Motion(ViMotion::Left))
         );
         assert_eq!(
-            decide_copy_mode_key(&ch("$"), KeyCode::Digit4, n, None),
-            CopyModeIntent::Motion(ViMotion::Last)
+            decide_copy_mode_key(&ch("$"), KeyCode::Digit4, n),
+            Some(CopyModeIntent::Motion(ViMotion::Last))
         );
         assert_eq!(
-            decide_copy_mode_key(&ch("w"), KeyCode::KeyW, n, None),
-            CopyModeIntent::Motion(ViMotion::SemanticRight)
+            decide_copy_mode_key(&ch("w"), KeyCode::KeyW, n),
+            Some(CopyModeIntent::Motion(ViMotion::SemanticRight))
         );
         assert_eq!(
-            decide_copy_mode_key(
-                &ch("W"),
-                KeyCode::KeyW,
-                mods(false, true, false, false),
-                None
-            ),
-            CopyModeIntent::Motion(ViMotion::WordRight)
+            decide_copy_mode_key(&ch("W"), KeyCode::KeyW, mods(false, true, false, false)),
+            Some(CopyModeIntent::Motion(ViMotion::WordRight))
         );
     }
 
@@ -303,16 +314,16 @@ mod tests {
     fn ctrl_combos_map_to_scroll_and_exit() {
         let c = mods(true, false, false, false);
         assert_eq!(
-            decide_copy_mode_key(&ch("f"), KeyCode::KeyF, c, None),
-            CopyModeIntent::Scroll(ScrollKind::PageDown)
+            decide_copy_mode_key(&ch("f"), KeyCode::KeyF, c),
+            Some(CopyModeIntent::Scroll(ScrollKind::PageDown))
         );
         assert_eq!(
-            decide_copy_mode_key(&ch("u"), KeyCode::KeyU, c, None),
-            CopyModeIntent::Scroll(ScrollKind::HalfUp)
+            decide_copy_mode_key(&ch("u"), KeyCode::KeyU, c),
+            Some(CopyModeIntent::Scroll(ScrollKind::HalfUp))
         );
         assert_eq!(
-            decide_copy_mode_key(&ch("c"), KeyCode::KeyC, c, None),
-            CopyModeIntent::Exit
+            decide_copy_mode_key(&ch("c"), KeyCode::KeyC, c),
+            Some(CopyModeIntent::Exit)
         );
     }
 
@@ -320,17 +331,25 @@ mod tests {
     fn g_and_shift_g_map_to_top_and_bottom() {
         let n = mods(false, false, false, false);
         assert_eq!(
-            decide_copy_mode_key(&ch("g"), KeyCode::KeyG, n, None),
-            CopyModeIntent::Scroll(ScrollKind::Top)
+            decide_copy_mode_key(&ch("g"), KeyCode::KeyG, n),
+            Some(CopyModeIntent::Scroll(ScrollKind::Top))
         );
         assert_eq!(
-            decide_copy_mode_key(
-                &ch("G"),
-                KeyCode::KeyG,
-                mods(false, true, false, false),
-                None
-            ),
-            CopyModeIntent::Scroll(ScrollKind::Bottom)
+            decide_copy_mode_key(&ch("G"), KeyCode::KeyG, mods(false, true, false, false)),
+            Some(CopyModeIntent::Scroll(ScrollKind::Bottom))
+        );
+    }
+
+    #[test]
+    fn selection_keys_map_to_toggle() {
+        let n = mods(false, false, false, false);
+        assert_eq!(
+            decide_copy_mode_key(&ch("v"), KeyCode::KeyV, n),
+            Some(CopyModeIntent::SelectionToggle(SelectionType::Simple))
+        );
+        assert_eq!(
+            decide_copy_mode_key(&ch("V"), KeyCode::KeyV, mods(false, true, false, false)),
+            Some(CopyModeIntent::SelectionToggle(SelectionType::Lines))
         );
     }
 
@@ -338,38 +357,28 @@ mod tests {
     fn named_keys_map() {
         let n = mods(false, false, false, false);
         assert_eq!(
-            decide_copy_mode_key(&Key::Escape, KeyCode::Escape, n, None),
-            CopyModeIntent::Exit
+            decide_copy_mode_key(&Key::Escape, KeyCode::Escape, n),
+            Some(CopyModeIntent::Exit)
         );
         assert_eq!(
-            decide_copy_mode_key(&Key::Enter, KeyCode::Enter, n, None),
-            CopyModeIntent::Yank
+            decide_copy_mode_key(&Key::Enter, KeyCode::Enter, n),
+            Some(CopyModeIntent::Yank)
         );
         assert_eq!(
-            decide_copy_mode_key(&Key::ArrowDown, KeyCode::ArrowDown, n, None),
-            CopyModeIntent::Motion(ViMotion::Down)
+            decide_copy_mode_key(&Key::ArrowDown, KeyCode::ArrowDown, n),
+            Some(CopyModeIntent::Motion(ViMotion::Down))
         );
     }
 
     #[test]
-    fn meta_and_alt_chords_are_ignored() {
+    fn meta_and_alt_chords_return_none() {
         assert_eq!(
-            decide_copy_mode_key(
-                &ch("q"),
-                KeyCode::KeyQ,
-                mods(false, false, false, true),
-                None
-            ),
-            CopyModeIntent::Ignore
+            decide_copy_mode_key(&ch("q"), KeyCode::KeyQ, mods(false, false, false, true)),
+            None
         );
         assert_eq!(
-            decide_copy_mode_key(
-                &ch("j"),
-                KeyCode::KeyJ,
-                mods(false, false, true, false),
-                None
-            ),
-            CopyModeIntent::Ignore
+            decide_copy_mode_key(&ch("j"), KeyCode::KeyJ, mods(false, false, true, false)),
+            None
         );
     }
 
@@ -393,22 +402,19 @@ mod tests {
     fn yank_and_exit_keys() {
         let n = mods(false, false, false, false);
         assert_eq!(
-            decide_copy_mode_key(&ch("y"), KeyCode::KeyY, n, None),
-            CopyModeIntent::Yank
+            decide_copy_mode_key(&ch("y"), KeyCode::KeyY, n),
+            Some(CopyModeIntent::Yank)
         );
         assert_eq!(
-            decide_copy_mode_key(&ch("q"), KeyCode::KeyQ, n, None),
-            CopyModeIntent::Exit
+            decide_copy_mode_key(&ch("q"), KeyCode::KeyQ, n),
+            Some(CopyModeIntent::Exit)
         );
     }
 
     #[test]
-    fn unbound_keys_are_ignored() {
+    fn unbound_keys_return_none() {
         let n = mods(false, false, false, false);
-        assert_eq!(
-            decide_copy_mode_key(&ch("z"), KeyCode::KeyZ, n, None),
-            CopyModeIntent::Ignore
-        );
+        assert_eq!(decide_copy_mode_key(&ch("z"), KeyCode::KeyZ, n), None);
     }
 
     #[test]

@@ -154,7 +154,7 @@ fn apply_ime_commit_to_terminal(
     });
 }
 
-fn should_disable_input(
+pub(crate) fn should_disable_input(
     picker_open: bool,
     composing: bool,
     window_focused: bool,
