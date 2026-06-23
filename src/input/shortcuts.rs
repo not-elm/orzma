@@ -248,9 +248,9 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_resolve_to_five() {
+    fn default_bindings_resolve_to_six() {
         let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
-        assert_eq!(r.0.len(), 5);
+        assert_eq!(r.0.len(), 6);
     }
 
     #[test]
@@ -342,8 +342,8 @@ mod tests {
         assert!(b.paste.meta && !b.paste.ctrl && !b.paste.shift && !b.paste.alt);
         assert_eq!(
             b.reserved.len(),
-            4,
-            "Quit, OpenPicker, ReleaseWebviewFocus, DetachSession"
+            5,
+            "Quit, OpenPicker, ReleaseWebviewFocus, DetachSession, EnterCopyMode"
         );
         assert!(
             !b.reserved

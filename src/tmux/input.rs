@@ -317,6 +317,7 @@ fn forward_keys_to_tmux(
                 ShortcutAction::DetachSession => {
                     next_mode.set(AppMode::Default);
                 }
+                ShortcutAction::EnterCopyMode => {}
             }
             continue;
         }
