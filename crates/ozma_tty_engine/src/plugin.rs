@@ -77,8 +77,10 @@ fn drain_pty_chunks(
 /// is the tmux -CC control stream, not a VT, so writing alacritty VT replies into
 /// it would corrupt the protocol. Their VT is frozen post-adoption (see
 /// `process_pty_chunks`), so no new replies accrue and skipping the drain is safe.
-fn drain_pty_writes(mut q: Query<(&TerminalHandle, &mut PtyHandle), Without<AdoptedControlMode>>) {
-    q.par_iter_mut().for_each(|(handle, mut pty)| {
+fn drain_pty_writes(
+    mut terminals: Query<(&TerminalHandle, &mut PtyHandle), Without<AdoptedControlMode>>,
+) {
+    terminals.par_iter_mut().for_each(|(handle, mut pty)| {
         let mut buf: Vec<u8> = Vec::new();
         handle.drain_replies_into(&mut buf);
         if !buf.is_empty()
@@ -93,11 +95,12 @@ fn drain_pty_writes(mut q: Query<(&TerminalHandle, &mut PtyHandle), Without<Adop
 /// rescues the bootstrap snapshot for terminals that have not yet
 /// produced PTY output.
 fn check_deadline_flush(
+    mut terminals: Query<(Entity, &mut TerminalHandle, &mut Coalescer)>,
     par_commands: ParallelCommands,
-    mut q: Query<(Entity, &mut TerminalHandle, &mut Coalescer)>,
 ) {
     let now = Instant::now();
-    q.par_iter_mut()
+    terminals
+        .par_iter_mut()
         .for_each(|(entity, mut handle, mut coalescer)| {
             // NOTE: bootstrap rescue — alacritty's first damage() returns Full
             // even with no chunks yet, so we can emit the Initial snapshot.
