@@ -9,7 +9,7 @@ use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
 use crate::picker::SessionPicker;
-use crate::ui::copy_mode::EnterCopyModeActionEvent;
+use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
@@ -52,16 +52,25 @@ fn maintain_input_gates(
     ime: Res<ImeState>,
     focused_webview: Res<FocusedWebview>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    terminals: Query<(Entity, Has<KeyboardDisabled>, Has<MouseDisabled>), With<OzmaTerminal>>,
+    terminals: Query<
+        (
+            Entity,
+            Has<KeyboardDisabled>,
+            Has<MouseDisabled>,
+            Has<CopyModeState>,
+        ),
+        With<OzmaTerminal>,
+    >,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    let disable = should_disable_input(
+    let global_disable = should_disable_input(
         picker.open,
         ime.is_composing(),
         focused,
         focused_webview.0.is_some(),
     );
-    for (entity, has_keyboard, has_mouse) in terminals.iter() {
+    for (entity, has_keyboard, has_mouse, in_copy_mode) in terminals.iter() {
+        let disable = global_disable || in_copy_mode;
         if disable && !has_keyboard {
             commands.entity(entity).insert(KeyboardDisabled);
         } else if !disable && has_keyboard {

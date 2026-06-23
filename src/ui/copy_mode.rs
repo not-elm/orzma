@@ -11,7 +11,7 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
-use ozma_terminal::Clipboard;
+use ozma_terminal::{Clipboard, KeyboardDisabled, MouseDisabled};
 use ozma_tty_engine::{Coalescer, TerminalHandle};
 
 /// Bevy Plugin: registers the two observers and ensures the global
@@ -58,7 +58,9 @@ pub(crate) fn handle_enter_copy_mode_request(
         return;
     };
     handle.enter_vi_mode(&mut coalescer);
-    commands.entity(ev.entity).insert(CopyModeState);
+    commands
+        .entity(ev.entity)
+        .insert((CopyModeState, KeyboardDisabled, MouseDisabled));
 }
 
 /// Observer for `ExitCopyMode`. Removes `CopyModeState`, clears any
@@ -74,7 +76,11 @@ pub(crate) fn handle_exit_copy_mode(
     };
     handle.selection_clear(&mut coalescer);
     handle.exit_vi_mode(&mut coalescer);
-    commands.entity(ev.entity).remove::<CopyModeState>();
+    commands
+        .entity(ev.entity)
+        .remove::<CopyModeState>()
+        .remove::<KeyboardDisabled>()
+        .remove::<MouseDisabled>();
 }
 
 #[cfg(test)]
@@ -114,6 +120,35 @@ mod tests {
             h.selection_type().is_none(),
             "enter must not auto-create a selection",
         );
+    }
+
+    #[test]
+    fn enter_observer_disables_keyboard_and_mouse() {
+        use ozma_terminal::{KeyboardDisabled, MouseDisabled};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(handle_enter_copy_mode_request);
+        let entity = spawn_terminal_entity(&mut app);
+        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.update();
+        assert!(app.world().get::<KeyboardDisabled>(entity).is_some());
+        assert!(app.world().get::<MouseDisabled>(entity).is_some());
+    }
+
+    #[test]
+    fn exit_observer_reenables_keyboard_and_mouse() {
+        use ozma_terminal::{KeyboardDisabled, MouseDisabled};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(handle_enter_copy_mode_request);
+        app.add_observer(handle_exit_copy_mode);
+        let entity = spawn_terminal_entity(&mut app);
+        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.update();
+        app.world_mut().trigger(ExitCopyMode { entity });
+        app.update();
+        assert!(app.world().get::<KeyboardDisabled>(entity).is_none());
+        assert!(app.world().get::<MouseDisabled>(entity).is_none());
     }
 
     #[test]
