@@ -124,7 +124,6 @@ mod tests {
 
     #[test]
     fn enter_observer_disables_keyboard_and_mouse() {
-        use ozma_terminal::{KeyboardDisabled, MouseDisabled};
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_observer(handle_enter_copy_mode_request);
@@ -137,7 +136,6 @@ mod tests {
 
     #[test]
     fn exit_observer_reenables_keyboard_and_mouse() {
-        use ozma_terminal::{KeyboardDisabled, MouseDisabled};
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_observer(handle_enter_copy_mode_request);

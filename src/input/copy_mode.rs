@@ -434,8 +434,6 @@ mod tests {
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let entity = app.world_mut().spawn(bundle).id();
 
-        // Enter vi mode, write content, start a selection, then move so the
-        // selection is non-empty.
         app.world_mut().trigger(EnterCopyModeActionEvent { entity });
         app.update();
         app.world_mut()
@@ -453,9 +451,7 @@ mod tests {
         });
         app.update();
 
-        // Yank exits copy mode...
         assert!(app.world().get::<CopyModeState>(entity).is_none());
-        // ...and writes the selection to the clipboard.
         let text = app.world_mut().resource_mut::<Clipboard>().read();
         assert!(
             text.is_some_and(|t| !t.is_empty()),
