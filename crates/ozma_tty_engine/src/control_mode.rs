@@ -3,7 +3,7 @@
 //! When a Default-mode shell runs `tmux -CC`, tmux emits the DCS introducer
 //! `ESC P 1000 p` then switches to its control-mode protocol stream. A
 //! terminal carrying a [`ControlModeWatch`] component has its inbound PTY
-//! bytes scanned for that introducer ([`scan_handover`]): the launching
+//! bytes scanned for that introducer ([`Handover::scan`]): the launching
 //! shell line is advanced into the VT cleanly, then VT feeding stops and the
 //! introducer-onward bytes are buffered raw on [`AdoptedControlMode`] for a
 //! later task to drive the tmux protocol.
@@ -87,28 +87,30 @@ pub(crate) enum Handover {
     Detected { vt: Vec<u8>, captured: Vec<u8> },
 }
 
-/// Scans `chunk` (joined with any carried partial-introducer prefix) for the
-/// control-mode introducer.
-///
-/// Bytes that may begin an introducer are withheld from `vt` and carried to
-/// the next call, so the VT never sees a partial introducer; a disproven
-/// match flushes the carried bytes into a later `vt`.
-pub(crate) fn scan_handover(watch: &mut ControlModeWatch, chunk: &[u8]) -> Handover {
-    let mut working = take(&mut watch.carry);
-    working.extend_from_slice(chunk);
+impl Handover {
+    /// Scans `chunk` (joined with any carried partial-introducer prefix) for the
+    /// control-mode introducer.
+    ///
+    /// Bytes that may begin an introducer are withheld from `vt` and carried to
+    /// the next call, so the VT never sees a partial introducer; a disproven
+    /// match flushes the carried bytes into a later `vt`.
+    pub(crate) fn scan(watch: &mut ControlModeWatch, chunk: &[u8]) -> Self {
+        let mut working = take(&mut watch.carry);
+        working.extend_from_slice(chunk);
 
-    if let Some(p) = find_introducer(&working) {
-        return Handover::Detected {
-            vt: working[..p].to_vec(),
-            captured: working[p..].to_vec(),
-        };
+        if let Some(p) = find_introducer(&working) {
+            return Self::Detected {
+                vt: working[..p].to_vec(),
+                captured: working[p..].to_vec(),
+            };
+        }
+
+        let s = longest_proper_prefix_suffix(&working);
+        let split = working.len() - s;
+        watch.carry = working[split..].to_vec();
+        working.truncate(split);
+        Self::NotYet { vt: working }
     }
-
-    let s = longest_proper_prefix_suffix(&working);
-    let split = working.len() - s;
-    watch.carry = working[split..].to_vec();
-    working.truncate(split);
-    Handover::NotYet { vt: working }
 }
 
 /// Returns the index of the first full [`CONTROL_MODE_INTRODUCER`]
@@ -142,7 +144,7 @@ mod tests {
     use super::*;
 
     fn scan(watch: &mut ControlModeWatch, chunk: &[u8]) -> Handover {
-        scan_handover(watch, chunk)
+        Handover::scan(watch, chunk)
     }
 
     fn assert_detected(handover: Handover, expected_vt: &[u8], expected_captured: &[u8]) {

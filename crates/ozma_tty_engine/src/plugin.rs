@@ -1,9 +1,7 @@
 //! `TerminalHandlePlugin` — registers the 4 chained Bevy systems.
 
 use crate::coalescer::Coalescer;
-use crate::control_mode::{
-    AdoptedControlMode, ControlModeDetected, ControlModeWatch, Handover, scan_handover,
-};
+use crate::control_mode::{AdoptedControlMode, ControlModeDetected, ControlModeWatch, Handover};
 use crate::events::{TerminalChildExit, TerminalKeyInput};
 use crate::handle::TerminalHandle;
 use crate::input_codec::encode_key;
@@ -145,7 +143,7 @@ fn drain_pty_exits(par_commands: ParallelCommands, q: Query<(Entity, &PtyHandle)
 /// Three per-chunk paths:
 /// - already-adopted terminals buffer raw bytes on `AdoptedControlMode` and
 ///   never touch the VT;
-/// - watched terminals route each chunk through [`scan_handover`]: on
+/// - watched terminals route each chunk through [`Handover::scan`]: on
 ///   `NotYet` the pre-introducer bytes take the normal flush/arm path, and on
 ///   `Detected` the pre-introducer bytes flush into the VT, the handle is
 ///   adopted, and [`ControlModeDetected`] fires;
@@ -165,7 +163,7 @@ fn process_pty_chunks(
             continue;
         }
         if let Some(watch) = watch.as_deref_mut() {
-            match scan_handover(watch, &chunk) {
+            match Handover::scan(watch, &chunk) {
                 Handover::NotYet { vt } => {
                     ingest_and_flush_or_arm(par_commands, entity, handle, coalescer, &vt);
                 }
