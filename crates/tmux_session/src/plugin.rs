@@ -31,6 +31,13 @@ use tmux_control_parser::PaneId;
 /// would desync the FIFO command/reply correlation).
 const MAX_EVENTS_PER_FRAME: usize = 4096;
 
+/// Hard per-frame cap on bytes fed through `ProtocolClient::feed`. A pane
+/// flooding `%output` can buffer a very large `captured` chunk; feeding it all in
+/// one tick stalls the schedule (visible frame hitch). Drain at most this many
+/// bytes per frame, leaving the remainder for the next — the drive runs every
+/// frame while connected, so the backlog clears over a few ticks.
+const MAX_FEED_BYTES_PER_FRAME: usize = 256 * 1024;
+
 /// Marker resource inserted when the tmux backend is active. Drain systems are
 /// gated on its presence; insert it to activate tmux mode, remove it to idle.
 #[derive(Resource, Default)]
@@ -208,8 +215,8 @@ fn recapture_settled_panes(
     connection: NonSend<TmuxConnection>,
     panes: Query<&TmuxPane>,
 ) {
-    // Prune departed panes every frame, even while the control client is absent,
-    // so a reconnect that reuses a pane id starts from a clean slate.
+    // NOTE: prune departed panes every frame, even while the control client is
+    // absent, so a reconnect that reuses a pane id starts from a clean slate.
     let present: HashSet<PaneId> = panes.iter().map(|pane| pane.id).collect();
     watch.retain(|id, _| present.contains(id));
 
@@ -226,9 +233,9 @@ fn recapture_settled_panes(
         if state.dims != dims {
             state.dims = dims;
             state.stable = 0;
-            // Re-arm the one-shot: a size change (e.g. a born-small adopted pane
-            // grown to the client size) pulls scrollback onto the screen and
-            // needs a fresh re-seed once the new size settles.
+            // NOTE: re-arm the one-shot — a size change (e.g. a born-small
+            // adopted pane grown to the client size) pulls scrollback onto the
+            // screen and needs a fresh re-seed once the new size settles.
             state.done = false;
         } else {
             state.stable = state.stable.saturating_add(1);
@@ -367,7 +374,7 @@ fn drain_tmux_transport(
     let bytes = match connection.gateway() {
         Some(gateway) => adopted
             .get_mut(gateway)
-            .map(|mut control| control.take_captured())
+            .map(|mut control| control.take_captured_up_to(MAX_FEED_BYTES_PER_FRAME))
             .unwrap_or_default(),
         None => Vec::new(),
     };

@@ -183,8 +183,8 @@ fn forward_keys_to_tmux(
     };
 
     // The active pane (if any) is the forward/paste target. GUI chords below do
-    // not need it (so quit/picker work before a pane is projected); tmux key
-    // dispatch does.
+    // not need it (so quit and similar chords work before a pane is projected);
+    // tmux key dispatch does.
     let (active_entity, active_pane_id, target) = match active_pane {
         Some(single) => {
             let (entity, pane) = *single;

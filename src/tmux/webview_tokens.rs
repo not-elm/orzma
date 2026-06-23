@@ -11,6 +11,7 @@
 //! the runtime dir is removed.
 
 use bevy::prelude::*;
+use ozma_tty_engine::TerminalRawWrite;
 use ozma_webview::ControlPlaneHandle;
 use ozmux_tmux::{
     SetEnvironmentGlobal, TmuxConnection, TmuxPane, TmuxPresence, UnsetEnvironmentGlobal,
@@ -21,12 +22,15 @@ pub(crate) struct WebviewTokensPlugin;
 
 impl Plugin for WebviewTokensPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, bind_tmux_pane_tokens.in_set(super::TmuxActiveSet))
-            .add_systems(
-                Update,
-                refresh_ozma_sock.run_if(resource_added::<TmuxPresence>),
-            )
-            .add_systems(Last, cleanup_ozma_sock.run_if(on_message::<AppExit>));
+        app.add_systems(
+            Update,
+            bind_tmux_pane_tokens.run_if(resource_exists::<TmuxPresence>),
+        )
+        .add_systems(
+            Update,
+            refresh_ozma_sock.run_if(resource_added::<TmuxPresence>),
+        )
+        .add_systems(Last, cleanup_ozma_sock.run_if(on_message::<AppExit>));
     }
 }
 
@@ -90,21 +94,39 @@ fn refresh_ozma_sock(
 /// NOTE: only the `control` subdir is removed, not the `<pid>` parent — sibling
 /// webview runtime roots can live under the same pid dir, so `remove_dir_all` on
 /// the parent would delete theirs.
-fn cleanup_ozma_sock(
-    connection: NonSend<TmuxConnection>,
-    control: Option<Res<ControlPlaneHandle>>,
-) {
-    let Some(control) = control else {
-        return;
-    };
-    if let Some(handle) = connection.handle() {
-        let _ = handle.send(UnsetEnvironmentGlobal { key: "OZMA_SOCK" });
+///
+/// NOTE: this is an exclusive system so it can call `world.trigger(TerminalRawWrite
+/// { .. })` synchronously before removing the runtime dir. `flush_tmux_outgoing`
+/// (the scheduled flusher) ran in `Update` and will not run again this frame, so
+/// bytes queued with `handle.send()` alone would never reach the PTY. Triggering
+/// `TerminalRawWrite` directly bypasses that gap.
+fn cleanup_ozma_sock(world: &mut World) {
+    let runtime_root = world
+        .get_resource::<ControlPlaneHandle>()
+        .and_then(|c| c.sock_path.parent()?.parent().map(|p| p.to_path_buf()));
+
+    let write = world
+        .get_non_send_resource::<TmuxConnection>()
+        .and_then(|conn| {
+            let handle = conn.handle()?;
+            let _ = handle.send(UnsetEnvironmentGlobal { key: "OZMA_SOCK" });
+            let bytes = conn.take_outgoing();
+            let gateway = conn.gateway()?;
+            if bytes.is_empty() {
+                None
+            } else {
+                Some((gateway, bytes))
+            }
+        });
+
+    if let Some((gateway, bytes)) = write {
+        world.trigger(TerminalRawWrite {
+            entity: gateway,
+            bytes,
+        });
     }
-    if let Some(runtime_root) = control
-        .sock_path
-        .parent()
-        .and_then(|sock_dir| sock_dir.parent())
-    {
+
+    if let Some(runtime_root) = runtime_root {
         let _ = std::fs::remove_dir_all(runtime_root);
     }
 }
@@ -115,6 +137,7 @@ mod tests {
     use ozma_webview::TokenRegistry;
     use ozmux_tmux::PaneId;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
     use tmux_control_parser::CellDims;
 
     #[test]
@@ -213,8 +236,19 @@ mod tests {
 
     #[test]
     fn cleanup_sends_unset_environment_global() {
+        #[derive(Resource, Default, Clone)]
+        struct Written(Arc<Mutex<Vec<(Entity, Vec<u8>)>>>);
+
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
+        app.init_resource::<Written>();
+        app.add_observer(|ev: On<TerminalRawWrite>, written: Res<Written>| {
+            written
+                .0
+                .lock()
+                .unwrap()
+                .push((ev.entity, ev.bytes.clone()));
+        });
         app.insert_non_send_resource(TmuxConnection::default());
 
         let gateway = app.world_mut().spawn_empty().id();
@@ -232,13 +266,48 @@ mod tests {
         app.world_mut().write_message(AppExit::Success);
         app.update();
 
-        let out = app
-            .world()
-            .non_send_resource::<TmuxConnection>()
-            .take_outgoing();
+        let written = app.world().resource::<Written>().0.lock().unwrap().clone();
         assert_eq!(
-            out, b"set-environment -gu OZMA_SOCK\n",
-            "cleanup sends the global unset over the adopted connection"
+            written,
+            vec![(gateway, b"set-environment -gu OZMA_SOCK\n".to_vec())],
+            "cleanup synchronously triggers TerminalRawWrite with the unset command"
+        );
+    }
+
+    #[test]
+    fn bind_pane_runs_in_default_mode_with_presence() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let tokens = TokenRegistry::default();
+        app.insert_resource(ControlPlaneHandle {
+            sock_path: PathBuf::from("/tmp/x.sock"),
+            tokens: tokens.clone(),
+        });
+        app.insert_resource(TmuxPresence);
+        app.add_systems(
+            Update,
+            bind_tmux_pane_tokens.run_if(resource_exists::<TmuxPresence>),
+        );
+
+        let dims = CellDims {
+            width: 80,
+            height: 24,
+            xoff: 0,
+            yoff: 0,
+        };
+        let pane = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(42),
+                dims,
+            })
+            .id();
+        app.update();
+
+        assert_eq!(
+            tokens.resolve("%42"),
+            Some(pane),
+            "%N token bound even when TmuxPresence exists but no AppMode::Tmux state"
         );
     }
 }

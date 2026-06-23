@@ -28,6 +28,11 @@ pub mod tmux;
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct OzmuxConfigs {
+    /// Deprecated and ignored: the startup mode is now determined automatically
+    /// (always tmux). Accepted so existing configs carrying it still parse under
+    /// `deny_unknown_fields`. Remove after one release.
+    #[serde(default, skip_serializing)]
+    pub startup_mode: Option<String>,
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
     /// Theme configuration.
@@ -279,11 +284,9 @@ resize-pane-down = "Cmd+Shift+J"
     }
 
     #[test]
-    fn stale_tmux_program_key_is_rejected() {
-        assert!(
-            toml::from_str::<OzmuxConfigs>("[tmux]\nprogram = \"/usr/local/bin/tmux\"\n").is_err(),
-            "the removed [tmux] program key must be rejected under deny_unknown_fields"
-        );
+    fn stale_tmux_program_key_is_accepted_and_ignored() {
+        toml::from_str::<OzmuxConfigs>("[tmux]\nprogram = \"/usr/local/bin/tmux\"\n")
+            .expect("deprecated [tmux] program key must parse under deny_unknown_fields");
     }
 
     #[test]
@@ -293,10 +296,40 @@ resize-pane-down = "Cmd+Shift+J"
     }
 
     #[test]
-    fn startup_mode_key_is_rejected() {
+    fn startup_mode_key_is_accepted_and_ignored() {
+        toml::from_str::<OzmuxConfigs>(r#"startup_mode = "tmux""#)
+            .expect("deprecated startup_mode key must parse under deny_unknown_fields");
+    }
+
+    #[test]
+    fn old_config_with_deprecated_keys_and_real_setting_loads_correctly() {
+        // An upgrading user whose config.toml still carries removed keys plus
+        // a real setting must not silently revert to defaults. This is the
+        // regression test for the deny_unknown_fields parse-error path.
+        let toml = r#"
+startup_mode = "tmux"
+
+[tmux]
+program = "/usr/local/bin/tmux"
+socket_name = "work"
+
+[shortcuts.bindings]
+paste = "Cmd+Shift+V"
+"#;
+        let mut c: OzmuxConfigs = toml::from_str(toml)
+            .expect("config with deprecated keys and a real setting must parse");
+        c.normalize();
+        c.validate().expect("parsed config must be valid");
+        let chord = c
+            .shortcuts
+            .bindings
+            .paste
+            .as_ref()
+            .expect("paste must be set");
+        assert_eq!(chord.key, shortcuts::Key::Char('v'));
         assert!(
-            toml::from_str::<OzmuxConfigs>(r#"startup_mode = "tmux""#).is_err(),
-            "startup_mode is removed; top-level deny_unknown_fields must reject it"
+            chord.modifiers.meta && chord.modifiers.shift,
+            "real paste binding override must be preserved, not reset to defaults"
         );
     }
 

@@ -67,7 +67,7 @@ impl Plugin for MousePlugin {
 pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
 
 /// Run condition for the active tmux gesture pipeline: `true` iff a focused
-/// primary window exists AND no modal (picker / copy-search prompt) owns input.
+/// primary window exists AND no modal (copy-search prompt) owns input.
 ///
 /// Gates `tmux_gesture` only (which reads the hand-off buffer, not
 /// `MouseButtonInput`). `tmux_webview_pointer` is NOT gated by this — it owns the
@@ -179,7 +179,7 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// never dragged, the pane under the cursor is focused as a fallback click.
 ///
 /// Gated by `run_if(pointer_active)`: this system runs only when a focused
-/// primary window exists and no modal (picker / copy-search prompt) owns input.
+/// primary window exists and no modal (copy-search prompt) owns input.
 /// The suppressed path — clearing the buffer, resetting the gesture, and
 /// releasing or dropping an in-flight inline press — is owned by
 /// `tmux_webview_pointer`, which runs every frame upstream of this system.

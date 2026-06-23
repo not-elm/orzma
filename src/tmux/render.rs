@@ -478,9 +478,9 @@ fn rows_for_panes(total_rows: u16) -> u16 {
 
 /// The pinned tmux pane cell size (`(cols, rows)`) for the current GUI window,
 /// with one row reserved for the ozmux status bar. [`sync_client_size`] pins
-/// tmux to this. The session picker deliberately births new sessions one row
-/// larger (the full window, no bar reservation) so reconciliation to this size
-/// is a shrink, never a grow — see `picker_client_size`.
+/// tmux to this. The gateway PTY is sized to the full window (no bar
+/// reservation) by [`sync_gateway_size`], so reconciliation to this size is
+/// always a shrink, never a grow.
 fn client_cell_size(phys_w: u32, phys_h: u32, cell_w_phys: f32, cell_h_phys: f32) -> (u16, u16) {
     let (cols, rows) = cells_for(phys_w, phys_h, cell_w_phys, cell_h_phys);
     (cols, rows_for_panes(rows))

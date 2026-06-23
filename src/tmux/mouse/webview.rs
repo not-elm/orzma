@@ -72,8 +72,8 @@ pub(super) struct TmuxWebviewRouteParams<'w, 's> {
 /// This system owns the single `MouseButtonInput` reader for the tmux pointer
 /// pipeline and runs EVERY frame within `TmuxActiveSet` (it is NOT gated by
 /// `pointer_active`); it computes the suppressed/active decision in-body. On a
-/// suppressed frame (no focused primary window, or a picker / copy-search prompt
-/// owns input) it drains the reader and the buffer, resets the gesture to
+/// suppressed frame (no focused primary window, or a copy-search prompt owns
+/// input) it drains the reader and the buffer, resets the gesture to
 /// `Idle`, and resolves an in-flight inline press: with no window it drops
 /// `TmuxWebviewPress` WITHOUT a CEF mouse-up (there is no cursor/scale to place
 /// it); with a window present it `release_webview_press`es so the focused page

@@ -60,7 +60,7 @@ struct GatewaySize(Option<(Entity, u16, u16)>);
 /// Runs while connected (`TmuxPresence`) and covers both the adopt edge (the
 /// gateway entity changes, forcing the first emit) and live window resizes (the
 /// derived cell size changes). The full-window size (no status-bar row reserved)
-/// matches the picker's birth-size policy: `sync_client_size` then pins the
+/// matches the gateway birth-size policy: `sync_client_size` then pins the
 /// active window one row smaller, so reconciliation is always a shrink.
 ///
 /// Emits [`TerminalResize`] only when the gateway or size changed, so it never
@@ -115,12 +115,24 @@ fn on_control_mode_detected(
     containers: Query<Entity, With<DefaultModeUi>>,
 ) {
     let gateway = ev.entity;
-    // The pending CommandId for the adopted stream's entry reply is intentionally
-    // dropped: it correlates at the ProtocolClient level and is harmless if it
-    // never matches an EnumerationState entry.
+    // NOTE: replace any already-live connection rather than overwriting it
+    // blindly: a second handshake (e.g. running `tmux -CC` again after a
+    // view-hide toggle left the connection live) must not orphan the previous
+    // gateway's PTY/child or leave its stale window/pane projection on screen.
+    // Despawn the old gateway and reset the projection/connection state before
+    // adopting the new.
+    if let Some(old) = connection.gateway() {
+        if old != gateway {
+            commands.entity(old).despawn();
+        }
+        commands.trigger(TmuxConnectionReset);
+    }
+    // NOTE: the pending CommandId for the adopted stream's entry reply is
+    // intentionally dropped: it correlates at the ProtocolClient level and is
+    // harmless if it never matches an EnumerationState entry.
     connection.adopt(gateway);
 
-    // Reparent the gateway out of the Default view BEFORE despawning the
+    // NOTE: reparent the gateway out of the Default view BEFORE despawning the
     // container. Inserting a new `ChildOf` breaks the old relationship (removing
     // the gateway from the container's `Children`), so the recursive container
     // despawn below cannot take the gateway with it. The gateway is pure
@@ -491,6 +503,36 @@ mod tests {
             *app.world().resource::<State<AppMode>>().get(),
             AppMode::Tmux,
             "second tmux -CC must re-enter Tmux mode"
+        );
+    }
+
+    #[test]
+    fn re_adopt_while_live_replaces_and_despawns_old_gateway() {
+        let mut app = build_app();
+        let (_c1, g1) = spawn_gateway_under_container(&mut app);
+        app.world_mut().trigger(ControlModeDetected { entity: g1 });
+        app.update();
+        assert_eq!(
+            app.world().non_send_resource::<TmuxConnection>().gateway(),
+            Some(g1),
+            "first gateway adopted",
+        );
+
+        // A second handshake while the first connection is still live (e.g.
+        // running `tmux -CC` in the fresh shell of a view-hidden session) must
+        // replace it and despawn the old gateway, not orphan its PTY/child.
+        let (_c2, g2) = spawn_gateway_under_container(&mut app);
+        app.world_mut().trigger(ControlModeDetected { entity: g2 });
+        app.update();
+
+        assert_eq!(
+            app.world().non_send_resource::<TmuxConnection>().gateway(),
+            Some(g2),
+            "the new gateway replaces the old",
+        );
+        assert!(
+            app.world().get_entity(g1).is_err(),
+            "the previous gateway must be despawned, not leaked",
         );
     }
 

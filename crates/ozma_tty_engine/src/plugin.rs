@@ -74,10 +74,18 @@ fn drain_pty_chunks(
 /// Drains `reply_rx` (alacritty PtyWrite responses) and writes them
 /// back to the PTY. Concatenates per-entity into one `write_all` to
 /// minimize syscalls.
-fn drain_pty_writes(mut q: Query<(&TerminalHandle, &mut PtyHandle)>) {
-    q.par_iter_mut().for_each(|(handle, mut pty)| {
+fn drain_pty_writes(mut q: Query<(&TerminalHandle, &mut PtyHandle, Option<&AdoptedControlMode>)>) {
+    q.par_iter_mut().for_each(|(handle, mut pty, adopted)| {
         let mut buf: Vec<u8> = Vec::new();
         handle.drain_replies_into(&mut buf);
+        // NOTE: an adopted gateway's PTY is the tmux -CC control stream, not a
+        // VT. Its alacritty reply bytes (e.g. stale DSR/DA answers queued by the
+        // pre-tmux shell) must be drained-and-discarded, never written back, or
+        // they corrupt the control protocol. Drain still happens above to keep
+        // the unbounded reply channel from growing.
+        if adopted.is_some() {
+            return;
+        }
         if !buf.is_empty()
             && let Err(e) = pty.write_all(&buf)
         {
@@ -161,8 +169,17 @@ fn process_pty_chunks(
                 Handover::NotYet { vt } => {
                     ingest_and_flush_or_arm(par_commands, entity, handle, coalescer, &vt);
                 }
-                Handover::Detected { vt, captured } => {
+                Handover::Detected { vt, mut captured } => {
                     let _ = handle.ingest_chunk(&vt, coalescer);
+                    // NOTE: the remove<ControlModeWatch>/insert<AdoptedControlMode>
+                    // below are deferred commands, so any further chunk already
+                    // queued this frame would re-enter this `watch` branch and
+                    // feed its post-introducer protocol bytes to the VT (lost
+                    // from the stream). Drain the rest of the frame into
+                    // `captured` now so the whole control stream is preserved.
+                    while let Ok(more) = pty.try_recv_chunk() {
+                        captured.extend_from_slice(&more);
+                    }
                     par_commands.command_scope(|mut commands| {
                         handle.emit(&mut commands, entity);
                         commands.entity(entity).remove::<ControlModeWatch>();
@@ -173,6 +190,7 @@ fn process_pty_chunks(
                             .insert(AdoptedControlMode { captured });
                         commands.trigger(ControlModeDetected { entity });
                     });
+                    return;
                 }
             }
             continue;
@@ -376,6 +394,55 @@ mod tests {
             1,
             "ControlModeDetected fires once, not per subsequent chunk"
         );
+
+        app.world_mut().despawn(entity);
+    }
+
+    #[test]
+    fn divert_captures_subsequent_same_frame_chunks() {
+        // Regression: tmux's initial burst can arrive as 2+ PTY reads in ONE
+        // frame. The introducer chunk adopts, but remove<ControlModeWatch> /
+        // insert<AdoptedControlMode> are deferred commands — so the in-loop drain
+        // must pull the rest of the frame into `captured`, or those later chunks
+        // re-enter the `watch` branch and their protocol bytes go to the VT
+        // (lost), desyncing the parser and blanking the projection.
+        let mut app = App::new();
+        app.add_plugins(TerminalHandlePlugin)
+            .init_resource::<DetectedCount>()
+            .add_observer(count_detected);
+
+        let handle = TerminalHandle::detached(80, 24, Arc::new(AtomicBool::new(false)));
+        let (pty, chunk_tx) = pty_handle_with_injector();
+        let entity = app
+            .world_mut()
+            .spawn((
+                handle,
+                pty,
+                Coalescer::new(),
+                TerminalTitle::default(),
+                ControlModeWatch::default(),
+            ))
+            .id();
+
+        // Both chunks queued BEFORE a single update -> same-frame draining.
+        chunk_tx
+            .send(b"\x1bP1000p%begin 1 1 1\r\n".to_vec())
+            .unwrap();
+        chunk_tx
+            .send(b"%output %1 hi\r\n%end 1 1 1\r\n".to_vec())
+            .unwrap();
+        app.update();
+
+        let mut adopted = app
+            .world_mut()
+            .get_mut::<AdoptedControlMode>(entity)
+            .expect("adopted");
+        assert_eq!(
+            adopted.take_captured(),
+            b"\x1bP1000p%begin 1 1 1\r\n%output %1 hi\r\n%end 1 1 1\r\n",
+            "every same-frame chunk after the introducer must be captured, not lost to the VT"
+        );
+        assert_eq!(app.world().resource::<DetectedCount>().0, 1);
 
         app.world_mut().despawn(entity);
     }
