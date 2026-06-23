@@ -26,12 +26,14 @@ impl Plugin for WebviewTokensPlugin {
             Update,
             bind_tmux_pane_tokens.run_if(any_with_component::<TmuxClient>),
         )
-        .add_systems(
-            Update,
-            refresh_ozma_sock.run_if(|added: Query<(), Added<TmuxClient>>| !added.is_empty()),
-        )
+        .add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added))
         .add_systems(Last, cleanup_ozma_sock.run_if(on_message::<AppExit>));
     }
+}
+
+/// Run condition: true on the frame a [`TmuxClient`] is newly adopted.
+fn tmux_client_added(added: Query<(), Added<TmuxClient>>) -> bool {
+    !added.is_empty()
 }
 
 /// Binds `%<pane-id>` → pane entity for every newly projected tmux pane.
@@ -100,7 +102,7 @@ fn cleanup_ozma_sock(world: &mut World) {
         .and_then(|c| c.sock_path.parent()?.parent().map(|p| p.to_path_buf()));
 
     let write = world
-        .query_filtered::<(Entity, &mut TmuxClient), With<TmuxClient>>()
+        .query::<(Entity, &mut TmuxClient)>()
         .single_mut(world)
         .ok()
         .and_then(|(gateway, mut client)| {
@@ -179,10 +181,7 @@ mod tests {
             tokens: TokenRegistry::default(),
         });
 
-        app.add_systems(
-            Update,
-            refresh_ozma_sock.run_if(|added: Query<(), Added<TmuxClient>>| !added.is_empty()),
-        );
+        app.add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added));
         app.update();
 
         let out = app
@@ -203,10 +202,7 @@ mod tests {
 
         let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
 
-        app.add_systems(
-            Update,
-            refresh_ozma_sock.run_if(|added: Query<(), Added<TmuxClient>>| !added.is_empty()),
-        );
+        app.add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added));
         app.update();
 
         let out = app

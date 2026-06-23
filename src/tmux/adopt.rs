@@ -118,7 +118,6 @@ fn on_control_mode_detected(
     // blindly: a second handshake (e.g. running `tmux -CC` again after a
     // view-hide toggle left the connection live) must not orphan the previous
     // gateway's PTY/child or leave its stale window/pane projection on screen.
-    // Despawn the old gateway and reset the projection before adopting the new.
     if let Ok(old) = existing.single()
         && old != gateway
     {

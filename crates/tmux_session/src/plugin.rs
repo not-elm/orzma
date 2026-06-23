@@ -95,15 +95,6 @@ impl TmuxEventBatch {
         &self.0
     }
 
-    /// Returns whether this frame's batch contains any protocol event.
-    ///
-    /// Used by the attach-edge detector instead of re-scanning the batch.
-    pub fn has_protocol(&self) -> bool {
-        self.0
-            .iter()
-            .any(|e| matches!(e, TransportEvent::Protocol(_)))
-    }
-
     /// Drops any buffered events.
     ///
     /// Called on connection reset so a previous connection's events (notably a
@@ -250,17 +241,17 @@ fn tmux_batch_pending(batch: Res<TmuxEventBatch>) -> bool {
 }
 
 /// Inserts [`TmuxAttached`] and emits [`TmuxClientAttached`] on the attach edge:
-/// the first protocol event in this frame's batch while the gateway is not yet
-/// attached. Gated on a pending batch.
+/// the first frame the connected gateway has a pending batch while it is not yet
+/// attached. Gated on a pending batch; the drain only ever produces protocol
+/// events, so a pending batch is exactly "a protocol event arrived".
 fn mark_attached_on_first_protocol(
     mut commands: Commands,
     mut attached: MessageWriter<TmuxClientAttached>,
     gateway: Single<Entity, With<TmuxClient>>,
     already: Query<(), With<TmuxAttached>>,
-    batch: Res<TmuxEventBatch>,
 ) {
     let gateway = *gateway;
-    if already.get(gateway).is_ok() || !batch.has_protocol() {
+    if already.get(gateway).is_ok() {
         return;
     }
     commands.entity(gateway).insert(TmuxAttached);

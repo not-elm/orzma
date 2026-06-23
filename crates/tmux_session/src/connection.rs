@@ -71,12 +71,12 @@ impl TmuxClient {
     }
 
     /// Caches the control client name returned by the `display-message` query.
-    pub fn set_client_name(&mut self, name: String) {
+    pub(crate) fn set_client_name(&mut self, name: String) {
         self.client_name = Some(name);
     }
 
     /// Caches the per-window `refresh-client` capability from the version reply.
-    pub fn set_per_window_refresh(&mut self, supported: bool) {
+    pub(crate) fn set_per_window_refresh(&mut self, supported: bool) {
         self.per_window_refresh = Some(supported);
     }
 }
