@@ -84,7 +84,11 @@ TmuxClient {
 
 `EnumerationState` を Resource → **Component** 化(ゲートウェイ・エンティティに同居)。
 読み手は crate 内 `plugin.rs` 各システムと `on_connection_reset` のみで外部依存が
-無く、安全に entity に載せられる。
+無く、安全に entity に載せられる。`TmuxClient` に **required components**
+(`#[require(EnumerationState)]`)を付け、`EnumerationState` を自動随伴させる
+(adopt は `TmuxClient` のみ insert すればよく、両者の取り違えを型で防ぐ。
+`EnumerationState: Default` は既に満たす)。`TmuxAttached` はエッジ駆動なので
+required にはしない。
 
 当面グローバル Resource のまま: `TmuxProjection` / `KeyBindings` /
 `CopyModeQueries` / `TmuxEventBatch`。
@@ -110,8 +114,10 @@ Error`)だが、本番コードで実際に到達するのは `Idle` と `Attach
 
 - `TmuxAttached`: 接続エンティティに付くマーカー。初 protocol イベント到達時に付与。
 - attach エッジ検出(旧 `advance_tmux_connection`): 「接続エンティティが未
-  `TmuxAttached` かつ今フレームの `TmuxEventBatch` に Protocol イベントあり」→
-  `TmuxAttached` を挿入し、`TmuxClientAttached` メッセージを送出。
+  `TmuxAttached`(`Without<TmuxAttached>`)かつ今フレームの `TmuxEventBatch` に
+  Protocol イベントあり」→ `TmuxAttached` を挿入し、`TmuxClientAttached` を送出。
+  batch 再走査を避けるため、Protocol イベント有無は drain 段で立てる boolean
+  (`TmuxEventBatch::has_protocol()`)で判定する。
 - `TmuxClientAttached` メッセージは**残す**(実績ある仕組み)。
   `send_attach_enumeration` は `on_message::<TmuxClientAttached>` のまま。
 - `send_tmux_reenumeration` の `matches!(*state, Attached)` ガード → `With<TmuxAttached>`。
@@ -127,9 +133,9 @@ Error`)だが、本番コードで実際に到達するのは `Idle` と `Attach
 
 **adopt**(`on_control_mode_detected`):
 
-- `connection.adopt(gateway)` → `commands.entity(gateway).insert((
-  TmuxClient::new_adopted(), EnumerationState::default()))`。
-  `TmuxAttached` はここでは付けない(初 protocol イベントで付く)。
+- `connection.adopt(gateway)` → `commands.entity(gateway).insert(TmuxClient::new_adopted())`
+  (`EnumerationState` は `#[require]` で自動付与)。`TmuxAttached` はここでは付けない
+  (初 protocol イベントで付く)。
 - 既存接続の検出 `connection.gateway()` → `Query<Entity, With<TmuxClient>>`。
   存在しかつ新ゲートウェイと異なれば、旧エンティティを despawn し
   `TmuxConnectionReset` をトリガ。
@@ -173,10 +179,13 @@ Error`)だが、本番コードで実際に到達するのは `Idle` と `Attach
 
 - 通常システム: `Single<&mut TmuxClient>`(接続が無ければシステムを**自動スキップ**
   = `Option` チェックと body-guard が消える)。読むだけなら `Single<&TmuxClient>`。
-- オブザーバ: `Single` の自動スキップ挙動が不確実なため、薄い `SystemParam` ラッパ
-  `TmuxClientMut`(内部 `Query<&mut TmuxClient>` + `.single_mut().ok()`)を1つ用意し、
-  systems / observers 両方をこれ経由に統一。将来の `Single → Query`(multi-session)
-  変更がこの一点に閉じる。
+- オブザーバ: bevy 0.18 では `Single` は observer 内でも 0件/2件以上で安全にスキップ
+  する(`observer/runner.rs`: skipped は error handler に到達しない)— 当初の「挙動が
+  不確実」は誤りで、検証済み。さらに本番の送信サイトに observer は存在しない。よって
+  カスタム `SystemParam` は作らず、grep アンカーと将来の `Single → Query`(multi-session)
+  変更の一点化のためだけに薄い**型エイリアス** `type TmuxClientMut<'w> = Single<'w, &'w mut TmuxClient>`
+  を置く。接続無しを no-op として扱うサイトは `Option<Single<&mut TmuxClient>>`、
+  読むだけは `Single<&TmuxClient>` を使う。
 - `drain` / `flush` / `apply` / capture 系は同一エンティティを
   `Single<(&mut AdoptedControlMode, &mut TmuxClient, &mut EnumerationState)>` 等で
   引く。`connection.gateway()` 探索が消える。
@@ -208,6 +217,9 @@ Error`)だが、本番コードで実際に到達するのは `Idle` と `Attach
     `tmux/window_bar_input.rs`、`tmux/webview_tokens.rs`、`ui/rename_prompt.rs`、
     `ui/copy_search.rs`、`ui/confirm_prompt.rs`
   - `tmux/dialog.rs`(削除)、`tmux.rs`(dialog 登録削除)
+- `src/tmux.rs::request_detach(connection: &TmuxConnection)` は `ProtocolClient::send`
+  が `RefCell` 撤去後 `&mut self` になるため、`&mut TmuxClient`(借用を `mut` で取る)へ
+  符号反転が必要(`input.rs` の `forward_keys_to_tmux` 経由で呼ばれる)。
 
 ## テスト
 
@@ -244,9 +256,13 @@ Error`)だが、本番コードで実際に到達するのは `Idle` と `Attach
 
 ## 確定した実装方針(曖昧さ排除)
 
-- **送信サイトは全て `TmuxClientMut` 経由に統一**する。通常システムで素の `Single`
-  を使い observer のみラッパにする折衷は採らない(将来の `Query` 化を一点に閉じ込め、
-  systems/observers の挙動差を無くすため)。
+- **送信サイトは `Single<&mut TmuxClient>`(no-op 許容サイトは `Option<Single<…>>`、
+  読み取りは `Single<&TmuxClient>`)を直接使う**。カスタム `SystemParam` は作らない
+  (observer でも `Single` が安全にスキップ・送信サイトに observer も無いため不要)。
+  grep アンカーと将来の `Query` 化の一点化のため、その名前は**型エイリアス**
+  `TmuxClientMut` として残す。
 - **`refresh_ozma_sock` は `Added<TmuxClient>` を使う run condition で gate** する
   (`|q: Query<(), Added<TmuxClient>>| !q.is_empty()`)。システム本体での `Added`
-  クエリ判定は採らない(gate 表現に揃える)。
+  クエリ判定は採らない(gate 表現に揃える)。`Added` は condition システムの last-run
+  tick 基準で判定されるため、これが one-shot として機能するのは**毎 adopt が新しい
+  ゲートウェイ・エンティティ**であることに依存する。
