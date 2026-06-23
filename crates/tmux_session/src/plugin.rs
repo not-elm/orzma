@@ -103,6 +103,21 @@ impl TmuxEventBatch {
     pub fn events(&self) -> &[TransportEvent] {
         &self.0
     }
+
+    /// Drops any buffered events.
+    ///
+    /// Called on connection reset so a previous connection's events (notably a
+    /// `%exit`) cannot leak into the next one — the drain is gated off in Default
+    /// mode, so without this the stale batch would survive a teardown and tear
+    /// down the next adopted connection on sight.
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn from_events(events: Vec<TransportEvent>) -> Self {
+        Self(events)
+    }
 }
 
 /// Sends `capture-pane` and a companion cursor-position `display-message` once

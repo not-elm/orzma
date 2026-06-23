@@ -12,6 +12,7 @@ use crate::events::{
     TmuxWindowFlagsChanged, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
 use crate::keybindings::KeyBindings;
+use crate::plugin::TmuxEventBatch;
 use crate::state::ConnectionState;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -228,6 +229,7 @@ fn on_connection_reset(
     mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut state: ResMut<ConnectionState>,
+    mut batch: ResMut<TmuxEventBatch>,
 ) {
     // NOTE: try_despawn for the window entities only. They are reparented
     // ChildOf the WorkspaceUiRoot subtree, so on a mode exit DespawnOnExit(Tmux)
@@ -250,6 +252,11 @@ fn on_connection_reset(
     // when next == current, so leaving this Attached would suppress the
     // TmuxClientAttached edge and the re-adopted session would never enumerate.
     *state = ConnectionState::default();
+    // Drop the closing connection's drained events (notably its `%exit`) so they
+    // cannot leak into the next adopted connection. The drain is gated off in
+    // Default mode, so a stale batch would otherwise survive to the re-adoption
+    // and tear it down immediately.
+    batch.clear();
 }
 
 fn ensure_window(commands: &mut Commands, index: &mut TmuxProjection, id: WindowId) -> Entity {
@@ -338,7 +345,8 @@ mod tests {
             .init_resource::<EnumerationState>()
             .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
-            .init_resource::<ConnectionState>();
+            .init_resource::<ConnectionState>()
+            .init_resource::<TmuxEventBatch>();
         register_observers(&mut app);
         app
     }
@@ -548,6 +556,7 @@ mod tests {
 
     #[test]
     fn connection_reset_clears_everything() {
+        use tmux_control::{ClientEvent, ControlEvent, TransportEvent};
         let mut app = app();
         *app.world_mut().resource_mut::<ConnectionState>() = ConnectionState::Attached;
         app.world_mut().trigger(TmuxSessionChanged {
@@ -564,6 +573,12 @@ mod tests {
             layout: layout(b"abcd,80x24,0,0,1"),
         });
         app.update();
+        // A stale `%exit` from this connection's detach sits in the batch; the
+        // drain is gated off in Default mode, so reset must clear it or it would
+        // tear down the next adopted connection on sight.
+        app.insert_resource(TmuxEventBatch::from_events(vec![TransportEvent::Protocol(
+            ClientEvent::Notification(ControlEvent::Exit { reason: None }),
+        )]));
         app.world_mut().trigger(TmuxConnectionReset);
         app.update();
 
@@ -574,6 +589,11 @@ mod tests {
             ConnectionState::Idle,
             "connection reset must restore ConnectionState to the initial Idle so a \
              re-adoption folds Idle->Attached and re-fires the attach edge",
+        );
+        assert!(
+            app.world().resource::<TmuxEventBatch>().events().is_empty(),
+            "connection reset must clear the event batch so a stale %exit cannot \
+             tear down the next adopted connection",
         );
     }
 

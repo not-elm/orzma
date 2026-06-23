@@ -431,6 +431,69 @@ mod tests {
         );
     }
 
+    #[test]
+    fn re_adoption_after_teardown_re_enters_tmux() {
+        let mut app = build_app();
+        // Mimic OzmuxTmuxPlugin's connection-closed -> Default handler, which
+        // lives in src/tmux.rs (not AdoptPlugin) so it isn't in build_app.
+        app.add_observer(
+            |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
+                next.set(AppMode::Default);
+            },
+        );
+
+        // Deferred observer-command chains + state transitions need a few frames
+        // to settle (the real app gets them over multiple frames).
+        let pump = |app: &mut App| {
+            for _ in 0..5 {
+                app.update();
+            }
+        };
+
+        // First adoption.
+        let (_c1, g1) = spawn_gateway_under_container(&mut app);
+        app.world_mut().trigger(ControlModeDetected { entity: g1 });
+        pump(&mut app);
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Tmux,
+            "first tmux -CC enters Tmux"
+        );
+
+        // Detach: the gateway child exits -> teardown -> back to Default.
+        app.world_mut().trigger(TerminalChildExit {
+            entity: g1,
+            code: Some(0),
+        });
+        pump(&mut app);
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Default,
+            "detach returns to Default"
+        );
+        assert!(
+            !app.world()
+                .non_send_resource::<TmuxConnection>()
+                .is_connected(),
+            "connection closed after detach"
+        );
+
+        // Second adoption: a fresh shell runs tmux -CC again.
+        let (_c2, g2) = spawn_gateway_under_container(&mut app);
+        app.world_mut().trigger(ControlModeDetected { entity: g2 });
+        pump(&mut app);
+        assert_eq!(
+            app.world().non_send_resource::<TmuxConnection>().gateway(),
+            Some(g2),
+            "second adoption re-adopts the new gateway"
+        );
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Tmux,
+            "second tmux -CC must re-enter Tmux mode"
+        );
+    }
+
     #[derive(Resource, Default)]
     struct ResizeLog(Vec<(Entity, u16, u16)>);
 
