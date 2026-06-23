@@ -3,7 +3,7 @@
 //!
 //! The binary registers a copy-mode control command (state query, capture, or
 //! show-buffer) via [`CopyModeQueries::register`], keyed by the `CommandId`
-//! `AdoptedHandle::send` returned. When the matching `%begin/%end` reply lands,
+//! `TmuxClient::send` returned. When the matching `%begin/%end` reply lands,
 //! [`drain_copy_replies`] correlates it back to its pane + kind and emits a
 //! [`CopyModeReply`] the binary consumes — the binary never drains the transport
 //! channel itself (that would steal events from the one real drainer).

@@ -5,7 +5,7 @@ use crate::input::ime::ImeCommit;
 use bevy::prelude::*;
 use ozma_terminal::TerminalForwardInput;
 use ozma_tty_engine::TerminalHandle;
-use ozmux_tmux::{PaneId, SendBytes, TmuxConnection, TmuxPane};
+use ozmux_tmux::{PaneId, SendBytes, TmuxClient, TmuxPane};
 
 /// Registers the `TerminalForwardInput` → tmux `send-keys -H` observer.
 pub(crate) struct ForwardPlugin;
@@ -19,14 +19,17 @@ impl Plugin for ForwardPlugin {
 
 fn forward_pane_input(
     ev: On<TerminalForwardInput>,
+    mut client: Option<Single<&mut TmuxClient>>,
     panes: Query<&TmuxPane>,
-    connection: NonSend<TmuxConnection>,
 ) {
     let Ok(pane) = panes.get(ev.entity) else {
         return;
     };
+    let Some(client) = client.as_deref_mut() else {
+        return;
+    };
     send_to_pane(
-        &connection,
+        client,
         pane.id,
         &ev.bytes,
         "tmux mouse-report forward failed",
@@ -36,9 +39,9 @@ fn forward_pane_input(
 fn forward_ime_commit(
     ev: On<ImeCommit>,
     mut commands: Commands,
+    mut client: Option<Single<&mut TmuxClient>>,
     mut handles: Query<&mut TerminalHandle>,
     panes: Query<&TmuxPane>,
-    connection: NonSend<TmuxConnection>,
 ) {
     let Ok(pane) = panes.get(ev.entity) else {
         return;
@@ -48,8 +51,11 @@ fn forward_ime_commit(
     {
         handle.flush_emit(&mut commands, ev.entity);
     }
+    let Some(client) = client.as_deref_mut() else {
+        return;
+    };
     send_to_pane(
-        &connection,
+        client,
         pane.id,
         ev.text.as_bytes(),
         "IME commit send failed",
@@ -57,13 +63,10 @@ fn forward_ime_commit(
 }
 
 /// Sends `bytes` to tmux pane `pane` via `send-keys -H`, logging `context` on
-/// failure. No-op when the control client is absent.
-fn send_to_pane(connection: &TmuxConnection, pane: PaneId, bytes: &[u8], context: &str) {
-    let Some(handle) = connection.handle() else {
-        return;
-    };
+/// failure.
+fn send_to_pane(client: &mut TmuxClient, pane: PaneId, bytes: &[u8], context: &str) {
     let target = pane_target(pane);
-    if let Err(e) = handle.send(SendBytes {
+    if let Err(e) = client.send(SendBytes {
         pane: &target,
         bytes,
     }) {
@@ -102,7 +105,6 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_non_send_resource(TmuxConnection::default());
         app.add_observer(forward_ime_commit);
 
         let pane = app

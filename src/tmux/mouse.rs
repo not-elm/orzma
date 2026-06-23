@@ -32,7 +32,7 @@ use decide::{
 };
 use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{ActiveWindow, PaneId, TmuxConnection, TmuxPane};
+use ozmux_tmux::{ActiveWindow, PaneId, TmuxClient, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 use webview::tmux_webview_pointer;
@@ -74,12 +74,6 @@ pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
 /// single `MouseButtonInput` reader and runs every frame, computing the same
 /// suppressed/active decision in-body. The focused-webview case is NOT a
 /// suppressor here — the `tmux_webview_pointer` pre-step owns webview focus.
-///
-/// # Invariants
-///
-/// Must NOT read `NonSend<TmuxConnection>`: a run condition touching it is
-/// unsound (`bevyengine/bevy#21230`), which is why connection liveness stays an
-/// in-body guard in `on_tmux_mouse_effects` instead.
 fn pointer_active(
     windows: Query<&Window, With<PrimaryWindow>>,
     copy_prompt: Res<CopyPrompt>,
@@ -170,7 +164,7 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// copy mode (drag/selection for a pane NOT in copy mode is owned by
 /// `ozma_terminal`). Multi-click (≥2) on a pane in copy mode enters
 /// `PendingMultiSelect` to wait for a copy-mode snapshot AND a connected client
-/// (it passes `connection.is_connected()` to the decider so a no-client
+/// (it passes whether a `TmuxClient` is present to the decider so a no-client
 /// frame stays pending and retries), then selects a word/line via copy-mode
 /// commands. Each frame while `Resizing` the pointer's
 /// major-axis cell coordinate is mapped to an absolute target size and sent as
@@ -194,7 +188,7 @@ fn tmux_gesture(
     mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: ResMut<TmuxGestureButtons>,
-    connection: NonSend<TmuxConnection>,
+    client: Option<Single<&TmuxClient>>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -271,7 +265,7 @@ fn tmux_gesture(
         drag_threshold_phys,
         cell_w,
         cell_h,
-        connection.is_connected(),
+        client.is_some(),
     );
     effects.extend(decide_continuation(&mut gesture.state, ctx));
 
@@ -450,7 +444,7 @@ mod tests {
     use ozma_tty_renderer::CellMetrics;
     use ozma_tty_renderer::prelude::TerminalOverlays;
     use ozma_webview::{NonInteractive, Webview, webview_hit_at};
-    use ozmux_tmux::{CopyModeQueries, TmuxConnection};
+    use ozmux_tmux::CopyModeQueries;
     use webview::TmuxWebviewPress;
 
     #[test]
@@ -489,7 +483,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseButtonInput>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<TmuxWebviewPress>();
@@ -533,7 +526,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseButtonInput>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<TmuxWebviewPress>();

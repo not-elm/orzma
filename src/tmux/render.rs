@@ -14,7 +14,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozma_webview::OscWebviewGate;
 use ozmux_tmux::{
-    ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxCommand, TmuxConnection, TmuxPane,
+    ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxClient, TmuxCommand, TmuxPane,
     TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,
 };
 use std::collections::HashMap;
@@ -547,14 +547,11 @@ fn reconcile_decision(
 /// drift and recover without spinning when tmux refuses to grow the window.
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
-    connection: NonSend<TmuxConnection>,
+    mut client: Single<&mut TmuxClient>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
     active: Query<(&TmuxWindow, Option<&TmuxWindowLayout>), With<ActiveWindow>>,
 ) {
-    let Some(handle) = connection.handle() else {
-        return;
-    };
     let Ok(window) = window.single() else {
         return;
     };
@@ -579,7 +576,7 @@ fn sync_client_size(
     // a re-pin even when window/size/reported are unchanged — otherwise the first
     // pin sent with the global fallback (capability still unknown) is never
     // upgraded to the per-window form, defeating multi-client isolation.
-    let per_window = connection.supports_per_window_refresh();
+    let per_window = client.supports_per_window_refresh();
     let capability_changed = last.last_per_window != per_window;
     if !capability_changed
         && !reconcile_decision(
@@ -599,7 +596,7 @@ fn sync_client_size(
     // NOTE: only record the size as sent AFTER a successful send — otherwise a
     // transient send failure would poison the dedupe and permanently suppress
     // re-sending this size, leaving tmux stuck at the stale client dimensions.
-    match handle.send(Pin {
+    match client.send(Pin {
         per_window,
         win: tmux_window.id,
         cols,
@@ -771,7 +768,6 @@ mod tests {
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
-        app.insert_non_send_resource(TmuxConnection::default());
 
         let pane_id = PaneId(1);
         let pane_entity = app
@@ -828,7 +824,6 @@ mod tests {
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
-        app.insert_non_send_resource(TmuxConnection::default());
 
         let pane_id = PaneId(1);
         let pane_entity = app
@@ -919,7 +914,6 @@ mod tests {
         app.add_plugins(TerminalGridPlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(true))));
         app.init_resource::<Seen>();
         app.add_observer(|_ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
@@ -1513,7 +1507,6 @@ mod tests {
         app.add_plugins(TerminalGridPlugin);
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
-        app.insert_non_send_resource(TmuxConnection::default());
 
         let pane_entity = app
             .world_mut()

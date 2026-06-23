@@ -23,7 +23,7 @@ use ozma_tty_renderer::schema::{
 };
 use ozmux_tmux::{
     CopyModeCapture, CopyModeQueries, CopyModeReply, CopyQueryKind, CopyState, CopyStateQuery,
-    PaneId, TmuxConnection, TmuxPane, TmuxProjectionSet, absolute_to_visible_row, parse_copy_state,
+    PaneId, TmuxClient, TmuxPane, TmuxProjectionSet, absolute_to_visible_row, parse_copy_state,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -127,10 +127,10 @@ fn on_copy_mode_exit(
 fn issue_copy_state(
     mut refresh: ResMut<CopyRefreshState>,
     mut queries: ResMut<CopyModeQueries>,
-    connection: NonSend<TmuxConnection>,
+    mut client: Option<Single<&mut TmuxClient>>,
     panes: Query<&TmuxPane, With<CopyModeState>>,
 ) {
-    let Some(handle) = connection.handle() else {
+    let Some(client) = client.as_deref_mut() else {
         return;
     };
     // NOTE: re-send a state query that has been in flight for too long. The reply
@@ -149,7 +149,7 @@ fn issue_copy_state(
         if !send_now {
             continue;
         }
-        match handle.send(CopyStateQuery { pane: pane.id }) {
+        match client.send(CopyStateQuery { pane: pane.id }) {
             Ok(id) => {
                 queries.register(id, pane.id, CopyQueryKind::State);
                 refresh.state_in_flight.insert(pane.id, 0);
@@ -173,7 +173,7 @@ fn consume_copy_reply(
     mut replies: MessageReader<CopyModeReply>,
     mut clipboard: ResMut<Clipboard>,
     mut render_handles: Query<&mut CopyRenderHandle>,
-    connection: NonSend<TmuxConnection>,
+    mut client: Option<Single<&mut TmuxClient>>,
     panes: Query<(Entity, &TmuxPane)>,
     copy_modes: Query<(), With<CopyModeState>>,
     snapshots: Query<&CopyModeSnapshot>,
@@ -200,7 +200,7 @@ fn consume_copy_reply(
                     &mut commands,
                     &mut refresh,
                     &mut queries,
-                    &connection,
+                    client.as_deref_mut().map(|c| &mut **c),
                     entity,
                     reply,
                     stored.as_ref(),
@@ -230,7 +230,7 @@ fn apply_state_reply(
     commands: &mut Commands,
     refresh: &mut CopyRefreshState,
     queries: &mut CopyModeQueries,
-    connection: &TmuxConnection,
+    client: Option<&mut TmuxClient>,
     entity: Entity,
     reply: &CopyModeReply,
     stored: Option<&CopyState>,
@@ -252,10 +252,10 @@ fn apply_state_reply(
     if !changed {
         return;
     }
-    let Some(handle) = connection.handle() else {
+    let Some(client) = client else {
         return;
     };
-    match handle.send(CopyModeCapture {
+    match client.send(CopyModeCapture {
         pane: reply.pane,
         scroll_position: state.scroll_position,
         pane_height: state.pane_height,
@@ -617,7 +617,6 @@ mod tests {
         app.add_plugins(TerminalGridPlugin);
         app.add_message::<CopyModeReply>();
         app.init_resource::<CopyModeQueries>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.add_plugins(CopyModePlugin);
 
         let pane_id = PaneId(1);
@@ -715,7 +714,6 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_message::<CopyModeReply>();
         app.init_resource::<CopyModeQueries>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.add_plugins(CopyModePlugin);
 
         let pane_id = PaneId(7);

@@ -25,7 +25,7 @@ use gate::GatePlugin;
 use input::InputPlugin;
 use mode_ui::TmuxModeUiPlugin;
 use mouse::MousePlugin;
-use ozmux_tmux::{TmuxConnection, TmuxConnectionClosed, TmuxSessionPlugin};
+use ozmux_tmux::{TmuxClient, TmuxConnectionClosed, TmuxSessionPlugin};
 use pane_focus::PaneFocusPlugin;
 use render::RenderPlugin;
 use webview_tokens::WebviewTokensPlugin;
@@ -67,10 +67,8 @@ impl Plugin for OzmuxTmuxPlugin {
 /// `AppMode::Default`. Callers must NOT also set `NextState(Default)` directly:
 /// the connection stays live until tmux acknowledges the detach, and the
 /// teardown owns the mode transition.
-pub(crate) fn request_detach(connection: &TmuxConnection) {
-    if let Some(handle) = connection.handle()
-        && let Err(error) = handle.send_raw("detach-client")
-    {
+pub(crate) fn request_detach(client: &mut TmuxClient) {
+    if let Err(error) = client.send_raw("detach-client") {
         tracing::warn!(?error, "detach-client send failed");
     }
 }
@@ -89,11 +87,9 @@ mod tests {
 
     #[test]
     fn request_detach_sends_detach_client() {
-        let mut conn = TmuxConnection::default();
-        let gateway = Entity::from_raw_u32(7).expect("entity id");
-        conn.adopt(gateway);
-        request_detach(&conn);
-        assert_eq!(conn.take_outgoing(), b"detach-client\n");
+        let mut client = TmuxClient::new_adopted();
+        request_detach(&mut client);
+        assert_eq!(client.take_outgoing(), b"detach-client\n");
     }
 
     #[test]

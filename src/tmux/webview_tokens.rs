@@ -13,9 +13,7 @@
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalRawWrite;
 use ozma_webview::ControlPlaneHandle;
-use ozmux_tmux::{
-    SetEnvironmentGlobal, TmuxConnection, TmuxPane, TmuxPresence, UnsetEnvironmentGlobal,
-};
+use ozmux_tmux::{SetEnvironmentGlobal, TmuxClient, TmuxPane, UnsetEnvironmentGlobal};
 
 /// Registers the tmux `%N` token binder and `$OZMA_SOCK` propagation systems.
 pub(crate) struct WebviewTokensPlugin;
@@ -24,11 +22,11 @@ impl Plugin for WebviewTokensPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            bind_tmux_pane_tokens.run_if(resource_exists::<TmuxPresence>),
+            bind_tmux_pane_tokens.run_if(any_with_component::<TmuxClient>),
         )
         .add_systems(
             Update,
-            refresh_ozma_sock.run_if(resource_added::<TmuxPresence>),
+            refresh_ozma_sock.run_if(|added: Query<(), Added<TmuxClient>>| !added.is_empty()),
         )
         .add_systems(Last, cleanup_ozma_sock.run_if(on_message::<AppExit>));
     }
@@ -49,10 +47,10 @@ fn bind_tmux_pane_tokens(
 
 /// Propagates `$OZMA_SOCK` into the tmux global environment on each attach edge.
 ///
-/// Runs exactly once per attach (`resource_added::<TmuxPresence>`). The global
-/// `-g` flag writes to the tmux server's global environment, which all existing
-/// sessions inherit and new sessions pick up automatically — no per-session
-/// enumeration is required.
+/// Runs exactly once per attach (`Added<TmuxClient>`). The global `-g` flag
+/// writes to the tmux server's global environment, which all existing sessions
+/// inherit and new sessions pick up automatically — no per-session enumeration
+/// is required.
 ///
 /// For a remote-adopted session the socket path refers to a local path the
 /// remote host cannot reach, but the set is harmless; the next local attach
@@ -60,17 +58,14 @@ fn bind_tmux_pane_tokens(
 ///
 /// No-op when the control plane is absent (no `ControlPlaneHandle`).
 fn refresh_ozma_sock(
-    connection: NonSend<TmuxConnection>,
+    mut client: Single<&mut TmuxClient>,
     control: Option<Res<ControlPlaneHandle>>,
 ) {
     let Some(control) = control else {
         return;
     };
-    let Some(handle) = connection.handle() else {
-        return;
-    };
     let sock = control.sock_path.to_string_lossy();
-    if let Err(e) = handle.send(SetEnvironmentGlobal {
+    if let Err(e) = client.send(SetEnvironmentGlobal {
         key: "OZMA_SOCK",
         value: sock.as_ref(),
     }) {
@@ -106,12 +101,12 @@ fn cleanup_ozma_sock(world: &mut World) {
         .and_then(|c| c.sock_path.parent()?.parent().map(|p| p.to_path_buf()));
 
     let write = world
-        .get_non_send_resource::<TmuxConnection>()
-        .and_then(|conn| {
-            let handle = conn.handle()?;
-            let _ = handle.send(UnsetEnvironmentGlobal { key: "OZMA_SOCK" });
-            let bytes = conn.take_outgoing();
-            let gateway = conn.gateway()?;
+        .query_filtered::<(Entity, &mut TmuxClient), With<TmuxClient>>()
+        .single_mut(world)
+        .ok()
+        .and_then(|(gateway, mut client)| {
+            let _ = client.send(UnsetEnvironmentGlobal { key: "OZMA_SOCK" });
+            let bytes = client.take_outgoing();
             if bytes.is_empty() {
                 None
             } else {
@@ -177,12 +172,8 @@ mod tests {
     fn refresh_sends_set_environment_global() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_non_send_resource(TmuxConnection::default());
 
-        let gateway = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
+        let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
 
         app.insert_resource(ControlPlaneHandle {
             sock_path: PathBuf::from("/tmp/ctl.sock"),
@@ -191,14 +182,14 @@ mod tests {
 
         app.add_systems(
             Update,
-            refresh_ozma_sock.run_if(resource_added::<TmuxPresence>),
+            refresh_ozma_sock.run_if(|added: Query<(), Added<TmuxClient>>| !added.is_empty()),
         );
-        app.insert_resource(TmuxPresence);
         app.update();
 
         let out = app
-            .world()
-            .non_send_resource::<TmuxConnection>()
+            .world_mut()
+            .get_mut::<TmuxClient>(gateway)
+            .unwrap()
             .take_outgoing();
         assert_eq!(
             out, b"set-environment -g OZMA_SOCK /tmp/ctl.sock\n",
@@ -210,23 +201,19 @@ mod tests {
     fn refresh_is_no_op_without_control_plane() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_non_send_resource(TmuxConnection::default());
 
-        let gateway = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
+        let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
 
         app.add_systems(
             Update,
-            refresh_ozma_sock.run_if(resource_added::<TmuxPresence>),
+            refresh_ozma_sock.run_if(|added: Query<(), Added<TmuxClient>>| !added.is_empty()),
         );
-        app.insert_resource(TmuxPresence);
         app.update();
 
         let out = app
-            .world()
-            .non_send_resource::<TmuxConnection>()
+            .world_mut()
+            .get_mut::<TmuxClient>(gateway)
+            .unwrap()
             .take_outgoing();
         assert!(
             out.is_empty(),
@@ -249,12 +236,8 @@ mod tests {
                 .unwrap()
                 .push((ev.entity, ev.bytes.clone()));
         });
-        app.insert_non_send_resource(TmuxConnection::default());
 
-        let gateway = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
+        let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
 
         // NOTE: cleanup_ozma_sock remove_dir_all's the sock_path's GRANDPARENT.
         // This path must stay deep + under a non-existent temp subdir so that
@@ -283,7 +266,7 @@ mod tests {
     }
 
     #[test]
-    fn bind_pane_runs_in_default_mode_with_presence() {
+    fn bind_pane_runs_in_default_mode_with_client() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         let tokens = TokenRegistry::default();
@@ -291,10 +274,10 @@ mod tests {
             sock_path: PathBuf::from("/tmp/x.sock"),
             tokens: tokens.clone(),
         });
-        app.insert_resource(TmuxPresence);
+        app.world_mut().spawn(TmuxClient::new_adopted());
         app.add_systems(
             Update,
-            bind_tmux_pane_tokens.run_if(resource_exists::<TmuxPresence>),
+            bind_tmux_pane_tokens.run_if(any_with_component::<TmuxClient>),
         );
 
         let dims = CellDims {
@@ -315,7 +298,7 @@ mod tests {
         assert_eq!(
             tokens.resolve("%42"),
             Some(pane),
-            "%N token bound even when TmuxPresence exists but no AppMode::Tmux state"
+            "%N token bound when a TmuxClient exists but no AppMode::Tmux state"
         );
     }
 }

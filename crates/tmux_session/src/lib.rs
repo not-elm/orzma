@@ -27,7 +27,7 @@ pub use command::{
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
 };
-pub use connection::{AdoptedHandle, TmuxAttached, TmuxClient, TmuxClientMut, TmuxConnection};
+pub use connection::{TmuxAttached, TmuxClient, TmuxClientMut};
 pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
     CopyState, EnumerationState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row,
@@ -39,6 +39,6 @@ pub use keybindings::{
     CopyAction, Forwarded, KeyBindings, PromptKind, copy_mode_dispatch, plan_forward,
 };
 pub use output::PaneOutput;
-pub use plugin::{TmuxEventBatch, TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
+pub use plugin::{TmuxEventBatch, TmuxProjectionSet, TmuxSessionPlugin};
 pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};
 pub use tmux_control_parser::{PaneId, SessionId, WindowId};

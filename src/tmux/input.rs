@@ -35,8 +35,8 @@ use ozma_webview::{ForwardKeys, NonInteractive, Webview, focused_webview_of, web
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use ozmux_tmux::{
     ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
-    KeyMods, PromptKind, SendBytes, SendPaneKeys, ShowBuffer, TmuxCommand, TmuxConnection,
-    TmuxPane, TmuxSession, TmuxWindow, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
+    KeyMods, PromptKind, SendBytes, SendPaneKeys, ShowBuffer, TmuxClient, TmuxCommand, TmuxPane,
+    TmuxSession, TmuxWindow, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
@@ -117,7 +117,7 @@ fn forward_keys_to_tmux(
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
     mut handles: Query<&mut TerminalHandle>,
-    connection: NonSend<TmuxConnection>,
+    mut client: Option<Single<&mut TmuxClient>>,
     (keys, ime, bindings, resolved): (
         Res<ButtonInput<KeyCode>>,
         Res<crate::input::ime::ImeState>,
@@ -227,11 +227,11 @@ fn forward_keys_to_tmux(
 
         if !forward_names.is_empty() {
             let actions = plan_forward(&mut prefix_pending, &bindings, forward_names);
-            if let (Some(target), Some(handle)) = (target.as_deref(), connection.handle()) {
+            if let (Some(target), Some(client)) = (target.as_deref(), client.as_deref_mut()) {
                 for action in actions {
                     let result = match action {
-                        Forwarded::Run(cmd) => handle.send(&cmd),
-                        Forwarded::Keys(names) => handle.send(SendPaneKeys {
+                        Forwarded::Run(cmd) => client.send(&cmd),
+                        Forwarded::Keys(names) => client.send(SendPaneKeys {
                             pane: target,
                             names: &names,
                         }),
@@ -276,7 +276,7 @@ fn forward_keys_to_tmux(
                     if text.is_empty() {
                         continue;
                     }
-                    let (Some(target), Some(tmux)) = (target.as_deref(), connection.handle())
+                    let (Some(target), Some(tmux)) = (target.as_deref(), client.as_deref_mut())
                     else {
                         continue;
                     };
@@ -299,7 +299,9 @@ fn forward_keys_to_tmux(
                 }
                 ShortcutAction::ReleaseWebviewFocus => {}
                 ShortcutAction::DetachSession => {
-                    super::request_detach(&connection);
+                    if let Some(client) = client.as_deref_mut() {
+                        super::request_detach(client);
+                    }
                 }
                 ShortcutAction::EnterCopyMode => {}
             }
@@ -331,16 +333,16 @@ fn forward_keys_to_tmux(
     }
 
     if in_copy_mode {
-        let Some(handle) = connection.handle() else {
+        let Some(client) = client.as_deref_mut() else {
             return;
         };
         for name in key_names {
             let outcome = outcome_of(copy_mode_dispatch(&bindings, &name));
             if let Some(cmd) = &outcome.command {
-                match handle.send(cmd) {
+                match client.send(cmd) {
                     Ok(_) if outcome.bridge => {
                         if let Some(pane_id) = active_pane_id {
-                            match handle.send(ShowBuffer) {
+                            match client.send(ShowBuffer) {
                                 Ok(buf_id) => {
                                     copy_queries.register(buf_id, pane_id, CopyQueryKind::Buffer);
                                 }
@@ -383,7 +385,7 @@ fn forward_keys_to_tmux(
     if actions.is_empty() {
         return;
     }
-    let (Some(target), Some(handle)) = (target.as_deref(), connection.handle()) else {
+    let (Some(target), Some(client)) = (target.as_deref(), client.as_deref_mut()) else {
         return;
     };
     for action in actions {
@@ -410,8 +412,8 @@ fn forward_keys_to_tmux(
         }
         let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
         let result = match action {
-            Forwarded::Run(command) => handle.send(&command),
-            Forwarded::Keys(names) => handle.send(SendPaneKeys {
+            Forwarded::Run(command) => client.send(&command),
+            Forwarded::Keys(names) => client.send(SendPaneKeys {
                 pane: target,
                 names: &names,
             }),
@@ -668,9 +670,9 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 fn forward_wheel_to_tmux(
     mut wheel: MessageReader<MouseWheel>,
     mut accumulator: ResMut<TmuxWheelAccumulator>,
+    mut client: Option<Single<&mut TmuxClient>>,
     handles: Query<&TerminalHandle>,
     wheel_params: TmuxWebviewWheelParams,
-    connection: NonSend<TmuxConnection>,
     copy_prompt: Res<CopyPrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
     configs: Res<OzmuxConfigsResource>,
@@ -755,7 +757,7 @@ fn forward_wheel_to_tmux(
     let lines = configs.mouse.lines_per_notch;
     let total_lines = count as u32 * lines;
 
-    let Some(tmux) = connection.handle() else {
+    let Some(tmux) = client.as_deref_mut() else {
         return;
     };
 

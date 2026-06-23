@@ -4,22 +4,22 @@
 use super::window_bar::WindowEntry;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
-use ozmux_tmux::{SelectWindow, TmuxConnection};
+use ozmux_tmux::{SelectWindow, TmuxClient};
 
 /// Routes a press on a window entry to `select-window`: sends the tmux
 /// `select-window -t @N` command for the pressed entry's window id.
 pub(super) fn switch_window_on_click(
+    mut client: Option<Single<&mut TmuxClient>>,
     entries: Query<(&Interaction, &WindowEntry), Changed<Interaction>>,
-    connection: NonSend<TmuxConnection>,
 ) {
+    let Some(client) = client.as_deref_mut() else {
+        return;
+    };
     for (interaction, entry) in entries.iter() {
         if *interaction != Interaction::Pressed {
             continue;
         }
-        let Some(handle) = connection.handle() else {
-            continue;
-        };
-        if let Err(e) = handle.send(SelectWindow { id: entry.window }) {
+        if let Err(e) = client.send(SelectWindow { id: entry.window }) {
             tracing::warn!(?e, window = entry.window.0, "select-window send failed");
         }
     }

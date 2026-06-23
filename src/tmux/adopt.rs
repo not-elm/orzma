@@ -3,13 +3,14 @@
 //!
 //! When a Default-mode shell runs `tmux -CC`, the engine fires
 //! [`ControlModeDetected`] on that terminal. [`on_control_mode_detected`] adopts
-//! the terminal's PTY as the control-mode gateway, promotes it out of the
-//! Default view (despawning the now-empty Default container so a fresh shell is
-//! lazily re-spawned on return), inserts [`TmuxPresence`] to activate the drive
-//! chain, and enters [`AppMode::Tmux`]. The matching teardown fires when tmux
-//! ends the control client — either via `%exit` (a detach, where the shell
-//! process survives) or the gateway child process actually exiting — closing the
-//! connection, despawning the gateway, and returning to [`AppMode::Default`].
+//! the terminal's PTY as the control-mode gateway by inserting a [`TmuxClient`]
+//! component on it, promotes it out of the Default view (despawning the
+//! now-empty Default container so a fresh shell is lazily re-spawned on return),
+//! and enters [`AppMode::Tmux`]. The drive chain activates on the presence of a
+//! [`TmuxClient`] component. The matching teardown fires when tmux ends the
+//! control client — either via `%exit` (a detach, where the shell process
+//! survives) or the gateway child process actually exiting — despawning the
+//! gateway entity (and its `TmuxClient`) and returning to [`AppMode::Default`].
 
 use crate::app_mode::{AppMode, DefaultModeUi};
 use crate::ui::UiRoot;
@@ -19,8 +20,8 @@ use ozma_terminal::{KeyboardFocused, cells_for};
 use ozma_tty_engine::{ControlModeDetected, TerminalChildExit, TerminalResize};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{
-    ClientEvent, ControlEvent, EnumerationState, TmuxConnection, TmuxConnectionClosed,
-    TmuxConnectionReset, TmuxEventBatch, TmuxPresence, TmuxProjectionSet, TransportEvent,
+    ClientEvent, ControlEvent, TmuxClient, TmuxConnectionClosed, TmuxConnectionReset,
+    TmuxEventBatch, TmuxProjectionSet, TransportEvent,
 };
 
 /// Registers the adoption observer and the teardown systems/observer.
@@ -35,12 +36,12 @@ impl Plugin for AdoptPlugin {
                 Update,
                 teardown_on_exit_notification
                     .after(TmuxProjectionSet)
-                    .run_if(resource_exists::<TmuxPresence>),
+                    .run_if(any_with_component::<TmuxClient>),
             )
             .add_systems(
                 Update,
                 sync_gateway_size.run_if(
-                    resource_exists::<TmuxPresence>
+                    any_with_component::<TmuxClient>
                         .and(resource_exists::<TerminalCellMetricsResource>),
                 ),
             );
@@ -57,24 +58,22 @@ struct GatewaySize(Option<(Entity, u16, u16)>);
 ///
 /// tmux lays panes out to the control client's tty size — for the adopted
 /// connection that is the gateway PTY — so the gateway must track the window.
-/// Runs while connected (`TmuxPresence`) and covers both the adopt edge (the
-/// gateway entity changes, forcing the first emit) and live window resizes (the
-/// derived cell size changes). The full-window size (no status-bar row reserved)
-/// matches the gateway birth-size policy: `sync_client_size` then pins the
-/// active window one row smaller, so reconciliation is always a shrink.
+/// Runs while connected (a [`TmuxClient`] exists) and covers both the adopt edge
+/// (the gateway entity changes, forcing the first emit) and live window resizes
+/// (the derived cell size changes). The full-window size (no status-bar row
+/// reserved) matches the gateway birth-size policy: `sync_client_size` then pins
+/// the active window one row smaller, so reconciliation is always a shrink.
 ///
 /// Emits [`TerminalResize`] only when the gateway or size changed, so it never
 /// spams the PTY each frame.
 fn sync_gateway_size(
     mut commands: Commands,
     mut last: ResMut<GatewaySize>,
-    connection: NonSend<TmuxConnection>,
+    gateway: Single<Entity, With<TmuxClient>>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Some(gateway) = connection.gateway() else {
-        return;
-    };
+    let gateway = *gateway;
     let Ok(window) = window.single() else {
         return;
     };
@@ -109,8 +108,8 @@ fn sync_gateway_size(
 fn on_control_mode_detected(
     ev: On<ControlModeDetected>,
     mut commands: Commands,
-    mut connection: NonSendMut<TmuxConnection>,
     mut next_mode: ResMut<NextState<AppMode>>,
+    existing: Query<Entity, With<TmuxClient>>,
     ui_root: Query<Entity, With<UiRoot>>,
     containers: Query<Entity, With<DefaultModeUi>>,
 ) {
@@ -119,22 +118,14 @@ fn on_control_mode_detected(
     // blindly: a second handshake (e.g. running `tmux -CC` again after a
     // view-hide toggle left the connection live) must not orphan the previous
     // gateway's PTY/child or leave its stale window/pane projection on screen.
-    // Despawn the old gateway and reset the projection/connection state before
-    // adopting the new.
-    if let Some(old) = connection.gateway() {
-        if old != gateway {
-            commands.entity(old).despawn();
-        }
+    // Despawn the old gateway and reset the projection before adopting the new.
+    if let Ok(old) = existing.single()
+        && old != gateway
+    {
+        commands.entity(old).despawn();
         commands.trigger(TmuxConnectionReset);
-        // NOTE: re-inserting an already-present `TmuxPresence` below does NOT fire
-        // `Added`, so `resource_added::<TmuxPresence>` consumers — notably
-        // `refresh_ozma_sock`, which re-propagates `$OZMA_SOCK` to the newly
-        // adopted tmux server — would silently skip this re-adoption. Remove it
-        // first so the insert re-arms them for the new gateway.
-        commands.remove_resource::<TmuxPresence>();
     }
-    connection.adopt(gateway);
-    commands.entity(gateway).insert(EnumerationState::default());
+    commands.entity(gateway).insert(TmuxClient::new_adopted());
 
     // NOTE: reparent the gateway out of the Default view BEFORE despawning the
     // container. Inserting a new `ChildOf` breaks the old relationship (removing
@@ -161,7 +152,6 @@ fn on_control_mode_detected(
         commands.entity(container).despawn();
     }
 
-    commands.insert_resource(TmuxPresence);
     next_mode.set(AppMode::Tmux);
 }
 
@@ -172,26 +162,28 @@ fn on_control_mode_detected(
 fn on_gateway_child_exit(
     ev: On<TerminalChildExit>,
     mut commands: Commands,
-    mut connection: NonSendMut<TmuxConnection>,
+    clients: Query<(), With<TmuxClient>>,
 ) {
-    if connection.gateway() == Some(ev.entity) {
-        teardown(&mut commands, &mut connection);
+    if clients.get(ev.entity).is_ok() {
+        teardown(&mut commands, ev.entity);
     }
 }
 
 /// Tears down the adopted connection when tmux emits `%exit` (a detach).
 ///
-/// Gated on `TmuxPresence` and ordered after the drive chain so the batch holds
-/// this frame's freshly-drained transport events. NOTE: on a detach the gateway
-/// shell process SURVIVES, so `TerminalChildExit` never fires for it — this
-/// `%exit` scan is the only teardown signal in that path.
+/// Gated on the presence of a [`TmuxClient`] and ordered after the drive chain
+/// so the batch holds this frame's freshly-drained transport events. NOTE: on a
+/// detach the gateway shell process SURVIVES, so `TerminalChildExit` never fires
+/// for it — this `%exit` scan is the only teardown signal in that path.
 fn teardown_on_exit_notification(
     mut commands: Commands,
-    mut connection: NonSendMut<TmuxConnection>,
+    clients: Query<Entity, With<TmuxClient>>,
     batch: Res<TmuxEventBatch>,
 ) {
-    if batch_has_exit(batch.events()) {
-        teardown(&mut commands, &mut connection);
+    if batch_has_exit(batch.events())
+        && let Ok(gateway) = clients.single()
+    {
+        teardown(&mut commands, gateway);
     }
 }
 
@@ -205,22 +197,17 @@ fn batch_has_exit(events: &[TransportEvent]) -> bool {
     })
 }
 
-/// Closes the connection, despawns the gateway, clears the projection, removes
-/// [`TmuxPresence`], and triggers [`TmuxConnectionClosed`] (which returns the app
-/// to `AppMode::Default`).
+/// Despawns the gateway entity (ending the connection by removing its
+/// [`TmuxClient`]), clears the projection, and triggers [`TmuxConnectionClosed`]
+/// (which returns the app to `AppMode::Default`).
 ///
-/// Idempotent: a no-op once the connection is already closed, so the `%exit`
-/// scan and the child-exit observer cannot double-tear-down. Despawning the
-/// gateway ends its PTY (its `Drop` kills the child); the fresh Default shell
-/// appears via `ensure_default_mode_ui` on the return to `AppMode::Default`.
-fn teardown(commands: &mut Commands, connection: &mut TmuxConnection) {
-    if !connection.is_connected() {
-        return;
-    }
-    if let Some(gateway) = connection.close() {
-        commands.entity(gateway).despawn();
-    }
-    commands.remove_resource::<TmuxPresence>();
+/// Idempotency is guaranteed by the callers' `With<TmuxClient>` checks: once the
+/// gateway is despawned the `%exit` scan and the child-exit observer no longer
+/// find a `TmuxClient`, so neither fires again. Despawning the gateway ends its
+/// PTY (its `Drop` kills the child); the fresh Default shell appears via
+/// `ensure_default_mode_ui` on the return to `AppMode::Default`.
+fn teardown(commands: &mut Commands, gateway: Entity) {
+    commands.entity(gateway).despawn();
     commands.trigger(TmuxConnectionReset);
     commands.trigger(TmuxConnectionClosed);
 }
@@ -236,11 +223,17 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Default);
-        app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxEventBatch>();
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins(AdoptPlugin);
         app
+    }
+
+    fn client_gateway(app: &mut App) -> Option<Entity> {
+        app.world_mut()
+            .query_filtered::<Entity, With<TmuxClient>>()
+            .single(app.world())
+            .ok()
     }
 
     fn spawn_gateway_under_container(app: &mut App) -> (Entity, Entity) {
@@ -273,14 +266,9 @@ mod tests {
             .trigger(ControlModeDetected { entity: gateway });
         app.update();
 
-        assert_eq!(
-            app.world().non_send_resource::<TmuxConnection>().gateway(),
-            Some(gateway),
-            "connection adopted the gateway"
-        );
         assert!(
-            app.world().get_resource::<TmuxPresence>().is_some(),
-            "TmuxPresence inserted"
+            app.world().get::<TmuxClient>(gateway).is_some(),
+            "connection adopted the gateway (TmuxClient inserted)"
         );
         assert_eq!(
             *app.world().resource::<State<AppMode>>().get(),
@@ -320,11 +308,10 @@ mod tests {
     #[test]
     fn gateway_exit_tears_down_connection() {
         let mut app = build_app();
-        let gateway = app.world_mut().spawn(AdoptedControlMode::default()).id();
-        app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
-        app.insert_resource(TmuxPresence);
+        let gateway = app
+            .world_mut()
+            .spawn((AdoptedControlMode::default(), TmuxClient::new_adopted()))
+            .id();
 
         app.world_mut().trigger(TerminalChildExit {
             entity: gateway,
@@ -333,29 +320,22 @@ mod tests {
         app.update();
 
         assert!(
-            !app.world()
-                .non_send_resource::<TmuxConnection>()
-                .is_connected(),
+            client_gateway(&mut app).is_none(),
             "connection torn down on gateway child exit"
         );
         assert!(
             app.world().get_entity(gateway).is_err(),
             "gateway despawned"
         );
-        assert!(
-            app.world().get_resource::<TmuxPresence>().is_none(),
-            "TmuxPresence removed"
-        );
     }
 
     #[test]
     fn non_gateway_exit_does_not_tear_down() {
         let mut app = build_app();
-        let gateway = app.world_mut().spawn(AdoptedControlMode::default()).id();
-        app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
-        app.insert_resource(TmuxPresence);
+        let gateway = app
+            .world_mut()
+            .spawn((AdoptedControlMode::default(), TmuxClient::new_adopted()))
+            .id();
         let other = app.world_mut().spawn_empty().id();
 
         app.world_mut().trigger(TerminalChildExit {
@@ -364,10 +344,9 @@ mod tests {
         });
         app.update();
 
-        assert!(
-            app.world()
-                .non_send_resource::<TmuxConnection>()
-                .is_connected(),
+        assert_eq!(
+            client_gateway(&mut app),
+            Some(gateway),
             "an unrelated terminal's exit must not tear down the connection"
         );
     }
@@ -388,62 +367,51 @@ mod tests {
     }
 
     #[test]
-    fn exit_notification_runs_teardown_system() {
+    fn exit_notification_runs_teardown() {
         use bevy::ecs::system::RunSystemOnce;
 
         let mut app = build_app();
-        let gateway = app.world_mut().spawn(AdoptedControlMode::default()).id();
-        app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
-        app.insert_resource(TmuxPresence);
+        let gateway = app
+            .world_mut()
+            .spawn((AdoptedControlMode::default(), TmuxClient::new_adopted()))
+            .id();
 
         app.world_mut()
             .run_system_once(
-                move |mut commands: Commands, mut connection: NonSendMut<TmuxConnection>| {
+                move |mut commands: Commands, clients: Query<Entity, With<TmuxClient>>| {
                     let events = [TransportEvent::Protocol(ClientEvent::Notification(
                         ControlEvent::Exit { reason: None },
                     ))];
-                    if batch_has_exit(&events) {
-                        teardown(&mut commands, &mut connection);
+                    if batch_has_exit(&events)
+                        && let Ok(gateway) = clients.single()
+                    {
+                        teardown(&mut commands, gateway);
                     }
                 },
             )
             .unwrap();
 
         assert!(
-            !app.world()
-                .non_send_resource::<TmuxConnection>()
-                .is_connected(),
+            client_gateway(&mut app).is_none(),
             "connection torn down on %exit"
         );
         assert!(
             app.world().get_entity(gateway).is_err(),
             "gateway despawned on %exit"
         );
-        assert!(
-            app.world().get_resource::<TmuxPresence>().is_none(),
-            "TmuxPresence removed on %exit"
-        );
     }
 
     #[test]
-    fn teardown_is_idempotent_when_already_closed() {
-        use bevy::ecs::system::RunSystemOnce;
-
+    fn teardown_is_a_noop_without_a_client() {
         let mut app = build_app();
-        app.world_mut()
-            .run_system_once(
-                |mut commands: Commands, mut connection: NonSendMut<TmuxConnection>| {
-                    teardown(&mut commands, &mut connection);
-                },
-            )
-            .unwrap();
+        app.add_systems(Update, teardown_on_exit_notification);
+        // No TmuxClient spawned: the run_if (any_with_component) is bypassed here
+        // because teardown_on_exit_notification is registered bare in this test;
+        // its own clients.single() guard keeps it a no-op.
+        app.update();
         assert!(
-            !app.world()
-                .non_send_resource::<TmuxConnection>()
-                .is_connected(),
-            "teardown on an absent connection is a no-op"
+            client_gateway(&mut app).is_none(),
+            "teardown with no client present is a no-op"
         );
     }
 
@@ -488,9 +456,7 @@ mod tests {
             "detach returns to Default"
         );
         assert!(
-            !app.world()
-                .non_send_resource::<TmuxConnection>()
-                .is_connected(),
+            client_gateway(&mut app).is_none(),
             "connection closed after detach"
         );
 
@@ -499,7 +465,7 @@ mod tests {
         app.world_mut().trigger(ControlModeDetected { entity: g2 });
         pump(&mut app);
         assert_eq!(
-            app.world().non_send_resource::<TmuxConnection>().gateway(),
+            client_gateway(&mut app),
             Some(g2),
             "second adoption re-adopts the new gateway"
         );
@@ -516,11 +482,7 @@ mod tests {
         let (_c1, g1) = spawn_gateway_under_container(&mut app);
         app.world_mut().trigger(ControlModeDetected { entity: g1 });
         app.update();
-        assert_eq!(
-            app.world().non_send_resource::<TmuxConnection>().gateway(),
-            Some(g1),
-            "first gateway adopted",
-        );
+        assert_eq!(client_gateway(&mut app), Some(g1), "first gateway adopted",);
 
         // A second handshake while the first connection is still live (e.g.
         // running `tmux -CC` in the fresh shell of a view-hidden session) must
@@ -530,7 +492,7 @@ mod tests {
         app.update();
 
         assert_eq!(
-            app.world().non_send_resource::<TmuxConnection>().gateway(),
+            client_gateway(&mut app),
             Some(g2),
             "the new gateway replaces the old",
         );
@@ -572,12 +534,9 @@ mod tests {
     }
 
     fn adopt_gateway(app: &mut App) -> Entity {
-        let gateway = app.world_mut().spawn(AdoptedControlMode::default()).id();
         app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
-        app.insert_resource(TmuxPresence);
-        gateway
+            .spawn((AdoptedControlMode::default(), TmuxClient::new_adopted()))
+            .id()
     }
 
     #[test]
@@ -642,19 +601,18 @@ mod tests {
     }
 
     #[test]
-    fn gateway_size_skips_without_presence() {
+    fn gateway_size_skips_without_client() {
         let mut app = build_app();
         install_metrics_and_window(&mut app, 800, 600);
-        let gateway = app.world_mut().spawn(AdoptedControlMode::default()).id();
-        app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
+        // A gateway with no TmuxClient: the any_with_component gate blocks the
+        // system entirely.
+        app.world_mut().spawn(AdoptedControlMode::default());
 
         app.update();
 
         assert!(
             app.world().resource::<ResizeLog>().0.is_empty(),
-            "no TmuxPresence (run_if gate) means no gateway resize",
+            "no TmuxClient (run_if gate) means no gateway resize",
         );
     }
 }

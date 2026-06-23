@@ -15,7 +15,7 @@ use bevy::ecs::schedule::common_conditions::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ozmux_tmux::{RenameSession, RenameWindow, SessionId, TmuxCommand, TmuxConnection, WindowId};
+use ozmux_tmux::{RenameSession, RenameWindow, SessionId, TmuxClient, TmuxCommand, WindowId};
 
 const RENAME_Z: i32 = 340;
 
@@ -238,7 +238,7 @@ fn handle_rename_input(
     mut prompt: ResMut<RenamePrompt>,
     mut events: MessageReader<KeyboardInput>,
     mut armed: Local<bool>,
-    connection: NonSend<TmuxConnection>,
+    mut client: Option<Single<&mut TmuxClient>>,
 ) {
     // NOTE: the bound key that opened the prompt (`,` / `$`) is still in the
     // shared KeyboardInput buffer; this reader has its own cursor, so skip the
@@ -256,8 +256,8 @@ fn handle_rename_input(
             RenameStep::Continue => {}
             RenameStep::Submit => {
                 let cmd = prompt.submit_command();
-                if let Some(handle) = connection.handle()
-                    && let Err(e) = handle.send_raw(&cmd)
+                if let Some(client) = client.as_deref_mut()
+                    && let Err(e) = client.send_raw(&cmd)
                 {
                     tracing::warn!(?e, "rename submit failed");
                 }
@@ -579,7 +579,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<KeyboardInput>()
-            .insert_non_send_resource(TmuxConnection::default())
             .add_systems(
                 Update,
                 handle_rename_input.run_if(resource_exists::<RenamePrompt>),
