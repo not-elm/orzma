@@ -22,6 +22,7 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::Line;
 use alacritty_terminal::index::Side as ASide;
 use alacritty_terminal::term::{Config, TermMode};
+use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::Processor;
 use alacritty_terminal::vte::ansi::{Color as AColor, Rgb};
 use bevy::ecs::component::Component;
@@ -334,9 +335,29 @@ impl TerminalHandle {
         self.stage_full_damage_and_arm(coalescer);
     }
 
-    /// Snaps the viewport to the live tail and arms an emit.
+    /// Snaps the viewport to the live tail and arms an emit. While in vi mode,
+    /// also places the vi cursor on the first occupied cell of the last line,
+    /// mirroring alacritty's scroll-to-bottom action.
     pub fn scroll_to_bottom(&mut self, coalescer: &mut Coalescer) {
         self.term.scroll_display(Scroll::Bottom);
+        if self.term.mode().contains(TermMode::VI) {
+            let bottom = self.term.bottommost_line();
+            self.term.vi_mode_cursor.point.line = bottom;
+            self.term.vi_motion(ViMotion::FirstOccupied);
+        }
+        self.stage_full_damage_and_arm(coalescer);
+    }
+
+    /// Snaps the viewport to the top of scrollback and arms an emit. While in
+    /// vi mode, also places the vi cursor on the first occupied cell of the
+    /// first line, mirroring alacritty's scroll-to-top action.
+    pub fn scroll_to_top(&mut self, coalescer: &mut Coalescer) {
+        self.term.scroll_display(Scroll::Top);
+        if self.term.mode().contains(TermMode::VI) {
+            let top = self.term.topmost_line();
+            self.term.vi_mode_cursor.point.line = top;
+            self.term.vi_motion(ViMotion::FirstOccupied);
+        }
         self.stage_full_damage_and_arm(coalescer);
     }
 
@@ -3074,5 +3095,71 @@ mod accessor_tests {
         let handle = new_handle();
         let modes = handle.current_modes();
         assert!(!modes.contains(alacritty_terminal::term::TermMode::ALT_SCREEN));
+    }
+
+    #[test]
+    fn scroll_to_top_in_vi_mode_places_cursor_on_first_line() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut coalescer = Coalescer::default();
+        h.advance(
+            b"L1\r\nL2\r\nL3\r\nL4\r\nL5\r\nL6\r\nL7\r\nL8\r\nL9\r\nL10\r\n\
+              L11\r\nL12\r\nL13\r\nL14\r\nL15\r\nL16\r\nL17\r\nL18\r\nL19\r\nL20\r\n",
+        );
+        h.enter_vi_mode(&mut coalescer);
+        h.scroll_to_top(&mut coalescer);
+        assert_eq!(h.term.vi_mode_cursor.point.line, h.term.topmost_line());
+        assert!(
+            h.term.grid().display_offset() > 0,
+            "scroll_to_top must move the viewport up into history",
+        );
+    }
+
+    #[test]
+    fn scroll_to_bottom_in_vi_mode_places_cursor_on_last_line() {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        let mut h = TerminalHandle::new(
+            10,
+            5,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        );
+        let mut coalescer = Coalescer::default();
+        h.advance(
+            b"L1\r\nL2\r\nL3\r\nL4\r\nL5\r\nL6\r\nL7\r\nL8\r\nL9\r\nL10\r\n\
+              L11\r\nL12\r\nL13\r\nL14\r\nL15\r\nL16\r\nL17\r\nL18\r\nL19\r\nL20\r\n",
+        );
+        h.enter_vi_mode(&mut coalescer);
+        h.scroll_to_top(&mut coalescer);
+        h.scroll_to_bottom(&mut coalescer);
+        assert_eq!(h.term.vi_mode_cursor.point.line, h.term.bottommost_line());
+        assert_eq!(
+            h.term.grid().display_offset(),
+            0,
+            "scroll_to_bottom must pin the viewport to the live tail",
+        );
     }
 }
