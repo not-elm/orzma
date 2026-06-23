@@ -104,7 +104,7 @@ fn sync_gateway_size(
 /// despawns the now-empty `DefaultModeUi` container so `ensure_default_mode_ui`
 /// re-spawns a fresh Default shell on the next return to `AppMode::Default`.
 /// On-attach enumeration is NOT kicked here: the gateway's first protocol bytes
-/// flip `ConnectionState` to `Attached`, and the crate's own attach-edge
+/// insert `TmuxAttached` on the gateway entity, and the crate's own attach-edge
 /// detection emits the enumeration trigger.
 fn on_control_mode_detected(
     ev: On<ControlModeDetected>,

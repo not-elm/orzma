@@ -2,7 +2,6 @@
 
 mod adopt;
 mod copy_mode;
-mod dialog;
 mod divider_handle;
 mod forward;
 mod gate;
@@ -20,7 +19,6 @@ use crate::app_mode::AppMode;
 use adopt::AdoptPlugin;
 use bevy::prelude::*;
 use copy_mode::CopyModePlugin;
-use dialog::DialogPlugin;
 use divider_handle::DividerHandlePlugin;
 use forward::ForwardPlugin;
 use gate::GatePlugin;
@@ -53,7 +51,6 @@ impl Plugin for OzmuxTmuxPlugin {
                 ForwardPlugin,
                 CopyModePlugin,
                 WindowBarPlugin,
-                DialogPlugin,
                 DividerHandlePlugin,
                 PaneFocusPlugin,
                 GatePlugin,

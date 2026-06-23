@@ -12,7 +12,6 @@ use crate::events::{
 };
 use crate::keybindings::KeyBindings;
 use crate::plugin::TmuxEventBatch;
-use crate::state::ConnectionState;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
 use tmux_control_parser::{PaneId, WindowId};
@@ -226,7 +225,6 @@ fn on_connection_reset(
     mut index: ResMut<TmuxProjection>,
     mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
-    mut state: ResMut<ConnectionState>,
     mut batch: ResMut<TmuxEventBatch>,
 ) {
     // NOTE: try_despawn for the window entities only. They are reparented
@@ -244,11 +242,6 @@ fn on_connection_reset(
     index.pending_active_pane = None;
     keybindings.clear();
     copy_queries.clear();
-    // NOTE: reset to the initial state so a second adoption folds Idle->Attached
-    // (a real transition) on its first protocol event; advance_state returns None
-    // when next == current, so leaving this Attached would suppress the
-    // TmuxClientAttached edge and the re-adopted session would never enumerate.
-    *state = ConnectionState::default();
     // Drop the closing connection's drained events (notably its `%exit`) so they
     // cannot leak into the next adopted connection. The drain is gated off in
     // Default mode, so a stale batch would otherwise survive to the re-adoption
@@ -341,7 +334,6 @@ mod tests {
         app.init_resource::<TmuxProjection>()
             .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
-            .init_resource::<ConnectionState>()
             .init_resource::<TmuxEventBatch>();
         register_observers(&mut app);
         app
@@ -554,7 +546,6 @@ mod tests {
     fn connection_reset_clears_everything() {
         use tmux_control::{ClientEvent, ControlEvent, TransportEvent};
         let mut app = app();
-        *app.world_mut().resource_mut::<ConnectionState>() = ConnectionState::Attached;
         app.world_mut().trigger(TmuxSessionChanged {
             session: SessionId(1),
             name: "m".into(),
@@ -580,12 +571,6 @@ mod tests {
 
         let index = app.world().resource::<TmuxProjection>();
         assert!(index.windows.is_empty() && index.panes.is_empty() && index.session.is_none());
-        assert_eq!(
-            *app.world().resource::<ConnectionState>(),
-            ConnectionState::Idle,
-            "connection reset must restore ConnectionState to the initial Idle so a \
-             re-adoption folds Idle->Attached and re-fires the attach edge",
-        );
         assert!(
             app.world().resource::<TmuxEventBatch>().events().is_empty(),
             "connection reset must clear the event batch so a stale %exit cannot \

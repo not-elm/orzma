@@ -6,19 +6,18 @@ use crate::command::{
     ModeKeys as ModeKeysCmd, PrefixOptions, SubscribeWindowFlags, Version,
 };
 use crate::components::{TmuxPane, TmuxSession};
-use crate::connection::{AdoptedHandle, TmuxConnection};
+use crate::connection::{AdoptedHandle, TmuxAttached, TmuxConnection};
 use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{EnumerationState, PendingReply, version_supports_per_window_refresh};
 use crate::event_pump::{
-    advance_state, capture_to_bytes, capture_to_bytes_with_cursor, detect_session_switch,
-    detect_window_added, detect_window_switch, first_reply_line, log_transport_event,
-    parse_active_pane, parse_cursor_pos, trigger_notification, trigger_seed,
+    capture_to_bytes, capture_to_bytes_with_cursor, detect_session_switch, detect_window_added,
+    detect_window_switch, first_reply_line, log_transport_event, parse_active_pane,
+    parse_cursor_pos, trigger_notification, trigger_seed,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, ModeKeys, parse_list_keys, parse_prefix};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
-use crate::state::ConnectionState;
 use bevy::prelude::*;
 use ozma_tty_engine::{AdoptedControlMode, TerminalRawWrite};
 use std::collections::{HashMap, HashSet};
@@ -50,8 +49,7 @@ pub struct TmuxProjectionSet;
 impl Plugin for TmuxSessionPlugin {
     fn build(&self, app: &mut App) {
         register_observers(app);
-        app.init_resource::<ConnectionState>()
-            .init_resource::<TmuxProjection>()
+        app.init_resource::<TmuxProjection>()
             .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
@@ -63,7 +61,7 @@ impl Plugin for TmuxSessionPlugin {
                 Update,
                 (
                     drain_tmux_transport,
-                    advance_tmux_connection.run_if(tmux_batch_pending),
+                    mark_attached_on_first_protocol.run_if(tmux_batch_pending),
                     send_attach_enumeration.run_if(on_message::<TmuxClientAttached>),
                     send_tmux_reenumeration.run_if(tmux_batch_pending),
                     apply_tmux_replies.run_if(tmux_batch_pending),
@@ -257,25 +255,24 @@ fn tmux_batch_pending(batch: Res<TmuxEventBatch>) -> bool {
     !batch.0.is_empty()
 }
 
-/// Folds the batch through `advance_state`, writes `ConnectionState` only on a
-/// real transition (so change detection fires once per transition), and emits
-/// `TmuxClientAttached` on the attach edge.
-///
-/// NOTE: connection close/teardown (the former `TransportEvent::Closed` arm) is
-/// reintroduced by the adoption-lifecycle task — the in-world feed produces only
-/// `Protocol` events, so there is no `Closed` event to act on here yet.
-fn advance_tmux_connection(
-    mut state: ResMut<ConnectionState>,
+/// Inserts [`TmuxAttached`] and emits [`TmuxClientAttached`] on the attach edge:
+/// the first protocol event in this frame's batch while the gateway is not yet
+/// attached. Gated on a pending batch.
+fn mark_attached_on_first_protocol(
+    mut commands: Commands,
     mut attached: MessageWriter<TmuxClientAttached>,
+    connection: NonSend<TmuxConnection>,
+    already: Query<(), With<TmuxAttached>>,
     batch: Res<TmuxEventBatch>,
 ) {
-    if let Some(next) = advance_state(&state, &batch.0) {
-        let is_attached = matches!(next, ConnectionState::Attached);
-        *state = next;
-        if is_attached {
-            attached.write(TmuxClientAttached);
-        }
+    let Some(gateway) = connection.gateway() else {
+        return;
+    };
+    if already.get(gateway).is_ok() || !batch.has_protocol() {
+        return;
     }
+    commands.entity(gateway).insert(TmuxAttached);
+    attached.write(TmuxClientAttached);
 }
 
 /// Sends the one-time initial query suite when the client attaches:
@@ -324,7 +321,7 @@ fn send_tmux_reenumeration(
     mut commands: Commands,
     mut enumeration: Single<&mut EnumerationState>,
     connection: NonSend<TmuxConnection>,
-    state: Res<ConnectionState>,
+    already: Query<(), With<TmuxAttached>>,
     index: Res<TmuxProjection>,
     sessions: Query<&TmuxSession>,
     batch: Res<TmuxEventBatch>,
@@ -357,7 +354,10 @@ fn send_tmux_reenumeration(
             enumeration.register(handle.send(ActivePane), PendingReply::ActivePane);
         }
     }
-    if matches!(*state, ConnectionState::Attached)
+    let is_attached = connection
+        .gateway()
+        .is_some_and(|gw| already.get(gw).is_ok());
+    if is_attached
         && connection.client_name().is_none()
         && !enumeration.has_pending(PendingReply::ClientName)
     {
@@ -624,6 +624,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn first_protocol_event_marks_attached_once() {
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+        app.insert_resource(TmuxPresence);
+        let gateway = app
+            .world_mut()
+            .spawn(AdoptedControlMode::from_captured(
+                b"\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n".to_vec(),
+            ))
+            .id();
+        app.world_mut()
+            .non_send_resource_mut::<TmuxConnection>()
+            .adopt(gateway);
+        app.world_mut()
+            .entity_mut(gateway)
+            .insert(EnumerationState::default());
+        app.update();
+        assert!(
+            app.world().get::<TmuxAttached>(gateway).is_some(),
+            "first protocol event must mark the gateway TmuxAttached"
+        );
+        let attached = app.world().resource::<Messages<TmuxClientAttached>>();
+        assert_eq!(attached.iter_current_update_messages().count(), 1);
+    }
+
+    #[test]
     fn drain_transport_clears_stale_batch_once_then_skips_idle() {
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
@@ -647,41 +673,10 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
         app.update();
-        assert_eq!(
-            *app.world().resource::<ConnectionState>(),
-            ConnectionState::Idle
-        );
         let index = app.world().resource::<TmuxProjection>();
         assert!(index.windows.is_empty());
         assert!(index.panes.is_empty());
         assert!(index.session.is_none());
-    }
-
-    #[test]
-    fn advance_to_attached_emits_client_attached_message() {
-        use bevy::ecs::system::RunSystemOnce;
-        use tmux_control::{ClientEvent, ControlEvent};
-        use tmux_control_parser::WindowId;
-        let mut app = App::new();
-        app.add_plugins(TmuxSessionPlugin);
-        *app.world_mut().resource_mut::<ConnectionState>() = ConnectionState::Connecting;
-        app.world_mut()
-            .resource_mut::<TmuxEventBatch>()
-            .0
-            .push(TransportEvent::Protocol(ClientEvent::Notification(
-                ControlEvent::WindowAdd {
-                    window: WindowId(1),
-                },
-            )));
-        app.world_mut()
-            .run_system_once(advance_tmux_connection)
-            .unwrap();
-        let messages = app.world().resource::<Messages<TmuxClientAttached>>();
-        assert_eq!(messages.iter_current_update_messages().count(), 1);
-        assert_eq!(
-            *app.world().resource::<ConnectionState>(),
-            ConnectionState::Attached
-        );
     }
 
     #[test]
@@ -1085,19 +1080,16 @@ mod tests {
     }
 
     /// A second adoption (after a teardown reset) must re-fire the attach edge and
-    /// re-send the on-attach enumeration. The attach edge is gated on a real
-    /// `ConnectionState` transition; teardown's `TmuxConnectionReset` must restore
-    /// `ConnectionState` to the initial `Idle` so the re-adoption folds
-    /// `Idle -> Attached` again. Without the reset, `ConnectionState` stays
-    /// `Attached`, `advance_state` folds to `None`, `TmuxClientAttached` never
-    /// fires the second time, and the re-adopted session never enumerates.
+    /// re-send the on-attach enumeration. The attach edge inserts `TmuxAttached` on
+    /// the gateway entity; despawning the gateway on teardown removes the marker, so
+    /// the re-adoption's first protocol event can fire it again.
     #[test]
     fn second_adoption_after_reset_reattaches_and_reenumerates() {
         use crate::events::TmuxConnectionReset;
 
         // The DCS introducer + a %begin/%end block: the adopted tmux -CC entry
         // block, which correlates with adopt()'s pre-registered external reply and
-        // produces one Protocol event that flips ConnectionState to Attached.
+        // produces one Protocol event that marks the gateway TmuxAttached.
         fn entry_block() -> Vec<u8> {
             b"\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n".to_vec()
         }
@@ -1142,10 +1134,9 @@ mod tests {
             1,
             "first adoption must fire the attach edge once"
         );
-        assert_eq!(
-            *app.world().resource::<ConnectionState>(),
-            ConnectionState::Attached,
-            "first adoption must reach Attached"
+        assert!(
+            app.world().get::<TmuxAttached>(gateway1).is_some(),
+            "first adoption must mark gateway1 TmuxAttached"
         );
         assert!(
             enumeration_pending_nonempty(&mut app),
@@ -1154,8 +1145,8 @@ mod tests {
 
         // Teardown, mirroring src/tmux/adopt.rs::teardown's crate-facing effect:
         // close the connection, despawn the gateway (taking its EnumerationState
-        // with it), and trigger TmuxConnectionReset (which resets the projection
-        // AND ConnectionState back to Idle).
+        // and TmuxAttached marker with it), and trigger TmuxConnectionReset
+        // (which resets the projection).
         app.world_mut()
             .non_send_resource_mut::<TmuxConnection>()
             .close();
@@ -1163,10 +1154,9 @@ mod tests {
         app.world_mut().trigger(TmuxConnectionReset);
         app.update();
 
-        assert_eq!(
-            *app.world().resource::<ConnectionState>(),
-            ConnectionState::Idle,
-            "teardown reset must restore ConnectionState to Idle"
+        assert!(
+            app.world().get::<TmuxAttached>(gateway1).is_none(),
+            "teardown must have despawned gateway1 (and its TmuxAttached marker)"
         );
 
         // Second adoption: a fresh gateway with EnumerationState and a fresh
@@ -1187,13 +1177,11 @@ mod tests {
         assert_eq!(
             attached_count(&app),
             1,
-            "second adoption must fire the attach edge again (regressed before the \
-             ConnectionState reset: it stayed Attached so advance_state folded to None)"
+            "second adoption must fire the attach edge again"
         );
-        assert_eq!(
-            *app.world().resource::<ConnectionState>(),
-            ConnectionState::Attached,
-            "second adoption must reach Attached again"
+        assert!(
+            app.world().get::<TmuxAttached>(gateway2).is_some(),
+            "second adoption must mark gateway2 TmuxAttached"
         );
         assert!(
             enumeration_pending_nonempty(&mut app),

@@ -17,7 +17,6 @@ mod keybindings;
 mod observers;
 mod output;
 mod plugin;
-mod state;
 
 pub use command::{
     CopyModeCapture, CopyStateQuery, Prompt, RefreshClient, RenameSession, RenameWindow,
@@ -41,6 +40,5 @@ pub use keybindings::{
 };
 pub use output::PaneOutput;
 pub use plugin::{TmuxEventBatch, TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
-pub use state::ConnectionState;
 pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};
 pub use tmux_control_parser::{PaneId, SessionId, WindowId};

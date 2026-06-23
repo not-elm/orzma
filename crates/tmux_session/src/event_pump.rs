@@ -1,5 +1,5 @@
-//! Draining, logging, and routing of tmux transport events: into
-//! `ConnectionState` and the global projection events the observers consume.
+//! Draining, logging, and routing of tmux transport events into the global
+//! projection events the observers consume.
 
 use crate::components::WindowFlags;
 use crate::enumerate::{WINDOW_FLAGS_SUBSCRIPTION, parse_window_rows};
@@ -8,27 +8,9 @@ use crate::events::{
     TmuxWindowAdded, TmuxWindowClosed, TmuxWindowFlagsChanged, TmuxWindowRenamed,
     TmuxWindowsRetained,
 };
-use crate::state::{ConnectionState, next_state};
 use bevy::prelude::Commands;
 use tmux_control::{ClientEvent, ControlEvent, TransportEvent};
 use tmux_control_parser::{PaneId, SessionId, WindowId};
-
-/// Folds `events` through [`next_state`] from `current`, returning the resulting
-/// `ConnectionState` if the batch changed it, or `None` if it ended unchanged.
-///
-/// Returning the next state (rather than mutating in place) lets the caller
-/// write it back through `ResMut` only on a real transition, so change
-/// detection fires once per transition instead of every frame.
-pub(crate) fn advance_state(
-    current: &ConnectionState,
-    events: &[TransportEvent],
-) -> Option<ConnectionState> {
-    let mut next: Option<ConnectionState> = None;
-    for event in events {
-        next = Some(next_state(next.as_ref().unwrap_or(current), event));
-    }
-    next.filter(|n| n != current)
-}
 
 /// Returns the first non-empty trimmed output line of a completed command, or
 /// `None` when the command failed (logged with the `what` label) or the output
@@ -297,19 +279,6 @@ mod tests {
     use bevy::prelude::*;
     use tmux_control::ControlEvent;
     use tmux_control_parser::{SessionId, WindowId};
-
-    fn window_add(id: u32) -> TransportEvent {
-        TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::WindowAdd {
-            window: WindowId(id),
-        }))
-    }
-
-    #[test]
-    fn advance_state_attaches_on_first_notification() {
-        let drained = vec![window_add(1)];
-        let next = advance_state(&ConnectionState::Connecting, &drained);
-        assert_eq!(next, Some(ConnectionState::Attached));
-    }
 
     #[test]
     fn first_reply_line_returns_first_non_empty_trimmed() {
