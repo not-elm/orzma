@@ -23,6 +23,7 @@ use configs::OzmuxConfigsPlugin;
 use default_input::DefaultHostInputPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
+use input::copy_mode::CopyModeInputPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
 use ozma_terminal::OzmaTerminalPlugin;
@@ -103,6 +104,7 @@ fn main() {
             ImeOverlayPlugin,
             OptionAsAltPlugin,
             DefaultHostInputPlugin,
+            CopyModeInputPlugin,
         ))
         .run();
 }

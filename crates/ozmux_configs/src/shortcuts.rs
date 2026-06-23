@@ -428,11 +428,9 @@ pub struct Bindings {
     /// release.
     #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
     pub focus_surface_next: Option<KeyChord>,
-    /// Deprecated and ignored: copy mode is now owned by tmux, so this entry
-    /// no longer maps to an ozmux action. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
+    /// Enters copy mode (Alacritty vi mode) on the focused terminal in
+    /// `AppMode::Default`.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub enter_copy_mode: Option<KeyChord>,
     /// Deprecated and ignored: the copy action moved to tmux's own copy mode.
     /// Accepted so existing configs carrying it still parse under
@@ -473,7 +471,7 @@ impl Default for Bindings {
             new_terminal_surface: None,
             focus_surface_prev: None,
             focus_surface_next: None,
-            enter_copy_mode: None,
+            enter_copy_mode: Some(parse_default_chord("Cmd+S")),
             copy: None,
             detach_session: Some(parse_default_chord("Ctrl+Shift+D")),
         }
@@ -501,6 +499,11 @@ impl Bindings {
                 ShortcutAction::ToggleTmuxView,
             ),
             ("quit", &self.quit, ShortcutAction::Quit),
+            (
+                "enter-copy-mode",
+                &self.enter_copy_mode,
+                ShortcutAction::EnterCopyMode,
+            ),
             (
                 "detach-session",
                 &self.detach_session,
@@ -544,6 +547,9 @@ pub enum ShortcutAction {
     Quit,
     /// Detaches from the tmux session and returns to Default single-terminal mode.
     DetachSession,
+    /// Enters copy mode (Alacritty vi mode) on the focused terminal in
+    /// `AppMode::Default`.
+    EnterCopyMode,
 }
 
 #[cfg(test)]
@@ -809,9 +815,9 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_5_entries() {
+    fn iter_yields_6_entries() {
         let b = Bindings::default();
-        assert_eq!(b.iter().count(), 5);
+        assert_eq!(b.iter().count(), 6);
     }
 
     #[test]
@@ -820,7 +826,7 @@ mod tests {
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies. Deprecated fields carry
         // `skip_serializing`, so only the active bindings appear here.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"toggle-tmux-view":{"key":"t","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"toggle-tmux-view":{"key":"t","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
         assert_eq!(json, expected);
     }
 
@@ -863,13 +869,12 @@ close-surface = \"Cmd+Shift+F\"
 new-terminal-surface = \"Cmd+Shift+T\"
 focus-surface-prev = \"Cmd+Shift+G\"
 focus-surface-next = \"Cmd+Shift+B\"
-enter-copy-mode = \"Cmd+U\"
 copy = \"Cmd+C\"
 ";
         let parsed: Shortcuts = toml::from_str(toml).expect("deprecated keys must still parse");
         assert_eq!(
             parsed.bindings.iter().count(),
-            5,
+            6,
             "ignored keys must not enter the active set"
         );
     }

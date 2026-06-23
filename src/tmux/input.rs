@@ -308,6 +308,7 @@ fn forward_keys_to_tmux(
                 ShortcutAction::DetachSession => {
                     super::request_detach(&connection);
                 }
+                ShortcutAction::EnterCopyMode => {}
             }
             continue;
         }
