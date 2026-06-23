@@ -9,13 +9,15 @@ use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
 use crate::picker::SessionPicker;
+use crate::ui::copy_mode::EnterCopyModeActionEvent;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use ozma_terminal::{
-    KeyboardDisabled, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet,
+    KeyboardDisabled, KeyboardFocused, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet,
+    OzmaTerminalMouseSet,
 };
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::ShortcutAction;
@@ -74,6 +76,7 @@ fn maintain_input_gates(
 }
 
 fn app_shortcut_handler(
+    mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut picker: ResMut<SessionPicker>,
@@ -82,6 +85,7 @@ fn app_shortcut_handler(
     ime: Res<ImeState>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if picker.open || ime.is_composing() || !focused {
@@ -110,6 +114,11 @@ fn app_shortcut_handler(
             }
             ShortcutAction::OpenPicker => {
                 picker.open = true;
+            }
+            ShortcutAction::EnterCopyMode => {
+                if let Ok(entity) = terminal.single() {
+                    commands.trigger(EnterCopyModeActionEvent { entity });
+                }
             }
             ShortcutAction::DetachSession => {}
             ShortcutAction::Paste | ShortcutAction::ReleaseWebviewFocus => {}
