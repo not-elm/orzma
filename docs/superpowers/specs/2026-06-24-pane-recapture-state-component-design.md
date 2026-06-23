@@ -152,6 +152,12 @@ fn recapture_settled_panes(
 最初の再シードが現状より最大1フレーム遅れる。`RECAPTURE_SETTLE_FRAMES = 3` の
 デバウンス下で無害。
 
+実 dims で初期化してこの差を消す案(`upsert_pane` での明示 insert やフック)は
+**採らない**: Bevy の required-component コンストラクタは兄弟コンポーネント
+(`TmuxPane.dims`)を読めず(bevyengine/bevy#17396)、フック/明示 insert はこの
+リファクタが除去したライフサイクル手管理を再導入してしまう。1フレーム差は
+デバウンス下で無害なので、素直に `#[require]` の default を使う。
+
 ### 3. データフロー
 
 - pane spawn(`observers.rs` の upsert / `ensure_pane`)→ `#[require]` で
