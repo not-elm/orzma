@@ -22,7 +22,6 @@ pub mod ozma;
 pub mod path;
 pub mod shortcuts;
 pub mod theme;
-pub mod tmux;
 
 /// Fully-resolved ozmux configuration.
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -42,8 +41,6 @@ pub struct OzmuxConfigs {
     pub inactive_pane: InactivePaneConfig,
     /// OSC-driven webview configuration.
     pub osc_webview: OscWebviewConfig,
-    /// tmux backend configuration.
-    pub tmux: tmux::TmuxConfig,
     /// Ozma single-terminal mode configuration.
     pub ozma: ozma::OzmaConfig,
 }
@@ -270,18 +267,6 @@ resize-pane-down = "Cmd+Shift+J"
             defaulted.osc_webview.enabled,
             "empty TOML must keep the default-on gate"
         );
-    }
-
-    #[test]
-    fn empty_tmux_section_is_accepted() {
-        let c = parse("[tmux]\n");
-        assert_eq!(c.tmux, tmux::TmuxConfig::default());
-    }
-
-    #[test]
-    fn missing_tmux_section_uses_defaults() {
-        let c = parse("");
-        assert_eq!(c.tmux, tmux::TmuxConfig::default());
     }
 
     #[test]
