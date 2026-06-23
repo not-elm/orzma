@@ -230,8 +230,9 @@ pub struct TmuxAttached;
 ///
 /// Auto-skips the system when there is not exactly one client. A type alias (not
 /// a custom `SystemParam`) so the future multi-session migration to `Query` has
-/// one named anchor.
-pub type TmuxClientMut<'w> = Single<'w, 'w, &'static mut TmuxClient>;
+/// one named anchor. When used as a system param, `&'static mut TmuxClient`
+/// resolves to `Mut<'w, TmuxClient>`.
+pub type TmuxClientMut<'w, 's> = Single<'w, 's, &'static mut TmuxClient>;
 
 #[cfg(test)]
 mod tests {
