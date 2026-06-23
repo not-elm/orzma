@@ -89,38 +89,6 @@ fn on_tmux_connection_closed(
 mod tests {
     use super::*;
     use bevy::state::app::StatesPlugin;
-    use ozma_tty_engine::AdoptedControlMode;
-    use ozmux_tmux::TmuxPresence;
-
-    #[test]
-    fn exit_tmux_view_does_not_close_connection() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Tmux);
-        app.insert_non_send_resource(TmuxConnection::default());
-        app.insert_resource(TmuxPresence);
-
-        let gateway = app.world_mut().spawn(AdoptedControlMode::default()).id();
-        app.world_mut()
-            .non_send_resource_mut::<TmuxConnection>()
-            .adopt(gateway);
-
-        app.world_mut()
-            .resource_mut::<NextState<AppMode>>()
-            .set(AppMode::Default);
-        app.update();
-
-        assert!(
-            app.world()
-                .non_send_resource::<TmuxConnection>()
-                .is_connected(),
-            "view-hide (Tmux -> Default) must not close the connection"
-        );
-        assert!(
-            app.world().get_resource::<TmuxPresence>().is_some(),
-            "TmuxPresence must persist across a view-hide"
-        );
-    }
 
     #[test]
     fn request_detach_sends_detach_client() {

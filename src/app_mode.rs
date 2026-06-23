@@ -16,9 +16,7 @@ pub(crate) enum AppMode {
     Tmux,
 }
 
-/// Root of the Default-mode UI subtree, mounted under `UiRoot`. Persists across
-/// mode switches; visibility is toggled by `toggle_default_mode_ui_visibility`
-/// rather than despawned.
+/// Root of the Default-mode UI subtree, mounted under `UiRoot`.
 ///
 /// Adoption (`crate::tmux::adopt`) despawns this container when it promotes the
 /// Default shell to the tmux gateway, so `ensure_default_mode_ui` lazily spawns
@@ -27,8 +25,8 @@ pub(crate) enum AppMode {
 pub(crate) struct DefaultModeUi;
 
 /// Marker for the single Default-mode shell terminal entity. Persists across
-/// `AppMode::Default` ↔ `AppMode::Tmux` round-trips; the subtree is hidden
-/// in `AppMode::Tmux` and shown again on re-entry.
+/// `AppMode::Default` ↔ `AppMode::Tmux` round-trips when the Default shell
+/// is not adopted as the tmux gateway.
 #[derive(Component)]
 struct DefaultShell;
 
@@ -36,10 +34,10 @@ struct DefaultShell;
 /// `OzmaTerminal` under `DefaultModeUi`) exists while in `AppMode::Default`.
 ///
 /// `ensure_default_mode_ui` runs once while in `AppMode::Default` to build the
-/// subtree; it is never despawned. `toggle_default_mode_ui_visibility`
-/// shows it in `AppMode::Default` and hides it in `AppMode::Tmux`.
-/// `OzmaTerminalPlugin` must be added first (it inserts the `OzmaTerminalConfig`
-/// this reads).
+/// subtree. Adoption despawns `DefaultModeUi` when it promotes the Default shell
+/// to the tmux gateway; `ensure_default_mode_ui` spawns a fresh one on the next
+/// return to `AppMode::Default`. `OzmaTerminalPlugin` must be added first (it
+/// inserts the `OzmaTerminalConfig` this reads).
 pub(crate) struct DefaultModePlugin;
 
 impl Plugin for DefaultModePlugin {
@@ -48,10 +46,6 @@ impl Plugin for DefaultModePlugin {
             Update,
             ensure_default_mode_ui
                 .run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>))),
-        )
-        .add_systems(
-            Update,
-            toggle_default_mode_ui_visibility.run_if(state_changed::<AppMode>),
         );
     }
 }
@@ -99,25 +93,6 @@ fn ensure_default_mode_ui(
             tracing::error!(?e, "failed to spawn ozma terminal");
             exit.write(AppExit::Success);
         }
-    }
-}
-
-/// Shows `DefaultModeUi` in `AppMode::Default` and hides it in `AppMode::Tmux`.
-/// Gated by `state_changed::<AppMode>` so it only runs on transitions.
-/// Mutates the `Node.display` field only when the value differs.
-fn toggle_default_mode_ui_visibility(
-    mut mode_ui: Query<&mut Node, With<DefaultModeUi>>,
-    mode: Res<State<AppMode>>,
-) {
-    let want = match **mode {
-        AppMode::Default => Display::Flex,
-        AppMode::Tmux => Display::None,
-    };
-    let Ok(mut node) = mode_ui.single_mut() else {
-        return;
-    };
-    if node.display != want {
-        node.display = want;
     }
 }
 
@@ -187,53 +162,5 @@ mod tests {
             .iter(world)
             .count();
         assert_eq!(count, 1, "exactly one DefaultShell after round-trip");
-    }
-
-    #[test]
-    fn default_mode_ui_hidden_in_tmux_mode() {
-        let mut app = build_app(AppMode::Default);
-        app.update();
-
-        app.world_mut()
-            .resource_mut::<NextState<AppMode>>()
-            .set(AppMode::Tmux);
-        app.update();
-
-        let world = app.world_mut();
-        let node = world
-            .query_filtered::<&Node, With<DefaultModeUi>>()
-            .single(world)
-            .expect("DefaultModeUi present");
-        assert_eq!(
-            node.display,
-            Display::None,
-            "DefaultModeUi hidden in Tmux mode"
-        );
-    }
-
-    #[test]
-    fn default_mode_ui_visible_in_default_mode() {
-        let mut app = build_app(AppMode::Default);
-        app.update();
-
-        app.world_mut()
-            .resource_mut::<NextState<AppMode>>()
-            .set(AppMode::Tmux);
-        app.update();
-        app.world_mut()
-            .resource_mut::<NextState<AppMode>>()
-            .set(AppMode::Default);
-        app.update();
-
-        let world = app.world_mut();
-        let node = world
-            .query_filtered::<&Node, With<DefaultModeUi>>()
-            .single(world)
-            .expect("DefaultModeUi present");
-        assert_eq!(
-            node.display,
-            Display::Flex,
-            "DefaultModeUi visible in Default mode"
-        );
     }
 }

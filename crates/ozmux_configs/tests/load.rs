@@ -37,17 +37,17 @@ fn empty_file_yields_defaults() {
 #[test]
 fn bindings_section_overrides_one_binding_keeps_others() {
     let configs = load_with_overrides(Some(fixture("bindings_replace.toml")), None, None).unwrap();
-    let close = configs
+    let quit = configs
         .shortcuts
         .bindings
-        .close_pane
+        .quit
         .as_ref()
-        .expect("bindings_replace fixture rebinds close-pane");
-    assert_eq!(close.key, Key::Char('y'));
-    assert!(close.modifiers.meta, "Cmd modifier must be set");
+        .expect("bindings_replace fixture rebinds quit");
+    assert_eq!(quit.key, Key::Char('y'));
+    assert!(quit.modifiers.meta, "Cmd modifier must be set");
     let defaults = OzmuxConfigs::default();
     assert_eq!(
-        configs.shortcuts.bindings.focus_pane_left, defaults.shortcuts.bindings.focus_pane_left,
+        configs.shortcuts.bindings.paste, defaults.shortcuts.bindings.paste,
         "unspecified bindings must remain at defaults"
     );
 }
@@ -77,13 +77,13 @@ fn duplicate_chord_rejected() {
 #[test]
 fn modifier_binding_accepted() {
     let configs = load_with_overrides(Some(fixture("modifier_binding.toml")), None, None).unwrap();
-    let close = configs
+    let quit = configs
         .shortcuts
         .bindings
-        .close_pane
+        .quit
         .as_ref()
-        .expect("modifier_binding fixture rebinds close-pane");
-    assert!(close.modifiers.shift, "the fixture's binding carries Shift");
+        .expect("modifier_binding fixture rebinds quit");
+    assert!(quit.modifiers.shift, "the fixture's binding carries Shift");
 }
 
 #[test]

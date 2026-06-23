@@ -248,9 +248,9 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_resolve_to_six() {
+    fn default_bindings_resolve_to_five() {
         let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
-        assert_eq!(r.0.len(), 6);
+        assert_eq!(r.0.len(), 5);
     }
 
     #[test]
@@ -261,12 +261,12 @@ mod tests {
             Some(ShortcutAction::Paste)
         );
         assert_eq!(
-            r.match_gui_action(KeyCode::KeyT, mods(false, true, false, true)),
-            Some(ShortcutAction::ToggleTmuxView)
-        );
-        assert_eq!(
             r.match_gui_action(KeyCode::KeyQ, mods(false, false, false, true)),
             Some(ShortcutAction::Quit)
+        );
+        assert_eq!(
+            r.match_gui_action(KeyCode::KeyS, mods(false, false, false, true)),
+            Some(ShortcutAction::EnterCopyMode)
         );
     }
 
@@ -342,8 +342,8 @@ mod tests {
         assert!(b.paste.meta && !b.paste.ctrl && !b.paste.shift && !b.paste.alt);
         assert_eq!(
             b.reserved.len(),
-            5,
-            "Quit, ToggleTmuxView, ReleaseWebviewFocus, DetachSession, EnterCopyMode"
+            4,
+            "Quit, ReleaseWebviewFocus, DetachSession, EnterCopyMode"
         );
         assert!(
             !b.reserved

@@ -1,2 +1,2 @@
 [shortcuts.bindings]
-close-pane = "Cmd+Shift+W"
+quit = "Cmd+Shift+W"

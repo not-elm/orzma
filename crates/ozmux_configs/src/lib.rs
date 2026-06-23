@@ -28,15 +28,6 @@ pub mod tmux;
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct OzmuxConfigs {
-    /// Deprecated and ignored: the startup mode is now determined automatically
-    /// (always tmux). Accepted so existing configs carrying it still parse under
-    /// `deny_unknown_fields`. Remove after one release.
-    #[serde(default)]
-    #[expect(
-        dead_code,
-        reason = "deprecated config key accepted only so existing configs still parse under deny_unknown_fields; never read"
-    )]
-    startup_mode: Option<String>,
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
     /// Theme configuration.
@@ -288,53 +279,9 @@ resize-pane-down = "Cmd+Shift+J"
     }
 
     #[test]
-    fn stale_tmux_program_key_is_accepted_and_ignored() {
-        toml::from_str::<OzmuxConfigs>("[tmux]\nprogram = \"/usr/local/bin/tmux\"\n")
-            .expect("deprecated [tmux] program key must parse under deny_unknown_fields");
-    }
-
-    #[test]
     fn missing_tmux_section_uses_defaults() {
         let c = parse("");
         assert_eq!(c.tmux, tmux::TmuxConfig::default());
-    }
-
-    #[test]
-    fn startup_mode_key_is_accepted_and_ignored() {
-        toml::from_str::<OzmuxConfigs>(r#"startup_mode = "tmux""#)
-            .expect("deprecated startup_mode key must parse under deny_unknown_fields");
-    }
-
-    #[test]
-    fn old_config_with_deprecated_keys_and_real_setting_loads_correctly() {
-        // An upgrading user whose config.toml still carries removed keys plus
-        // a real setting must not silently revert to defaults. This is the
-        // regression test for the deny_unknown_fields parse-error path.
-        let toml = r#"
-startup_mode = "tmux"
-
-[tmux]
-program = "/usr/local/bin/tmux"
-socket_name = "work"
-
-[shortcuts.bindings]
-paste = "Cmd+Shift+V"
-"#;
-        let mut c: OzmuxConfigs = toml::from_str(toml)
-            .expect("config with deprecated keys and a real setting must parse");
-        c.normalize();
-        c.validate().expect("parsed config must be valid");
-        let chord = c
-            .shortcuts
-            .bindings
-            .paste
-            .as_ref()
-            .expect("paste must be set");
-        assert_eq!(chord.key, shortcuts::Key::Char('v'));
-        assert!(
-            chord.modifiers.meta && chord.modifiers.shift,
-            "real paste binding override must be preserved, not reset to defaults"
-        );
     }
 
     #[test]
@@ -380,19 +327,19 @@ paste = "Cmd+Shift+V"
 
     #[test]
     fn user_override_replaces_one_binding_keeps_others() {
-        let c = parse("[shortcuts.bindings]\nclose-pane = \"Cmd+Shift+W\"\n");
-        let close = c.shortcuts.bindings.close_pane.as_ref().unwrap();
-        assert_eq!(close.key, shortcuts::Key::Char('w'));
-        assert!(close.modifiers.meta && close.modifiers.shift);
+        let c = parse("[shortcuts.bindings]\nquit = \"Cmd+Shift+Q\"\n");
+        let quit = c.shortcuts.bindings.quit.as_ref().unwrap();
+        assert_eq!(quit.key, shortcuts::Key::Char('q'));
+        assert!(quit.modifiers.meta && quit.modifiers.shift);
         assert!(
-            c.shortcuts.bindings.focus_pane_left.is_none(),
-            "unspecified deprecated bindings stay None",
+            c.shortcuts.bindings.paste.is_some(),
+            "unspecified active bindings keep their defaults",
         );
     }
 
     #[test]
     fn user_unbind_with_empty_string_sets_field_to_none() {
-        let c = parse("[shortcuts.bindings]\nclose-pane = \"\"\n");
-        assert!(c.shortcuts.bindings.close_pane.is_none());
+        let c = parse("[shortcuts.bindings]\nquit = \"\"\n");
+        assert!(c.shortcuts.bindings.quit.is_none());
     }
 }

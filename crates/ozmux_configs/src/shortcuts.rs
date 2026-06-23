@@ -303,140 +303,23 @@ pub struct Shortcuts {
 /// TOML reads the `[shortcuts.bindings]` table; the `kebab-case` serde
 /// rename maps each `paste = "Cmd+V"` line to the matching field.
 /// `#[serde(default)]` at struct level seeds missing fields from
-/// `Bindings::default()`. `deny_unknown_fields` rejects typos at load time;
-/// deprecated keys (the pane/window/surface set tmux now owns) are accepted
-/// and ignored.
+/// `Bindings::default()`. `deny_unknown_fields` rejects typos at load time.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct Bindings {
-    /// Deprecated and ignored: pane lifecycle moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub close_pane: Option<KeyChord>,
-    /// Deprecated and ignored: pane focus moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub focus_pane_left: Option<KeyChord>,
-    /// Deprecated and ignored: pane focus moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub focus_pane_down: Option<KeyChord>,
-    /// Deprecated and ignored: pane focus moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub focus_pane_up: Option<KeyChord>,
-    /// Deprecated and ignored: pane focus moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub focus_pane_right: Option<KeyChord>,
-    /// Deprecated and ignored: pane splitting moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub split_pane_vertical: Option<KeyChord>,
-    /// Deprecated and ignored: pane splitting moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub split_pane_horizontal: Option<KeyChord>,
-    /// Deprecated and ignored: pane swapping moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub swap_pane_prev: Option<KeyChord>,
-    /// Deprecated and ignored: pane swapping moved to tmux, which owns this
-    /// binding now under forward-only key routing. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub swap_pane_next: Option<KeyChord>,
-    /// Deprecated and ignored: workspace lifecycle moved to tmux windows, which
-    /// own this binding now under forward-only key routing. Accepted so existing
-    /// configs carrying it still parse under `deny_unknown_fields`. Remove after
-    /// one release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub new_workspace: Option<KeyChord>,
-    /// Deprecated and ignored: workspace focus moved to tmux windows, which own
-    /// this binding now under forward-only key routing. Accepted so existing
-    /// configs carrying it still parse under `deny_unknown_fields`. Remove after
-    /// one release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub focus_workspace_prev: Option<KeyChord>,
-    /// Deprecated and ignored: workspace focus moved to tmux windows, which own
-    /// this binding now under forward-only key routing. Accepted so existing
-    /// configs carrying it still parse under `deny_unknown_fields`. Remove after
-    /// one release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub focus_workspace_next: Option<KeyChord>,
     /// Paste the system clipboard into the active terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub paste: Option<KeyChord>,
     /// Releases keyboard focus from a focused webview back to the terminal.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub release_webview_focus: Option<KeyChord>,
-    /// Deprecated and ignored: renamed to `release_webview_focus`. Accepted so
-    /// existing configs carrying it still parse under `deny_unknown_fields`.
-    /// Remove after one release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub release_inline_focus: Option<KeyChord>,
-    /// Toggles between Tmux view and the Default shell. In Default mode,
-    /// switches to Tmux when a background tmux session is connected; in
-    /// Tmux mode, returns to the Default shell without detaching.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub toggle_tmux_view: Option<KeyChord>,
-    /// Deprecated and ignored: renamed to `toggle_tmux_view`. Accepted so
-    /// existing configs carrying it still parse under `deny_unknown_fields`.
-    /// Remove after one release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub open_picker: Option<KeyChord>,
     /// Quits the ozmux application.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub quit: Option<KeyChord>,
-    /// Deprecated and ignored: this binding was removed when surface/copy
-    /// actions were dropped for the tmux backend. Accepted so existing
-    /// configs carrying it still parse under `deny_unknown_fields`. Remove
-    /// after one release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub close_surface: Option<KeyChord>,
-    /// Deprecated and ignored: surface creation no longer exists under the
-    /// tmux backend. Accepted so existing configs carrying it still parse
-    /// under `deny_unknown_fields`. Remove after one release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub new_terminal_surface: Option<KeyChord>,
-    /// Deprecated and ignored: surface focus cycling was dropped with the
-    /// surface model for the tmux backend. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub focus_surface_prev: Option<KeyChord>,
-    /// Deprecated and ignored: surface focus cycling was dropped with the
-    /// surface model for the tmux backend. Accepted so existing configs
-    /// carrying it still parse under `deny_unknown_fields`. Remove after one
-    /// release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub focus_surface_next: Option<KeyChord>,
     /// Enters copy mode (Alacritty vi mode) on the focused terminal in
     /// `AppMode::Default`.
     #[serde(deserialize_with = "deser_chord_or_unbind")]
     pub enter_copy_mode: Option<KeyChord>,
-    /// Deprecated and ignored: the copy action moved to tmux's own copy mode.
-    /// Accepted so existing configs carrying it still parse under
-    /// `deny_unknown_fields`. Remove after one release.
-    #[serde(default, skip_serializing, deserialize_with = "deser_chord_or_unbind")]
-    pub copy: Option<KeyChord>,
     /// Detach the current tmux session and switch to Default mode.
     #[serde(deserialize_with = "deser_chord_or_unbind", default)]
     pub detach_session: Option<KeyChord>,
@@ -449,30 +332,10 @@ fn parse_default_chord(s: &str) -> KeyChord {
 impl Default for Bindings {
     fn default() -> Self {
         Bindings {
-            close_pane: None,
-            focus_pane_left: None,
-            focus_pane_down: None,
-            focus_pane_up: None,
-            focus_pane_right: None,
-            split_pane_vertical: None,
-            split_pane_horizontal: None,
-            swap_pane_prev: None,
-            swap_pane_next: None,
-            new_workspace: None,
-            focus_workspace_prev: None,
-            focus_workspace_next: None,
             paste: Some(parse_default_chord("Cmd+V")),
             release_webview_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
-            release_inline_focus: None,
-            toggle_tmux_view: Some(parse_default_chord("Cmd+Shift+T")),
-            open_picker: None,
             quit: Some(parse_default_chord("Cmd+Q")),
-            close_surface: None,
-            new_terminal_surface: None,
-            focus_surface_prev: None,
-            focus_surface_next: None,
             enter_copy_mode: Some(parse_default_chord("Cmd+S")),
-            copy: None,
             detach_session: Some(parse_default_chord("Ctrl+Shift+D")),
         }
     }
@@ -492,11 +355,6 @@ impl Bindings {
                 "release-webview-focus",
                 &self.release_webview_focus,
                 ShortcutAction::ReleaseWebviewFocus,
-            ),
-            (
-                "toggle-tmux-view",
-                &self.toggle_tmux_view,
-                ShortcutAction::ToggleTmuxView,
             ),
             ("quit", &self.quit, ShortcutAction::Quit),
             (
@@ -541,8 +399,6 @@ pub enum ShortcutAction {
     Paste,
     /// Releases keyboard focus from a focused webview back to the terminal.
     ReleaseWebviewFocus,
-    /// Toggles between Tmux view and the Default shell without detaching.
-    ToggleTmuxView,
     /// Quits the ozmux application.
     Quit,
     /// Detaches from the tmux session and returns to Default single-terminal mode.
@@ -764,36 +620,8 @@ mod tests {
         let b = Bindings::default();
         assert!(b.paste.is_some());
         assert!(b.release_webview_focus.is_some());
-        assert!(b.toggle_tmux_view.is_some());
         assert!(b.quit.is_some());
         assert!(b.detach_session.is_some());
-    }
-
-    #[test]
-    fn bindings_default_has_toggle_tmux_view() {
-        let b = Bindings::default();
-        assert!(b.toggle_tmux_view.is_some());
-        let chord = b.toggle_tmux_view.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('t'));
-        assert!(chord.modifiers.meta && chord.modifiers.shift);
-        assert!(!chord.modifiers.ctrl && !chord.modifiers.alt);
-    }
-
-    #[test]
-    fn bindings_default_deprecated_pane_window_fields_are_none() {
-        let b = Bindings::default();
-        assert!(b.close_pane.is_none());
-        assert!(b.focus_pane_left.is_none());
-        assert!(b.focus_pane_down.is_none());
-        assert!(b.focus_pane_up.is_none());
-        assert!(b.focus_pane_right.is_none());
-        assert!(b.split_pane_vertical.is_none());
-        assert!(b.split_pane_horizontal.is_none());
-        assert!(b.swap_pane_prev.is_none());
-        assert!(b.swap_pane_next.is_none());
-        assert!(b.new_workspace.is_none());
-        assert!(b.focus_workspace_prev.is_none());
-        assert!(b.focus_workspace_next.is_none());
     }
 
     #[test]
@@ -815,18 +643,17 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_6_entries() {
+    fn iter_yields_5_entries() {
         let b = Bindings::default();
-        assert_eq!(b.iter().count(), 6);
+        assert_eq!(b.iter().count(), 5);
     }
 
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
-        // The kebab-case rename applies. Deprecated fields carry
-        // `skip_serializing`, so only the active bindings appear here.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"toggle-tmux-view":{"key":"t","modifiers":{"ctrl":false,"shift":true,"alt":false,"meta":true}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        // The kebab-case rename applies.
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
         assert_eq!(json, expected);
     }
 
@@ -857,78 +684,5 @@ mod tests {
             .find_map(|(_, bound, action)| (bound.as_ref() == Some(&chord)).then_some(action))
             .expect("Cmd+V must resolve");
         assert!(matches!(action, ShortcutAction::Paste));
-    }
-
-    #[test]
-    fn deprecated_surface_copy_bindings_are_accepted_and_ignored() {
-        // Configs carrying the removed surface/copy-mode binding keys must
-        // still parse (back-compat) and not appear in the active binding set.
-        let toml = "\
-[bindings]
-close-surface = \"Cmd+Shift+F\"
-new-terminal-surface = \"Cmd+Shift+T\"
-focus-surface-prev = \"Cmd+Shift+G\"
-focus-surface-next = \"Cmd+Shift+B\"
-copy = \"Cmd+C\"
-";
-        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated keys must still parse");
-        assert_eq!(
-            parsed.bindings.iter().count(),
-            6,
-            "ignored keys must not enter the active set"
-        );
-    }
-
-    #[test]
-    fn deprecated_open_picker_key_still_parses_and_is_ignored() {
-        // Old configs carrying the removed open-picker key must still parse under
-        // deny_unknown_fields, and must not appear in the active binding set.
-        let toml = "[bindings]\nopen-picker = \"Cmd+Shift+P\"\n";
-        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated key must still parse");
-        assert!(
-            parsed
-                .bindings
-                .iter()
-                .all(|(label, _, _)| label != "open-picker"),
-            "deprecated key must not enter the active set"
-        );
-        // The new field falls back to its default chord.
-        assert!(parsed.bindings.toggle_tmux_view.is_some());
-    }
-
-    #[test]
-    fn deprecated_release_inline_focus_key_still_parses_and_is_ignored() {
-        // Old configs carrying the renamed key must still parse under
-        // deny_unknown_fields, and must not appear in the active binding set.
-        let toml = "[bindings]\nrelease-inline-focus = \"Cmd+E\"\n";
-        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated key must still parse");
-        assert!(
-            parsed
-                .bindings
-                .iter()
-                .all(|(label, _, _)| label != "release-inline-focus"),
-            "deprecated key must not enter the active set"
-        );
-        // The new field falls back to its default chord.
-        assert!(parsed.bindings.release_webview_focus.is_some());
-    }
-
-    #[test]
-    fn deprecated_pane_window_bindings_are_accepted_and_ignored() {
-        let toml = "\
-[bindings]
-split-pane-vertical = \"Cmd+I\"
-focus-pane-left = \"Cmd+H\"
-new-workspace = \"Cmd+R\"
-swap-pane-next = \"Cmd+N\"
-";
-        let parsed: Shortcuts = toml::from_str(toml).expect("deprecated keys must still parse");
-        assert!(
-            parsed.bindings.iter().all(|(label, _, _)| !matches!(
-                label,
-                "split-pane-vertical" | "focus-pane-left" | "new-workspace" | "swap-pane-next"
-            )),
-            "ignored keys must not enter the active set",
-        );
     }
 }

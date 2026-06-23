@@ -1,7 +1,7 @@
 //! Host-side input for `AppMode::Default`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
 //! markers from the coarse guards (IME, focus, webview), and handles the
 //! application-level GUI shortcuts the terminal crate does not own (Quit,
-//! ToggleTmuxView, DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
+//! DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
 use crate::app_mode::AppMode;
@@ -20,7 +20,7 @@ use ozma_terminal::{
 };
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozmux_configs::shortcuts::ShortcutAction;
-use ozmux_tmux::{TmuxConnection, TmuxPane};
+use ozmux_tmux::TmuxPane;
 
 /// Registers the host-side input systems for `AppMode::Default`.
 pub(crate) struct DefaultHostInputPlugin;
@@ -79,12 +79,10 @@ fn maintain_input_gates(
 }
 
 fn app_shortcut_handler(
-    mut next_mode: ResMut<NextState<AppMode>>,
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
-    connection: Option<NonSend<TmuxConnection>>,
     shortcuts: Res<ResolvedShortcuts>,
     ime: Res<ImeState>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
@@ -115,11 +113,6 @@ fn app_shortcut_handler(
         match action {
             ShortcutAction::Quit => {
                 exit.write(AppExit::Success);
-            }
-            ShortcutAction::ToggleTmuxView => {
-                if connection.as_ref().is_some_and(|c| c.is_connected()) {
-                    next_mode.set(AppMode::Tmux);
-                }
             }
             ShortcutAction::EnterCopyMode => {
                 if let Ok(entity) = terminal.single() {
@@ -254,11 +247,11 @@ mod tests {
         assert!(gui_action_suppressed_by_webview(true, ShortcutAction::Quit));
         assert!(gui_action_suppressed_by_webview(
             true,
-            ShortcutAction::ToggleTmuxView
+            ShortcutAction::DetachSession
         ));
         assert!(gui_action_suppressed_by_webview(
             true,
-            ShortcutAction::DetachSession
+            ShortcutAction::EnterCopyMode
         ));
         assert!(!gui_action_suppressed_by_webview(
             true,
