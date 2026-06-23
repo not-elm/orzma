@@ -76,11 +76,27 @@ pub struct TmuxWindowLayout(pub WindowLayout);
 
 /// A projected tmux pane entity.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(PaneRecaptureState)]
 pub struct TmuxPane {
     /// tmux pane id (`%N`).
     pub id: PaneId,
     /// Cell geometry from the window layout.
     pub dims: CellDims,
+}
+
+/// Per-pane bookkeeping for the recapture-settle re-seed (driven by
+/// `recapture_settled_panes` in the plugin). Co-located with `TmuxPane` so it
+/// can be a required component; the re-seed logic itself lives in the plugin.
+/// Despawning the pane drops this, so a reconnect that respawns the pane starts
+/// from a clean re-seed state.
+#[derive(Component, Default)]
+pub(crate) struct PaneRecaptureState {
+    /// Last-seen cell dims, to detect size changes.
+    pub(crate) dims: (u32, u32),
+    /// Frames the dims have held steady since the last change.
+    pub(crate) stable: u8,
+    /// Whether this pane has been re-seeded since its last size change.
+    pub(crate) done: bool,
 }
 
 #[cfg(test)]

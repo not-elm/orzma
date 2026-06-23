@@ -5,7 +5,7 @@ use crate::command::{
     ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListKeys, ListWindows,
     ModeKeys as ModeKeysCmd, PrefixOptions, SubscribeWindowFlags, Version,
 };
-use crate::components::{TmuxPane, TmuxSession};
+use crate::components::{PaneRecaptureState, TmuxPane, TmuxSession};
 use crate::connection::{TmuxAttached, TmuxClient};
 use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{EnumerationState, PendingReply, version_supports_per_window_refresh};
@@ -20,7 +20,6 @@ use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, collect_pane_outputs};
 use bevy::prelude::*;
 use ozma_tty_engine::{AdoptedControlMode, TerminalRawWrite};
-use std::collections::{HashMap, HashSet};
 use tmux_control::{ClientEvent, TransportEvent};
 use tmux_control_parser::PaneId;
 
@@ -156,17 +155,6 @@ fn request_pane_capture(client: &mut TmuxClient, enumeration: &mut EnumerationSt
     }
 }
 
-/// Per-pane state for [`recapture_settled_panes`].
-#[derive(Default)]
-struct PaneRecaptureState {
-    /// Last-seen cell dims, to detect size changes.
-    dims: (u32, u32),
-    /// Frames the dims have held steady since the last change.
-    stable: u8,
-    /// Whether this pane has been re-seeded since its last size change.
-    done: bool,
-}
-
 /// Frames a pane's size must hold steady before its mirror is re-seeded from
 /// tmux. Lets a born-small pane finish growing (and a window-drag finish) before
 /// the re-seed fires.
@@ -191,40 +179,23 @@ const RECAPTURE_SETTLE_FRAMES: u8 = 3;
 /// content). Skipped while an earlier capture for the pane is still in flight so
 /// the two capture/cursor pairs never collide.
 fn recapture_settled_panes(
-    mut watch: Local<HashMap<PaneId, PaneRecaptureState>>,
-    mut last_gateway: Local<Option<Entity>>,
-    mut client: Single<(Entity, &mut TmuxClient, &mut EnumerationState)>,
-    panes: Query<&TmuxPane>,
+    mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
+    mut panes: Query<(&TmuxPane, &mut PaneRecaptureState)>,
 ) {
-    let (gateway, client, enumeration) = &mut *client;
-    let gateway = *gateway;
-    // NOTE: a re-adoption spawns a fresh gateway entity; stale `done: true` entries
-    // from the previous connection would suppress the one-shot re-seed on reconnect
-    // if a restarted tmux server reuses a pane id. Clear the watch whenever the
-    // gateway entity changes so every reconnect re-seeds all panes from scratch.
-    if *last_gateway != Some(gateway) {
-        watch.clear();
-        *last_gateway = Some(gateway);
-    }
-    let present: HashSet<PaneId> = panes.iter().map(|pane| pane.id).collect();
-    watch.retain(|id, _| present.contains(id));
-
-    for pane in panes.iter() {
+    let (client, enumeration) = &mut *client;
+    for (pane, mut state) in panes.iter_mut() {
         let dims = (pane.dims.width, pane.dims.height);
-        let state = watch.entry(pane.id).or_insert(PaneRecaptureState {
-            dims,
-            stable: 0,
-            done: false,
-        });
         if state.dims != dims {
-            state.dims = dims;
-            state.stable = 0;
             // NOTE: re-arm the one-shot — a size change (e.g. a born-small
             // adopted pane grown to the client size) pulls scrollback onto the
             // screen and needs a fresh re-seed once the new size settles.
-            state.done = false;
-        } else {
-            state.stable = state.stable.saturating_add(1);
+            *state = PaneRecaptureState {
+                dims,
+                stable: 0,
+                done: false,
+            };
+        } else if !state.done && state.stable < RECAPTURE_SETTLE_FRAMES {
+            state.stable += 1;
         }
         if !state.done
             && state.stable >= RECAPTURE_SETTLE_FRAMES
@@ -1095,11 +1066,11 @@ mod tests {
     }
 
     #[test]
-    fn recapture_clears_watch_on_gateway_change_so_reconnect_reseeds_reused_pane_id() {
-        // Regression: after teardown + re-adoption, recapture_settled_panes kept
-        // stale `done: true` entries in its Local<HashMap>. If a restarted tmux
-        // server reuses a pane id, the stale entry suppressed the one-shot re-seed
-        // on reconnect, leaving the pane blank until the user typed.
+    fn recapture_reseeds_reused_pane_id_after_pane_respawn() {
+        // Regression: a reconnect to a restarted tmux server can reuse a pane id.
+        // PaneRecaptureState now lives on the pane entity, so despawning the old
+        // pane drops its `done: true` state and the respawned reused-id pane gets
+        // a fresh component — the one-shot re-seed must fire again on reconnect.
         use tmux_control_parser::CellDims;
 
         let mut app = App::new();
@@ -1160,8 +1131,8 @@ mod tests {
             dims,
         });
 
-        // Settle the reconnected pane — the watch.clear() on gateway change must
-        // re-arm the one-shot so the re-seed fires again.
+        // Settle the reconnected pane — the fresh PaneRecaptureState on the
+        // respawned pane entity must re-arm the one-shot so the re-seed fires.
         for _ in 0..(RECAPTURE_SETTLE_FRAMES as usize + 1) {
             app.update();
         }
