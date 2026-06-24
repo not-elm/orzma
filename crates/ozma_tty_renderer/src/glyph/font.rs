@@ -28,7 +28,7 @@ const FONT_SIZE_PX: f32 = 12.0;
 /// PrimaryWindow's `scale_factor` to obtain the physical pixel size fed to
 /// `cell_metrics_px` and the glyph atlas.
 ///
-/// Defaults to [`FONT_SIZE_PX`]; the app's `FontBridgePlugin` overwrites it
+/// Defaults to 12.0 (`FONT_SIZE_PX`); the app's `FontBridgePlugin` overwrites it
 /// from `config.font.size` at Startup, before cell metrics are computed.
 #[derive(Resource, Clone, Copy, Debug)]
 pub struct TerminalFontSize(pub f32);
@@ -643,7 +643,6 @@ mod tests {
         };
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
-        // Pre-insert so the plugin's init_resource keeps this value.
         app.insert_resource(TerminalFontSize(10.0));
         app.add_plugins(TerminalFontPlugin);
         app.update();
