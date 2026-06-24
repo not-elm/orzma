@@ -1,7 +1,7 @@
 use crate::{
     glyph::{
         atlas::{GlyphAtlas, GlyphRect},
-        font::{FONT_SIZE_PX, FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFonts},
+        font::{FontFace, GlyphKey, TerminalCellMetricsResource, TerminalFontSize, TerminalFonts},
     },
     material::state::TerminalMaterialState,
     schema::{Cell, HyperlinkHoverState, SelectionKind, TerminalGrid},
@@ -479,13 +479,12 @@ fn update_terminal_material(
         Option<&TerminalOverlays>,
     )>,
     fonts: Res<TerminalFonts>,
+    font_size: Res<TerminalFontSize>,
     palette_time: Res<Time>,
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     hover: Res<HyperlinkHoverState>,
 ) {
-    // TODO: load font size from config.
-
     // NOTE: This system runs unconditionally — *not* gated by
     // `Changed<TerminalGrid>`. The `mat.params = ...` write at the end is
     // load-bearing for rendering correctness: it forces `AssetEvent::Modified`
@@ -512,7 +511,7 @@ fn update_terminal_material(
         return;
     };
     let dpr = window.scale_factor();
-    let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
+    let phys_font_size = (font_size.0 * dpr).round() as u16;
 
     for (entity, handle, mut state, grid, pane_style, overlays) in terminals.iter_mut() {
         let atlas_invalidated = atlas.generation != state.last_atlas_generation;

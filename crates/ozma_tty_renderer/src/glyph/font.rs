@@ -22,10 +22,22 @@ pub enum FontLoadError {
     },
 }
 
-/// Font size in CSS pixels; multiplied by the PrimaryWindow's
-/// `scale_factor` to obtain the physical pixel size fed to
-/// `cell_metrics_px`.
-pub const FONT_SIZE_PX: f32 = 12.0;
+const FONT_SIZE_PX: f32 = 12.0;
+
+/// Logical (CSS) pixel font size for the terminal grid. Multiplied by the
+/// PrimaryWindow's `scale_factor` to obtain the physical pixel size fed to
+/// `cell_metrics_px` and the glyph atlas.
+///
+/// Defaults to 12.0 (`FONT_SIZE_PX`); the app's `FontBridgePlugin` overwrites it
+/// from `config.font.size` at Startup, before cell metrics are computed.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct TerminalFontSize(pub f32);
+
+impl Default for TerminalFontSize {
+    fn default() -> Self {
+        Self(FONT_SIZE_PX)
+    }
+}
 
 /// Public `SystemSet` label used to order systems against the renderer's
 /// cell-metrics initialization. App-level plugins that need to mutate
@@ -47,7 +59,7 @@ impl Plugin for TerminalFontPlugin {
         if !app.world().contains_resource::<TerminalFonts>() {
             app.insert_resource(TerminalFonts::default());
         }
-        app.add_systems(
+        app.init_resource::<TerminalFontSize>().add_systems(
             Startup,
             init_cell_metrics_from_primary_window.in_set(TerminalFontInitSet::InitCellMetrics),
         );
@@ -69,10 +81,11 @@ impl Plugin for TerminalFontPlugin {
 fn init_cell_metrics_from_primary_window(
     mut commands: Commands,
     fonts: Res<TerminalFonts>,
+    font_size: Res<TerminalFontSize>,
     window: Single<&Window, With<PrimaryWindow>>,
 ) {
     let dpr = window.scale_factor();
-    let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
+    let phys_font_size = (font_size.0 * dpr).round() as u16;
     let metrics = fonts.cell_metrics_px(phys_font_size);
     commands.insert_resource(TerminalCellMetricsResource {
         metrics,
@@ -181,6 +194,18 @@ fn max_ascii_overflow_for_face(face: &FontArc, px_scale: f32, cell_w_phys_floor:
         }
     }
     worst.max(0.0)
+}
+
+/// Returns a face's em-scale `(ascender − descender) / units_per_em` — the
+/// factor that maps a physical font size in pixels to the `ab_glyph::PxScale`
+/// whose em-square renders at exactly that pixel size.
+fn em_scale_of(font: &FontArc) -> f32 {
+    let face = TtfFace::parse(font.font_data(), 0)
+        .expect("ttf-parser parse failed for a face ab_glyph already accepted");
+    let asc = i32::from(face.ascender());
+    let desc = i32::from(face.descender());
+    let upem = f32::from(face.units_per_em());
+    (asc - desc) as f32 / upem
 }
 
 impl TerminalFonts {
@@ -347,28 +372,18 @@ impl TerminalFonts {
         }
     }
 
-    /// Returns the actual `PxScale` value fed to `ab_glyph` for the given
-    /// CSS-pixel font size. Multiplies by `em_scale = (ascender − descender)
-    /// / units_per_em` (derived from the Regular face's hhea/head tables)
-    /// so the input size is interpreted as the em-square in physical pixels
-    /// (CSS / Terminal.app convention), not as `ab_glyph::PxScale`'s
-    /// native "ascent + |descent|" interpretation.
-    ///
-    /// Used by both `cell_metrics_px` (for advance / ascent / descent
-    /// derivation) and `glyph/atlas.rs` (for glyph rasterization), so both
-    /// agree on the actual rendering scale.
+    /// Returns the `ab_glyph::PxScale` value for the primary regular face at the
+    /// given physical pixel size. Used by `cell_metrics_px` and `glyph/atlas.rs`.
     pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
-        let face = TtfFace::parse(self.regular.font_data(), 0)
-            .expect(
-                "regular face: ttf-parser parse failed (bundled or user-supplied via FontBridgePlugin); \
-                 if a user override is in effect this means the override file passed ab_glyph but \
-                 ttf-parser rejected it — check the most recent FontBridgePlugin warning",
-            );
-        let asc = i32::from(face.ascender());
-        let desc = i32::from(face.descender());
-        let upem = f32::from(face.units_per_em());
-        let em_scale = (asc - desc) as f32 / upem;
-        f32::from(phys_size_px) * em_scale
+        f32::from(phys_size_px) * em_scale_of(&self.regular)
+    }
+
+    /// Returns the `PxScale` value for the CJK fallback face so its em-square
+    /// renders at the same physical pixel size as the primary's, preventing the
+    /// fallback from rasterizing larger than the grid expects. Mirrors
+    /// [`Self::px_scale_value`] but reads `self.fallback_regular`'s metrics.
+    pub(crate) fn fallback_px_scale_value(&self, phys_size_px: u16) -> f32 {
+        f32::from(phys_size_px) * em_scale_of(&self.fallback_regular)
     }
 }
 
@@ -598,6 +613,45 @@ mod tests {
             pre_inserted_bytes_ptr,
             "TerminalFonts was overwritten by Plugin::build, but the resource was \
              already present at add_plugins time — the pre-insert should have been preserved"
+        );
+    }
+
+    #[test]
+    fn fallback_px_scale_value_is_em_matched_and_smaller_than_primary() {
+        let fonts = TerminalFonts::default();
+        let phys = 12u16;
+        let primary = fonts.px_scale_value(phys);
+        let fallback = fonts.fallback_px_scale_value(phys);
+        let ratio = fallback / primary;
+        assert!(
+            (ratio - 0.879646).abs() < 0.001,
+            "fallback/primary px_scale ratio = {ratio} (expected ~0.879646: \
+             UDEVGothic35 em_scale 1.161133 / JBM 1.320000)"
+        );
+    }
+
+    #[test]
+    fn init_cell_metrics_honors_terminal_font_size_resource() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+
+        let mut app = App::new();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.insert_resource(TerminalFontSize(10.0));
+        app.add_plugins(TerminalFontPlugin);
+        app.update();
+
+        let res = app
+            .world()
+            .get_resource::<TerminalCellMetricsResource>()
+            .expect("Startup system should insert TerminalCellMetricsResource");
+        assert_eq!(
+            res.phys_font_size, 10,
+            "phys_font_size must follow TerminalFontSize (10.0) at DPR 1.0"
         );
     }
 

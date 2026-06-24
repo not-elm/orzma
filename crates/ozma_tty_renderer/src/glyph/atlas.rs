@@ -1,4 +1,4 @@
-use ab_glyph::{Font, FontArc, OutlinedGlyph, ScaleFont};
+use ab_glyph::{Font, FontArc, OutlinedGlyph};
 use bevy::{platform::collections::HashMap, prelude::*};
 
 use crate::glyph::font::{FontFace, GlyphKey, TerminalFonts};
@@ -47,43 +47,37 @@ pub struct GlyphAtlas {
     shelves: Shelves,
 }
 
-/// Resolves a glyph for the requested codepoint, preferring the
-/// primary face and falling back to `fallback_choice` when the
-/// primary's `glyph_id` is 0 (notdef).
+/// Resolves a glyph for the requested codepoint, preferring the primary face
+/// and falling back to `fallback_choice` when the primary's `glyph_id` is 0
+/// (notdef).
 ///
-/// Returns `(font, glyph_id)` for the resolved face, or `None` when
-/// neither primary nor fallback contains the glyph.
+/// Returns `(font, glyph_id, used_fallback)` for the resolved face, or `None`
+/// when neither primary nor fallback contains the glyph. The `used_fallback`
+/// flag tells `get_or_insert` which em-matched `PxScale` to rasterize at: the
+/// primary's (`px_scale_value`) or the fallback's (`fallback_px_scale_value`),
+/// so each face renders its em-square at the same physical pixel size.
 ///
-/// Both faces are scaled at `scale` — the primary's `PxScale`. This
-/// is the Alacritty / WezTerm pattern: rasterize fallback at the
-/// primary's size so the grid pitch stays bound to the primary
-/// font's metrics. UDEVGothic35 is JBM-metric-compatible by design.
+/// `glyph_id` lookup is scale-independent, so this resolves before any scale is
+/// chosen.
 ///
-/// NOTE: this helper retries on `glyph_id == 0` only — NOT on
-/// degenerate outline (`w == 0 || h == 0`) which is still
-/// short-circuited in `get_or_insert`. A non-zero `glyph_id` with
-/// zero-extent raster indicates a malformed font, not missing
-/// coverage; not worth retrying.
-///
-/// NOTE: we keep PUA Nerd Font icons rendering through the primary
-/// face — UDEVGothic35 doesn't include Nerd Font glyphs, so for
-/// U+E000–U+F8FF the primary's glyph_id is non-zero and we never
-/// reach the fallback path.
+/// NOTE: retries on `glyph_id == 0` only — NOT on degenerate outline
+/// (`w == 0 || h == 0`), which `get_or_insert` still short-circuits after
+/// outlining. PUA Nerd Font icons (U+E000–U+F8FF) resolve non-zero on the
+/// primary, so they never reach the fallback.
 fn resolve_glyph<'a>(
     fonts: &'a TerminalFonts,
     face: &FontFace,
     ch: char,
-    scale: ab_glyph::PxScale,
-) -> Option<(&'a FontArc, ab_glyph::GlyphId)> {
+) -> Option<(&'a FontArc, ab_glyph::GlyphId, bool)> {
     let primary = fonts.choice(face);
-    let id = primary.as_scaled(scale).glyph_id(ch);
+    let id = primary.glyph_id(ch);
     if id.0 != 0 {
-        return Some((primary, id));
+        return Some((primary, id, false));
     }
     let fallback = fonts.fallback_choice(face);
-    let id = fallback.as_scaled(scale).glyph_id(ch);
+    let id = fallback.glyph_id(ch);
     if id.0 != 0 {
-        return Some((fallback, id));
+        return Some((fallback, id, true));
     }
     None
 }
@@ -120,8 +114,13 @@ impl GlyphAtlas {
             return Some(*r);
         }
         let ch = char::from_u32(key.codepoint)?;
-        let scale = ab_glyph::PxScale::from(fonts.px_scale_value(key.size_px));
-        let (font, glyph_id) = resolve_glyph(fonts, &key.face, ch, scale)?;
+        let (font, glyph_id, used_fallback) = resolve_glyph(fonts, &key.face, ch)?;
+        let scale_value = if used_fallback {
+            fonts.fallback_px_scale_value(key.size_px)
+        } else {
+            fonts.px_scale_value(key.size_px)
+        };
+        let scale = ab_glyph::PxScale::from(scale_value);
 
         let outlined = font.outline_glyph(glyph_id.with_scale(scale))?;
         let bounds = outlined.px_bounds();
@@ -311,6 +310,33 @@ mod tests {
             .get_or_insert(key, &fonts)
             .expect("Powerline glyph U+E0B0 must rasterize via primary");
         assert!(rect.w > 0 && rect.h > 0, "U+E0B0 rect must be non-empty");
+    }
+
+    #[test]
+    fn cjk_rasterizes_at_fallback_scale_not_primary_scale() {
+        use ab_glyph::Font as _;
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let size = 24u16;
+        let key = make_key(FontFace::Regular, 0x3042, size); // 'あ'
+        let rect = atlas
+            .get_or_insert(key, &fonts)
+            .expect("'あ' must rasterize via fallback");
+
+        let fb = fonts.fallback_choice(&FontFace::Regular);
+        let primary_scale = ab_glyph::PxScale::from(fonts.px_scale_value(size));
+        let gid = fb.glyph_id('あ');
+        let primary_scaled_h = fb
+            .outline_glyph(gid.with_scale(primary_scale))
+            .expect("'あ' outline at primary scale")
+            .px_bounds()
+            .height();
+
+        assert!(
+            (rect.h as f32) < primary_scaled_h - 0.5,
+            "'あ' rect height {} must be smaller than the primary-scaled height {primary_scaled_h}",
+            rect.h
+        );
     }
 
     #[test]
