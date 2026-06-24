@@ -183,6 +183,18 @@ fn max_ascii_overflow_for_face(face: &FontArc, px_scale: f32, cell_w_phys_floor:
     worst.max(0.0)
 }
 
+/// Returns a face's em-scale `(ascender − descender) / units_per_em` — the
+/// factor that maps a physical font size in pixels to the `ab_glyph::PxScale`
+/// whose em-square renders at exactly that pixel size.
+fn em_scale_of(font: &FontArc) -> f32 {
+    let face = TtfFace::parse(font.font_data(), 0)
+        .expect("ttf-parser parse failed for a face ab_glyph already accepted");
+    let asc = i32::from(face.ascender());
+    let desc = i32::from(face.descender());
+    let upem = f32::from(face.units_per_em());
+    (asc - desc) as f32 / upem
+}
+
 impl TerminalFonts {
     /// Constructs a `TerminalFonts` from eight owned TTF byte buffers, one
     /// per face (four primary + four fallback). `Vec<u8>` is required by
@@ -347,28 +359,18 @@ impl TerminalFonts {
         }
     }
 
-    /// Returns the actual `PxScale` value fed to `ab_glyph` for the given
-    /// CSS-pixel font size. Multiplies by `em_scale = (ascender − descender)
-    /// / units_per_em` (derived from the Regular face's hhea/head tables)
-    /// so the input size is interpreted as the em-square in physical pixels
-    /// (CSS / Terminal.app convention), not as `ab_glyph::PxScale`'s
-    /// native "ascent + |descent|" interpretation.
-    ///
-    /// Used by both `cell_metrics_px` (for advance / ascent / descent
-    /// derivation) and `glyph/atlas.rs` (for glyph rasterization), so both
-    /// agree on the actual rendering scale.
+    /// Returns the `ab_glyph::PxScale` value for the primary regular face at the
+    /// given physical pixel size. Used by `cell_metrics_px` and `glyph/atlas.rs`.
     pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
-        let face = TtfFace::parse(self.regular.font_data(), 0)
-            .expect(
-                "regular face: ttf-parser parse failed (bundled or user-supplied via FontBridgePlugin); \
-                 if a user override is in effect this means the override file passed ab_glyph but \
-                 ttf-parser rejected it — check the most recent FontBridgePlugin warning",
-            );
-        let asc = i32::from(face.ascender());
-        let desc = i32::from(face.descender());
-        let upem = f32::from(face.units_per_em());
-        let em_scale = (asc - desc) as f32 / upem;
-        f32::from(phys_size_px) * em_scale
+        f32::from(phys_size_px) * em_scale_of(&self.regular)
+    }
+
+    /// Returns the `PxScale` value for the CJK fallback face so its em-square
+    /// renders at the same physical pixel size as the primary's, preventing the
+    /// fallback from rasterizing larger than the grid expects. Mirrors
+    /// [`Self::px_scale_value`] but reads `self.fallback_regular`'s metrics.
+    pub(crate) fn fallback_px_scale_value(&self, phys_size_px: u16) -> f32 {
+        f32::from(phys_size_px) * em_scale_of(&self.fallback_regular)
     }
 }
 
@@ -598,6 +600,22 @@ mod tests {
             pre_inserted_bytes_ptr,
             "TerminalFonts was overwritten by Plugin::build, but the resource was \
              already present at add_plugins time — the pre-insert should have been preserved"
+        );
+    }
+
+    #[test]
+    fn fallback_px_scale_value_is_em_matched_and_smaller_than_primary() {
+        let fonts = TerminalFonts::default();
+        let phys = 12u16;
+        let primary = fonts.px_scale_value(phys);
+        let fallback = fonts.fallback_px_scale_value(phys);
+        // UDEVGothic35 em_scale (1.161133) is ~12% smaller than JBM (1.320000);
+        // the fallback must rasterize correspondingly smaller, not at the
+        // primary's scale (which inflated CJK by +13.68%).
+        let ratio = fallback / primary;
+        assert!(
+            (ratio - 0.879646).abs() < 0.001,
+            "fallback/primary px_scale ratio = {ratio} (expected ~0.879646)"
         );
     }
 
