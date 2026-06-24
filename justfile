@@ -30,6 +30,8 @@ build:
     cargo build
 
 install-apps:
+    pnpm i
+    pnpm build
     cargo install --path ./apps/ozbrowser/
     cargo install --path ./apps/ozmd/
 
