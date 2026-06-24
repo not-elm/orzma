@@ -144,6 +144,48 @@ impl fmt::Display for KeyChord {
     }
 }
 
+/// A table of single-chord → tmux-command overrides (`[shortcuts.commands]`).
+/// Each chord, when pressed in tmux mode, runs its command instead of tmux's
+/// own binding for that key. Named `CommandOverrides` to avoid confusion with
+/// Bevy's `Commands`.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct CommandOverrides(BTreeMap<KeyChord, String>);
+
+impl CommandOverrides {
+    /// Yields each `(chord, command)` entry.
+    pub fn iter(&self) -> impl Iterator<Item = (&KeyChord, &str)> + '_ {
+        self.0.iter().map(|(k, v)| (k, v.as_str()))
+    }
+}
+
+impl FromIterator<(KeyChord, String)> for CommandOverrides {
+    fn from_iter<I: IntoIterator<Item = (KeyChord, String)>>(iter: I) -> Self {
+        CommandOverrides(iter.into_iter().collect())
+    }
+}
+
+impl serde::Serialize for CommandOverrides {
+    fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
+        ser.collect_map(self.0.iter().map(|(k, v)| (k.to_string(), v)))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for CommandOverrides {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        let raw = BTreeMap::<String, String>::deserialize(de)?;
+        let mut map = BTreeMap::new();
+        for (key, command) in raw {
+            let chord = parse_key_chord(&key).map_err(DeError::custom)?;
+            if map.insert(chord, command).is_some() {
+                return Err(DeError::custom(format!(
+                    "chord {key:?} normalizes to an already-bound override chord"
+                )));
+            }
+        }
+        Ok(CommandOverrides(map))
+    }
+}
+
 /// Reason a `parse_key_chord` invocation failed. Surfaced via
 /// `D::Error::custom` from serde's `deserialize_with`.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -293,6 +335,8 @@ fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
 pub struct Shortcuts {
     /// The named-field binding table. See `Bindings` for the field list and merge semantics.
     pub bindings: Bindings,
+    /// Single-chord → tmux-command overrides (`[shortcuts.commands]`). Empty by default.
+    pub commands: CommandOverrides,
 }
 
 /// User-facing shortcut configuration. Each Action gets its own named
@@ -653,7 +697,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}},"commands":{}}"#;
         assert_eq!(json, expected);
     }
 
@@ -684,5 +728,41 @@ mod tests {
             .find_map(|(_, bound, action)| (bound.as_ref() == Some(&chord)).then_some(action))
             .expect("Cmd+V must resolve");
         assert!(matches!(action, ShortcutAction::Paste));
+    }
+
+    #[test]
+    fn command_overrides_parse_chord_to_command() {
+        let m: CommandOverrides = toml::from_str(r#""Cmd+D" = "split-window -h""#).unwrap();
+        let got: Vec<(KeyChord, String)> =
+            m.iter().map(|(k, v)| (k.clone(), v.to_string())).collect();
+        assert_eq!(
+            got,
+            vec![(
+                parse_key_chord("Cmd+D").unwrap(),
+                "split-window -h".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn command_overrides_reject_malformed_chord() {
+        assert!(toml::from_str::<CommandOverrides>(r#""Cmd+Foo" = "x""#).is_err());
+    }
+
+    #[test]
+    fn command_overrides_reject_normalized_duplicate() {
+        // "Cmd+S" and "cmd+s" normalize to the same chord.
+        let toml_str = "\"Cmd+S\" = \"a\"\n\"cmd+s\" = \"b\"\n";
+        assert!(toml::from_str::<CommandOverrides>(toml_str).is_err());
+    }
+
+    #[test]
+    fn command_overrides_default_is_empty() {
+        assert_eq!(CommandOverrides::default().iter().count(), 0);
+    }
+
+    #[test]
+    fn shortcuts_default_has_empty_commands() {
+        assert_eq!(Shortcuts::default().commands.iter().count(), 0);
     }
 }
