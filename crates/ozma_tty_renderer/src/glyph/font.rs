@@ -27,6 +27,21 @@ pub enum FontLoadError {
 /// `cell_metrics_px`.
 pub const FONT_SIZE_PX: f32 = 12.0;
 
+/// Logical (CSS) pixel font size for the terminal grid. Multiplied by the
+/// PrimaryWindow's `scale_factor` to obtain the physical pixel size fed to
+/// `cell_metrics_px` and the glyph atlas.
+///
+/// Defaults to [`FONT_SIZE_PX`]; the app's `FontBridgePlugin` overwrites it
+/// from `config.font.size` at Startup, before cell metrics are computed.
+#[derive(Resource, Clone, Copy, Debug)]
+pub struct TerminalFontSize(pub f32);
+
+impl Default for TerminalFontSize {
+    fn default() -> Self {
+        Self(FONT_SIZE_PX)
+    }
+}
+
 /// Public `SystemSet` label used to order systems against the renderer's
 /// cell-metrics initialization. App-level plugins that need to mutate
 /// `TerminalFonts` before metrics are computed should run their Startup
@@ -47,7 +62,7 @@ impl Plugin for TerminalFontPlugin {
         if !app.world().contains_resource::<TerminalFonts>() {
             app.insert_resource(TerminalFonts::default());
         }
-        app.add_systems(
+        app.init_resource::<TerminalFontSize>().add_systems(
             Startup,
             init_cell_metrics_from_primary_window.in_set(TerminalFontInitSet::InitCellMetrics),
         );
@@ -69,10 +84,11 @@ impl Plugin for TerminalFontPlugin {
 fn init_cell_metrics_from_primary_window(
     mut commands: Commands,
     fonts: Res<TerminalFonts>,
+    font_size: Res<TerminalFontSize>,
     window: Single<&Window, With<PrimaryWindow>>,
 ) {
     let dpr = window.scale_factor();
-    let phys_font_size = (FONT_SIZE_PX * dpr).round() as u16;
+    let phys_font_size = (font_size.0 * dpr).round() as u16;
     let metrics = fonts.cell_metrics_px(phys_font_size);
     commands.insert_resource(TerminalCellMetricsResource {
         metrics,
@@ -616,6 +632,32 @@ mod tests {
         assert!(
             (ratio - 0.879646).abs() < 0.001,
             "fallback/primary px_scale ratio = {ratio} (expected ~0.879646)"
+        );
+    }
+
+    #[test]
+    fn init_cell_metrics_honors_terminal_font_size_resource() {
+        use bevy::window::{PrimaryWindow, Window, WindowResolution};
+
+        let mut app = App::new();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        // Pre-insert so the plugin's init_resource keeps this value.
+        app.insert_resource(TerminalFontSize(10.0));
+        app.add_plugins(TerminalFontPlugin);
+        app.update();
+
+        let res = app
+            .world()
+            .get_resource::<TerminalCellMetricsResource>()
+            .expect("Startup system should insert TerminalCellMetricsResource");
+        assert_eq!(
+            res.phys_font_size, 10,
+            "phys_font_size must follow TerminalFontSize (10.0) at DPR 1.0"
         );
     }
 

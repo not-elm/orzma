@@ -13,7 +13,7 @@ pub mod schema;
 
 pub use crate::glyph::font::{
     CellMetrics, FONT_SIZE_PX, FontFace, FontLoadError, TerminalCellMetricsResource,
-    TerminalFontInitSet, TerminalFontPlugin, TerminalFonts,
+    TerminalFontInitSet, TerminalFontPlugin, TerminalFontSize, TerminalFonts,
 };
 
 pub mod prelude {
