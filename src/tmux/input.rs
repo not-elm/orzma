@@ -258,6 +258,7 @@ fn forward_keys_to_tmux(
     // Collect forwardable tmux key names in event order. Super-modified keys are
     // matched against the configured ozmux shortcuts or swallowed; none reach tmux.
     let mut key_names: Vec<String> = Vec::new();
+    let mut opened_prompt = false;
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
@@ -307,6 +308,30 @@ fn forward_keys_to_tmux(
             }
             continue;
         }
+        if let Some(command) = resolved.match_command(ev.key_code, cfg_mods) {
+            // A command override abandons any pending tmux prefix sequence,
+            // exactly like a GUI action.
+            *prefix_pending = false;
+            if let Some(entity) = active_entity
+                && let Ok(mut handle) = handles.get_mut(entity)
+                && handle.snap_to_bottom_vt_only()
+            {
+                handle.flush_emit(&mut commands, entity);
+            }
+            if let Some(client) = client.as_deref_mut()
+                && matches!(
+                    run_control_command(&mut commands, client, &rename, active_entity, command),
+                    Flow::PromptOpened
+                )
+            {
+                // NOTE: a prompt now owns the keyboard. Break out of the event
+                // loop; the post-loop drain (events.clear) below cannot run while
+                // events.read() still borrows `events`.
+                opened_prompt = true;
+                break;
+            }
+            continue;
+        }
         // NOTE: tmux/PTY has no Super modifier, so a Cmd-modified key that
         // matched no ozmux shortcut must be swallowed here, never forwarded.
         if mods.super_ {
@@ -318,6 +343,10 @@ fn forward_keys_to_tmux(
         }
     }
 
+    if opened_prompt {
+        events.clear();
+        return;
+    }
     // NOTE: this branch must return before plan_forward — a copy-mode entry
     // binding pressed while already in copy mode is relayed here (not
     // re-intercepted), which would otherwise re-insert CopyModeState each press.
@@ -389,41 +418,25 @@ fn forward_keys_to_tmux(
         return;
     };
     for action in actions {
-        if let Forwarded::Run(command) = &action
-            && let Some(kind) = RenameKind::parse(command)
-            && let Some(subject) = resolve_rename_subject(kind, &rename)
-        {
-            commands.insert_resource(RenamePrompt::new(subject));
-            // NOTE: the prompt now owns the keyboard — stop here so no further
-            // actions from this frame are sent to tmux.
-            break;
-        }
-        if let Forwarded::Run(command) = &action
-            && let Some((message, inner)) = parse_confirm_before(command)
-        {
-            commands.insert_resource(ConfirmState {
-                message,
-                command: inner,
-            });
-            // NOTE: the prompt now owns the keyboard — stop here so any further
-            // actions decoded from this same frame are NOT sent to tmux (that
-            // would bypass the confirmation the prompt is gating).
-            break;
-        }
-        let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
-        let result = match action {
-            Forwarded::Run(command) => client.send(&command),
-            Forwarded::Keys(names) => client.send(SendPaneKeys {
-                pane: target,
-                names: &names,
-            }),
-        };
-        if let Err(e) = result {
-            tracing::warn!(?e, "tmux forward send failed");
-            break;
-        }
-        if enters_copy_mode && let Some(entity) = active_entity {
-            commands.entity(entity).insert(CopyModeState);
+        match action {
+            Forwarded::Run(command) => {
+                // NOTE: PromptOpened / SendFailed must stop here — a prompt now
+                // owns the keyboard, and a failed send aborts the frame; either
+                // way no later action from this frame may be sent.
+                match run_control_command(&mut commands, client, &rename, active_entity, &command) {
+                    Flow::Sent => {}
+                    Flow::PromptOpened | Flow::SendFailed => break,
+                }
+            }
+            Forwarded::Keys(names) => {
+                if let Err(e) = client.send(SendPaneKeys {
+                    pane: target,
+                    names: &names,
+                }) {
+                    tracing::warn!(?e, "tmux forward send failed");
+                    break;
+                }
+            }
         }
     }
 }
@@ -442,6 +455,96 @@ fn forward_keys_to_tmux(
 /// strings and the `copy-mode-vi` table name do not trip it.
 fn is_copy_mode_entry(command: &str) -> bool {
     command.split_whitespace().any(|token| token == "copy-mode")
+}
+
+/// What a bound/override tmux `Run` command does, decided from the command text
+/// alone (no world access) so it is unit-testable.
+#[derive(Debug)]
+enum RunClass {
+    /// `rename-window` / `rename-session` — ozmux opens its own rename prompt.
+    Rename(RenameKind),
+    /// `confirm-before … <inner>` — ozmux opens its own confirm prompt.
+    Confirm {
+        /// Prompt text to show.
+        message: String,
+        /// Inner command to run on confirm.
+        command: String,
+    },
+    /// A command that enters copy mode — send it, then mark `CopyModeState`.
+    CopyEntry,
+    /// Any other command — send it verbatim.
+    Plain,
+}
+
+/// Classifies one tmux command by text: rename and confirm-before wrappers take
+/// priority (they become ozmux prompts), then copy-mode entry, then plain send.
+fn classify_run_command(command: &str) -> RunClass {
+    let first = command.split_whitespace().next().unwrap_or("");
+    let rename_kind = match first {
+        "rename-window" | "renamew" => Some(RenameKind::Window),
+        "rename-session" | "rename" => Some(RenameKind::Session),
+        _ => RenameKind::parse(command),
+    };
+    if let Some(kind) = rename_kind {
+        return RunClass::Rename(kind);
+    }
+    if let Some((message, inner)) = parse_confirm_before(command) {
+        return RunClass::Confirm {
+            message,
+            command: inner,
+        };
+    }
+    if is_copy_mode_entry(command) {
+        return RunClass::CopyEntry;
+    }
+    RunClass::Plain
+}
+
+/// The control-flow outcome of running one `Run` command.
+enum Flow {
+    /// Command sent (or sent and copy-mode marked); keep processing.
+    Sent,
+    /// An ozmux prompt opened and now owns the keyboard; the caller must stop.
+    PromptOpened,
+    /// The control-connection send failed (already logged); the caller stops.
+    SendFailed,
+}
+
+/// Runs one tmux `Run` command with the same interception a tmux binding gets:
+/// rename / confirm-before open an ozmux prompt instead of sending; a copy-mode
+/// entry sends then marks `CopyModeState`; everything else sends verbatim. A
+/// rename whose subject cannot be resolved falls back to a verbatim send (as the
+/// pre-refactor loop did).
+fn run_control_command(
+    commands: &mut Commands,
+    client: &mut TmuxClient,
+    rename: &RenameParams,
+    active_entity: Option<Entity>,
+    command: &str,
+) -> Flow {
+    let enters_copy_mode = match classify_run_command(command) {
+        RunClass::Rename(kind) => {
+            if let Some(subject) = resolve_rename_subject(kind, rename) {
+                commands.insert_resource(RenamePrompt::new(subject));
+                return Flow::PromptOpened;
+            }
+            false
+        }
+        RunClass::Confirm { message, command } => {
+            commands.insert_resource(ConfirmState { message, command });
+            return Flow::PromptOpened;
+        }
+        RunClass::CopyEntry => true,
+        RunClass::Plain => false,
+    };
+    if let Err(e) = client.send(command) {
+        tracing::warn!(?e, "tmux control command send failed");
+        return Flow::SendFailed;
+    }
+    if enters_copy_mode && let Some(entity) = active_entity {
+        commands.entity(entity).insert(CopyModeState);
+    }
+    Flow::Sent
 }
 
 /// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down` — one copy-mode wheel notch.
@@ -1297,6 +1400,54 @@ mod tests {
         assert!(is_copy_mode_entry("copy-mode -eu"));
         assert!(!is_copy_mode_entry("copy-selection"));
         assert!(!is_copy_mode_entry("new-window"));
+    }
+
+    #[test]
+    fn classify_rename_commands() {
+        assert!(matches!(
+            classify_run_command("rename-window"),
+            RunClass::Rename(RenameKind::Window)
+        ));
+        assert!(matches!(
+            classify_run_command("renamew"),
+            RunClass::Rename(RenameKind::Window)
+        ));
+        assert!(matches!(
+            classify_run_command("rename-session"),
+            RunClass::Rename(RenameKind::Session)
+        ));
+    }
+
+    #[test]
+    fn classify_confirm_before_command() {
+        match classify_run_command("confirm-before kill-server") {
+            RunClass::Confirm { command, .. } => assert_eq!(command, "kill-server"),
+            other => panic!("expected Confirm, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn classify_copy_mode_entry() {
+        assert!(matches!(
+            classify_run_command("copy-mode"),
+            RunClass::CopyEntry
+        ));
+        assert!(matches!(
+            classify_run_command("copy-mode -u"),
+            RunClass::CopyEntry
+        ));
+    }
+
+    #[test]
+    fn classify_plain_command() {
+        assert!(matches!(
+            classify_run_command("split-window -h"),
+            RunClass::Plain
+        ));
+        assert!(matches!(
+            classify_run_command("next-window"),
+            RunClass::Plain
+        ));
     }
 
     #[test]
