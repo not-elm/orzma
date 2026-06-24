@@ -11,6 +11,11 @@ pub enum Frame {
     Reply {
         /// The command number shared by the matching `%begin`/`%end`/`%error`.
         number: u32,
+        /// The `%begin` flags bitmask, verbatim (taken from the opening
+        /// `%begin`). tmux populates bit 0 for control-client command replies;
+        /// the protocol layer owns that interpretation (see the consumer's
+        /// `is_client_command_reply`).
+        flags: u32,
         /// `true` if closed by `%end`, `false` if closed by `%error`.
         ok: bool,
         /// Reply body lines, verbatim, in order.
@@ -49,6 +54,7 @@ impl BlockAssembler {
                 match closed_ok {
                     Some(ok) => Ok(Some(Frame::Reply {
                         number: block.number,
+                        flags: block.flags,
                         ok,
                         body: block.body,
                     })),
@@ -60,9 +66,10 @@ impl BlockAssembler {
                 }
             }
             None => match ControlEvent::parse(line)? {
-                ControlEvent::Begin { number, .. } => {
+                ControlEvent::Begin { number, flags, .. } => {
                     self.open = Some(OpenBlock {
                         number,
+                        flags,
                         body: Vec::new(),
                     });
                     Ok(None)
@@ -79,6 +86,7 @@ impl BlockAssembler {
 #[derive(Debug, Clone)]
 struct OpenBlock {
     number: u32,
+    flags: u32,
     body: Vec<String>,
 }
 
@@ -106,6 +114,23 @@ mod tests {
             frames,
             vec![Frame::Reply {
                 number: 7,
+                flags: 1,
+                ok: true,
+                body: Vec::new()
+            }]
+        );
+    }
+
+    #[test]
+    fn reply_carries_begin_flags() {
+        // flags=0 marks the adopted-stream launch reply or unsolicited internal
+        // output (a hook's run-shell); flags=1 a control-client command reply.
+        let zero = feed_all(&[b"%begin 1 42 0", b"%end 1 42 0"]);
+        assert_eq!(
+            zero,
+            vec![Frame::Reply {
+                number: 42,
+                flags: 0,
                 ok: true,
                 body: Vec::new()
             }]
@@ -124,6 +149,7 @@ mod tests {
             frames,
             vec![Frame::Reply {
                 number: 8,
+                flags: 1,
                 ok: true,
                 body: vec![
                     "0: ksh* (1 panes) [80x24]".to_string(),
@@ -140,6 +166,7 @@ mod tests {
             frames,
             vec![Frame::Reply {
                 number: 9,
+                flags: 1,
                 ok: false,
                 body: vec!["unknown command: bogus".to_string()],
             }]
@@ -157,6 +184,7 @@ mod tests {
             frames,
             vec![Frame::Reply {
                 number: 10,
+                flags: 1,
                 ok: true,
                 body: vec!["%not-a-notification literally text".to_string()],
             }]
@@ -170,6 +198,7 @@ mod tests {
             frames,
             vec![Frame::Reply {
                 number: 11,
+                flags: 1,
                 ok: true,
                 body: vec!["%end 1 999 1".to_string()],
             }]
@@ -205,6 +234,7 @@ mod tests {
                 }),
                 Frame::Reply {
                     number: 12,
+                    flags: 1,
                     ok: true,
                     body: vec!["reply".to_string()]
                 },
@@ -224,6 +254,7 @@ mod tests {
             asm.feed(b"%end 1 13 1"),
             Ok(Some(Frame::Reply {
                 number: 13,
+                flags: 1,
                 ok: true,
                 body: vec!["line".to_string()]
             }))
@@ -257,6 +288,7 @@ mod tests {
             vec![
                 Frame::Reply {
                     number: 1,
+                    flags: 1,
                     ok: true,
                     body: Vec::new()
                 },
