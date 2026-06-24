@@ -17,7 +17,6 @@ use super::pane_hit::tmux_pane_at_phys;
 use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::picker::SessionPicker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
@@ -33,7 +32,7 @@ use decide::{
 };
 use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{ActiveWindow, PaneId, TmuxConnection, TmuxPane};
+use ozmux_tmux::{ActiveWindow, PaneId, TmuxClient, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 use webview::tmux_webview_pointer;
@@ -68,27 +67,18 @@ impl Plugin for MousePlugin {
 pub(super) struct TmuxGestureButtons(pub(super) Vec<MouseButtonInput>);
 
 /// Run condition for the active tmux gesture pipeline: `true` iff a focused
-/// primary window exists AND no modal (picker / copy-search prompt) owns input.
+/// primary window exists AND no modal (copy-search prompt) owns input.
 ///
 /// Gates `tmux_gesture` only (which reads the hand-off buffer, not
 /// `MouseButtonInput`). `tmux_webview_pointer` is NOT gated by this — it owns the
 /// single `MouseButtonInput` reader and runs every frame, computing the same
 /// suppressed/active decision in-body. The focused-webview case is NOT a
 /// suppressor here — the `tmux_webview_pointer` pre-step owns webview focus.
-///
-/// # Invariants
-///
-/// Must NOT read `NonSend<TmuxConnection>`: a run condition touching it is
-/// unsound (`bevyengine/bevy#21230`), which is why connection liveness stays an
-/// in-body guard in `on_tmux_mouse_effects` instead.
 fn pointer_active(
     windows: Query<&Window, With<PrimaryWindow>>,
-    picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
 ) -> bool {
-    windows.single().is_ok_and(|window| window.focused)
-        && !picker.open
-        && copy_prompt.open.is_none()
+    windows.single().is_ok_and(|window| window.focused) && copy_prompt.open.is_none()
 }
 
 /// Bundles the two immutable copy-mode query reads used by `tmux_gesture`.
@@ -174,7 +164,7 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// copy mode (drag/selection for a pane NOT in copy mode is owned by
 /// `ozma_terminal`). Multi-click (≥2) on a pane in copy mode enters
 /// `PendingMultiSelect` to wait for a copy-mode snapshot AND a connected client
-/// (it passes `connection.client().is_some()` to the decider so a no-client
+/// (it passes whether a `TmuxClient` is present to the decider so a no-client
 /// frame stays pending and retries), then selects a word/line via copy-mode
 /// commands. Each frame while `Resizing` the pointer's
 /// major-axis cell coordinate is mapped to an absolute target size and sent as
@@ -183,7 +173,7 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// never dragged, the pane under the cursor is focused as a fallback click.
 ///
 /// Gated by `run_if(pointer_active)`: this system runs only when a focused
-/// primary window exists and no modal (picker / copy-search prompt) owns input.
+/// primary window exists and no modal (copy-search prompt) owns input.
 /// The suppressed path — clearing the buffer, resetting the gesture, and
 /// releasing or dropping an in-flight inline press — is owned by
 /// `tmux_webview_pointer`, which runs every frame upstream of this system.
@@ -198,7 +188,7 @@ fn tmux_gesture(
     mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: ResMut<TmuxGestureButtons>,
-    connection: NonSend<TmuxConnection>,
+    client: Option<Single<&TmuxClient>>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -275,7 +265,7 @@ fn tmux_gesture(
         drag_threshold_phys,
         cell_w,
         cell_h,
-        connection.client().is_some(),
+        client.is_some(),
     );
     effects.extend(decide_continuation(&mut gesture.state, ctx));
 
@@ -454,7 +444,7 @@ mod tests {
     use ozma_tty_renderer::CellMetrics;
     use ozma_tty_renderer::prelude::TerminalOverlays;
     use ozma_webview::{NonInteractive, Webview, webview_hit_at};
-    use ozmux_tmux::{CopyModeQueries, TmuxConnection};
+    use ozmux_tmux::CopyModeQueries;
     use webview::TmuxWebviewPress;
 
     #[test]
@@ -477,17 +467,26 @@ mod tests {
         }
     }
 
+    fn set_modal_open(app: &mut App, open: bool) {
+        use crate::ui::copy_search::CopyPromptState;
+        use ozmux_tmux::{PaneId, PromptKind};
+
+        app.world_mut().resource_mut::<CopyPrompt>().open = open.then(|| CopyPromptState {
+            kind: PromptKind::SearchForward,
+            pane: PaneId(0),
+            text: String::new(),
+        });
+    }
+
     #[test]
     fn left_press_without_cursor_stays_idle() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseButtonInput>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<TmuxWebviewPress>();
         app.init_resource::<CopyModeQueries>();
-        app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
@@ -527,12 +526,10 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseButtonInput>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<TmuxWebviewPress>();
         app.init_resource::<CopyModeQueries>();
-        app.init_resource::<SessionPicker>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
@@ -737,7 +734,7 @@ mod tests {
     #[test]
     fn modal_open_suppresses_webview_routing_and_gesture() {
         let (mut app, _pane, _child) = make_gesture_webview_app();
-        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_modal_open(&mut app, true);
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_button(
             &mut app,
@@ -764,7 +761,7 @@ mod tests {
     #[test]
     fn closing_modal_resumes_pointer_handling() {
         let (mut app, pane, _child) = make_gesture_webview_app();
-        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_modal_open(&mut app, true);
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_button(
             &mut app,
@@ -778,7 +775,7 @@ mod tests {
             "while the modal is open the suppressed drain keeps the gesture Idle"
         );
 
-        app.world_mut().resource_mut::<SessionPicker>().open = false;
+        set_modal_open(&mut app, false);
         write_button(
             &mut app,
             bevy::input::mouse::MouseButton::Left,
@@ -797,7 +794,7 @@ mod tests {
     #[test]
     fn suppressed_frame_press_does_not_resurface_when_pointer_reactivates() {
         let (mut app, _pane, _child) = make_gesture_webview_app();
-        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_modal_open(&mut app, true);
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_button(
             &mut app,
@@ -811,7 +808,7 @@ mod tests {
             "the suppressed frame must not arm a gesture"
         );
 
-        app.world_mut().resource_mut::<SessionPicker>().open = false;
+        set_modal_open(&mut app, false);
         app.update();
         assert_eq!(
             app.world().resource::<TmuxMouseGesture>().state,
@@ -829,7 +826,7 @@ mod tests {
     fn suppressed_frame_releases_in_flight_webview_press() {
         let (mut app, _pane, child) = make_gesture_webview_app();
         app.world_mut().resource_mut::<TmuxWebviewPress>().0 = Some(child);
-        app.world_mut().resource_mut::<SessionPicker>().open = true;
+        set_modal_open(&mut app, true);
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         app.update();
         assert_eq!(

@@ -11,9 +11,6 @@ pub const BACKGROUND: Color = Color::srgb(0.118, 0.125, 0.157);
 /// Status bar background — slightly darker than BACKGROUND to read as
 /// secondary chrome below the active pane content.
 pub const PANEL: Color = Color::srgb(0.110, 0.118, 0.157);
-/// Tab bar background — distinctly darker than pane content so chrome
-/// reads separate from content.
-pub const TAB_BAR_BG: Color = Color::srgb(0.086, 0.094, 0.125);
 /// Pane border — cool blue-grey, intentionally subtle.
 pub const BORDER: Color = Color::srgb(0.333, 0.333, 0.333);
 /// Primary text color.
@@ -31,14 +28,10 @@ pub const SESSION_BG: Color = Color::srgb(0.200, 0.220, 0.282);
 pub const FLAG_WARN: Color = Color::srgb(0.878, 0.690, 0.302);
 /// Powerline right-pointing filled separator glyph (Nerd Font U+E0B0).
 pub const POWERLINE_RIGHT: &str = "\u{e0b0}";
-/// Session-chooser selection bar — tmux choose-tree style amber.
+/// Selection highlight bar — amber; used by the rename and confirm prompts.
 pub const SELECTION: Color = Color::srgb(0.847, 0.651, 0.341);
 /// Text on the SELECTION bar — near-black for contrast.
 pub const SELECTION_FG: Color = Color::srgb(0.094, 0.086, 0.063);
-/// Faint divider line (chooser footer separator, etc.).
-pub const DIVIDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.06);
-/// Session-chooser title / footer font size.
-pub const PICKER_TITLE_FONT_SIZE_PX: f32 = 11.0;
 
 /// Gap in logical px between packed panes. The grey window container bleeds
 /// through this gap as the 1px divider line.

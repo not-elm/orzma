@@ -514,7 +514,6 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(WindowBarPlugin);
         app.insert_resource(metrics_fixture());
-        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.add_systems(
             Startup,
             |mut commands: Commands, metrics: Option<Res<TerminalCellMetricsResource>>| {
@@ -573,7 +572,6 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(WindowBarPlugin);
         app.insert_resource(metrics_fixture());
-        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.add_systems(
             Startup,
             |mut commands: Commands, metrics: Option<Res<TerminalCellMetricsResource>>| {

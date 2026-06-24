@@ -13,7 +13,7 @@ use bevy::ecs::schedule::common_conditions::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ozmux_tmux::TmuxConnection;
+use ozmux_tmux::TmuxClient;
 
 const CONFIRM_Z: i32 = 330;
 
@@ -209,8 +209,8 @@ fn handle_confirm_input(
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
     mut armed: Local<bool>,
+    mut client: Option<Single<&mut TmuxClient>>,
     state: Res<ConfirmState>,
-    connection: NonSend<TmuxConnection>,
 ) {
     // NOTE: the bound key that opened the prompt (e.g. M-t) is still in the
     // shared KeyboardInput buffer; this reader has its own cursor, so skip the
@@ -228,8 +228,8 @@ fn handle_confirm_input(
         match confirm_step(&ev.logical_key) {
             None => {}
             Some(ConfirmStep::Confirm) => {
-                if let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(&state.command)
+                if let Some(client) = client.as_deref_mut()
+                    && let Err(e) = client.send_raw(&state.command)
                 {
                     tracing::warn!(?e, "confirm-before command send failed");
                 }

@@ -11,7 +11,7 @@ use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ozmux_tmux::{PaneId, Prompt, PromptKind, TmuxConnection};
+use ozmux_tmux::{PaneId, Prompt, PromptKind, TmuxClient};
 
 const PROMPT_Z: i32 = 320;
 
@@ -160,7 +160,7 @@ fn handle_prompt_input(
     mut copy_prompt: ResMut<CopyPrompt>,
     mut events: MessageReader<KeyboardInput>,
     mut armed: Local<bool>,
-    connection: NonSend<TmuxConnection>,
+    mut client: Option<Single<&mut TmuxClient>>,
 ) {
     // NOTE: the keystroke that opened the prompt (e.g. `/`, or `f` for a jump)
     // is still in the shared KeyboardInput buffer; each reader has its own
@@ -184,8 +184,8 @@ fn handle_prompt_input(
         match step {
             PromptStep::Continue => {}
             PromptStep::Submit => {
-                if let Some(client) = connection.client()
-                    && let Err(e) = client.handle().send(Prompt {
+                if let Some(client) = client.as_deref_mut()
+                    && let Err(e) = client.send(Prompt {
                         pane: state.pane,
                         kind: state.kind,
                         text: &state.text,
@@ -344,7 +344,6 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<KeyboardInput>()
             .init_resource::<CopyPrompt>()
-            .insert_non_send_resource(TmuxConnection::default())
             .add_systems(
                 Update,
                 handle_prompt_input.run_if(|p: Res<CopyPrompt>| p.open.is_some()),

@@ -10,7 +10,6 @@ use crate::default_input::should_disable_input;
 use crate::input::InputPhase;
 use crate::input::current_modifiers;
 use crate::input::ime::ImeState;
-use crate::picker::SessionPicker;
 use crate::ui::copy_mode::{CopyModeState, ExitCopyMode};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
@@ -152,13 +151,12 @@ fn decide_copy_mode_key(
 
 /// Gather system: reads `KeyboardInput` for the focused copy-mode terminal,
 /// decides an intent per key, and triggers `CopyModeKeyAction`. Suspends
-/// (and drains events) while input is disabled (picker open, IME composing,
-/// webview focused, or window unfocused) — the same coarse guard
-/// `maintain_input_gates` uses (`should_disable_input`).
+/// (and drains events) while input is disabled (IME composing, webview focused,
+/// or window unfocused) — the same coarse guard `maintain_input_gates` uses
+/// (`should_disable_input`).
 fn copy_mode_keys(
     mut commands: Commands,
     mut events: MessageReader<KeyboardInput>,
-    picker: Res<SessionPicker>,
     ime: Res<ImeState>,
     focused_webview: Res<FocusedWebview>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
@@ -177,12 +175,7 @@ fn copy_mode_keys(
         return;
     };
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    if should_disable_input(
-        picker.open,
-        ime.is_composing(),
-        focused,
-        focused_webview.0.is_some(),
-    ) {
+    if should_disable_input(ime.is_composing(), focused, focused_webview.0.is_some()) {
         events.clear();
         return;
     }

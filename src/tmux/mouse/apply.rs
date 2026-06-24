@@ -10,7 +10,7 @@ use crate::tmux::copy_mode::cursor_deltas;
 use bevy::prelude::*;
 use ozmux_tmux::{
     CopyModeQueries, CopyQueryKind, PaneId, ResizePaneX, ResizePaneY, SelectPane, ShowBuffer,
-    TmuxConnection,
+    TmuxClient,
 };
 use tmux_control_parser::DividerAxis;
 
@@ -31,12 +31,12 @@ fn on_tmux_mouse_effects(
     ev: On<TmuxMouseEffects>,
     mut queries: ResMut<CopyModeQueries>,
     mut gesture: ResMut<TmuxMouseGesture>,
-    connection: NonSend<TmuxConnection>,
+    client: Option<Single<&mut TmuxClient>>,
 ) {
-    let Some(client) = connection.client() else {
+    let Some(mut handle) = client else {
         return;
     };
-    let handle = client.handle();
+    let handle = &mut *handle;
     for effect in &ev.effects {
         match *effect {
             TmuxMouseEffect::SelectPane(pane_id) => {
@@ -176,13 +176,11 @@ fn multi_select_commands(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_tmux::TmuxConnection;
 
     #[test]
     fn observer_applies_without_panic_when_no_client() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .insert_non_send_resource(TmuxConnection::default())
             .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxMouseGesture>()
             .add_observer(on_tmux_mouse_effects);

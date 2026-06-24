@@ -86,6 +86,15 @@ impl PtyHandle {
     pub(crate) fn try_recv_exit(&self) -> Result<Option<i32>, TryRecvError> {
         self.exit_rx.try_recv()
     }
+
+    #[cfg(test)]
+    pub(crate) fn master_size(&self) -> anyhow::Result<PtySize> {
+        self.master
+            .lock()
+            .expect("PtyHandle::master mutex never poisoned")
+            .get_size()
+            .map_err(|e| anyhow::anyhow!("PTY get_size failed: {e}"))
+    }
 }
 
 impl Drop for PtyHandle {

@@ -7,7 +7,6 @@ mod configs;
 mod default_input;
 mod font;
 mod input;
-mod picker;
 mod system_set;
 mod theme;
 mod tmux;
@@ -31,9 +30,7 @@ use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
-use ozmux_configs::StartupMode;
 use ozmux_webview_host::WebviewAssetRegistry;
-use picker::OzmuxPickerPlugin;
 use tmux::OzmuxTmuxPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
@@ -63,14 +60,9 @@ fn main() {
     ensure_terminfo_env();
 
     let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
-    // NOTE: start in AppMode::Tmux as a boot-dispatch state; dispatch_startup_mode
-    // (registered on OnEnter(Tmux), gated to run once) routes to the real startup
-    // mode. The initial state MUST be Tmux for that OnEnter(Tmux) hook to fire;
-    // routing out of it (to Default when configured) is a queued NextState applied
-    // at the first post-Startup StateTransition.
-    let initial_mode = match pre_configs.startup_mode {
-        StartupMode::Default | StartupMode::Tmux | StartupMode::TmuxAutoAttach => AppMode::Tmux,
-    };
+    // The app boots into a single PTY shell; tmux is entered only by adopting the
+    // user's own `tmux -CC` (ControlModeDetected -> NextState(Tmux)), never at boot.
+    let initial_mode = AppMode::Default;
     let ozma_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
     App::new()
@@ -90,7 +82,6 @@ fn main() {
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,
-            OzmuxPickerPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxBootstrapPlugin,

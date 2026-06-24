@@ -1,5 +1,5 @@
-//! Draining, logging, and routing of tmux transport events: into
-//! `ConnectionState` and the global projection events the observers consume.
+//! Draining, logging, and routing of tmux transport events into the global
+//! projection events the observers consume.
 
 use crate::components::WindowFlags;
 use crate::enumerate::{WINDOW_FLAGS_SUBSCRIPTION, parse_window_rows};
@@ -8,50 +8,9 @@ use crate::events::{
     TmuxWindowAdded, TmuxWindowClosed, TmuxWindowFlagsChanged, TmuxWindowRenamed,
     TmuxWindowsRetained,
 };
-use crate::state::{ConnectionState, next_state};
 use bevy::prelude::Commands;
-use crossbeam_channel::Receiver;
 use tmux_control::{ClientEvent, ControlEvent, TransportEvent};
 use tmux_control_parser::{PaneId, SessionId, WindowId};
-
-/// Upper bound on events drained per frame, so a pane flooding `%output`
-/// cannot stall the schedule with unbounded parse/apply work in one tick;
-/// any remainder stays queued and is drained on the next frame.
-const MAX_EVENTS_PER_FRAME: usize = 4096;
-
-/// Drains up to [`MAX_EVENTS_PER_FRAME`] currently-available transport events
-/// from `events`, logging each. Non-blocking: returns once the channel is
-/// empty or the per-frame cap is hit.
-pub(crate) fn drain_transport(events: &Receiver<TransportEvent>) -> Vec<TransportEvent> {
-    let mut drained = Vec::new();
-    while drained.len() < MAX_EVENTS_PER_FRAME {
-        match events.try_recv() {
-            Ok(event) => {
-                log_transport_event(&event);
-                drained.push(event);
-            }
-            Err(_) => break,
-        }
-    }
-    drained
-}
-
-/// Folds `events` through [`next_state`] from `current`, returning the resulting
-/// `ConnectionState` if the batch changed it, or `None` if it ended unchanged.
-///
-/// Returning the next state (rather than mutating in place) lets the caller
-/// write it back through `ResMut` only on a real transition, so change
-/// detection fires once per transition instead of every frame.
-pub(crate) fn advance_state(
-    current: &ConnectionState,
-    events: &[TransportEvent],
-) -> Option<ConnectionState> {
-    let mut next: Option<ConnectionState> = None;
-    for event in events {
-        next = Some(next_state(next.as_ref().unwrap_or(current), event));
-    }
-    next.filter(|n| n != current)
-}
 
 /// Returns the first non-empty trimmed output line of a completed command, or
 /// `None` when the command failed (logged with the `what` label) or the output
@@ -300,7 +259,7 @@ pub(crate) fn trigger_seed(commands: &mut Commands, output: &[String]) {
 }
 
 /// Emits a `tracing` line describing a single transport event.
-fn log_transport_event(event: &TransportEvent) {
+pub(crate) fn log_transport_event(event: &TransportEvent) {
     match event {
         TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, .. }) => {
             tracing::debug!(?id, ok, "tmux command complete");
@@ -318,24 +277,8 @@ fn log_transport_event(event: &TransportEvent) {
 mod tests {
     use super::*;
     use bevy::prelude::*;
-    use crossbeam_channel::unbounded;
     use tmux_control::ControlEvent;
     use tmux_control_parser::{SessionId, WindowId};
-
-    fn window_add(id: u32) -> TransportEvent {
-        TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::WindowAdd {
-            window: WindowId(id),
-        }))
-    }
-
-    #[test]
-    fn drain_then_advance_state_attaches() {
-        let (tx, rx) = unbounded();
-        tx.send(window_add(1)).unwrap();
-        let drained = drain_transport(&rx);
-        let next = advance_state(&ConnectionState::Connecting, &drained);
-        assert_eq!(next, Some(ConnectionState::Attached));
-    }
 
     #[test]
     fn first_reply_line_returns_first_non_empty_trimmed() {

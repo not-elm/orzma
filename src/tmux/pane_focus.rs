@@ -206,7 +206,6 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, PaneFocusPlugin));
-        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         app.insert_resource(OzmuxConfigsResource::default());
         let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
 
@@ -276,7 +275,6 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, PaneFocusPlugin));
-        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         let mut configs = OzmuxConfigsResource::default();
         configs.0.inactive_pane.enabled = false;
         app.insert_resource(configs);
@@ -318,7 +316,6 @@ mod tests {
     fn augment_adds_button_and_focus_block_no_overlay() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, PaneFocusPlugin));
-        app.insert_non_send_resource(ozmux_tmux::TmuxConnection::default());
         let pane = app
             .world_mut()
             .spawn((

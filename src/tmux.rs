@@ -1,7 +1,7 @@
 //! tmux feature plugin: aggregates all tmux runtime sub-plugins.
 
+mod adopt;
 mod copy_mode;
-mod dialog;
 mod divider_handle;
 mod forward;
 mod gate;
@@ -16,18 +16,16 @@ mod window_bar;
 mod window_bar_input;
 
 use crate::app_mode::AppMode;
+use adopt::AdoptPlugin;
 use bevy::prelude::*;
 use copy_mode::CopyModePlugin;
-use dialog::DialogPlugin;
 use divider_handle::DividerHandlePlugin;
 use forward::ForwardPlugin;
 use gate::GatePlugin;
 use input::InputPlugin;
 use mode_ui::TmuxModeUiPlugin;
 use mouse::MousePlugin;
-use ozmux_tmux::{
-    TmuxConnection, TmuxConnectionClosed, TmuxConnectionReset, TmuxPresence, TmuxSessionPlugin,
-};
+use ozmux_tmux::{TmuxClient, TmuxConnectionClosed, TmuxSessionPlugin};
 use pane_focus::PaneFocusPlugin;
 use render::RenderPlugin;
 use webview_tokens::WebviewTokensPlugin;
@@ -43,24 +41,35 @@ pub struct OzmuxTmuxPlugin;
 impl Plugin for OzmuxTmuxPlugin {
     fn build(&self, app: &mut App) {
         app.configure_sets(Update, TmuxActiveSet.run_if(in_state(AppMode::Tmux)))
-            .add_systems(OnEnter(AppMode::Tmux), on_enter_tmux)
-            .add_systems(OnExit(AppMode::Tmux), on_exit_tmux)
             .add_observer(on_tmux_connection_closed)
             .add_plugins((
                 TmuxSessionPlugin,
+                AdoptPlugin,
                 RenderPlugin,
                 InputPlugin,
                 MousePlugin,
                 ForwardPlugin,
                 CopyModePlugin,
                 WindowBarPlugin,
-                DialogPlugin,
                 DividerHandlePlugin,
                 PaneFocusPlugin,
                 GatePlugin,
                 WebviewTokensPlugin,
                 TmuxModeUiPlugin,
             ));
+    }
+}
+
+/// Sends `detach-client` over the live connection, if any.
+///
+/// The `%exit` notification tmux emits in response drives the teardown path
+/// (see `crate::tmux::adopt`), which closes the connection and returns to
+/// `AppMode::Default`. Callers must NOT also set `NextState(Default)` directly:
+/// the connection stays live until tmux acknowledges the detach, and the
+/// teardown owns the mode transition.
+pub(crate) fn request_detach(client: &mut TmuxClient) {
+    if let Err(error) = client.send_raw("detach-client") {
+        tracing::warn!(?error, "detach-client send failed");
     }
 }
 
@@ -71,15 +80,29 @@ fn on_tmux_connection_closed(
     next_mode.set(AppMode::Default);
 }
 
-fn on_enter_tmux(mut commands: Commands) {
-    commands.insert_resource(TmuxPresence);
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::state::app::StatesPlugin;
 
-fn on_exit_tmux(mut commands: Commands, mut connection: NonSendMut<TmuxConnection>) {
-    if let Some(client) = connection.client() {
-        let _ = client.handle().send("detach-client");
+    #[test]
+    fn request_detach_sends_detach_client() {
+        let mut client = TmuxClient::new_adopted();
+        request_detach(&mut client);
+        assert_eq!(client.take_outgoing(), b"detach-client\n");
     }
-    connection.take();
-    commands.remove_resource::<TmuxPresence>();
-    commands.trigger(TmuxConnectionReset);
+
+    #[test]
+    fn connection_closed_returns_to_default() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(AppMode::Tmux);
+        app.add_observer(on_tmux_connection_closed);
+        app.world_mut().trigger(TmuxConnectionClosed);
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Default
+        );
+    }
 }

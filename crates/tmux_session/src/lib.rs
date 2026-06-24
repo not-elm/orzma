@@ -7,7 +7,6 @@
 
 mod command;
 mod components;
-mod connect;
 mod connection;
 mod copy_queries;
 mod enumerate;
@@ -18,19 +17,17 @@ mod keybindings;
 mod observers;
 mod output;
 mod plugin;
-mod select;
-mod state;
 
 pub use command::{
     CopyModeCapture, CopyStateQuery, Prompt, RefreshClient, RenameSession, RenameWindow,
     ResizePaneX, ResizePaneY, ResizeWindow, SelectPane, SelectWindow, SendBytes, SendPaneKeys,
-    SetEnvironmentInSession, ShowBuffer, SwitchClient, WindowRefreshClient,
+    SetEnvironmentGlobal, SetEnvironmentInSession, ShowBuffer, UnsetEnvironmentGlobal,
+    WindowRefreshClient,
 };
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
 };
-pub use connect::attach_or_create;
-pub use connection::TmuxConnection;
+pub use connection::{TmuxAttached, TmuxClient, TmuxClientMut};
 pub use copy_queries::{CopyModeQueries, CopyModeReply, CopyQueryKind};
 pub use enumerate::{
     CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, parse_copy_state,
@@ -42,8 +39,6 @@ pub use keybindings::{
     CopyAction, Forwarded, KeyBindings, PromptKind, copy_mode_dispatch, plan_forward,
 };
 pub use output::PaneOutput;
-pub use plugin::{TmuxPresence, TmuxProjectionSet, TmuxSessionPlugin};
-pub use select::{AttachTarget, select_attach_target};
-pub use state::ConnectionState;
-pub use tmux_control::TmuxCommand;
+pub use plugin::{TmuxEventBatch, TmuxProjectionSet, TmuxSessionPlugin};
+pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};
 pub use tmux_control_parser::{PaneId, SessionId, WindowId};

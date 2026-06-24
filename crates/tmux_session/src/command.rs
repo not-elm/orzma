@@ -9,13 +9,11 @@ mod size;
 mod target;
 
 pub use copymode::{CopyModeCapture, CopyStateQuery, Prompt, ShowBuffer};
-pub use env::SetEnvironmentInSession;
+pub use env::{SetEnvironmentGlobal, SetEnvironmentInSession, UnsetEnvironmentGlobal};
 pub use io::{SendBytes, SendPaneKeys};
 pub(crate) use query::{
     ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListKeys, ListWindows,
     ModeKeys, PrefixOptions, SubscribeWindowFlags, Version,
 };
 pub use size::{RefreshClient, ResizeWindow, WindowRefreshClient};
-pub use target::{
-    RenameSession, RenameWindow, ResizePaneX, ResizePaneY, SelectPane, SelectWindow, SwitchClient,
-};
+pub use target::{RenameSession, RenameWindow, ResizePaneX, ResizePaneY, SelectPane, SelectWindow};

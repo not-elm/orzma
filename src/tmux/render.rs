@@ -14,7 +14,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozma_webview::OscWebviewGate;
 use ozmux_tmux::{
-    ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxCommand, TmuxConnection, TmuxPane,
+    ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxClientMut, TmuxCommand, TmuxPane,
     TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,
 };
 use std::collections::HashMap;
@@ -478,9 +478,9 @@ fn rows_for_panes(total_rows: u16) -> u16 {
 
 /// The pinned tmux pane cell size (`(cols, rows)`) for the current GUI window,
 /// with one row reserved for the ozmux status bar. [`sync_client_size`] pins
-/// tmux to this. The session picker deliberately births new sessions one row
-/// larger (the full window, no bar reservation) so reconciliation to this size
-/// is a shrink, never a grow — see `picker_client_size`.
+/// tmux to this. The gateway PTY is sized to the full window (no bar
+/// reservation) by [`sync_gateway_size`], so reconciliation to this size is
+/// always a shrink, never a grow.
 fn client_cell_size(phys_w: u32, phys_h: u32, cell_w_phys: f32, cell_h_phys: f32) -> (u16, u16) {
     let (cols, rows) = cells_for(phys_w, phys_h, cell_w_phys, cell_h_phys);
     (cols, rows_for_panes(rows))
@@ -547,14 +547,11 @@ fn reconcile_decision(
 /// drift and recover without spinning when tmux refuses to grow the window.
 fn sync_client_size(
     mut last: ResMut<LastClientSize>,
-    connection: NonSend<TmuxConnection>,
+    mut client: TmuxClientMut<'_, '_>,
     metrics: Res<TerminalCellMetricsResource>,
     window: Query<&Window, With<PrimaryWindow>>,
     active: Query<(&TmuxWindow, Option<&TmuxWindowLayout>), With<ActiveWindow>>,
 ) {
-    let Some(client) = connection.client() else {
-        return;
-    };
     let Ok(window) = window.single() else {
         return;
     };
@@ -579,7 +576,7 @@ fn sync_client_size(
     // a re-pin even when window/size/reported are unchanged — otherwise the first
     // pin sent with the global fallback (capability still unknown) is never
     // upgraded to the per-window form, defeating multi-client isolation.
-    let per_window = connection.supports_per_window_refresh();
+    let per_window = client.supports_per_window_refresh();
     let capability_changed = last.last_per_window != per_window;
     if !capability_changed
         && !reconcile_decision(
@@ -599,7 +596,7 @@ fn sync_client_size(
     // NOTE: only record the size as sent AFTER a successful send — otherwise a
     // transient send failure would poison the dedupe and permanently suppress
     // re-sending this size, leaving tmux stuck at the stale client dimensions.
-    match client.handle().send(Pin {
+    match client.send(Pin {
         per_window,
         win: tmux_window.id,
         cols,
@@ -771,7 +768,6 @@ mod tests {
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
-        app.insert_non_send_resource(TmuxConnection::default());
 
         let pane_id = PaneId(1);
         let pane_entity = app
@@ -828,7 +824,6 @@ mod tests {
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
-        app.insert_non_send_resource(TmuxConnection::default());
 
         let pane_id = PaneId(1);
         let pane_entity = app
@@ -919,7 +914,6 @@ mod tests {
         app.add_plugins(TerminalGridPlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
-        app.insert_non_send_resource(TmuxConnection::default());
         app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(true))));
         app.init_resource::<Seen>();
         app.add_observer(|_ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
@@ -1044,127 +1038,6 @@ mod tests {
         assert!(
             app.world().resource::<SnapHits>().0 >= 1,
             "resize emitted a FrameSnapshot (#1)",
-        );
-    }
-
-    #[test]
-    #[ignore = "requires a real tmux binary and a controlling PTY"]
-    fn display_only_pane_does_not_inject_phantom_device_replies() {
-        use ozmux_tmux::{ConnectionState, TmuxSessionPlugin};
-        use std::time::{Duration, Instant};
-        use tmux_control::TmuxServer;
-
-        #[derive(Resource, Default)]
-        struct Captured(Vec<u8>);
-
-        fn capture(mut sink: ResMut<Captured>, mut reader: MessageReader<PaneOutput>) {
-            for msg in reader.read() {
-                sink.0.extend_from_slice(&msg.data);
-            }
-        }
-
-        let socket = format!("ozmux-replyloop-{}", std::process::id());
-        let server = TmuxServer::new().socket_name(&socket);
-        let client = server.new_session().expect("spawn tmux -CC new-session");
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_plugins(TerminalGridPlugin);
-        app.init_resource::<Assets<TerminalUiMaterial>>();
-        app.add_plugins(TmuxSessionPlugin);
-        app.init_resource::<Captured>();
-        app.add_systems(
-            Update,
-            (
-                attach_tmux_pane_terminal,
-                route_tmux_output.run_if(on_message::<PaneOutput>),
-                capture,
-            )
-                .chain()
-                .after(TmuxProjectionSet),
-        );
-        app.world_mut()
-            .get_non_send_resource_mut::<TmuxConnection>()
-            .expect("TmuxConnection inserted by the plugin")
-            .set(client);
-
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut pane_id: Option<PaneId> = None;
-        while Instant::now() < deadline {
-            app.update();
-            if *app.world().resource::<ConnectionState>() == ConnectionState::Attached {
-                let mut q = app
-                    .world_mut()
-                    .query_filtered::<&TmuxPane, With<TerminalHandle>>();
-                if let Some(id) = q.iter(app.world()).next().map(|p| p.id) {
-                    pane_id = Some(id);
-                    break;
-                }
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let pane_id = pane_id.expect("a pane should be projected with a TerminalHandle attached");
-        let target = format!("%{}", pane_id.0);
-
-        // Run `cat` so the pane TTY is in cooked mode with echo on: any bytes
-        // injected into the pane's input are reflected back as %output, making
-        // a spurious injected device-report reply observable.
-        let handle = app
-            .world()
-            .get_non_send_resource::<TmuxConnection>()
-            .unwrap()
-            .client()
-            .unwrap()
-            .handle();
-        handle
-            .send(&format!("send-keys -t {target} -l -- cat"))
-            .expect("send-keys cat");
-        handle
-            .send(&format!("send-keys -t {target} Enter"))
-            .expect("send-keys Enter");
-
-        let cat_deadline = Instant::now() + Duration::from_secs(1);
-        while Instant::now() < cat_deadline {
-            app.update();
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        app.world_mut().resource_mut::<Captured>().0.clear();
-
-        // NOTE: inject the DSR-5 query as a *synthetic* %output — tmux never saw
-        // a real query, so it answers nothing. Any `[0n` (the DSR-OK reply)
-        // echoed back can therefore only be ozmux's display-only renderer
-        // answering the probe and injecting it into the pane via send-keys -H.
-        app.world_mut()
-            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
-            .write(PaneOutput {
-                pane: pane_id,
-                data: b"\x1b[5n".to_vec(),
-            });
-
-        let echo_deadline = Instant::now() + Duration::from_secs(2);
-        while Instant::now() < echo_deadline {
-            app.update();
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        let (injected, captured_len) = {
-            let captured = &app.world().resource::<Captured>().0;
-            (captured.windows(3).any(|w| w == b"[0n"), captured.len())
-        };
-
-        if let Some(client) = app
-            .world_mut()
-            .get_non_send_resource_mut::<TmuxConnection>()
-            .unwrap()
-            .take()
-        {
-            client.handle().send("kill-server").ok();
-        }
-
-        assert!(
-            !injected,
-            "display-only pane must not answer device queries: an echoed DSR reply ([0n) was \
-             injected back into the tmux pane (captured {captured_len} bytes)"
         );
     }
 
@@ -1634,7 +1507,6 @@ mod tests {
         app.add_plugins(TerminalGridPlugin);
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
-        app.insert_non_send_resource(TmuxConnection::default());
 
         let pane_entity = app
             .world_mut()

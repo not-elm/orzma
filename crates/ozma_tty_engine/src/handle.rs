@@ -1328,6 +1328,55 @@ fn hash_cursor_shape(s: CursorShape, h: &mut DefaultHasher) {
 mod tests {
     use super::*;
 
+    fn scrollback_test_handle(cols: u16, rows: u16) -> TerminalHandle {
+        let (reply_tx, reply_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (ctrl_tx, ctrl_rx) =
+            crossbeam_channel::unbounded::<crate::vt::listener::ControlFrame>();
+        let listener = crate::vt::listener::TermListener {
+            reply_tx,
+            control_tx: ctrl_tx.clone(),
+        };
+        TerminalHandle::new(
+            cols,
+            rows,
+            listener,
+            reply_rx,
+            ctrl_rx,
+            ctrl_tx,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    fn cursor_row(h: &TerminalHandle) -> i32 {
+        h.term.grid().cursor.point.line.0
+    }
+
+    #[test]
+    fn capture_seed_restores_prompt_to_top_after_grow_with_scrollback() {
+        // A tmux pane grid that overflowed into scrollback and is then grown
+        // (e.g. the control client pins a larger size after a born-small layout)
+        // pulls scrollback onto the screen and pushes the prompt to mid-screen —
+        // the issue #193 fixed via birth-at-size. The recapture seed (cursor
+        // home + clear + tmux's authoritative rows + real cursor) MUST restore
+        // the prompt to the top; this is why a post-grow re-seed is required.
+        let mut h = scrollback_test_handle(20, 5);
+        let mut parser = alacritty_terminal::vte::ansi::Processor::<
+            alacritty_terminal::vte::ansi::StdSyncHandler,
+        >::new();
+        parser.advance(&mut h.term, b"l0\r\nl1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\n$ ");
+        h.resize_grid_only(20, 15);
+        assert!(
+            cursor_row(&h) > 0,
+            "grow with scrollback pulls history onto the screen, pushing the prompt (cursor) down"
+        );
+        parser.advance(&mut h.term, b"\x1b[H\x1b[2J$ \x1b[1;3H");
+        assert_eq!(
+            cursor_row(&h),
+            0,
+            "the capture seed must restore the prompt (cursor) to the top row"
+        );
+    }
+
     #[test]
     fn is_noop_emit_returns_false_when_only_selection_changed() {
         use alacritty_terminal::index::Side;

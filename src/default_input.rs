@@ -1,14 +1,13 @@
 //! Host-side input for `AppMode::Default`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
-//! markers from the coarse guards (picker, IME, focus, webview), and handles the
+//! markers from the coarse guards (IME, focus, webview), and handles the
 //! application-level GUI shortcuts the terminal crate does not own (Quit,
-//! OpenPicker, DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
+//! DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
 use crate::app_mode::AppMode;
 use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
-use crate::picker::SessionPicker;
 use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
@@ -48,7 +47,6 @@ impl Plugin for DefaultHostInputPlugin {
 
 fn maintain_input_gates(
     mut commands: Commands,
-    picker: Res<SessionPicker>,
     ime: Res<ImeState>,
     focused_webview: Res<FocusedWebview>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -63,12 +61,8 @@ fn maintain_input_gates(
     >,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    let global_disable = should_disable_input(
-        picker.open,
-        ime.is_composing(),
-        focused,
-        focused_webview.0.is_some(),
-    );
+    let global_disable =
+        should_disable_input(ime.is_composing(), focused, focused_webview.0.is_some());
     for (entity, has_keyboard, has_mouse, in_copy_mode) in terminals.iter() {
         let disable = global_disable || in_copy_mode;
         if disable && !has_keyboard {
@@ -88,7 +82,6 @@ fn app_shortcut_handler(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
-    mut picker: ResMut<SessionPicker>,
     mut focused_webview: ResMut<FocusedWebview>,
     shortcuts: Res<ResolvedShortcuts>,
     ime: Res<ImeState>,
@@ -97,7 +90,7 @@ fn app_shortcut_handler(
     terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    if picker.open || ime.is_composing() || !focused {
+    if ime.is_composing() || !focused {
         events.clear();
         return;
     }
@@ -120,9 +113,6 @@ fn app_shortcut_handler(
         match action {
             ShortcutAction::Quit => {
                 exit.write(AppExit::Success);
-            }
-            ShortcutAction::OpenPicker => {
-                picker.open = true;
             }
             ShortcutAction::EnterCopyMode => {
                 if let Ok(entity) = terminal.single() {
@@ -155,12 +145,11 @@ fn apply_ime_commit_to_terminal(
 }
 
 pub(crate) fn should_disable_input(
-    picker_open: bool,
     composing: bool,
     window_focused: bool,
     webview_focused: bool,
 ) -> bool {
-    picker_open || composing || !window_focused || webview_focused
+    composing || !window_focused || webview_focused
 }
 
 fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutAction) -> bool {
@@ -247,11 +236,10 @@ mod tests {
 
     #[test]
     fn disables_input_on_any_guard() {
-        assert!(!should_disable_input(false, false, true, false));
-        assert!(should_disable_input(true, false, true, false));
-        assert!(should_disable_input(false, true, true, false));
-        assert!(should_disable_input(false, false, false, false));
-        assert!(should_disable_input(false, false, true, true));
+        assert!(!should_disable_input(false, true, false));
+        assert!(should_disable_input(true, true, false));
+        assert!(should_disable_input(false, false, false));
+        assert!(should_disable_input(false, true, true));
     }
 
     #[test]
@@ -259,11 +247,11 @@ mod tests {
         assert!(gui_action_suppressed_by_webview(true, ShortcutAction::Quit));
         assert!(gui_action_suppressed_by_webview(
             true,
-            ShortcutAction::OpenPicker
+            ShortcutAction::DetachSession
         ));
         assert!(gui_action_suppressed_by_webview(
             true,
-            ShortcutAction::DetachSession
+            ShortcutAction::EnterCopyMode
         ));
         assert!(!gui_action_suppressed_by_webview(
             true,

@@ -3,6 +3,7 @@
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use ozma_terminal::{KeyboardFocused, OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
+use ozma_tty_engine::ControlModeWatch;
 
 /// Application mode. `Default` is the default (single PTY, no tmux).
 /// `Tmux` activates the tmux multiplexer backend.
@@ -15,21 +16,28 @@ pub(crate) enum AppMode {
     Tmux,
 }
 
-/// Root of the Default-mode UI subtree, mounted under `UiRoot` while in
-/// `AppMode::Default`. Carries `DespawnOnExit(AppMode::Default)`, so leaving
-/// Default mode removes the subtree (including its child terminal).
+/// Root of the Default-mode UI subtree, mounted under `UiRoot`.
+///
+/// Adoption (`crate::tmux::adopt`) despawns this container when it promotes the
+/// Default shell to the tmux gateway, so `ensure_default_mode_ui` lazily spawns
+/// a fresh Default shell on the next return to `AppMode::Default`.
 #[derive(Component)]
-struct DefaultModeUi;
+pub(crate) struct DefaultModeUi;
+
+/// Marker for the single Default-mode shell terminal entity. Persists across
+/// `AppMode::Default` ↔ `AppMode::Tmux` round-trips when the Default shell
+/// is not adopted as the tmux gateway.
+#[derive(Component)]
+struct DefaultShell;
 
 /// Bevy plugin that ensures the Default-mode UI subtree (a single
 /// `OzmaTerminal` under `DefaultModeUi`) exists while in `AppMode::Default`.
 ///
-/// The subtree is built by `ensure_default_mode_ui`, gated
-/// `run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>)))`:
-/// it runs in `Update` (always after `Startup` spawns `UiRoot`) and re-fires on
-/// re-entry once the previous subtree is gone. Teardown is `DespawnOnExit`.
-/// `OzmaTerminalPlugin` must be added first (it inserts the `OzmaTerminalConfig`
-/// this reads).
+/// `ensure_default_mode_ui` runs once while in `AppMode::Default` to build the
+/// subtree. Adoption despawns `DefaultModeUi` when it promotes the Default shell
+/// to the tmux gateway; `ensure_default_mode_ui` spawns a fresh one on the next
+/// return to `AppMode::Default`. `OzmaTerminalPlugin` must be added first (it
+/// inserts the `OzmaTerminalConfig` this reads).
 pub(crate) struct DefaultModePlugin;
 
 impl Plugin for DefaultModePlugin {
@@ -64,7 +72,6 @@ fn ensure_default_mode_ui(
                 height: Val::Percent(100.0),
                 ..default()
             },
-            DespawnOnExit(AppMode::Default),
             DefaultModeUi,
             ChildOf(ui_root),
         ))
@@ -74,11 +81,86 @@ fn ensure_default_mode_ui(
         ..default()
     }) {
         Ok(bundle) => {
-            commands.spawn((bundle, KeyboardFocused, ChildOf(mode_ui)));
+            commands.spawn((
+                bundle,
+                KeyboardFocused,
+                ControlModeWatch::default(),
+                DefaultShell,
+                ChildOf(mode_ui),
+            ));
         }
         Err(e) => {
             tracing::error!(?e, "failed to spawn ozma terminal");
             exit.write(AppExit::Success);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::state::app::StatesPlugin;
+
+    fn build_app(initial_mode: AppMode) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(initial_mode);
+        app.insert_resource(OzmaTerminalConfig { shell: None });
+        app.world_mut().spawn((Node::default(), UiRoot));
+        app.add_plugins(DefaultModePlugin);
+        app
+    }
+
+    #[test]
+    fn spawns_default_mode_ui_once() {
+        let mut app = build_app(AppMode::Default);
+        app.update();
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<(), With<DefaultModeUi>>();
+        assert_eq!(q.iter(world).count(), 1, "exactly one DefaultModeUi");
+        app.update();
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<(), With<DefaultModeUi>>();
+        assert_eq!(
+            q.iter(world).count(),
+            1,
+            "still exactly one DefaultModeUi after second update"
+        );
+    }
+
+    #[test]
+    fn default_shell_survives_mode_roundtrip() {
+        let mut app = build_app(AppMode::Default);
+        app.update();
+
+        let shell_entity = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, With<DefaultShell>>()
+                .single(world)
+                .expect("DefaultShell spawned")
+        };
+
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Tmux);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Default);
+        app.update();
+
+        assert!(
+            app.world_mut().get_entity(shell_entity).is_ok(),
+            "DefaultShell entity survived Default → Tmux → Default round-trip"
+        );
+
+        let world = app.world_mut();
+        let count = world
+            .query_filtered::<(), With<DefaultShell>>()
+            .iter(world)
+            .count();
+        assert_eq!(count, 1, "exactly one DefaultShell after round-trip");
     }
 }

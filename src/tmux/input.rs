@@ -14,7 +14,6 @@ use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
-use crate::picker::SessionPicker;
 use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
@@ -36,8 +35,8 @@ use ozma_webview::{ForwardKeys, NonInteractive, Webview, focused_webview_of, web
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use ozmux_tmux::{
     ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
-    KeyMods, PromptKind, SendBytes, SendPaneKeys, ShowBuffer, TmuxCommand, TmuxConnection,
-    TmuxPane, TmuxSession, TmuxWindow, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
+    KeyMods, PromptKind, SendBytes, SendPaneKeys, ShowBuffer, TmuxClient, TmuxCommand, TmuxPane,
+    TmuxSession, TmuxWindow, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
@@ -110,21 +109,15 @@ fn outcome_of(action: CopyAction) -> CopyOutcome {
 
 fn forward_keys_to_tmux(
     mut commands: Commands,
-    mut picker: ResMut<SessionPicker>,
-    (mut copy_prompt, mut next_mode, confirm_state, rename): (
-        ResMut<CopyPrompt>,
-        ResMut<NextState<AppMode>>,
-        Option<Res<ConfirmState>>,
-        RenameParams,
-    ),
-    mut exit: MessageWriter<AppExit>,
+    (mut copy_prompt, mut exit): (ResMut<CopyPrompt>, MessageWriter<AppExit>),
+    (confirm_state, rename): (Option<Res<ConfirmState>>, RenameParams),
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
     mut focused_webview: ResMut<FocusedWebview>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
     mut handles: Query<&mut TerminalHandle>,
-    connection: NonSend<TmuxConnection>,
+    mut client: Option<Single<&mut TmuxClient>>,
     (keys, ime, bindings, resolved): (
         Res<ButtonInput<KeyCode>>,
         Res<crate::input::ime::ImeState>,
@@ -136,13 +129,6 @@ fn forward_keys_to_tmux(
     windows: Query<&Window, With<PrimaryWindow>>,
     forward_keys: Query<&ForwardKeys>,
 ) {
-    // NOTE: while the picker is open it owns the keyboard; forwarding would
-    // leak picker-navigation keys to the active tmux pane. Drain (don't replay).
-    if picker.open {
-        *prefix_pending = false;
-        events.clear();
-        return;
-    }
     // NOTE: while the copy-mode prompt is open it owns the keyboard; the prompt's
     // own system handles raw keys. Drain here so no key leaks to tmux or the
     // prefix state machine.
@@ -193,8 +179,8 @@ fn forward_keys_to_tmux(
     };
 
     // The active pane (if any) is the forward/paste target. GUI chords below do
-    // not need it (so quit/picker work before a pane is projected); tmux key
-    // dispatch does.
+    // not need it (so quit and similar chords work before a pane is projected);
+    // tmux key dispatch does.
     let (active_entity, active_pane_id, target) = match active_pane {
         Some(single) => {
             let (entity, pane) = *single;
@@ -241,12 +227,11 @@ fn forward_keys_to_tmux(
 
         if !forward_names.is_empty() {
             let actions = plan_forward(&mut prefix_pending, &bindings, forward_names);
-            if let (Some(target), Some(client)) = (target.as_deref(), connection.client()) {
-                let handle = client.handle();
+            if let (Some(target), Some(client)) = (target.as_deref(), client.as_deref_mut()) {
                 for action in actions {
                     let result = match action {
-                        Forwarded::Run(cmd) => handle.send(&cmd),
-                        Forwarded::Keys(names) => handle.send(SendPaneKeys {
+                        Forwarded::Run(cmd) => client.send(&cmd),
+                        Forwarded::Keys(names) => client.send(SendPaneKeys {
                             pane: target,
                             names: &names,
                         }),
@@ -281,7 +266,6 @@ fn forward_keys_to_tmux(
             // A GUI action abandons any pending tmux prefix sequence.
             *prefix_pending = false;
             match action {
-                ShortcutAction::OpenPicker => picker.open = true,
                 ShortcutAction::Quit => {
                     exit.write(AppExit::Success);
                 }
@@ -292,7 +276,7 @@ fn forward_keys_to_tmux(
                     if text.is_empty() {
                         continue;
                     }
-                    let (Some(target), Some(client)) = (target.as_deref(), connection.client())
+                    let (Some(target), Some(tmux)) = (target.as_deref(), client.as_deref_mut())
                     else {
                         continue;
                     };
@@ -304,7 +288,7 @@ fn forward_keys_to_tmux(
                     }
                     let bytes = build_paste_bytes(&text, false);
                     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
-                        if let Err(e) = client.handle().send(SendBytes {
+                        if let Err(e) = tmux.send(SendBytes {
                             pane: target,
                             bytes: chunk,
                         }) {
@@ -315,7 +299,9 @@ fn forward_keys_to_tmux(
                 }
                 ShortcutAction::ReleaseWebviewFocus => {}
                 ShortcutAction::DetachSession => {
-                    next_mode.set(AppMode::Default);
+                    if let Some(client) = client.as_deref_mut() {
+                        super::request_detach(client);
+                    }
                 }
                 ShortcutAction::EnterCopyMode => {}
             }
@@ -347,17 +333,16 @@ fn forward_keys_to_tmux(
     }
 
     if in_copy_mode {
-        let Some(client) = connection.client() else {
+        let Some(client) = client.as_deref_mut() else {
             return;
         };
-        let handle = client.handle();
         for name in key_names {
             let outcome = outcome_of(copy_mode_dispatch(&bindings, &name));
             if let Some(cmd) = &outcome.command {
-                match handle.send(cmd) {
+                match client.send(cmd) {
                     Ok(_) if outcome.bridge => {
                         if let Some(pane_id) = active_pane_id {
-                            match handle.send(ShowBuffer) {
+                            match client.send(ShowBuffer) {
                                 Ok(buf_id) => {
                                     copy_queries.register(buf_id, pane_id, CopyQueryKind::Buffer);
                                 }
@@ -400,10 +385,9 @@ fn forward_keys_to_tmux(
     if actions.is_empty() {
         return;
     }
-    let (Some(target), Some(client)) = (target.as_deref(), connection.client()) else {
+    let (Some(target), Some(client)) = (target.as_deref(), client.as_deref_mut()) else {
         return;
     };
-    let handle = client.handle();
     for action in actions {
         if let Forwarded::Run(command) = &action
             && let Some(kind) = RenameKind::parse(command)
@@ -428,8 +412,8 @@ fn forward_keys_to_tmux(
         }
         let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
         let result = match action {
-            Forwarded::Run(command) => handle.send(&command),
-            Forwarded::Keys(names) => handle.send(SendPaneKeys {
+            Forwarded::Run(command) => client.send(&command),
+            Forwarded::Keys(names) => client.send(SendPaneKeys {
                 pane: target,
                 names: &names,
             }),
@@ -686,10 +670,9 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 fn forward_wheel_to_tmux(
     mut wheel: MessageReader<MouseWheel>,
     mut accumulator: ResMut<TmuxWheelAccumulator>,
+    mut client: Option<Single<&mut TmuxClient>>,
     handles: Query<&TerminalHandle>,
     wheel_params: TmuxWebviewWheelParams,
-    connection: NonSend<TmuxConnection>,
-    picker: Res<SessionPicker>,
     copy_prompt: Res<CopyPrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
     configs: Res<OzmuxConfigsResource>,
@@ -729,7 +712,7 @@ fn forward_wheel_to_tmux(
     // can't accumulate behind a modal / unfocused window and lurch on resume.
     // focused_webview is NOT a guard here — the pointer-gated target above owns
     // webview scrolling, so a focused webview must not steal terminal wheel.
-    if !window.focused || picker.open || copy_prompt.open.is_some() || rename_prompt.is_some() {
+    if !window.focused || copy_prompt.open.is_some() || rename_prompt.is_some() {
         accumulator.residual_cells = 0.0;
         return;
     }
@@ -774,10 +757,9 @@ fn forward_wheel_to_tmux(
     let lines = configs.mouse.lines_per_notch;
     let total_lines = count as u32 * lines;
 
-    let Some(client) = connection.client() else {
+    let Some(tmux) = client.as_deref_mut() else {
         return;
     };
-    let tmux = client.handle();
 
     let (cmd, failure) = match owner {
         WheelOwner::CopyMode => (

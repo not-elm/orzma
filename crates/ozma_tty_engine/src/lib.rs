@@ -5,6 +5,7 @@
 mod bundle;
 mod buttons;
 mod coalescer;
+mod control_mode;
 mod events;
 mod handle;
 mod input_codec;
@@ -14,6 +15,8 @@ mod osc_webview;
 mod palette;
 mod plugin;
 mod pty;
+mod raw_write;
+mod resize;
 mod title;
 mod vt;
 mod wheel;
@@ -25,6 +28,7 @@ pub use alacritty_terminal::vi_mode::ViMotion;
 pub use bundle::{SpawnOptions, TerminalBundle};
 pub use buttons::{ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind};
 pub use coalescer::Coalescer;
+pub use control_mode::{AdoptedControlMode, ControlModeDetected, ControlModeWatch};
 pub use events::{
     OscWebviewRequest, TerminalBell, TerminalChildExit, TerminalClipboardStore, TerminalCurrentDir,
     TerminalKey, TerminalKeyInput, TerminalModeChanged, TerminalModifiers, TerminalTitleChanged,
@@ -33,6 +37,8 @@ pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use mouse_encode::ProtocolModifiers;
 pub use plugin::TerminalHandlePlugin;
 pub use pty::PtyHandle;
+pub use raw_write::{RawWritePlugin, TerminalRawWrite};
+pub use resize::{ResizePlugin, TerminalResize};
 pub use title::{TerminalTitle, sanitize_title};
 pub use vt::listener::{AnchorMode, InlineAnchor, OscWebviewVerb};
 pub use wheel::{CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers};
