@@ -476,13 +476,22 @@ enum RunClass {
     Plain,
 }
 
-/// Classifies one tmux command by text: rename and confirm-before wrappers take
-/// priority (they become ozmux prompts), then copy-mode entry, then plain send.
+/// Classifies one tmux command by text.
+///
+/// A bare `rename-window` / `renamew` / `rename-session` / `rename` verb (no
+/// trailing arguments) opens the interactive ozmux rename prompt; the
+/// `command-prompt`-wrapped default-binding form is recognized via
+/// `RenameKind::parse`. A rename carrying an explicit name (e.g.
+/// `rename-window foo`) is sent verbatim so the name is not dropped.
+/// `confirm-before` wrappers become an ozmux confirm prompt; copy-mode entry is
+/// sent then marked; everything else is a plain verbatim send.
 fn classify_run_command(command: &str) -> RunClass {
-    let first = command.split_whitespace().next().unwrap_or("");
-    let rename_kind = match first {
-        "rename-window" | "renamew" => Some(RenameKind::Window),
-        "rename-session" | "rename" => Some(RenameKind::Session),
+    let mut tokens = command.split_whitespace();
+    let first = tokens.next().unwrap_or("");
+    let bare = tokens.next().is_none();
+    let rename_kind = match (first, bare) {
+        ("rename-window" | "renamew", true) => Some(RenameKind::Window),
+        ("rename-session" | "rename", true) => Some(RenameKind::Session),
         _ => RenameKind::parse(command),
     };
     if let Some(kind) = rename_kind {
@@ -1446,6 +1455,18 @@ mod tests {
         ));
         assert!(matches!(
             classify_run_command("next-window"),
+            RunClass::Plain
+        ));
+    }
+
+    #[test]
+    fn classify_rename_with_explicit_name_is_plain() {
+        assert!(matches!(
+            classify_run_command("rename-window foo"),
+            RunClass::Plain
+        ));
+        assert!(matches!(
+            classify_run_command("rename-session bar"),
             RunClass::Plain
         ));
     }
