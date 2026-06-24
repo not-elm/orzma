@@ -28,9 +28,9 @@ pub enum OzmuxConfigsError {
         source: toml::de::Error,
     },
 
-    /// One or more KeyChord collisions across the `[shortcuts.bindings]` table.
-    /// Collected in a single pass; reported all-at-once to avoid whack-a-mole.
-    #[error("duplicate chord(s) in shortcuts.bindings: {}", format_dupes(.0))]
+    /// One or more KeyChord collisions across `[shortcuts.bindings]` and
+    /// `[shortcuts.commands]`. Collected in a single pass; reported all-at-once.
+    #[error("duplicate chord(s) in shortcuts.bindings/commands: {}", format_dupes(.0))]
     DuplicateChords(Vec<crate::shortcuts::DuplicateChord>),
 
     /// The configured font size is outside the supported range.

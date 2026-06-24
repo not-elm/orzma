@@ -92,7 +92,7 @@ impl OzmuxConfigs {
     }
 
     fn validate(&self) -> OzmuxConfigsResult<()> {
-        if let Err(dupes) = self.shortcuts.bindings.validate_no_conflicts() {
+        if let Err(dupes) = self.shortcuts.validate_no_conflicts() {
             return Err(OzmuxConfigsError::DuplicateChords(dupes));
         }
         let size = self.font.size;
@@ -170,11 +170,51 @@ release-webview-focus = "Cmd+V"
         match err {
             OzmuxConfigsError::DuplicateChords(dupes) => {
                 assert_eq!(dupes.len(), 1);
-                assert!(dupes[0].actions.contains(&"paste"));
-                assert!(dupes[0].actions.contains(&"release-webview-focus"));
+                assert!(dupes[0].actions.iter().any(|a| a == "paste"));
+                assert!(
+                    dupes[0]
+                        .actions
+                        .iter()
+                        .any(|a| a == "release-webview-focus")
+                );
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
         }
+    }
+
+    #[test]
+    fn validate_detects_command_vs_builtin_conflict() {
+        // Cmd+S is the default enter-copy-mode chord; binding it as a command
+        // override too must be rejected.
+        let toml_str = r#"
+[shortcuts.commands]
+"Cmd+S" = "copy-mode"
+"#;
+        let mut configs: OzmuxConfigs = toml::from_str(toml_str).unwrap();
+        configs.normalize();
+        let err = configs.validate().unwrap_err();
+        match err {
+            OzmuxConfigsError::DuplicateChords(dupes) => {
+                assert_eq!(dupes.len(), 1);
+                assert!(dupes[0].actions.iter().any(|a| a == "enter-copy-mode"));
+                assert!(dupes[0].actions.iter().any(|a| a == "copy-mode"));
+            }
+            _ => panic!("expected DuplicateChords, got {err:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_allows_command_after_unbinding_builtin() {
+        let toml_str = r#"
+[shortcuts.bindings]
+enter-copy-mode = ""
+
+[shortcuts.commands]
+"Cmd+S" = "copy-mode"
+"#;
+        let mut configs: OzmuxConfigs = toml::from_str(toml_str).unwrap();
+        configs.normalize();
+        assert!(configs.validate().is_ok());
     }
 }
 

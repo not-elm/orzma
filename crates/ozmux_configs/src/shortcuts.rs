@@ -288,8 +288,9 @@ where
 pub struct DuplicateChord {
     /// The chord that has multiple bindings.
     pub chord: KeyChord,
-    /// Action labels (kebab-case TOML keys) that share this chord. Length >= 2.
-    pub actions: Vec<&'static str>,
+    /// Labels (kebab-case built-in action names and/or command text) that share
+    /// this chord. Length >= 2.
+    pub actions: Vec<String>,
 }
 
 fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
@@ -337,6 +338,24 @@ pub struct Shortcuts {
     pub bindings: Bindings,
     /// Single-chord → tmux-command overrides (`[shortcuts.commands]`). Empty by default.
     pub commands: CommandOverrides,
+}
+
+impl Shortcuts {
+    /// Detects chord collisions across both the built-in `bindings` and the
+    /// `commands` overrides. Built-in entries are labeled by their kebab-case
+    /// action name; command entries by their command text. Returns the
+    /// colliding chords sorted for deterministic error output.
+    pub fn validate_no_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
+        let binding_entries = self
+            .bindings
+            .iter()
+            .filter_map(|(label, bound, _)| bound.as_ref().map(|c| (label.to_string(), c)));
+        let command_entries = self
+            .commands
+            .iter()
+            .map(|(chord, cmd)| (cmd.to_string(), chord));
+        collect_duplicate_chords(binding_entries.chain(command_entries))
+    }
 }
 
 /// User-facing shortcut configuration. Each Action gets its own named
@@ -415,23 +434,30 @@ impl Bindings {
         .into_iter()
     }
 
-    /// Detects chord collisions across fields. Returns a `Vec` sorted by chord
-    /// (via BTreeMap key order) for deterministic error output. Caller maps
-    /// the Vec into `OzmuxConfigsError::DuplicateChords`.
-    pub fn validate_no_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
-        let mut by_chord: BTreeMap<KeyChord, Vec<&'static str>> = BTreeMap::new();
-        for (label, bound, _action) in self.iter() {
-            if let Some(chord) = bound {
-                by_chord.entry(chord.clone()).or_default().push(label);
-            }
-        }
-        let dupes: Vec<DuplicateChord> = by_chord
-            .into_iter()
-            .filter(|(_, labels)| labels.len() >= 2)
-            .map(|(chord, actions)| DuplicateChord { chord, actions })
-            .collect();
-        if dupes.is_empty() { Ok(()) } else { Err(dupes) }
+    #[cfg(test)]
+    fn validate_no_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
+        collect_duplicate_chords(
+            self.iter()
+                .filter_map(|(label, bound, _)| bound.as_ref().map(|c| (label.to_string(), c))),
+        )
     }
+}
+
+/// Groups `(label, chord)` entries by chord and returns any chord shared by two
+/// or more entries, sorted by chord for deterministic output.
+fn collect_duplicate_chords<'a>(
+    entries: impl Iterator<Item = (String, &'a KeyChord)>,
+) -> Result<(), Vec<DuplicateChord>> {
+    let mut by_chord: BTreeMap<KeyChord, Vec<String>> = BTreeMap::new();
+    for (label, chord) in entries {
+        by_chord.entry(chord.clone()).or_default().push(label);
+    }
+    let dupes: Vec<DuplicateChord> = by_chord
+        .into_iter()
+        .filter(|(_, labels)| labels.len() >= 2)
+        .map(|(chord, actions)| DuplicateChord { chord, actions })
+        .collect();
+    if dupes.is_empty() { Ok(()) } else { Err(dupes) }
 }
 
 /// Shortcut actions reachable under forward-only key routing. tmux owns the
@@ -682,8 +708,8 @@ mod tests {
         };
         let err = b.validate_no_conflicts().unwrap_err();
         assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
-        assert!(err[0].actions.contains(&"paste"));
-        assert!(err[0].actions.contains(&"release-webview-focus"));
+        assert!(err[0].actions.iter().any(|a| a == "paste"));
+        assert!(err[0].actions.iter().any(|a| a == "release-webview-focus"));
     }
 
     #[test]
