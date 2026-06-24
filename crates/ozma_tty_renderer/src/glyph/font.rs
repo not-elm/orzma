@@ -622,13 +622,11 @@ mod tests {
         let phys = 12u16;
         let primary = fonts.px_scale_value(phys);
         let fallback = fonts.fallback_px_scale_value(phys);
-        // UDEVGothic35 em_scale (1.161133) is ~12% smaller than JBM (1.320000);
-        // the fallback must rasterize correspondingly smaller, not at the
-        // primary's scale (which inflated CJK by +13.68%).
         let ratio = fallback / primary;
         assert!(
             (ratio - 0.879646).abs() < 0.001,
-            "fallback/primary px_scale ratio = {ratio} (expected ~0.879646)"
+            "fallback/primary px_scale ratio = {ratio} (expected ~0.879646: \
+             UDEVGothic35 em_scale 1.161133 / JBM 1.320000)"
         );
     }
 

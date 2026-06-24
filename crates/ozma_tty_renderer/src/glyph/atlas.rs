@@ -323,20 +323,18 @@ mod tests {
             .get_or_insert(key, &fonts)
             .expect("'あ' must rasterize via fallback");
 
-        // Height the buggy code produced: the fallback outline at the PRIMARY
-        // scale. The fix must rasterize 'あ' strictly smaller than this.
         let fb = fonts.fallback_choice(&FontFace::Regular);
         let primary_scale = ab_glyph::PxScale::from(fonts.px_scale_value(size));
         let gid = fb.glyph_id('あ');
-        let buggy_h = fb
+        let primary_scaled_h = fb
             .outline_glyph(gid.with_scale(primary_scale))
             .expect("'あ' outline at primary scale")
             .px_bounds()
             .height();
 
         assert!(
-            (rect.h as f32) < buggy_h - 0.5,
-            "'あ' rect height {} must be smaller than primary-scaled height {buggy_h}",
+            (rect.h as f32) < primary_scaled_h - 0.5,
+            "'あ' rect height {} must be smaller than the primary-scaled height {primary_scaled_h}",
             rect.h
         );
     }
