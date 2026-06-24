@@ -29,6 +29,7 @@ use ozma_terminal::KeyboardFocused;
 use ozma_tty_renderer::CellMetrics;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalFontInitSet;
+use ozma_tty_renderer::TerminalFontSize;
 use ozma_tty_renderer::material::TerminalMaterialSystems;
 use ozma_tty_renderer::prelude::TerminalGrid;
 use unicode_width::UnicodeWidthStr;
@@ -362,10 +363,14 @@ const IME_OVERLAY_Z: i32 = 200;
 /// TODO: bind TextColor / UnderlineColor / BackgroundColor to theme
 /// tokens (`text-foreground` / `bg-background`) once the theme-token
 /// helper is integrated. Placeholder white for now.
-fn spawn_ime_overlay_once(mut commands: Commands, ui_font: Res<TerminalUiFont>) {
+fn spawn_ime_overlay_once(
+    mut commands: Commands,
+    ui_font: Res<TerminalUiFont>,
+    font_size: Res<TerminalFontSize>,
+) {
     let text_font = TextFont {
         font: ui_font.0.clone(),
-        font_size: ozma_tty_renderer::FONT_SIZE_PX,
+        font_size: font_size.0,
         ..default()
     };
     let color = Color::WHITE;
@@ -678,6 +683,28 @@ mod tests {
         // begin=0, end=4 → (0.0, 3.0). begin=1 (after "a"), end=4 → (1.0, 3.0).
         assert_eq!(caret_cell_offsets("aあ", (0, 4)), (0.0, 3.0));
         assert_eq!(caret_cell_offsets("aあ", (1, 4)), (1.0, 3.0));
+    }
+
+    #[test]
+    fn ime_overlay_uses_terminal_font_size() {
+        use bevy::asset::Handle;
+        use bevy::text::TextFont;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(TerminalFontSize(9.0));
+        app.add_systems(Startup, spawn_ime_overlay_once);
+        app.update();
+
+        let mut query = app.world_mut().query::<&TextFont>();
+        let matched = query
+            .iter(app.world())
+            .any(|tf| (tf.font_size - 9.0).abs() < f32::EPSILON);
+        assert!(
+            matched,
+            "IME overlay TextFont must use TerminalFontSize (9.0), not the constant"
+        );
     }
 
     #[test]

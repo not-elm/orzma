@@ -22,10 +22,7 @@ pub enum FontLoadError {
     },
 }
 
-/// Font size in CSS pixels; multiplied by the PrimaryWindow's
-/// `scale_factor` to obtain the physical pixel size fed to
-/// `cell_metrics_px`.
-pub const FONT_SIZE_PX: f32 = 12.0;
+const FONT_SIZE_PX: f32 = 12.0;
 
 /// Logical (CSS) pixel font size for the terminal grid. Multiplied by the
 /// PrimaryWindow's `scale_factor` to obtain the physical pixel size fed to
