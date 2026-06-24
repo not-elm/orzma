@@ -12,7 +12,7 @@
 use crate::configs::OzmuxConfigsResource;
 use bevy::prelude::*;
 use bevy::text::{CosmicFontSystem, Font};
-use ozma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFonts, bundled};
+use ozma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
 use ozmux_configs::font::FontConfig;
 use ozmux_configs::path::{SystemEnv, expand_user_path};
 use std::path::Path;
@@ -111,10 +111,12 @@ fn register_cjk_fallback_with_cosmic(mut font_system: ResMut<CosmicFontSystem>) 
 
 fn bridge_font_config(
     mut commands: Commands,
-    configs: Res<OzmuxConfigsResource>,
     mut fonts_assets: ResMut<Assets<Font>>,
     mut terminal_fonts: ResMut<TerminalFonts>,
+    mut font_size: ResMut<TerminalFontSize>,
+    configs: Res<OzmuxConfigsResource>,
 ) {
+    font_size.0 = configs.font.size;
     let font: &FontConfig = &configs.font;
 
     let powerline = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
@@ -448,6 +450,49 @@ mod tests {
             has_udev_face,
             "UDEVGothic35 must be registered in cosmic-text fontdb after Startup",
         );
+    }
+
+    #[test]
+    fn bridge_sets_terminal_font_size_from_default_config() {
+        let (mut app, _guard, _env) = make_test_app();
+        app.update();
+        let size = app.world().resource::<TerminalFontSize>();
+        assert_eq!(
+            size.0, 11.25,
+            "default config font.size (11.25) must reach TerminalFontSize"
+        );
+    }
+
+    #[test]
+    fn bridge_sets_terminal_font_size_from_config_override_without_font_paths() {
+        let tmp = std::env::temp_dir().join("ozmux_font_size_override.toml");
+        std::fs::write(&tmp, "[font]\nsize = 16.0\n").expect("write toml");
+
+        let _guard = crate::configs::env_guard();
+        let _env = EnvVarGuard::set("OZMUX_CONFIG", &tmp);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .add_plugins(TextPlugin)
+            .init_asset::<Font>();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.add_plugins(TerminalFontPlugin);
+        app.add_plugins(OzmuxConfigsPlugin);
+        app.add_plugins(FontBridgePlugin);
+        app.update();
+
+        let size = app.world().resource::<TerminalFontSize>();
+        assert_eq!(
+            size.0, 16.0,
+            "config size=16 must reach TerminalFontSize even with no font override (cold path)"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
     }
 
     #[test]

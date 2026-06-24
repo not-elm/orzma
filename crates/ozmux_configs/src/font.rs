@@ -9,7 +9,9 @@ const DEFAULT_SIZE: f32 = 11.25;
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct FontConfig {
-    /// Terminal font size in points, matching Alacritty.
+    /// Terminal font size in logical (CSS) pixels, scaled by the display's
+    /// `scale_factor` to device pixels — Alacritty's model (not literal
+    /// typographic points; no 96/72 conversion is applied).
     pub size: f32,
     /// Absolute or `~`-prefixed path to the regular-face TTF (Bevy GUI only).
     pub normal: Option<PathBuf>,
