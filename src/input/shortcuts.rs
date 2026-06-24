@@ -8,7 +8,9 @@ use bevy::prelude::*;
 use ozma_terminal::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
-use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
+use ozmux_configs::shortcuts::{
+    Bindings, CommandOverrides, Key as ConfigKey, Modifiers, ShortcutAction,
+};
 use std::time::Duration;
 
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
@@ -20,10 +22,24 @@ struct ResolvedShortcut {
     action: ShortcutAction,
 }
 
-/// The startup-resolved ozmux shortcut table. Built once from
+/// One configured command override resolved to a physical key: the `KeyCode` to
+/// match, the exact modifier set required, and the tmux command to run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedCommand {
+    keycode: KeyCode,
+    modifiers: Modifiers,
+    command: String,
+}
+
+/// The startup-resolved ozmux shortcut tables. Built once from
 /// `OzmuxConfigsResource`; consumed by the tmux keyboard dispatcher.
+/// `actions` are the built-in GUI actions; `commands` are the tmux-command
+/// overrides (`[shortcuts.commands]`).
 #[derive(Resource, Default, Debug, Clone)]
-pub(crate) struct ResolvedShortcuts(Vec<ResolvedShortcut>);
+pub(crate) struct ResolvedShortcuts {
+    actions: Vec<ResolvedShortcut>,
+    commands: Vec<ResolvedCommand>,
+}
 
 impl ResolvedShortcuts {
     /// Returns the GUI action bound to `(keycode, mods)`, if any. Excludes
@@ -34,7 +50,7 @@ impl ResolvedShortcuts {
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<ShortcutAction> {
-        self.0
+        self.actions
             .iter()
             .find(|s| {
                 s.action != ShortcutAction::ReleaseWebviewFocus
@@ -47,11 +63,21 @@ impl ResolvedShortcuts {
     /// True when `(keycode, mods)` matches the configured release-webview-focus
     /// chord.
     pub(crate) fn is_release_webview_focus(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        self.0.iter().any(|s| {
+        self.actions.iter().any(|s| {
             s.action == ShortcutAction::ReleaseWebviewFocus
                 && s.keycode == keycode
                 && s.modifiers == mods
         })
+    }
+
+    /// Returns the tmux command bound to `(keycode, mods)` as a command
+    /// override, if any. Exact modifier equality, consistent with
+    /// `match_gui_action`.
+    pub(crate) fn match_command(&self, keycode: KeyCode, mods: Modifiers) -> Option<&str> {
+        self.commands
+            .iter()
+            .find(|c| c.keycode == keycode && c.modifiers == mods)
+            .map(|c| c.command.as_str())
     }
 
     /// Derives the crate's `TerminalInputBindings` from the resolved table:
@@ -60,7 +86,7 @@ impl ResolvedShortcuts {
     pub(crate) fn input_bindings(&self) -> TerminalInputBindings {
         let mut paste = None;
         let mut reserved = Vec::new();
-        for s in &self.0 {
+        for s in &self.actions {
             let chord = ReservedChord {
                 key_code: s.keycode,
                 ctrl: s.modifiers.ctrl,
@@ -103,6 +129,27 @@ fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut> {
     out
 }
 
+/// Resolves every override chord in `commands` to a `ResolvedCommand`, skipping
+/// (with a warning) any chord whose logical key has no physical `KeyCode`.
+fn resolve_from_commands(commands: &CommandOverrides) -> Vec<ResolvedCommand> {
+    let mut out = Vec::new();
+    for (chord, command) in commands.iter() {
+        match key_to_keycode(&chord.key) {
+            Some(keycode) => out.push(ResolvedCommand {
+                keycode,
+                modifiers: chord.modifiers,
+                command: command.to_string(),
+            }),
+            None => tracing::warn!(
+                chord = %chord,
+                command,
+                "command-override key has no physical KeyCode mapping; ignoring"
+            ),
+        }
+    }
+    out
+}
+
 /// `Startup` system: resolves the configured shortcut bindings into
 /// `ResolvedShortcuts`, replacing the empty default inserted at plugin build.
 ///
@@ -114,7 +161,10 @@ pub(crate) fn build_resolved_shortcuts(
     mut resolved: ResMut<ResolvedShortcuts>,
     configs: Res<OzmuxConfigsResource>,
 ) {
-    resolved.0 = resolve_from_bindings(&configs.shortcuts.bindings);
+    *resolved = ResolvedShortcuts {
+        actions: resolve_from_bindings(&configs.shortcuts.bindings),
+        commands: resolve_from_commands(&configs.shortcuts.commands),
+    };
 }
 
 /// `Startup` system: inserts `TerminalInputBindings` derived from the resolved
@@ -214,6 +264,14 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozmux_configs::shortcuts::{CommandOverrides as ConfigCommandOverrides, parse_key_chord};
+
+    fn from_bindings(b: &Bindings) -> ResolvedShortcuts {
+        ResolvedShortcuts {
+            actions: resolve_from_bindings(b),
+            commands: Vec::new(),
+        }
+    }
 
     fn mods(ctrl: bool, shift: bool, alt: bool, meta: bool) -> Modifiers {
         Modifiers {
@@ -249,13 +307,13 @@ mod tests {
 
     #[test]
     fn default_bindings_resolve_to_five() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
-        assert_eq!(r.0.len(), 5);
+        let r = from_bindings(&Bindings::default());
+        assert_eq!(r.actions.len(), 5);
     }
 
     #[test]
     fn match_gui_action_resolves_defaults() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = from_bindings(&Bindings::default());
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
             Some(ShortcutAction::Paste)
@@ -272,7 +330,7 @@ mod tests {
 
     #[test]
     fn match_gui_action_requires_exact_modifiers() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = from_bindings(&Bindings::default());
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true)),
             None
@@ -285,7 +343,7 @@ mod tests {
 
     #[test]
     fn match_gui_action_excludes_release_webview_focus() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = from_bindings(&Bindings::default());
         assert_eq!(
             r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
             None
@@ -294,7 +352,7 @@ mod tests {
 
     #[test]
     fn unmatched_chord_is_none() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = from_bindings(&Bindings::default());
         assert_eq!(
             r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true)),
             None
@@ -307,7 +365,7 @@ mod tests {
 
     #[test]
     fn is_release_webview_focus_matches_default_chord() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = from_bindings(&Bindings::default());
         assert!(r.is_release_webview_focus(KeyCode::Escape, mods(true, true, false, false)));
         assert!(!r.is_release_webview_focus(KeyCode::KeyV, mods(false, false, false, true)));
     }
@@ -336,7 +394,7 @@ mod tests {
 
     #[test]
     fn input_bindings_excludes_paste_from_reserved() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = from_bindings(&Bindings::default());
         let b = r.input_bindings();
         assert_eq!(b.paste.key_code, KeyCode::KeyV);
         assert!(b.paste.meta && !b.paste.ctrl && !b.paste.shift && !b.paste.alt);
@@ -350,6 +408,56 @@ mod tests {
                 .iter()
                 .any(|c| c.key_code == KeyCode::KeyV && c.meta),
             "the paste chord must not appear in reserved",
+        );
+    }
+
+    #[test]
+    fn resolve_from_commands_maps_chord_to_command() {
+        let commands: ConfigCommandOverrides = [(
+            parse_key_chord("Cmd+D").unwrap(),
+            "split-window -h".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let resolved = resolve_from_commands(&commands);
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].keycode, KeyCode::KeyD);
+        assert!(resolved[0].modifiers.meta);
+        assert_eq!(resolved[0].command, "split-window -h");
+    }
+
+    #[test]
+    fn resolve_from_commands_skips_unmappable_key() {
+        let commands: ConfigCommandOverrides =
+            [(parse_key_chord("Cmd+Plus").unwrap(), "x".to_string())]
+                .into_iter()
+                .collect();
+        assert!(resolve_from_commands(&commands).is_empty());
+    }
+
+    #[test]
+    fn match_command_requires_exact_modifiers() {
+        let commands: ConfigCommandOverrides = [(
+            parse_key_chord("Alt+I").unwrap(),
+            "split-window -h".to_string(),
+        )]
+        .into_iter()
+        .collect();
+        let r = ResolvedShortcuts {
+            actions: Vec::new(),
+            commands: resolve_from_commands(&commands),
+        };
+        assert_eq!(
+            r.match_command(KeyCode::KeyI, mods(false, false, true, false)),
+            Some("split-window -h")
+        );
+        assert_eq!(
+            r.match_command(KeyCode::KeyI, mods(true, false, true, false)),
+            None
+        );
+        assert_eq!(
+            r.match_command(KeyCode::KeyI, mods(false, false, false, false)),
+            None
         );
     }
 }
