@@ -23,14 +23,13 @@ pub struct TmuxClient {
 impl TmuxClient {
     /// Returns a client for a freshly adopted `tmux -CC` stream.
     ///
-    /// Pre-registers the single reply block the adopted stream emits on entry
-    /// (its DCS introducer is glued to the first `%begin`) so the in-world drive
-    /// correlates it instead of dropping it as unsolicited.
+    /// The adopted stream's first block — the launch (`new-session` /
+    /// `attach-session`) reply, whose DCS introducer is glued to the first
+    /// `%begin` — carries flags=0, so the protocol client skips it as an
+    /// unsolicited block; no pre-registration is needed.
     pub fn new_adopted() -> Self {
-        let mut protocol = ProtocolClient::new();
-        let _entry = protocol.register_external_pending();
         Self {
-            protocol,
+            protocol: ProtocolClient::new(),
             client_name: None,
             per_window_refresh: None,
         }

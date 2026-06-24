@@ -213,8 +213,13 @@ fn tmux_batch_pending(batch: Res<TmuxEventBatch>) -> bool {
 
 /// Inserts [`TmuxAttached`] and emits [`TmuxClientAttached`] on the attach edge:
 /// the first frame the connected gateway has a pending batch while it is not yet
-/// attached. Gated on a pending batch; the drain only ever produces protocol
-/// events, so a pending batch is exactly "a protocol event arrived".
+/// attached. Gated on a pending batch.
+///
+/// The adopted stream's launch reply (flags=0) is skipped by the protocol client
+/// and yields no event, so the attach edge is the first notification or
+/// correlated reply — on a real `tmux -CC` attach, the session/window state tmux
+/// streams immediately after the launch block. A launch-block-only frame (its
+/// trailing notifications not yet read) merely defers attach to the next frame.
 fn mark_attached_on_first_protocol(
     mut commands: Commands,
     mut attached: MessageWriter<TmuxClientAttached>,
@@ -549,7 +554,7 @@ mod tests {
         let gateway = app
             .world_mut()
             .spawn(AdoptedControlMode::from_captured(
-                b"\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n".to_vec(),
+                b"\x1bP1000p%begin 1 1 0\r\n%end 1 1 0\r\n%session-changed $0 0\r\n".to_vec(),
             ))
             .id();
         app.world_mut()
@@ -682,7 +687,9 @@ mod tests {
         app.init_resource::<TmuxEventBatch>()
             .add_message::<PaneOutput>();
         app.world_mut().spawn((
-            AdoptedControlMode::from_captured(b"\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n".to_vec()),
+            AdoptedControlMode::from_captured(
+                b"\x1bP1000p%begin 1 1 0\r\n%end 1 1 0\r\n%session-changed $0 0\r\n".to_vec(),
+            ),
             TmuxClient::new_adopted(),
         ));
         app.add_systems(Update, drain_tmux_transport);
@@ -864,23 +871,23 @@ mod tests {
     /// -> `MessageWriter<PaneOutput>` for `%output`) -> `apply_tmux_replies`
     /// (`trigger_notification` for `%window-add` / `%layout-change`) -> the
     /// projection observers -> `TmuxWindow` / `TmuxPane` entities in the
-    /// `TmuxProjection` index. The leading DCS introducer plus a `%begin`/`%end`
-    /// block correlate with the external pending reply that `adopt` pre-registers
-    /// (mirroring the `tmux -CC` entry block); the three notification lines that
-    /// follow are the projected transcript.
+    /// `TmuxProjection` index. The leading DCS introducer plus the `%begin`/`%end`
+    /// launch block (flags=0) are skipped as unsolicited (mirroring the `tmux -CC`
+    /// entry block); the three notification lines that follow are the projected
+    /// transcript.
     #[test]
     fn transcript_drives_ecs_projection_and_pane_output() {
         use tmux_control_parser::{PaneId, WindowId};
 
         // Canned transcript fed verbatim through the drain chain:
-        //   * DCS introducer + initial %begin/%end block — the adopted tmux -CC
-        //     entry block, correlated by adopt()'s pre-registered external reply.
+        //   * DCS introducer + initial %begin/%end launch block (flags=0) — the
+        //     adopted tmux -CC entry block, skipped as an unsolicited block.
         //   * %window-add @1, %layout-change @1 (single 80x24 pane %1) — project a
         //     window and its pane. "b25f" is a real tmux layout checksum; the
         //     visible_layout field repeats the layout string (>= tmux 3.2 format).
         //   * %output %1 hello — routes to a PaneOutput message.
         let transcript: Vec<u8> = concat!(
-            "\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n",
+            "\x1bP1000p%begin 1 1 0\r\n%end 1 1 0\r\n",
             "%window-add @1\r\n",
             "%layout-change @1 b25f,80x24,0,0,1 b25f,80x24,0,0,1\r\n",
             "%output %1 hello\r\n",
@@ -973,11 +980,12 @@ mod tests {
     fn second_adoption_after_reset_reattaches_and_reenumerates() {
         use crate::events::TmuxConnectionReset;
 
-        // The DCS introducer + a %begin/%end block: the adopted tmux -CC entry
-        // block, which correlates with adopt()'s pre-registered external reply and
-        // produces one Protocol event that marks the gateway TmuxAttached.
+        // The DCS introducer + a %begin/%end launch block (flags=0, skipped as
+        // unsolicited) followed by a %session-changed notification: the adopted
+        // tmux -CC entry stream, whose first protocol event marks the gateway
+        // TmuxAttached.
         fn entry_block() -> Vec<u8> {
-            b"\x1bP1000p%begin 1 1 1\r\n%end 1 1 1\r\n".to_vec()
+            b"\x1bP1000p%begin 1 1 0\r\n%end 1 1 0\r\n%session-changed $0 0\r\n".to_vec()
         }
 
         fn attached_count(app: &App) -> usize {

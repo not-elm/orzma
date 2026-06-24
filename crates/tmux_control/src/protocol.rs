@@ -4,7 +4,7 @@
 use crate::error::{TmuxError, TmuxResult};
 use std::collections::VecDeque;
 use tmux_control_parser::{BlockAssembler, ControlEvent, Frame};
-use tracing::warn;
+use tracing::{debug, warn};
 
 // NOTE: `tmux -CC` wraps its entire control stream in a DCS sequence —
 // `ESC P 1000 p` … `ESC \`. The introducer is glued to the first `%begin`, so
@@ -108,20 +108,8 @@ impl ProtocolClient {
         Ok(events)
     }
 
-    /// Pre-registers the single reply block that an *adopted* `tmux -CC` stream
-    /// emits on entry (its introducer is glued to the first `%begin`), so the
-    /// in-world drive correlates it instead of dropping it as unsolicited.
-    pub fn register_external_pending(&mut self) -> CommandId {
-        self.register_pending()
-    }
-
-    /// Pre-registers a pending command with no outgoing bytes.
-    ///
-    /// Backs [`register_external_pending`](Self::register_external_pending) for
-    /// the launch subcommand's (`new-session` / `attach-session`) reply block,
-    /// which arrives before any client `send`. tmux assigns it an arbitrary
-    /// command number, so correlation is by FIFO.
-    pub(crate) fn register_pending(&mut self) -> CommandId {
+    /// Assigns the next [`CommandId`] and records it as awaiting a reply.
+    fn register_pending(&mut self) -> CommandId {
         let id = CommandId(self.next_id);
         self.next_id += 1;
         self.pending.push_back(id);
@@ -159,33 +147,63 @@ impl ProtocolClient {
             }
         };
         match frame {
-            Some(Frame::Reply { number, ok, body }) => match self.pending.pop_front() {
-                Some(id) => Ok(Some(ClientEvent::CommandComplete {
-                    id,
-                    number,
-                    ok,
-                    output: body,
-                })),
-                // NOTE: a reply block with no pending command means tmux emitted a
-                // command-output block this control client did not originate.
-                // Observed when `select-pane` changes focus in a multi-pane
-                // session, likely because `focus-events on` causes tmux to run
-                // an additional internal command (focus-in/focus-out delivery)
-                // that generates its own `%begin … %end` block. Closing the
-                // transport over it would tear down the whole projection (blank
-                // screen); log at debug and skip so the connection stays alive.
-                None => {
-                    tracing::debug!(
-                        number,
-                        "skipping unsolicited tmux reply (no pending command); transport remains open"
-                    );
-                    Ok(None)
+            Some(Frame::Reply {
+                number,
+                flags,
+                ok,
+                body,
+            }) => {
+                // NOTE: only a control-client command reply (flags bit 0 set) may
+                // consume a pending slot. tmux also emits unsolicited blocks this
+                // client never sent — the adopted-stream launch reply, and a
+                // hook's `run-shell` output (e.g. `after-select-pane` in a
+                // multi-pane session). Those carry flags=0; popping `pending` for
+                // one would assign the next sent command's id to it and desync
+                // every later reply (which silently freezes the copy-mode refresh
+                // loop). Skipping without popping keeps FIFO correlation aligned.
+                if !is_client_command_reply(flags) {
+                    return Ok(None);
                 }
-            },
+                match self.pending.pop_front() {
+                    Some(id) => Ok(Some(ClientEvent::CommandComplete {
+                        id,
+                        number,
+                        ok,
+                        output: body,
+                    })),
+                    // NOTE: a flags=1 reply with no pending command means the FIFO
+                    // is already desynced (more client replies than sent commands).
+                    // Closing the transport over it would blank the whole
+                    // projection; log at debug and skip so the connection stays
+                    // alive.
+                    None => {
+                        debug!(
+                            number,
+                            "skipping client-command reply with no pending command; transport remains open"
+                        );
+                        Ok(None)
+                    }
+                }
+            }
             Some(Frame::Notification(event)) => Ok(Some(ClientEvent::Notification(event))),
             None => Ok(None),
         }
     }
+}
+
+/// Returns whether a `%begin` flags bitmask marks a reply to a command the
+/// control client sent.
+///
+/// tmux sets bit 0 only for commands read from the control client's own input
+/// (its `CMDQ_STATE_CONTROL` flag, set on the control-client read path), and
+/// clears it for the adopted-stream launch reply and for unsolicited internal
+/// output (e.g. a hook's `run-shell`, as `after-select-pane` triggers). That bit
+/// is exactly the FIFO precondition: only a client-issued command's reply may
+/// consume a pending slot. The man page labels the field "currently not used",
+/// but it is populated — the man page's own example shows `%begin … 1` for a
+/// command reply; confirmed in `-CC` mode on tmux 3.6b.
+fn is_client_command_reply(flags: u32) -> bool {
+    flags & 1 != 0
 }
 
 #[cfg(test)]
@@ -279,7 +297,7 @@ mod tests {
 
     #[test]
     fn feed_arbitrary_byte_boundaries_match_whole() {
-        let whole = b"%begin 1 1 0\nbody-line\n%end 1 1 0\n";
+        let whole = b"%begin 1 1 1\nbody-line\n%end 1 1 1\n";
         let mut a = ProtocolClient::new();
         a.register_pending();
         let whole_events = a.feed(whole).unwrap();
@@ -348,7 +366,7 @@ mod tests {
         let id = c.send("capture").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 1 0\nline1\n\nline3\n%end 1 1 0\n")
+            .feed(b"%begin 1 1 1\nline1\n\nline3\n%end 1 1 1\n")
             .unwrap();
         assert_eq!(
             events,
@@ -364,25 +382,18 @@ mod tests {
     #[test]
     fn feed_strips_dcs_wrapper() {
         // Mirrors a real `tmux -CC` startup: the DCS introducer is glued to the
-        // first %begin, and the terminator arrives as a bare line. CRLF endings.
+        // first %begin (the launch reply, flags=0), the terminator arrives as a
+        // bare line, CRLF endings. The launch block is unsolicited (flags=0) and
+        // skipped; only the notification passes through.
         let mut c = ProtocolClient::new();
-        let id = c.register_pending();
         let events = c
             .feed(b"\x1bP1000p%begin 1 318 0\r\n%end 1 318 0\r\n%window-add @0\r\n\x1b\\\r\n")
             .unwrap();
         assert_eq!(
             events,
-            vec![
-                ClientEvent::CommandComplete {
-                    id,
-                    number: 318,
-                    ok: true,
-                    output: vec![]
-                },
-                ClientEvent::Notification(ControlEvent::WindowAdd {
-                    window: WindowId(0)
-                }),
-            ]
+            vec![ClientEvent::Notification(ControlEvent::WindowAdd {
+                window: WindowId(0)
+            })]
         );
     }
 
@@ -391,7 +402,7 @@ mod tests {
         let mut c = ProtocolClient::new();
         let id = c.send("list-panes").unwrap();
         let _ = c.take_outgoing();
-        let events = c.feed(b"%begin 100 5 0\n0: ksh\n%end 100 5 0\n").unwrap();
+        let events = c.feed(b"%begin 100 5 1\n0: ksh\n%end 100 5 1\n").unwrap();
         assert_eq!(
             events,
             vec![ClientEvent::CommandComplete {
@@ -405,12 +416,42 @@ mod tests {
     }
 
     #[test]
+    fn unsolicited_hook_block_does_not_steal_pending_slot() {
+        // A tmux hook's `run-shell` (e.g. `after-select-pane`) emits an
+        // unsolicited %begin/%end block with flags=0; control-client command
+        // replies carry flags=1. The unsolicited block must NOT consume a pending
+        // command's slot, or every later reply mis-correlates (the copy-mode
+        // refresh loop dies when this happens in a multi-pane session).
+        let mut c = ProtocolClient::new();
+        let id = c.send("display-message -p x").unwrap();
+        let _ = c.take_outgoing();
+        let events = c
+            .feed(b"%begin 1 900 0\nHOOK\n%end 1 900 0\n%begin 1 901 1\nx\n%end 1 901 1\n")
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::CommandComplete {
+                id,
+                number: 901,
+                ok: true,
+                output: vec!["x".to_string()],
+            }],
+            "the flags=1 reply correlates to the sent command; the flags=0 hook block is skipped"
+        );
+        assert_eq!(
+            c.pending_len(),
+            0,
+            "the command's pending slot is consumed exactly once"
+        );
+    }
+
+    #[test]
     fn error_reply_is_not_ok() {
         let mut c = ProtocolClient::new();
         let id = c.send("bogus").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 9 0\nunknown command\n%error 1 9 0\n")
+            .feed(b"%begin 1 9 1\nunknown command\n%error 1 9 1\n")
             .unwrap();
         assert_eq!(
             events,
@@ -428,7 +469,7 @@ mod tests {
         let mut c = ProtocolClient::new();
         let id = c.send("new-window").unwrap();
         let _ = c.take_outgoing();
-        let events = c.feed(b"%begin 1 2 0\n%end 1 2 0\n").unwrap();
+        let events = c.feed(b"%begin 1 2 1\n%end 1 2 1\n").unwrap();
         assert_eq!(
             events,
             vec![ClientEvent::CommandComplete {
@@ -447,7 +488,7 @@ mod tests {
         let b = c.send("b").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 1 0\nA\n%end 1 1 0\n%begin 1 2 0\nB\n%end 1 2 0\n")
+            .feed(b"%begin 1 1 1\nA\n%end 1 1 1\n%begin 1 2 1\nB\n%end 1 2 1\n")
             .unwrap();
         assert_eq!(
             events,
@@ -475,7 +516,7 @@ mod tests {
         let b = c.send("b").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 1 0\nA\n%end 1 1 0\n%window-add @9\n%begin 1 2 0\nB\n%end 1 2 0\n")
+            .feed(b"%begin 1 1 1\nA\n%end 1 1 1\n%window-add @9\n%begin 1 2 1\nB\n%end 1 2 1\n")
             .unwrap();
         assert_eq!(
             events,
@@ -500,11 +541,21 @@ mod tests {
     }
 
     #[test]
-    fn unsolicited_reply_is_skipped_not_fatal() {
+    fn unsolicited_flags0_reply_is_skipped_not_fatal() {
         let mut c = ProtocolClient::new();
-        // A reply block with no pending command must be skipped, not close the
-        // transport (tmux can emit blocks this control client did not originate).
+        // A flags=0 block (a hook's run-shell, or the adopted launch reply) is
+        // unsolicited and must be skipped without consuming a pending slot, not
+        // close the transport — tmux emits blocks this client did not originate.
         let events = c.feed(b"%begin 1 4 0\n%end 1 4 0\n").unwrap();
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn client_reply_with_no_pending_is_skipped_not_fatal() {
+        let mut c = ProtocolClient::new();
+        // A flags=1 reply with nothing pending means the FIFO is already desynced;
+        // skip it as a safety net rather than closing the transport.
+        let events = c.feed(b"%begin 1 5 1\n%end 1 5 1\n").unwrap();
         assert!(events.is_empty());
     }
 
@@ -513,7 +564,7 @@ mod tests {
         let mut c = ProtocolClient::new();
         let id = c.send("x").unwrap();
         let _ = c.take_outgoing();
-        let events = c.feed(b"%begin 1 42 0\n%end 1 42 0\n").unwrap();
+        let events = c.feed(b"%begin 1 42 1\n%end 1 42 1\n").unwrap();
         assert_eq!(
             events,
             vec![ClientEvent::CommandComplete {
@@ -614,7 +665,7 @@ mod tests {
         let mut c = ProtocolClient::new();
         let id = c.send("x").unwrap();
         let _ = c.take_outgoing();
-        let events = c.feed(b"%begin 1 1 0\nhello world\n%end 1 1 0\n").unwrap();
+        let events = c.feed(b"%begin 1 1 1\nhello world\n%end 1 1 1\n").unwrap();
         assert_eq!(
             events,
             vec![ClientEvent::CommandComplete {
@@ -627,17 +678,29 @@ mod tests {
     }
 
     #[test]
-    fn external_pending_correlates_initial_reply_block() {
+    fn adopted_launch_block_skipped_then_first_command_correlates() {
+        // A freshly adopted tmux -CC stream emits its launch reply (flags=0, DCS
+        // introducer glued to the first %begin) before any client send. It must
+        // be skipped, not consume the first real command's pending slot.
         let mut c = ProtocolClient::new();
-        let id = c.register_external_pending();
-        // Introducer glued to the first %begin (as tmux -CC emits on entry).
-        let events = c
-            .feed(b"\x1bP1000p%begin 1 1 1\r\n0:work\r\n%end 1 1 1\r\n")
+        let launch = c
+            .feed(b"\x1bP1000p%begin 1 1 0\r\n0:work\r\n%end 1 1 0\r\n")
             .expect("feed ok");
-        assert!(matches!(
-            events.as_slice(),
-            [ClientEvent::CommandComplete { id: got, ok: true, .. }] if *got == id
-        ));
+        assert!(launch.is_empty(), "the flags=0 launch reply is skipped");
+
+        let id = c.send("list-windows").unwrap();
+        let _ = c.take_outgoing();
+        let events = c.feed(b"%begin 1 2 1\n0: win\n%end 1 2 1\n").unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::CommandComplete {
+                id,
+                number: 2,
+                ok: true,
+                output: vec!["0: win".to_string()],
+            }],
+            "the first client command correlates after the skipped launch block"
+        );
     }
 
     #[test]
@@ -648,7 +711,7 @@ mod tests {
         let mut c = ProtocolClient::new();
         c.send("capture").unwrap();
         let _ = c.take_outgoing();
-        let events = c.feed(b"%begin 1 1 0\nlast-line%end 1 1 0\n").unwrap();
+        let events = c.feed(b"%begin 1 1 1\nlast-line%end 1 1 1\n").unwrap();
         assert!(events.is_empty());
         assert_eq!(c.pending_len(), 1);
     }
