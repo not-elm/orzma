@@ -1,7 +1,7 @@
 //! The `%output` projection seam: the `PaneOutput` message and the pure
 //! helper that extracts pane output from a drained transport batch.
 
-use bevy::prelude::Message;
+use bevy::prelude::*;
 use tmux_control::{ClientEvent, ControlEvent, TransportEvent};
 use tmux_control_parser::PaneId;
 
@@ -14,6 +14,15 @@ pub struct PaneOutput {
     pub pane: PaneId,
     /// Raw VT bytes from `%output`.
     pub data: Vec<u8>,
+}
+
+/// Request from the renderer layer (the binary) to re-`capture-pane`-seed a
+/// pane whose grid was left structurally unpainted after a layout change. The
+/// crate handles it via `request_pane_capture`, reusing the existing reply
+/// correlation and in-flight suppression.
+#[derive(Message)]
+pub struct RequestPaneReseed {
+    pub pane: PaneId,
 }
 
 /// Extracts a [`PaneOutput`] for every `%output` or `%extended-output`

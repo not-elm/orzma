@@ -27,6 +27,7 @@ use input::InputPlugin;
 use mode_ui::TmuxModeUiPlugin;
 use mouse::MousePlugin;
 use ozmux_tmux::{TmuxClient, TmuxConnectionClosed, TmuxSessionPlugin};
+use paint_rescue::PaintRescuePlugin;
 use pane_focus::PaneFocusPlugin;
 use render::RenderPlugin;
 use webview_tokens::WebviewTokensPlugin;
@@ -47,6 +48,7 @@ impl Plugin for OzmuxTmuxPlugin {
                 TmuxSessionPlugin,
                 AdoptPlugin,
                 RenderPlugin,
+                PaintRescuePlugin,
                 InputPlugin,
                 MousePlugin,
                 ForwardPlugin,

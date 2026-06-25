@@ -17,7 +17,7 @@ use crate::event_pump::{
 use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, ModeKeys, parse_list_keys, parse_prefix};
 use crate::observers::{TmuxProjection, register_observers};
-use crate::output::{PaneOutput, collect_pane_outputs};
+use crate::output::{PaneOutput, RequestPaneReseed, collect_pane_outputs};
 use bevy::prelude::*;
 use ozma_tty_engine::{AdoptedControlMode, TerminalRawWrite};
 use tmux_control::{ClientEvent, TransportEvent};
@@ -48,6 +48,7 @@ impl Plugin for TmuxSessionPlugin {
             .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
             .add_message::<PaneOutput>()
+            .add_message::<RequestPaneReseed>()
             .add_message::<CopyModeReply>()
             .add_message::<TmuxClientAttached>()
             .add_systems(
@@ -66,7 +67,11 @@ impl Plugin for TmuxSessionPlugin {
             )
             .add_systems(
                 Update,
-                (request_pane_captures, recapture_settled_panes)
+                (
+                    request_pane_captures,
+                    recapture_settled_panes,
+                    handle_pane_reseed_requests.run_if(on_message::<RequestPaneReseed>),
+                )
                     .after(TmuxProjectionSet)
                     .run_if(any_with_component::<TmuxClient>),
             );
@@ -204,6 +209,22 @@ fn recapture_settled_panes(
             state.done = true;
             request_pane_capture(client, enumeration, pane.id);
         }
+    }
+}
+
+/// Re-seeds each requested pane via `request_pane_capture`, skipping panes that
+/// already have a capture/cursor pair in flight (so a repeated request while the
+/// reply is pending does not duplicate the command).
+fn handle_pane_reseed_requests(
+    mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
+    mut requests: MessageReader<RequestPaneReseed>,
+) {
+    let (client, enumeration) = &mut *client;
+    for req in requests.read() {
+        if enumeration.panes_with_cursor_pending.contains(&req.pane) {
+            continue;
+        }
+        request_pane_capture(client, enumeration, req.pane);
     }
 }
 
