@@ -7,6 +7,10 @@
 /// `cells_len != rows` clause catches a grid whose dims were written but whose
 /// rows were never repopulated (e.g. a lost resize snapshot). A genuinely blank
 /// captured pane has `cells_len == rows`, so it does not fire.
+// NOTE: the only caller (the rescue system) lands in the next task; this
+// allowance is removed then. #[expect] is unusable here because the fn is
+// live in the test target but dead in the lib build.
+#[allow(dead_code)]
 fn grid_needs_full_seed(
     grid_cols: u16,
     grid_rows: u16,
