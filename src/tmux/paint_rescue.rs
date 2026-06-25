@@ -2,6 +2,7 @@
 //! layout change: detects the unpainted state and asks `ozmux_tmux` to
 //! re-`capture-pane` until the grid paints (spec Component 2).
 
+use super::render::TmuxLayoutSet;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
@@ -39,7 +40,7 @@ impl Plugin for PaintRescuePlugin {
                 Update,
                 rescue_unpainted_panes
                     .after(TmuxProjectionSet)
-                    .before(super::render::TmuxLayoutSet)
+                    .before(TmuxLayoutSet)
                     .in_set(super::TmuxActiveSet),
             );
     }
