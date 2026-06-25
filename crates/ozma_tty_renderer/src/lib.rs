@@ -15,6 +15,7 @@ pub use crate::glyph::font::{
     CellMetrics, FontFace, FontLoadError, TerminalCellMetricsResource, TerminalFontInitSet,
     TerminalFontPlugin, TerminalFontSize, TerminalFonts,
 };
+pub use material::TerminalPaddingFallback;
 
 pub mod prelude {
     pub use crate::TerminalRendererPlugin;

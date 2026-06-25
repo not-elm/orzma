@@ -11,6 +11,7 @@ use bevy::window::PrimaryWindow;
 use ozma_terminal::{OzmaTerminal, cells_for};
 use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::TerminalPaddingFallback;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozma_webview::OscWebviewGate;
 use ozmux_tmux::{
@@ -38,6 +39,7 @@ impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>()
             .insert_resource(ClearColor(theme::PANE_GAP))
+            .insert_resource(TerminalPaddingFallback(theme_background_bytes()))
             .add_systems(
                 Update,
                 (
@@ -617,6 +619,15 @@ fn sync_client_size(
         }
         Err(e) => tracing::warn!(?e, cols, rows, "window refresh-client send failed"),
     }
+}
+
+fn theme_background_bytes() -> [u8; 3] {
+    let s = theme::BACKGROUND.to_srgba();
+    [
+        (s.red * 255.0).round() as u8,
+        (s.green * 255.0).round() as u8,
+        (s.blue * 255.0).round() as u8,
+    ]
 }
 
 fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<TmuxWindow>>) {
