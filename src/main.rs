@@ -151,8 +151,9 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
 
 /// The UTF-8 `LC_CTYPE` ozmux installs when the inherited locale is not UTF-8.
 /// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
-/// writes it on.
-const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
+/// writes it on. Also the fallback advertised to tmux panes
+/// (`crate::tmux::locale`).
+pub(crate) const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment
 /// selects none, so tmux treats ozmux's control client as UTF-8 capable.
@@ -217,7 +218,7 @@ fn utf8_locale_fallback(
 
 /// Returns whether a locale string selects the UTF-8 codeset (`…UTF-8`,
 /// `…UTF8`, or the bare macOS `UTF-8`), case-insensitively.
-fn is_utf8_locale(value: &str) -> bool {
+pub(crate) fn is_utf8_locale(value: &str) -> bool {
     let upper = value.to_ascii_uppercase();
     upper.contains("UTF-8") || upper.contains("UTF8")
 }
