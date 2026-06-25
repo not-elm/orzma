@@ -22,6 +22,7 @@ pub struct PaneOutput {
 /// correlation and in-flight suppression.
 #[derive(Message)]
 pub struct RequestPaneReseed {
+    /// tmux pane (`%N`) to re-seed.
     pub pane: PaneId,
 }
 

@@ -107,9 +107,9 @@ mod tests {
     #[test]
     fn debounce_emits_only_after_threshold_consecutive_true() {
         let mut c = 0u8;
-        assert!(!should_emit_reseed(&mut c, true, 3)); // 1
-        assert!(!should_emit_reseed(&mut c, true, 3)); // 2
-        assert!(should_emit_reseed(&mut c, true, 3)); // 3 -> emit
+        assert!(!should_emit_reseed(&mut c, true, 3));
+        assert!(!should_emit_reseed(&mut c, true, 3));
+        assert!(should_emit_reseed(&mut c, true, 3));
     }
 
     #[test]
@@ -117,9 +117,9 @@ mod tests {
         let mut c = 0u8;
         should_emit_reseed(&mut c, true, 3);
         should_emit_reseed(&mut c, true, 3);
-        assert!(!should_emit_reseed(&mut c, false, 3)); // reset
+        assert!(!should_emit_reseed(&mut c, false, 3));
         assert_eq!(c, 0);
-        assert!(!should_emit_reseed(&mut c, true, 3)); // counting restarts at 1
+        assert!(!should_emit_reseed(&mut c, true, 3));
     }
 
     #[test]
@@ -128,7 +128,7 @@ mod tests {
         for _ in 0..2 {
             should_emit_reseed(&mut c, true, 3);
         }
-        assert!(should_emit_reseed(&mut c, true, 3)); // emits at threshold
-        assert!(!should_emit_reseed(&mut c, true, 3)); // held: no re-emit until reset
+        assert!(should_emit_reseed(&mut c, true, 3));
+        assert!(!should_emit_reseed(&mut c, true, 3));
     }
 }
