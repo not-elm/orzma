@@ -629,7 +629,7 @@ mod tests {
     }
 
     #[test]
-    fn decide_capture_reissues_after_lost_capture_cleared() {
+    fn decide_capture_issues_when_scroll_differs_and_not_in_flight() {
         assert_eq!(decide_capture(Some(3), false, 5), CaptureDecision::Issue);
     }
 
