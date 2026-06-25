@@ -8,6 +8,7 @@ mod gate;
 mod input;
 mod mode_ui;
 mod mouse;
+mod paint_rescue;
 mod pane_focus;
 pub(crate) mod pane_hit;
 mod render;
