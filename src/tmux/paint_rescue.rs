@@ -9,26 +9,39 @@ use ozma_tty_renderer::schema::TerminalGrid;
 use ozmux_tmux::{PaneId, RequestPaneReseed, TmuxPane, TmuxProjectionSet};
 use std::collections::HashMap;
 
-/// Frames the unpainted state must persist before a reseed is requested. Filters
-/// the 1-frame resize transient (dims written before the deferred snapshot
-/// flush) while still healing a genuinely lost seed quickly.
+/// Frames the unpainted state must persist before the FIRST reseed request
+/// (filters the ≤1-frame resize transient).
 const RESEED_DEBOUNCE_FRAMES: u8 = 3;
+/// Frames to wait for a reseed's capture to land before re-requesting. This is
+/// the dedicated in-flight age (spec §3.2) so a lost reply does not wedge a pane.
+const RESEED_INFLIGHT_TIMEOUT: u16 = 30;
 
-/// Per-pane consecutive-frames-unpainted counters for the reseed debounce.
+/// Per-pane reseed state: a debounce streak before the first request, then an
+/// in-flight age that re-requests on timeout until the grid paints.
+#[derive(Default)]
+struct ReseedTracker {
+    unpainted_streak: u8,
+    inflight_age: Option<u16>,
+}
+
+/// Per-pane reseed trackers, keyed by `PaneId`.
 #[derive(Resource, Default)]
-struct PaneSeedDebounce(HashMap<PaneId, u8>);
+struct PaneSeedTrackers(HashMap<PaneId, ReseedTracker>);
 
 /// Wires the structural paint-rescue system after the tmux projection chain.
 pub(crate) struct PaintRescuePlugin;
 
 impl Plugin for PaintRescuePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PaneSeedDebounce>().add_systems(
-            Update,
-            rescue_unpainted_panes
-                .after(TmuxProjectionSet)
-                .in_set(super::TmuxActiveSet),
-        );
+        app.init_resource::<PaneSeedTrackers>()
+            .add_observer(prune_tracker_on_pane_removed)
+            .add_systems(
+                Update,
+                rescue_unpainted_panes
+                    .after(TmuxProjectionSet)
+                    .before(super::render::TmuxLayoutSet)
+                    .in_set(super::TmuxActiveSet),
+            );
     }
 }
 
@@ -47,36 +60,65 @@ fn grid_needs_full_seed(
     (grid_cols, grid_rows) != (handle_cols, handle_rows) || cells_len != grid_rows as usize
 }
 
-/// Advances a per-pane debounce counter and returns whether to emit a reseed
-/// request this frame. Emits exactly once when `needs_seed` has held for
-/// `threshold` consecutive frames; a `false` resets the counter; once emitted it
-/// will not re-emit until the counter resets (the saturated value stays above
-/// `threshold`, and only the exact `== threshold` transition emits).
-fn should_emit_reseed(counter: &mut u8, needs_seed: bool, threshold: u8) -> bool {
+/// Advances a pane's reseed tracker one frame and returns whether to emit a
+/// reseed request now. A painted grid (`!needs_seed`) resets the tracker.
+/// Otherwise it debounces `RESEED_DEBOUNCE_FRAMES` consecutive unpainted frames
+/// before the first request, then suppresses while a request is in flight,
+/// re-requesting every `RESEED_INFLIGHT_TIMEOUT` frames until the grid paints.
+fn reseed_decision(tracker: &mut ReseedTracker, needs_seed: bool) -> bool {
     if !needs_seed {
-        *counter = 0;
+        *tracker = ReseedTracker::default();
         return false;
     }
-    *counter = counter.saturating_add(1);
-    *counter == threshold
+    match &mut tracker.inflight_age {
+        Some(age) => {
+            *age = age.saturating_add(1);
+            if *age >= RESEED_INFLIGHT_TIMEOUT {
+                *age = 0;
+                true
+            } else {
+                false
+            }
+        }
+        None => {
+            tracker.unpainted_streak = tracker.unpainted_streak.saturating_add(1);
+            if tracker.unpainted_streak >= RESEED_DEBOUNCE_FRAMES {
+                tracker.inflight_age = Some(0);
+                true
+            } else {
+                false
+            }
+        }
+    }
 }
 
 /// Requests a tmux re-seed for each non-copy-mode pane whose grid is
-/// structurally unpainted (see [`grid_needs_full_seed`]) once the state has held
-/// for [`RESEED_DEBOUNCE_FRAMES`]. Copy-mode panes are skipped — they paint via
-/// the separate `CopyRenderHandle` (Component 3).
+/// structurally unpainted (see [`grid_needs_full_seed`]) once the state has
+/// held for [`RESEED_DEBOUNCE_FRAMES`], then re-requests every
+/// [`RESEED_INFLIGHT_TIMEOUT`] frames until the grid paints. Copy-mode panes
+/// are skipped — they paint via the separate `CopyRenderHandle` (Component 3).
 fn rescue_unpainted_panes(
-    mut debounce: ResMut<PaneSeedDebounce>,
+    mut trackers: ResMut<PaneSeedTrackers>,
     mut reseed: MessageWriter<RequestPaneReseed>,
     panes: Query<(&TmuxPane, &TerminalHandle, &TerminalGrid), Without<CopyModeState>>,
 ) {
     for (pane, handle, grid) in panes.iter() {
         let (h_cols, h_rows, _) = handle.read_geometry();
         let needs = grid_needs_full_seed(grid.cols, grid.rows, grid.cells.len(), h_cols, h_rows);
-        let counter = debounce.0.entry(pane.id).or_default();
-        if should_emit_reseed(counter, needs, RESEED_DEBOUNCE_FRAMES) {
+        let tracker = trackers.0.entry(pane.id).or_default();
+        if reseed_decision(tracker, needs) {
             reseed.write(RequestPaneReseed { pane: pane.id });
         }
+    }
+}
+
+fn prune_tracker_on_pane_removed(
+    ev: On<Remove, TmuxPane>,
+    mut trackers: ResMut<PaneSeedTrackers>,
+    panes: Query<&TmuxPane>,
+) {
+    if let Ok(pane) = panes.get(ev.entity) {
+        trackers.0.remove(&pane.id);
     }
 }
 
@@ -105,30 +147,41 @@ mod tests {
     }
 
     #[test]
-    fn debounce_emits_only_after_threshold_consecutive_true() {
-        let mut c = 0u8;
-        assert!(!should_emit_reseed(&mut c, true, 3));
-        assert!(!should_emit_reseed(&mut c, true, 3));
-        assert!(should_emit_reseed(&mut c, true, 3));
+    fn reseed_emits_after_debounce_frames() {
+        let mut t = ReseedTracker::default();
+        assert!(!reseed_decision(&mut t, true));
+        assert!(!reseed_decision(&mut t, true));
+        assert!(reseed_decision(&mut t, true));
     }
 
     #[test]
-    fn debounce_resets_on_false() {
-        let mut c = 0u8;
-        should_emit_reseed(&mut c, true, 3);
-        should_emit_reseed(&mut c, true, 3);
-        assert!(!should_emit_reseed(&mut c, false, 3));
-        assert_eq!(c, 0);
-        assert!(!should_emit_reseed(&mut c, true, 3));
-    }
-
-    #[test]
-    fn debounce_does_not_re_emit_every_frame_while_held() {
-        let mut c = 0u8;
-        for _ in 0..2 {
-            should_emit_reseed(&mut c, true, 3);
+    fn reseed_suppresses_while_in_flight_then_retries_on_timeout() {
+        let mut t = ReseedTracker::default();
+        for _ in 0..RESEED_DEBOUNCE_FRAMES {
+            reseed_decision(&mut t, true);
         }
-        assert!(should_emit_reseed(&mut c, true, 3));
-        assert!(!should_emit_reseed(&mut c, true, 3));
+        for _ in 0..(RESEED_INFLIGHT_TIMEOUT - 1) {
+            assert!(!reseed_decision(&mut t, true));
+        }
+        assert!(reseed_decision(&mut t, true));
+    }
+
+    #[test]
+    fn reseed_resets_when_painted() {
+        let mut t = ReseedTracker::default();
+        for _ in 0..RESEED_DEBOUNCE_FRAMES {
+            reseed_decision(&mut t, true);
+        }
+        assert!(!reseed_decision(&mut t, false));
+        assert!(t.inflight_age.is_none());
+        assert_eq!(t.unpainted_streak, 0);
+    }
+
+    #[test]
+    fn reseed_ignores_one_frame_transient() {
+        let mut t = ReseedTracker::default();
+        assert!(!reseed_decision(&mut t, true));
+        assert!(!reseed_decision(&mut t, false));
+        assert!(!reseed_decision(&mut t, true));
     }
 }

@@ -67,6 +67,12 @@ impl PendingPaneOutput {
     }
 }
 
+/// Ordering handle for `layout_tmux_panes` so the paint-rescue system can run
+/// before this frame's grid-dims write (avoids the ≤1-frame resize transient
+/// where `cells.len() != rows`).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct TmuxLayoutSet;
+
 #[derive(Resource, Default)]
 struct LastClientSize {
     window: Option<WindowId>,
@@ -90,9 +96,10 @@ impl Plugin for RenderPlugin {
                 (
                     attach_tmux_window_container,
                     attach_tmux_pane_terminal,
-                    route_tmux_output.run_if(on_message::<PaneOutput>),
+                    route_tmux_output
+                        .run_if(on_message::<PaneOutput>.or(pending_pane_output_waiting)),
                     sync_active_window,
-                    layout_tmux_panes,
+                    layout_tmux_panes.in_set(TmuxLayoutSet),
                 )
                     .chain()
                     .after(TmuxProjectionSet)
@@ -191,6 +198,10 @@ fn attach_tmux_pane_terminal(
             },
         ));
     }
+}
+
+fn pending_pane_output_waiting(pending: Res<PendingPaneOutput>) -> bool {
+    !pending.buf.is_empty()
 }
 
 /// Routes tmux `%output` into each pane's handle. Groups a frame's
