@@ -1,6 +1,6 @@
 use crate::bundled::{
     BOLD, BOLD_ITALIC, FALLBACK_BOLD, FALLBACK_BOLD_ITALIC, FALLBACK_ITALIC, FALLBACK_REGULAR,
-    ITALIC, REGULAR,
+    ITALIC, REGULAR, SYMBOL_REGULAR,
 };
 use ab_glyph::{Font, FontArc, ScaleFont};
 use bevy::prelude::*;
@@ -165,6 +165,11 @@ pub struct TerminalFonts {
     pub fallback_italic: FontArc,
     /// Fallback bold weight, italic style.
     pub fallback_bold_italic: FontArc,
+    /// Symbol/dingbat fallback (e.g. checkbox marks ☐ ☑ ☒ ✔), tried after
+    /// both the primary and CJK fallback miss. Face-independent: symbols have
+    /// no weight/style variants, so one face serves every `FontFace`. Always
+    /// the bundled Noto Sans Symbols 2 — never user-overridable.
+    pub symbol: FontArc,
 }
 
 /// Computes the worst-case rightward overflow (in physical px) over ASCII
@@ -208,6 +213,13 @@ fn em_scale_of(font: &FontArc) -> f32 {
     (asc - desc) as f32 / upem
 }
 
+/// Loads the bundled symbol/dingbat fallback face (Noto Sans Symbols 2). It is
+/// never user-overridable, so both [`TerminalFonts::from_bytes`] and
+/// [`TerminalFonts::default`] build it from the same embedded bytes.
+fn bundled_symbol_face() -> FontArc {
+    FontArc::try_from_slice(SYMBOL_REGULAR).expect("bundled NotoSansSymbols2-Regular load")
+}
+
 impl TerminalFonts {
     /// Constructs a `TerminalFonts` from eight owned TTF byte buffers, one
     /// per face (four primary + four fallback). `Vec<u8>` is required by
@@ -216,6 +228,10 @@ impl TerminalFonts {
     /// build `Vec<u8>`, and call this. On per-face parse failure, returns
     /// `FontLoadError::ParseFailed` naming the offending face — callers may
     /// then substitute bundled bytes for that face and retry.
+    ///
+    /// The symbol fallback face is loaded internally from the bundled
+    /// Noto Sans Symbols 2 — it is not user-overridable, so callers do not
+    /// supply it.
     pub fn from_bytes(
         regular: Vec<u8>,
         bold: Vec<u8>,
@@ -269,6 +285,7 @@ impl TerminalFonts {
                     source,
                 }
             })?;
+        let symbol = bundled_symbol_face();
         Ok(Self {
             regular,
             bold,
@@ -278,6 +295,7 @@ impl TerminalFonts {
             fallback_bold,
             fallback_italic,
             fallback_bold_italic,
+            symbol,
         })
     }
 
@@ -385,6 +403,24 @@ impl TerminalFonts {
     pub(crate) fn fallback_px_scale_value(&self, phys_size_px: u16) -> f32 {
         f32::from(phys_size_px) * em_scale_of(&self.fallback_regular)
     }
+
+    /// Returns the `PxScale` value for the symbol fallback face so its
+    /// em-square renders at the same physical pixel size as the primary's.
+    /// Mirrors [`Self::px_scale_value`] but reads `self.symbol`'s metrics.
+    pub(crate) fn symbol_px_scale_value(&self, phys_size_px: u16) -> f32 {
+        f32::from(phys_size_px) * em_scale_of(&self.symbol)
+    }
+
+    /// Returns the primary regular face's `'0'` advance in physical pixels —
+    /// the monospace cell pitch the grid lays out at, matching the
+    /// `advance_phys` field of [`Self::cell_metrics_px`]. Used by the atlas to
+    /// shrink over-wide symbol-fallback glyphs to their cell.
+    pub(crate) fn cell_advance_px(&self, phys_size_px: u16) -> f32 {
+        let scaled = self
+            .regular
+            .as_scaled(ab_glyph::PxScale::from(self.px_scale_value(phys_size_px)));
+        scaled.h_advance(scaled.glyph_id('0'))
+    }
 }
 
 impl Default for TerminalFonts {
@@ -408,6 +444,7 @@ impl Default for TerminalFonts {
                 .expect("UDEVGothic35-Italic load"),
             fallback_bold_italic: FontArc::try_from_slice(FALLBACK_BOLD_ITALIC)
                 .expect("UDEVGothic35-BoldItalic load"),
+            symbol: bundled_symbol_face(),
         }
     }
 }

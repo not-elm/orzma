@@ -38,3 +38,12 @@ pub const FALLBACK_ITALIC: &[u8] =
 /// Bold-italic UDEVGothic35 bytes (CJK fallback).
 pub const FALLBACK_BOLD_ITALIC: &[u8] =
     include_bytes!("../assets/fonts/udevgothic/UDEVGothic35-BoldItalic.ttf");
+
+/// Noto Sans Symbols 2 bytes (symbol/dingbat fallback).
+///
+/// Covers Miscellaneous Symbols, Dingbats, and Geometric Shapes blocks
+/// (e.g. ☐ ☑ ☒ ✔) that neither the primary nor the CJK fallback carries —
+/// the marks interactive TUIs draw for checkbox/selection state. Symbols
+/// have no weight/style variants, so a single regular face serves all faces.
+pub const SYMBOL_REGULAR: &[u8] =
+    include_bytes!("../assets/fonts/notosanssymbols2/NotoSansSymbols2-Regular.ttf");

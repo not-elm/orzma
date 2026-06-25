@@ -47,15 +47,25 @@ pub struct GlyphAtlas {
     shelves: Shelves,
 }
 
-/// Resolves a glyph for the requested codepoint, preferring the primary face
-/// and falling back to `fallback_choice` when the primary's `glyph_id` is 0
+/// Which face in the fallback chain a glyph resolved through. Tells
+/// `get_or_insert` which em-matched `PxScale` to rasterize at, so every face
+/// renders its em-square at the same physical pixel size.
+#[derive(Clone, Copy)]
+enum GlyphTier {
+    Primary,
+    Fallback,
+    Symbol,
+}
+
+/// Resolves a glyph for the requested codepoint, walking the fallback chain:
+/// primary face → CJK fallback (`fallback_choice`) → symbol fallback
+/// (`symbol`), trying the next only when the current's `glyph_id` is 0
 /// (notdef).
 ///
-/// Returns `(font, glyph_id, used_fallback)` for the resolved face, or `None`
-/// when neither primary nor fallback contains the glyph. The `used_fallback`
-/// flag tells `get_or_insert` which em-matched `PxScale` to rasterize at: the
-/// primary's (`px_scale_value`) or the fallback's (`fallback_px_scale_value`),
-/// so each face renders its em-square at the same physical pixel size.
+/// Returns `(font, glyph_id, tier)` for the resolved face, or `None` when no
+/// face in the chain contains the glyph. The symbol tier carries Miscellaneous
+/// Symbols / Dingbats marks (e.g. ☐ ☑ ☒ ✔) that neither the primary nor the
+/// CJK fallback ships.
 ///
 /// `glyph_id` lookup is scale-independent, so this resolves before any scale is
 /// chosen.
@@ -63,23 +73,53 @@ pub struct GlyphAtlas {
 /// NOTE: retries on `glyph_id == 0` only — NOT on degenerate outline
 /// (`w == 0 || h == 0`), which `get_or_insert` still short-circuits after
 /// outlining. PUA Nerd Font icons (U+E000–U+F8FF) resolve non-zero on the
-/// primary, so they never reach the fallback.
+/// primary, so they never reach the fallbacks.
 fn resolve_glyph<'a>(
     fonts: &'a TerminalFonts,
     face: &FontFace,
     ch: char,
-) -> Option<(&'a FontArc, ab_glyph::GlyphId, bool)> {
+) -> Option<(&'a FontArc, ab_glyph::GlyphId, GlyphTier)> {
     let primary = fonts.choice(face);
     let id = primary.glyph_id(ch);
     if id.0 != 0 {
-        return Some((primary, id, false));
+        return Some((primary, id, GlyphTier::Primary));
     }
     let fallback = fonts.fallback_choice(face);
     let id = fallback.glyph_id(ch);
     if id.0 != 0 {
-        return Some((fallback, id, true));
+        return Some((fallback, id, GlyphTier::Fallback));
+    }
+    let symbol = &fonts.symbol;
+    let id = symbol.glyph_id(ch);
+    if id.0 != 0 {
+        return Some((symbol, id, GlyphTier::Symbol));
     }
     None
+}
+
+/// Shrinks a symbol-tier glyph so its rasterized width fits the monospace cell
+/// advance, returning the original outline when it already fits or when
+/// re-outlining at the reduced scale fails.
+///
+/// Symbol-fallback glyphs come from a proportional font (Noto Sans Symbols 2)
+/// and routinely outline wider than the narrow primary cell pitch. Left
+/// unshrunk, a width-1 symbol (e.g. ☑) overflows its cell and the shader's
+/// `paint_left_overdraw` stage paints that overflow on top of the neighbouring
+/// cell — so a `[✔]` checkbox would bleed the mark over the `]`.
+fn fit_symbol_to_cell(
+    font: &FontArc,
+    glyph_id: ab_glyph::GlyphId,
+    scale_value: f32,
+    outlined: OutlinedGlyph,
+    cell_advance_px: f32,
+) -> OutlinedGlyph {
+    let w = outlined.px_bounds().width();
+    if cell_advance_px <= 0.0 || w <= cell_advance_px {
+        return outlined;
+    }
+    let fitted = ab_glyph::PxScale::from(scale_value * (cell_advance_px / w));
+    font.outline_glyph(glyph_id.with_scale(fitted))
+        .unwrap_or(outlined)
 }
 
 impl GlyphAtlas {
@@ -114,15 +154,26 @@ impl GlyphAtlas {
             return Some(*r);
         }
         let ch = char::from_u32(key.codepoint)?;
-        let (font, glyph_id, used_fallback) = resolve_glyph(fonts, &key.face, ch)?;
-        let scale_value = if used_fallback {
-            fonts.fallback_px_scale_value(key.size_px)
-        } else {
-            fonts.px_scale_value(key.size_px)
+        let (font, glyph_id, tier) = resolve_glyph(fonts, &key.face, ch)?;
+        let scale_value = match tier {
+            GlyphTier::Primary => fonts.px_scale_value(key.size_px),
+            GlyphTier::Fallback => fonts.fallback_px_scale_value(key.size_px),
+            GlyphTier::Symbol => fonts.symbol_px_scale_value(key.size_px),
         };
         let scale = ab_glyph::PxScale::from(scale_value);
 
         let outlined = font.outline_glyph(glyph_id.with_scale(scale))?;
+        let outlined = if matches!(tier, GlyphTier::Symbol) {
+            fit_symbol_to_cell(
+                font,
+                glyph_id,
+                scale_value,
+                outlined,
+                fonts.cell_advance_px(key.size_px),
+            )
+        } else {
+            outlined
+        };
         let bounds = outlined.px_bounds();
         let w = bounds.width().ceil() as u16;
         let h = bounds.height().ceil() as u16;
@@ -350,5 +401,34 @@ mod tests {
             result.is_none(),
             "unknown codepoint must return None (tofu suppression)"
         );
+    }
+
+    #[test]
+    fn checkbox_marks_render_through_symbol_fallback() {
+        let fonts = TerminalFonts::default();
+        let mut atlas = GlyphAtlas::default();
+        let size = 24u16;
+        let cell_w = fonts.cell_metrics_px(size).advance_phys;
+        // ☐ ☑ ☒ ✔ — Miscellaneous Symbols / Dingbats marks that interactive
+        // TUIs (e.g. Claude Code's multi-select) draw for checkbox state.
+        // Absent from BOTH JetBrains Mono Nerd Font and UDEVGothic35, so
+        // before the symbol fallback they returned None and rendered blank.
+        for codepoint in [0x2610u32, 0x2611, 0x2612, 0x2714] {
+            let key = make_key(FontFace::Regular, codepoint, size);
+            let rect = atlas
+                .get_or_insert(key, &fonts)
+                .unwrap_or_else(|| panic!("U+{codepoint:04X} must rasterize via symbol fallback"));
+            assert!(
+                rect.w > 0 && rect.h > 0,
+                "U+{codepoint:04X} rect must be non-empty"
+            );
+            // The proportional symbol glyph is shrunk to the monospace cell so
+            // it does not overflow and overdraw the neighbouring cell.
+            assert!(
+                rect.w <= cell_w.ceil() as u16 + 1,
+                "U+{codepoint:04X} width {} must fit cell advance {cell_w:.1}",
+                rect.w
+            );
+        }
     }
 }
