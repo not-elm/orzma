@@ -19,9 +19,50 @@ use ozmux_tmux::{
     TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,
 };
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tmux_control_parser::{Cell, DividerAxis, PaneId, SplitDir};
+
+/// Total cap, across all panes, for bytes buffered while a pane's handle/grid
+/// is not yet present. One MiB is far above any real capture seed; the cap only
+/// guards a pane that never attaches.
+const PENDING_PANE_OUTPUT_CAP: usize = 1 << 20;
+
+/// Bytes routed to a pane before its `TerminalHandle` was queryable, held until
+/// the pane is ready and then replayed. Prevents losing the authoritative
+/// `capture-pane` seed (spec Component 1).
+#[derive(Resource, Default)]
+struct PendingPaneOutput {
+    buf: HashMap<PaneId, Vec<u8>>,
+    total: usize,
+}
+
+impl PendingPaneOutput {
+    fn push(&mut self, pane: PaneId, data: &[u8]) {
+        if self.total + data.len() > PENDING_PANE_OUTPUT_CAP {
+            if let Some(old) = self.buf.remove(&pane) {
+                self.total -= old.len();
+            }
+            tracing::warn!(
+                pane = pane.0,
+                "pending pane-output over cap; dropped buffered bytes"
+            );
+            if data.len() > PENDING_PANE_OUTPUT_CAP {
+                return;
+            }
+        }
+        let entry = self.buf.entry(pane).or_default();
+        entry.extend_from_slice(data);
+        self.total += data.len();
+    }
+
+    fn take(&mut self, pane: PaneId) -> Option<Vec<u8>> {
+        let v = self.buf.remove(&pane)?;
+        self.total -= v.len();
+        Some(v)
+    }
+}
 
 #[derive(Resource, Default)]
 struct LastClientSize {
@@ -38,6 +79,7 @@ pub(crate) struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>()
+            .init_resource::<PendingPaneOutput>()
             .insert_resource(ClearColor(theme::PANE_GAP))
             .insert_resource(TerminalPaddingFallback(theme_background_bytes()))
             .add_systems(
@@ -168,6 +210,7 @@ fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
     mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle)>,
+    mut pending: ResMut<PendingPaneOutput>,
     panes: Query<(Entity, &TmuxPane)>,
     copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
@@ -179,14 +222,22 @@ fn route_tmux_output(
             .extend_from_slice(&msg.data);
     }
     let entity_of: HashMap<_, _> = panes.iter().map(|(e, p)| (p.id, e)).collect();
-    for (pane, data) in by_pane {
+    let mut pane_ids: HashSet<PaneId> = by_pane.keys().copied().collect();
+    pane_ids.extend(pending.buf.keys().copied());
+    for pane in pane_ids {
+        let fresh = by_pane.remove(&pane).unwrap_or_default();
         let Some(&entity) = entity_of.get(&pane) else {
+            pending.push(pane, &fresh);
             continue;
         };
         let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
+            pending.push(pane, &fresh);
             continue;
         };
-        handle.advance(&data);
+        if let Some(buffered) = pending.take(pane) {
+            handle.advance(&buffered);
+        }
+        handle.advance(&fresh);
         // NOTE: drain captured control frames — crucially the OSC 5379
         // mount/unmount verbs — into observer triggers. The engine's own control
         // drain runs only for PtyHandle-backed terminals; tmux panes have no
@@ -779,6 +830,7 @@ mod tests {
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
+        app.init_resource::<PendingPaneOutput>();
 
         let pane_id = PaneId(1);
         let pane_entity = app
@@ -835,6 +887,7 @@ mod tests {
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
+        app.init_resource::<PendingPaneOutput>();
 
         let pane_id = PaneId(1);
         let pane_entity = app
@@ -925,6 +978,7 @@ mod tests {
         app.add_plugins(TerminalGridPlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
+        app.init_resource::<PendingPaneOutput>();
         app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(true))));
         app.init_resource::<Seen>();
         app.add_observer(|_ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
@@ -1509,6 +1563,30 @@ mod tests {
             "pane 3 gets its share of slack"
         );
         assert_eq!(bbox.y, 440.0, "bounding box matches workspace_h");
+    }
+
+    #[test]
+    fn pending_output_accumulates_then_takes() {
+        let mut p = PendingPaneOutput::default();
+        p.push(PaneId(1), b"ab");
+        p.push(PaneId(1), b"cd");
+        p.push(PaneId(2), b"xy");
+        assert_eq!(p.take(PaneId(1)).as_deref(), Some(&b"abcd"[..]));
+        assert_eq!(p.take(PaneId(1)), None);
+        assert_eq!(p.take(PaneId(2)).as_deref(), Some(&b"xy"[..]));
+    }
+
+    #[test]
+    fn pending_output_drops_pane_buffer_over_cap() {
+        let mut p = PendingPaneOutput::default();
+        let big = vec![0u8; PENDING_PANE_OUTPUT_CAP];
+        p.push(PaneId(1), &big);
+        p.push(PaneId(1), b"z");
+        let got = p.take(PaneId(1)).unwrap_or_default();
+        assert!(
+            got.len() <= PENDING_PANE_OUTPUT_CAP,
+            "buffer must not grow past the cap"
+        );
     }
 
     #[test]
