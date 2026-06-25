@@ -131,6 +131,11 @@ pub(crate) struct OzmaMouseGesture {
     pub(crate) drag: Option<DragGesture>,
     /// Held button + last drag cell, for both local and app-forward drags.
     pub(crate) held: Option<HeldPointer>,
+    /// Last observed physical cursor position, including out-of-bounds values
+    /// carried by `CursorMoved` while a button is held. Lets a drag continue
+    /// when `Window::cursor_position()` masks an off-window cursor; cleared on
+    /// every gesture reset and on release.
+    last_cursor_phys: Option<Vec2>,
 }
 
 /// Consecutive-click counter using a timeout + positional-drift gate.
@@ -176,8 +181,12 @@ pub(crate) fn cell_at_local(
     (CellCoord { col, row }, side)
 }
 
-/// Resolves the window-space physical cursor to a cell on the terminal node, or
-/// `None` when the cursor is outside the node.
+/// Resolves the window-space physical cursor to a cell on the terminal node.
+///
+/// Any position is projected and the resulting column/row is clamped to
+/// `1..=cols × 1..=rows`, so a cursor outside the node resolves to the nearest
+/// edge cell. Returns `None` only when the node has no projectable geometry
+/// (zero size or a non-invertible transform).
 pub(crate) fn cell_at_cursor(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
@@ -415,6 +424,7 @@ pub(crate) fn dispatch_mouse_buttons(
     mut commands: Commands,
     mut gesture: ResMut<OzmaMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
+    mut cursor_moved: MessageReader<CursorMoved>,
     terminals: Query<
         (
             Entity,
@@ -433,21 +443,41 @@ pub(crate) fn dispatch_mouse_buttons(
 ) {
     let Ok(window) = windows.single() else {
         buttons.clear();
+        cursor_moved.clear();
         gesture.drag = None;
         gesture.held = None;
+        gesture.last_cursor_phys = None;
         return;
     };
     if !window.focused || terminals.is_empty() {
         buttons.clear();
+        cursor_moved.clear();
         gesture.drag = None;
         gesture.held = None;
+        gesture.last_cursor_phys = None;
         return;
     }
     let scale = window.scale_factor();
-    let Some(cursor_phys) = window.cursor_position().map(|c| c * scale) else {
+
+    // NOTE: read CursorMoved BEFORE the button loop so a same-frame
+    // release/press sees the refreshed position. It is the only source of the
+    // off-window cursor — Window::cursor_position() masks out-of-bounds
+    // positions that winit still reports while a button is held. The live
+    // position wins when present; write only on a real change so idle motion
+    // does not dirty the gesture resource every frame.
+    let moved_phys = cursor_moved.read().last().map(|m| m.position * scale);
+    let live = window.cursor_position().map(|c| c * scale);
+    if let Some(latest) = live.or(moved_phys)
+        && gesture.last_cursor_phys != Some(latest)
+    {
+        gesture.last_cursor_phys = Some(latest);
+    }
+    let active = gesture.held.is_some() || gesture.drag.is_some();
+    let Some(cursor_phys) = effective_drag_cursor(live, active, gesture.last_cursor_phys) else {
         buttons.clear();
         gesture.drag = None;
         gesture.held = None;
+        gesture.last_cursor_phys = None;
         return;
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
@@ -476,6 +506,7 @@ pub(crate) fn dispatch_mouse_buttons(
         let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
             gesture.held = None;
             gesture.drag = None;
+            gesture.last_cursor_phys = None;
             continue;
         };
         let ctx = CellContext {
@@ -516,7 +547,10 @@ pub(crate) fn dispatch_mouse_buttons(
                     last_cell: evt.cell,
                 });
             }
-            ButtonEventKind::Release => gesture.held = None,
+            ButtonEventKind::Release => {
+                gesture.held = None;
+                gesture.last_cursor_phys = None;
+            }
             _ => {}
         }
         if !decided.is_empty() {
@@ -533,6 +567,7 @@ pub(crate) fn dispatch_mouse_buttons(
     let Ok((_, handle, node, transform, grid)) = terminals.get(held.entity) else {
         gesture.held = None;
         gesture.drag = None;
+        gesture.last_cursor_phys = None;
         return;
     };
     let ctx = CellContext {
@@ -752,6 +787,23 @@ fn synthesize_drag(
     };
     let effects = decide_button(gesture, modes, evt, mods, modifier_held, None, cfg);
     Some((effects, cell))
+}
+
+/// The physical cursor position to drive the gesture with this frame.
+///
+/// `live` is `window.cursor_position()` (already `None` once the pointer leaves
+/// the window, since Bevy bounds-masks off-window positions); `active` is
+/// whether a gesture is in flight (a button is held or a drag is started);
+/// `last` is the last observed physical position. Returns the live position
+/// when present, the last-known position while a gesture is active (so an
+/// off-window drag keeps extending), or `None` when idle with no cursor (the
+/// caller then resets the gesture).
+fn effective_drag_cursor(live: Option<Vec2>, active: bool, last: Option<Vec2>) -> Option<Vec2> {
+    match (live, active) {
+        (Some(c), _) => Some(c),
+        (None, true) => last,
+        (None, false) => None,
+    }
 }
 
 /// Builds `WheelModifiers` from the held keys + the fine-scroll config.
@@ -974,6 +1026,228 @@ mod tests {
     use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind};
 
     #[test]
+    fn effective_drag_cursor_truth_table() {
+        let live = Vec2::new(10.0, 10.0);
+        let last = Vec2::new(99.0, 88.0);
+        // Live cursor present: always use it, regardless of gesture state.
+        assert_eq!(
+            effective_drag_cursor(Some(live), false, Some(last)),
+            Some(live)
+        );
+        assert_eq!(
+            effective_drag_cursor(Some(live), true, Some(last)),
+            Some(live)
+        );
+        // Off-window (live None) while a gesture is active: fall back to last-known.
+        assert_eq!(effective_drag_cursor(None, true, Some(last)), Some(last));
+        assert_eq!(effective_drag_cursor(None, true, None), None);
+        // Off-window while idle: nothing to drive — caller resets.
+        assert_eq!(effective_drag_cursor(None, false, Some(last)), None);
+    }
+
+    #[derive(Resource, Default)]
+    struct CapturedEffects(Vec<Vec<MouseEffect>>);
+
+    fn make_selection_app() -> App {
+        use bevy::window::WindowResolution;
+        use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseButtonInput>()
+            .add_message::<CursorMoved>()
+            .init_resource::<OzmaMouseConfig>()
+            .init_resource::<OzmaMouseGesture>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Clipboard>()
+            .init_resource::<CapturedEffects>()
+            .insert_resource(test_metrics())
+            .add_observer(
+                |ev: On<TerminalMouseEffects>, mut cap: ResMut<CapturedEffects>| {
+                    cap.0.push(ev.effects.clone());
+                },
+            )
+            .add_systems(Update, dispatch_mouse_buttons);
+
+        let handle = TerminalHandle::detached(100, 37, Arc::new(AtomicBool::new(false)));
+        // Node at window center (400,300), size 800x600 -> top-left (0,0).
+        app.world_mut().spawn((
+            OzmaTerminal,
+            handle,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            TerminalGrid {
+                cols: 100,
+                rows: 37,
+                ..default()
+            },
+        ));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app
+    }
+
+    fn set_phys_cursor(app: &mut App, phys: Vec2) {
+        use bevy::math::DVec2;
+
+        let win = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(win)
+            .unwrap()
+            .set_physical_cursor_position(Some(DVec2::new(phys.x as f64, phys.y as f64)));
+    }
+
+    fn write_cursor_moved(app: &mut App, pos: Vec2) {
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<CursorMoved>>()
+            .write(CursorMoved {
+                window: Entity::PLACEHOLDER,
+                position: pos,
+                delta: None,
+            });
+    }
+
+    fn write_left(app: &mut App, state: ButtonState) {
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<MouseButtonInput>>()
+            .write(MouseButtonInput {
+                button: MouseButton::Left,
+                state,
+                window: Entity::PLACEHOLDER,
+            });
+    }
+
+    #[test]
+    fn drag_survives_cursor_leaving_window() {
+        let mut app = make_selection_app();
+
+        // Press inside (cell ~col 6, row 4).
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+
+        // Drag to a new cell inside -> selection started.
+        set_phys_cursor(&mut app, Vec2::new(80.0, 48.0));
+        app.update();
+        assert!(
+            matches!(
+                app.world().resource::<OzmaMouseGesture>().drag,
+                Some(DragGesture {
+                    phase: DragPhase::Started,
+                    ..
+                })
+            ),
+            "dragging across a cell must start the selection"
+        );
+
+        // Leave the window: physical (900,700) is out of the 800x600 bounds, so
+        // cursor_position() returns None, but CursorMoved still carries the position.
+        app.world_mut().resource_mut::<CapturedEffects>().0.clear();
+        set_phys_cursor(&mut app, Vec2::new(900.0, 700.0));
+        write_cursor_moved(&mut app, Vec2::new(900.0, 700.0));
+        app.update();
+
+        let g = app.world().resource::<OzmaMouseGesture>();
+        assert!(
+            g.held.is_some(),
+            "leaving the window must NOT drop the held pointer"
+        );
+        assert!(
+            matches!(
+                g.drag,
+                Some(DragGesture {
+                    phase: DragPhase::Started,
+                    ..
+                })
+            ),
+            "leaving the window must NOT cancel the in-progress selection"
+        );
+
+        let cap = app.world().resource::<CapturedEffects>();
+        let pinned = cap
+            .0
+            .iter()
+            .flatten()
+            .any(|e| matches!(e, MouseEffect::SelUpdate { point, .. } if point.column.0 == 99));
+        assert!(
+            pinned,
+            "the selection must extend (pin) to the rightmost edge column while \
+             outside, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn release_after_leaving_window_copies() {
+        let mut app = make_selection_app();
+
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_left(&mut app, ButtonState::Pressed);
+        app.update();
+        set_phys_cursor(&mut app, Vec2::new(80.0, 48.0));
+        app.update();
+
+        // Leave the window.
+        set_phys_cursor(&mut app, Vec2::new(900.0, 700.0));
+        write_cursor_moved(&mut app, Vec2::new(900.0, 700.0));
+        app.update();
+
+        // Release while still outside.
+        app.world_mut().resource_mut::<CapturedEffects>().0.clear();
+        write_left(&mut app, ButtonState::Released);
+        app.update();
+
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0
+                .iter()
+                .flatten()
+                .any(|e| matches!(e, MouseEffect::Copy)),
+            "releasing after leaving the window must copy the selection, got {:?}",
+            cap.0
+        );
+        let g = app.world().resource::<OzmaMouseGesture>();
+        assert!(
+            g.held.is_none() && g.drag.is_none(),
+            "release must end the gesture"
+        );
+    }
+
+    #[test]
+    fn idle_cursor_outside_window_resets_and_clears_last() {
+        let mut app = make_selection_app();
+
+        // No press; cursor is out of bounds.
+        set_phys_cursor(&mut app, Vec2::new(900.0, 700.0));
+        write_cursor_moved(&mut app, Vec2::new(900.0, 700.0));
+        app.update();
+
+        let g = app.world().resource::<OzmaMouseGesture>();
+        assert!(
+            g.drag.is_none() && g.held.is_none(),
+            "an idle frame with no in-window cursor must stay reset"
+        );
+        assert!(
+            g.last_cursor_phys.is_none(),
+            "the idle reset must clear last_cursor_phys"
+        );
+    }
+
+    #[test]
     fn detached_terminal_forwards_write_and_selects_via_vt_only() {
         use ozma_tty_engine::TerminalHandle;
         use std::sync::Arc;
@@ -1104,6 +1378,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<MouseButtonInput>()
+            .add_message::<CursorMoved>()
             .init_resource::<OzmaMouseConfig>()
             .init_resource::<OzmaMouseGesture>()
             .init_resource::<ButtonInput<KeyCode>>()
