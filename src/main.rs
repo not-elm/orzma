@@ -222,6 +222,48 @@ fn is_utf8_locale(value: &str) -> bool {
     upper.contains("UTF-8") || upper.contains("UTF8")
 }
 
+/// The UTF-8 `LC_CTYPE` ozmux advertises to tmux panes spawned after attach
+/// (see `crate::tmux::locale`), so their shells render typed wide characters
+/// correctly instead of as `<00xx>` placeholders.
+///
+/// A pane shell stuck in the C/POSIX locale makes zsh's line editor re-render
+/// every typed multibyte glyph as its per-byte C-locale notation (an orphaned
+/// lead byte plus `<0083>`-style placeholders), which ozmux then faithfully
+/// displays. This happens whenever the tmux server ozmux adopts was itself
+/// started without a UTF-8 locale (e.g. a pre-existing server, or a launchd
+/// `.app` with stripped env). Pushing this value into tmux's environment fixes
+/// newly-spawned panes.
+///
+/// Resolves to the first UTF-8 locale among `LC_ALL` / `LC_CTYPE` / `LANG`,
+/// skipping any non-UTF-8 entries, falling back to [`UTF8_CTYPE_FALLBACK`].
+///
+/// This deliberately differs from [`utf8_locale_fallback`]: that one honors
+/// tmux's first-non-empty-wins precedence to decide *whether* ozmux's own
+/// process needs the fallback, so a leading non-UTF-8 value (e.g. `LC_ALL=C`)
+/// makes it return the fallback. Here we instead want a concrete UTF-8 *value*
+/// to advertise to panes, so a non-UTF-8 entry is skipped rather than allowed to
+/// win. Because `ensure_utf8_locale_env` runs first, on macOS this always
+/// resolves to a UTF-8 value even when the inherited environment selected the
+/// C/POSIX locale.
+pub(crate) fn utf8_ctype_for_panes() -> String {
+    resolve_utf8_ctype(
+        std::env::var("LC_ALL").ok().as_deref(),
+        std::env::var("LC_CTYPE").ok().as_deref(),
+        std::env::var("LANG").ok().as_deref(),
+    )
+}
+
+/// Pure resolver behind [`utf8_ctype_for_panes`]: the first non-empty UTF-8
+/// locale among the three values, or [`UTF8_CTYPE_FALLBACK`].
+fn resolve_utf8_ctype(lc_all: Option<&str>, lc_ctype: Option<&str>, lang: Option<&str>) -> String {
+    [lc_all, lc_ctype, lang]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_empty() && is_utf8_locale(value))
+        .map(str::to_string)
+        .unwrap_or_else(|| UTF8_CTYPE_FALLBACK.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,6 +337,37 @@ mod tests {
         assert_eq!(
             utf8_locale_fallback(Some("en_US.UTF-8"), None, Some("C")),
             None
+        );
+    }
+
+    #[test]
+    fn resolve_ctype_falls_back_when_no_utf8_locale() {
+        assert_eq!(resolve_utf8_ctype(None, None, None), "en_US.UTF-8");
+        assert_eq!(
+            resolve_utf8_ctype(Some("C"), Some("C"), Some("C")),
+            "en_US.UTF-8"
+        );
+        assert_eq!(
+            resolve_utf8_ctype(Some(""), Some(""), Some("POSIX")),
+            "en_US.UTF-8"
+        );
+    }
+
+    #[test]
+    fn resolve_ctype_keeps_first_utf8_locale() {
+        // The user's own UTF-8 locale is preserved rather than overwritten with
+        // the en_US fallback, honoring tmux's LC_ALL > LC_CTYPE > LANG order.
+        assert_eq!(
+            resolve_utf8_ctype(None, Some("ja_JP.UTF-8"), None),
+            "ja_JP.UTF-8"
+        );
+        assert_eq!(
+            resolve_utf8_ctype(Some("en_US.UTF-8"), Some("C"), None),
+            "en_US.UTF-8"
+        );
+        assert_eq!(
+            resolve_utf8_ctype(Some("C"), None, Some("ja_JP.UTF-8")),
+            "ja_JP.UTF-8"
         );
     }
 }

@@ -6,6 +6,7 @@ mod divider_handle;
 mod forward;
 mod gate;
 mod input;
+mod locale;
 mod mode_ui;
 mod mouse;
 mod pane_focus;
@@ -23,6 +24,7 @@ use divider_handle::DividerHandlePlugin;
 use forward::ForwardPlugin;
 use gate::GatePlugin;
 use input::InputPlugin;
+use locale::TmuxLocalePlugin;
 use mode_ui::TmuxModeUiPlugin;
 use mouse::MousePlugin;
 use ozmux_tmux::{TmuxClient, TmuxConnectionClosed, TmuxSessionPlugin};
@@ -55,6 +57,7 @@ impl Plugin for OzmuxTmuxPlugin {
                 PaneFocusPlugin,
                 GatePlugin,
                 WebviewTokensPlugin,
+                TmuxLocalePlugin,
                 TmuxModeUiPlugin,
             ));
     }
