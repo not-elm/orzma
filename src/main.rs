@@ -55,9 +55,10 @@ fn primary_window() -> Window {
 }
 
 fn main() {
-    // NOTE: must run before App::new() spawns any thread — it writes process
+    // NOTE: must run before App::new() spawns any thread — they write process
     // env vars, which is unsound once other threads may read the environment.
     ensure_terminfo_env();
+    ensure_utf8_locale_env();
 
     let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
     // The app boots into a single PTY shell; tmux is entered only by adopting the
@@ -148,6 +149,79 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// The UTF-8 `LC_CTYPE` ozmux installs when the inherited locale is not UTF-8.
+/// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
+/// writes it on.
+const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
+
+/// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment
+/// selects none, so tmux treats ozmux's control client as UTF-8 capable.
+///
+/// tmux replaces every TAB (and other non-printable byte) in `display-message`
+/// / `list-windows` format output with `_` when its effective `LC_CTYPE` is not
+/// UTF-8 (the C/POSIX locale). ozmux's tab-separated format queries
+/// (`LIST_WINDOWS_FORMAT`, `COPY_STATE_FORMAT`) then collapse into a single
+/// unsplittable field — which silently freezes copy-mode cursor/scroll updates,
+/// since `parse_copy_state` returns `None` and never refreshes the overlay. A
+/// bundled `.app` launched from Finder inherits launchd's environment with no
+/// `LANG`/`LC_*`, so it falls into the C locale; this restores a UTF-8
+/// `LC_CTYPE`. A usable inherited UTF-8 locale is left untouched.
+///
+/// # Invariants
+///
+/// Must be called before any thread is spawned (same constraint as
+/// [`ensure_terminfo_env`]): it writes a process environment variable.
+fn ensure_utf8_locale_env() {
+    if utf8_locale_fallback(
+        std::env::var("LC_ALL").ok().as_deref(),
+        std::env::var("LC_CTYPE").ok().as_deref(),
+        std::env::var("LANG").ok().as_deref(),
+    )
+    .is_none()
+    {
+        return;
+    }
+    // NOTE: `en_US.UTF-8` is guaranteed present on macOS (the only platform that
+    // ships the bundled `.app` hitting launchd's stripped env); other platforms
+    // may lack it, where forcing it would fail `setlocale` and warn, so the
+    // write is macOS-only.
+    #[cfg(target_os = "macos")]
+    // SAFETY: the caller invokes this before App::new() spawns any task-pool
+    // thread, so no other thread can read the environment concurrently with
+    // this write (see # Invariants).
+    unsafe {
+        std::env::set_var("LC_CTYPE", UTF8_CTYPE_FALLBACK);
+    }
+}
+
+/// The UTF-8 `LC_CTYPE` ozmux substitutes when the effective locale is not
+/// UTF-8, or `None` to keep the inherited locale.
+///
+/// Mirrors tmux's own `LC_ALL` > `LC_CTYPE` > `LANG` resolution: the first
+/// non-empty of the three decides the character type. Returns the fallback when
+/// that value is absent or not UTF-8; otherwise `None`.
+fn utf8_locale_fallback(
+    lc_all: Option<&str>,
+    lc_ctype: Option<&str>,
+    lang: Option<&str>,
+) -> Option<&'static str> {
+    let effective = [lc_all, lc_ctype, lang]
+        .into_iter()
+        .flatten()
+        .find(|value| !value.is_empty());
+    match effective {
+        Some(value) if is_utf8_locale(value) => None,
+        _ => Some(UTF8_CTYPE_FALLBACK),
+    }
+}
+
+/// Returns whether a locale string selects the UTF-8 codeset (`…UTF-8`,
+/// `…UTF8`, or the bare macOS `UTF-8`), case-insensitively.
+fn is_utf8_locale(value: &str) -> bool {
+    let upper = value.to_ascii_uppercase();
+    upper.contains("UTF-8") || upper.contains("UTF8")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -175,5 +249,52 @@ mod tests {
         assert_eq!(term_fallback(Some("tmux-256color")), None);
         assert_eq!(term_fallback(Some("xterm-256color")), None);
         assert_eq!(term_fallback(Some("screen")), None);
+    }
+
+    #[test]
+    fn unset_locale_gets_utf8_fallback() {
+        assert_eq!(utf8_locale_fallback(None, None, None), Some("en_US.UTF-8"));
+    }
+
+    #[test]
+    fn empty_locale_gets_utf8_fallback() {
+        assert_eq!(
+            utf8_locale_fallback(Some(""), Some(""), Some("")),
+            Some("en_US.UTF-8")
+        );
+    }
+
+    #[test]
+    fn non_utf8_locale_gets_fallback() {
+        assert_eq!(
+            utf8_locale_fallback(None, Some("C"), None),
+            Some("en_US.UTF-8")
+        );
+        assert_eq!(
+            utf8_locale_fallback(None, None, Some("POSIX")),
+            Some("en_US.UTF-8")
+        );
+    }
+
+    #[test]
+    fn utf8_locale_is_preserved() {
+        assert_eq!(utf8_locale_fallback(None, Some("en_US.UTF-8"), None), None);
+        assert_eq!(utf8_locale_fallback(None, None, Some("ja_JP.UTF-8")), None);
+        assert_eq!(utf8_locale_fallback(None, Some("UTF-8"), None), None);
+        assert_eq!(utf8_locale_fallback(None, None, Some("en_US.utf8")), None);
+    }
+
+    #[test]
+    fn lc_all_takes_precedence_over_lang() {
+        // LC_ALL=C wins even when LANG is UTF-8 → fallback applies.
+        assert_eq!(
+            utf8_locale_fallback(Some("C"), None, Some("en_US.UTF-8")),
+            Some("en_US.UTF-8")
+        );
+        // LC_ALL UTF-8 wins even when LANG is C → preserved.
+        assert_eq!(
+            utf8_locale_fallback(Some("en_US.UTF-8"), None, Some("C")),
+            None
+        );
     }
 }
