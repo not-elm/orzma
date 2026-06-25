@@ -182,7 +182,7 @@ pub(crate) fn position_ime_overlay(
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     primary_window: Query<&Window, With<PrimaryWindow>>,
-    mut overlay_root: Query<(&mut Node, &mut Text), With<ImeOverlayNode>>,
+    mut overlay_root: Query<(&mut Node, &mut Text, &mut BackgroundColor), With<ImeOverlayNode>>,
     mut caret_bar: Query<
         &mut Node,
         (
@@ -200,7 +200,7 @@ pub(crate) fn position_ime_overlay(
         ),
     >,
 ) {
-    let Ok((mut root_node, mut root_text)) = overlay_root.single_mut() else {
+    let Ok((mut root_node, mut root_text, mut root_bg)) = overlay_root.single_mut() else {
         return;
     };
     let mut bar = caret_bar.single_mut().ok();
@@ -261,6 +261,11 @@ pub(crate) fn position_ime_overlay(
     root_node.left = Val::Px(pos.x);
     root_node.top = Val::Px(pos.y);
     root_node.display = Display::Flex;
+
+    let occluding_bg = Color::srgb_u8(grid.default_bg[0], grid.default_bg[1], grid.default_bg[2]);
+    if root_bg.0 != occluding_bg {
+        root_bg.0 = occluding_bg;
+    }
 
     // Write the full composition text to the root. With a single
     // `Text` entity (no `TextSpan` children), Bevy's text pipeline
@@ -704,6 +709,82 @@ mod tests {
         assert!(
             matched,
             "IME overlay TextFont must use TerminalFontSize (9.0), not the constant"
+        );
+    }
+
+    #[test]
+    fn overlay_background_matches_pane_default_bg_while_composing() {
+        use bevy::asset::Handle;
+        use bevy::window::WindowResolution;
+        use ozma_terminal::OzmaTerminal;
+        use ozma_tty_renderer::prelude::Cursor;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(TerminalFontSize(12.0));
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: metrics(8.0, 16.0),
+            phys_font_size: 12,
+        });
+
+        let mut state = ImeState::default();
+        apply_event(
+            &mut state,
+            &Ime::Preedit {
+                window: Entity::PLACEHOLDER,
+                value: "あ".into(),
+                cursor: Some((3, 3)),
+            },
+        );
+        app.insert_resource(state);
+
+        app.add_systems(Startup, spawn_ime_overlay_once);
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.world_mut().spawn((
+            OzmaTerminal,
+            KeyboardFocused,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            TerminalGrid {
+                cursor: Some(Cursor::default()),
+                default_bg: [10, 20, 30],
+                ..TerminalGrid::default()
+            },
+        ));
+
+        app.update();
+        app.world_mut()
+            .run_system_once(position_ime_overlay)
+            .unwrap();
+
+        let mut overlays = app
+            .world_mut()
+            .query_filtered::<Entity, With<ImeOverlayNode>>();
+        let overlay = overlays.single(app.world()).expect("overlay entity");
+
+        let bg = app
+            .world()
+            .get::<BackgroundColor>(overlay)
+            .expect("overlay must carry an opaque BackgroundColor while composing");
+        assert_eq!(
+            bg.0,
+            Color::srgb_u8(10, 20, 30),
+            "overlay background must match the focused pane's default_bg so it occludes the underlying line",
+        );
+        assert_eq!(
+            app.world().get::<Node>(overlay).unwrap().display,
+            Display::Flex,
+            "overlay must be shown while composing",
         );
     }
 
