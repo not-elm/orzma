@@ -149,6 +149,11 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
     }
 }
 
+/// The UTF-8 `LC_CTYPE` ozmux installs when the inherited locale is not UTF-8.
+/// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
+/// writes it on.
+const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
+
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment
 /// selects none, so tmux treats ozmux's control client as UTF-8 capable.
 ///
@@ -185,7 +190,7 @@ fn ensure_utf8_locale_env() {
     // thread, so no other thread can read the environment concurrently with
     // this write (see # Invariants).
     unsafe {
-        std::env::set_var("LC_CTYPE", "en_US.UTF-8");
+        std::env::set_var("LC_CTYPE", UTF8_CTYPE_FALLBACK);
     }
 }
 
@@ -206,7 +211,7 @@ fn utf8_locale_fallback(
         .find(|value| !value.is_empty());
     match effective {
         Some(value) if is_utf8_locale(value) => None,
-        _ => Some("en_US.UTF-8"),
+        _ => Some(UTF8_CTYPE_FALLBACK),
     }
 }
 
