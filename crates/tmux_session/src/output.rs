@@ -1,7 +1,7 @@
 //! The `%output` projection seam: the `PaneOutput` message and the pure
 //! helper that extracts pane output from a drained transport batch.
 
-use bevy::prelude::*;
+use bevy::prelude::Message;
 use tmux_control::{ClientEvent, ControlEvent, TransportEvent};
 use tmux_control_parser::PaneId;
 

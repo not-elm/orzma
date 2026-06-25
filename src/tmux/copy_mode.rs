@@ -333,10 +333,15 @@ fn apply_capture_reply(
     pane_entity: Entity,
     reply: &CopyModeReply,
 ) {
+    // NOTE: clear the in-flight entry even on failure, before the early return —
+    // otherwise a failed capture leaves the pane's `capture_in_flight` set and
+    // `decide_capture` suppresses every retry until `issue_copy_state` ages it
+    // out (≤ STALE_STATE_RESEND_UPDATES frames).
+    let pending = refresh.capture_in_flight.remove(&reply.pane);
     if !reply.ok {
         return;
     }
-    if let Some(pending) = refresh.capture_in_flight.remove(&reply.pane) {
+    if let Some(pending) = pending {
         refresh.last_scroll.insert(reply.pane, pending.scroll);
     }
     let bytes = capture_to_bytes(&reply.output);

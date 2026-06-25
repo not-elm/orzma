@@ -212,15 +212,24 @@ fn recapture_settled_panes(
     }
 }
 
-/// Re-seeds each requested pane via `request_pane_capture`. In-flight suppression
-/// is owned by the binary's reseed tracker (spec §3.2), so this sends one capture
-/// per request (the binary emits at most one request per pane per frame).
+/// Re-seeds each requested pane via `request_pane_capture`. Retry cadence is
+/// owned by the binary's aged reseed tracker (spec §3.2); this additionally
+/// skips a pane that already has a capture/cursor pair in flight so it cannot
+/// collide with `recapture_settled_panes`.
 fn handle_pane_reseed_requests(
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
     mut requests: MessageReader<RequestPaneReseed>,
 ) {
     let (client, enumeration) = &mut *client;
     for req in requests.read() {
+        // NOTE: two in-flight capture/cursor pairs for one pane desync the
+        // per-pane cursor correlation (`panes_with_cursor_pending` /
+        // `capture_awaiting_cursor` are keyed by pane, not by command), so the
+        // second capture lands without cursor info. The aged reseed tracker
+        // retries later, so suppressing here cannot wedge the pane.
+        if enumeration.panes_with_cursor_pending.contains(&req.pane) {
+            continue;
+        }
         request_pane_capture(client, enumeration, req.pane);
     }
 }

@@ -67,6 +67,19 @@ impl PendingPaneOutput {
     }
 }
 
+/// Drops a despawned pane's buffered output so its `PaneId` cannot keep
+/// `pending_pane_output_waiting` true (which would spin `route_tmux_output`
+/// every frame for the rest of the session).
+fn prune_pending_on_pane_removed(
+    ev: On<Remove, TmuxPane>,
+    mut pending: ResMut<PendingPaneOutput>,
+    panes: Query<&TmuxPane>,
+) {
+    if let Ok(pane) = panes.get(ev.entity) {
+        pending.take(pane.id);
+    }
+}
+
 /// Ordering handle for `layout_tmux_panes` so the paint-rescue system can run
 /// before this frame's grid-dims write (avoids the ≤1-frame resize transient
 /// where `cells.len() != rows`).
@@ -91,6 +104,7 @@ impl Plugin for RenderPlugin {
             .init_resource::<PendingPaneOutput>()
             .insert_resource(ClearColor(theme::PANE_GAP))
             .insert_resource(TerminalPaddingFallback(theme_background_bytes()))
+            .add_observer(prune_pending_on_pane_removed)
             .add_systems(
                 Update,
                 (
@@ -241,11 +255,18 @@ fn route_tmux_output(
     for pane in pane_ids {
         let fresh = by_pane.remove(&pane).unwrap_or_default();
         let Some(&entity) = entity_of.get(&pane) else {
-            pending.push(pane, &fresh);
+            // NOTE: only buffer real bytes — pushing an empty `fresh` would
+            // create/keep a phantom entry that keeps `pending_pane_output_waiting`
+            // true and spins this system every frame.
+            if !fresh.is_empty() {
+                pending.push(pane, &fresh);
+            }
             continue;
         };
         let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
-            pending.push(pane, &fresh);
+            if !fresh.is_empty() {
+                pending.push(pane, &fresh);
+            }
             continue;
         };
         if let Some(buffered) = pending.take(pane) {
