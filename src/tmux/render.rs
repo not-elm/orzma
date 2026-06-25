@@ -48,7 +48,10 @@ impl PendingPaneOutput {
                 pane = pane.0,
                 "pending pane-output over cap; dropped buffered bytes"
             );
-            if data.len() > PENDING_PANE_OUTPUT_CAP {
+            // NOTE: the cap is global across all panes — if evicting this pane's
+            // own backlog still leaves no room (another pane holds the budget),
+            // drop the incoming bytes so `total` can never exceed the cap.
+            if self.total + data.len() > PENDING_PANE_OUTPUT_CAP {
                 return;
             }
         }
@@ -237,7 +240,9 @@ fn route_tmux_output(
         if let Some(buffered) = pending.take(pane) {
             handle.advance(&buffered);
         }
-        handle.advance(&fresh);
+        if !fresh.is_empty() {
+            handle.advance(&fresh);
+        }
         // NOTE: drain captured control frames — crucially the OSC 5379
         // mount/unmount verbs — into observer triggers. The engine's own control
         // drain runs only for PtyHandle-backed terminals; tmux panes have no
@@ -1582,11 +1587,37 @@ mod tests {
         let big = vec![0u8; PENDING_PANE_OUTPUT_CAP];
         p.push(PaneId(1), &big);
         p.push(PaneId(1), b"z");
+        assert!(
+            p.total <= PENDING_PANE_OUTPUT_CAP,
+            "total must not grow past the cap"
+        );
         let got = p.take(PaneId(1)).unwrap_or_default();
         assert!(
             got.len() <= PENDING_PANE_OUTPUT_CAP,
             "buffer must not grow past the cap"
         );
+        assert_eq!(p.total, 0, "taking the only pane drains total to zero");
+    }
+
+    #[test]
+    fn pending_output_enforces_global_cap_across_panes() {
+        let mut p = PendingPaneOutput::default();
+        let big = vec![0u8; PENDING_PANE_OUTPUT_CAP];
+        p.push(PaneId(2), &big);
+        // pane 2 already holds the whole budget; a push to pane 1 must not let
+        // `total` exceed the global cap even though pane 1 has no backlog to evict.
+        p.push(PaneId(1), b"hello");
+        assert!(
+            p.total <= PENDING_PANE_OUTPUT_CAP,
+            "global cap holds across panes, got total = {}",
+            p.total
+        );
+        // The incoming bytes were dropped (no room), so pane 1 holds nothing.
+        assert_eq!(p.take(PaneId(1)), None);
+        // Draining pane 2 returns the budget exactly.
+        let got = p.take(PaneId(2)).unwrap_or_default();
+        assert_eq!(got.len(), PENDING_PANE_OUTPUT_CAP);
+        assert_eq!(p.total, 0, "draining all panes returns total to zero");
     }
 
     #[test]
