@@ -5,16 +5,27 @@
 //! webview crate.
 //!
 //! This module also propagates `$OZMA_SOCK` (the control-plane socket path) into
-//! the tmux global environment so panes can reach the live control plane. The
-//! global `-g` flag covers all existing sessions and any sessions created later,
-//! so no per-session enumeration is needed. On app exit the global is unset and
-//! the runtime dir is removed.
+//! the tmux environment so panes can reach the live control plane. Two writes
+//! cover the two ways a program reads it back:
+//!
+//! - A global `-g` set (on the attach edge) so the process environment of any
+//!   pane spawned *after* the set inherits `$OZMA_SOCK` directly.
+//! - A per-session `-t` set (on each session add or switch) so
+//!   `tmux show-environment OZMA_SOCK` recovers the value from *any* pane of the
+//!   session — including a pane that forked before the global set (the adopted
+//!   control-mode pane, and any pane attached to a pre-existing session). A
+//!   global-scope variable is invisible to session-scope `show-environment`, so
+//!   the per-session set is what makes the ratatui-ozma SDK's tmux recovery path
+//!   work in the first pane.
+//!
+//! On app exit the global is unset and the runtime dir is removed.
 
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalRawWrite;
 use ozma_webview::ControlPlaneHandle;
 use ozmux_tmux::{
-    SetEnvironmentGlobal, TmuxClient, TmuxClientMut, TmuxPane, UnsetEnvironmentGlobal,
+    SetEnvironmentGlobal, SetEnvironmentInSession, TmuxClient, TmuxClientMut, TmuxPane,
+    TmuxSession, UnsetEnvironmentGlobal,
 };
 
 /// Registers the tmux `%N` token binder and `$OZMA_SOCK` propagation systems.
@@ -26,7 +37,18 @@ impl Plugin for WebviewTokensPlugin {
             Update,
             bind_tmux_pane_tokens.run_if(any_with_component::<TmuxClient>),
         )
-        .add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added))
+        .add_systems(
+            Update,
+            refresh_ozma_sock
+                .run_if(tmux_client_added)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        )
+        .add_systems(
+            Update,
+            bind_ozma_sock_to_session
+                .run_if(tmux_session_changed)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        )
         .add_systems(Last, cleanup_ozma_sock.run_if(on_message::<AppExit>));
     }
 }
@@ -34,6 +56,11 @@ impl Plugin for WebviewTokensPlugin {
 /// Run condition: true on the frame a [`TmuxClient`] is newly adopted.
 fn tmux_client_added(added: Query<(), Added<TmuxClient>>) -> bool {
     !added.is_empty()
+}
+
+/// Run condition: true on a frame where any [`TmuxSession`] is added or changed.
+fn tmux_session_changed(changed: Query<(), Changed<TmuxSession>>) -> bool {
+    !changed.is_empty()
 }
 
 /// Binds `%<pane-id>` → pane entity for every newly projected tmux pane.
@@ -51,26 +78,61 @@ fn bind_tmux_pane_tokens(
 
 /// Propagates `$OZMA_SOCK` into the tmux global environment on each attach edge.
 ///
-/// Runs exactly once per attach (`Added<TmuxClient>`). The global `-g` flag
-/// writes to the tmux server's global environment, which all existing sessions
-/// inherit and new sessions pick up automatically — no per-session enumeration
-/// is required.
+/// Runs exactly once per attach (`Added<TmuxClient>`). The global `-g` set seeds
+/// the process environment of every pane spawned *after* it. It does not reach a
+/// pane that forked earlier, and a global-scope value is invisible to
+/// session-scope `tmux show-environment`; [`bind_ozma_sock_to_session`] covers
+/// those panes with a per-session set.
 ///
 /// For a remote-adopted session the socket path refers to a local path the
 /// remote host cannot reach, but the set is harmless; the next local attach
 /// overwrites it.
 ///
-/// No-op when the control plane is absent (no `ControlPlaneHandle`).
-fn refresh_ozma_sock(mut client: TmuxClientMut<'_, '_>, control: Option<Res<ControlPlaneHandle>>) {
-    let Some(control) = control else {
-        return;
-    };
+/// Gated by `run_if(resource_exists::<ControlPlaneHandle>)`, so it never runs
+/// when the control plane is absent.
+fn refresh_ozma_sock(mut client: TmuxClientMut<'_, '_>, control: Res<ControlPlaneHandle>) {
     let sock = control.sock_path.to_string_lossy();
     if let Err(e) = client.send(SetEnvironmentGlobal {
         key: "OZMA_SOCK",
         value: sock.as_ref(),
     }) {
         tracing::warn!(?e, "failed to set global $OZMA_SOCK");
+    }
+}
+
+/// Sets `$OZMA_SOCK` at session scope for each tmux session as it appears or the
+/// attached session changes.
+///
+/// Gated on `Changed<TmuxSession>`, so it fires on the initial projection and
+/// again whenever the control client switches to (or is re-attached to) a
+/// different session — `on_session_changed` reuses one session entity, so a
+/// switch is a component re-insert, not an `Added` edge. The global set in
+/// [`refresh_ozma_sock`] only reaches the process environment of panes spawned
+/// *after* it and is invisible to session-scope `show-environment`; a pane that
+/// forked earlier (the adopted control-mode pane, or any pane of a pre-existing
+/// session switched into) therefore cannot see it. tmux injects `$TMUX` into
+/// every pane, so the ratatui-ozma SDK recovers the value with
+/// `tmux show-environment OZMA_SOCK` — but only when it is set at session scope,
+/// which this system does. The session is targeted by id (`$N`), which is stable
+/// and unique, rather than name, which may be empty or duplicated.
+///
+/// Gated by `run_if(resource_exists::<ControlPlaneHandle>)`, so it never runs
+/// when the control plane is absent.
+fn bind_ozma_sock_to_session(
+    mut client: TmuxClientMut<'_, '_>,
+    sessions: Query<&TmuxSession, Changed<TmuxSession>>,
+    control: Res<ControlPlaneHandle>,
+) {
+    let sock = control.sock_path.to_string_lossy();
+    for session in sessions.iter() {
+        let target = format!("${}", session.id.0);
+        if let Err(e) = client.send(SetEnvironmentInSession {
+            session: &target,
+            key: "OZMA_SOCK",
+            value: sock.as_ref(),
+        }) {
+            tracing::warn!(?e, session = %target, "failed to set session $OZMA_SOCK");
+        }
     }
 }
 
@@ -131,7 +193,7 @@ fn cleanup_ozma_sock(world: &mut World) {
 mod tests {
     use super::*;
     use ozma_webview::TokenRegistry;
-    use ozmux_tmux::PaneId;
+    use ozmux_tmux::{PaneId, SessionId};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tmux_control_parser::CellDims;
@@ -181,7 +243,12 @@ mod tests {
             tokens: TokenRegistry::default(),
         });
 
-        app.add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added));
+        app.add_systems(
+            Update,
+            refresh_ozma_sock
+                .run_if(tmux_client_added)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        );
         app.update();
 
         let out = app
@@ -196,13 +263,135 @@ mod tests {
     }
 
     #[test]
+    fn session_added_sends_session_scoped_set_environment() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
+
+        app.insert_resource(ControlPlaneHandle {
+            sock_path: PathBuf::from("/tmp/ctl.sock"),
+            tokens: TokenRegistry::default(),
+        });
+
+        app.add_systems(
+            Update,
+            bind_ozma_sock_to_session
+                .run_if(tmux_session_changed)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        );
+
+        app.world_mut().spawn(TmuxSession {
+            id: SessionId(3),
+            name: "work".into(),
+        });
+        app.update();
+
+        let out = app
+            .world_mut()
+            .get_mut::<TmuxClient>(gateway)
+            .unwrap()
+            .take_outgoing();
+        assert_eq!(
+            out, b"set-environment -t '$3' OZMA_SOCK /tmp/ctl.sock\n",
+            "a newly projected session gets a session-scoped set so show-environment recovers it"
+        );
+    }
+
+    #[test]
+    fn session_switch_resends_session_scoped_set_for_new_id() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
+        app.insert_resource(ControlPlaneHandle {
+            sock_path: PathBuf::from("/tmp/ctl.sock"),
+            tokens: TokenRegistry::default(),
+        });
+        app.add_systems(
+            Update,
+            bind_ozma_sock_to_session
+                .run_if(tmux_session_changed)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        );
+
+        let session = app
+            .world_mut()
+            .spawn(TmuxSession {
+                id: SessionId(3),
+                name: "work".into(),
+            })
+            .id();
+        app.update();
+        let _ = app
+            .world_mut()
+            .get_mut::<TmuxClient>(gateway)
+            .unwrap()
+            .take_outgoing();
+
+        // A control-client switch re-inserts TmuxSession on the same entity with a
+        // new id (no `Added` edge), mirroring `on_session_changed`.
+        app.world_mut().entity_mut(session).insert(TmuxSession {
+            id: SessionId(5),
+            name: "other".into(),
+        });
+        app.update();
+
+        let out = app
+            .world_mut()
+            .get_mut::<TmuxClient>(gateway)
+            .unwrap()
+            .take_outgoing();
+        assert_eq!(
+            out, b"set-environment -t '$5' OZMA_SOCK /tmp/ctl.sock\n",
+            "switching to a different session re-sends the session-scoped set for the new id"
+        );
+    }
+
+    #[test]
+    fn session_set_is_no_op_without_control_plane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+
+        let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
+
+        app.add_systems(
+            Update,
+            bind_ozma_sock_to_session
+                .run_if(tmux_session_changed)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        );
+
+        app.world_mut().spawn(TmuxSession {
+            id: SessionId(1),
+            name: String::new(),
+        });
+        app.update();
+
+        let out = app
+            .world_mut()
+            .get_mut::<TmuxClient>(gateway)
+            .unwrap()
+            .take_outgoing();
+        assert!(
+            out.is_empty(),
+            "no ControlPlaneHandle means no session set-environment is sent"
+        );
+    }
+
+    #[test]
     fn refresh_is_no_op_without_control_plane() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
 
         let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
 
-        app.add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added));
+        app.add_systems(
+            Update,
+            refresh_ozma_sock
+                .run_if(tmux_client_added)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        );
         app.update();
 
         let out = app
