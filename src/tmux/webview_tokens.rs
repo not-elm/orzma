@@ -37,10 +37,17 @@ impl Plugin for WebviewTokensPlugin {
             Update,
             bind_tmux_pane_tokens.run_if(any_with_component::<TmuxClient>),
         )
-        .add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added))
         .add_systems(
             Update,
-            bind_ozma_sock_to_session.run_if(tmux_session_changed),
+            refresh_ozma_sock
+                .run_if(tmux_client_added)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        )
+        .add_systems(
+            Update,
+            bind_ozma_sock_to_session
+                .run_if(tmux_session_changed)
+                .run_if(resource_exists::<ControlPlaneHandle>),
         )
         .add_systems(Last, cleanup_ozma_sock.run_if(on_message::<AppExit>));
     }
@@ -81,11 +88,9 @@ fn bind_tmux_pane_tokens(
 /// remote host cannot reach, but the set is harmless; the next local attach
 /// overwrites it.
 ///
-/// No-op when the control plane is absent (no `ControlPlaneHandle`).
-fn refresh_ozma_sock(mut client: TmuxClientMut<'_, '_>, control: Option<Res<ControlPlaneHandle>>) {
-    let Some(control) = control else {
-        return;
-    };
+/// Gated by `run_if(resource_exists::<ControlPlaneHandle>)`, so it never runs
+/// when the control plane is absent.
+fn refresh_ozma_sock(mut client: TmuxClientMut<'_, '_>, control: Res<ControlPlaneHandle>) {
     let sock = control.sock_path.to_string_lossy();
     if let Err(e) = client.send(SetEnvironmentGlobal {
         key: "OZMA_SOCK",
@@ -111,15 +116,13 @@ fn refresh_ozma_sock(mut client: TmuxClientMut<'_, '_>, control: Option<Res<Cont
 /// which this system does. The session is targeted by id (`$N`), which is stable
 /// and unique, rather than name, which may be empty or duplicated.
 ///
-/// No-op when the control plane is absent (no `ControlPlaneHandle`).
+/// Gated by `run_if(resource_exists::<ControlPlaneHandle>)`, so it never runs
+/// when the control plane is absent.
 fn bind_ozma_sock_to_session(
     mut client: TmuxClientMut<'_, '_>,
     sessions: Query<&TmuxSession, Changed<TmuxSession>>,
-    control: Option<Res<ControlPlaneHandle>>,
+    control: Res<ControlPlaneHandle>,
 ) {
-    let Some(control) = control else {
-        return;
-    };
     let sock = control.sock_path.to_string_lossy();
     for session in sessions.iter() {
         let target = format!("${}", session.id.0);
@@ -240,7 +243,12 @@ mod tests {
             tokens: TokenRegistry::default(),
         });
 
-        app.add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added));
+        app.add_systems(
+            Update,
+            refresh_ozma_sock
+                .run_if(tmux_client_added)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        );
         app.update();
 
         let out = app
@@ -268,7 +276,9 @@ mod tests {
 
         app.add_systems(
             Update,
-            bind_ozma_sock_to_session.run_if(tmux_session_changed),
+            bind_ozma_sock_to_session
+                .run_if(tmux_session_changed)
+                .run_if(resource_exists::<ControlPlaneHandle>),
         );
 
         app.world_mut().spawn(TmuxSession {
@@ -300,7 +310,9 @@ mod tests {
         });
         app.add_systems(
             Update,
-            bind_ozma_sock_to_session.run_if(tmux_session_changed),
+            bind_ozma_sock_to_session
+                .run_if(tmux_session_changed)
+                .run_if(resource_exists::<ControlPlaneHandle>),
         );
 
         let session = app
@@ -345,7 +357,9 @@ mod tests {
 
         app.add_systems(
             Update,
-            bind_ozma_sock_to_session.run_if(tmux_session_changed),
+            bind_ozma_sock_to_session
+                .run_if(tmux_session_changed)
+                .run_if(resource_exists::<ControlPlaneHandle>),
         );
 
         app.world_mut().spawn(TmuxSession {
@@ -372,7 +386,12 @@ mod tests {
 
         let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
 
-        app.add_systems(Update, refresh_ozma_sock.run_if(tmux_client_added));
+        app.add_systems(
+            Update,
+            refresh_ozma_sock
+                .run_if(tmux_client_added)
+                .run_if(resource_exists::<ControlPlaneHandle>),
+        );
         app.update();
 
         let out = app
