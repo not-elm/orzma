@@ -262,12 +262,6 @@ pub(crate) fn position_ime_overlay(
     root_node.top = Val::Px(pos.y);
     root_node.display = Display::Flex;
 
-    // NOTE: the shell still renders the pre-commit line under the
-    // preedit (only the block cursor is suppressed, not the cells), so a
-    // transparent preedit lets mid-line characters bleed through and
-    // collide with the composed glyphs. An opaque background matching
-    // the pane's default bg occludes them — match the VT default (what
-    // the renderer fills default-bg cells with) so the box is seamless.
     let occluding_bg = Color::srgb_u8(grid.default_bg[0], grid.default_bg[1], grid.default_bg[2]);
     if root_bg.0 != occluding_bg {
         root_bg.0 = occluding_bg;
