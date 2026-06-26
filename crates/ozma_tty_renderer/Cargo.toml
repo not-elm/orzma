@@ -11,7 +11,7 @@ publish.workspace = true
 bevy = { workspace = true }
 ab_glyph = "0.2"
 ttf-parser = "0.25"
-unicode-segmentation = "1"
+unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
