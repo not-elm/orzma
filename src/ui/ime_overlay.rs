@@ -16,6 +16,8 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::schedule::SystemCondition;
+use bevy::ecs::schedule::common_conditions::{not, resource_changed};
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
 use bevy::prelude::default;
@@ -69,8 +71,14 @@ impl Plugin for ImeOverlayPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    position_ime_overlay.before(UiSystems::Content),
+                    position_ime_overlay
+                        .run_if(ime_is_composing)
+                        .before(UiSystems::Content),
+                    hide_ime_overlay
+                        .run_if(resource_changed::<ImeState>.and(not(ime_is_composing)))
+                        .before(UiSystems::Content),
                     suppress_terminal_cursor_during_ime
+                        .run_if(resource_changed::<ImeState>.or(ime_is_composing))
                         .before(TerminalMaterialSystems::UpdateMaterial),
                 ),
             );
@@ -258,6 +266,11 @@ fn clamp_cluster_cells(cluster: &str) -> u32 {
         1 => 1,
         _ => 2,
     }
+}
+
+/// Run condition: true while an IME preedit composition is active.
+fn ime_is_composing(state: Res<ImeState>) -> bool {
+    state.is_composing()
 }
 
 /// PostUpdate system that grid-aligns the IME preedit overlay at the attached
@@ -515,6 +528,31 @@ fn suppress_terminal_cursor_during_ime(
             grid.suppress_cursor = want;
         }
     }
+}
+
+/// PostUpdate system that hides every IME overlay part. Gated to run only on
+/// the frame composition ends (commit / cancel / `Ime::Disabled`); see
+/// `ImeOverlayPlugin`. Shares `hide_all_overlay_parts` with
+/// `position_ime_overlay`'s internal precondition guards.
+fn hide_ime_overlay(
+    mut nodes: Query<&mut Node>,
+    pool: Res<ImeGraphemePool>,
+    background: Query<Entity, With<ImeOverlayNode>>,
+    underline: Query<Entity, With<ImeUnderline>>,
+    caret: Query<Entity, With<ImeCaretBar>>,
+    clause: Query<Entity, With<ImeClauseHighlight>>,
+) {
+    let Ok(bg_entity) = background.single() else {
+        return;
+    };
+    hide_all_overlay_parts(
+        &mut nodes,
+        bg_entity,
+        underline.single().ok(),
+        caret.single().ok(),
+        clause.single().ok(),
+        &pool,
+    );
 }
 
 /// Global z-index for the IME overlay; placed high enough to float
@@ -1373,7 +1411,10 @@ mod tests {
         app.insert_resource(state);
 
         app.add_systems(Startup, spawn_ime_overlay_once);
-        app.add_systems(Update, (position_ime_overlay, count_changed).chain());
+        app.add_systems(
+            Update,
+            (position_ime_overlay.run_if(ime_is_composing), count_changed).chain(),
+        );
         app.world_mut().spawn((
             Window {
                 resolution: WindowResolution::new(800, 600),
@@ -1403,6 +1444,143 @@ mod tests {
             app.world().resource::<ChangedOverlayNodes>().0,
             0,
             "no overlay Node may be re-marked Changed on an unchanged composition",
+        );
+    }
+
+    #[test]
+    fn hide_ime_overlay_hides_parts_after_composition_clears() {
+        // Show the overlay with an active composition, then clear it and run the
+        // hide system: every part must end Display::None.
+        let mut app = run_overlay_with_composition("abc", Some((3, 3)));
+
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::Flex,
+            "precondition: overlay is shown while composing",
+        );
+
+        app.insert_resource(ImeState::default());
+        app.world_mut().run_system_once(hide_ime_overlay).unwrap();
+
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::None,
+            "hide_ime_overlay must hide the overlay background after composition clears",
+        );
+        let pool = app.world().resource::<ImeGraphemePool>().0.clone();
+        for &cell in &pool {
+            assert_eq!(
+                app.world().get::<Node>(cell).unwrap().display,
+                Display::None,
+                "every pooled grapheme cell must be hidden",
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_hidden_and_idle_after_composition_ends() {
+        use bevy::app::PostUpdate;
+        use bevy::asset::Handle;
+        use bevy::window::WindowResolution;
+        use ozma_terminal::OzmaTerminal;
+        use ozma_tty_renderer::prelude::Cursor;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(TerminalFontSize(12.0));
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: metrics(10.0, 16.0),
+            phys_font_size: 12,
+        });
+        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ImeState>();
+
+        app.add_systems(Startup, spawn_ime_overlay_once);
+        app.add_systems(
+            PostUpdate,
+            (
+                position_ime_overlay.run_if(ime_is_composing),
+                hide_ime_overlay.run_if(resource_changed::<ImeState>.and(not(ime_is_composing))),
+            ),
+        );
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.world_mut().spawn((
+            OzmaTerminal,
+            KeyboardFocused,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            TerminalGrid {
+                cursor: Some(Cursor::default()),
+                default_bg: [0, 0, 0],
+                ..TerminalGrid::default()
+            },
+        ));
+
+        {
+            let mut state = app.world_mut().resource_mut::<ImeState>();
+            apply_event(
+                &mut state,
+                &Ime::Preedit {
+                    window: Entity::PLACEHOLDER,
+                    value: "abc".into(),
+                    cursor: Some((3, 3)),
+                },
+            );
+        }
+        app.update();
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::Flex,
+            "overlay shows while composing",
+        );
+
+        {
+            let mut state = app.world_mut().resource_mut::<ImeState>();
+            apply_event(
+                &mut state,
+                &Ime::Commit {
+                    window: Entity::PLACEHOLDER,
+                    value: "abc".into(),
+                },
+            );
+        }
+        app.update();
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::None,
+            "overlay hides the frame composition ends",
+        );
+
+        app.update();
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::None,
+            "overlay stays hidden while idle (neither gated system runs)",
         );
     }
 }
