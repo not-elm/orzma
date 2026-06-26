@@ -270,8 +270,7 @@ fn position_ime_overlay(
     let caret_entity = caret.single().ok();
     let clause_entity = clause.single().ok();
 
-    // Default: hide every overlay part each frame. The success path re-shows
-    // the active ones. Guarantees no leak past a commit / cancel / focus loss.
+    // NOTE: hide every part by default each frame; the success path re-shows only the active ones. Without this, caret/clause/cells leak past a commit, cancel, or focus loss.
     set_node_display(&mut nodes, bg_entity, Display::None);
     for entity in [underline_entity, caret_entity, clause_entity]
         .into_iter()
@@ -301,9 +300,6 @@ fn position_ime_overlay(
     let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;
     let line_h_logical = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
 
-    // Lay out once at origin 0 to get the true total width, then anchor with
-    // the real width so `compute_overlay_pos` can clamp at the pane edge, then
-    // lay out again at the clamped origin.
     let (_, total_cells) = layout_preedit_cells(comp.text(), cell_w_logical, 0.0);
     let total_width_logical = total_cells as f32 * cell_w_logical;
     let pos = compute_overlay_pos(
@@ -316,7 +312,6 @@ fn position_ime_overlay(
     );
     let (placements, _) = layout_preedit_cells(comp.text(), cell_w_logical, pos.x);
 
-    // Occluding background rect.
     if let Ok(mut bg_node) = nodes.get_mut(bg_entity) {
         set_node_rect(
             &mut bg_node,
@@ -336,7 +331,6 @@ fn position_ime_overlay(
         }
     }
 
-    // Grapheme cells: reuse pool entries, growing the pool when short.
     for (index, placement) in placements.iter().enumerate() {
         if let Some(&cell) = pool.0.get(index) {
             if let Ok(mut node) = nodes.get_mut(cell) {
@@ -375,8 +369,7 @@ fn position_ime_overlay(
         }
     }
 
-    // Continuous underline bar. `underline_position_phys` is baseline-relative
-    // and negative, so fold in ascent to land it below the baseline.
+    // NOTE: `underline_position_phys` is baseline-relative and negative; subtract it from ascent so the bar lands below the baseline, not above the cell top.
     if let Some(underline_entity) = underline_entity
         && let Ok(mut node) = nodes.get_mut(underline_entity)
     {
@@ -418,7 +411,9 @@ fn position_ime_overlay(
         if node.height != height {
             node.height = height;
         }
-        node.display = Display::Flex;
+        if node.display != Display::Flex {
+            node.display = Display::Flex;
+        }
     }
 
     if has_clause
@@ -432,7 +427,9 @@ fn position_ime_overlay(
             (end_cells - begin_cells) * cell_w_logical,
             line_h_logical,
         );
-        node.display = Display::Flex;
+        if node.display != Display::Flex {
+            node.display = Display::Flex;
+        }
     }
 }
 
