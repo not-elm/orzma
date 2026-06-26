@@ -35,12 +35,22 @@ pub(crate) fn parse_cursor_pos(output: &[String]) -> Option<(u16, u16)> {
 }
 
 /// Joins `capture-pane -p -e` reply lines into VT bytes for seeding a pane's
-/// screen: a cursor-home + clear-screen prefix so the snapshot repaints from a
-/// clean grid (the reply can arrive after live `%output` has already moved the
-/// cursor — without the reset the rows would stack and duplicate), then the rows
-/// CRLF-joined (the reply omits line terminators).
+/// screen: a clean-state prefix (reset scroll region + origin mode + SGR, then
+/// cursor-home + clear-screen) so the snapshot repaints from a clean grid with
+/// the default background and absolute positioning, then the rows CRLF-joined
+/// (the reply omits line terminators). Home + clear also keep the rows from
+/// stacking when the reply arrives after live `%output` has moved the cursor.
 pub(crate) fn capture_to_bytes(lines: &[String]) -> Vec<u8> {
-    let mut bytes = b"\x1b[H\x1b[2J".to_vec();
+    // NOTE: the reset prefix MUST precede the ESC[2J erase and the row replay.
+    // `capture-pane -e` output assumes a default-state terminal, but it is
+    // replayed into the long-lived pane mirror, which can still carry modes left
+    // by prior `%output` (e.g. nvim mid-redraw on a resize): a stale SGR
+    // background floods the erase and default-bg cells (the blue-pane bug), and
+    // a stale scroll region (DECSTBM) or origin mode (DECOM) scrolls the CRLF
+    // replay within the wrong margins or mis-places the cursor. Reset region
+    // (ESC[r), origin (ESC[?6l), and SGR (ESC[0m) first so the replay is
+    // faithful regardless of prior state.
+    let mut bytes = b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2J".to_vec();
     bytes.extend_from_slice(lines.join("\r\n").as_bytes());
     bytes
 }
@@ -310,10 +320,10 @@ mod tests {
 
     #[test]
     fn capture_to_bytes_with_cursor_appends_cursor_escape() {
-        // ESC[H ESC[2J + "hello" + ESC[6;4H  (cy=5→row 6, cx=3→col 4, 1-origin)
+        // ESC[r ESC[?6l ESC[0m ESC[H ESC[2J + "hello" + ESC[6;4H  (cy=5→row 6, cx=3→col 4)
         assert_eq!(
             capture_to_bytes_with_cursor(&["hello".to_string()], 3, 5),
-            b"\x1b[H\x1b[2Jhello\x1b[6;4H".to_vec()
+            b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2Jhello\x1b[6;4H".to_vec()
         );
     }
 
