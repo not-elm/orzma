@@ -188,9 +188,18 @@ pub(crate) fn compute_overlay_pos(
 /// Caller is responsible for byte-offset validity (UTF-8 boundary,
 /// `begin <= end <= text.len()`); `Composition::try_new` enforces these.
 fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
-    let begin_cells = UnicodeWidthStr::width(&text[..begin]) as f32;
-    let end_cells = UnicodeWidthStr::width(&text[..end]) as f32;
-    (begin_cells, end_cells)
+    (
+        clamped_prefix_cells(&text[..begin]) as f32,
+        clamped_prefix_cells(&text[..end]) as f32,
+    )
+}
+
+/// Total clamped cell width of `text` — the sum of [`clamp_cluster_cells`] over
+/// its grapheme clusters. Mirrors the per-cluster counting in
+/// `layout_preedit_cells`, so the caret/clause offsets cannot diverge from the
+/// rendered cells for a cluster wider than two columns (e.g. a ZWJ emoji).
+fn clamped_prefix_cells(text: &str) -> u32 {
+    text.graphemes(true).map(clamp_cluster_cells).sum()
 }
 
 /// A single placed preedit cell-unit: the grapheme cluster's text and its
@@ -216,16 +225,21 @@ fn layout_preedit_cells(
     let mut placements: Vec<CellPlacement> = Vec::new();
     let mut cum_cells: u32 = 0;
     for cluster in text.graphemes(true) {
-        let cells = match UnicodeWidthStr::width(cluster) {
-            0 => {
-                if let Some(last) = placements.last_mut() {
-                    last.text.push_str(cluster);
-                }
-                continue;
+        let cells = clamp_cluster_cells(cluster);
+        if cells == 0 {
+            match placements.last_mut() {
+                Some(last) => last.text.push_str(cluster),
+                // NOTE: a leading zero-width cluster (a combining mark with no
+                // base) has nothing to merge into; render it at the origin so the
+                // overlay still shows every typed character instead of silently
+                // dropping it. It consumes no cell.
+                None => placements.push(CellPlacement {
+                    text: cluster.to_string(),
+                    left: origin_x,
+                }),
             }
-            1 => 1,
-            _ => 2,
-        };
+            continue;
+        }
         placements.push(CellPlacement {
             text: cluster.to_string(),
             left: origin_x + cum_cells as f32 * cell_w_logical,
@@ -233,6 +247,17 @@ fn layout_preedit_cells(
         cum_cells += cells;
     }
     (placements, cum_cells)
+}
+
+/// Cell width of one grapheme cluster, clamped to the renderer's `runs_to_cells`
+/// rule (`crates/ozma_tty_renderer/src/grid.rs`): a `width >= 2` cluster is 2
+/// cells, `width == 0` is 0, otherwise 1.
+fn clamp_cluster_cells(cluster: &str) -> u32 {
+    match UnicodeWidthStr::width(cluster) {
+        0 => 0,
+        1 => 1,
+        _ => 2,
+    }
 }
 
 /// PostUpdate system that grid-aligns the IME preedit overlay at the attached
@@ -320,12 +345,15 @@ fn position_ime_overlay(
         return;
     };
 
-    let scale = window.resolution.scale_factor();
+    // NOTE: clamp the scale away from zero (matching `ime_policy_system`); a
+    // 0 scale factor would make every cell metric inf/NaN and fling the overlay
+    // off-screen during composition.
+    let scale = window.resolution.scale_factor().max(f32::EPSILON);
     let cursor_cell = grid.cursor.as_ref().map(|c| (c.x, c.y)).unwrap_or((0, 0));
     let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;
     let line_h_logical = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
 
-    let (_, total_cells) = layout_preedit_cells(comp.text(), cell_w_logical, 0.0);
+    let (mut placements, total_cells) = layout_preedit_cells(comp.text(), cell_w_logical, 0.0);
     let total_width_logical = total_cells as f32 * cell_w_logical;
     let pos = compute_overlay_pos(
         ui_xform.translation,
@@ -335,7 +363,13 @@ fn position_ime_overlay(
         total_width_logical,
         scale,
     );
-    let (placements, _) = layout_preedit_cells(comp.text(), cell_w_logical, pos.x);
+    // Lay out once at origin 0 (above) for the true width, then shift each
+    // placement to the clamped origin. `left = origin_x + cum_cells * cell_w`
+    // differs only by `pos.x`, so re-segmenting would just reallocate a String
+    // per grapheme on the typing hot path.
+    for placement in &mut placements {
+        placement.left += pos.x;
+    }
 
     set_node_rect(
         &mut nodes,
@@ -487,6 +521,13 @@ fn suppress_terminal_cursor_during_ime(
 /// above all other UI nodes.
 const IME_OVERLAY_Z: i32 = 200;
 
+/// Z-index for the opaque occluding background rect — one below
+/// [`IME_OVERLAY_Z`] so the preedit glyph cells, underline, caret, and clause
+/// box (all at [`IME_OVERLAY_Z`]) always render in front of it, rather than
+/// relying on Bevy's equal-z spawn-order tie-break (which entity reuse as the
+/// pool grows/shrinks could otherwise flip, hiding the composition).
+const IME_OVERLAY_BG_Z: i32 = IME_OVERLAY_Z - 1;
+
 /// Spawns the overlay entity tree.
 ///
 /// NOTE: `Text` root and caret bar are spawned as INDEPENDENT
@@ -532,7 +573,7 @@ fn spawn_ime_overlay_once(
             top: Val::Px(0.0),
             ..default()
         },
-        GlobalZIndex(IME_OVERLAY_Z),
+        GlobalZIndex(IME_OVERLAY_BG_Z),
         ImeOverlayNode,
     ));
 
@@ -1125,6 +1166,39 @@ mod tests {
         let (cells, total) = layout_preedit_cells("", 10.0, 0.0);
         assert_eq!(total, 0);
         assert!(cells.is_empty());
+    }
+
+    #[test]
+    fn layout_preedit_cells_leading_combining_mark_is_not_dropped() {
+        // A composition that begins with a lone combining mark (its own grapheme,
+        // width 0, with no base to merge into) must still render — the old
+        // single-Text path displayed every character.
+        let (cells, total) = layout_preedit_cells("\u{0301}ab", 10.0, 0.0);
+        let texts: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, vec!["\u{0301}", "a", "b"]);
+        // The orphan mark consumes 0 cells; "a"/"b" occupy cells 0 and 1.
+        assert_eq!(total, 2);
+        assert_eq!(cells[0].left, 0.0);
+        assert_eq!(cells[1].left, 0.0);
+        assert_eq!(cells[2].left, 10.0);
+    }
+
+    #[test]
+    fn caret_offset_matches_clamped_cell_layout_for_wide_cluster() {
+        // A ZWJ emoji is a single grapheme cluster whose raw display width
+        // exceeds two cells. The caret offset must use the same clamped (<=2)
+        // count the rendered cells use, so the beam cannot drift past the glyph.
+        let family = "👨\u{200d}👩\u{200d}👧";
+        let (_, total_cells) = layout_preedit_cells(family, 1.0, 0.0);
+        let (_, end_cells) = caret_cell_offsets(family, (0, family.len()));
+        assert_eq!(
+            end_cells, total_cells as f32,
+            "caret end offset must equal the rendered cell-layout width",
+        );
+        assert!(
+            end_cells <= 2.0,
+            "a single grapheme cluster must clamp to at most 2 cells, got {end_cells}",
+        );
     }
 
     fn run_overlay_with_composition(value: &str, caret: Option<(usize, usize)>) -> App {
