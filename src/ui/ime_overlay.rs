@@ -15,7 +15,8 @@ use bevy::ecs::component::Component;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::query::{With, Without};
 use bevy::ecs::schedule::IntoScheduleConfigs;
-use bevy::ecs::system::{Commands, Query, Res};
+use bevy::ecs::resource::Resource;
+use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::math::Vec2;
 use bevy::prelude::default;
 use bevy::text::{LineBreak, TextColor, TextFont, TextLayout, Underline, UnderlineColor};
@@ -41,10 +42,11 @@ pub struct ImeOverlayPlugin;
 
 impl Plugin for ImeOverlayPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Startup,
-            spawn_ime_overlay_once.after(TerminalFontInitSet::InitCellMetrics),
-        )
+        app.init_resource::<ImeGraphemePool>()
+            .add_systems(
+                Startup,
+                spawn_ime_overlay_once.after(TerminalFontInitSet::InitCellMetrics),
+            )
         // NOTE: must run BEFORE `UiSystems::Content`. Bevy's
         // `detect_text_needs_rerender::<Text>` and `measure_text_system`
         // run in `UiSystems::Content` (`bevy_ui-0.18.1/src/lib.rs:226-243`)
@@ -95,6 +97,29 @@ pub struct ImeCaretBar;
 /// mutually exclusive visually.
 #[derive(Component)]
 pub struct ImeClauseHighlight;
+
+/// Marker for a pooled per-grapheme preedit `Text` node. Each is an
+/// independent top-level UI entity (never a child of another node) so it stays
+/// a Taffy leaf and the text measure func drives its `ComputedNode.size`.
+#[derive(Component)]
+struct ImeGraphemeCell;
+
+/// Marker for the single continuous underline bar drawn under the whole
+/// preedit. A solid `Node` bar (not Bevy's per-glyph `Underline`) so it has no
+/// gaps under fullwidth glyphs narrower than their cell span.
+#[derive(Component)]
+struct ImeUnderline;
+
+/// Pool of `ImeGraphemeCell` entities, reused across compositions and grown on
+/// demand. Index `i` holds the i-th visible grapheme; entries past the active
+/// composition length are hidden (`Display::None`).
+#[derive(Resource, Default)]
+struct ImeGraphemePool(Vec<Entity>);
+
+/// Initial number of pooled grapheme nodes pre-spawned at Startup. Covers
+/// typical short compositions without runtime growth; longer compositions grow
+/// the pool on demand.
+const INITIAL_POOL_CAP: usize = 16;
 
 /// Computes the overlay's top-left logical-pixel position relative to
 /// the window origin. Caller is responsible for writing this into
@@ -410,6 +435,7 @@ const IME_OVERLAY_Z: i32 = 200;
 /// helper is integrated. Placeholder white for now.
 fn spawn_ime_overlay_once(
     mut commands: Commands,
+    mut pool: ResMut<ImeGraphemePool>,
     ui_font: Res<TerminalUiFont>,
     font_size: Res<TerminalFontSize>,
 ) {
@@ -471,6 +497,73 @@ fn spawn_ime_overlay_once(
         GlobalZIndex(IME_OVERLAY_Z),
         ImeClauseHighlight,
     ));
+
+    commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            width: Val::Px(0.0),
+            height: Val::Px(1.0),
+            left: Val::Px(0.0),
+            top: Val::Px(0.0),
+            ..default()
+        },
+        BackgroundColor(Color::WHITE),
+        GlobalZIndex(IME_OVERLAY_Z),
+        ImeUnderline,
+    ));
+
+    pool.0 = (0..INITIAL_POOL_CAP)
+        .map(|_| {
+            spawn_grapheme_cell(
+                &mut commands,
+                &ui_font,
+                &font_size,
+                "",
+                0.0,
+                0.0,
+                Display::None,
+            )
+        })
+        .collect();
+}
+
+/// Spawns one `ImeGraphemeCell` leaf `Text` node, configured with `text`, an
+/// absolute `left`/`top`, and `display`. Used both to pre-spawn hidden pool
+/// nodes and to grow the pool with already-positioned nodes.
+fn spawn_grapheme_cell(
+    commands: &mut Commands,
+    ui_font: &TerminalUiFont,
+    font_size: &TerminalFontSize,
+    text: &str,
+    left: f32,
+    top: f32,
+    display: Display,
+) -> Entity {
+    commands
+        .spawn((
+            Text::new(text),
+            TextFont {
+                font: ui_font.0.clone(),
+                font_size: font_size.0,
+                ..default()
+            },
+            TextColor(Color::WHITE),
+            TextLayout {
+                linebreak: LineBreak::NoWrap,
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                display,
+                left: Val::Px(left),
+                top: Val::Px(top),
+                ..default()
+            },
+            GlobalZIndex(IME_OVERLAY_Z),
+            ImeGraphemeCell,
+        ))
+        .id()
 }
 
 #[cfg(test)]
@@ -739,6 +832,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
         app.insert_resource(TerminalFontSize(9.0));
+        app.init_resource::<ImeGraphemePool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
         app.update();
 
@@ -779,6 +873,7 @@ mod tests {
         );
         app.insert_resource(state);
 
+        app.init_resource::<ImeGraphemePool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
         app.world_mut().spawn((
             Window {
@@ -897,5 +992,30 @@ mod tests {
         let (cells, total) = layout_preedit_cells("", 10.0, 0.0);
         assert_eq!(total, 0);
         assert!(cells.is_empty());
+    }
+
+    #[test]
+    fn spawn_creates_grapheme_pool_and_underline() {
+        use bevy::asset::Handle;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(TerminalFontSize(12.0));
+        app.init_resource::<ImeGraphemePool>();
+        app.add_systems(Startup, spawn_ime_overlay_once);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ImeGraphemePool>().0.len(),
+            INITIAL_POOL_CAP,
+            "the grapheme pool must be pre-spawned at the initial capacity"
+        );
+        let mut underlines = app.world_mut().query_filtered::<Entity, With<ImeUnderline>>();
+        assert_eq!(
+            underlines.iter(app.world()).count(),
+            1,
+            "exactly one underline bar must be spawned"
+        );
     }
 }
