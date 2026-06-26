@@ -6,6 +6,8 @@
 //! `position_ime_overlay`), and the marker components identifying the
 //! root, pre-caret span, post-caret span, and caret bar.
 
+mod layout;
+
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
 use crate::input::ime::resolve_focused_surface;
@@ -19,7 +21,6 @@ use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::SystemCondition;
 use bevy::ecs::schedule::common_conditions::{not, resource_changed};
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
-use bevy::math::Vec2;
 use bevy::prelude::default;
 use bevy::text::{LineBreak, TextColor, TextFont, TextLayout};
 use bevy::ui::widget::Text;
@@ -28,15 +29,13 @@ use bevy::ui::{
     UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
+use layout::{caret_cell_offsets, compute_overlay_pos, layout_preedit_cells};
 use ozma_terminal::KeyboardFocused;
-use ozma_tty_renderer::CellMetrics;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalFontInitSet;
 use ozma_tty_renderer::TerminalFontSize;
 use ozma_tty_renderer::material::TerminalMaterialSystems;
 use ozma_tty_renderer::prelude::TerminalGrid;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
@@ -129,144 +128,6 @@ struct ImeGraphemePool(Vec<Entity>);
 /// typical short compositions without runtime growth; longer compositions grow
 /// the pool on demand.
 const INITIAL_POOL_CAP: usize = 16;
-
-/// Computes the overlay's top-left logical-pixel position relative to
-/// the window origin. Caller is responsible for writing this into
-/// `Node.left` / `Node.top`.
-///
-/// All metric inputs are physical px; the function does the
-/// physical→logical conversion via `scale`.
-///
-/// Layout: the overlay sits **at the cursor row**, matching Alacritty.
-/// The composed glyph overlays the terminal-rendered cursor cell for
-/// the duration of composition; this is the conventional placement
-/// users expect from a terminal IME. Clamps:
-///   - right: if `cell_origin_x + measured_width > host_right`,
-///     shifts left so the right edge stays inside the host rect.
-///   - left: after the right-edge clamp, ensures `left >= host_left`
-///     so a very wide composition can't escape the left side of the
-///     pane.
-pub(crate) fn compute_overlay_pos(
-    ui_global_translation_phys: Vec2,
-    host_size_phys: Vec2,
-    cursor_cell: (u16, u16),
-    metrics: &CellMetrics,
-    measured_width_logical: f32,
-    scale: f32,
-) -> Vec2 {
-    // NOTE: `UiGlobalTransform.translation` is the CENTER of the
-    // node in PHYSICAL pixels (verified via Bevy 0.18 source:
-    // `bevy_ui-0.18.1/src/layout/mod.rs:239-275`). To get the
-    // top-left we subtract `0.5 * host_size_phys`. We do NOT
-    // multiply by `scale` — translation is already physical. The
-    // earlier draft treated `translation` as logical-px top-left,
-    // producing an offset of ~(host_w/2, host_h/2) at scale=1
-    // (visible in bug1.png) and a compounding unit error at DPR>1.
-    let cell_w_phys = metrics.advance_phys.floor().max(1.0);
-    let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
-    let host_top_left_phys = ui_global_translation_phys - 0.5 * host_size_phys;
-    let cell_origin_phys = host_top_left_phys
-        + Vec2::new(
-            cursor_cell.0 as f32 * cell_w_phys,
-            cursor_cell.1 as f32 * cell_h_phys,
-        );
-    let pos_logical = cell_origin_phys / scale;
-
-    let host_top_left_logical = host_top_left_phys / scale;
-    let host_size_logical = host_size_phys / scale;
-    let host_left = host_top_left_logical.x;
-    let host_right = host_left + host_size_logical.x;
-    let mut left = pos_logical.x;
-    if left + measured_width_logical > host_right {
-        left = host_right - measured_width_logical;
-    }
-    if left < host_left {
-        left = host_left;
-    }
-
-    Vec2::new(left, pos_logical.y)
-}
-
-/// Returns `(begin_cells, end_cells)` — the per-side cell offsets of
-/// the IME caret/clause range relative to the start of `text`. Uses
-/// `unicode_width::UnicodeWidthStr::width` so fullwidth CJK
-/// preedit counts as 2 cells per glyph, matching the renderer's own
-/// width logic in `ozma_tty_renderer::grid`.
-///
-/// Caller is responsible for byte-offset validity (UTF-8 boundary,
-/// `begin <= end <= text.len()`); `Composition::try_new` enforces these.
-fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
-    (
-        clamped_prefix_cells(&text[..begin]) as f32,
-        clamped_prefix_cells(&text[..end]) as f32,
-    )
-}
-
-/// Total clamped cell width of `text` — the sum of [`clamp_cluster_cells`] over
-/// its grapheme clusters. Mirrors the per-cluster counting in
-/// `layout_preedit_cells`, so the caret/clause offsets cannot diverge from the
-/// rendered cells for a cluster wider than two columns (e.g. a ZWJ emoji).
-fn clamped_prefix_cells(text: &str) -> u32 {
-    text.graphemes(true).map(clamp_cluster_cells).sum()
-}
-
-/// A single placed preedit cell-unit: the grapheme cluster's text and its
-/// left edge in logical px (the cell origin it is anchored to).
-struct CellPlacement {
-    text: String,
-    left: f32,
-}
-
-/// Splits `text` into grapheme clusters and assigns each a cell-aligned
-/// `left` edge, returning `(placements, total_cells)`.
-///
-/// Cluster width follows the renderer's `runs_to_cells` rule
-/// (`crates/ozma_tty_renderer/src/grid.rs`): a `width >= 2` cluster consumes
-/// 2 cells, a `width == 0` cluster (lone combining mark) consumes 0 cells and
-/// merges into the previous placement's text. `origin_x` is the composition's
-/// left edge; `cell_w_logical` is the floored cell pitch — both in logical px.
-fn layout_preedit_cells(
-    text: &str,
-    cell_w_logical: f32,
-    origin_x: f32,
-) -> (Vec<CellPlacement>, u32) {
-    let mut placements: Vec<CellPlacement> = Vec::new();
-    let mut cum_cells: u32 = 0;
-    for cluster in text.graphemes(true) {
-        let cells = clamp_cluster_cells(cluster);
-        if cells == 0 {
-            match placements.last_mut() {
-                Some(last) => last.text.push_str(cluster),
-                // NOTE: a leading zero-width cluster (a combining mark with no
-                // base) has nothing to merge into; render it at the origin so the
-                // overlay still shows every typed character instead of silently
-                // dropping it. It consumes no cell.
-                None => placements.push(CellPlacement {
-                    text: cluster.to_string(),
-                    left: origin_x,
-                }),
-            }
-            continue;
-        }
-        placements.push(CellPlacement {
-            text: cluster.to_string(),
-            left: origin_x + cum_cells as f32 * cell_w_logical,
-        });
-        cum_cells += cells;
-    }
-    (placements, cum_cells)
-}
-
-/// Cell width of one grapheme cluster, clamped to the renderer's `runs_to_cells`
-/// rule (`crates/ozma_tty_renderer/src/grid.rs`): a `width >= 2` cluster is 2
-/// cells, `width == 0` is 0, otherwise 1.
-fn clamp_cluster_cells(cluster: &str) -> u32 {
-    match UnicodeWidthStr::width(cluster) {
-        0 => 0,
-        1 => 1,
-        _ => 2,
-    }
-}
 
 /// Run condition: true while an IME preedit composition is active.
 fn ime_is_composing(state: Res<ImeState>) -> bool {
@@ -784,9 +645,11 @@ mod tests {
     use crate::input::ime::apply_event;
     use bevy::app::App;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::math::Vec2;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
     use ozma_terminal::KeyboardFocused;
+    use ozma_tty_renderer::CellMetrics;
     use ozmux_tmux::PaneId;
     use ozmux_tmux::{ActivePane, TmuxPane};
     use tmux_control_parser::CellDims;
@@ -899,142 +762,6 @@ mod tests {
         }
     }
 
-    /// Builds the inputs `compute_overlay_pos` expects from a more
-    /// intuitive `(top_left_logical, size_logical, scale)` spec.
-    /// `UiGlobalTransform.translation` is in physical px and points
-    /// at the node's CENTER; `ComputedNode.size` is in physical px.
-    /// Tests express their setup in logical-px top-left because
-    /// that's how a reader thinks about pane geometry; this helper
-    /// does the conversion.
-    fn host_inputs(top_left_logical: Vec2, size_logical: Vec2, scale: f32) -> (Vec2, Vec2) {
-        let size_phys = size_logical * scale;
-        let top_left_phys = top_left_logical * scale;
-        let center_phys = top_left_phys + 0.5 * size_phys;
-        (center_phys, size_phys)
-    }
-
-    #[test]
-    fn places_overlay_at_cursor_row() {
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (3, 5),
-            &metrics(10.0, 16.0),
-            0.0,
-            1.0,
-        );
-        // y = row 5 × 16 = 80
-        assert_eq!(pos.y, 80.0);
-        // x = col 3 × 10 = 30, no clamp
-        assert_eq!(pos.x, 30.0);
-    }
-
-    #[test]
-    fn divides_by_scale_factor_for_logical_px() {
-        // Logical top-left (100, 0), logical size 800×600, scale 2.0.
-        // At scale 2.0: physical size = (1600, 1200), physical
-        // top-left = (200, 0), physical center = (1000, 600).
-        // Cursor (0, 0) at cursor row → cell_origin_phys = (200, 0) →
-        // pos_logical = (100, 0).
-        let (translation_phys, size_phys) =
-            host_inputs(Vec2::new(100.0, 0.0), Vec2::new(800.0, 600.0), 2.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (0, 0),
-            &metrics(10.0, 16.0),
-            0.0,
-            2.0,
-        );
-        assert_eq!(pos.x, 100.0);
-        assert_eq!(pos.y, 0.0);
-    }
-
-    #[test]
-    fn floors_subpixel_cell_pitch() {
-        // advance 10.4 → floor 10; col 10 → x = 100
-        // line_height 16.4 → floor 16; cursor row 1 → y = 1 × 16 = 16
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (10, 1),
-            &metrics(10.4, 16.4),
-            0.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 100.0);
-        assert_eq!(pos.y, 16.0);
-    }
-
-    #[test]
-    fn clamps_right_when_overlay_overflows() {
-        // Cursor at col 78, cell width 10 → cell_origin x = 780.
-        // Measured width 100 → would extend to 880, host right = 800.
-        // Shift left by 80 → left = 700.
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (78, 0),
-            &metrics(10.0, 16.0),
-            100.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 700.0);
-    }
-
-    #[test]
-    fn clamps_left_when_composition_too_wide_to_fit() {
-        // host_size 80 (very narrow), measured 200, cursor at col 7 →
-        // cell_origin x = 70, would overflow right → shift to
-        // host_right - measured = 80 - 200 = -120, then left clamp →
-        // 0 (host_left).
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(80.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (7, 0),
-            &metrics(10.0, 16.0),
-            200.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 0.0);
-    }
-
-    #[test]
-    fn caret_cell_offsets_ascii_caret_at_start() {
-        assert_eq!(caret_cell_offsets("hello", (0, 0)), (0.0, 0.0));
-    }
-
-    #[test]
-    fn caret_cell_offsets_ascii_caret_at_end() {
-        assert_eq!(caret_cell_offsets("hello", (5, 5)), (5.0, 5.0));
-    }
-
-    #[test]
-    fn caret_cell_offsets_ascii_clause_range() {
-        // begin=2 ("he|llo"), end=4 ("hel|lo"). Width 2 cells.
-        assert_eq!(caret_cell_offsets("hello", (2, 4)), (2.0, 4.0));
-    }
-
-    #[test]
-    fn caret_cell_offsets_cjk_fullwidth() {
-        // "にほん" is 3 hiragana × 3 bytes each = 9 bytes total;
-        // each hiragana takes 2 monospace cells. begin=0, end=9 →
-        // begin_cells=0, end_cells=6.
-        assert_eq!(caret_cell_offsets("にほん", (0, 9)), (0.0, 6.0));
-    }
-
-    #[test]
-    fn caret_cell_offsets_mixed_ascii_and_cjk() {
-        // "a" (1 byte, 1 cell) + "あ" (3 bytes, 2 cells) = 4 bytes, 3 cells.
-        // begin=0, end=4 → (0.0, 3.0). begin=1 (after "a"), end=4 → (1.0, 3.0).
-        assert_eq!(caret_cell_offsets("aあ", (0, 4)), (0.0, 3.0));
-        assert_eq!(caret_cell_offsets("aあ", (1, 4)), (1.0, 3.0));
-    }
-
     #[test]
     fn ime_overlay_uses_terminal_font_size() {
         use bevy::asset::Handle;
@@ -1132,110 +859,6 @@ mod tests {
             app.world().get::<Node>(overlay).unwrap().display,
             Display::Flex,
             "overlay must be shown while composing",
-        );
-    }
-
-    #[test]
-    fn host_translated_to_window_offset_does_not_leak_into_cell_origin() {
-        // Regression guard for the bug visible in bug1.png: prior
-        // implementation treated `translation` as top-left, so a
-        // host centered in a 1265×720 window would push the cell
-        // origin by (host_w/2, host_h/2). With the fix, the cell
-        // origin must be the host's top-left + cursor offset, no
-        // matter where the host sits in the window.
-        //
-        // Host top-left at logical (10, 20), size 1200×640, cursor (5, 3),
-        // metrics 10×16, scale 1.0.
-        // Expected: pos = (10 + 5*10, 20 + 3*16) = (60, 68).
-        let (translation_phys, size_phys) =
-            host_inputs(Vec2::new(10.0, 20.0), Vec2::new(1200.0, 640.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (5, 3),
-            &metrics(10.0, 16.0),
-            0.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 60.0);
-        assert_eq!(pos.y, 68.0);
-    }
-
-    #[test]
-    fn layout_preedit_cells_ascii() {
-        let (cells, total) = layout_preedit_cells("abc", 10.0, 100.0);
-        assert_eq!(total, 3);
-        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
-        assert_eq!(lefts, vec![100.0, 110.0, 120.0]);
-        let texts: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(texts, vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn layout_preedit_cells_fullwidth_cjk_consumes_two_cells_each() {
-        // Each hiragana is 2 cells; cells start at 0 and 2 columns.
-        let (cells, total) = layout_preedit_cells("あい", 10.0, 0.0);
-        assert_eq!(total, 4);
-        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
-        assert_eq!(lefts, vec![0.0, 20.0]);
-    }
-
-    #[test]
-    fn layout_preedit_cells_mixed_ascii_and_cjk() {
-        // "a"(1) + "あ"(2) + "b"(1): lefts at 0, 1, 3 columns.
-        let (cells, total) = layout_preedit_cells("aあb", 10.0, 0.0);
-        assert_eq!(total, 4);
-        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
-        assert_eq!(lefts, vec![0.0, 10.0, 30.0]);
-    }
-
-    #[test]
-    fn layout_preedit_cells_combining_mark_merges_into_previous() {
-        // "e" + U+0301 (combining acute, width 0): one placement, total 1 cell.
-        let (cells, total) = layout_preedit_cells("e\u{0301}", 10.0, 0.0);
-        assert_eq!(total, 1);
-        assert_eq!(cells.len(), 1);
-        assert_eq!(cells[0].text, "e\u{0301}");
-        assert_eq!(cells[0].left, 0.0);
-    }
-
-    #[test]
-    fn layout_preedit_cells_empty() {
-        let (cells, total) = layout_preedit_cells("", 10.0, 0.0);
-        assert_eq!(total, 0);
-        assert!(cells.is_empty());
-    }
-
-    #[test]
-    fn layout_preedit_cells_leading_combining_mark_is_not_dropped() {
-        // A composition that begins with a lone combining mark (its own grapheme,
-        // width 0, with no base to merge into) must still render — the old
-        // single-Text path displayed every character.
-        let (cells, total) = layout_preedit_cells("\u{0301}ab", 10.0, 0.0);
-        let texts: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(texts, vec!["\u{0301}", "a", "b"]);
-        // The orphan mark consumes 0 cells; "a"/"b" occupy cells 0 and 1.
-        assert_eq!(total, 2);
-        assert_eq!(cells[0].left, 0.0);
-        assert_eq!(cells[1].left, 0.0);
-        assert_eq!(cells[2].left, 10.0);
-    }
-
-    #[test]
-    fn caret_offset_matches_clamped_cell_layout_for_wide_cluster() {
-        // A ZWJ emoji is a single grapheme cluster whose raw display width
-        // exceeds two cells. The caret offset must use the same clamped (<=2)
-        // count the rendered cells use, so the beam cannot drift past the glyph.
-        let family = "👨\u{200d}👩\u{200d}👧";
-        let (_, total_cells) = layout_preedit_cells(family, 1.0, 0.0);
-        let (_, end_cells) = caret_cell_offsets(family, (0, family.len()));
-        assert_eq!(
-            end_cells, total_cells as f32,
-            "caret end offset must equal the rendered cell-layout width",
-        );
-        assert!(
-            end_cells <= 2.0,
-            "a single grapheme cluster must clamp to at most 2 cells, got {end_cells}",
         );
     }
 
