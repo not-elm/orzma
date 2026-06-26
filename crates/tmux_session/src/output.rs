@@ -16,6 +16,16 @@ pub struct PaneOutput {
     pub data: Vec<u8>,
 }
 
+/// Request from the renderer layer (the binary) to re-`capture-pane`-seed a
+/// pane whose grid was left structurally unpainted after a layout change. The
+/// crate handles it via `request_pane_capture`, reusing the existing reply
+/// correlation and in-flight suppression.
+#[derive(Message)]
+pub struct RequestPaneReseed {
+    /// tmux pane (`%N`) to re-seed.
+    pub pane: PaneId,
+}
+
 /// Extracts a [`PaneOutput`] for every `%output` or `%extended-output`
 /// notification in a drained transport batch, preserving stream order.
 pub(crate) fn collect_pane_outputs(events: &[TransportEvent]) -> Vec<PaneOutput> {

@@ -38,7 +38,7 @@ pub use input::{KeyMods, bevy_key_to_tmux_name};
 pub use keybindings::{
     CopyAction, Forwarded, KeyBindings, PromptKind, copy_mode_dispatch, plan_forward,
 };
-pub use output::PaneOutput;
+pub use output::{PaneOutput, RequestPaneReseed};
 pub use plugin::{TmuxEventBatch, TmuxProjectionSet, TmuxSessionPlugin};
 pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};
 pub use tmux_control_parser::{PaneId, SessionId, WindowId};

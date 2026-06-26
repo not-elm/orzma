@@ -56,12 +56,15 @@ impl Plugin for CopyModePlugin {
 
 /// Bookkeeping for the copy-mode refresh loop: per-pane the number of updates a
 /// state query has been outstanding (so at most one is in flight, but a stale one
-/// is re-issued — see `issue_copy_state`), and the last captured `scroll_position`
-/// per pane (so an unchanged viewport skips re-capturing).
+/// is re-issued — see `issue_copy_state`), the last *captured* `scroll_position`
+/// per pane (recorded on the capture reply, so an unchanged viewport skips
+/// re-capturing), and an in-flight capture entry per pane (so a concurrent state
+/// reply does not trigger a duplicate capture while one is already pending).
 #[derive(Resource, Default)]
 struct CopyRefreshState {
     state_in_flight: HashMap<PaneId, u32>,
     last_scroll: HashMap<PaneId, u32>,
+    capture_in_flight: HashMap<PaneId, CapturePending>,
 }
 
 /// Updates a still-in-flight state query waits before `issue_copy_state` re-sends
@@ -72,6 +75,35 @@ struct CopyRefreshState {
 /// continuous loop, so a reply tmux has emitted is always read — this is not a
 /// flush of "stuck" traffic, just a fresh query whose reply can still land.
 const STALE_STATE_RESEND_UPDATES: u32 = 12;
+
+/// Whether a `State` reply should trigger a fresh `capture-pane`.
+#[derive(Debug, PartialEq, Eq)]
+enum CaptureDecision {
+    Skip,
+    Issue,
+}
+
+/// Per-pane in-flight capture bookkeeping: the scroll position the pending
+/// capture is for, and how many updates it has been outstanding (for the resend
+/// backstop).
+struct CapturePending {
+    scroll: u32,
+    age: u32,
+}
+
+/// Decides whether to issue a capture for `scroll`: issue when we have not yet
+/// captured that scroll position and no capture for it is already in flight.
+fn decide_capture(
+    last_captured_scroll: Option<u32>,
+    capture_in_flight: bool,
+    scroll: u32,
+) -> CaptureDecision {
+    if capture_in_flight || last_captured_scroll == Some(scroll) {
+        CaptureDecision::Skip
+    } else {
+        CaptureDecision::Issue
+    }
+}
 
 /// The latest copy-mode state snapshot for a pane. Written only when the state
 /// changes (so `Changed<CopyModeSnapshot>` is meaningful), and read back to
@@ -119,6 +151,7 @@ fn on_copy_mode_exit(
     if let Ok(pane) = panes.get(entity) {
         refresh.state_in_flight.remove(&pane.id);
         refresh.last_scroll.remove(&pane.id);
+        refresh.capture_in_flight.remove(&pane.id);
     }
 }
 
@@ -160,6 +193,14 @@ fn issue_copy_state(
             }
         }
     }
+    refresh.capture_in_flight.retain(|pane, pending| {
+        pending.age += 1;
+        let keep = pending.age < STALE_STATE_RESEND_UPDATES;
+        if !keep {
+            tracing::warn!(pane = pane.0, "copy capture reply lost; will re-issue");
+        }
+        keep
+    });
 }
 
 /// Applies each correlated [`CopyModeReply`]: a `State` reply drives exit (when
@@ -210,7 +251,13 @@ fn consume_copy_reply(
                 if copy_modes.get(entity).is_err() {
                     continue;
                 }
-                apply_capture_reply(&mut commands, &mut render_handles, entity, reply);
+                apply_capture_reply(
+                    &mut commands,
+                    &mut refresh,
+                    &mut render_handles,
+                    entity,
+                    reply,
+                );
             }
             CopyQueryKind::Buffer => {
                 if reply.ok {
@@ -248,8 +295,9 @@ fn apply_state_reply(
     if stored != Some(&state) {
         commands.entity(entity).insert(CopyModeSnapshot(state));
     }
-    let changed = refresh.last_scroll.get(&reply.pane) != Some(&state.scroll_position);
-    if !changed {
+    let in_flight = refresh.capture_in_flight.contains_key(&reply.pane);
+    let last = refresh.last_scroll.get(&reply.pane).copied();
+    if decide_capture(last, in_flight, state.scroll_position) == CaptureDecision::Skip {
         return;
     }
     let Some(client) = client else {
@@ -262,9 +310,13 @@ fn apply_state_reply(
     }) {
         Ok(id) => {
             queries.register(id, reply.pane, CopyQueryKind::Capture);
-            refresh
-                .last_scroll
-                .insert(reply.pane, state.scroll_position);
+            refresh.capture_in_flight.insert(
+                reply.pane,
+                CapturePending {
+                    scroll: state.scroll_position,
+                    age: 0,
+                },
+            );
         }
         Err(error) => tracing::warn!(?error, pane = reply.pane.0, "copy-capture send failed"),
     }
@@ -276,12 +328,21 @@ fn apply_state_reply(
 /// both the `CopyRenderHandle` and the `TerminalGrid` the emit targets.
 fn apply_capture_reply(
     commands: &mut Commands,
+    refresh: &mut CopyRefreshState,
     render_handles: &mut Query<&mut CopyRenderHandle>,
     pane_entity: Entity,
     reply: &CopyModeReply,
 ) {
+    // NOTE: clear the in-flight entry even on failure, before the early return —
+    // otherwise a failed capture leaves the pane's `capture_in_flight` set and
+    // `decide_capture` suppresses every retry until `issue_copy_state` ages it
+    // out (≤ STALE_STATE_RESEND_UPDATES frames).
+    let pending = refresh.capture_in_flight.remove(&reply.pane);
     if !reply.ok {
         return;
+    }
+    if let Some(pending) = pending {
+        refresh.last_scroll.insert(reply.pane, pending.scroll);
     }
     let bytes = capture_to_bytes(&reply.output);
     let (cols, rows) = capture_dims(&reply.output);
@@ -554,6 +615,27 @@ mod tests {
             24,
         );
         assert_eq!(cell, Some((0, 0)));
+    }
+
+    #[test]
+    fn decide_capture_issues_for_new_scroll() {
+        assert_eq!(decide_capture(None, false, 5), CaptureDecision::Issue);
+        assert_eq!(decide_capture(Some(3), false, 5), CaptureDecision::Issue);
+    }
+
+    #[test]
+    fn decide_capture_skips_when_already_captured_that_scroll() {
+        assert_eq!(decide_capture(Some(5), false, 5), CaptureDecision::Skip);
+    }
+
+    #[test]
+    fn decide_capture_skips_while_in_flight() {
+        assert_eq!(decide_capture(None, true, 5), CaptureDecision::Skip);
+    }
+
+    #[test]
+    fn decide_capture_issues_when_scroll_differs_and_not_in_flight() {
+        assert_eq!(decide_capture(Some(3), false, 5), CaptureDecision::Issue);
     }
 
     #[test]

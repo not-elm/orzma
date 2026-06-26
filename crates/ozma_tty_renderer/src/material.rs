@@ -47,7 +47,8 @@ impl Plugin for TerminalMaterialPlugin {
             "shaders/terminal_ui_material.wgsl",
             Shader::from_wgsl
         );
-        app.add_plugins(UiMaterialPlugin::<TerminalUiMaterial>::default())
+        app.init_resource::<TerminalPaddingFallback>()
+            .add_plugins(UiMaterialPlugin::<TerminalUiMaterial>::default())
             .add_plugins(state::TerminalMaterialStatePlugin)
             // NOTE: Scheduled in `PostUpdate` (not `Update`) so it runs after
             // `ui_layout_system` has written the current frame's
@@ -139,6 +140,13 @@ impl Default for PaneInactiveStyle {
         }
     }
 }
+
+/// Padding colour used for the area outside a terminal grid (and the whole
+/// quad while a grid is unpainted) when the terminal has no OSC 11 default
+/// background. Defaults to black (the prior behaviour); the binary sets it to
+/// the theme background so a momentarily-unpainted pane is not pure black.
+#[derive(Resource, Default)]
+pub struct TerminalPaddingFallback(pub [u8; 3]);
 
 /// Number of inline-overlay texture slots on `TerminalUiMaterial`.
 ///
@@ -466,6 +474,16 @@ impl GpuGlyph {
     }
 }
 
+fn padding_color(default_bg: [u8; 3], fallback: [u8; 3]) -> Vec4 {
+    let [r, g, b] = if default_bg == [0, 0, 0] {
+        fallback
+    } else {
+        default_bg
+    };
+    let c = Color::srgb_u8(r, g, b).to_linear();
+    Vec4::new(c.red, c.green, c.blue, 1.0)
+}
+
 fn update_terminal_material(
     mut atlas: ResMut<GlyphAtlas>,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
@@ -484,6 +502,7 @@ fn update_terminal_material(
     windows: Query<&Window, With<PrimaryWindow>>,
     mut cell_metrics_res: ResMut<TerminalCellMetricsResource>,
     hover: Res<HyperlinkHoverState>,
+    fallback: Res<TerminalPaddingFallback>,
 ) {
     // NOTE: This system runs unconditionally — *not* gated by
     // `Changed<TerminalGrid>`. The `mat.params = ...` write at the end is
@@ -603,11 +622,7 @@ fn update_terminal_material(
             state.initialized = true;
         }
 
-        let bg_padding_color = {
-            let [r, g, b] = grid.default_bg;
-            let c = Color::srgb_u8(r, g, b).to_linear();
-            Vec4::new(c.red, c.green, c.blue, 1.0)
-        };
+        let bg_padding_color = padding_color(grid.default_bg, fallback.0);
 
         let (hover_hyperlink_id, hover_active) = match (hover.entity, hover.hyperlink_id) {
             (Some(e), Some(id)) if e == entity => (id.0, if hover.modifier_held { 1 } else { 0 }),
@@ -933,5 +948,19 @@ mod tests {
             196,
             "overlay_desaturate after overlay_dim"
         );
+    }
+
+    #[test]
+    fn padding_color_falls_back_when_default_bg_is_black() {
+        let got = padding_color([0, 0, 0], [30, 32, 40]);
+        let c = Color::srgb_u8(30, 32, 40).to_linear();
+        assert_eq!(got, Vec4::new(c.red, c.green, c.blue, 1.0));
+    }
+
+    #[test]
+    fn padding_color_uses_default_bg_when_set() {
+        let got = padding_color([10, 20, 30], [99, 99, 99]);
+        let c = Color::srgb_u8(10, 20, 30).to_linear();
+        assert_eq!(got, Vec4::new(c.red, c.green, c.blue, 1.0));
     }
 }

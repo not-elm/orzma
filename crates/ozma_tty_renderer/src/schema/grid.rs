@@ -44,8 +44,10 @@ pub struct TerminalGrid {
     /// interner rationale).
     pub hyperlinks: Vec<(HyperlinkId, HyperlinkUri)>,
     /// Terminal default background color from `FrameSnapshot.default_bg`
-    /// (sourced from OSC 11). Raw `[r, g, b]` bytes; black when not set.
-    /// Used by the material system to fill padding pixels outside the grid.
+    /// (sourced from OSC 11). Raw `[r, g, b]` bytes; black when not set. The
+    /// material uses it as the base background for default-bg cells and the
+    /// padding outside the grid; an unset `[0,0,0]` is mapped to
+    /// `TerminalPaddingFallback` (the theme background) by the material system.
     pub default_bg: [u8; 3],
 }
 

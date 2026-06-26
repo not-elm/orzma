@@ -11,6 +11,7 @@ use bevy::window::PrimaryWindow;
 use ozma_terminal::{OzmaTerminal, cells_for};
 use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::TerminalPaddingFallback;
 use ozma_tty_renderer::schema::TerminalGrid;
 use ozma_webview::OscWebviewGate;
 use ozmux_tmux::{
@@ -18,9 +19,72 @@ use ozmux_tmux::{
     TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,
 };
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use tmux_control_parser::{Cell, DividerAxis, PaneId, SplitDir};
+
+/// Total cap, across all panes, for bytes buffered while a pane's handle/grid
+/// is not yet present. One MiB is far above any real capture seed; the cap only
+/// guards a pane that never attaches.
+const PENDING_PANE_OUTPUT_CAP: usize = 1 << 20;
+
+/// Bytes routed to a pane before its `TerminalHandle` was queryable, held until
+/// the pane is ready and then replayed. Prevents losing the authoritative
+/// `capture-pane` seed (spec Component 1).
+#[derive(Resource, Default)]
+struct PendingPaneOutput {
+    buf: HashMap<PaneId, Vec<u8>>,
+    total: usize,
+}
+
+impl PendingPaneOutput {
+    fn push(&mut self, pane: PaneId, data: &[u8]) {
+        if self.total + data.len() > PENDING_PANE_OUTPUT_CAP {
+            if let Some(old) = self.buf.remove(&pane) {
+                self.total -= old.len();
+            }
+            tracing::warn!(
+                pane = pane.0,
+                "pending pane-output over cap; dropped buffered bytes"
+            );
+            // NOTE: the cap is global across all panes — if evicting this pane's
+            // own backlog still leaves no room (another pane holds the budget),
+            // drop the incoming bytes so `total` can never exceed the cap.
+            if self.total + data.len() > PENDING_PANE_OUTPUT_CAP {
+                return;
+            }
+        }
+        let entry = self.buf.entry(pane).or_default();
+        entry.extend_from_slice(data);
+        self.total += data.len();
+    }
+
+    fn take(&mut self, pane: PaneId) -> Option<Vec<u8>> {
+        let v = self.buf.remove(&pane)?;
+        self.total -= v.len();
+        Some(v)
+    }
+}
+
+/// Drops a despawned pane's buffered output so its `PaneId` cannot keep
+/// `pending_pane_output_waiting` true (which would spin `route_tmux_output`
+/// every frame for the rest of the session).
+fn prune_pending_on_pane_removed(
+    ev: On<Remove, TmuxPane>,
+    mut pending: ResMut<PendingPaneOutput>,
+    panes: Query<&TmuxPane>,
+) {
+    if let Ok(pane) = panes.get(ev.entity) {
+        pending.take(pane.id);
+    }
+}
+
+/// Ordering handle for `layout_tmux_panes` so the paint-rescue system can run
+/// before this frame's grid-dims write (avoids the ≤1-frame resize transient
+/// where `cells.len() != rows`).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct TmuxLayoutSet;
 
 #[derive(Resource, Default)]
 struct LastClientSize {
@@ -37,15 +101,19 @@ pub(crate) struct RenderPlugin;
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<LastClientSize>()
+            .init_resource::<PendingPaneOutput>()
             .insert_resource(ClearColor(theme::PANE_GAP))
+            .insert_resource(TerminalPaddingFallback(theme_background_bytes()))
+            .add_observer(prune_pending_on_pane_removed)
             .add_systems(
                 Update,
                 (
                     attach_tmux_window_container,
                     attach_tmux_pane_terminal,
-                    route_tmux_output.run_if(on_message::<PaneOutput>),
+                    route_tmux_output
+                        .run_if(on_message::<PaneOutput>.or(pending_pane_output_waiting)),
                     sync_active_window,
-                    layout_tmux_panes,
+                    layout_tmux_panes.in_set(TmuxLayoutSet),
                 )
                     .chain()
                     .after(TmuxProjectionSet)
@@ -146,6 +214,10 @@ fn attach_tmux_pane_terminal(
     }
 }
 
+fn pending_pane_output_waiting(pending: Res<PendingPaneOutput>) -> bool {
+    !pending.buf.is_empty()
+}
+
 /// Routes tmux `%output` into each pane's handle. Groups a frame's
 /// `PaneOutput` messages by pane, advances all of a pane's bytes, then emits
 /// once per pane (immediate emit, coalesced per pane).
@@ -166,6 +238,7 @@ fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
     mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle)>,
+    mut pending: ResMut<PendingPaneOutput>,
     panes: Query<(Entity, &TmuxPane)>,
     copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
 ) {
@@ -177,14 +250,31 @@ fn route_tmux_output(
             .extend_from_slice(&msg.data);
     }
     let entity_of: HashMap<_, _> = panes.iter().map(|(e, p)| (p.id, e)).collect();
-    for (pane, data) in by_pane {
+    let mut pane_ids: HashSet<PaneId> = by_pane.keys().copied().collect();
+    pane_ids.extend(pending.buf.keys().copied());
+    for pane in pane_ids {
+        let fresh = by_pane.remove(&pane).unwrap_or_default();
         let Some(&entity) = entity_of.get(&pane) else {
+            // NOTE: only buffer real bytes — pushing an empty `fresh` would
+            // create/keep a phantom entry that keeps `pending_pane_output_waiting`
+            // true and spins this system every frame.
+            if !fresh.is_empty() {
+                pending.push(pane, &fresh);
+            }
             continue;
         };
         let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
+            if !fresh.is_empty() {
+                pending.push(pane, &fresh);
+            }
             continue;
         };
-        handle.advance(&data);
+        if let Some(buffered) = pending.take(pane) {
+            handle.advance(&buffered);
+        }
+        if !fresh.is_empty() {
+            handle.advance(&fresh);
+        }
         // NOTE: drain captured control frames — crucially the OSC 5379
         // mount/unmount verbs — into observer triggers. The engine's own control
         // drain runs only for PtyHandle-backed terminals; tmux panes have no
@@ -619,6 +709,15 @@ fn sync_client_size(
     }
 }
 
+fn theme_background_bytes() -> [u8; 3] {
+    let s = theme::BACKGROUND.to_srgba();
+    [
+        (s.red * 255.0).round() as u8,
+        (s.green * 255.0).round() as u8,
+        (s.blue * 255.0).round() as u8,
+    ]
+}
+
 fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<TmuxWindow>>) {
     for (mut node, active) in windows.iter_mut() {
         let want = if active { Display::Flex } else { Display::None };
@@ -768,6 +867,7 @@ mod tests {
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
+        app.init_resource::<PendingPaneOutput>();
 
         let pane_id = PaneId(1);
         let pane_entity = app
@@ -824,6 +924,7 @@ mod tests {
         app.add_plugins(OzmaTerminalPlugin { config_shell: None });
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
+        app.init_resource::<PendingPaneOutput>();
 
         let pane_id = PaneId(1);
         let pane_entity = app
@@ -914,6 +1015,7 @@ mod tests {
         app.add_plugins(TerminalGridPlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
+        app.init_resource::<PendingPaneOutput>();
         app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(true))));
         app.init_resource::<Seen>();
         app.add_observer(|_ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
@@ -1498,6 +1600,56 @@ mod tests {
             "pane 3 gets its share of slack"
         );
         assert_eq!(bbox.y, 440.0, "bounding box matches workspace_h");
+    }
+
+    #[test]
+    fn pending_output_accumulates_then_takes() {
+        let mut p = PendingPaneOutput::default();
+        p.push(PaneId(1), b"ab");
+        p.push(PaneId(1), b"cd");
+        p.push(PaneId(2), b"xy");
+        assert_eq!(p.take(PaneId(1)).as_deref(), Some(&b"abcd"[..]));
+        assert_eq!(p.take(PaneId(1)), None);
+        assert_eq!(p.take(PaneId(2)).as_deref(), Some(&b"xy"[..]));
+    }
+
+    #[test]
+    fn pending_output_drops_pane_buffer_over_cap() {
+        let mut p = PendingPaneOutput::default();
+        let big = vec![0u8; PENDING_PANE_OUTPUT_CAP];
+        p.push(PaneId(1), &big);
+        p.push(PaneId(1), b"z");
+        assert!(
+            p.total <= PENDING_PANE_OUTPUT_CAP,
+            "total must not grow past the cap"
+        );
+        let got = p.take(PaneId(1)).unwrap_or_default();
+        assert!(
+            got.len() <= PENDING_PANE_OUTPUT_CAP,
+            "buffer must not grow past the cap"
+        );
+        assert_eq!(p.total, 0, "taking the only pane drains total to zero");
+    }
+
+    #[test]
+    fn pending_output_enforces_global_cap_across_panes() {
+        let mut p = PendingPaneOutput::default();
+        let big = vec![0u8; PENDING_PANE_OUTPUT_CAP];
+        p.push(PaneId(2), &big);
+        // pane 2 already holds the whole budget; a push to pane 1 must not let
+        // `total` exceed the global cap even though pane 1 has no backlog to evict.
+        p.push(PaneId(1), b"hello");
+        assert!(
+            p.total <= PENDING_PANE_OUTPUT_CAP,
+            "global cap holds across panes, got total = {}",
+            p.total
+        );
+        // The incoming bytes were dropped (no room), so pane 1 holds nothing.
+        assert_eq!(p.take(PaneId(1)), None);
+        // Draining pane 2 returns the budget exactly.
+        let got = p.take(PaneId(2)).unwrap_or_default();
+        assert_eq!(got.len(), PENDING_PANE_OUTPUT_CAP);
+        assert_eq!(p.total, 0, "draining all panes returns total to zero");
     }
 
     #[test]
