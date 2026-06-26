@@ -18,7 +18,7 @@ use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::ecs::schedule::SystemCondition;
-use bevy::ecs::schedule::common_conditions::{not, resource_changed};
+use bevy::ecs::schedule::common_conditions::{not, resource_exists_and_changed};
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::prelude::default;
 use bevy::text::{LineBreak, TextColor, TextFont, TextLayout};
@@ -73,10 +73,10 @@ impl Plugin for ImeOverlayPlugin {
                         .run_if(ime_is_composing)
                         .before(UiSystems::Content),
                     hide_ime_overlay
-                        .run_if(resource_changed::<ImeState>.and(not(ime_is_composing)))
+                        .run_if(resource_exists_and_changed::<ImeState>.and(not(ime_is_composing)))
                         .before(UiSystems::Content),
                     suppress_terminal_cursor_during_ime
-                        .run_if(resource_changed::<ImeState>.or(ime_is_composing))
+                        .run_if(resource_exists_and_changed::<ImeState>.or(ime_is_composing))
                         .before(TerminalMaterialSystems::UpdateMaterial),
                 ),
             );
@@ -128,9 +128,11 @@ struct ImeGraphemePool(Vec<Entity>);
 /// the pool on demand.
 const INITIAL_POOL_CAP: usize = 16;
 
-/// Run condition: true while an IME preedit composition is active.
-fn ime_is_composing(state: Res<ImeState>) -> bool {
-    state.is_composing()
+/// Run condition: true while an IME preedit composition is active. Takes
+/// `Option<Res<ImeState>>` so it returns `false` rather than panicking when
+/// `ImeState` is absent, keeping the `.or()` / `.and()` gates safe.
+fn ime_is_composing(state: Option<Res<ImeState>>) -> bool {
+    state.is_some_and(|state| state.is_composing())
 }
 
 /// PostUpdate system that grid-aligns the IME preedit overlay at the attached
@@ -141,8 +143,11 @@ fn ime_is_composing(state: Res<ImeState>) -> bool {
 /// (`begin != end`). Every visible element uses the same cell arithmetic, so
 /// the caret cannot drift from the text.
 ///
-/// When `ImeState` has no composition — or the focused surface / window is
-/// missing — hides every overlay part and returns.
+/// Gated by `run_if(ime_is_composing)`, so it runs only while a composition is
+/// active; the end-of-composition hide (commit / cancel / `Ime::Disabled`) is
+/// owned by [`hide_ime_overlay`]. If the focused surface, its anchor, or the
+/// window is missing while composing, it hides every overlay part defensively
+/// and returns.
 fn position_ime_overlay(
     mut commands: Commands,
     mut pool: ResMut<ImeGraphemePool>,
@@ -168,8 +173,12 @@ fn position_ime_overlay(
     let caret_entity = caret.single().ok();
     let clause_entity = clause.single().ok();
 
-    // NOTE: hide every overlay part (and return) the moment any precondition for
-    // showing fails, so nothing leaks past a commit, cancel, or focus loss.
+    // NOTE: the end-of-composition hide (commit / cancel / disable) is owned by
+    // `hide_ime_overlay` — `run_if(ime_is_composing)` means this system runs only
+    // WHILE composing, so deleting `hide_ime_overlay` would leak the overlay past
+    // commit. The guards below hide defensively on a showing-precondition failure
+    // (missing focused surface / anchor / window); the `composition()` arm is an
+    // unreachable fallback the gate already guarantees.
     let Some(comp) = state.composition() else {
         hide_all_overlay_parts(
             &mut nodes,
@@ -1117,6 +1126,28 @@ mod tests {
             Display::None,
             "hide_ime_overlay must hide the overlay background after composition clears",
         );
+        let mut caret = app.world_mut().query_filtered::<&Node, With<ImeCaretBar>>();
+        assert_eq!(
+            caret.single(app.world()).unwrap().display,
+            Display::None,
+            "the caret bar must be hidden after composition clears",
+        );
+        let mut clause = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeClauseHighlight>>();
+        assert_eq!(
+            clause.single(app.world()).unwrap().display,
+            Display::None,
+            "the clause highlight must be hidden after composition clears",
+        );
+        let mut underline = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeUnderline>>();
+        assert_eq!(
+            underline.single(app.world()).unwrap().display,
+            Display::None,
+            "the underline must be hidden after composition clears",
+        );
         let pool = app.world().resource::<ImeGraphemePool>().0.clone();
         for &cell in &pool {
             assert_eq!(
@@ -1151,7 +1182,8 @@ mod tests {
             PostUpdate,
             (
                 position_ime_overlay.run_if(ime_is_composing),
-                hide_ime_overlay.run_if(resource_changed::<ImeState>.and(not(ime_is_composing))),
+                hide_ime_overlay
+                    .run_if(resource_exists_and_changed::<ImeState>.and(not(ime_is_composing))),
             ),
         );
         app.world_mut().spawn((
