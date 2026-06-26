@@ -270,44 +270,53 @@ fn position_ime_overlay(
     let caret_entity = caret.single().ok();
     let clause_entity = clause.single().ok();
 
-    // NOTE: caret/clause/cells are hidden upfront each frame so they don't leak
-    // past a commit, cancel, or focus loss. bg and underline are intentionally
-    // excluded here: they are shown whenever composition is active, so pre-hiding
-    // them would toggle display on every stable-composition frame and mark them
-    // Changed unconditionally. Instead they are hidden in each early-return path.
-    for entity in [caret_entity, clause_entity].into_iter().flatten() {
-        set_node_display(&mut nodes, entity, Display::None);
-    }
-    for index in 0..pool.0.len() {
-        set_node_display(&mut nodes, pool.0[index], Display::None);
-    }
-
+    // NOTE: hide every overlay part (and return) the moment any precondition for
+    // showing fails, so nothing leaks past a commit, cancel, or focus loss. The
+    // success path sets each node's display to its target exactly once, so a
+    // stable composition never re-toggles display (which would mark every node
+    // Changed each frame and defeat change detection).
     let Some(comp) = state.composition() else {
-        set_node_display(&mut nodes, bg_entity, Display::None);
-        if let Some(e) = underline_entity {
-            set_node_display(&mut nodes, e, Display::None);
-        }
+        hide_all_overlay_parts(
+            &mut nodes,
+            bg_entity,
+            underline_entity,
+            caret_entity,
+            clause_entity,
+            &pool,
+        );
         return;
     };
     let Some(entity) = resolve_focused_surface(&focused) else {
-        set_node_display(&mut nodes, bg_entity, Display::None);
-        if let Some(e) = underline_entity {
-            set_node_display(&mut nodes, e, Display::None);
-        }
+        hide_all_overlay_parts(
+            &mut nodes,
+            bg_entity,
+            underline_entity,
+            caret_entity,
+            clause_entity,
+            &pool,
+        );
         return;
     };
     let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
-        set_node_display(&mut nodes, bg_entity, Display::None);
-        if let Some(e) = underline_entity {
-            set_node_display(&mut nodes, e, Display::None);
-        }
+        hide_all_overlay_parts(
+            &mut nodes,
+            bg_entity,
+            underline_entity,
+            caret_entity,
+            clause_entity,
+            &pool,
+        );
         return;
     };
     let Ok(window) = primary_window.single() else {
-        set_node_display(&mut nodes, bg_entity, Display::None);
-        if let Some(e) = underline_entity {
-            set_node_display(&mut nodes, e, Display::None);
-        }
+        hide_all_overlay_parts(
+            &mut nodes,
+            bg_entity,
+            underline_entity,
+            caret_entity,
+            clause_entity,
+            &pool,
+        );
         return;
     };
 
@@ -381,6 +390,9 @@ fn position_ime_overlay(
             pool.0.push(cell);
         }
     }
+    for index in placements.len()..pool.0.len() {
+        set_node_display(&mut nodes, pool.0[index], Display::None);
+    }
 
     // NOTE: `underline_position_phys` is baseline-relative and negative; subtract it from ascent so the bar lands below the baseline, not above the cell top.
     if let Some(underline_entity) = underline_entity {
@@ -424,6 +436,8 @@ fn position_ime_overlay(
         if node.display != Display::Flex {
             node.display = Display::Flex;
         }
+    } else if let Some(caret_entity) = caret_entity {
+        set_node_display(&mut nodes, caret_entity, Display::None);
     }
 
     if has_clause && let Some(clause_entity) = clause_entity {
@@ -436,6 +450,8 @@ fn position_ime_overlay(
             line_h_logical,
         );
         set_node_display(&mut nodes, clause_entity, Display::Flex);
+    } else if let Some(clause_entity) = clause_entity {
+        set_node_display(&mut nodes, clause_entity, Display::None);
     }
 }
 
@@ -622,6 +638,26 @@ fn set_node_rect(
     let height = Val::Px(height);
     if node.height != height {
         node.height = height;
+    }
+}
+
+/// Hides every IME overlay part (background, underline, caret, clause, and all
+/// pooled grapheme cells). Called on every path where the overlay must not be
+/// shown, so no part leaks past a commit, cancel, or focus loss.
+fn hide_all_overlay_parts(
+    nodes: &mut Query<&mut Node>,
+    bg: Entity,
+    underline: Option<Entity>,
+    caret: Option<Entity>,
+    clause: Option<Entity>,
+    pool: &ImeGraphemePool,
+) {
+    set_node_display(nodes, bg, Display::None);
+    for entity in [underline, caret, clause].into_iter().flatten() {
+        set_node_display(nodes, entity, Display::None);
+    }
+    for &cell in &pool.0 {
+        set_node_display(nodes, cell, Display::None);
     }
 }
 
@@ -1227,7 +1263,13 @@ mod tests {
                 Entity,
                 (
                     Changed<Node>,
-                    Or<(With<ImeOverlayNode>, With<ImeUnderline>)>,
+                    Or<(
+                        With<ImeOverlayNode>,
+                        With<ImeUnderline>,
+                        With<ImeCaretBar>,
+                        With<ImeClauseHighlight>,
+                        With<ImeGraphemeCell>,
+                    )>,
                 ),
             >,
         ) {
@@ -1286,7 +1328,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<ChangedOverlayNodes>().0,
             0,
-            "background/underline Nodes must not be re-marked Changed on an unchanged composition",
+            "no overlay Node may be re-marked Changed on an unchanged composition",
         );
     }
 }
