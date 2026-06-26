@@ -270,12 +270,12 @@ fn position_ime_overlay(
     let caret_entity = caret.single().ok();
     let clause_entity = clause.single().ok();
 
-    // NOTE: hide every part by default each frame; the success path re-shows only the active ones. Without this, caret/clause/cells leak past a commit, cancel, or focus loss.
-    set_node_display(&mut nodes, bg_entity, Display::None);
-    for entity in [underline_entity, caret_entity, clause_entity]
-        .into_iter()
-        .flatten()
-    {
+    // NOTE: caret/clause/cells are hidden upfront each frame so they don't leak
+    // past a commit, cancel, or focus loss. bg and underline are intentionally
+    // excluded here: they are shown whenever composition is active, so pre-hiding
+    // them would toggle display on every stable-composition frame and mark them
+    // Changed unconditionally. Instead they are hidden in each early-return path.
+    for entity in [caret_entity, clause_entity].into_iter().flatten() {
         set_node_display(&mut nodes, entity, Display::None);
     }
     for index in 0..pool.0.len() {
@@ -283,15 +283,31 @@ fn position_ime_overlay(
     }
 
     let Some(comp) = state.composition() else {
+        set_node_display(&mut nodes, bg_entity, Display::None);
+        if let Some(e) = underline_entity {
+            set_node_display(&mut nodes, e, Display::None);
+        }
         return;
     };
     let Some(entity) = resolve_focused_surface(&focused) else {
+        set_node_display(&mut nodes, bg_entity, Display::None);
+        if let Some(e) = underline_entity {
+            set_node_display(&mut nodes, e, Display::None);
+        }
         return;
     };
     let Ok((node, ui_xform, grid)) = anchors.get(entity) else {
+        set_node_display(&mut nodes, bg_entity, Display::None);
+        if let Some(e) = underline_entity {
+            set_node_display(&mut nodes, e, Display::None);
+        }
         return;
     };
     let Ok(window) = primary_window.single() else {
+        set_node_display(&mut nodes, bg_entity, Display::None);
+        if let Some(e) = underline_entity {
+            set_node_display(&mut nodes, e, Display::None);
+        }
         return;
     };
 
@@ -312,18 +328,15 @@ fn position_ime_overlay(
     );
     let (placements, _) = layout_preedit_cells(comp.text(), cell_w_logical, pos.x);
 
-    if let Ok(mut bg_node) = nodes.get_mut(bg_entity) {
-        set_node_rect(
-            &mut bg_node,
-            pos.x,
-            pos.y,
-            total_width_logical,
-            line_h_logical,
-        );
-        if bg_node.display != Display::Flex {
-            bg_node.display = Display::Flex;
-        }
-    }
+    set_node_rect(
+        &mut nodes,
+        bg_entity,
+        pos.x,
+        pos.y,
+        total_width_logical,
+        line_h_logical,
+    );
+    set_node_display(&mut nodes, bg_entity, Display::Flex);
     if let Ok(mut bg) = overlay_bg.single_mut() {
         let occluding = Color::srgb_u8(grid.default_bg[0], grid.default_bg[1], grid.default_bg[2]);
         if bg.0 != occluding {
@@ -370,22 +383,19 @@ fn position_ime_overlay(
     }
 
     // NOTE: `underline_position_phys` is baseline-relative and negative; subtract it from ascent so the bar lands below the baseline, not above the cell top.
-    if let Some(underline_entity) = underline_entity
-        && let Ok(mut node) = nodes.get_mut(underline_entity)
-    {
+    if let Some(underline_entity) = underline_entity {
         let underline_top =
             pos.y + (metrics.metrics.ascent_phys - metrics.metrics.underline_position_phys) / scale;
         let underline_h = (metrics.metrics.underline_thickness_phys / scale).max(1.0);
         set_node_rect(
-            &mut node,
+            &mut nodes,
+            underline_entity,
             pos.x,
             underline_top,
             total_width_logical,
             underline_h,
         );
-        if node.display != Display::Flex {
-            node.display = Display::Flex;
-        }
+        set_node_display(&mut nodes, underline_entity, Display::Flex);
     }
 
     let (begin_cells, end_cells) = match comp.caret() {
@@ -416,20 +426,16 @@ fn position_ime_overlay(
         }
     }
 
-    if has_clause
-        && let Some(clause_entity) = clause_entity
-        && let Ok(mut node) = nodes.get_mut(clause_entity)
-    {
+    if has_clause && let Some(clause_entity) = clause_entity {
         set_node_rect(
-            &mut node,
+            &mut nodes,
+            clause_entity,
             pos.x + begin_cells * cell_w_logical,
             pos.y,
             (end_cells - begin_cells) * cell_w_logical,
             line_h_logical,
         );
-        if node.display != Display::Flex {
-            node.display = Display::Flex;
-        }
+        set_node_display(&mut nodes, clause_entity, Display::Flex);
     }
 }
 
@@ -585,9 +591,22 @@ fn set_node_display(nodes: &mut Query<&mut Node>, entity: Entity, display: Displ
     }
 }
 
-/// Writes `left`/`top`/`width`/`height` (logical px) into `node`, each guarded
-/// by an equality check so change detection fires only on a real change.
-fn set_node_rect(node: &mut Node, left: f32, top: f32, width: f32, height: f32) {
+/// Writes `left`/`top`/`width`/`height` (logical px) into `entity`'s `Node`,
+/// each guarded by an equality check so change detection fires only on a real
+/// change. Resolving the node inside the helper (rather than accepting an
+/// already-dereferenced `&mut Node`) keeps the `DerefMut` — and thus the change
+/// tick — from firing on an unchanged frame.
+fn set_node_rect(
+    nodes: &mut Query<&mut Node>,
+    entity: Entity,
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+) {
+    let Ok(mut node) = nodes.get_mut(entity) else {
+        return;
+    };
     let left = Val::Px(left);
     if node.left != left {
         node.left = left;
@@ -1187,6 +1206,87 @@ mod tests {
             underlines.iter(app.world()).count(),
             1,
             "exactly one underline bar must be spawned"
+        );
+    }
+
+    #[test]
+    fn overlay_geometry_not_rechanged_on_unchanged_composition() {
+        use bevy::app::Update;
+        use bevy::asset::Handle;
+        use bevy::ecs::query::{Changed, Or};
+        use bevy::window::WindowResolution;
+        use ozma_terminal::OzmaTerminal;
+        use ozma_tty_renderer::prelude::Cursor;
+
+        #[derive(Resource, Default)]
+        struct ChangedOverlayNodes(usize);
+
+        fn count_changed(
+            mut count: ResMut<ChangedOverlayNodes>,
+            changed: Query<
+                Entity,
+                (
+                    Changed<Node>,
+                    Or<(With<ImeOverlayNode>, With<ImeUnderline>)>,
+                ),
+            >,
+        ) {
+            count.0 = changed.iter().count();
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(TerminalFontSize(12.0));
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: metrics(10.0, 16.0),
+            phys_font_size: 12,
+        });
+        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ChangedOverlayNodes>();
+
+        let mut state = ImeState::default();
+        apply_event(
+            &mut state,
+            &Ime::Preedit {
+                window: Entity::PLACEHOLDER,
+                value: "abc".into(),
+                cursor: Some((3, 3)),
+            },
+        );
+        app.insert_resource(state);
+
+        app.add_systems(Startup, spawn_ime_overlay_once);
+        app.add_systems(Update, (position_ime_overlay, count_changed).chain());
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.world_mut().spawn((
+            OzmaTerminal,
+            KeyboardFocused,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            TerminalGrid {
+                cursor: Some(Cursor::default()),
+                default_bg: [0, 0, 0],
+                ..TerminalGrid::default()
+            },
+        ));
+
+        app.update(); // frame 1: spawn + initial positioning (legitimately Changed)
+        app.update(); // frame 2: identical composition → no real geometry change
+
+        assert_eq!(
+            app.world().resource::<ChangedOverlayNodes>().0,
+            0,
+            "background/underline Nodes must not be re-marked Changed on an unchanged composition",
         );
     }
 }
