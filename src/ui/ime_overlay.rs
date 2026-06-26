@@ -1,10 +1,9 @@
 //! IME preedit overlay.
 //!
-//! Provides `compute_overlay_pos` (the pure pixel-math function for
-//! anchoring the overlay), `ImeOverlayPlugin` (Bevy plugin that spawns
-//! the overlay entity tree at Startup and schedules
-//! `position_ime_overlay`), and the marker components identifying the
-//! root, pre-caret span, post-caret span, and caret bar.
+//! Provides `ImeOverlayPlugin` (Bevy plugin that spawns the overlay
+//! entity tree at Startup and schedules `position_ime_overlay`) and the
+//! marker components identifying the root, caret bar, clause highlight,
+//! underline, and grapheme-cell pool.
 
 mod layout;
 
@@ -29,7 +28,7 @@ use bevy::ui::{
     UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
-use layout::{caret_cell_offsets, compute_overlay_pos, layout_preedit_cells};
+use layout::{CaretVisual, PlacedCell, compute_overlay_layout};
 use ozma_terminal::KeyboardFocused;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalFontInitSet;
@@ -170,10 +169,7 @@ fn position_ime_overlay(
     let clause_entity = clause.single().ok();
 
     // NOTE: hide every overlay part (and return) the moment any precondition for
-    // showing fails, so nothing leaks past a commit, cancel, or focus loss. The
-    // success path sets each node's display to its target exactly once, so a
-    // stable composition never re-toggles display (which would mark every node
-    // Changed each frame and defeat change detection).
+    // showing fails, so nothing leaks past a commit, cancel, or focus loss.
     let Some(comp) = state.composition() else {
         hide_all_overlay_parts(
             &mut nodes,
@@ -219,39 +215,29 @@ fn position_ime_overlay(
         return;
     };
 
-    // NOTE: clamp the scale away from zero (matching `ime_policy_system`); a
-    // 0 scale factor would make every cell metric inf/NaN and fling the overlay
+    // NOTE: clamp the scale away from zero (matching `ime_policy_system`); a 0
+    // scale factor would make every cell metric inf/NaN and fling the overlay
     // off-screen during composition.
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
     let cursor_cell = grid.cursor.as_ref().map(|c| (c.x, c.y)).unwrap_or((0, 0));
-    let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;
-    let line_h_logical = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
 
-    let (mut placements, total_cells) = layout_preedit_cells(comp.text(), cell_w_logical, 0.0);
-    let total_width_logical = total_cells as f32 * cell_w_logical;
-    let pos = compute_overlay_pos(
+    let layout = compute_overlay_layout(
+        comp.text(),
+        comp.caret(),
         ui_xform.translation,
         node.size,
         cursor_cell,
         &metrics.metrics,
-        total_width_logical,
         scale,
     );
-    // Lay out once at origin 0 (above) for the true width, then shift each
-    // placement to the clamped origin. `left = origin_x + cum_cells * cell_w`
-    // differs only by `pos.x`, so re-segmenting would just reallocate a String
-    // per grapheme on the typing hot path.
-    for placement in &mut placements {
-        placement.left += pos.x;
-    }
 
     set_node_rect(
         &mut nodes,
         bg_entity,
-        pos.x,
-        pos.y,
-        total_width_logical,
-        line_h_logical,
+        layout.background.left,
+        layout.background.top,
+        layout.background.width,
+        layout.background.height,
     );
     set_node_display(&mut nodes, bg_entity, Display::Flex);
     if let Ok(mut bg) = overlay_bg.single_mut() {
@@ -261,14 +247,51 @@ fn position_ime_overlay(
         }
     }
 
-    for (index, placement) in placements.iter().enumerate() {
-        if let Some(&cell) = pool.0.get(index) {
-            if let Ok(mut node) = nodes.get_mut(cell) {
-                let left = Val::Px(placement.left);
+    apply_grapheme_cells(
+        &mut commands,
+        &mut nodes,
+        &mut cell_texts,
+        &mut pool,
+        &ui_font,
+        &font_size,
+        &layout.cells,
+    );
+
+    if let Some(underline_entity) = underline_entity {
+        set_node_rect(
+            &mut nodes,
+            underline_entity,
+            layout.underline.left,
+            layout.underline.top,
+            layout.underline.width,
+            layout.underline.height,
+        );
+        set_node_display(&mut nodes, underline_entity, Display::Flex);
+    }
+
+    apply_caret_visual(&mut nodes, caret_entity, clause_entity, &layout.caret);
+}
+
+/// Applies the placed grapheme cells to the pooled `Text` nodes: reuses pool
+/// entries by index (equality-guarded writes), grows the pool for any overflow,
+/// and hides the unused tail.
+fn apply_grapheme_cells(
+    commands: &mut Commands,
+    nodes: &mut Query<&mut Node>,
+    cell_texts: &mut Query<&mut Text, With<ImeGraphemeCell>>,
+    pool: &mut ImeGraphemePool,
+    ui_font: &TerminalUiFont,
+    font_size: &TerminalFontSize,
+    cells: &[PlacedCell],
+) {
+    for (index, cell) in cells.iter().enumerate() {
+        if let Some(&entity) = pool.0.get(index) {
+            if let Ok(mut node) = nodes.get_mut(entity) {
+                let left = Val::Px(cell.left);
                 if node.left != left {
                     node.left = left;
                 }
-                let top = Val::Px(pos.y);
+                let top = Val::Px(cell.top);
                 if node.top != top {
                     node.top = top;
                 }
@@ -276,90 +299,89 @@ fn position_ime_overlay(
                     node.display = Display::Flex;
                 }
             }
-            if let Ok(mut text) = cell_texts.get_mut(cell)
-                && text.0 != placement.text
+            if let Ok(mut text) = cell_texts.get_mut(entity)
+                && text.0 != cell.text
             {
-                text.0 = placement.text.clone();
+                text.0 = cell.text.clone();
             }
         } else {
-            // NOTE: grown entities are not in `nodes`/`cell_texts` this frame,
+            // NOTE: grown entities are not in `nodes` / `cell_texts` this frame,
             // so they are spawned already configured; their tail appears one
-            // frame late only on the growth frame (same latency class as the
-            // overlay anchor NOTE above).
-            let cell = spawn_grapheme_cell(
-                &mut commands,
-                &ui_font,
-                &font_size,
-                &placement.text,
-                placement.left,
-                pos.y,
+            // frame late only on the growth frame.
+            let entity = spawn_grapheme_cell(
+                commands,
+                ui_font,
+                font_size,
+                &cell.text,
+                cell.left,
+                cell.top,
                 Display::Flex,
             );
-            pool.0.push(cell);
+            pool.0.push(entity);
         }
     }
-    for index in placements.len()..pool.0.len() {
-        set_node_display(&mut nodes, pool.0[index], Display::None);
+    for index in cells.len()..pool.0.len() {
+        set_node_display(nodes, pool.0[index], Display::None);
     }
+}
 
-    // NOTE: `underline_position_phys` is baseline-relative and negative; subtract it from ascent so the bar lands below the baseline, not above the cell top.
-    if let Some(underline_entity) = underline_entity {
-        let underline_top =
-            pos.y + (metrics.metrics.ascent_phys - metrics.metrics.underline_position_phys) / scale;
-        let underline_h = (metrics.metrics.underline_thickness_phys / scale).max(1.0);
-        set_node_rect(
-            &mut nodes,
-            underline_entity,
-            pos.x,
-            underline_top,
-            total_width_logical,
-            underline_h,
-        );
-        set_node_display(&mut nodes, underline_entity, Display::Flex);
-    }
-
-    let (begin_cells, end_cells) = match comp.caret() {
-        Some(range) => caret_cell_offsets(comp.text(), range),
-        None => (0.0, 0.0),
-    };
-    let has_clause = comp.caret().is_some_and(|(b, e)| b != e);
-    let has_beam = comp.caret().is_some() && !has_clause;
-
-    if has_beam
-        && let Some(caret_entity) = caret_entity
-        && let Ok(mut node) = nodes.get_mut(caret_entity)
-    {
-        let left = Val::Px(pos.x + end_cells * cell_w_logical);
-        if node.left != left {
-            node.left = left;
+/// Shows the caret beam or the clause highlight per `caret`, hiding the other.
+/// Every write is equality-guarded so an unchanged caret marks nothing changed.
+fn apply_caret_visual(
+    nodes: &mut Query<&mut Node>,
+    caret_entity: Option<Entity>,
+    clause_entity: Option<Entity>,
+    caret: &CaretVisual,
+) {
+    match caret {
+        CaretVisual::Beam(beam) => {
+            if let Some(caret_entity) = caret_entity
+                && let Ok(mut node) = nodes.get_mut(caret_entity)
+            {
+                let left = Val::Px(beam.left);
+                if node.left != left {
+                    node.left = left;
+                }
+                let top = Val::Px(beam.top);
+                if node.top != top {
+                    node.top = top;
+                }
+                let height = Val::Px(beam.height);
+                if node.height != height {
+                    node.height = height;
+                }
+                if node.display != Display::Flex {
+                    node.display = Display::Flex;
+                }
+            }
+            if let Some(clause_entity) = clause_entity {
+                set_node_display(nodes, clause_entity, Display::None);
+            }
         }
-        let top = Val::Px(pos.y);
-        if node.top != top {
-            node.top = top;
+        CaretVisual::Clause(rect) => {
+            if let Some(clause_entity) = clause_entity {
+                set_node_rect(
+                    nodes,
+                    clause_entity,
+                    rect.left,
+                    rect.top,
+                    rect.width,
+                    rect.height,
+                );
+                set_node_display(nodes, clause_entity, Display::Flex);
+            }
+            if let Some(caret_entity) = caret_entity {
+                set_node_display(nodes, caret_entity, Display::None);
+            }
         }
-        let height = Val::Px(line_h_logical);
-        if node.height != height {
-            node.height = height;
+        CaretVisual::None => {
+            if let Some(caret_entity) = caret_entity {
+                set_node_display(nodes, caret_entity, Display::None);
+            }
+            if let Some(clause_entity) = clause_entity {
+                set_node_display(nodes, clause_entity, Display::None);
+            }
         }
-        if node.display != Display::Flex {
-            node.display = Display::Flex;
-        }
-    } else if let Some(caret_entity) = caret_entity {
-        set_node_display(&mut nodes, caret_entity, Display::None);
-    }
-
-    if has_clause && let Some(clause_entity) = clause_entity {
-        set_node_rect(
-            &mut nodes,
-            clause_entity,
-            pos.x + begin_cells * cell_w_logical,
-            pos.y,
-            (end_cells - begin_cells) * cell_w_logical,
-            line_h_logical,
-        );
-        set_node_display(&mut nodes, clause_entity, Display::Flex);
-    } else if let Some(clause_entity) = clause_entity {
-        set_node_display(&mut nodes, clause_entity, Display::None);
     }
 }
 
@@ -744,12 +766,11 @@ mod tests {
         );
     }
 
-    /// Builds a `CellMetrics` literal for tests. `CellMetrics` does not
-    /// derive `Default`, so callers must provide every field; this
-    /// helper takes the two that `compute_overlay_pos` actually reads
-    /// (`advance_phys`, `line_height_phys`) and fills the rest with
-    /// arbitrary non-zero values that don't affect the function under
-    /// test.
+    /// Builds a `CellMetrics` literal for the overlay ECS tests.
+    /// `CellMetrics` has no `Default`, so every field is set; the tests
+    /// assert on geometry driven by `advance_phys` / `line_height_phys`,
+    /// with the remaining fields (read by `compute_overlay_layout` for the
+    /// underline rect) filled with arbitrary non-zero values.
     fn metrics(advance: f32, line_height: f32) -> CellMetrics {
         CellMetrics {
             advance_phys: advance,

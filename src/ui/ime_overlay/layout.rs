@@ -7,6 +7,136 @@ use ozma_tty_renderer::CellMetrics;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+/// A rectangle in logical pixels relative to the window origin.
+#[derive(Debug, PartialEq)]
+pub(super) struct RectPx {
+    pub(super) left: f32,
+    pub(super) top: f32,
+    pub(super) width: f32,
+    pub(super) height: f32,
+}
+
+/// One placed preedit grapheme cluster: its text and absolute top-left in
+/// logical px.
+#[derive(Debug, PartialEq)]
+pub(super) struct PlacedCell {
+    pub(super) text: String,
+    pub(super) left: f32,
+    pub(super) top: f32,
+}
+
+/// The caret beam at its logical-px anchor (1-px width is fixed at spawn).
+#[derive(Debug, PartialEq)]
+pub(super) struct CaretBeam {
+    pub(super) left: f32,
+    pub(super) top: f32,
+    pub(super) height: f32,
+}
+
+/// The caret visual for one composition frame. Beam (`begin == end`) and clause
+/// block (`begin != end`) are mutually exclusive.
+#[derive(Debug, PartialEq)]
+pub(super) enum CaretVisual {
+    None,
+    Beam(CaretBeam),
+    Clause(RectPx),
+}
+
+/// Fully-resolved placement of every IME overlay part, in logical px relative
+/// to the window origin. Pure output of [`compute_overlay_layout`].
+#[derive(Debug, PartialEq)]
+pub(super) struct OverlayLayout {
+    pub(super) background: RectPx,
+    pub(super) cells: Vec<PlacedCell>,
+    pub(super) underline: RectPx,
+    pub(super) caret: CaretVisual,
+}
+
+/// Computes the placement of every IME overlay part for one composition frame.
+///
+/// Pure: composes [`compute_overlay_pos`], [`layout_preedit_cells`], and
+/// [`caret_cell_offsets`] with the underline / caret / clause cell arithmetic,
+/// returning logical-px rects relative to the window origin. The occlusion
+/// color is intentionally not returned — the caller reads `grid.default_bg`.
+pub(super) fn compute_overlay_layout(
+    text: &str,
+    caret: Option<(usize, usize)>,
+    anchor_translation_phys: Vec2,
+    anchor_size_phys: Vec2,
+    cursor_cell: (u16, u16),
+    metrics: &CellMetrics,
+    scale: f32,
+) -> OverlayLayout {
+    let cell_w_logical = metrics.advance_phys.floor().max(1.0) / scale;
+    let line_h_logical = metrics.line_height_phys.floor().max(1.0) / scale;
+
+    let (placements, total_cells) = layout_preedit_cells(text, cell_w_logical, 0.0);
+    let total_width_logical = total_cells as f32 * cell_w_logical;
+    let pos = compute_overlay_pos(
+        anchor_translation_phys,
+        anchor_size_phys,
+        cursor_cell,
+        metrics,
+        total_width_logical,
+        scale,
+    );
+
+    let cells = placements
+        .into_iter()
+        .map(|placement| PlacedCell {
+            text: placement.text,
+            left: placement.left + pos.x,
+            top: pos.y,
+        })
+        .collect();
+
+    let background = RectPx {
+        left: pos.x,
+        top: pos.y,
+        width: total_width_logical,
+        height: line_h_logical,
+    };
+
+    // NOTE: `underline_position_phys` is baseline-relative and negative;
+    // subtract it from ascent so the bar lands below the baseline, not above
+    // the cell top.
+    let underline_top = pos.y + (metrics.ascent_phys - metrics.underline_position_phys) / scale;
+    let underline = RectPx {
+        left: pos.x,
+        top: underline_top,
+        width: total_width_logical,
+        height: (metrics.underline_thickness_phys / scale).max(1.0),
+    };
+
+    let caret = match caret {
+        Some((begin, end)) if begin != end => {
+            let (begin_cells, end_cells) = caret_cell_offsets(text, (begin, end));
+            CaretVisual::Clause(RectPx {
+                left: pos.x + begin_cells * cell_w_logical,
+                top: pos.y,
+                width: (end_cells - begin_cells) * cell_w_logical,
+                height: line_h_logical,
+            })
+        }
+        Some((begin, end)) => {
+            let (_, end_cells) = caret_cell_offsets(text, (begin, end));
+            CaretVisual::Beam(CaretBeam {
+                left: pos.x + end_cells * cell_w_logical,
+                top: pos.y,
+                height: line_h_logical,
+            })
+        }
+        None => CaretVisual::None,
+    };
+
+    OverlayLayout {
+        background,
+        cells,
+        underline,
+        caret,
+    }
+}
+
 /// Computes the overlay's top-left logical-pixel position relative to the
 /// window origin. Caller writes this into `Node.left` / `Node.top`.
 ///
@@ -14,7 +144,7 @@ use unicode_width::UnicodeWidthStr;
 /// conversion via `scale`. The overlay sits at the cursor row (Alacritty
 /// parity), clamped so its right edge stays inside the host rect, then so its
 /// left edge does not escape the host's left side.
-pub(super) fn compute_overlay_pos(
+fn compute_overlay_pos(
     ui_global_translation_phys: Vec2,
     host_size_phys: Vec2,
     cursor_cell: (u16, u16),
@@ -53,7 +183,7 @@ pub(super) fn compute_overlay_pos(
 /// Returns `(begin_cells, end_cells)` — the per-side cell offsets of the IME
 /// caret/clause range relative to the start of `text`. Fullwidth CJK counts as
 /// 2 cells per glyph, matching the renderer's width logic.
-pub(super) fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
+fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
     (
         clamped_prefix_cells(&text[..begin]) as f32,
         clamped_prefix_cells(&text[..end]) as f32,
@@ -69,16 +199,16 @@ fn clamped_prefix_cells(text: &str) -> u32 {
 
 /// A single placed preedit cell-unit: the grapheme cluster's text and its left
 /// edge in logical px (the cell origin it is anchored to).
-pub(super) struct CellPlacement {
-    pub(super) text: String,
-    pub(super) left: f32,
+struct CellPlacement {
+    text: String,
+    left: f32,
 }
 
 /// Splits `text` into grapheme clusters and assigns each a cell-aligned `left`
 /// edge, returning `(placements, total_cells)`. A `width >= 2` cluster consumes
 /// 2 cells; a `width == 0` cluster (lone combining mark) consumes 0 and merges
 /// into the previous placement's text.
-pub(super) fn layout_preedit_cells(
+fn layout_preedit_cells(
     text: &str,
     cell_w_logical: f32,
     origin_x: f32,
@@ -321,6 +451,127 @@ mod tests {
         assert!(
             end_cells <= 2.0,
             "a single grapheme cluster must clamp to at most 2 cells, got {end_cells}"
+        );
+    }
+
+    #[test]
+    fn compute_overlay_layout_ascii_beam() {
+        let (translation, size) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
+        let layout = compute_overlay_layout(
+            "abc",
+            Some((3, 3)),
+            translation,
+            size,
+            (0, 0),
+            &metrics(10.0, 16.0),
+            1.0,
+        );
+        assert_eq!(
+            layout.background,
+            RectPx {
+                left: 0.0,
+                top: 0.0,
+                width: 30.0,
+                height: 16.0
+            }
+        );
+        assert_eq!(
+            layout.cells,
+            vec![
+                PlacedCell {
+                    text: "a".into(),
+                    left: 0.0,
+                    top: 0.0
+                },
+                PlacedCell {
+                    text: "b".into(),
+                    left: 10.0,
+                    top: 0.0
+                },
+                PlacedCell {
+                    text: "c".into(),
+                    left: 20.0,
+                    top: 0.0
+                },
+            ]
+        );
+        assert_eq!(
+            layout.underline,
+            RectPx {
+                left: 0.0,
+                top: 14.0,
+                width: 30.0,
+                height: 1.0
+            }
+        );
+        assert_eq!(
+            layout.caret,
+            CaretVisual::Beam(CaretBeam {
+                left: 30.0,
+                top: 0.0,
+                height: 16.0
+            })
+        );
+    }
+
+    #[test]
+    fn compute_overlay_layout_clause_highlight() {
+        let (translation, size) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
+        let layout = compute_overlay_layout(
+            "hello",
+            Some((2, 4)),
+            translation,
+            size,
+            (0, 0),
+            &metrics(10.0, 16.0),
+            1.0,
+        );
+        assert_eq!(
+            layout.caret,
+            CaretVisual::Clause(RectPx {
+                left: 20.0,
+                top: 0.0,
+                width: 20.0,
+                height: 16.0
+            })
+        );
+    }
+
+    #[test]
+    fn compute_overlay_layout_no_caret_is_none() {
+        let (translation, size) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
+        let layout = compute_overlay_layout(
+            "ab",
+            None,
+            translation,
+            size,
+            (0, 0),
+            &metrics(10.0, 16.0),
+            1.0,
+        );
+        assert_eq!(layout.caret, CaretVisual::None);
+    }
+
+    #[test]
+    fn compute_overlay_layout_cjk_caret_at_fullwidth_suffix() {
+        let (translation, size) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
+        let layout = compute_overlay_layout(
+            "あい",
+            Some((6, 6)),
+            translation,
+            size,
+            (0, 0),
+            &metrics(10.0, 16.0),
+            1.0,
+        );
+        assert_eq!(layout.background.width, 40.0);
+        assert_eq!(
+            layout.caret,
+            CaretVisual::Beam(CaretBeam {
+                left: 40.0,
+                top: 0.0,
+                height: 16.0
+            })
         );
     }
 }
