@@ -32,6 +32,7 @@ use ozma_tty_renderer::TerminalFontInitSet;
 use ozma_tty_renderer::TerminalFontSize;
 use ozma_tty_renderer::material::TerminalMaterialSystems;
 use ozma_tty_renderer::prelude::TerminalGrid;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
@@ -164,6 +165,45 @@ fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
     let begin_cells = UnicodeWidthStr::width(&text[..begin]) as f32;
     let end_cells = UnicodeWidthStr::width(&text[..end]) as f32;
     (begin_cells, end_cells)
+}
+
+/// A single placed preedit cell-unit: the grapheme cluster's text and its
+/// left edge in logical px (the cell origin it is anchored to).
+struct CellPlacement {
+    text: String,
+    left: f32,
+}
+
+/// Splits `text` into grapheme clusters and assigns each a cell-aligned
+/// `left` edge, returning `(placements, total_cells)`.
+///
+/// Cluster width follows the renderer's `runs_to_cells` rule
+/// (`crates/ozma_tty_renderer/src/grid.rs`): a `width >= 2` cluster consumes
+/// 2 cells, a `width == 0` cluster (lone combining mark) consumes 0 cells and
+/// merges into the previous placement's text. `origin_x` is the composition's
+/// left edge; `cell_w_logical` is the floored cell pitch — both in logical px.
+#[expect(dead_code, reason = "wired into position_ime_overlay in a later task")]
+fn layout_preedit_cells(text: &str, cell_w_logical: f32, origin_x: f32) -> (Vec<CellPlacement>, u32) {
+    let mut placements: Vec<CellPlacement> = Vec::new();
+    let mut cum_cells: u32 = 0;
+    for cluster in text.graphemes(true) {
+        let cells = match UnicodeWidthStr::width(cluster) {
+            0 => {
+                if let Some(last) = placements.last_mut() {
+                    last.text.push_str(cluster);
+                }
+                continue;
+            }
+            1 => 1,
+            _ => 2,
+        };
+        placements.push(CellPlacement {
+            text: cluster.to_string(),
+            left: origin_x + cum_cells as f32 * cell_w_logical,
+        });
+        cum_cells += cells;
+    }
+    (placements, cum_cells)
 }
 
 /// PostUpdate system that positions the IME preedit overlay at the
@@ -812,5 +852,50 @@ mod tests {
         );
         assert_eq!(pos.x, 60.0);
         assert_eq!(pos.y, 68.0);
+    }
+
+    #[test]
+    fn layout_preedit_cells_ascii() {
+        let (cells, total) = layout_preedit_cells("abc", 10.0, 100.0);
+        assert_eq!(total, 3);
+        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
+        assert_eq!(lefts, vec![100.0, 110.0, 120.0]);
+        let texts: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
+        assert_eq!(texts, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn layout_preedit_cells_fullwidth_cjk_consumes_two_cells_each() {
+        // Each hiragana is 2 cells; cells start at 0 and 2 columns.
+        let (cells, total) = layout_preedit_cells("あい", 10.0, 0.0);
+        assert_eq!(total, 4);
+        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
+        assert_eq!(lefts, vec![0.0, 20.0]);
+    }
+
+    #[test]
+    fn layout_preedit_cells_mixed_ascii_and_cjk() {
+        // "a"(1) + "あ"(2) + "b"(1): lefts at 0, 1, 3 columns.
+        let (cells, total) = layout_preedit_cells("aあb", 10.0, 0.0);
+        assert_eq!(total, 4);
+        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
+        assert_eq!(lefts, vec![0.0, 10.0, 30.0]);
+    }
+
+    #[test]
+    fn layout_preedit_cells_combining_mark_merges_into_previous() {
+        // "e" + U+0301 (combining acute, width 0): one placement, total 1 cell.
+        let (cells, total) = layout_preedit_cells("e\u{0301}", 10.0, 0.0);
+        assert_eq!(total, 1);
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].text, "e\u{0301}");
+        assert_eq!(cells[0].left, 0.0);
+    }
+
+    #[test]
+    fn layout_preedit_cells_empty() {
+        let (cells, total) = layout_preedit_cells("", 10.0, 0.0);
+        assert_eq!(total, 0);
+        assert!(cells.is_empty());
     }
 }
