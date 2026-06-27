@@ -329,6 +329,36 @@ pub struct ControlPlaneHandle {
     pub tokens: TokenRegistry,
 }
 
+impl ControlPlaneHandle {
+    /// Returns the `OZMA_SOCK` / `OZMA_TOKEN` env pairs to inject into `surface`'s
+    /// PTY so a program running in it can reach the control plane and resolve to
+    /// `surface`. Pure: derives the token but does NOT register it — call
+    /// [`bind_surface`](Self::bind_surface) after the PTY actually spawns, so a
+    /// failed spawn leaks no binding.
+    pub fn surface_env(&self, surface: Entity) -> [(String, String); 2] {
+        [
+            (
+                "OZMA_SOCK".to_string(),
+                self.sock_path.to_string_lossy().into_owned(),
+            ),
+            ("OZMA_TOKEN".to_string(), surface_token(surface)),
+        ]
+    }
+
+    /// Registers `token -> surface` so a connecting program's `$OZMA_TOKEN`
+    /// resolves to `surface`. Call only after the surface's PTY has spawned.
+    pub fn bind_surface(&self, surface: Entity) {
+        self.tokens.insert(surface_token(surface), surface);
+    }
+}
+
+/// Derives the per-surface token (`ozma:<entity-bits>`) from a surface entity.
+/// Single-sources the format so [`ControlPlaneHandle::surface_env`] and
+/// [`ControlPlaneHandle::bind_surface`] always agree.
+fn surface_token(surface: Entity) -> String {
+    format!("ozma:{}", surface.to_bits())
+}
+
 /// Wires the control-plane listener, the event-apply system, and the teardown
 /// observer. Takes the `WebviewAssetRegistry` shared with the `ozma` scheme handler.
 pub(crate) struct ControlPlanePlugin {
@@ -904,6 +934,37 @@ mod token_tests {
         assert_eq!(reg.resolve("%1"), None);
         assert_eq!(reg.resolve("tok"), None);
         assert_eq!(reg.resolve("%2"), Some(Entity::from_bits(8)));
+    }
+
+    #[test]
+    fn surface_env_is_pure_and_bind_surface_registers() {
+        let handle = ControlPlaneHandle {
+            sock_path: PathBuf::from("/tmp/ctl.sock"),
+            tokens: TokenRegistry::default(),
+        };
+        let surface = Entity::from_bits(42);
+        let token = format!("ozma:{}", surface.to_bits());
+
+        let env = handle.surface_env(surface);
+        assert_eq!(
+            env,
+            [
+                ("OZMA_SOCK".to_string(), "/tmp/ctl.sock".to_string()),
+                ("OZMA_TOKEN".to_string(), token.clone()),
+            ]
+        );
+        assert_eq!(
+            handle.tokens.resolve(&token),
+            None,
+            "surface_env must not register the token (pure read)"
+        );
+
+        handle.bind_surface(surface);
+        assert_eq!(
+            handle.tokens.resolve(&token),
+            Some(surface),
+            "bind_surface registers token -> surface"
+        );
     }
 }
 
