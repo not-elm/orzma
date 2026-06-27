@@ -59,6 +59,30 @@ pub(crate) fn load(path: &Path) -> io::Result<Document> {
     Ok(Document::from_source(text, base_dir))
 }
 
+/// Resolves a link `target` (relative or absolute) against `base_dir` to an
+/// absolute, canonical path, requiring it to be an existing regular file.
+///
+/// # Errors
+/// Returns an error if the path does not exist or is not a regular file.
+pub(crate) fn resolve_link(base_dir: &Path, target: &str) -> io::Result<PathBuf> {
+    let path = fs::canonicalize(base_dir.join(target))?;
+    if !path.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok(path)
+}
+
+/// Whether `path` has a Markdown extension (`.md` or `.markdown`, ASCII
+/// case-insensitive).
+pub(crate) fn is_markdown(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
+}
+
 /// Reads the change fingerprint (length + mtime) for `path`.
 pub(crate) fn fingerprint(path: &Path) -> io::Result<Fingerprint> {
     let meta = fs::metadata(path)?;
@@ -108,5 +132,43 @@ mod tests {
         fs::write(&path, "a much longer body than before").unwrap();
         let fp2 = fingerprint(&path).unwrap();
         assert_ne!(fp1, fp2);
+    }
+
+    #[test]
+    fn resolve_link_resolves_relative_against_base_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("child.md");
+        fs::write(&target, "x").unwrap();
+        let got = resolve_link(dir.path(), "child.md").unwrap();
+        assert_eq!(got, fs::canonicalize(&target).unwrap());
+    }
+
+    #[test]
+    fn resolve_link_handles_parent_and_absolute() {
+        let dir = tempfile::tempdir().unwrap();
+        let sub = dir.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        let sibling = dir.path().join("sib.md");
+        fs::write(&sibling, "x").unwrap();
+        let from_parent = resolve_link(&sub, "../sib.md").unwrap();
+        assert_eq!(from_parent, fs::canonicalize(&sibling).unwrap());
+        let abs = sibling.to_str().unwrap();
+        assert_eq!(resolve_link(&sub, abs).unwrap(), fs::canonicalize(&sibling).unwrap());
+    }
+
+    #[test]
+    fn resolve_link_rejects_missing_and_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(resolve_link(dir.path(), "nope.md").is_err());
+        assert!(resolve_link(dir.path(), ".").is_err());
+    }
+
+    #[test]
+    fn is_markdown_matches_extensions_case_insensitively() {
+        assert!(is_markdown(Path::new("a.md")));
+        assert!(is_markdown(Path::new("a.MARKDOWN")));
+        assert!(is_markdown(Path::new("/x/y.Md")));
+        assert!(!is_markdown(Path::new("a.txt")));
+        assert!(!is_markdown(Path::new("README")));
     }
 }
