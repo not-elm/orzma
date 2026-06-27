@@ -44,18 +44,21 @@ impl Coalescer {
     }
 
     /// Returns true while a window is open (deadline armed).
-    pub(crate) fn is_armed(&self) -> bool {
+    #[inline]
+    pub(crate) const fn is_armed(&self) -> bool {
         self.armed_at.is_some()
     }
 
     /// Arms the window on first call after disarm; extends `last_chunk_at` on
     /// subsequent calls inside the same window.
+    #[inline]
     pub(crate) fn arm_or_extend(&mut self, now: Instant) {
         self.armed_at.get_or_insert(now);
         self.last_chunk_at = Some(now);
     }
 
     /// Resets the window. Called after `emit_now` runs.
+    #[inline]
     pub(crate) fn disarm(&mut self) {
         self.armed_at = None;
         self.last_chunk_at = None;
