@@ -19,8 +19,8 @@ use crate::vt::listener::{AnchorMode, ControlFrame, InlineAnchor, OscWebviewVerb
 use crate::vt::mode_diff::diff_mode;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::Line;
-use alacritty_terminal::index::Side as ASide;
+use alacritty_terminal::index::{Line, Point, Side as ASide};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vi_mode::{ViModeCursor, ViMotion};
 use alacritty_terminal::vte::ansi::Processor;
@@ -91,7 +91,7 @@ pub struct TerminalHandle {
     prev_cursor: Option<Cursor>,
     prev_vi_cursor: Option<ViCursor>,
     prev_selection: Option<SelectionRange>,
-    selection_anchor: Option<alacritty_terminal::index::Point>,
+    selection_anchor: Option<Point>,
     pending_user_input: bool,
     pending_damage: Option<DirtyRows>,
     first_emit: bool,
@@ -398,7 +398,7 @@ impl TerminalHandle {
     /// Returns the current `TermMode` bitflags. Used by the mouse-wheel
     /// router to choose between SGR/X10 mouse-protocol output,
     /// alt-screen arrow translation, and host scrollback.
-    pub fn current_modes(&self) -> alacritty_terminal::term::TermMode {
+    pub fn current_modes(&self) -> TermMode {
         *self.term.mode()
     }
 
@@ -431,8 +431,7 @@ impl TerminalHandle {
         if self.term.mode().contains(TermMode::VI) {
             self.term.toggle_vi_mode();
         }
-        self.term
-            .scroll_display(alacritty_terminal::grid::Scroll::Bottom);
+        self.term.scroll_display(Scroll::Bottom);
         self.stage_full_damage_and_arm(coalescer);
     }
 
@@ -441,11 +440,7 @@ impl TerminalHandle {
     /// so callers do not need to re-issue `selection_*` after motion.
     /// Schedules a Full damage emit because vi-cursor moves are not
     /// part of alacritty's `Term::damage()` (see is_noop_emit docs).
-    pub fn vi_motion(
-        &mut self,
-        coalescer: &mut Coalescer,
-        motion: alacritty_terminal::vi_mode::ViMotion,
-    ) {
+    pub fn vi_motion(&mut self, coalescer: &mut Coalescer, motion: ViMotion) {
         self.term.vi_motion(motion);
         self.stage_full_damage_and_arm(coalescer);
     }
@@ -499,13 +494,13 @@ impl TerminalHandle {
     pub fn selection_start_at(
         &mut self,
         coalescer: &mut Coalescer,
-        viewport_point: alacritty_terminal::index::Point,
-        side: alacritty_terminal::index::Side,
-        ty: alacritty_terminal::selection::SelectionType,
+        viewport_point: Point,
+        side: ASide,
+        ty: SelectionType,
     ) {
         let line = viewport_row_to_line(&self.term, viewport_point.line.0);
-        let anchor = alacritty_terminal::index::Point::new(line, viewport_point.column);
-        let mut sel = alacritty_terminal::selection::Selection::new(ty, anchor, side);
+        let anchor = Point::new(line, viewport_point.column);
+        let mut sel = Selection::new(ty, anchor, side);
         let opposite = match side {
             ASide::Left => ASide::Right,
             ASide::Right => ASide::Left,
@@ -525,14 +520,14 @@ impl TerminalHandle {
     pub fn selection_update_to(
         &mut self,
         coalescer: &mut Coalescer,
-        viewport_point: alacritty_terminal::index::Point,
-        side: alacritty_terminal::index::Side,
+        viewport_point: Point,
+        side: ASide,
     ) {
         if self.term.selection.is_none() {
             return;
         }
         let line = viewport_row_to_line(&self.term, viewport_point.line.0);
-        let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        let point = Point::new(line, viewport_point.column);
         if let Some(sel) = self.term.selection.as_mut() {
             sel.update(point, side);
         }
@@ -549,20 +544,12 @@ impl TerminalHandle {
     /// recompute on viewport changes (`scroll_display` →
     /// `vi_mode_recompute_selection` at `term/mod.rs:402` → `:872`)
     /// does not snap the selection end back to a stale vi cursor.
-    pub fn vi_goto(
-        &mut self,
-        coalescer: &mut Coalescer,
-        viewport_point: alacritty_terminal::index::Point,
-    ) {
-        if !self
-            .term
-            .mode()
-            .contains(alacritty_terminal::term::TermMode::VI)
-        {
+    pub fn vi_goto(&mut self, coalescer: &mut Coalescer, viewport_point: Point) {
+        if !self.term.mode().contains(TermMode::VI) {
             return;
         }
         let line = viewport_row_to_line(&self.term, viewport_point.line.0);
-        let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        let point = Point::new(line, viewport_point.column);
         self.term.vi_goto_point(point);
         self.stage_full_damage_and_arm(coalescer);
     }
@@ -575,18 +562,10 @@ impl TerminalHandle {
     /// from `to_range` when start and end coincide, so
     /// `selection_to_string` would yield `None`. See spec § 5 and
     /// `alacritty_terminal/selection.rs:124,193,332`.
-    pub fn selection_start(
-        &mut self,
-        coalescer: &mut Coalescer,
-        ty: alacritty_terminal::selection::SelectionType,
-    ) {
+    pub fn selection_start(&mut self, coalescer: &mut Coalescer, ty: SelectionType) {
         let anchor = self.term.vi_mode_cursor.point;
-        let mut sel = alacritty_terminal::selection::Selection::new(
-            ty,
-            anchor,
-            alacritty_terminal::index::Side::Left,
-        );
-        sel.update(anchor, alacritty_terminal::index::Side::Right);
+        let mut sel = Selection::new(ty, anchor, ASide::Left);
+        sel.update(anchor, ASide::Right);
         self.term.selection = Some(sel);
         self.selection_anchor = Some(anchor);
         self.stage_full_damage_and_arm(coalescer);
@@ -611,13 +590,13 @@ impl TerminalHandle {
     /// for a freshly-anchored `Simple` / `Block` selection.
     pub fn selection_start_at_vt_only(
         &mut self,
-        viewport_point: alacritty_terminal::index::Point,
-        side: alacritty_terminal::index::Side,
-        ty: alacritty_terminal::selection::SelectionType,
+        viewport_point: Point,
+        side: ASide,
+        ty: SelectionType,
     ) {
         let line = viewport_row_to_line(&self.term, viewport_point.line.0);
-        let anchor = alacritty_terminal::index::Point::new(line, viewport_point.column);
-        let mut sel = alacritty_terminal::selection::Selection::new(ty, anchor, side);
+        let anchor = Point::new(line, viewport_point.column);
+        let mut sel = Selection::new(ty, anchor, side);
         let opposite = match side {
             ASide::Left => ASide::Right,
             ASide::Right => ASide::Left,
@@ -632,13 +611,9 @@ impl TerminalHandle {
     /// translation as `selection_start_at`. No-op (no panic, no state change)
     /// when `Term::selection` is `None`. The caller must call `flush_emit`
     /// after this to push the updated selection to the renderer.
-    pub fn selection_update_to_vt_only(
-        &mut self,
-        viewport_point: alacritty_terminal::index::Point,
-        side: alacritty_terminal::index::Side,
-    ) {
+    pub fn selection_update_to_vt_only(&mut self, viewport_point: Point, side: ASide) {
         let line = viewport_row_to_line(&self.term, viewport_point.line.0);
-        let point = alacritty_terminal::index::Point::new(line, viewport_point.column);
+        let point = Point::new(line, viewport_point.column);
         let Some(sel) = self.term.selection.as_mut() else {
             return;
         };
@@ -662,7 +637,7 @@ impl TerminalHandle {
 
     /// Returns the type of the active selection, if any. Used by the
     /// v / V toggle predicate.
-    pub fn selection_type(&self) -> Option<alacritty_terminal::selection::SelectionType> {
+    pub fn selection_type(&self) -> Option<SelectionType> {
         self.term.selection.as_ref().map(|s| s.ty)
     }
 
@@ -675,21 +650,13 @@ impl TerminalHandle {
     /// Returns `false` when no selection anchor is stored (i.e. no
     /// selection is currently active). In that case callers should
     /// fall back to `selection_start`.
-    pub fn selection_change_type(
-        &mut self,
-        coalescer: &mut Coalescer,
-        ty: alacritty_terminal::selection::SelectionType,
-    ) -> bool {
+    pub fn selection_change_type(&mut self, coalescer: &mut Coalescer, ty: SelectionType) -> bool {
         let Some(anchor) = self.selection_anchor else {
             return false;
         };
         let cursor = self.term.vi_mode_cursor.point;
-        let mut sel = alacritty_terminal::selection::Selection::new(
-            ty,
-            anchor,
-            alacritty_terminal::index::Side::Left,
-        );
-        sel.update(cursor, alacritty_terminal::index::Side::Right);
+        let mut sel = Selection::new(ty, anchor, ASide::Left);
+        sel.update(cursor, ASide::Right);
         self.term.selection = Some(sel);
         // anchor stays as-is — type change preserves it
         self.stage_full_damage_and_arm(coalescer);
