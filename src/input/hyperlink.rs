@@ -1,23 +1,29 @@
-//! OSC 8 hyperlink hover detection and cursor-icon control. Over a linked
-//! cell the cursor becomes a pointer while the platform activation modifier
-//! (`link_modifier_held`) is held, and text otherwise. Hyperlink activation
-//! (Cmd/Ctrl-click open) for a pane is owned by `ozma_terminal`'s shared
-//! mouse systems, not here.
+//! OSC 8 hyperlink hover detection and cursor-icon control — the single
+//! authority for `HyperlinkHoverState` (the renderer underline) and the window
+//! `CursorIcon` over every terminal surface: tmux panes, the Default-mode shell,
+//! and webview hosts (all are `OzmaTerminal` entities). Over a linked cell the
+//! cursor becomes a pointer while the platform activation modifier
+//! (`link_modifier_held`) is held, and text otherwise; over a webview host the
+//! cursor is left to `bevy_cef`'s `SystemCursorIconPlugin`. Surfaces with input
+//! suppressed (`MouseDisabled`: copy mode, IME, focused webview, unfocused
+//! window) are skipped, so hover never advertises a link the mouse dispatcher
+//! would refuse to open. Hyperlink activation (Cmd/Ctrl-click open) is owned by
+//! `ozma_terminal`'s shared mouse systems, not here.
 
 use crate::input::{InputPhase, current_modifiers};
-use crate::tmux::pane_hit::{cell_at_local, tmux_pane_at_phys};
+use crate::tmux::pane_hit::{cell_at_local, phys_to_pane_local};
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon, Window};
+use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
+use ozma_terminal::{MouseDisabled, OzmaTerminal};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;
-use ozmux_tmux::TmuxPane;
 
 /// Plugin: registers `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
 pub(crate) struct HyperlinkInputPlugin;
@@ -27,7 +33,11 @@ impl Plugin for HyperlinkInputPlugin {
         app.add_systems(
             Update,
             hyperlink_hover_and_cursor
-                .run_if(on_message::<MouseMotion>.or(on_message::<KeyboardInput>))
+                .run_if(
+                    on_message::<MouseMotion>
+                        .or(on_message::<CursorMoved>)
+                        .or(on_message::<KeyboardInput>),
+                )
                 .in_set(InputPhase::Hover),
         );
     }
@@ -47,7 +57,10 @@ fn hyperlink_hover_and_cursor(
     mut hover: ResMut<HyperlinkHoverState>,
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
+    surfaces: Query<
+        (Entity, &ComputedNode, &UiGlobalTransform),
+        (With<OzmaTerminal>, Without<MouseDisabled>),
+    >,
     grids: Query<&TerminalGrid>,
     webview_hosts: Query<&WebviewSource>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -73,14 +86,27 @@ fn hyperlink_hover_and_cursor(
 
     hover.entity = None;
     hover.hyperlink_id = None;
-    let target = match tmux_pane_at_phys(&panes, cursor_phys) {
+    let target = match topmost_surface_at(cursor_phys, surfaces.iter()) {
         None => HoverTarget::Default,
-        Some((entity, _pane_id, local)) => {
-            if let Ok(grid) = grids.get(entity) {
-                let (col, row, _side) =
-                    cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows);
-                let id = grid
-                    .hyperlink_at(row.saturating_sub(1) as u16, col.saturating_sub(1) as u16)
+        Some(entity) => {
+            if webview_hosts.contains(entity) {
+                HoverTarget::Webview
+            } else if let Ok(grid) = grids.get(entity) {
+                let id = surfaces
+                    .get(entity)
+                    .ok()
+                    .and_then(|(_, node, transform)| {
+                        phys_to_pane_local(node, transform, cursor_phys)
+                    })
+                    .map(|local| {
+                        cell_at_local(local, cell_w_phys, cell_h_phys, grid.cols, grid.rows)
+                    })
+                    .and_then(|(col, row, _side)| {
+                        grid.hyperlink_at(
+                            row.saturating_sub(1) as u16,
+                            col.saturating_sub(1) as u16,
+                        )
+                    })
                     .map(|(id, _uri)| id);
                 hover.entity = Some(entity);
                 hover.hyperlink_id = id;
@@ -88,8 +114,6 @@ fn hyperlink_hover_and_cursor(
                     has_link: id.is_some(),
                     modifier_held: hover.modifier_held,
                 }
-            } else if webview_hosts.get(entity).is_ok() {
-                HoverTarget::Webview
             } else {
                 HoverTarget::Default
             }
@@ -97,6 +121,21 @@ fn hyperlink_hover_and_cursor(
     };
 
     apply_cursor(&mut cursor_icons, cursor_decision(target));
+}
+
+/// Returns the topmost `OzmaTerminal` surface whose node contains `cursor_phys`,
+/// or `None` when the cursor is over none. "Topmost" is the highest
+/// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); a higher
+/// index is drawn later, i.e. on top. Equal stack indices (only possible before
+/// the first layout pass assigns them) break by `Entity` for determinism.
+fn topmost_surface_at<'a>(
+    cursor_phys: Vec2,
+    candidates: impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)>,
+) -> Option<Entity> {
+    candidates
+        .filter(|&(_, node, transform)| node.contains_point(*transform, cursor_phys))
+        .max_by_key(|&(entity, node, _)| (node.stack_index(), entity))
+        .map(|(entity, _, _)| entity)
 }
 
 /// Clears every per-cursor field of the hover state, including
@@ -298,6 +337,226 @@ mod tests {
             icon,
             Some(&CursorIcon::System(SystemCursorIcon::Default)),
             "with no pane under the cursor the decision is Default"
+        );
+    }
+
+    #[test]
+    fn hover_over_default_mode_terminal_link_sets_state_and_pointer() {
+        use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<MouseMotion>();
+        app.init_resource::<HyperlinkHoverState>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(hover_test_metrics());
+        app.add_systems(Update, hyperlink_hover_and_cursor);
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            if cfg!(target_os = "macos") {
+                keys.press(KeyCode::SuperLeft);
+            } else {
+                keys.press(KeyCode::ControlLeft);
+            }
+        }
+
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
+        let window_entity = app
+            .world_mut()
+            .spawn((
+                window,
+                PrimaryWindow,
+                CursorIcon::System(SystemCursorIcon::Default),
+            ))
+            .id();
+
+        let grid = TerminalGrid {
+            cols: 10,
+            rows: 5,
+            cells: vec![vec![Cell {
+                text: "x".to_string(),
+                width: 1,
+                fg: Color::WHITE,
+                bg: Color::BLACK,
+                style: 0,
+                hyperlink_id: Some(HyperlinkId(7)),
+            }]],
+            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
+            ..default()
+        };
+        let term = app
+            .world_mut()
+            .spawn((
+                OzmaTerminal,
+                ComputedNode {
+                    size: Vec2::new(80.0, 80.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(40.0, 40.0),
+                grid,
+            ))
+            .id();
+
+        app.update();
+
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(
+            hover.entity,
+            Some(term),
+            "hover must resolve to the Default-mode OzmaTerminal (no TmuxPane) under the cursor"
+        );
+        assert_eq!(
+            hover.hyperlink_id,
+            Some(HyperlinkId(7)),
+            "the linked cell's hyperlink id must populate the hover state"
+        );
+        assert!(hover.modifier_held, "the link-activation modifier is held");
+        let icon = app.world().entity(window_entity).get::<CursorIcon>();
+        assert_eq!(
+            icon,
+            Some(&CursorIcon::System(SystemCursorIcon::Pointer)),
+            "a link under the cursor with the modifier held shows the pointer"
+        );
+    }
+
+    #[test]
+    fn hover_skips_mouse_disabled_surface() {
+        use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<MouseMotion>();
+        app.init_resource::<HyperlinkHoverState>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(hover_test_metrics());
+        app.add_systems(Update, hyperlink_hover_and_cursor);
+
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            if cfg!(target_os = "macos") {
+                keys.press(KeyCode::SuperLeft);
+            } else {
+                keys.press(KeyCode::ControlLeft);
+            }
+        }
+
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
+        let window_entity = app
+            .world_mut()
+            .spawn((
+                window,
+                PrimaryWindow,
+                CursorIcon::System(SystemCursorIcon::Default),
+            ))
+            .id();
+
+        let grid = TerminalGrid {
+            cols: 10,
+            rows: 5,
+            cells: vec![vec![Cell {
+                text: "x".to_string(),
+                width: 1,
+                fg: Color::WHITE,
+                bg: Color::BLACK,
+                style: 0,
+                hyperlink_id: Some(HyperlinkId(7)),
+            }]],
+            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
+            ..default()
+        };
+        app.world_mut().spawn((
+            OzmaTerminal,
+            MouseDisabled,
+            ComputedNode {
+                size: Vec2::new(80.0, 80.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(40.0, 40.0),
+            grid,
+        ));
+
+        app.update();
+
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(
+            hover.entity, None,
+            "a MouseDisabled surface must not be hovered — the click is suppressed, so no link affordance"
+        );
+        assert_eq!(hover.hyperlink_id, None);
+        let icon = app.world().entity(window_entity).get::<CursorIcon>();
+        assert_eq!(
+            icon,
+            Some(&CursorIcon::System(SystemCursorIcon::Default)),
+            "with input suppressed the cursor stays the arrow, not a link pointer"
+        );
+    }
+
+    #[test]
+    fn hover_over_webview_host_leaves_cursor_to_cef() {
+        use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<MouseMotion>();
+        app.init_resource::<HyperlinkHoverState>();
+        app.init_resource::<ButtonInput<KeyCode>>();
+        app.insert_resource(hover_test_metrics());
+        app.add_systems(Update, hyperlink_hover_and_cursor);
+
+        let mut window = Window::default();
+        window.set_cursor_position(Some(Vec2::new(4.0, 8.0)));
+        // A distinctive starting cursor that the Webview decision must leave untouched.
+        let window_entity = app
+            .world_mut()
+            .spawn((
+                window,
+                PrimaryWindow,
+                CursorIcon::System(SystemCursorIcon::Pointer),
+            ))
+            .id();
+
+        // A webview host: an OzmaTerminal carrying WebviewSource. `on_add_inject_render`
+        // would also give it a (rendered-over) grid, so the webview check must win.
+        let grid = TerminalGrid {
+            cols: 10,
+            rows: 5,
+            cells: vec![vec![Cell {
+                text: "x".to_string(),
+                width: 1,
+                fg: Color::WHITE,
+                bg: Color::BLACK,
+                style: 0,
+                hyperlink_id: Some(HyperlinkId(7)),
+            }]],
+            hyperlinks: vec![(HyperlinkId(7), HyperlinkUri::new("https://example.com"))],
+            ..default()
+        };
+        app.world_mut().spawn((
+            OzmaTerminal,
+            WebviewSource::new("ozma://example/index.html"),
+            ComputedNode {
+                size: Vec2::new(80.0, 80.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(40.0, 40.0),
+            grid,
+        ));
+
+        app.update();
+
+        let hover = app.world().resource::<HyperlinkHoverState>();
+        assert_eq!(
+            hover.entity, None,
+            "a webview host must not be treated as a terminal even though it carries a grid"
+        );
+        let icon = app.world().entity(window_entity).get::<CursorIcon>();
+        assert_eq!(
+            icon,
+            Some(&CursorIcon::System(SystemCursorIcon::Pointer)),
+            "over a webview host the cursor is left untouched for bevy_cef to own"
         );
     }
 }
