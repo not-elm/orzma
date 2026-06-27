@@ -8,10 +8,19 @@ use crate::{
 };
 use bevy::{
     asset::{load_internal_asset, uuid_handle},
+    ecs::system::{SystemParamItem, lifetimeless::SRes},
     prelude::*,
     render::{
-        render_resource::{AsBindGroup, ShaderType},
-        storage::ShaderStorageBuffer,
+        render_asset::RenderAssets,
+        render_resource::{
+            AsBindGroup, AsBindGroupError, BindGroupLayout, BindGroupLayoutEntry, BindingResources,
+            BindingType, BufferBindingType, BufferInitDescriptor, BufferUsages,
+            OwnedBindingResource, SamplerBindingType, ShaderStages, ShaderType, TextureSampleType,
+            TextureViewDimension, UnpreparedBindGroup, encase,
+        },
+        renderer::RenderDevice,
+        storage::{GpuShaderStorageBuffer, ShaderStorageBuffer},
+        texture::{FallbackImage, GpuImage},
     },
     shader::ShaderRef,
     window::PrimaryWindow,
@@ -65,29 +74,172 @@ impl Plugin for TerminalMaterialPlugin {
 }
 
 /// Custom UI material backing the full-screen terminal node.
-#[derive(AsBindGroup, Asset, TypePath, Clone, Default)]
+#[derive(Asset, TypePath, Clone)]
 pub struct TerminalUiMaterial {
-    #[uniform(0)]
     params: TerminalParams,
-    #[storage(1, read_only)]
     cells: Handle<ShaderStorageBuffer>,
-    #[storage(2, read_only)]
     glyphs: Handle<ShaderStorageBuffer>,
-    #[texture(3)]
-    #[sampler(4)]
     atlas: Handle<Image>,
-    #[texture(5)]
-    #[sampler(6)]
-    overlay0: Option<Handle<Image>>,
-    #[texture(7)]
-    #[sampler(8)]
-    overlay1: Option<Handle<Image>>,
-    #[texture(9)]
-    #[sampler(10)]
-    overlay2: Option<Handle<Image>>,
-    #[texture(11)]
-    #[sampler(12)]
-    overlay3: Option<Handle<Image>>,
+    overlays: [Option<Handle<Image>>; OVERLAY_SLOTS],
+}
+
+/// First `@binding` index of the overlay texture array; slot `i` binds at
+/// `OVERLAY_TEX_BINDING_BASE + i`. Bindings 0..=5 are params/cells/glyphs/atlas
+/// texture/atlas sampler/shared overlay sampler.
+const OVERLAY_TEX_BINDING_BASE: u32 = 6;
+
+impl Default for TerminalUiMaterial {
+    fn default() -> Self {
+        Self {
+            params: TerminalParams::default(),
+            cells: Handle::default(),
+            glyphs: Handle::default(),
+            atlas: Handle::default(),
+            overlays: [const { None }; OVERLAY_SLOTS],
+        }
+    }
+}
+
+impl AsBindGroup for TerminalUiMaterial {
+    type Data = ();
+    type Param = (
+        SRes<RenderAssets<GpuImage>>,
+        SRes<FallbackImage>,
+        SRes<RenderAssets<GpuShaderStorageBuffer>>,
+    );
+
+    fn label() -> &'static str {
+        "terminal_ui_material"
+    }
+
+    fn bind_group_data(&self) -> Self::Data {}
+
+    fn unprepared_bind_group(
+        &self,
+        _layout: &BindGroupLayout,
+        render_device: &RenderDevice,
+        (images, fallback_image, storage_buffers): &mut SystemParamItem<'_, '_, Self::Param>,
+        _force_no_bindless: bool,
+    ) -> Result<UnpreparedBindGroup, AsBindGroupError> {
+        let mut params_buffer = encase::UniformBuffer::new(Vec::new());
+        params_buffer.write(&self.params).unwrap();
+
+        let cells = storage_buffers
+            .get(&self.cells)
+            .ok_or(AsBindGroupError::RetryNextUpdate)?;
+        let glyphs = storage_buffers
+            .get(&self.glyphs)
+            .ok_or(AsBindGroupError::RetryNextUpdate)?;
+        let atlas = images
+            .get(&self.atlas)
+            .ok_or(AsBindGroupError::RetryNextUpdate)?;
+
+        let mut bindings = vec![
+            (
+                0,
+                OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
+                    &BufferInitDescriptor {
+                        label: Some("terminal_params"),
+                        usage: BufferUsages::UNIFORM,
+                        contents: params_buffer.as_ref(),
+                    },
+                )),
+            ),
+            (1, OwnedBindingResource::Buffer(cells.buffer.clone())),
+            (2, OwnedBindingResource::Buffer(glyphs.buffer.clone())),
+            (
+                3,
+                OwnedBindingResource::TextureView(
+                    TextureViewDimension::D2,
+                    atlas.texture_view.clone(),
+                ),
+            ),
+            (
+                4,
+                OwnedBindingResource::Sampler(SamplerBindingType::Filtering, atlas.sampler.clone()),
+            ),
+            (
+                5,
+                OwnedBindingResource::Sampler(
+                    SamplerBindingType::Filtering,
+                    fallback_image.d2.sampler.clone(),
+                ),
+            ),
+        ];
+
+        // NOTE: A `None` slot, OR a `Some` whose GpuImage is not yet loaded,
+        // binds the fallback view. The shader never samples it (the `rect.z==0`
+        // sentinel gates it), and this avoids stalling the whole material's bind
+        // group on a single mid-load overlay texture.
+        for (i, handle) in self.overlays.iter().enumerate() {
+            let view = handle.as_ref().and_then(|h| images.get(h)).map_or_else(
+                || fallback_image.d2.texture_view.clone(),
+                |img| img.texture_view.clone(),
+            );
+            bindings.push((
+                OVERLAY_TEX_BINDING_BASE + i as u32,
+                OwnedBindingResource::TextureView(TextureViewDimension::D2, view),
+            ));
+        }
+
+        Ok(UnpreparedBindGroup {
+            bindings: BindingResources(bindings),
+        })
+    }
+
+    fn bind_group_layout_entries(
+        _render_device: &RenderDevice,
+        _force_no_bindless: bool,
+    ) -> Vec<BindGroupLayoutEntry> {
+        let texture = |binding: u32| BindGroupLayoutEntry {
+            binding,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Texture {
+                sample_type: TextureSampleType::Float { filterable: true },
+                view_dimension: TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let sampler = |binding: u32| BindGroupLayoutEntry {
+            binding,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Sampler(SamplerBindingType::Filtering),
+            count: None,
+        };
+        let storage = |binding: u32| BindGroupLayoutEntry {
+            binding,
+            visibility: ShaderStages::FRAGMENT,
+            ty: BindingType::Buffer {
+                ty: BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
+
+        let mut entries = vec![
+            BindGroupLayoutEntry {
+                binding: 0,
+                visibility: ShaderStages::FRAGMENT,
+                ty: BindingType::Buffer {
+                    ty: BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: Some(<TerminalParams as ShaderType>::min_size()),
+                },
+                count: None,
+            },
+            storage(1),
+            storage(2),
+            texture(3),
+            sampler(4),
+            sampler(5),
+        ];
+        for i in 0..OVERLAY_SLOTS as u32 {
+            entries.push(texture(OVERLAY_TEX_BINDING_BASE + i));
+        }
+        entries
+    }
 }
 
 impl UiMaterial for TerminalUiMaterial {
@@ -97,13 +249,9 @@ impl UiMaterial for TerminalUiMaterial {
 }
 
 impl TerminalUiMaterial {
-    /// Copies the slot-indexed overlay handles onto the per-slot material
-    /// fields. The ONLY place that maps slot index -> `overlay<i>` field.
+    /// Overwrites the overlay texture array, slot-indexed (`None` = inactive).
     fn set_overlays(&mut self, textures: &[Option<Handle<Image>>; OVERLAY_SLOTS]) {
-        self.overlay0 = textures[0].clone();
-        self.overlay1 = textures[1].clone();
-        self.overlay2 = textures[2].clone();
-        self.overlay3 = textures[3].clone();
+        self.overlays = textures.clone();
     }
 }
 
@@ -891,16 +1039,18 @@ mod tests {
     }
 
     #[test]
-    fn set_overlays_maps_slot_index_to_field_order() {
+    fn set_overlays_copies_into_overlays_array() {
         const H_A: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000001");
         const H_B: Handle<Image> = uuid_handle!("c0fee000-0000-4000-8000-000000000002");
         let mut mat = TerminalUiMaterial::default();
-        let textures = [Some(H_A), None, Some(H_B), None];
+        let mut textures = [const { None }; OVERLAY_SLOTS];
+        textures[0] = Some(H_A);
+        textures[2] = Some(H_B);
         mat.set_overlays(&textures);
-        assert_eq!(mat.overlay0, Some(H_A));
-        assert_eq!(mat.overlay1, None);
-        assert_eq!(mat.overlay2, Some(H_B));
-        assert_eq!(mat.overlay3, None);
+        assert_eq!(mat.overlays[0], Some(H_A));
+        assert_eq!(mat.overlays[1], None);
+        assert_eq!(mat.overlays[2], Some(H_B));
+        assert_eq!(mat.overlays[3], None);
     }
 
     #[test]

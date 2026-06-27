@@ -66,14 +66,11 @@ struct CellColors {
 @group(1) @binding(2) var<storage, read> glyphs: array<Glyph>;
 @group(1) @binding(3) var atlas_tex: texture_2d<f32>;
 @group(1) @binding(4) var atlas_sampler: sampler;
-@group(1) @binding(5) var overlay0_tex: texture_2d<f32>;
-@group(1) @binding(6) var overlay0_samp: sampler;
+@group(1) @binding(5) var overlay_samp: sampler;
+@group(1) @binding(6) var overlay0_tex: texture_2d<f32>;
 @group(1) @binding(7) var overlay1_tex: texture_2d<f32>;
-@group(1) @binding(8) var overlay1_samp: sampler;
-@group(1) @binding(9) var overlay2_tex: texture_2d<f32>;
-@group(1) @binding(10) var overlay2_samp: sampler;
-@group(1) @binding(11) var overlay3_tex: texture_2d<f32>;
-@group(1) @binding(12) var overlay3_samp: sampler;
+@group(1) @binding(8) var overlay2_tex: texture_2d<f32>;
+@group(1) @binding(9) var overlay3_tex: texture_2d<f32>;
 
 // NOTE: Must stay in sync with `ozmux_terminal_protocol::style::*`. The
 //       Rust-side test `style_bits_match_protocol_constants` asserts the
@@ -420,40 +417,29 @@ fn treat_overlay(s: vec4<f32>) -> vec4<f32> {
 // distorts the image; grid-edge clipping is inherent because only in-grid
 // fragments reach paint_grid_cell.
 
+fn sample_overlay_slot(
+    rect: vec4<i32>,
+    tex: texture_2d<f32>,
+    samp: sampler,
+    p_px: vec2<f32>,
+    hit: CellHit,
+    color: vec4<f32>,
+) -> vec4<f32> {
+    let uv = overlay_uv(rect, p_px, hit);
+    if uv.x >= 0.0 {
+        let s = treat_overlay(textureSampleLevel(tex, samp, uv, 0.0));
+        return blend_premultiplied_over(color, s);
+    }
+    return color;
+}
+
 fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     var color = base;
     let p_px = vec2<f32>(f32(hit.col), f32(hit.row)) * params.cell_size_px + hit.in_cell_px;
-    // NOTE: bindings cannot be dynamically indexed in core WGSL — the four
-    // slots are unrolled by hand; keep slot order identical to the Rust
-    // `set_overlays` field order or textures swap silently.
-    {
-        let uv = overlay_uv(params.overlay_rects[0], p_px, hit);
-        if uv.x >= 0.0 {
-            let s = treat_overlay(textureSampleLevel(overlay0_tex, overlay0_samp, uv, 0.0));
-            color = blend_premultiplied_over(color, s);
-        }
-    }
-    {
-        let uv = overlay_uv(params.overlay_rects[1], p_px, hit);
-        if uv.x >= 0.0 {
-            let s = treat_overlay(textureSampleLevel(overlay1_tex, overlay1_samp, uv, 0.0));
-            color = blend_premultiplied_over(color, s);
-        }
-    }
-    {
-        let uv = overlay_uv(params.overlay_rects[2], p_px, hit);
-        if uv.x >= 0.0 {
-            let s = treat_overlay(textureSampleLevel(overlay2_tex, overlay2_samp, uv, 0.0));
-            color = blend_premultiplied_over(color, s);
-        }
-    }
-    {
-        let uv = overlay_uv(params.overlay_rects[3], p_px, hit);
-        if uv.x >= 0.0 {
-            let s = treat_overlay(textureSampleLevel(overlay3_tex, overlay3_samp, uv, 0.0));
-            color = blend_premultiplied_over(color, s);
-        }
-    }
+    color = sample_overlay_slot(params.overlay_rects[0], overlay0_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[1], overlay1_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[2], overlay2_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[3], overlay3_tex, overlay_samp, p_px, hit, color);
     return color;
 }
 
