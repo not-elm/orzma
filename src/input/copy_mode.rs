@@ -414,8 +414,6 @@ mod tests {
     fn yank_writes_selection_to_clipboard_and_exits() {
         use crate::ui::copy_mode::{CopyModePlugin, EnterCopyModeActionEvent};
         use ozma_tty_engine::{SpawnOptions, TerminalBundle};
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicBool;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -428,7 +426,6 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let entity = app.world_mut().spawn(bundle).id();

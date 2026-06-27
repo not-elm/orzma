@@ -128,8 +128,7 @@ fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> PaneInactiveStyle {
 mod tests {
     use super::*;
     use ozmux_tmux::TmuxPane;
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
+
     use tmux_control_parser::{CellDims, PaneId};
 
     fn dims() -> CellDims {
@@ -207,7 +206,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, PaneFocusPlugin));
         app.insert_resource(OzmuxConfigsResource::default());
-        let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
+        let h = || TerminalHandle::detached(10, 5);
 
         let p1 = app
             .world_mut()
@@ -278,7 +277,7 @@ mod tests {
         let mut configs = OzmuxConfigsResource::default();
         configs.0.inactive_pane.enabled = false;
         app.insert_resource(configs);
-        let h = || TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
+        let h = || TerminalHandle::detached(10, 5);
 
         let p1 = app
             .world_mut()
@@ -323,7 +322,7 @@ mod tests {
                     id: PaneId(1),
                     dims: dims(),
                 },
-                TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false))),
+                TerminalHandle::detached(10, 5),
             ))
             .id();
         app.update();

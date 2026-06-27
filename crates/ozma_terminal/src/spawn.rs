@@ -5,8 +5,6 @@ use ozma_tty_engine::{SpawnOptions, TerminalBundle};
 use ozma_tty_renderer::material::TerminalUiMaterial;
 use ozma_tty_renderer::prelude::TerminalRenderBundle;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 /// Marker component identifying an Ozma-mode terminal entity.
 ///
@@ -61,7 +59,6 @@ impl OzmaTerminalBundle {
             shell,
             cwd: opts.cwd,
             env: opts.env,
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         })?;
         Ok(Self {
             terminal,

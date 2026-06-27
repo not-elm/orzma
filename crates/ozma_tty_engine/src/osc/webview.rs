@@ -4,8 +4,6 @@
 //! Never sends frames itself.
 
 use crate::vt::listener::OscWebviewVerb;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use vte::Perform;
 
 /// The ozmux private OSC code for webview control. Outside vte 0.15 /
@@ -20,17 +18,13 @@ const MAX_COLS: u16 = 400;
 /// `TerminalHandle::advance` to drain at the `advance_until_terminated`
 /// stop point (where the anchor is stamped). It never sends frames itself.
 pub(crate) struct OscWebviewCapture {
-    gate: Arc<AtomicBool>,
     pending: Option<OscWebviewVerb>,
 }
 
 impl OscWebviewCapture {
-    /// Builds a capture that buffers verbs only while `gate` is `true`.
-    pub(crate) fn new(gate: Arc<AtomicBool>) -> Self {
-        Self {
-            gate,
-            pending: None,
-        }
+    /// Builds a capture that buffers one parsed OSC 5379 verb per sequence.
+    pub(crate) fn new() -> Self {
+        Self { pending: None }
     }
 
     /// Takes the buffered verb, clearing `terminated()`.
@@ -67,9 +61,6 @@ fn parse_dim(raw: Option<&[u8]>, max: u16) -> Option<u16> {
 impl Perform for OscWebviewCapture {
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
         if params.first().copied() != Some(OSC_WEBVIEW_CODE) {
-            return;
-        }
-        if !self.gate.load(Ordering::Relaxed) {
             return;
         }
         let verb = match params.get(1).copied() {
@@ -142,20 +133,13 @@ impl Perform for OscWebviewCapture {
 mod tests {
     use super::*;
 
-    fn cap(gate_on: bool) -> OscWebviewCapture {
-        OscWebviewCapture::new(Arc::new(AtomicBool::new(gate_on)))
+    fn cap() -> OscWebviewCapture {
+        OscWebviewCapture::new()
     }
 
     #[test]
-    fn gate_off_drops_sequence() {
-        let mut c = cap(false);
-        c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"], true);
-        assert!(c.take_pending().is_none());
-    }
-
-    #[test]
-    fn gate_on_buffers_verb_and_terminated_reflects_pending() {
-        let mut c = cap(true);
+    fn buffers_verb_and_terminated_reflects_pending() {
+        let mut c = cap();
         assert!(!Perform::terminated(&c));
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"], true);
         assert!(Perform::terminated(&c), "pending verb must set terminated");
@@ -176,14 +160,14 @@ mod tests {
 
     #[test]
     fn other_osc_code_ignored() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[b"7", b"file://localhost/tmp"], true);
         assert!(c.take_pending().is_none());
     }
 
     #[test]
     fn bad_view_id_rejected() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(
             &[OSC_WEBVIEW_CODE, b"mount", b"../etc/passwd", b"3", b"20"],
             true,
@@ -193,7 +177,7 @@ mod tests {
 
     #[test]
     fn mount_parses_rows_cols() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"], true);
         assert_eq!(
             c.take_pending(),
@@ -215,7 +199,7 @@ mod tests {
             ("3", "401"),
             ("x", "20"),
         ] {
-            let mut c = cap(true);
+            let mut c = cap();
             c.osc_dispatch(
                 &[
                     OSC_WEBVIEW_CODE,
@@ -235,7 +219,7 @@ mod tests {
 
     #[test]
     fn mount_minimum_dims_accepted() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"1", b"1"], true);
         assert_eq!(
             c.take_pending(),
@@ -250,7 +234,7 @@ mod tests {
 
     #[test]
     fn mount_maximum_dims_accepted() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"200", b"400"], true);
         assert_eq!(
             c.take_pending(),
@@ -266,7 +250,7 @@ mod tests {
     #[test]
     fn mount_non_digit_dims_dropped() {
         for (r, w) in [("3", "y"), ("+3", "20"), ("3", "+20")] {
-            let mut c = cap(true);
+            let mut c = cap();
             c.osc_dispatch(
                 &[
                     OSC_WEBVIEW_CODE,
@@ -286,17 +270,17 @@ mod tests {
 
     #[test]
     fn mount_missing_dims_dropped() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo"], true);
         assert!(c.take_pending().is_none());
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3"], true);
         assert!(c.take_pending().is_none());
     }
 
     #[test]
     fn mount_parses_instance_id() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(
             &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20", b"a"],
             true,
@@ -314,7 +298,7 @@ mod tests {
 
     #[test]
     fn mount_absent_instance_id_is_none() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20"], true);
         assert_eq!(
             c.take_pending(),
@@ -329,7 +313,7 @@ mod tests {
 
     #[test]
     fn mount_trailing_empty_instance_id_dropped() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(
             &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20", b""],
             true,
@@ -342,7 +326,7 @@ mod tests {
 
     #[test]
     fn mount_bad_instance_id_dropped() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(
             &[OSC_WEBVIEW_CODE, b"mount", b"memo", b"3", b"20", b"../etc"],
             true,
@@ -355,7 +339,7 @@ mod tests {
 
     #[test]
     fn unmount_absent_param_is_all_but_empty_param_is_malformed() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount"], true);
         assert_eq!(
             c.take_pending(),
@@ -364,13 +348,13 @@ mod tests {
                 instance_id: None,
             })
         );
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b""], true);
         assert!(
             c.take_pending().is_none(),
             "empty third param is malformed, not unmount-all"
         );
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo"], true);
         assert_eq!(
             c.take_pending(),
@@ -383,7 +367,7 @@ mod tests {
 
     #[test]
     fn unmount_parses_view_and_instance() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo", b"a"], true);
         assert_eq!(
             c.take_pending(),
@@ -396,7 +380,7 @@ mod tests {
 
     #[test]
     fn unmount_view_only_has_no_instance() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo"], true);
         assert_eq!(
             c.take_pending(),
@@ -409,7 +393,7 @@ mod tests {
 
     #[test]
     fn unmount_trailing_empty_instance_dropped() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo", b""], true);
         assert!(
             c.take_pending().is_none(),
@@ -419,7 +403,7 @@ mod tests {
 
     #[test]
     fn unmount_empty_view_with_instance_dropped() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"", b"a"], true);
         assert!(
             c.take_pending().is_none(),
@@ -429,7 +413,7 @@ mod tests {
 
     #[test]
     fn unmount_bad_instance_dropped() {
-        let mut c = cap(true);
+        let mut c = cap();
         c.osc_dispatch(&[OSC_WEBVIEW_CODE, b"unmount", b"memo", b"../x"], true);
         assert!(
             c.take_pending().is_none(),

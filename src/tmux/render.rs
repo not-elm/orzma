@@ -19,8 +19,6 @@ use ozmux_tmux::{
 };
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use tmux_control_parser::{Cell, DividerAxis, PaneId, SplitDir};
 
 /// Total cap, across all panes, for bytes buffered while a pane's handle/grid
@@ -189,10 +187,9 @@ fn attach_tmux_pane_terminal(
     mut commands: Commands,
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
 ) {
-    let gate = Arc::new(AtomicBool::new(true));
     for (entity, pane) in panes.iter() {
         let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
-        let handle = TerminalHandle::detached(cols, rows, gate.clone());
+        let handle = TerminalHandle::detached(cols, rows);
 
         commands.entity(entity).insert((
             handle,
@@ -1111,7 +1108,7 @@ mod tests {
                 },
                 Node::default(),
                 TerminalGrid::default(),
-                TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
+                TerminalHandle::detached(20, 5),
                 ChildOf(window_e),
             ))
             .id();
@@ -1199,7 +1196,7 @@ mod tests {
                 },
                 Node::default(),
                 TerminalGrid::default(),
-                TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
+                TerminalHandle::detached(20, 5),
                 ChildOf(window_e),
             ))
             .id();

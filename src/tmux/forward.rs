@@ -99,8 +99,7 @@ mod tests {
     fn ime_commit_observer_no_panic_without_client() {
         use crate::input::ime::ImeCommit;
         use ozma_tty_engine::TerminalHandle;
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicBool;
+
         use tmux_control_parser::{CellDims, PaneId};
 
         let mut app = App::new();
@@ -119,7 +118,7 @@ mod tests {
                         yoff: 0,
                     },
                 },
-                TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false))),
+                TerminalHandle::detached(10, 5),
             ))
             .id();
         // No live tmux client: the send is skipped; assert no panic.
