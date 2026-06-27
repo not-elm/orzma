@@ -30,6 +30,7 @@ wt
 .playwright-mcp/
 # Brainstorming visual companion artifacts
 .superpowers/
+sdd/
 .DS_Store
 *.suo
 *.ntvs*

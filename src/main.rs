@@ -39,21 +39,6 @@ use ui::{
     rename_prompt::RenamePromptPlugin,
 };
 
-/// The primary window descriptor.
-///
-/// `ime_enabled` starts `false` deliberately: bevy_winit applies the IME state
-/// to the OS window only on a live `false -> true` change of `Window::ime_enabled`
-/// (`bevy_winit-0.18.1/src/system.rs:503-504`) and never at window creation, so
-/// starting `true` would leave the OS IME un-armed. `ime_policy_system` flips it
-/// to `true` on the first focused-surface tick, producing the arming transition.
-fn primary_window() -> Window {
-    Window {
-        title: "ozmux".to_string(),
-        ime_enabled: false,
-        ..default()
-    }
-}
-
 fn main() {
     // NOTE: must run before App::new() spawns any thread — they write process
     // env vars, which is unsound once other threads may read the environment.
@@ -108,6 +93,21 @@ fn main() {
             CopyModeInputPlugin,
         ))
         .run();
+}
+
+/// The primary window descriptor.
+///
+/// `ime_enabled` starts `false` deliberately: bevy_winit applies the IME state
+/// to the OS window only on a live `false -> true` change of `Window::ime_enabled`
+/// (`bevy_winit-0.18.1/src/system.rs:503-504`) and never at window creation, so
+/// starting `true` would leave the OS IME un-armed. `ime_policy_system` flips it
+/// to `true` on the first focused-surface tick, producing the arming transition.
+fn primary_window() -> Window {
+    Window {
+        title: "ozmux".to_string(),
+        ime_enabled: false,
+        ..default()
+    }
 }
 
 /// Fills `TERM`/`COLORTERM` with a portable default when the inherited `TERM`
