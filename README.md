@@ -1,10 +1,10 @@
-# ozmux(Ozma Terminal Multiplexer)
+# ozmux (Ozma Terminal Multiplexer)
 
 > [!CAUTION]
 > This app is still in early development and may introduce breaking changes.
 
-ターミナル内にwebviewを描画することができるターミナルエミュレータ。
-tmuxの統合機能も標準搭載しています。
+ozmux is a terminal emulator that can render webviews directly inside the
+terminal, with built-in tmux integration.
 
 ## Installation
 
@@ -12,7 +12,6 @@ macOS (Apple Silicon) via Homebrew Cask:
 
 ```bash
 brew install --cask not-elm/ozmux/ozmux
-brew install ozmd ozbrowser # optional
 ```
 
 This taps `not-elm/homebrew-ozmux`, installs `ozmux.app` into `/Applications`,
@@ -22,33 +21,51 @@ and pulls in `tmux` as a dependency. Upgrade later with:
 brew upgrade --cask ozmux
 ```
 
+The companion apps `ozmd` and `ozbrowser` (built with the `ratatui-ozma` SDK)
+are installed from source with `just install-apps`.
+
 ## Features
 
 ### Webview
 
-ターミナル内にWebviewを表示することができます。これは特にTUIアプリの可能性を広げることが期待できます。例えば:
+ozmux can display webviews inside the terminal, which opens up new
+possibilities for TUI applications. For example:
 
-- チャートのような高度なグラフィックをレンダリングする
-- Wasmを使ったゲームを埋め込む
-- ローカルホストのフロントエンド
+- render rich graphics such as charts
+- embed games built with WebAssembly
+- host a local frontend (e.g. a dev server on localhost)
 
-### Tmux Intergration
+### Tmux Integration
 
-TmuxのControl Modeを使ったtmux統合機能を標準でサポートしています。キーバインドはtmux.confに設定されているものをそのまま使うことができます。
-`tmux -CC`をターミナル内で実行することでこのモードに切り替えることができます。
+ozmux supports tmux through its control mode (`tmux -CC`), so your existing
+`tmux.conf` keybindings work as-is. ozmux starts as a plain single-pane
+terminal; running `tmux -CC` inside it switches to integration mode, where
+tmux windows and panes are rendered natively.
 
 ## SDK
 
-- [ratatui_ozma](sdk/ratatui_zoma)
+- [ratatui-ozma](sdk/ratatui-ozma) — Rust SDK: a ratatui widget and RPC
+  handler for embedding ozmux webviews from a TUI app.
+- [@ozma/web](sdk/ozma-web) — TypeScript client for the in-page `window.ozma`
+  bridge.
 
 ## Ozma Webview Protocol
 
-Please see [docs/osc.md](docs/osc.md)
+A program registers webview content over ozmux's control socket to mint an
+opaque handle, then writes an `OSC 5379;mount;<handle>;<rows>;<cols>` escape
+sequence to mount it as an in-process webview at that cell geometry
+(`OSC 5379;unmount;<handle>` tears it down). The page talks back to the host
+program through the `window.ozma` bridge. Use one of the SDKs above for a
+ready-made client.
 
-## Configs
+## Configuration
 
-Please see [docs/configs.md](docs/configs.md)
+ozmux reads `~/.config/ozmux/config.toml`, resolved against built-in
+defaults. Override the file path with `$OZMUX_CONFIG`, or the config
+directory with `$XDG_CONFIG_HOME`. Configurable areas include theme colors,
+fonts, keyboard and shortcut bindings, mouse behavior, inactive-pane dimming,
+and the default shell.
 
-## Licenses
+## License
 
-MIT
+MIT. See [LICENSE](LICENSE).
