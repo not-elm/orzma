@@ -67,6 +67,7 @@ impl PtyHandle {
     }
 
     /// Writes bytes to the PTY master.
+    #[inline]
     pub(crate) fn write_all(&mut self, bytes: &[u8]) -> std::io::Result<()> {
         self.writer
             .get_mut()
@@ -76,6 +77,7 @@ impl PtyHandle {
 
     /// Non-blocking poll for the next PTY chunk pushed by the OS
     /// reader thread.
+    #[inline]
     pub(crate) fn try_recv_chunk(&self) -> Result<Vec<u8>, TryRecvError> {
         self.chunk_rx.try_recv()
     }
@@ -83,6 +85,7 @@ impl PtyHandle {
     /// Non-blocking poll for the one-shot child-exit signal. Returns
     /// `Some(code)` on a graceful exit, `None` if the wait itself
     /// failed; subsequent calls return `Err(Disconnected)`.
+    #[inline]
     pub(crate) fn try_recv_exit(&self) -> Result<Option<i32>, TryRecvError> {
         self.exit_rx.try_recv()
     }
