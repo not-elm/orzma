@@ -98,7 +98,7 @@ fn drain_pty_chunks(
             watch,
             adopted,
         );
-        process_control_events(&mut commands, entity, &handle, &mut title);
+        handle.drain_control_events(&mut commands, entity, &mut title);
     }
 }
 
@@ -238,18 +238,6 @@ fn ingest_and_flush_or_arm(
     } else {
         coalescer.arm_or_extend(Instant::now());
     }
-}
-
-/// Drains alacritty control events (Bell / Title / ResetTitle /
-/// Clipboard) into Observer triggers and updates the `TerminalTitle`
-/// component as a side-effect of Title / ResetTitle.
-fn process_control_events(
-    commands: &mut Commands,
-    entity: Entity,
-    handle: &TerminalHandle,
-    title: &mut TerminalTitle,
-) {
-    handle.drain_control_events(commands, entity, title);
 }
 
 /// Observer for `TerminalKeyInput`. Encodes the key using the entity's
