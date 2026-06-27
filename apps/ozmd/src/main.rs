@@ -10,21 +10,101 @@ mod ui;
 mod watcher;
 
 use crate::app::{App, Cmd};
-use crate::protocol::{Content, Scroll, ScrollState, ScrollTo, Search, SearchCount, SearchNav};
+use crate::protocol::{
+    Content, NavigateRequest, OpenExternal, OpenPath, Scroll, ScrollState, ScrollTo, Search,
+    SearchCount, SearchNav,
+};
 use crate::ui::LiveStatus;
+use crate::watcher::FileWatcher;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
-use ratatui_ozma::{Ozma, OzmaBackend, OzmaError, RpcError, Webview, WebviewHandle};
+use ratatui_ozma::{KeyChord, Ozma, OzmaBackend, OzmaError, RpcError, Webview, WebviewHandle};
 use std::io::stdout;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+struct HistoryEntry {
+    path: PathBuf,
+    ratio: f64,
+}
+
+struct Session {
+    state: App,
+    current_path: PathBuf,
+    history: Vec<HistoryEntry>,
+    current_watcher: FileWatcher,
+    file_name: String,
+    last_fp: Option<document::Fingerprint>,
+    live: LiveStatus,
+    latest_ratio: f64,
+    flash: Option<String>,
+}
+
+impl Session {
+    fn new(current_path: PathBuf, current_watcher: FileWatcher) -> Self {
+        let last_fp = document::fingerprint(&current_path).ok();
+        let file_name = file_name_of(&current_path);
+        Self {
+            state: App::default(),
+            current_path,
+            history: Vec::new(),
+            current_watcher,
+            file_name,
+            last_fp,
+            live: LiveStatus::Watching,
+            latest_ratio: 0.0,
+            flash: None,
+        }
+    }
+
+    fn scroll_percent(&self) -> u16 {
+        (self.latest_ratio.clamp(0.0, 1.0) * 100.0).round() as u16
+    }
+
+    fn reload(&mut self, shared: &Arc<Mutex<document::Document>>, view: &WebviewHandle) {
+        let fp = match document::fingerprint(&self.current_path) {
+            Ok(fp) => fp,
+            Err(_) => {
+                self.live = LiveStatus::Missing;
+                return;
+            }
+        };
+        if Some(fp) == self.last_fp {
+            return;
+        }
+        let doc = match document::load(&self.current_path) {
+            Ok(d) => d,
+            Err(_) => {
+                self.live = LiveStatus::Missing;
+                return;
+            }
+        };
+        // NOTE: record the fingerprint only after a successful load — setting it
+        // before would let a transient read failure poison the skip-check and
+        // permanently suppress a later reload with the same fingerprint.
+        self.last_fp = Some(fp);
+        self.live = LiveStatus::Watching;
+        self.state.set_outline(doc.outline.clone());
+        let content = content_for(&doc, ScrollTo::Preserve);
+        if let Ok(mut guard) = shared.lock() {
+            *guard = doc;
+        }
+        let _ = view.emit("content", &content);
+    }
+}
+
+fn file_name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
 
 fn main() {
     if let Err(e) = run() {
@@ -53,7 +133,7 @@ fn run() -> anyhow::Result<()> {
     let view = register_view(&ozma, &asset_dir, Arc::clone(&shared))?;
 
     let (reload_tx, reload_rx) = mpsc::channel::<()>();
-    let _watcher = watcher::watch(&path, reload_tx)?;
+    let watcher = watcher::watch(&path, reload_tx.clone())?;
 
     enable_raw_mode()?;
     if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
@@ -62,7 +142,7 @@ fn run() -> anyhow::Result<()> {
     }
     install_panic_hook();
 
-    let result = event_loop(&ozma, &view, &shared, &path, &reload_rx);
+    let result = event_loop(watcher, &ozma, &view, &shared, path, reload_tx, &reload_rx);
 
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen);
@@ -78,77 +158,93 @@ fn register_view(
     let view = ozma.register(
         Webview::dir(asset_dir.path(), "index.html")
             .interactive(true)
+            .forward_keys([
+                KeyChord {
+                    mods: KeyModifiers::NONE,
+                    code: KeyCode::Backspace,
+                },
+                KeyChord {
+                    mods: KeyModifiers::CONTROL,
+                    code: KeyCode::Char('o'),
+                },
+            ])
             .on("ready", move |(): ()| -> Result<Content, RpcError> {
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
-                Ok(content_of(&doc))
+                Ok(content_for(&doc, ScrollTo::Preserve))
             })
             .add_event::<SearchCount>("searchCount")
-            .add_event::<ScrollState>("scrollState"),
+            .add_event::<ScrollState>("scrollState")
+            .add_event::<NavigateRequest>("navigate")
+            .add_event::<OpenExternal>("openExternal")
+            .add_event::<OpenPath>("openPath"),
     )?;
     Ok(view)
 }
 
 fn event_loop(
+    current_watcher: FileWatcher,
     ozma: &Ozma,
     view: &WebviewHandle,
     shared: &Arc<Mutex<document::Document>>,
-    path: &Path,
+    start_path: PathBuf,
+    reload_tx: mpsc::Sender<()>,
     reload_rx: &mpsc::Receiver<()>,
 ) -> anyhow::Result<()> {
     let backend = OzmaBackend::new(CrosstermBackend::new(stdout()), ozma);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut state = App::default();
-    state.set_outline(shared.lock().unwrap().outline.clone());
-    let mut live = LiveStatus::Watching;
-    let mut scroll_percent: u16 = 0;
-    let mut last_fp = document::fingerprint(path).ok();
+    let mut session = Session::new(start_path, current_watcher);
+    session
+        .state
+        .set_outline(shared.lock().unwrap().outline.clone());
     let mut search_status: Option<SearchCount> = None;
-    let file_name = path
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
+    let _ = &reload_tx;
 
     loop {
         for c in view.read_events::<SearchCount>() {
             search_status = Some(c);
         }
         for s in view.read_events::<ScrollState>() {
-            scroll_percent = (s.ratio.clamp(0.0, 1.0) * 100.0).round() as u16;
-            state.set_current_heading_index(s.current_heading_index);
+            session.latest_ratio = s.ratio.clamp(0.0, 1.0);
+            session
+                .state
+                .set_current_heading_index(s.current_heading_index);
         }
+        let _ = view.read_events::<NavigateRequest>();
+        let _ = view.read_events::<OpenExternal>();
+        let _ = view.read_events::<OpenPath>();
 
         let mut reload = false;
         while reload_rx.try_recv().is_ok() {
             reload = true;
         }
         if reload {
-            apply_reload(&mut state, &mut live, &mut last_fp, view, shared, path)?;
+            session.reload(shared, view);
         }
 
+        let percent = session.scroll_percent();
         terminal.draw(|f| {
             ui::draw(
                 f,
                 &mut ozma.frame(),
-                &state,
+                &session.state,
                 &view.id(),
-                &file_name,
-                live,
-                scroll_percent,
+                &session.file_name,
+                session.live,
+                percent,
                 search_status,
+                session.flash.as_deref(),
             );
         })?;
 
         if event::poll(Duration::from_millis(33))?
             && let Event::Key(key) = event::read()?
         {
-            let action = keymap::map(state.mode(), key);
-            for cmd in state.on_action(action) {
+            let action = keymap::map(session.state.mode(), key);
+            for cmd in session.state.on_action(action) {
                 match cmd {
                     Cmd::Quit => return Ok(()),
-                    Cmd::Reload => {
-                        apply_reload(&mut state, &mut live, &mut last_fp, view, shared, path)?;
-                    }
+                    Cmd::Reload => session.reload(shared, view),
                     Cmd::Back => {}
                     Cmd::Scroll(action) => {
                         let _ = view.emit("scroll", &Scroll { action });
@@ -173,53 +269,11 @@ fn event_loop(
     }
 }
 
-fn apply_reload(
-    state: &mut App,
-    live: &mut LiveStatus,
-    last_fp: &mut Option<document::Fingerprint>,
-    view: &WebviewHandle,
-    shared: &Arc<Mutex<document::Document>>,
-    path: &Path,
-) -> anyhow::Result<()> {
-    let fp = match document::fingerprint(path) {
-        Ok(fp) => fp,
-        Err(_) => {
-            *live = LiveStatus::Missing;
-            return Ok(());
-        }
-    };
-    if Some(fp) == *last_fp {
-        return Ok(());
-    }
-    let doc = match document::load(path) {
-        Ok(d) => d,
-        Err(_) => {
-            *live = LiveStatus::Missing;
-            return Ok(());
-        }
-    };
-    // NOTE: record the fingerprint only after a successful load — setting it
-    // before would let a transient read failure poison the skip-check and
-    // permanently suppress a later reload with the same fingerprint.
-    *last_fp = Some(fp);
-    *live = LiveStatus::Watching;
-    state.set_outline(doc.outline.clone());
-    let content = content_of(&doc);
-    {
-        let mut guard = shared
-            .lock()
-            .map_err(|_| anyhow::anyhow!("state poisoned"))?;
-        *guard = doc;
-    }
-    let _ = view.emit("content", &content);
-    Ok(())
-}
-
-fn content_of(doc: &document::Document) -> Content {
+fn content_for(doc: &document::Document, scroll_to: ScrollTo) -> Content {
     Content {
         markdown: doc.text.clone(),
         base_dir: doc.base_dir.display().to_string(),
-        scroll_to: ScrollTo::Preserve,
+        scroll_to,
     }
 }
 
