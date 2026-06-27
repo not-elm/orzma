@@ -5,8 +5,8 @@ use crate::events::{
     OscWebviewRequest, TerminalBell, TerminalClipboardStore, TerminalCurrentDir,
     TerminalModeChanged, TerminalTitleChanged,
 };
-use crate::osc_webview::OscWebviewCapture;
-use crate::osc7::Osc7Capture;
+use crate::osc::osc7::Osc7Capture;
+use crate::osc::webview::OscWebviewCapture;
 use crate::pty::PtyHandle;
 use crate::title::{TerminalTitle, sanitize_title};
 use crate::vt::damage::{DamageVerdict, DirtyRows};
