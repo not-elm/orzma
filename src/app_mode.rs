@@ -4,6 +4,7 @@ use crate::ui::UiRoot;
 use bevy::prelude::*;
 use ozma_terminal::{KeyboardFocused, OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use ozma_tty_engine::ControlModeWatch;
+use ozma_webview::ControlPlaneHandle;
 
 /// Application mode. `Default` is the default (single PTY, no tmux).
 /// `Tmux` activates the tmux multiplexer backend.
@@ -55,6 +56,7 @@ fn ensure_default_mode_ui(
     mut exit: MessageWriter<AppExit>,
     ui_root: Query<Entity, With<UiRoot>>,
     config: Res<OzmaTerminalConfig>,
+    control: Option<Res<ControlPlaneHandle>>,
 ) {
     let Ok(ui_root) = ui_root.single() else {
         return;
@@ -76,20 +78,33 @@ fn ensure_default_mode_ui(
             ChildOf(ui_root),
         ))
         .id();
+    let shell = commands.spawn_empty().id();
+    let env = control
+        .as_deref()
+        .map(|c| c.surface_env(shell).to_vec())
+        .unwrap_or_default();
     match OzmaTerminalBundle::spawn(OzmaSpawnOptions {
         shell: config.shell.clone(),
+        env,
         ..default()
     }) {
         Ok(bundle) => {
-            commands.spawn((
+            commands.entity(shell).insert((
                 bundle,
                 KeyboardFocused,
                 ControlModeWatch::default(),
                 DefaultShell,
                 ChildOf(mode_ui),
             ));
+            // NOTE: bind the token only after a successful spawn. gc keys on
+            // RemovedComponents<OzmaTerminal> (never added on the error path),
+            // so a pre-spawn bind would leak the token if the spawn failed.
+            if let Some(c) = control.as_deref() {
+                c.bind_surface(shell);
+            }
         }
         Err(e) => {
+            commands.entity(shell).despawn();
             tracing::error!(?e, "failed to spawn ozma terminal");
             exit.write(AppExit::Success);
         }
@@ -100,6 +115,8 @@ fn ensure_default_mode_ui(
 mod tests {
     use super::*;
     use bevy::state::app::StatesPlugin;
+    use ozma_webview::TokenRegistry;
+    use std::path::PathBuf;
 
     fn build_app(initial_mode: AppMode) -> App {
         let mut app = App::new();
@@ -162,5 +179,30 @@ mod tests {
             .iter(world)
             .count();
         assert_eq!(count, 1, "exactly one DefaultShell after round-trip");
+    }
+
+    #[test]
+    fn default_shell_registers_a_resolvable_webview_token() {
+        let mut app = build_app(AppMode::Default);
+        let tokens = TokenRegistry::default();
+        app.world_mut().insert_resource(ControlPlaneHandle {
+            sock_path: PathBuf::from("/tmp/ctl.sock"),
+            tokens: tokens.clone(),
+        });
+        app.update();
+
+        let shell = {
+            let world = app.world_mut();
+            world
+                .query_filtered::<Entity, With<DefaultShell>>()
+                .single(world)
+                .expect("DefaultShell spawned")
+        };
+        let token = format!("ozma:{}", shell.to_bits());
+        assert_eq!(
+            tokens.resolve(&token),
+            Some(shell),
+            "the default shell's $OZMA_TOKEN must resolve to its own surface entity"
+        );
     }
 }
