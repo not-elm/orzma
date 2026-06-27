@@ -24,8 +24,10 @@ use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
 use ratatui_ozma::{KeyChord, Ozma, OzmaBackend, OzmaError, RpcError, Webview, WebviewHandle};
+use std::ffi::OsStr;
 use std::io::stdout;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -65,7 +67,7 @@ impl Session {
     }
 
     fn scroll_percent(&self) -> u16 {
-        (self.latest_ratio.clamp(0.0, 1.0) * 100.0).round() as u16
+        (self.latest_ratio * 100.0).round() as u16
     }
 
     fn navigate(
@@ -78,14 +80,16 @@ impl Session {
         let base = self.current_path.parent().unwrap_or_else(|| Path::new("."));
         match document::resolve_link(base, &request.path) {
             Ok(target) if document::is_markdown(&target) => {
-                self.history.push(HistoryEntry {
+                let previous = HistoryEntry {
                     path: self.current_path.clone(),
                     ratio: self.latest_ratio,
-                });
+                };
                 let scroll = request
                     .fragment
                     .map_or(ScrollTo::Top, |slug| ScrollTo::Slug { slug });
-                self.load_and_show(&target, scroll, shared, view, reload_tx);
+                if self.load_and_show(&target, scroll, shared, view, reload_tx) {
+                    self.history.push(previous);
+                }
             }
             _ => self.flash = Some(format!("cannot open {}", request.path)),
         }
@@ -99,9 +103,8 @@ impl Session {
     ) {
         match self.history.pop() {
             Some(entry) => {
-                let path = entry.path.clone();
-                self.load_and_show(
-                    &path,
+                let _ = self.load_and_show(
+                    &entry.path,
                     ScrollTo::Ratio { ratio: entry.ratio },
                     shared,
                     view,
@@ -119,19 +122,19 @@ impl Session {
         shared: &Arc<Mutex<document::Document>>,
         view: &WebviewHandle,
         reload_tx: &mpsc::Sender<()>,
-    ) {
+    ) -> bool {
         let doc = match document::load(target) {
             Ok(d) => d,
             Err(_) => {
                 self.flash = Some(format!("cannot open {}", target.display()));
-                return;
+                return false;
             }
         };
         match watcher::watch(target, reload_tx.clone()) {
             Ok(w) => self.current_watcher = w,
             Err(_) => {
                 self.flash = Some("watch failed".to_owned());
-                return;
+                return false;
             }
         }
         self.current_path = target.to_path_buf();
@@ -145,6 +148,7 @@ impl Session {
             *guard = doc;
         }
         let _ = view.emit("content", &content);
+        true
     }
 
     fn reload(&mut self, shared: &Arc<Mutex<document::Document>>, view: &WebviewHandle) {
@@ -197,10 +201,15 @@ fn allowed_external_url(url: &str) -> bool {
     )
 }
 
+// NOTE: `open` launches each target with the user's own authority — the same as
+// double-clicking it in Finder. Some regular-file types auto-execute or redirect
+// (.command/.terminal/.tool run scripts; .webloc/.fileloc open an embedded URL),
+// so ozmd is for viewing TRUSTED local documents and does not sandbox link
+// targets (see the design's non-goals).
 /// Opens `target` (a URL or absolute path) with the macOS default handler.
 /// No shell is involved, so `target` is not interpreted.
-fn spawn_open(target: &str) {
-    let _ = std::process::Command::new("open").arg(target).spawn();
+fn spawn_open(target: impl AsRef<OsStr>) {
+    let _ = Command::new("open").arg(target).spawn();
 }
 
 fn main() {
@@ -320,7 +329,7 @@ fn event_loop(
                 .parent()
                 .unwrap_or_else(|| Path::new("."));
             match document::resolve_link(base, &op.path) {
-                Ok(target) => spawn_open(&target.to_string_lossy()),
+                Ok(target) => spawn_open(&target),
                 Err(_) => session.flash = Some(format!("cannot open {}", op.path)),
             }
         }

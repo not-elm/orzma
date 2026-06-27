@@ -169,14 +169,23 @@ mod tests {
 
     #[test]
     fn scroll_to_serializes_tagged_camel_case() {
-        assert_eq!(serde_json::to_value(ScrollTo::Preserve).unwrap(), json!({"kind": "preserve"}));
-        assert_eq!(serde_json::to_value(ScrollTo::Top).unwrap(), json!({"kind": "top"}));
+        assert_eq!(
+            serde_json::to_value(ScrollTo::Preserve).unwrap(),
+            json!({"kind": "preserve"})
+        );
+        assert_eq!(
+            serde_json::to_value(ScrollTo::Top).unwrap(),
+            json!({"kind": "top"})
+        );
         assert_eq!(
             serde_json::to_value(ScrollTo::Ratio { ratio: 0.5 }).unwrap(),
             json!({"kind": "ratio", "ratio": 0.5})
         );
         assert_eq!(
-            serde_json::to_value(ScrollTo::Slug { slug: "mounting".into() }).unwrap(),
+            serde_json::to_value(ScrollTo::Slug {
+                slug: "mounting".into()
+            })
+            .unwrap(),
             json!({"kind": "slug", "slug": "mounting"})
         );
     }
@@ -196,10 +205,12 @@ mod tests {
 
     #[test]
     fn navigate_request_reads_path_and_optional_fragment() {
-        let a: NavigateRequest = serde_json::from_value(json!({"path": "a.md", "fragment": "sec"})).unwrap();
+        let a: NavigateRequest =
+            serde_json::from_value(json!({"path": "a.md", "fragment": "sec"})).unwrap();
         assert_eq!(a.path, "a.md");
         assert_eq!(a.fragment.as_deref(), Some("sec"));
-        let b: NavigateRequest = serde_json::from_value(json!({"path": "a.md", "fragment": null})).unwrap();
+        let b: NavigateRequest =
+            serde_json::from_value(json!({"path": "a.md", "fragment": null})).unwrap();
         assert_eq!(b.fragment, None);
     }
 }

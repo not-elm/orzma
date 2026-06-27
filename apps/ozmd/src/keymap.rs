@@ -188,7 +188,10 @@ mod tests {
     #[test]
     fn normal_backspace_and_ctrl_o_go_back() {
         assert_eq!(
-            map(Mode::Normal, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+            map(
+                Mode::Normal,
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+            ),
             Action::Back
         );
         assert_eq!(map(Mode::Normal, ctrl('o')), Action::Back);
@@ -197,7 +200,10 @@ mod tests {
     #[test]
     fn search_backspace_still_edits_query() {
         assert_eq!(
-            map(Mode::Search, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+            map(
+                Mode::Search,
+                KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)
+            ),
             Action::SearchBackspace
         );
     }

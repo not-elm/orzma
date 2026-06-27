@@ -18,6 +18,10 @@ describe('classifyLink', () => {
       kind: 'external',
       url: 'https://example.com',
     });
+    expect(classifyLink('http://example.com')).toEqual({
+      kind: 'external',
+      url: 'http://example.com',
+    });
     expect(classifyLink('mailto:a@b.com')).toEqual({ kind: 'external', url: 'mailto:a@b.com' });
     expect(classifyLink('tel:+1')).toEqual({ kind: 'external', url: 'tel:+1' });
   });
@@ -49,6 +53,14 @@ describe('classifyLink', () => {
     expect(classifyLink('docs/a%20b.md')).toEqual({
       kind: 'markdown',
       path: 'docs/a b.md',
+      fragment: null,
+    });
+  });
+
+  it('falls back to the raw path on malformed percent-encoding', () => {
+    expect(classifyLink('docs/a%ZZb.md')).toEqual({
+      kind: 'markdown',
+      path: 'docs/a%ZZb.md',
       fragment: null,
     });
   });

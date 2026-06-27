@@ -153,7 +153,10 @@ mod tests {
         let from_parent = resolve_link(&sub, "../sib.md").unwrap();
         assert_eq!(from_parent, fs::canonicalize(&sibling).unwrap());
         let abs = sibling.to_str().unwrap();
-        assert_eq!(resolve_link(&sub, abs).unwrap(), fs::canonicalize(&sibling).unwrap());
+        assert_eq!(
+            resolve_link(&sub, abs).unwrap(),
+            fs::canonicalize(&sibling).unwrap()
+        );
     }
 
     #[test]
