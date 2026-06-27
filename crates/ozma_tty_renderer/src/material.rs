@@ -16,7 +16,7 @@ use bevy::{
             AsBindGroup, AsBindGroupError, BindGroupLayout, BindGroupLayoutEntry, BindingResources,
             BindingType, BufferBindingType, BufferInitDescriptor, BufferUsages,
             OwnedBindingResource, SamplerBindingType, ShaderStages, ShaderType, TextureSampleType,
-            TextureViewDimension, UnpreparedBindGroup, encase,
+            TextureViewDimension, UnpreparedBindGroup, encase::UniformBuffer,
         },
         renderer::RenderDevice,
         storage::{GpuShaderStorageBuffer, ShaderStorageBuffer},
@@ -121,7 +121,7 @@ impl AsBindGroup for TerminalUiMaterial {
         (images, fallback_image, storage_buffers): &mut SystemParamItem<'_, '_, Self::Param>,
         _force_no_bindless: bool,
     ) -> Result<UnpreparedBindGroup, AsBindGroupError> {
-        let mut params_buffer = encase::UniformBuffer::new(Vec::new());
+        let mut params_buffer = UniformBuffer::new(Vec::new());
         params_buffer.write(&self.params).unwrap();
 
         let cells = storage_buffers
@@ -166,6 +166,7 @@ impl AsBindGroup for TerminalUiMaterial {
                 ),
             ),
         ];
+        bindings.reserve(OVERLAY_SLOTS);
 
         // NOTE: A `None` slot, OR a `Some` whose GpuImage is not yet loaded,
         // binds the fallback view. The shader never samples it (the `rect.z==0`
@@ -1133,5 +1134,35 @@ mod tests {
         );
         let calls = src.matches("color = sample_overlay_slot(").count();
         assert_eq!(calls, OVERLAY_SLOTS, "sample_overlay_slot call count");
+
+        // NOTE: the counts above cannot catch a binding-number drift or a
+        // copy-paste that samples the wrong texture for a slot — both produce a
+        // runtime bind-group/pipeline error, never a test failure. Pin the
+        // shared sampler binding, each slot's texture binding, and the per-call
+        // overlay_rects[i] <-> overlay{i}_tex pairing, all from the Rust
+        // constants, so a drift fails here instead.
+        assert!(
+            src.contains(&format!(
+                "@binding({}) var overlay_samp: sampler;",
+                OVERLAY_TEX_BINDING_BASE - 1
+            )),
+            "shared overlay_samp must be at binding {}",
+            OVERLAY_TEX_BINDING_BASE - 1
+        );
+        for i in 0..OVERLAY_SLOTS {
+            let binding = OVERLAY_TEX_BINDING_BASE + i as u32;
+            assert!(
+                src.contains(&format!(
+                    "@binding({binding}) var overlay{i}_tex: texture_2d<f32>;"
+                )),
+                "overlay{i}_tex must be declared at binding {binding}"
+            );
+            assert!(
+                src.contains(&format!(
+                    "sample_overlay_slot(params.overlay_rects[{i}], overlay{i}_tex, overlay_samp,"
+                )),
+                "slot {i} call must pair overlay_rects[{i}] with overlay{i}_tex"
+            );
+        }
     }
 }
