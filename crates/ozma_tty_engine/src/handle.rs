@@ -2288,7 +2288,7 @@ mod tests {
         );
     }
 
-    fn handle_with_gate_on(
+    fn webview_test_handle(
         cols: u16,
         rows: u16,
     ) -> (TerminalHandle, crossbeam_channel::Receiver<ControlFrame>) {
@@ -2311,7 +2311,7 @@ mod tests {
 
     #[test]
     fn mount_anchor_is_cursor_at_osc_byte_position_not_chunk_end() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         let mut payload = b"\x1b]5379;mount;memo;3;10\x1b\\".to_vec();
         payload.extend_from_slice(b"\r\n\r\n\r\n");
         h.advance(&payload);
@@ -2333,7 +2333,7 @@ mod tests {
 
     #[test]
     fn mount_anchor_accounts_for_prior_output_in_same_chunk() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         let mut payload = b"\r\n\r\n".to_vec();
         payload.extend_from_slice(b"\x1b]5379;mount;memo;2;10\x07");
         payload.extend_from_slice(b"\r\n\r\n");
@@ -2349,7 +2349,7 @@ mod tests {
 
     #[test]
     fn osc_split_across_two_chunks_still_anchors_correctly() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         let full = b"\x1b]5379;mount;memo;3;10\x1b\\";
         let (a, b) = full.split_at(10);
         h.advance(a);
@@ -2365,7 +2365,7 @@ mod tests {
 
     #[test]
     fn two_mounts_in_one_chunk_each_get_their_own_anchor() {
-        let (mut h, rx) = handle_with_gate_on(20, 6);
+        let (mut h, rx) = webview_test_handle(20, 6);
         let mut payload = b"\x1b]5379;mount;a1;2;10\x1b\\".to_vec();
         payload.extend_from_slice(b"\r\n\r\n");
         payload.extend_from_slice(b"\x1b]5379;mount;b2;2;10\x1b\\");
@@ -2397,7 +2397,7 @@ mod tests {
 
     #[test]
     fn clear_scrollback_folds_into_history_base_and_unmounts_all() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         let hist_before = h.vi_indicator_snapshot().history_size;
         assert!(hist_before > 0, "precondition: scrollback non-empty");
@@ -2417,7 +2417,7 @@ mod tests {
 
     #[test]
     fn clear_then_mount_in_same_chunk_anchors_after_fold() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         let hist = h.vi_indicator_snapshot().history_size as u64;
         let mut payload = b"\x1b[3J".to_vec();
@@ -2454,7 +2454,7 @@ mod tests {
 
     #[test]
     fn alt_screen_roundtrip_does_not_fold() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\x1b[?1049l");
@@ -2466,7 +2466,7 @@ mod tests {
 
     #[test]
     fn alt_exit_plus_clear_in_one_chunk_still_folds() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\x1b[?1049l\x1b[3J");
@@ -2487,7 +2487,7 @@ mod tests {
 
     #[test]
     fn resize_invalidates_baseline_and_next_segment_rebaselines_without_fold() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         h.resize_grid(20, 8);
         h.advance(b"x");
@@ -2499,7 +2499,7 @@ mod tests {
 
     #[test]
     fn bel_terminated_mount_at_exact_chunk_end_is_drained_in_same_call() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b]5379;mount;memo;2;10\x07");
         assert!(
             matches!(rx.try_recv(), Ok(ControlFrame::OscWebview { .. })),
@@ -2509,7 +2509,7 @@ mod tests {
 
     #[test]
     fn mount_anchor_col_reflects_text_before_osc_on_same_row() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"ab\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(a), ..
@@ -2526,7 +2526,7 @@ mod tests {
 
     #[test]
     fn saturation_first_arrival_unmounts_all_and_rejects_mounts() {
-        let (mut h, rx) = handle_with_gate_on(10, 3);
+        let (mut h, rx) = webview_test_handle(10, 3);
         let mut payload = Vec::new();
         for _ in 0..h.scroll_cap + 10 {
             payload.extend_from_slice(b"x\r\n");
@@ -2576,7 +2576,7 @@ mod tests {
 
     #[test]
     fn mount_on_alt_screen_stamps_fixed_screen_anchor() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\r\n\r\n");
         h.advance(b"\x1b]5379;mount;v;3;5\x1b\\");
@@ -2596,7 +2596,7 @@ mod tests {
 
     #[test]
     fn alt_screen_mount_then_primary_uses_scrollback() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
@@ -2631,7 +2631,7 @@ mod tests {
 
     #[test]
     fn same_chunk_alt_enter_then_mount_stamps_fixed_screen() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b[?1049h\x1b]5379;mount;v;3;5\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
@@ -2652,7 +2652,7 @@ mod tests {
 
     #[test]
     fn alt_screen_mount_not_gated_by_saturation() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b[?1049h");
         h.saturated = true;
         h.advance(b"\x1b]5379;mount;v;3;5\x1b\\");
@@ -2674,7 +2674,7 @@ mod tests {
 
     #[test]
     fn mount_inside_synchronized_update_samples_flushed_state() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         let mut payload = b"\x1b[?2026h\r\n\r\n".to_vec();
         payload.extend_from_slice(b"\x1b]5379;mount;memo;2;10\x1b\\");
         h.advance(&payload);
@@ -2697,7 +2697,7 @@ mod tests {
     #[test]
     fn mount_stamps_next_emit_seq_and_force_flag_bypasses_noop() {
         use bevy::ecs::world::{CommandQueue, World};
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
@@ -2752,7 +2752,7 @@ mod tests {
     #[test]
     fn force_flag_survives_a_no_damage_abort() {
         use bevy::ecs::world::{CommandQueue, World};
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let _ = rx.try_recv().expect("mount frame");
         assert!(h.test_force_next_emit());
@@ -2870,7 +2870,7 @@ mod tests {
 
     #[test]
     fn c1_osc_introducer_is_rejected_not_parsed() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x9d5379;mount;memo;3;10\x9c");
         assert!(
             rx.try_recv().is_err(),
