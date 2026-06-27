@@ -132,6 +132,7 @@ impl Perform for OscWebviewCapture {
         self.pending = Some(verb);
     }
 
+    #[inline]
     fn terminated(&self) -> bool {
         self.pending.is_some()
     }
