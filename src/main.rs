@@ -74,7 +74,6 @@ fn main() {
             OzmuxShortcutPlugin,
             OzmuxUiPlugin,
             OzmaWebviewPlugin {
-                osc_enabled: pre_configs.osc_webview.enabled,
                 ozma_assets: ozma_registry,
             },
             CopyModePlugin,

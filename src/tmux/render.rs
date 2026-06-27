@@ -13,15 +13,12 @@ use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalPaddingFallback;
 use ozma_tty_renderer::schema::TerminalGrid;
-use ozma_webview::OscWebviewGate;
 use ozmux_tmux::{
     ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxClientMut, TmuxCommand, TmuxPane,
     TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,
 };
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use tmux_control_parser::{Cell, DividerAxis, PaneId, SplitDir};
 
 /// Total cap, across all panes, for bytes buffered while a pane's handle/grid
@@ -188,19 +185,11 @@ fn attach_tmux_window_container(
 /// `ChildOf(window)` parent. `layout_tmux_panes` sets the real rect every frame.
 fn attach_tmux_pane_terminal(
     mut commands: Commands,
-    gate: Option<Res<OscWebviewGate>>,
     panes: Query<(Entity, &TmuxPane), Without<TerminalHandle>>,
 ) {
-    // NOTE: clone the SHARED OscWebviewGate so a tmux pane captures OSC 5379 when
-    // the feature is enabled; a fresh `false` atomic would leave webview
-    // capture permanently off for tmux panes. The fallback is only reached in
-    // tests that do not install the gate resource.
-    let gate = gate
-        .map(|g| g.0.clone())
-        .unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     for (entity, pane) in panes.iter() {
         let (cols, rows) = grid_dims(pane.dims.width, pane.dims.height);
-        let handle = TerminalHandle::detached(cols, rows, gate.clone());
+        let handle = TerminalHandle::detached(cols, rows);
 
         commands.entity(entity).insert((
             handle,
@@ -1016,7 +1005,6 @@ mod tests {
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
         app.init_resource::<PendingPaneOutput>();
-        app.insert_resource(OscWebviewGate(Arc::new(AtomicBool::new(true))));
         app.init_resource::<Seen>();
         app.add_observer(|_ev: On<OscWebviewRequest>, mut seen: ResMut<Seen>| {
             seen.0 += 1;
@@ -1120,7 +1108,7 @@ mod tests {
                 },
                 Node::default(),
                 TerminalGrid::default(),
-                TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
+                TerminalHandle::detached(20, 5),
                 ChildOf(window_e),
             ))
             .id();
@@ -1208,7 +1196,7 @@ mod tests {
                 },
                 Node::default(),
                 TerminalGrid::default(),
-                TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false))),
+                TerminalHandle::detached(20, 5),
                 ChildOf(window_e),
             ))
             .id();

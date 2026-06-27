@@ -32,8 +32,6 @@ use ozma_tty_renderer::prelude::{Cursor, CursorShape, SelectionRange, SnapshotRe
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use vte::Parser;
 
 /// Inner `Dimensions` impl exposed to `Term::new` / `Term::resize`.
@@ -122,7 +120,6 @@ impl TerminalHandle {
         reply_rx: Receiver<Vec<u8>>,
         control_rx: Receiver<ControlFrame>,
         control_tx: Sender<ControlFrame>,
-        gate: Arc<AtomicBool>,
     ) -> Self {
         let size = LocalDim::new(cols, rows);
         let config = Config::default();
@@ -159,7 +156,7 @@ impl TerminalHandle {
             osc7_parser: Parser::new(),
             osc7,
             osc_webview_parser: Parser::new(),
-            osc_webview: OscWebviewCapture::new(gate),
+            osc_webview: OscWebviewCapture::new(),
         }
     }
 
@@ -168,14 +165,14 @@ impl TerminalHandle {
     /// Same VT bridge as `TerminalBundle::spawn` minus the PTY, child
     /// process, and reader thread. Used for terminals whose bytes arrive from
     /// an external source (e.g. tmux `%output`).
-    pub fn detached(cols: u16, rows: u16, gate: Arc<AtomicBool>) -> Self {
+    pub fn detached(cols: u16, rows: u16) -> Self {
         let (reply_tx, reply_rx) = unbounded::<Vec<u8>>();
         let (control_tx, control_rx) = unbounded::<ControlFrame>();
         let listener = TermListener {
             reply_tx,
             control_tx: control_tx.clone(),
         };
-        Self::new(cols, rows, listener, reply_rx, control_rx, control_tx, gate)
+        Self::new(cols, rows, listener, reply_rx, control_rx, control_tx)
     }
 
     /// Drains and returns any pending alacritty `PtyWrite` reply bytes
@@ -1332,15 +1329,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        TerminalHandle::new(
-            cols,
-            rows,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        )
+        TerminalHandle::new(cols, rows, listener, reply_rx, ctrl_rx, ctrl_tx)
     }
 
     fn cursor_row(h: &TerminalHandle) -> i32 {
@@ -1384,15 +1373,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         h.first_emit = false;
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_selection = None;
@@ -1423,15 +1404,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         h.first_emit = false;
         h.prev_cursor = Some(extract_cursor(&h.term));
         h.prev_vi_cursor = None;
@@ -1457,15 +1430,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         assert!(!h.term.mode().contains(TermMode::VI));
         h.enter_vi_mode(&mut coalescer);
@@ -1481,15 +1446,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         let was_vi = h.term.mode().contains(TermMode::VI);
@@ -1510,15 +1467,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         let before = h.term.vi_mode_cursor.point.line.0;
@@ -1536,15 +1485,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.advance(
             b"L1\r\nL2\r\nL3\r\nL4\r\nL5\r\nL6\r\nL7\r\nL8\r\nL9\r\nL10\r\n\
@@ -1568,15 +1509,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.advance(
             b"L1\r\nL2\r\nL3\r\nL4\r\nL5\r\nL6\r\nL7\r\nL8\r\nL9\r\nL10\r\n\
@@ -1603,15 +1536,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         let mut payload = Vec::new();
         for i in 1..=40 {
@@ -1646,15 +1571,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
@@ -1680,15 +1597,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
             alacritty_terminal::vte::ansi::StdSyncHandler,
@@ -1717,15 +1626,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         // Put "X" at the cursor cell so selection_to_string yields a non-empty string.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
@@ -1756,15 +1657,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         h.selection_start(
@@ -1785,15 +1678,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         assert!(h.selection_to_string().is_none());
     }
 
@@ -1806,15 +1691,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         assert!(h.selection_type().is_none());
@@ -1838,15 +1715,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         // Push some content so selection_to_string is meaningful.
         let mut parser = alacritty_terminal::vte::ansi::Processor::<
@@ -1909,7 +1778,6 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let mut h = bundle.handle;
@@ -1949,7 +1817,6 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let mut handle = bundle.handle;
@@ -1978,7 +1845,6 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let mut handle = bundle.handle;
@@ -2006,7 +1872,6 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn");
         let TerminalBundle {
@@ -2034,7 +1899,6 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -2063,15 +1927,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            3,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 3, listener, reply_rx, ctrl_rx, ctrl_tx);
         let mut coalescer = Coalescer::default();
         h.enter_vi_mode(&mut coalescer);
         assert!(
@@ -2099,7 +1955,6 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -2138,7 +1993,6 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -2161,15 +2015,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         for _ in 0..5 {
             h.advance(b"x\r\n");
         }
@@ -2198,15 +2044,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         for _ in 0..5 {
             h.advance(b"hello\r\n");
         }
@@ -2239,15 +2077,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         let point = alacritty_terminal::index::Point::new(
             alacritty_terminal::index::Line(0),
             alacritty_terminal::index::Column(0),
@@ -2266,15 +2096,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         for _ in 0..5 {
             h.advance(b"x\r\n");
         }
@@ -2306,7 +2128,6 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -2339,7 +2160,6 @@ mod tests {
             shell: std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: Arc::new(AtomicBool::new(false)),
         };
         let TerminalBundle {
             mut handle,
@@ -2366,15 +2186,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         for _ in 0..30 {
             h.advance(b"x\r\n");
         }
@@ -2399,15 +2211,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         for _ in 0..30 {
             h.advance(b"x\r\n");
         }
@@ -2429,15 +2233,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let mut h = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut h = TerminalHandle::new(10, 5, listener, reply_rx, ctrl_rx, ctrl_tx);
         assert!(h.is_at_bottom(), "fresh handle is at live tail");
         assert!(
             !h.snap_to_bottom_vt_only(),
@@ -2470,15 +2266,7 @@ mod tests {
             reply_tx,
             control_tx: control_tx.clone(),
         };
-        let mut handle = TerminalHandle::new(
-            80,
-            24,
-            listener,
-            reply_rx,
-            control_rx,
-            control_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let mut handle = TerminalHandle::new(80, 24, listener, reply_rx, control_rx, control_tx);
         handle.advance(b"\x1b]7;file://localhost/tmp\x07");
 
         app.world_mut().spawn((handle, TerminalTitle::default()));
@@ -2500,7 +2288,7 @@ mod tests {
         );
     }
 
-    fn handle_with_gate_on(
+    fn webview_test_handle(
         cols: u16,
         rows: u16,
     ) -> (TerminalHandle, crossbeam_channel::Receiver<ControlFrame>) {
@@ -2517,14 +2305,13 @@ mod tests {
             reply_rx,
             crossbeam_channel::unbounded::<ControlFrame>().1,
             ctrl_tx,
-            Arc::new(AtomicBool::new(true)),
         );
         (h, ctrl_rx)
     }
 
     #[test]
     fn mount_anchor_is_cursor_at_osc_byte_position_not_chunk_end() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         let mut payload = b"\x1b]5379;mount;memo;3;10\x1b\\".to_vec();
         payload.extend_from_slice(b"\r\n\r\n\r\n");
         h.advance(&payload);
@@ -2546,7 +2333,7 @@ mod tests {
 
     #[test]
     fn mount_anchor_accounts_for_prior_output_in_same_chunk() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         let mut payload = b"\r\n\r\n".to_vec();
         payload.extend_from_slice(b"\x1b]5379;mount;memo;2;10\x07");
         payload.extend_from_slice(b"\r\n\r\n");
@@ -2562,7 +2349,7 @@ mod tests {
 
     #[test]
     fn osc_split_across_two_chunks_still_anchors_correctly() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         let full = b"\x1b]5379;mount;memo;3;10\x1b\\";
         let (a, b) = full.split_at(10);
         h.advance(a);
@@ -2578,7 +2365,7 @@ mod tests {
 
     #[test]
     fn two_mounts_in_one_chunk_each_get_their_own_anchor() {
-        let (mut h, rx) = handle_with_gate_on(20, 6);
+        let (mut h, rx) = webview_test_handle(20, 6);
         let mut payload = b"\x1b]5379;mount;a1;2;10\x1b\\".to_vec();
         payload.extend_from_slice(b"\r\n\r\n");
         payload.extend_from_slice(b"\x1b]5379;mount;b2;2;10\x1b\\");
@@ -2610,7 +2397,7 @@ mod tests {
 
     #[test]
     fn clear_scrollback_folds_into_history_base_and_unmounts_all() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         let hist_before = h.vi_indicator_snapshot().history_size;
         assert!(hist_before > 0, "precondition: scrollback non-empty");
@@ -2630,7 +2417,7 @@ mod tests {
 
     #[test]
     fn clear_then_mount_in_same_chunk_anchors_after_fold() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         let hist = h.vi_indicator_snapshot().history_size as u64;
         let mut payload = b"\x1b[3J".to_vec();
@@ -2667,7 +2454,7 @@ mod tests {
 
     #[test]
     fn alt_screen_roundtrip_does_not_fold() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\x1b[?1049l");
@@ -2679,7 +2466,7 @@ mod tests {
 
     #[test]
     fn alt_exit_plus_clear_in_one_chunk_still_folds() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\x1b[?1049l\x1b[3J");
@@ -2700,7 +2487,7 @@ mod tests {
 
     #[test]
     fn resize_invalidates_baseline_and_next_segment_rebaselines_without_fold() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         seed_scrollback(&mut h, 30);
         h.resize_grid(20, 8);
         h.advance(b"x");
@@ -2712,7 +2499,7 @@ mod tests {
 
     #[test]
     fn bel_terminated_mount_at_exact_chunk_end_is_drained_in_same_call() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b]5379;mount;memo;2;10\x07");
         assert!(
             matches!(rx.try_recv(), Ok(ControlFrame::OscWebview { .. })),
@@ -2722,7 +2509,7 @@ mod tests {
 
     #[test]
     fn mount_anchor_col_reflects_text_before_osc_on_same_row() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"ab\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(a), ..
@@ -2739,7 +2526,7 @@ mod tests {
 
     #[test]
     fn saturation_first_arrival_unmounts_all_and_rejects_mounts() {
-        let (mut h, rx) = handle_with_gate_on(10, 3);
+        let (mut h, rx) = webview_test_handle(10, 3);
         let mut payload = Vec::new();
         for _ in 0..h.scroll_cap + 10 {
             payload.extend_from_slice(b"x\r\n");
@@ -2789,7 +2576,7 @@ mod tests {
 
     #[test]
     fn mount_on_alt_screen_stamps_fixed_screen_anchor() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\r\n\r\n");
         h.advance(b"\x1b]5379;mount;v;3;5\x1b\\");
@@ -2809,7 +2596,7 @@ mod tests {
 
     #[test]
     fn alt_screen_mount_then_primary_uses_scrollback() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b[?1049h");
         h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
@@ -2844,7 +2631,7 @@ mod tests {
 
     #[test]
     fn same_chunk_alt_enter_then_mount_stamps_fixed_screen() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b[?1049h\x1b]5379;mount;v;3;5\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
@@ -2865,7 +2652,7 @@ mod tests {
 
     #[test]
     fn alt_screen_mount_not_gated_by_saturation() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b[?1049h");
         h.saturated = true;
         h.advance(b"\x1b]5379;mount;v;3;5\x1b\\");
@@ -2887,7 +2674,7 @@ mod tests {
 
     #[test]
     fn mount_inside_synchronized_update_samples_flushed_state() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         let mut payload = b"\x1b[?2026h\r\n\r\n".to_vec();
         payload.extend_from_slice(b"\x1b]5379;mount;memo;2;10\x1b\\");
         h.advance(&payload);
@@ -2910,7 +2697,7 @@ mod tests {
     #[test]
     fn mount_stamps_next_emit_seq_and_force_flag_bypasses_noop() {
         use bevy::ecs::world::{CommandQueue, World};
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let ControlFrame::OscWebview {
             anchor: Some(anchor),
@@ -2965,7 +2752,7 @@ mod tests {
     #[test]
     fn force_flag_survives_a_no_damage_abort() {
         use bevy::ecs::world::{CommandQueue, World};
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x1b]5379;mount;memo;2;10\x1b\\");
         let _ = rx.try_recv().expect("mount frame");
         assert!(h.test_force_next_emit());
@@ -3025,15 +2812,7 @@ mod tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        let handle = TerminalHandle::new(
-            10,
-            5,
-            listener,
-            reply_rx,
-            inject_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        );
+        let handle = TerminalHandle::new(10, 5, listener, reply_rx, inject_rx, ctrl_tx);
 
         inject_tx
             .send(ControlFrame::OscWebview {
@@ -3091,7 +2870,7 @@ mod tests {
 
     #[test]
     fn c1_osc_introducer_is_rejected_not_parsed() {
-        let (mut h, rx) = handle_with_gate_on(20, 5);
+        let (mut h, rx) = webview_test_handle(20, 5);
         h.advance(b"\x9d5379;mount;memo;3;10\x9c");
         assert!(
             rx.try_recv().is_err(),
@@ -3101,7 +2880,7 @@ mod tests {
 
     #[test]
     fn detached_handle_advances_without_pty() {
-        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::detached(20, 5);
         h.advance(b"hi");
         let (cols, rows, _cursor) = h.read_geometry();
         assert_eq!((cols, rows), (20, 5));
@@ -3110,7 +2889,7 @@ mod tests {
 
     #[test]
     fn take_replies_returns_alacritty_reply_bytes() {
-        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::detached(20, 5);
         h.advance(b"\x1b[5n");
         let replies = h.take_replies();
         assert!(
@@ -3143,11 +2922,7 @@ mod tests {
             hits.cols = snap.cols;
             hits.rows = snap.rows;
         });
-        app.world_mut().spawn(TerminalHandle::detached(
-            20,
-            5,
-            Arc::new(AtomicBool::new(false)),
-        ));
+        app.world_mut().spawn(TerminalHandle::detached(20, 5));
         app.world_mut()
             .run_system_once(
                 |mut commands: Commands, mut q: Query<(Entity, &mut TerminalHandle)>| {
@@ -3167,7 +2942,7 @@ mod tests {
 
     #[test]
     fn resize_grid_only_changes_geometry_without_pty() {
-        let mut h = TerminalHandle::detached(20, 5, Arc::new(AtomicBool::new(false)));
+        let mut h = TerminalHandle::detached(20, 5);
         h.resize_grid_only(40, 10);
         let (cols, rows, _) = h.read_geometry();
         assert_eq!((cols, rows), (40, 10));
@@ -3193,11 +2968,7 @@ mod tests {
         app.add_observer(|_delta: On<FrameDelta>, mut hits: ResMut<Hits>| {
             hits.deltas += 1;
         });
-        app.world_mut().spawn(TerminalHandle::detached(
-            20,
-            5,
-            Arc::new(AtomicBool::new(false)),
-        ));
+        app.world_mut().spawn(TerminalHandle::detached(20, 5));
         // First emit (bootstrap snapshot), then drain damage so the handle is
         // idle: a plain flush_emit now would be a no-op.
         app.world_mut()
@@ -3249,15 +3020,7 @@ mod accessor_tests {
             reply_tx,
             control_tx: ctrl_tx.clone(),
         };
-        TerminalHandle::new(
-            80,
-            24,
-            listener,
-            reply_rx,
-            ctrl_rx,
-            ctrl_tx,
-            Arc::new(AtomicBool::new(false)),
-        )
+        TerminalHandle::new(80, 24, listener, reply_rx, ctrl_rx, ctrl_tx)
     }
 
     #[test]

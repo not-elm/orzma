@@ -11,15 +11,13 @@
 //! `crates/tmux_session/tests/`).
 
 use ozma_tty_engine::{TermMode, TerminalHandle};
-use std::sync::{Arc, atomic::AtomicBool};
 
 /// Feeding `\x1b[?1000h` (X10 mouse click) + `\x1b[?1006h` (SGR mouse)
 /// to a detached `TerminalHandle` via `advance()` must activate
 /// `MOUSE_REPORT_CLICK` and `SGR_MOUSE` in `current_modes()`.
 #[test]
 fn decset_mouse_modes_reflect_in_current_modes() {
-    let gate = Arc::new(AtomicBool::new(false));
-    let mut handle = TerminalHandle::detached(80, 24, gate);
+    let mut handle = TerminalHandle::detached(80, 24);
 
     // ESC [ ? 1000 h → mouse report click; ESC [ ? 1006 h → SGR extended mouse.
     let decset = b"\x1b[?1000h\x1b[?1006h";
@@ -40,8 +38,7 @@ fn decset_mouse_modes_reflect_in_current_modes() {
 /// clear the corresponding flags, confirming round-trip mode tracking.
 #[test]
 fn decrst_clears_mouse_modes() {
-    let gate = Arc::new(AtomicBool::new(false));
-    let mut handle = TerminalHandle::detached(80, 24, gate);
+    let mut handle = TerminalHandle::detached(80, 24);
 
     handle.advance(b"\x1b[?1000h\x1b[?1006h");
     let after_set = handle.current_modes();

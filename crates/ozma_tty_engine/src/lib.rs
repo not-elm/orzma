@@ -271,8 +271,6 @@ mod tests {
     use crate::control_mode::AdoptedControlMode;
     use crossbeam_channel::{Sender, unbounded};
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
 
     #[derive(Resource, Default)]
     struct DetectedCount(usize);
@@ -315,7 +313,7 @@ mod tests {
             .init_resource::<DetectedCount>()
             .add_observer(count_detected);
 
-        let handle = TerminalHandle::detached(80, 24, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(80, 24);
         let (pty, chunk_tx) = pty_handle_with_injector();
         let entity = app
             .world_mut()
@@ -361,7 +359,7 @@ mod tests {
             .init_resource::<DetectedCount>()
             .add_observer(count_detected);
 
-        let handle = TerminalHandle::detached(80, 24, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(80, 24);
         let (pty, chunk_tx) = pty_handle_with_injector();
         let entity = app
             .world_mut()
@@ -410,7 +408,7 @@ mod tests {
             .init_resource::<DetectedCount>()
             .add_observer(count_detected);
 
-        let handle = TerminalHandle::detached(80, 24, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(80, 24);
         let (pty, chunk_tx) = pty_handle_with_injector();
         let entity = app
             .world_mut()
@@ -453,7 +451,7 @@ mod tests {
             .init_resource::<DetectedCount>()
             .add_observer(count_detected);
 
-        let handle = TerminalHandle::detached(80, 24, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(80, 24);
         let (pty, chunk_tx) = pty_handle_with_injector();
         let entity = app
             .world_mut()
@@ -524,7 +522,7 @@ mod tests {
                 count.0 += 1;
             });
 
-        let handle = TerminalHandle::detached(80, 24, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(80, 24);
         let (pty, chunk_tx) = pty_handle_with_injector();
         let entity = app
             .world_mut()

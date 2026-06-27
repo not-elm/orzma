@@ -1050,8 +1050,6 @@ mod tests {
 
     fn make_selection_app() -> App {
         use bevy::window::WindowResolution;
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicBool;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -1070,7 +1068,7 @@ mod tests {
             )
             .add_systems(Update, dispatch_mouse_buttons);
 
-        let handle = TerminalHandle::detached(100, 37, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(100, 37);
         // Node at window center (400,300), size 800x600 -> top-left (0,0).
         app.world_mut().spawn((
             OzmaTerminal,
@@ -1250,8 +1248,6 @@ mod tests {
     #[test]
     fn detached_terminal_forwards_write_and_selects_via_vt_only() {
         use ozma_tty_engine::TerminalHandle;
-        use std::sync::Arc;
-        use std::sync::atomic::AtomicBool;
 
         #[derive(Resource, Default)]
         struct CapturedForward(Vec<Vec<u8>>);
@@ -1266,7 +1262,7 @@ mod tests {
                 },
             );
 
-        let handle = TerminalHandle::detached(10, 5, Arc::new(AtomicBool::new(false)));
+        let handle = TerminalHandle::detached(10, 5);
         let entity = app.world_mut().spawn((OzmaTerminal, handle)).id();
 
         app.world_mut().trigger(TerminalMouseEffects {

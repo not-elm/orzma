@@ -14,8 +14,6 @@ use bevy::ecs::bundle::Bundle;
 use crossbeam_channel::unbounded;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 /// Spawn parameters consumed exactly once by `TerminalBundle::spawn`.
 pub struct SpawnOptions {
@@ -29,9 +27,6 @@ pub struct SpawnOptions {
     pub cwd: Option<PathBuf>,
     /// Arbitrary environment variables forwarded to the shell.
     pub env: Vec<(String, String)>,
-    /// Shared gate controlling whether OSC 5379 webview sequences are processed.
-    /// Off by default — callers that want webview support enable this at spawn time.
-    pub osc_webview_gate: Arc<AtomicBool>,
 }
 
 /// All four Components a working terminal entity needs.
@@ -99,13 +94,7 @@ impl TerminalBundle {
             control_tx: control_tx.clone(),
         };
         let handle = TerminalHandle::new(
-            opts.cols,
-            opts.rows,
-            listener,
-            reply_rx,
-            control_rx,
-            control_tx,
-            opts.osc_webview_gate,
+            opts.cols, opts.rows, listener, reply_rx, control_rx, control_tx,
         );
 
         let pty = PtyHandle::new(pty_pair.master, writer, chunk_rx, exit_rx, child_killer);

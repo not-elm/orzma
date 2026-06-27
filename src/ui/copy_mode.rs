@@ -97,7 +97,6 @@ mod tests {
             shell: "/bin/sh".into(),
             cwd: None,
             env: Vec::new(),
-            osc_webview_gate: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         app.world_mut().spawn(bundle).id()

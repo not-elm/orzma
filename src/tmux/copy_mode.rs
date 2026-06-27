@@ -26,8 +26,6 @@ use ozmux_tmux::{
     PaneId, TmuxClient, TmuxPane, TmuxProjectionSet, absolute_to_visible_row, parse_copy_state,
 };
 use std::collections::HashMap;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 /// Wires the capture-driven copy-mode refresh systems after the projection chain.
 pub(crate) struct CopyModePlugin;
@@ -355,7 +353,7 @@ fn apply_capture_reply(
         render.0.flush_emit(commands, pane_entity);
         return;
     }
-    let mut handle = TerminalHandle::detached(cols, rows, Arc::new(AtomicBool::new(false)));
+    let mut handle = TerminalHandle::detached(cols, rows);
     handle.advance(&bytes);
     handle.flush_emit(commands, pane_entity);
     commands
@@ -724,7 +722,7 @@ mod tests {
                     },
                 },
                 TerminalGrid::default(),
-                TerminalHandle::detached(20, 3, Arc::new(AtomicBool::new(false))),
+                TerminalHandle::detached(20, 3),
                 CopyModeState,
             ))
             .id();
@@ -737,7 +735,7 @@ mod tests {
                 move |mut commands: Commands, mut handles: Query<&mut TerminalHandle>| {
                     let mut live = handles.get_mut(entity).unwrap();
                     live.advance(b"LIVE");
-                    let mut cap = TerminalHandle::detached(20, 3, Arc::new(AtomicBool::new(false)));
+                    let mut cap = TerminalHandle::detached(20, 3);
                     cap.advance(b"CAP");
                     cap.flush_emit(&mut commands, entity);
                 },
@@ -762,11 +760,7 @@ mod tests {
         }
         app.world_mut()
             .entity_mut(entity)
-            .insert(CopyRenderHandle(TerminalHandle::detached(
-                20,
-                3,
-                Arc::new(AtomicBool::new(false)),
-            )));
+            .insert(CopyRenderHandle(TerminalHandle::detached(20, 3)));
 
         // Exit copy mode: the On<Remove, CopyModeState> observer forces a full
         // live repaint and prunes the refresh state.
@@ -820,7 +814,7 @@ mod tests {
                         yoff: 0,
                     },
                 },
-                TerminalHandle::detached(20, 3, Arc::new(AtomicBool::new(false))),
+                TerminalHandle::detached(20, 3),
                 CopyModeState,
             ))
             .id();

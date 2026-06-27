@@ -15,19 +15,17 @@ use webview::mount::WebviewPlugin;
 pub use webview::mount::{
     ForwardKeys, Webview, WebviewHit, focused_webview_of, webview_hit_at, webview_local_dip,
 };
+pub use webview::osc::NonInteractive;
 use webview::osc::OscPlugin;
-pub use webview::osc::{NonInteractive, OscWebviewGate};
 use webview::render::RenderPlugin;
 pub use webview::render::cef_plugin;
 
 /// Bevy plugin: the in-process webview subsystem — CEF render wiring + the
 /// `window.ozma` back-channel, OSC mount/unmount, and the control socket.
 ///
-/// The host supplies the OSC gate's initial state and the `WebviewAssetRegistry`
-/// shared with the `ozma://` scheme handler (built via [`cef_plugin`]).
+/// The host supplies the `WebviewAssetRegistry` shared with the `ozma://`
+/// scheme handler (built via [`cef_plugin`]).
 pub struct OzmaWebviewPlugin {
-    /// Initial state of the OSC-webview gate.
-    pub osc_enabled: bool,
     /// The registry shared with the `ozma://` scheme handler.
     pub ozma_assets: WebviewAssetRegistry,
 }
@@ -37,9 +35,7 @@ impl Plugin for OzmaWebviewPlugin {
         app.add_plugins((
             ControlPlanePlugin::new(self.ozma_assets.clone()),
             RenderPlugin,
-            OscPlugin {
-                osc_enabled: self.osc_enabled,
-            },
+            OscPlugin,
             WebviewPlugin,
         ));
     }

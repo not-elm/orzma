@@ -6,7 +6,6 @@
 
 use crate::font::FontConfig;
 use crate::inactive_pane::InactivePaneConfig;
-use crate::osc_webview::OscWebviewConfig;
 use crate::shortcuts::Shortcuts;
 use crate::theme::Theme;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
@@ -17,7 +16,6 @@ pub mod font;
 pub mod inactive_pane;
 pub mod keyboard;
 pub mod mouse;
-pub mod osc_webview;
 pub mod ozma;
 pub mod path;
 pub mod shortcuts;
@@ -39,8 +37,6 @@ pub struct OzmuxConfigs {
     pub keyboard: keyboard::KeyboardConfig,
     /// Inactive-pane dimming configuration.
     pub inactive_pane: InactivePaneConfig,
-    /// OSC-driven webview configuration.
-    pub osc_webview: OscWebviewConfig,
     /// Ozma single-terminal mode configuration.
     pub ozma: ozma::OzmaConfig,
 }
@@ -253,20 +249,6 @@ resize-pane-down = "Cmd+Shift+J"
         let c = parse("[inactive_pane]\ndim = 4.0\ntint_color = \"#FF00AB\"");
         assert_eq!(c.inactive_pane.dim, 1.0);
         assert_eq!(c.inactive_pane.tint_color, "#ff00ab");
-    }
-
-    #[test]
-    fn osc_webview_setting_merges_from_toml() {
-        let disabled = parse("[osc_webview]\nenabled = false\n");
-        assert!(
-            !disabled.osc_webview.enabled,
-            "[osc_webview] enabled = false must flip the default-on gate off"
-        );
-        let defaulted = parse("");
-        assert!(
-            defaulted.osc_webview.enabled,
-            "empty TOML must keep the default-on gate"
-        );
     }
 
     #[test]
