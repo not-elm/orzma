@@ -199,7 +199,7 @@ impl WheelAction {
 /// in alacritty and wezterm — DECCKM affects keyboard-originated
 /// cursor keys, but wheel→arrow translation in alt-screen mode is
 /// unconditional SS3.
-pub(crate) fn alt_screen_arrow_bytes(direction: WheelDir, n: u32) -> Vec<u8> {
+fn alt_screen_arrow_bytes(direction: WheelDir, n: u32) -> Vec<u8> {
     let suffix = match direction {
         WheelDir::Up => b'A',
         WheelDir::Down => b'B',
