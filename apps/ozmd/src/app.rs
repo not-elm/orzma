@@ -20,6 +20,8 @@ pub(crate) enum Cmd {
     ClearSearch,
     /// Re-read the file from disk and push new content.
     Reload,
+    /// Pop the navigation back stack.
+    Back,
     /// Exit the app.
     Quit,
 }
@@ -97,6 +99,7 @@ impl App {
             }
             Action::Quit => vec![Cmd::Quit],
             Action::Reload => vec![Cmd::Reload],
+            Action::Back => vec![Cmd::Back],
             Action::ScrollLineDown => vec![Cmd::Scroll(ScrollAction::Down)],
             Action::ScrollLineUp => vec![Cmd::Scroll(ScrollAction::Up)],
             Action::ScrollHalfDown => vec![Cmd::Scroll(ScrollAction::HalfDown)],
@@ -355,5 +358,11 @@ mod tests {
         app.set_current_heading_index(Some(0));
         app.on_action(Action::Prefix('['));
         assert_eq!(app.on_action(Action::Prefix('[')), vec![]);
+    }
+
+    #[test]
+    fn back_action_emits_back_cmd() {
+        let mut app = App::default();
+        assert_eq!(app.on_action(Action::Back), vec![Cmd::Back]);
     }
 }

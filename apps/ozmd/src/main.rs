@@ -149,6 +149,7 @@ fn event_loop(
                     Cmd::Reload => {
                         apply_reload(&mut state, &mut live, &mut last_fp, view, shared, path)?;
                     }
+                    Cmd::Back => {}
                     Cmd::Scroll(action) => {
                         let _ = view.emit("scroll", &Scroll { action });
                     }

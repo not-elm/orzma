@@ -28,6 +28,8 @@ pub(crate) enum Action {
     ScrollPageDown,
     ScrollPageUp,
     GoBottom,
+    /// Pop the navigation back stack.
+    Back,
     /// First key of a two-key chord (`g`, `]`, `[`).
     Prefix(char),
     ToggleOutline,
@@ -77,9 +79,11 @@ fn map_normal(ctrl: bool, code: KeyCode) -> Action {
         KeyCode::Char('u') if ctrl => Action::ScrollHalfUp,
         KeyCode::Char('f') if ctrl => Action::ScrollPageDown,
         KeyCode::Char('b') if ctrl => Action::ScrollPageUp,
+        KeyCode::Char('o') if ctrl => Action::Back,
         _ if ctrl => Action::Ignore,
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Char('r') => Action::Reload,
+        KeyCode::Backspace => Action::Back,
         KeyCode::Char('j') | KeyCode::Down => Action::ScrollLineDown,
         KeyCode::Char('k') | KeyCode::Up => Action::ScrollLineUp,
         KeyCode::Char(' ') | KeyCode::PageDown => Action::ScrollPageDown,
@@ -178,6 +182,23 @@ mod tests {
                 KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)
             ),
             Action::Escape
+        );
+    }
+
+    #[test]
+    fn normal_backspace_and_ctrl_o_go_back() {
+        assert_eq!(
+            map(Mode::Normal, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+            Action::Back
+        );
+        assert_eq!(map(Mode::Normal, ctrl('o')), Action::Back);
+    }
+
+    #[test]
+    fn search_backspace_still_edits_query() {
+        assert_eq!(
+            map(Mode::Search, KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+            Action::SearchBackspace
         );
     }
 }
