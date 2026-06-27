@@ -60,7 +60,7 @@ impl Plugin for TerminalHandlePlugin {
                 (
                     drain_pty_chunks,
                     drain_pty_writes,
-                    deadline_flush,
+                    flush_due_terminals,
                     drain_pty_exits,
                 )
                     .chain(),
@@ -127,7 +127,7 @@ fn drain_pty_writes(
 /// Flushes any coalescer window whose deadline has elapsed.
 /// Also rescues the bootstrap snapshot for terminals that have not yet
 /// produced PTY output.
-fn deadline_flush(
+fn flush_due_terminals(
     mut terminals: Query<(Entity, &mut TerminalHandle, &mut Coalescer)>,
     mut commands: Commands,
 ) {
