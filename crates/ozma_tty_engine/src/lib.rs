@@ -44,7 +44,6 @@ pub use wheel::{CellCoord, WheelAction, WheelConfig, WheelDir, WheelModifiers};
 use crate::input_codec::encode_key;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::observer::On;
-use bevy::ecs::system::ParallelCommands;
 use bevy::prelude::*;
 use control_mode::Handover;
 use std::time::Instant;
@@ -76,7 +75,7 @@ impl Plugin for TerminalHandlePlugin {
 /// Also drains control events (Bell/Title/ResetTitle/Clipboard)
 /// produced by the listener while parsing the chunks.
 fn drain_pty_chunks(
-    par_commands: ParallelCommands,
+    mut commands: Commands,
     mut terminals: Query<(
         Entity,
         &mut TerminalHandle,
@@ -87,20 +86,20 @@ fn drain_pty_chunks(
         Option<&mut AdoptedControlMode>,
     )>,
 ) {
-    terminals.par_iter_mut().for_each(
-        |(entity, mut handle, mut pty, mut coalescer, mut title, watch, adopted)| {
-            process_pty_chunks(
-                &par_commands,
-                entity,
-                &mut handle,
-                &mut pty,
-                &mut coalescer,
-                watch,
-                adopted,
-            );
-            process_control_events(&par_commands, entity, &handle, &mut title);
-        },
-    );
+    for (entity, mut handle, mut pty, mut coalescer, mut title, watch, adopted) in
+        terminals.iter_mut()
+    {
+        process_pty_chunks(
+            &mut commands,
+            entity,
+            &mut handle,
+            &mut pty,
+            &mut coalescer,
+            watch,
+            adopted,
+        );
+        process_control_events(&mut commands, entity, &handle, &mut title);
+    }
 }
 
 /// Drains `reply_rx` (alacritty PtyWrite responses) and writes them
@@ -114,7 +113,7 @@ fn drain_pty_chunks(
 fn drain_pty_writes(
     mut terminals: Query<(&TerminalHandle, &mut PtyHandle), Without<AdoptedControlMode>>,
 ) {
-    terminals.par_iter_mut().for_each(|(handle, mut pty)| {
+    for (handle, mut pty) in terminals.iter_mut() {
         let mut buf: Vec<u8> = Vec::new();
         handle.drain_replies_into(&mut buf);
         if !buf.is_empty()
@@ -122,7 +121,7 @@ fn drain_pty_writes(
         {
             tracing::warn!(?e, "pty_write reply failed");
         }
-    });
+    }
 }
 
 /// Flushes any coalescer window whose deadline has elapsed. Also
@@ -130,45 +129,32 @@ fn drain_pty_writes(
 /// produced PTY output.
 fn check_deadline_flush(
     mut terminals: Query<(Entity, &mut TerminalHandle, &mut Coalescer)>,
-    par_commands: ParallelCommands,
+    mut commands: Commands,
 ) {
     let now = Instant::now();
-    terminals
-        .par_iter_mut()
-        .for_each(|(entity, mut handle, mut coalescer)| {
-            // NOTE: bootstrap rescue — alacritty's first damage() returns Full
-            // even with no chunks yet, so we can emit the Initial snapshot.
-            // Daemon handled this implicitly in its wait_deadline arm; the
-            // chained-systems port does it explicitly. Required for terminals
-            // that don't produce output immediately.
-            if handle.needs_bootstrap_emit() {
-                handle.force_bootstrap_damage();
-                par_commands.command_scope(|mut commands| {
-                    handle.emit(&mut commands, entity);
-                });
-                coalescer.disarm();
-                return;
-            }
-            if let Some(deadline) = coalescer.next_deadline()
-                && now >= deadline
-            {
-                par_commands.command_scope(|mut commands| {
-                    handle.emit(&mut commands, entity);
-                });
-                coalescer.disarm();
-            }
-        });
+    for (entity, mut handle, mut coalescer) in terminals.iter_mut() {
+        if handle.needs_bootstrap_emit() {
+            handle.force_bootstrap_damage();
+            handle.emit(&mut commands, entity);
+            coalescer.disarm();
+            continue;
+        }
+        if let Some(deadline) = coalescer.next_deadline()
+            && now >= deadline
+        {
+            handle.emit(&mut commands, entity);
+            coalescer.disarm();
+        }
+    }
 }
 
 /// Polls `exit_rx` and fires `TerminalChildExit` once per terminal.
-fn drain_pty_exits(par_commands: ParallelCommands, q: Query<(Entity, &PtyHandle)>) {
-    q.par_iter().for_each(|(entity, pty)| {
+fn drain_pty_exits(mut commands: Commands, terminals: Query<(Entity, &PtyHandle)>) {
+    for (entity, pty) in terminals.iter() {
         if let Ok(code) = pty.try_recv_exit() {
-            par_commands.command_scope(|mut commands| {
-                commands.trigger(TerminalChildExit { entity, code });
-            });
+            commands.trigger(TerminalChildExit { entity, code });
         }
-    });
+    }
 }
 
 /// Pulls all available PTY chunks, advances Term, and decides
@@ -183,7 +169,7 @@ fn drain_pty_exits(par_commands: ParallelCommands, q: Query<(Entity, &PtyHandle)
 ///   adopted, and [`ControlModeDetected`] fires;
 /// - all other terminals take the unchanged normal path.
 fn process_pty_chunks(
-    par_commands: &ParallelCommands,
+    commands: &mut Commands,
     entity: Entity,
     handle: &mut TerminalHandle,
     pty: &mut PtyHandle,
@@ -199,7 +185,7 @@ fn process_pty_chunks(
         if let Some(watch) = watch.as_deref_mut() {
             match Handover::scan(watch, &chunk) {
                 Handover::NotYet { vt } => {
-                    ingest_and_flush_or_arm(par_commands, entity, handle, coalescer, &vt);
+                    ingest_and_flush_or_arm(commands, entity, handle, coalescer, &vt);
                 }
                 Handover::Detected { vt, mut captured } => {
                     let _ = handle.ingest_chunk(&vt, coalescer);
@@ -212,22 +198,20 @@ fn process_pty_chunks(
                     while let Ok(more) = pty.try_recv_chunk() {
                         captured.extend_from_slice(&more);
                     }
-                    par_commands.command_scope(|mut commands| {
-                        handle.emit(&mut commands, entity);
-                        commands.entity(entity).remove::<ControlModeWatch>();
-                        // NOTE: `captured` starts at the introducer byte;
-                        // downstream `ProtocolClient::feed` strips it.
-                        commands
-                            .entity(entity)
-                            .insert(AdoptedControlMode { captured });
-                        commands.trigger(ControlModeDetected { entity });
-                    });
+                    handle.emit(commands, entity);
+                    commands.entity(entity).remove::<ControlModeWatch>();
+                    // NOTE: `captured` starts at the introducer byte;
+                    // downstream `ProtocolClient::feed` strips it.
+                    commands
+                        .entity(entity)
+                        .insert(AdoptedControlMode { captured });
+                    commands.trigger(ControlModeDetected { entity });
                     return;
                 }
             }
             continue;
         }
-        ingest_and_flush_or_arm(par_commands, entity, handle, coalescer, &chunk);
+        ingest_and_flush_or_arm(commands, entity, handle, coalescer, &chunk);
     }
 }
 
@@ -238,7 +222,7 @@ fn process_pty_chunks(
 /// as a carried partial-introducer prefix, and feeding zero bytes to the VT
 /// must not arm the coalescer or trip the first-emit bootstrap.
 fn ingest_and_flush_or_arm(
-    par_commands: &ParallelCommands,
+    commands: &mut Commands,
     entity: Entity,
     handle: &mut TerminalHandle,
     coalescer: &mut Coalescer,
@@ -249,9 +233,7 @@ fn ingest_and_flush_or_arm(
     }
     let should_flush = handle.ingest_chunk(bytes, coalescer);
     if should_flush {
-        par_commands.command_scope(|mut commands| {
-            handle.emit(&mut commands, entity);
-        });
+        handle.emit(commands, entity);
         coalescer.disarm();
     } else {
         coalescer.arm_or_extend(Instant::now());
@@ -262,14 +244,12 @@ fn ingest_and_flush_or_arm(
 /// Clipboard) into Observer triggers and updates the `TerminalTitle`
 /// component as a side-effect of Title / ResetTitle.
 fn process_control_events(
-    par_commands: &ParallelCommands,
+    commands: &mut Commands,
     entity: Entity,
     handle: &TerminalHandle,
     title: &mut TerminalTitle,
 ) {
-    par_commands.command_scope(|mut commands| {
-        handle.drain_control_events(&mut commands, entity, title);
-    });
+    handle.drain_control_events(commands, entity, title);
 }
 
 /// Observer for `TerminalKeyInput`. Encodes the key using the entity's
