@@ -1,10 +1,11 @@
 //! IME preedit overlay.
 //!
-//! Provides `compute_overlay_pos` (the pure pixel-math function for
-//! anchoring the overlay), `ImeOverlayPlugin` (Bevy plugin that spawns
-//! the overlay entity tree at Startup and schedules
-//! `position_ime_overlay`), and the marker components identifying the
-//! root, pre-caret span, post-caret span, and caret bar.
+//! Provides `ImeOverlayPlugin` (Bevy plugin that spawns the overlay
+//! entity tree at Startup and schedules `position_ime_overlay`) and the
+//! marker components identifying the root, caret bar, clause highlight,
+//! underline, and grapheme-cell pool.
+
+mod layout;
 
 use crate::font::TerminalUiFont;
 use crate::input::ime::ImeState;
@@ -16,8 +17,9 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::query::With;
 use bevy::ecs::resource::Resource;
 use bevy::ecs::schedule::IntoScheduleConfigs;
+use bevy::ecs::schedule::SystemCondition;
+use bevy::ecs::schedule::common_conditions::{not, resource_exists_and_changed};
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
-use bevy::math::Vec2;
 use bevy::prelude::default;
 use bevy::text::{LineBreak, TextColor, TextFont, TextLayout};
 use bevy::ui::widget::Text;
@@ -26,15 +28,13 @@ use bevy::ui::{
     UiGlobalTransform, UiRect, UiSystems, Val,
 };
 use bevy::window::{PrimaryWindow, Window};
+use layout::{CaretVisual, PlacedCell, compute_overlay_layout};
 use ozma_terminal::KeyboardFocused;
-use ozma_tty_renderer::CellMetrics;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalFontInitSet;
 use ozma_tty_renderer::TerminalFontSize;
 use ozma_tty_renderer::material::TerminalMaterialSystems;
 use ozma_tty_renderer::prelude::TerminalGrid;
-use unicode_segmentation::UnicodeSegmentation;
-use unicode_width::UnicodeWidthStr;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
@@ -69,8 +69,14 @@ impl Plugin for ImeOverlayPlugin {
             .add_systems(
                 PostUpdate,
                 (
-                    position_ime_overlay.before(UiSystems::Content),
+                    position_ime_overlay
+                        .run_if(ime_is_composing)
+                        .before(UiSystems::Content),
+                    hide_ime_overlay
+                        .run_if(resource_exists_and_changed::<ImeState>.and(not(ime_is_composing)))
+                        .before(UiSystems::Content),
                     suppress_terminal_cursor_during_ime
+                        .run_if(resource_exists_and_changed::<ImeState>.or(ime_is_composing))
                         .before(TerminalMaterialSystems::UpdateMaterial),
                 ),
             );
@@ -122,142 +128,11 @@ struct ImeGraphemePool(Vec<Entity>);
 /// the pool on demand.
 const INITIAL_POOL_CAP: usize = 16;
 
-/// Computes the overlay's top-left logical-pixel position relative to
-/// the window origin. Caller is responsible for writing this into
-/// `Node.left` / `Node.top`.
-///
-/// All metric inputs are physical px; the function does the
-/// physical→logical conversion via `scale`.
-///
-/// Layout: the overlay sits **at the cursor row**, matching Alacritty.
-/// The composed glyph overlays the terminal-rendered cursor cell for
-/// the duration of composition; this is the conventional placement
-/// users expect from a terminal IME. Clamps:
-///   - right: if `cell_origin_x + measured_width > host_right`,
-///     shifts left so the right edge stays inside the host rect.
-///   - left: after the right-edge clamp, ensures `left >= host_left`
-///     so a very wide composition can't escape the left side of the
-///     pane.
-pub(crate) fn compute_overlay_pos(
-    ui_global_translation_phys: Vec2,
-    host_size_phys: Vec2,
-    cursor_cell: (u16, u16),
-    metrics: &CellMetrics,
-    measured_width_logical: f32,
-    scale: f32,
-) -> Vec2 {
-    // NOTE: `UiGlobalTransform.translation` is the CENTER of the
-    // node in PHYSICAL pixels (verified via Bevy 0.18 source:
-    // `bevy_ui-0.18.1/src/layout/mod.rs:239-275`). To get the
-    // top-left we subtract `0.5 * host_size_phys`. We do NOT
-    // multiply by `scale` — translation is already physical. The
-    // earlier draft treated `translation` as logical-px top-left,
-    // producing an offset of ~(host_w/2, host_h/2) at scale=1
-    // (visible in bug1.png) and a compounding unit error at DPR>1.
-    let cell_w_phys = metrics.advance_phys.floor().max(1.0);
-    let cell_h_phys = metrics.line_height_phys.floor().max(1.0);
-    let host_top_left_phys = ui_global_translation_phys - 0.5 * host_size_phys;
-    let cell_origin_phys = host_top_left_phys
-        + Vec2::new(
-            cursor_cell.0 as f32 * cell_w_phys,
-            cursor_cell.1 as f32 * cell_h_phys,
-        );
-    let pos_logical = cell_origin_phys / scale;
-
-    let host_top_left_logical = host_top_left_phys / scale;
-    let host_size_logical = host_size_phys / scale;
-    let host_left = host_top_left_logical.x;
-    let host_right = host_left + host_size_logical.x;
-    let mut left = pos_logical.x;
-    if left + measured_width_logical > host_right {
-        left = host_right - measured_width_logical;
-    }
-    if left < host_left {
-        left = host_left;
-    }
-
-    Vec2::new(left, pos_logical.y)
-}
-
-/// Returns `(begin_cells, end_cells)` — the per-side cell offsets of
-/// the IME caret/clause range relative to the start of `text`. Uses
-/// `unicode_width::UnicodeWidthStr::width` so fullwidth CJK
-/// preedit counts as 2 cells per glyph, matching the renderer's own
-/// width logic in `ozma_tty_renderer::grid`.
-///
-/// Caller is responsible for byte-offset validity (UTF-8 boundary,
-/// `begin <= end <= text.len()`); `Composition::try_new` enforces these.
-fn caret_cell_offsets(text: &str, (begin, end): (usize, usize)) -> (f32, f32) {
-    (
-        clamped_prefix_cells(&text[..begin]) as f32,
-        clamped_prefix_cells(&text[..end]) as f32,
-    )
-}
-
-/// Total clamped cell width of `text` — the sum of [`clamp_cluster_cells`] over
-/// its grapheme clusters. Mirrors the per-cluster counting in
-/// `layout_preedit_cells`, so the caret/clause offsets cannot diverge from the
-/// rendered cells for a cluster wider than two columns (e.g. a ZWJ emoji).
-fn clamped_prefix_cells(text: &str) -> u32 {
-    text.graphemes(true).map(clamp_cluster_cells).sum()
-}
-
-/// A single placed preedit cell-unit: the grapheme cluster's text and its
-/// left edge in logical px (the cell origin it is anchored to).
-struct CellPlacement {
-    text: String,
-    left: f32,
-}
-
-/// Splits `text` into grapheme clusters and assigns each a cell-aligned
-/// `left` edge, returning `(placements, total_cells)`.
-///
-/// Cluster width follows the renderer's `runs_to_cells` rule
-/// (`crates/ozma_tty_renderer/src/grid.rs`): a `width >= 2` cluster consumes
-/// 2 cells, a `width == 0` cluster (lone combining mark) consumes 0 cells and
-/// merges into the previous placement's text. `origin_x` is the composition's
-/// left edge; `cell_w_logical` is the floored cell pitch — both in logical px.
-fn layout_preedit_cells(
-    text: &str,
-    cell_w_logical: f32,
-    origin_x: f32,
-) -> (Vec<CellPlacement>, u32) {
-    let mut placements: Vec<CellPlacement> = Vec::new();
-    let mut cum_cells: u32 = 0;
-    for cluster in text.graphemes(true) {
-        let cells = clamp_cluster_cells(cluster);
-        if cells == 0 {
-            match placements.last_mut() {
-                Some(last) => last.text.push_str(cluster),
-                // NOTE: a leading zero-width cluster (a combining mark with no
-                // base) has nothing to merge into; render it at the origin so the
-                // overlay still shows every typed character instead of silently
-                // dropping it. It consumes no cell.
-                None => placements.push(CellPlacement {
-                    text: cluster.to_string(),
-                    left: origin_x,
-                }),
-            }
-            continue;
-        }
-        placements.push(CellPlacement {
-            text: cluster.to_string(),
-            left: origin_x + cum_cells as f32 * cell_w_logical,
-        });
-        cum_cells += cells;
-    }
-    (placements, cum_cells)
-}
-
-/// Cell width of one grapheme cluster, clamped to the renderer's `runs_to_cells`
-/// rule (`crates/ozma_tty_renderer/src/grid.rs`): a `width >= 2` cluster is 2
-/// cells, `width == 0` is 0, otherwise 1.
-fn clamp_cluster_cells(cluster: &str) -> u32 {
-    match UnicodeWidthStr::width(cluster) {
-        0 => 0,
-        1 => 1,
-        _ => 2,
-    }
+/// Run condition: true while an IME preedit composition is active. Takes
+/// `Option<Res<ImeState>>` so it returns `false` rather than panicking when
+/// `ImeState` is absent, keeping the `.or()` / `.and()` gates safe.
+fn ime_is_composing(state: Option<Res<ImeState>>) -> bool {
+    state.is_some_and(|state| state.is_composing())
 }
 
 /// PostUpdate system that grid-aligns the IME preedit overlay at the attached
@@ -268,8 +143,11 @@ fn clamp_cluster_cells(cluster: &str) -> u32 {
 /// (`begin != end`). Every visible element uses the same cell arithmetic, so
 /// the caret cannot drift from the text.
 ///
-/// When `ImeState` has no composition — or the focused surface / window is
-/// missing — hides every overlay part and returns.
+/// Gated by `run_if(ime_is_composing)`, so it runs only while a composition is
+/// active; the end-of-composition hide (commit / cancel / `Ime::Disabled`) is
+/// owned by [`hide_ime_overlay`]. If the focused surface, its anchor, or the
+/// window is missing while composing, it hides every overlay part defensively
+/// and returns.
 fn position_ime_overlay(
     mut commands: Commands,
     mut pool: ResMut<ImeGraphemePool>,
@@ -295,11 +173,12 @@ fn position_ime_overlay(
     let caret_entity = caret.single().ok();
     let clause_entity = clause.single().ok();
 
-    // NOTE: hide every overlay part (and return) the moment any precondition for
-    // showing fails, so nothing leaks past a commit, cancel, or focus loss. The
-    // success path sets each node's display to its target exactly once, so a
-    // stable composition never re-toggles display (which would mark every node
-    // Changed each frame and defeat change detection).
+    // NOTE: the end-of-composition hide (commit / cancel / disable) is owned by
+    // `hide_ime_overlay` — `run_if(ime_is_composing)` means this system runs only
+    // WHILE composing, so deleting `hide_ime_overlay` would leak the overlay past
+    // commit. The guards below hide defensively on a showing-precondition failure
+    // (missing focused surface / anchor / window); the `composition()` arm is an
+    // unreachable fallback the gate already guarantees.
     let Some(comp) = state.composition() else {
         hide_all_overlay_parts(
             &mut nodes,
@@ -345,39 +224,29 @@ fn position_ime_overlay(
         return;
     };
 
-    // NOTE: clamp the scale away from zero (matching `ime_policy_system`); a
-    // 0 scale factor would make every cell metric inf/NaN and fling the overlay
+    // NOTE: clamp the scale away from zero (matching `ime_policy_system`); a 0
+    // scale factor would make every cell metric inf/NaN and fling the overlay
     // off-screen during composition.
     let scale = window.resolution.scale_factor().max(f32::EPSILON);
     let cursor_cell = grid.cursor.as_ref().map(|c| (c.x, c.y)).unwrap_or((0, 0));
-    let cell_w_logical = metrics.metrics.advance_phys.floor().max(1.0) / scale;
-    let line_h_logical = metrics.metrics.line_height_phys.floor().max(1.0) / scale;
 
-    let (mut placements, total_cells) = layout_preedit_cells(comp.text(), cell_w_logical, 0.0);
-    let total_width_logical = total_cells as f32 * cell_w_logical;
-    let pos = compute_overlay_pos(
+    let layout = compute_overlay_layout(
+        comp.text(),
+        comp.caret(),
         ui_xform.translation,
         node.size,
         cursor_cell,
         &metrics.metrics,
-        total_width_logical,
         scale,
     );
-    // Lay out once at origin 0 (above) for the true width, then shift each
-    // placement to the clamped origin. `left = origin_x + cum_cells * cell_w`
-    // differs only by `pos.x`, so re-segmenting would just reallocate a String
-    // per grapheme on the typing hot path.
-    for placement in &mut placements {
-        placement.left += pos.x;
-    }
 
     set_node_rect(
         &mut nodes,
         bg_entity,
-        pos.x,
-        pos.y,
-        total_width_logical,
-        line_h_logical,
+        layout.background.left,
+        layout.background.top,
+        layout.background.width,
+        layout.background.height,
     );
     set_node_display(&mut nodes, bg_entity, Display::Flex);
     if let Ok(mut bg) = overlay_bg.single_mut() {
@@ -387,14 +256,51 @@ fn position_ime_overlay(
         }
     }
 
-    for (index, placement) in placements.iter().enumerate() {
-        if let Some(&cell) = pool.0.get(index) {
-            if let Ok(mut node) = nodes.get_mut(cell) {
-                let left = Val::Px(placement.left);
+    apply_grapheme_cells(
+        &mut commands,
+        &mut nodes,
+        &mut cell_texts,
+        &mut pool,
+        &ui_font,
+        &font_size,
+        &layout.cells,
+    );
+
+    if let Some(underline_entity) = underline_entity {
+        set_node_rect(
+            &mut nodes,
+            underline_entity,
+            layout.underline.left,
+            layout.underline.top,
+            layout.underline.width,
+            layout.underline.height,
+        );
+        set_node_display(&mut nodes, underline_entity, Display::Flex);
+    }
+
+    apply_caret_visual(&mut nodes, caret_entity, clause_entity, &layout.caret);
+}
+
+/// Applies the placed grapheme cells to the pooled `Text` nodes: reuses pool
+/// entries by index (equality-guarded writes), grows the pool for any overflow,
+/// and hides the unused tail.
+fn apply_grapheme_cells(
+    commands: &mut Commands,
+    nodes: &mut Query<&mut Node>,
+    cell_texts: &mut Query<&mut Text, With<ImeGraphemeCell>>,
+    pool: &mut ImeGraphemePool,
+    ui_font: &TerminalUiFont,
+    font_size: &TerminalFontSize,
+    cells: &[PlacedCell],
+) {
+    for (index, cell) in cells.iter().enumerate() {
+        if let Some(&entity) = pool.0.get(index) {
+            if let Ok(mut node) = nodes.get_mut(entity) {
+                let left = Val::Px(cell.left);
                 if node.left != left {
                     node.left = left;
                 }
-                let top = Val::Px(pos.y);
+                let top = Val::Px(cell.top);
                 if node.top != top {
                     node.top = top;
                 }
@@ -402,90 +308,89 @@ fn position_ime_overlay(
                     node.display = Display::Flex;
                 }
             }
-            if let Ok(mut text) = cell_texts.get_mut(cell)
-                && text.0 != placement.text
+            if let Ok(mut text) = cell_texts.get_mut(entity)
+                && text.0 != cell.text
             {
-                text.0 = placement.text.clone();
+                text.0 = cell.text.clone();
             }
         } else {
-            // NOTE: grown entities are not in `nodes`/`cell_texts` this frame,
+            // NOTE: grown entities are not in `nodes` / `cell_texts` this frame,
             // so they are spawned already configured; their tail appears one
-            // frame late only on the growth frame (same latency class as the
-            // overlay anchor NOTE above).
-            let cell = spawn_grapheme_cell(
-                &mut commands,
-                &ui_font,
-                &font_size,
-                &placement.text,
-                placement.left,
-                pos.y,
+            // frame late only on the growth frame.
+            let entity = spawn_grapheme_cell(
+                commands,
+                ui_font,
+                font_size,
+                &cell.text,
+                cell.left,
+                cell.top,
                 Display::Flex,
             );
-            pool.0.push(cell);
+            pool.0.push(entity);
         }
     }
-    for index in placements.len()..pool.0.len() {
-        set_node_display(&mut nodes, pool.0[index], Display::None);
+    for index in cells.len()..pool.0.len() {
+        set_node_display(nodes, pool.0[index], Display::None);
     }
+}
 
-    // NOTE: `underline_position_phys` is baseline-relative and negative; subtract it from ascent so the bar lands below the baseline, not above the cell top.
-    if let Some(underline_entity) = underline_entity {
-        let underline_top =
-            pos.y + (metrics.metrics.ascent_phys - metrics.metrics.underline_position_phys) / scale;
-        let underline_h = (metrics.metrics.underline_thickness_phys / scale).max(1.0);
-        set_node_rect(
-            &mut nodes,
-            underline_entity,
-            pos.x,
-            underline_top,
-            total_width_logical,
-            underline_h,
-        );
-        set_node_display(&mut nodes, underline_entity, Display::Flex);
-    }
-
-    let (begin_cells, end_cells) = match comp.caret() {
-        Some(range) => caret_cell_offsets(comp.text(), range),
-        None => (0.0, 0.0),
-    };
-    let has_clause = comp.caret().is_some_and(|(b, e)| b != e);
-    let has_beam = comp.caret().is_some() && !has_clause;
-
-    if has_beam
-        && let Some(caret_entity) = caret_entity
-        && let Ok(mut node) = nodes.get_mut(caret_entity)
-    {
-        let left = Val::Px(pos.x + end_cells * cell_w_logical);
-        if node.left != left {
-            node.left = left;
+/// Shows the caret beam or the clause highlight per `caret`, hiding the other.
+/// Every write is equality-guarded so an unchanged caret marks nothing changed.
+fn apply_caret_visual(
+    nodes: &mut Query<&mut Node>,
+    caret_entity: Option<Entity>,
+    clause_entity: Option<Entity>,
+    caret: &CaretVisual,
+) {
+    match caret {
+        CaretVisual::Beam(beam) => {
+            if let Some(caret_entity) = caret_entity
+                && let Ok(mut node) = nodes.get_mut(caret_entity)
+            {
+                let left = Val::Px(beam.left);
+                if node.left != left {
+                    node.left = left;
+                }
+                let top = Val::Px(beam.top);
+                if node.top != top {
+                    node.top = top;
+                }
+                let height = Val::Px(beam.height);
+                if node.height != height {
+                    node.height = height;
+                }
+                if node.display != Display::Flex {
+                    node.display = Display::Flex;
+                }
+            }
+            if let Some(clause_entity) = clause_entity {
+                set_node_display(nodes, clause_entity, Display::None);
+            }
         }
-        let top = Val::Px(pos.y);
-        if node.top != top {
-            node.top = top;
+        CaretVisual::Clause(rect) => {
+            if let Some(clause_entity) = clause_entity {
+                set_node_rect(
+                    nodes,
+                    clause_entity,
+                    rect.left,
+                    rect.top,
+                    rect.width,
+                    rect.height,
+                );
+                set_node_display(nodes, clause_entity, Display::Flex);
+            }
+            if let Some(caret_entity) = caret_entity {
+                set_node_display(nodes, caret_entity, Display::None);
+            }
         }
-        let height = Val::Px(line_h_logical);
-        if node.height != height {
-            node.height = height;
+        CaretVisual::None => {
+            if let Some(caret_entity) = caret_entity {
+                set_node_display(nodes, caret_entity, Display::None);
+            }
+            if let Some(clause_entity) = clause_entity {
+                set_node_display(nodes, clause_entity, Display::None);
+            }
         }
-        if node.display != Display::Flex {
-            node.display = Display::Flex;
-        }
-    } else if let Some(caret_entity) = caret_entity {
-        set_node_display(&mut nodes, caret_entity, Display::None);
-    }
-
-    if has_clause && let Some(clause_entity) = clause_entity {
-        set_node_rect(
-            &mut nodes,
-            clause_entity,
-            pos.x + begin_cells * cell_w_logical,
-            pos.y,
-            (end_cells - begin_cells) * cell_w_logical,
-            line_h_logical,
-        );
-        set_node_display(&mut nodes, clause_entity, Display::Flex);
-    } else if let Some(clause_entity) = clause_entity {
-        set_node_display(&mut nodes, clause_entity, Display::None);
     }
 }
 
@@ -515,6 +420,31 @@ fn suppress_terminal_cursor_during_ime(
             grid.suppress_cursor = want;
         }
     }
+}
+
+/// PostUpdate system that hides every IME overlay part. Gated to run only on
+/// the frame composition ends (commit / cancel / `Ime::Disabled`); see
+/// `ImeOverlayPlugin`. Shares `hide_all_overlay_parts` with
+/// `position_ime_overlay`'s internal precondition guards.
+fn hide_ime_overlay(
+    mut nodes: Query<&mut Node>,
+    pool: Res<ImeGraphemePool>,
+    background: Query<Entity, With<ImeOverlayNode>>,
+    underline: Query<Entity, With<ImeUnderline>>,
+    caret: Query<Entity, With<ImeCaretBar>>,
+    clause: Query<Entity, With<ImeClauseHighlight>>,
+) {
+    let Ok(bg_entity) = background.single() else {
+        return;
+    };
+    hide_all_overlay_parts(
+        &mut nodes,
+        bg_entity,
+        underline.single().ok(),
+        caret.single().ok(),
+        clause.single().ok(),
+        &pool,
+    );
 }
 
 /// Global z-index for the IME overlay; placed high enough to float
@@ -746,9 +676,11 @@ mod tests {
     use crate::input::ime::apply_event;
     use bevy::app::App;
     use bevy::ecs::system::RunSystemOnce;
+    use bevy::math::Vec2;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
     use ozma_terminal::KeyboardFocused;
+    use ozma_tty_renderer::CellMetrics;
     use ozmux_tmux::PaneId;
     use ozmux_tmux::{ActivePane, TmuxPane};
     use tmux_control_parser::CellDims;
@@ -843,12 +775,11 @@ mod tests {
         );
     }
 
-    /// Builds a `CellMetrics` literal for tests. `CellMetrics` does not
-    /// derive `Default`, so callers must provide every field; this
-    /// helper takes the two that `compute_overlay_pos` actually reads
-    /// (`advance_phys`, `line_height_phys`) and fills the rest with
-    /// arbitrary non-zero values that don't affect the function under
-    /// test.
+    /// Builds a `CellMetrics` literal for the overlay ECS tests.
+    /// `CellMetrics` has no `Default`, so every field is set; the tests
+    /// assert on geometry driven by `advance_phys` / `line_height_phys`,
+    /// with the remaining fields (read by `compute_overlay_layout` for the
+    /// underline rect) filled with arbitrary non-zero values.
     fn metrics(advance: f32, line_height: f32) -> CellMetrics {
         CellMetrics {
             advance_phys: advance,
@@ -859,142 +790,6 @@ mod tests {
             underline_thickness_phys: 1.0,
             max_overflow_phys: 0.0,
         }
-    }
-
-    /// Builds the inputs `compute_overlay_pos` expects from a more
-    /// intuitive `(top_left_logical, size_logical, scale)` spec.
-    /// `UiGlobalTransform.translation` is in physical px and points
-    /// at the node's CENTER; `ComputedNode.size` is in physical px.
-    /// Tests express their setup in logical-px top-left because
-    /// that's how a reader thinks about pane geometry; this helper
-    /// does the conversion.
-    fn host_inputs(top_left_logical: Vec2, size_logical: Vec2, scale: f32) -> (Vec2, Vec2) {
-        let size_phys = size_logical * scale;
-        let top_left_phys = top_left_logical * scale;
-        let center_phys = top_left_phys + 0.5 * size_phys;
-        (center_phys, size_phys)
-    }
-
-    #[test]
-    fn places_overlay_at_cursor_row() {
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (3, 5),
-            &metrics(10.0, 16.0),
-            0.0,
-            1.0,
-        );
-        // y = row 5 × 16 = 80
-        assert_eq!(pos.y, 80.0);
-        // x = col 3 × 10 = 30, no clamp
-        assert_eq!(pos.x, 30.0);
-    }
-
-    #[test]
-    fn divides_by_scale_factor_for_logical_px() {
-        // Logical top-left (100, 0), logical size 800×600, scale 2.0.
-        // At scale 2.0: physical size = (1600, 1200), physical
-        // top-left = (200, 0), physical center = (1000, 600).
-        // Cursor (0, 0) at cursor row → cell_origin_phys = (200, 0) →
-        // pos_logical = (100, 0).
-        let (translation_phys, size_phys) =
-            host_inputs(Vec2::new(100.0, 0.0), Vec2::new(800.0, 600.0), 2.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (0, 0),
-            &metrics(10.0, 16.0),
-            0.0,
-            2.0,
-        );
-        assert_eq!(pos.x, 100.0);
-        assert_eq!(pos.y, 0.0);
-    }
-
-    #[test]
-    fn floors_subpixel_cell_pitch() {
-        // advance 10.4 → floor 10; col 10 → x = 100
-        // line_height 16.4 → floor 16; cursor row 1 → y = 1 × 16 = 16
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (10, 1),
-            &metrics(10.4, 16.4),
-            0.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 100.0);
-        assert_eq!(pos.y, 16.0);
-    }
-
-    #[test]
-    fn clamps_right_when_overlay_overflows() {
-        // Cursor at col 78, cell width 10 → cell_origin x = 780.
-        // Measured width 100 → would extend to 880, host right = 800.
-        // Shift left by 80 → left = 700.
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(800.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (78, 0),
-            &metrics(10.0, 16.0),
-            100.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 700.0);
-    }
-
-    #[test]
-    fn clamps_left_when_composition_too_wide_to_fit() {
-        // host_size 80 (very narrow), measured 200, cursor at col 7 →
-        // cell_origin x = 70, would overflow right → shift to
-        // host_right - measured = 80 - 200 = -120, then left clamp →
-        // 0 (host_left).
-        let (translation_phys, size_phys) = host_inputs(Vec2::ZERO, Vec2::new(80.0, 600.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (7, 0),
-            &metrics(10.0, 16.0),
-            200.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 0.0);
-    }
-
-    #[test]
-    fn caret_cell_offsets_ascii_caret_at_start() {
-        assert_eq!(caret_cell_offsets("hello", (0, 0)), (0.0, 0.0));
-    }
-
-    #[test]
-    fn caret_cell_offsets_ascii_caret_at_end() {
-        assert_eq!(caret_cell_offsets("hello", (5, 5)), (5.0, 5.0));
-    }
-
-    #[test]
-    fn caret_cell_offsets_ascii_clause_range() {
-        // begin=2 ("he|llo"), end=4 ("hel|lo"). Width 2 cells.
-        assert_eq!(caret_cell_offsets("hello", (2, 4)), (2.0, 4.0));
-    }
-
-    #[test]
-    fn caret_cell_offsets_cjk_fullwidth() {
-        // "にほん" is 3 hiragana × 3 bytes each = 9 bytes total;
-        // each hiragana takes 2 monospace cells. begin=0, end=9 →
-        // begin_cells=0, end_cells=6.
-        assert_eq!(caret_cell_offsets("にほん", (0, 9)), (0.0, 6.0));
-    }
-
-    #[test]
-    fn caret_cell_offsets_mixed_ascii_and_cjk() {
-        // "a" (1 byte, 1 cell) + "あ" (3 bytes, 2 cells) = 4 bytes, 3 cells.
-        // begin=0, end=4 → (0.0, 3.0). begin=1 (after "a"), end=4 → (1.0, 3.0).
-        assert_eq!(caret_cell_offsets("aあ", (0, 4)), (0.0, 3.0));
-        assert_eq!(caret_cell_offsets("aあ", (1, 4)), (1.0, 3.0));
     }
 
     #[test]
@@ -1094,110 +889,6 @@ mod tests {
             app.world().get::<Node>(overlay).unwrap().display,
             Display::Flex,
             "overlay must be shown while composing",
-        );
-    }
-
-    #[test]
-    fn host_translated_to_window_offset_does_not_leak_into_cell_origin() {
-        // Regression guard for the bug visible in bug1.png: prior
-        // implementation treated `translation` as top-left, so a
-        // host centered in a 1265×720 window would push the cell
-        // origin by (host_w/2, host_h/2). With the fix, the cell
-        // origin must be the host's top-left + cursor offset, no
-        // matter where the host sits in the window.
-        //
-        // Host top-left at logical (10, 20), size 1200×640, cursor (5, 3),
-        // metrics 10×16, scale 1.0.
-        // Expected: pos = (10 + 5*10, 20 + 3*16) = (60, 68).
-        let (translation_phys, size_phys) =
-            host_inputs(Vec2::new(10.0, 20.0), Vec2::new(1200.0, 640.0), 1.0);
-        let pos = compute_overlay_pos(
-            translation_phys,
-            size_phys,
-            (5, 3),
-            &metrics(10.0, 16.0),
-            0.0,
-            1.0,
-        );
-        assert_eq!(pos.x, 60.0);
-        assert_eq!(pos.y, 68.0);
-    }
-
-    #[test]
-    fn layout_preedit_cells_ascii() {
-        let (cells, total) = layout_preedit_cells("abc", 10.0, 100.0);
-        assert_eq!(total, 3);
-        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
-        assert_eq!(lefts, vec![100.0, 110.0, 120.0]);
-        let texts: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(texts, vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn layout_preedit_cells_fullwidth_cjk_consumes_two_cells_each() {
-        // Each hiragana is 2 cells; cells start at 0 and 2 columns.
-        let (cells, total) = layout_preedit_cells("あい", 10.0, 0.0);
-        assert_eq!(total, 4);
-        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
-        assert_eq!(lefts, vec![0.0, 20.0]);
-    }
-
-    #[test]
-    fn layout_preedit_cells_mixed_ascii_and_cjk() {
-        // "a"(1) + "あ"(2) + "b"(1): lefts at 0, 1, 3 columns.
-        let (cells, total) = layout_preedit_cells("aあb", 10.0, 0.0);
-        assert_eq!(total, 4);
-        let lefts: Vec<f32> = cells.iter().map(|c| c.left).collect();
-        assert_eq!(lefts, vec![0.0, 10.0, 30.0]);
-    }
-
-    #[test]
-    fn layout_preedit_cells_combining_mark_merges_into_previous() {
-        // "e" + U+0301 (combining acute, width 0): one placement, total 1 cell.
-        let (cells, total) = layout_preedit_cells("e\u{0301}", 10.0, 0.0);
-        assert_eq!(total, 1);
-        assert_eq!(cells.len(), 1);
-        assert_eq!(cells[0].text, "e\u{0301}");
-        assert_eq!(cells[0].left, 0.0);
-    }
-
-    #[test]
-    fn layout_preedit_cells_empty() {
-        let (cells, total) = layout_preedit_cells("", 10.0, 0.0);
-        assert_eq!(total, 0);
-        assert!(cells.is_empty());
-    }
-
-    #[test]
-    fn layout_preedit_cells_leading_combining_mark_is_not_dropped() {
-        // A composition that begins with a lone combining mark (its own grapheme,
-        // width 0, with no base to merge into) must still render — the old
-        // single-Text path displayed every character.
-        let (cells, total) = layout_preedit_cells("\u{0301}ab", 10.0, 0.0);
-        let texts: Vec<&str> = cells.iter().map(|c| c.text.as_str()).collect();
-        assert_eq!(texts, vec!["\u{0301}", "a", "b"]);
-        // The orphan mark consumes 0 cells; "a"/"b" occupy cells 0 and 1.
-        assert_eq!(total, 2);
-        assert_eq!(cells[0].left, 0.0);
-        assert_eq!(cells[1].left, 0.0);
-        assert_eq!(cells[2].left, 10.0);
-    }
-
-    #[test]
-    fn caret_offset_matches_clamped_cell_layout_for_wide_cluster() {
-        // A ZWJ emoji is a single grapheme cluster whose raw display width
-        // exceeds two cells. The caret offset must use the same clamped (<=2)
-        // count the rendered cells use, so the beam cannot drift past the glyph.
-        let family = "👨\u{200d}👩\u{200d}👧";
-        let (_, total_cells) = layout_preedit_cells(family, 1.0, 0.0);
-        let (_, end_cells) = caret_cell_offsets(family, (0, family.len()));
-        assert_eq!(
-            end_cells, total_cells as f32,
-            "caret end offset must equal the rendered cell-layout width",
-        );
-        assert!(
-            end_cells <= 2.0,
-            "a single grapheme cluster must clamp to at most 2 cells, got {end_cells}",
         );
     }
 
@@ -1373,7 +1064,10 @@ mod tests {
         app.insert_resource(state);
 
         app.add_systems(Startup, spawn_ime_overlay_once);
-        app.add_systems(Update, (position_ime_overlay, count_changed).chain());
+        app.add_systems(
+            Update,
+            (position_ime_overlay.run_if(ime_is_composing), count_changed).chain(),
+        );
         app.world_mut().spawn((
             Window {
                 resolution: WindowResolution::new(800, 600),
@@ -1403,6 +1097,166 @@ mod tests {
             app.world().resource::<ChangedOverlayNodes>().0,
             0,
             "no overlay Node may be re-marked Changed on an unchanged composition",
+        );
+    }
+
+    #[test]
+    fn hide_ime_overlay_hides_parts_after_composition_clears() {
+        // Show the overlay with an active composition, then clear it and run the
+        // hide system: every part must end Display::None.
+        let mut app = run_overlay_with_composition("abc", Some((3, 3)));
+
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::Flex,
+            "precondition: overlay is shown while composing",
+        );
+
+        app.insert_resource(ImeState::default());
+        app.world_mut().run_system_once(hide_ime_overlay).unwrap();
+
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::None,
+            "hide_ime_overlay must hide the overlay background after composition clears",
+        );
+        let mut caret = app.world_mut().query_filtered::<&Node, With<ImeCaretBar>>();
+        assert_eq!(
+            caret.single(app.world()).unwrap().display,
+            Display::None,
+            "the caret bar must be hidden after composition clears",
+        );
+        let mut clause = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeClauseHighlight>>();
+        assert_eq!(
+            clause.single(app.world()).unwrap().display,
+            Display::None,
+            "the clause highlight must be hidden after composition clears",
+        );
+        let mut underline = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeUnderline>>();
+        assert_eq!(
+            underline.single(app.world()).unwrap().display,
+            Display::None,
+            "the underline must be hidden after composition clears",
+        );
+        let pool = app.world().resource::<ImeGraphemePool>().0.clone();
+        for &cell in &pool {
+            assert_eq!(
+                app.world().get::<Node>(cell).unwrap().display,
+                Display::None,
+                "every pooled grapheme cell must be hidden",
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_hidden_and_idle_after_composition_ends() {
+        use bevy::app::PostUpdate;
+        use bevy::asset::Handle;
+        use bevy::window::WindowResolution;
+        use ozma_terminal::OzmaTerminal;
+        use ozma_tty_renderer::prelude::Cursor;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(TerminalFontSize(12.0));
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: metrics(10.0, 16.0),
+            phys_font_size: 12,
+        });
+        app.init_resource::<ImeGraphemePool>();
+        app.init_resource::<ImeState>();
+
+        app.add_systems(Startup, spawn_ime_overlay_once);
+        app.add_systems(
+            PostUpdate,
+            (
+                position_ime_overlay.run_if(ime_is_composing),
+                hide_ime_overlay
+                    .run_if(resource_exists_and_changed::<ImeState>.and(not(ime_is_composing))),
+            ),
+        );
+        app.world_mut().spawn((
+            Window {
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.world_mut().spawn((
+            OzmaTerminal,
+            KeyboardFocused,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            TerminalGrid {
+                cursor: Some(Cursor::default()),
+                default_bg: [0, 0, 0],
+                ..TerminalGrid::default()
+            },
+        ));
+
+        {
+            let mut state = app.world_mut().resource_mut::<ImeState>();
+            apply_event(
+                &mut state,
+                &Ime::Preedit {
+                    window: Entity::PLACEHOLDER,
+                    value: "abc".into(),
+                    cursor: Some((3, 3)),
+                },
+            );
+        }
+        app.update();
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::Flex,
+            "overlay shows while composing",
+        );
+
+        {
+            let mut state = app.world_mut().resource_mut::<ImeState>();
+            apply_event(
+                &mut state,
+                &Ime::Commit {
+                    window: Entity::PLACEHOLDER,
+                    value: "abc".into(),
+                },
+            );
+        }
+        app.update();
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::None,
+            "overlay hides the frame composition ends",
+        );
+
+        app.update();
+        let mut bg = app
+            .world_mut()
+            .query_filtered::<&Node, With<ImeOverlayNode>>();
+        assert_eq!(
+            bg.single(app.world()).unwrap().display,
+            Display::None,
+            "overlay stays hidden while idle (neither gated system runs)",
         );
     }
 }
