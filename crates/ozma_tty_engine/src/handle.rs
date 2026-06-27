@@ -900,6 +900,7 @@ impl TerminalHandle {
     /// Cleanup path taken when `emit` is invoked with no staged
     /// damage. Discards any captured window-open mode so the next
     /// chunk re-captures fresh.
+    #[inline]
     fn abort_emit_with_no_damage(&mut self) {
         self.window_open_mode = None;
     }
@@ -1089,6 +1090,7 @@ impl TerminalHandle {
 
     /// Resets alacritty's per-cycle damage tracker. Called at the end
     /// of every emit (both the noop-skip and the normal-end path).
+    #[inline]
     fn finalize_emit(&mut self) {
         self.term.reset_damage();
     }
