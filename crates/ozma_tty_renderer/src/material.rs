@@ -1113,4 +1113,26 @@ mod tests {
         let c = Color::srgb_u8(10, 20, 30).to_linear();
         assert_eq!(got, Vec4::new(c.red, c.green, c.blue, 1.0));
     }
+
+    #[test]
+    fn wgsl_overlay_bindings_track_overlay_slots() {
+        let src = include_str!("shaders/terminal_ui_material.wgsl");
+        // 1. One `texture_2d<f32>` per overlay slot, plus the atlas texture.
+        let texture_decls = src.matches("_tex: texture_2d<f32>").count();
+        assert_eq!(
+            texture_decls,
+            OVERLAY_SLOTS + 1,
+            "expected atlas + {OVERLAY_SLOTS} overlay texture declarations"
+        );
+        // 2. The uniform rect array length must match (a stale size is a silent
+        //    uniform-offset bug: no binding error, garbage overlay_dim/desaturate).
+        assert!(
+            src.contains(&format!("overlay_rects: array<vec4<i32>, {OVERLAY_SLOTS}>")),
+            "overlay_rects must be array<vec4<i32>, {OVERLAY_SLOTS}>"
+        );
+        // 3. One sample_overlay_slot call per slot (bindings cannot be indexed
+        //    dynamically, so the unroll count must equal OVERLAY_SLOTS).
+        let calls = src.matches("color = sample_overlay_slot(").count();
+        assert_eq!(calls, OVERLAY_SLOTS, "sample_overlay_slot call count");
+    }
 }
