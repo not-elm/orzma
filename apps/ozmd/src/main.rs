@@ -10,7 +10,7 @@ mod ui;
 mod watcher;
 
 use crate::app::{App, Cmd};
-use crate::protocol::{Content, Scroll, ScrollState, Search, SearchCount, SearchNav};
+use crate::protocol::{Content, Scroll, ScrollState, ScrollTo, Search, SearchCount, SearchNav};
 use crate::ui::LiveStatus;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -218,6 +218,7 @@ fn content_of(doc: &document::Document) -> Content {
     Content {
         markdown: doc.text.clone(),
         base_dir: doc.base_dir.display().to_string(),
+        scroll_to: ScrollTo::Preserve,
     }
 }
 
