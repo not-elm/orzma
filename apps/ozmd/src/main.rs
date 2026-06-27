@@ -68,6 +68,85 @@ impl Session {
         (self.latest_ratio.clamp(0.0, 1.0) * 100.0).round() as u16
     }
 
+    fn navigate(
+        &mut self,
+        request: NavigateRequest,
+        shared: &Arc<Mutex<document::Document>>,
+        view: &WebviewHandle,
+        reload_tx: &mpsc::Sender<()>,
+    ) {
+        let base = self.current_path.parent().unwrap_or_else(|| Path::new("."));
+        match document::resolve_link(base, &request.path) {
+            Ok(target) if document::is_markdown(&target) => {
+                self.history.push(HistoryEntry {
+                    path: self.current_path.clone(),
+                    ratio: self.latest_ratio,
+                });
+                let scroll = request
+                    .fragment
+                    .map_or(ScrollTo::Top, |slug| ScrollTo::Slug { slug });
+                self.load_and_show(&target, scroll, shared, view, reload_tx);
+            }
+            _ => self.flash = Some(format!("cannot open {}", request.path)),
+        }
+    }
+
+    fn back(
+        &mut self,
+        shared: &Arc<Mutex<document::Document>>,
+        view: &WebviewHandle,
+        reload_tx: &mpsc::Sender<()>,
+    ) {
+        match self.history.pop() {
+            Some(entry) => {
+                let path = entry.path.clone();
+                self.load_and_show(
+                    &path,
+                    ScrollTo::Ratio { ratio: entry.ratio },
+                    shared,
+                    view,
+                    reload_tx,
+                );
+            }
+            None => self.flash = Some("no previous page".to_owned()),
+        }
+    }
+
+    fn load_and_show(
+        &mut self,
+        target: &Path,
+        scroll_to: ScrollTo,
+        shared: &Arc<Mutex<document::Document>>,
+        view: &WebviewHandle,
+        reload_tx: &mpsc::Sender<()>,
+    ) {
+        let doc = match document::load(target) {
+            Ok(d) => d,
+            Err(_) => {
+                self.flash = Some(format!("cannot open {}", target.display()));
+                return;
+            }
+        };
+        match watcher::watch(target, reload_tx.clone()) {
+            Ok(w) => self.current_watcher = w,
+            Err(_) => {
+                self.flash = Some("watch failed".to_owned());
+                return;
+            }
+        }
+        self.current_path = target.to_path_buf();
+        self.file_name = file_name_of(target);
+        self.last_fp = document::fingerprint(target).ok();
+        self.live = LiveStatus::Watching;
+        self.flash = None;
+        self.state.set_outline(doc.outline.clone());
+        let content = content_for(&doc, scroll_to);
+        if let Ok(mut guard) = shared.lock() {
+            *guard = doc;
+        }
+        let _ = view.emit("content", &content);
+    }
+
     fn reload(&mut self, shared: &Arc<Mutex<document::Document>>, view: &WebviewHandle) {
         let fp = match document::fingerprint(&self.current_path) {
             Ok(fp) => fp,
@@ -104,6 +183,24 @@ fn file_name_of(path: &Path) -> String {
     path.file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default()
+}
+
+/// Whether `url` carries one of the schemes safe to hand to the OS opener.
+fn allowed_external_url(url: &str) -> bool {
+    matches!(
+        url.split_once(':'),
+        Some((scheme, _))
+            if scheme.eq_ignore_ascii_case("http")
+                || scheme.eq_ignore_ascii_case("https")
+                || scheme.eq_ignore_ascii_case("mailto")
+                || scheme.eq_ignore_ascii_case("tel")
+    )
+}
+
+/// Opens `target` (a URL or absolute path) with the macOS default handler.
+/// No shell is involved, so `target` is not interpreted.
+fn spawn_open(target: &str) {
+    let _ = std::process::Command::new("open").arg(target).spawn();
 }
 
 fn main() {
@@ -198,7 +295,6 @@ fn event_loop(
         .state
         .set_outline(shared.lock().unwrap().outline.clone());
     let mut search_status: Option<SearchCount> = None;
-    let _ = &reload_tx;
 
     loop {
         for c in view.read_events::<SearchCount>() {
@@ -210,9 +306,24 @@ fn event_loop(
                 .state
                 .set_current_heading_index(s.current_heading_index);
         }
-        let _ = view.read_events::<NavigateRequest>();
-        let _ = view.read_events::<OpenExternal>();
-        let _ = view.read_events::<OpenPath>();
+        for request in view.read_events::<NavigateRequest>() {
+            session.navigate(request, shared, view, &reload_tx);
+        }
+        for ext in view.read_events::<OpenExternal>() {
+            if allowed_external_url(&ext.url) {
+                spawn_open(&ext.url);
+            }
+        }
+        for op in view.read_events::<OpenPath>() {
+            let base = session
+                .current_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."));
+            match document::resolve_link(base, &op.path) {
+                Ok(target) => spawn_open(&target.to_string_lossy()),
+                Err(_) => session.flash = Some(format!("cannot open {}", op.path)),
+            }
+        }
 
         let mut reload = false;
         while reload_rx.try_recv().is_ok() {
@@ -245,7 +356,7 @@ fn event_loop(
                 match cmd {
                     Cmd::Quit => return Ok(()),
                     Cmd::Reload => session.reload(shared, view),
-                    Cmd::Back => {}
+                    Cmd::Back => session.back(shared, view, &reload_tx),
                     Cmd::Scroll(action) => {
                         let _ = view.emit("scroll", &Scroll { action });
                     }
@@ -284,4 +395,21 @@ fn install_panic_hook() {
         let _ = execute!(stdout(), LeaveAlternateScreen);
         prev(info);
     }));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allowed_external_url_accepts_web_schemes_only() {
+        assert!(allowed_external_url("https://example.com"));
+        assert!(allowed_external_url("http://x"));
+        assert!(allowed_external_url("mailto:a@b.com"));
+        assert!(allowed_external_url("tel:+1"));
+        assert!(!allowed_external_url("javascript:alert(1)"));
+        assert!(!allowed_external_url("data:text/html,x"));
+        assert!(!allowed_external_url("file:///etc/passwd"));
+        assert!(!allowed_external_url("not a url"));
+    }
 }
