@@ -8,26 +8,6 @@ use std::os::unix::ffi::OsStringExt;
 use std::path::PathBuf;
 use vte::Perform;
 
-/// Parses an OSC 7 payload (`file://<host>/<path>`) into an absolute working
-/// directory, or `None` when the scheme is not `file:`, the host is neither
-/// empty/`localhost`/`local_host`, the path is not absolute, or it contains a
-/// NUL. `local_host` is the machine hostname (OSC 7 emitters send the real
-/// host). The path component is percent-decoded byte-wise to preserve
-/// non-UTF-8 paths.
-pub(crate) fn parse_osc7(payload: &[u8], local_host: &str) -> Option<PathBuf> {
-    let rest = payload.strip_prefix(b"file://")?;
-    let slash = rest.iter().position(|&b| b == b'/')?;
-    let host = std::str::from_utf8(&rest[..slash]).ok()?;
-    if !(host.is_empty() || host == "localhost" || host.eq_ignore_ascii_case(local_host)) {
-        return None;
-    }
-    let decoded = percent_decode(&rest[slash..]).collect::<Vec<u8>>();
-    if decoded.first() != Some(&b'/') || decoded.contains(&0) {
-        return None;
-    }
-    Some(PathBuf::from(OsString::from_vec(decoded)))
-}
-
 /// A `vte::Perform` that watches a second, independent parser for OSC 7 and
 /// forwards changed directories onto the terminal's `ControlFrame` channel.
 /// Dedups: a shell re-emits OSC 7 on every prompt, so only a *changed* path is
@@ -67,6 +47,26 @@ impl Perform for Osc7Capture {
             }
         }
     }
+}
+
+/// Parses an OSC 7 payload (`file://<host>/<path>`) into an absolute working
+/// directory, or `None` when the scheme is not `file:`, the host is neither
+/// empty/`localhost`/`local_host`, the path is not absolute, or it contains a
+/// NUL. `local_host` is the machine hostname (OSC 7 emitters send the real
+/// host). The path component is percent-decoded byte-wise to preserve
+/// non-UTF-8 paths.
+fn parse_osc7(payload: &[u8], local_host: &str) -> Option<PathBuf> {
+    let rest = payload.strip_prefix(b"file://")?;
+    let slash = rest.iter().position(|&b| b == b'/')?;
+    let host = std::str::from_utf8(&rest[..slash]).ok()?;
+    if !(host.is_empty() || host == "localhost" || host.eq_ignore_ascii_case(local_host)) {
+        return None;
+    }
+    let decoded = percent_decode(&rest[slash..]).collect::<Vec<u8>>();
+    if decoded.first() != Some(&b'/') || decoded.contains(&0) {
+        return None;
+    }
+    Some(PathBuf::from(OsString::from_vec(decoded)))
 }
 
 #[cfg(test)]
