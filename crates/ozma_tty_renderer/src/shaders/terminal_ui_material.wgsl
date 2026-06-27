@@ -27,7 +27,7 @@ struct TerminalParams {
     hover_active: u32,
     dim: f32,
     inactive_tint: vec4<f32>,
-    overlay_rects: array<vec4<i32>, 4>,
+    overlay_rects: array<vec4<i32>, 12>,
     overlay_dim: f32,
     overlay_desaturate: f32,
 };
@@ -71,6 +71,14 @@ struct CellColors {
 @group(1) @binding(7) var overlay1_tex: texture_2d<f32>;
 @group(1) @binding(8) var overlay2_tex: texture_2d<f32>;
 @group(1) @binding(9) var overlay3_tex: texture_2d<f32>;
+@group(1) @binding(10) var overlay4_tex: texture_2d<f32>;
+@group(1) @binding(11) var overlay5_tex: texture_2d<f32>;
+@group(1) @binding(12) var overlay6_tex: texture_2d<f32>;
+@group(1) @binding(13) var overlay7_tex: texture_2d<f32>;
+@group(1) @binding(14) var overlay8_tex: texture_2d<f32>;
+@group(1) @binding(15) var overlay9_tex: texture_2d<f32>;
+@group(1) @binding(16) var overlay10_tex: texture_2d<f32>;
+@group(1) @binding(17) var overlay11_tex: texture_2d<f32>;
 
 // NOTE: Must stay in sync with `ozmux_terminal_protocol::style::*`. The
 //       Rust-side test `style_bits_match_protocol_constants` asserts the
@@ -440,6 +448,14 @@ fn paint_inline_overlays(hit: CellHit, base: vec4<f32>) -> vec4<f32> {
     color = sample_overlay_slot(params.overlay_rects[1], overlay1_tex, overlay_samp, p_px, hit, color);
     color = sample_overlay_slot(params.overlay_rects[2], overlay2_tex, overlay_samp, p_px, hit, color);
     color = sample_overlay_slot(params.overlay_rects[3], overlay3_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[4], overlay4_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[5], overlay5_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[6], overlay6_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[7], overlay7_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[8], overlay8_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[9], overlay9_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[10], overlay10_tex, overlay_samp, p_px, hit, color);
+    color = sample_overlay_slot(params.overlay_rects[11], overlay11_tex, overlay_samp, p_px, hit, color);
     return color;
 }
 

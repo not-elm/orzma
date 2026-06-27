@@ -300,7 +300,7 @@ pub struct TerminalPaddingFallback(pub [u8; 3]);
 ///
 /// Slot index = array index = `overlay<i>` field order (NOT the WGSL binding
 /// number). Hard upper bound per terminal surface (spec §6.1).
-pub const OVERLAY_SLOTS: usize = 4;
+pub const OVERLAY_SLOTS: usize = 12;
 
 /// Per-terminal overlay placements + textures, derived every frame by the
 /// consumer (e.g. ozmux's webview projection) and consumed by
@@ -358,9 +358,9 @@ impl Default for TerminalOverlays {
 /// at offset 76 that encase would otherwise insert before `bg_padding_color`
 /// (Vec4 needs 16-byte alignment, lands at offset 80). `inactive_tint` is also
 /// a Vec4 (16-byte alignment), so encase pads the 4 bytes after `dim` and lands
-/// it at offset 112; `overlay_rects` (`array<vec4<i32>, 4>`) follows at offset
-/// 128. The trailing `overlay_dim` / `overlay_desaturate` scalars sit at 192/196
-/// and the struct rounds up to its 16-byte alignment (total 208 bytes):
+/// it at offset 112; `overlay_rects` (`array<vec4<i32>, 12>`) follows at offset
+/// 128. The trailing `overlay_dim` / `overlay_desaturate` scalars sit at 320/324
+/// and the struct rounds up to its 16-byte alignment (total 336 bytes):
 ///
 /// | Offset | Field                       |
 /// |--------|-----------------------------|
@@ -386,8 +386,8 @@ impl Default for TerminalOverlays {
 /// | 104    | `dim`                       |
 /// | 112    | `inactive_tint`             |
 /// | 128    | `overlay_rects`             |
-/// | 192    | `overlay_dim`               |
-/// | 196    | `overlay_desaturate`        |
+/// | 320    | `overlay_dim`               |
+/// | 324    | `overlay_desaturate`        |
 #[derive(Clone, Copy, ShaderType, Debug)]
 struct TerminalParams {
     grid_size: UVec2,
@@ -1055,7 +1055,7 @@ mod tests {
 
     #[test]
     fn terminal_params_uniform_size_includes_overlay_rects() {
-        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 208);
+        assert_eq!(<TerminalParams as ShaderType>::min_size().get(), 336);
     }
 
     #[test]
@@ -1071,7 +1071,7 @@ mod tests {
         // `dim` is at offset 104; `inactive_tint` (a Vec4, 16-byte aligned)
         // lands at 112 after encase pads the 4 bytes following `dim`;
         // `overlay_rects` follows at 128; the trailing scalars `overlay_dim` /
-        // `overlay_desaturate` sit at 192/196 (total 208 bytes). Field indices
+        // `overlay_desaturate` sit at 320/324 (total 336 bytes). Field indices
         // are 0-based in declaration order.
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(19),
@@ -1090,12 +1090,12 @@ mod tests {
         );
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(22),
-            192,
+            320,
             "overlay_dim after overlay_rects"
         );
         assert_eq!(
             <TerminalParams as ShaderType>::METADATA.offset(23),
-            196,
+            324,
             "overlay_desaturate after overlay_dim"
         );
     }
