@@ -20,7 +20,6 @@ use crate::vt::mode_diff::diff_mode;
 use alacritty_terminal::Term;
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Line, Point, Side as ASide};
-use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{Config, TermMode};
 use alacritty_terminal::vi_mode::{ViModeCursor, ViMotion};
 use alacritty_terminal::vte::ansi::Processor;
