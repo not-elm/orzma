@@ -982,28 +982,27 @@ mod tests {
     }
 
     #[test]
-    fn slots_fill_in_order_and_a_fifth_mount_is_rejected() {
+    fn slots_fill_in_order_and_an_over_cap_mount_is_rejected() {
         let mut app = make_test_app();
         let terminal = spawn_terminal(&mut app);
-        for id in ["a", "b", "c", "d", "e"] {
+        let ids: Vec<String> = (0..=OVERLAY_SLOTS).map(|i| format!("v{i}")).collect();
+        for id in &ids {
             register_ozma(&mut app, id, terminal, true);
         }
 
-        for id in ["a", "b", "c", "d"] {
+        for (i, id) in ids.iter().take(OVERLAY_SLOTS).enumerate() {
             mount(&mut app, terminal, id, Some(test_anchor()));
+            assert_eq!(slot_of(&app, terminal, id), Some(i as u8));
         }
-        assert_eq!(slot_of(&app, terminal, "a"), Some(0));
-        assert_eq!(slot_of(&app, terminal, "b"), Some(1));
-        assert_eq!(slot_of(&app, terminal, "c"), Some(2));
-        assert_eq!(slot_of(&app, terminal, "d"), Some(3));
 
-        mount(&mut app, terminal, "e", Some(test_anchor()));
+        let overflow = &ids[OVERLAY_SLOTS];
+        mount(&mut app, terminal, overflow, Some(test_anchor()));
         assert_eq!(
             webview_children_of(&app, terminal).len(),
             OVERLAY_SLOTS,
-            "a fifth mount must be rejected once all slots are taken"
+            "an over-cap mount must be rejected once all slots are taken"
         );
-        assert_eq!(slot_of(&app, terminal, "e"), None);
+        assert_eq!(slot_of(&app, terminal, overflow), None);
     }
 
     #[test]
@@ -1200,18 +1199,23 @@ mod tests {
         let terminal = spawn_terminal(&mut app);
         register_ozma(&mut app, "memo", terminal, true);
 
-        for inst in ["a", "b", "c", "d"] {
+        let insts: Vec<String> = (0..=OVERLAY_SLOTS).map(|i| format!("i{i}")).collect();
+        for inst in insts.iter().take(OVERLAY_SLOTS) {
             mount_instance(&mut app, terminal, "memo", inst, Some(test_anchor()));
         }
         assert_eq!(webview_children_of(&app, terminal).len(), OVERLAY_SLOTS);
 
-        mount_instance(&mut app, terminal, "memo", "e", Some(test_anchor()));
+        let overflow = &insts[OVERLAY_SLOTS];
+        mount_instance(&mut app, terminal, "memo", overflow, Some(test_anchor()));
         assert_eq!(
             webview_children_of(&app, terminal).len(),
             OVERLAY_SLOTS,
-            "the 4-slot cap is per-terminal across all instances; a 5th is rejected"
+            "the per-terminal slot cap counts all instances together; an over-cap mount is rejected"
         );
-        assert_eq!(slot_of_instance(&app, terminal, "memo", Some("e")), None);
+        assert_eq!(
+            slot_of_instance(&app, terminal, "memo", Some(overflow.as_str())),
+            None
+        );
     }
 
     #[test]
