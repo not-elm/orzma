@@ -1,9 +1,10 @@
-# ozmux
+# ozmux(Ozma Terminal Multiplexer)
 
-A terminal multiplexer built as a single
-[Bevy](https://bevyengine.org/) application (`ozmux`). Terminal emulation,
-GPU rendering, layout, input, and in-process CEF webview rendering all run in
-one ECS world.
+> [!CAUTION]
+> This app is still in early development and may introduce breaking changes.
+
+ターミナル内にwebviewを描画することができるターミナルエミュレータ。
+tmuxの統合機能も標準搭載しています。
 
 ## Installation
 
@@ -11,6 +12,7 @@ macOS (Apple Silicon) via Homebrew Cask:
 
 ```bash
 brew install --cask not-elm/ozmux/ozmux
+brew install ozmd ozbrowser # optional
 ```
 
 This taps `not-elm/homebrew-ozmux`, installs `ozmux.app` into `/Applications`,
@@ -20,48 +22,33 @@ and pulls in `tmux` as a dependency. Upgrade later with:
 brew upgrade --cask ozmux
 ```
 
-## Prerequisites
+## Features
 
-- Rust 1.95 (pinned by `rust-toolchain.toml`)
-- Node + `pnpm@10.30.2` (for the `@ozma/web` TypeScript package; dev/CI use Node 24)
-- [`just`](https://just.systems/) — the task runner (`brew install just` or `cargo install just`)
-- The Chromium Embedded Framework, installed once:
-  ```bash
-  just setup-cef
-  ```
+### Webview
 
-## Run
+ターミナル内にWebviewを表示することができます。これは特にTUIアプリの可能性を広げることが期待できます。例えば:
 
-```bash
-pnpm install
-cargo run               # or: just run
-```
+- チャートのような高度なグラフィックをレンダリングする
+- Wasmを使ったゲームを埋め込む
+- ローカルホストのフロントエンド
 
-## Layout
+### Tmux Intergration
 
-- `src/` — the `ozmux` Bevy binary
-- `crates/` — `ozma_tty_engine`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
-- `sdk/ozma-web` — `@ozma/web` (in-page `window.ozma` bridge client for webview pages)
+TmuxのControl Modeを使ったtmux統合機能を標準でサポートしています。キーバインドはtmux.confに設定されているものをそのまま使うことができます。
+`tmux -CC`をターミナル内で実行することでこのモードに切り替えることができます。
 
-## Webviews
+## SDK
 
-A program in the shell can render a webview **inline in the terminal text flow**
-(a live CEF webview composited in the terminal shader, scrolling with the text).
-It registers content over the control plane to mint a handle, then writes an OSC
-5379 `mount;<handle>` sequence:
+- [ratatui_ozma](sdk/ratatui_zoma)
 
-```sh
-printf '\033]5379;mount;%s;12;48\033\\' "$handle"
-printf '\n%.0s' $(seq 12)
-```
+## Ozma Webview Protocol
 
-For a runnable end-to-end client (register → mount → `window.ozma` back-channel)
-see [`examples/dyn_webview_client.rs`](examples/dyn_webview_client.rs). Click the
-view to focus it; keys, wheel, and IME then route to the page; `Ctrl+Shift+Escape`
-returns focus to the terminal. Full protocol, focus model, and limits:
-[`docs/dyn-webview.md`](docs/dyn-webview.md) and
-[`docs/webview.md`](docs/webview.md).
+Please see [docs/osc.md](docs/osc.md)
 
-## Development
+## Configs
 
-See `CLAUDE.md` for architecture and `.claude/rules/` for coding conventions.
+Please see [docs/configs.md](docs/configs.md)
+
+## Licenses
+
+MIT
