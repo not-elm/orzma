@@ -3,8 +3,10 @@
 //! no chord data.
 
 pub(crate) mod focus;
+pub(crate) mod gesture;
 pub(crate) mod hyperlink;
 pub(crate) mod ime;
+pub(crate) mod keyboard;
 pub(crate) mod option_as_alt;
 pub(crate) mod shortcuts;
 
