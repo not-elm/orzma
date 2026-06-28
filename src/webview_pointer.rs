@@ -1,7 +1,7 @@
 //! Mode-agnostic webview pointer routing: forwards left press/release and
 //! pointer motion to the inline CEF child under the cursor, on ANY
 //! `OzmaTerminal` surface (a tmux pane or the Default-mode shell). The
-//! mode-specific systems (`crate::mode::tmux::mouse::webview`, `crate::default_input`)
+//! mode-specific systems (`crate::mode::tmux::mouse::webview`, `crate::mode::default::input`)
 //! resolve which surface is under the cursor — multi-pane hit-test for tmux, the
 //! single shell for Default — and then delegate the CEF forwarding + focus to
 //! the helpers here. Inline webviews are Node/Mesh-free `ChildOf` children

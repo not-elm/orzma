@@ -14,4 +14,5 @@ pub(crate) enum AppMode {
     Tmux,
 }
 
+pub(crate) mod default;
 pub(crate) mod tmux;

@@ -1,11 +1,8 @@
 //! ozmux Bevy GUI entry point.
 
-mod app_mode;
 mod bootstrap;
 mod cef_profile;
 mod configs;
-mod default_input;
-mod default_webview;
 mod font;
 mod input;
 mod mode;
@@ -16,7 +13,6 @@ mod ui;
 mod webview_pointer;
 mod window_title;
 
-use crate::app_mode::DefaultModePlugin;
 use crate::cef_profile::CefProfileDir;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::mode::AppMode;
@@ -24,13 +20,14 @@ use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
-use default_input::DefaultHostInputPlugin;
-use default_webview::DefaultWebviewPointerPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::copy_mode::CopyModeInputPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
+use mode::default::DefaultHostInputPlugin;
+use mode::default::DefaultModePlugin;
+use mode::default::DefaultWebviewPointerPlugin;
 use mode::tmux::OzmuxTmuxPlugin;
 use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;

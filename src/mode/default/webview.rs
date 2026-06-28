@@ -8,7 +8,7 @@
 //! so an in-flight press is released when input is suppressed (window unfocused /
 //! modal), never leaving CEF logically pressed. Double-handling with the
 //! terminal's `dispatch_mouse_buttons` is avoided by the `MouseDisabled`
-//! rect-claim gate in `crate::default_input::maintain_input_gates`: over an
+//! rect-claim gate in `crate::mode::default::input::maintain_input_gates`: over an
 //! interactive rect the shell is `MouseDisabled` (dispatch yields, the webview
 //! gets the click); off-rect the press clears webview focus here and falls
 //! through to the terminal.
