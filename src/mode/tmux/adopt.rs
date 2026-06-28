@@ -419,7 +419,7 @@ mod tests {
     fn re_adoption_after_teardown_re_enters_tmux() {
         let mut app = build_app();
         // Mimic OzmuxTmuxPlugin's connection-closed -> Default handler, which
-        // lives in src/tmux.rs (not AdoptPlugin) so it isn't in build_app.
+        // lives in src/mode/tmux.rs (not AdoptPlugin) so it isn't in build_app.
         app.add_observer(
             |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
                 next.set(AppMode::Default);

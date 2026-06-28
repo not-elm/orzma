@@ -91,7 +91,7 @@ pub(crate) struct TmuxWindowsRetained {
 pub struct TmuxConnectionReset;
 
 /// Fired specifically when the tmux transport closes from the tmux side (not
-/// app-initiated). Consumed in `src/tmux.rs` to transition `AppMode` back to
+/// app-initiated). Consumed in `src/mode/tmux.rs` to transition `AppMode` back to
 /// `Default`. Keeping this separate from `TmuxConnectionReset` avoids a double
 /// mode-set when the app itself initiates the detach.
 #[derive(Event, Debug, Clone)]
