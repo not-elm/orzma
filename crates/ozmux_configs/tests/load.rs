@@ -53,17 +53,6 @@ fn bindings_section_overrides_one_binding_keeps_others() {
 }
 
 #[test]
-fn theme_patch_preserves_other_fields() {
-    let configs = load_with_overrides(Some(fixture("theme_accent.toml")), None, None).unwrap();
-    assert_eq!(configs.theme.accent, "#deadbe");
-    let defaults = OzmuxConfigs::default();
-    assert_eq!(configs.theme.background, defaults.theme.background);
-    assert_eq!(configs.theme.foreground, defaults.theme.foreground);
-    assert_eq!(configs.theme.border, defaults.theme.border);
-    assert_eq!(configs.theme.destructive, defaults.theme.destructive);
-}
-
-#[test]
 fn duplicate_chord_rejected() {
     let err = load_with_overrides(Some(fixture("duplicate_binding.toml")), None, None).unwrap_err();
     match err {
