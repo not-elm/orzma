@@ -108,7 +108,7 @@ fn decide_capture(
 /// changes (so `Changed<CopyModeSnapshot>` is meaningful), and read back to
 /// diff against the next reply.
 #[derive(Component)]
-pub(crate) struct CopyModeSnapshot(pub(crate) CopyState);
+pub(super) struct CopyModeSnapshot(pub(super) CopyState);
 
 /// A per-pane scratch terminal used only to parse `capture-pane` bytes into the
 /// pane's rendered grid while in copy mode. The pane's live handle stays
@@ -471,7 +471,7 @@ fn buffer_reply_to_text(lines: &[String]) -> String {
 /// one command: a positive horizontal delta emits `cursor-right`, negative
 /// `cursor-left`; a positive vertical delta emits `cursor-down`, negative
 /// `cursor-up`. A zero delta on an axis emits nothing.
-pub(crate) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
+pub(super) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
     let mut out = Vec::new();
     let (cx, cy) = (cur.0 as i32, cur.1 as i32);
     let (tx, ty) = (target.0 as i32, target.1 as i32);
@@ -495,7 +495,7 @@ pub(crate) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> 
 /// the projection is degenerate (zero-area node). The point is clamped (not
 /// rejected) when it falls outside the pane so a drag that leaves the pane edge
 /// still extends the selection to the nearest cell.
-pub(crate) fn cell_at_pane(
+pub(super) fn cell_at_pane(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
     cursor_phys: Vec2,
