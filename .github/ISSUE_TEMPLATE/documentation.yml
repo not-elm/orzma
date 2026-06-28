@@ -1,0 +1,35 @@
+name: Documentation
+description: Report a docs error, gap, or confusion
+title: "[Docs] "
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve the docs!
+        Please search [existing issues](https://github.com/not-elm/ozmux/issues?q=is%3Aissue) first to avoid duplicates.
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: The doc URL or file path (e.g. `README.md`, `docs/configs.md`).
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong, missing, or confusing?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested improvement
+      description: How would you fix or clarify it?
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
