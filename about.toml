@@ -1,6 +1,6 @@
 # cargo-about configuration for ozmux third-party license aggregation.
 # `accepted` mirrors deny.toml [licenses].allow (keep the two in sync).
-# no-clearly-defined + targets keep output deterministic across hosts.
+# targets keeps output deterministic across hosts.
 accepted = [
     "MIT",
     "Apache-2.0",
@@ -23,7 +23,5 @@ accepted = [
 targets = ["aarch64-apple-darwin"]
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
-no-clearly-defined = true
-filter-noassertion = true
 
 private = { ignore = true }
