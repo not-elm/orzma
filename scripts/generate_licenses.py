@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -34,7 +33,13 @@ HEADER = (
 
 def _fenced(text: str) -> str:
     body = text.strip("\n")
-    return f"{FENCE}text\n{body}\n{FENCE}\n"
+    fence_len = len(FENCE)
+    for line in body.split("\n"):
+        stripped = line.strip()
+        if stripped and set(stripped) == {"~"}:
+            fence_len = max(fence_len, len(stripped) + 1)
+    fence = "~" * fence_len
+    return f"{fence}text\n{body}\n{fence}\n"
 
 
 def render_rust_section(rust_body: str) -> str:
@@ -49,7 +54,9 @@ def render_npm_section(entries: list[dict]) -> str:
         if not text:
             homepage = entry.get("homepage") or "the upstream repository"
             text = f"(No license text was provided by the package; see {homepage}.)"
-        lines.append(f"### {entry['name']} {entry.get('version', '')} — {license_id}\n")
+        version = entry.get("version", "")
+        title = f"{entry['name']} {version}" if version else entry["name"]
+        lines.append(f"### {title} — {license_id}\n")
         lines.append(_fenced(text))
         lines.append("")
     return "\n".join(lines).rstrip("\n") + "\n"
@@ -92,7 +99,7 @@ def assemble(rust_body: str, npm_entries: list[dict], licenses_dir: Path) -> str
     return "\n".join(part.rstrip("\n") for part in parts) + "\n"
 
 
-def run_cargo_about() -> str:
+def run_cargo_about(version: str = "0.9.0") -> str:
     template = REPO_ROOT / "about.hbs"
     result = subprocess.run(
         [
@@ -100,60 +107,53 @@ def run_cargo_about() -> str:
             "--frozen", "--workspace", "--all-features", "--fail",
             str(template),
         ],
-        cwd=REPO_ROOT, capture_output=True, text=True,
+        cwd=REPO_ROOT, capture_output=True, text=True, encoding="utf-8",
     )
     if result.returncode != 0:
         sys.stderr.write(result.stderr)
         raise SystemExit(
             "cargo-about failed. Install the pinned version with "
-            "`cargo install cargo-about@0.9.0 --locked --features cli` and resolve any "
-            "unsatisfied licenses in about.toml."
+            f"`cargo install cargo-about@{version} --locked --features cli` and resolve "
+            "any unsatisfied licenses in about.toml."
         )
     return result.stdout
 
 
-def run_pnpm_licenses(version: str) -> list[dict]:
+def _run_checked(argv: list[str], cwd: Path, stdin: str | None = None) -> str:
     try:
-        listed = subprocess.run(
-            ["pnpm", "licenses", "list", "--prod", "--json"],
-            cwd=NPM_DIR, capture_output=True, text=True, check=True,
+        return subprocess.run(
+            argv, cwd=cwd, input=stdin,
+            capture_output=True, text=True, encoding="utf-8", check=True,
         ).stdout
     except subprocess.CalledProcessError as exc:
         sys.stderr.write(exc.stderr or "")
         sys.stderr.write(exc.stdout or "")
         raise
-    inp_f = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-    try:
-        inp_f.write(listed)
-        inp_f.close()
-        out_fd, out_path = tempfile.mkstemp(suffix=".json")
-        os.close(out_fd)
-        try:
-            try:
-                subprocess.run(
-                    [
-                        "pnpm", "dlx", f"@quantco/pnpm-licenses@{version}",
-                        "list", "--json-input-file", inp_f.name, "--output-file", out_path,
-                    ],
-                    cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-                )
-            except subprocess.CalledProcessError as exc:
-                sys.stderr.write(exc.stderr or "")
-                sys.stderr.write(exc.stdout or "")
-                raise
-            return json.loads(Path(out_path).read_text(encoding="utf-8"))
-        finally:
-            Path(out_path).unlink(missing_ok=True)
-    finally:
-        Path(inp_f.name).unlink(missing_ok=True)
+
+
+def run_pnpm_licenses(version: str) -> list[dict]:
+    listed = _run_checked(["pnpm", "licenses", "list", "--prod", "--json"], NPM_DIR)
+    with tempfile.TemporaryDirectory() as tmp:
+        inp_path = Path(tmp) / "input.json"
+        out_path = Path(tmp) / "output.json"
+        inp_path.write_text(listed, encoding="utf-8")
+        _run_checked(
+            [
+                "pnpm", "dlx", f"@quantco/pnpm-licenses@{version}",
+                "list", "--json-input-file", str(inp_path), "--output-file", str(out_path),
+            ],
+            REPO_ROOT,
+        )
+        return json.loads(out_path.read_text(encoding="utf-8"))
 
 
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Generate THIRD-PARTY-LICENSES.md")
+    parser.add_argument("--cargo-about-version", default="0.9.0")
     parser.add_argument("--pnpm-licenses-version", default="2.4.2")
     args = parser.parse_args(argv)
 
-    rust_body = run_cargo_about()
+    rust_body = run_cargo_about(args.cargo_about_version)
     npm_entries = run_pnpm_licenses(args.pnpm_licenses_version)
     content = assemble(rust_body, npm_entries, LICENSES_DIR)
     OUTPUT_PATH.write_text(content, encoding="utf-8")

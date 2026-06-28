@@ -395,6 +395,8 @@ class EndToEnd(unittest.TestCase):
             resources = out / "ozmux.app" / "Contents" / "Resources"
             self.assertTrue((resources / "ozbrowser").is_file())
             self.assertTrue((resources / "ozmd").is_file())
+            self.assertTrue((resources / "THIRD-PARTY-LICENSES.md").is_file())
+            self.assertTrue((resources / "CREDITS.html").is_file())
             # ad-hoc signature must verify deep+strict on the outer bundle
             subprocess.run(
                 ["codesign", "--verify", "--deep", "--strict", str(out / "ozmux.app")],

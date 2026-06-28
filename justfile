@@ -91,7 +91,7 @@ licenses-refresh-cef:
 
 # generate licenses/THIRD-PARTY-LICENSES.md from all dependency licenses
 licenses:
-    python3 scripts/generate_licenses.py --pnpm-licenses-version {{ pnpm_licenses_version }}
+    python3 scripts/generate_licenses.py --cargo-about-version {{ cargo_about_version }} --pnpm-licenses-version {{ pnpm_licenses_version }}
 
 # regenerate and fail if the committed licenses file is stale (CI drift gate)
 licenses-check: licenses
