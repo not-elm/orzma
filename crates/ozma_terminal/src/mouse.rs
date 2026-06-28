@@ -403,7 +403,13 @@ pub(crate) fn decide_wheel(
     mods: WheelModifiers,
     cfg: &WheelConfig,
 ) -> Vec<MouseEffect> {
-    match WheelAction::route(modes, notches, cell, mods, cfg) {
+    effects_from_wheel_action(WheelAction::route(modes, notches, cell, mods, cfg))
+}
+
+/// Maps a routed `WheelAction` to host effects. Shared by the vertical
+/// (`route`) and horizontal (`route_horizontal`) wheel paths.
+fn effects_from_wheel_action(action: WheelAction) -> Vec<MouseEffect> {
+    match action {
         WheelAction::Noop => Vec::new(),
         WheelAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
         WheelAction::ScrollViewport(lines) => vec![MouseEffect::Scroll(lines)],
@@ -810,6 +816,18 @@ fn build_wheel_modifiers(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> 
         alt: m.alt,
         fine: fine_held(cfg.fine_modifier, &m),
     }
+}
+
+/// Horizontal-wheel modifiers. On macOS the OS converts Shift+wheel into a
+/// horizontal scroll while Shift stays physically held; stripping the Shift bit
+/// keeps the report a plain `<ScrollWheelLeft/Right>` rather than the shifted
+/// (and by default unmapped) variant. Other platforms pass modifiers through.
+fn build_wheel_modifiers_horizontal(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> WheelModifiers {
+    let mut mods = build_wheel_modifiers(keys, cfg);
+    if cfg!(target_os = "macos") {
+        mods.shift = false;
+    }
+    mods
 }
 
 fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
@@ -1913,5 +1931,31 @@ mod tests {
             &WheelConfig::default(),
         );
         assert!(matches!(fx.as_slice(), [MouseEffect::Write(b)] if !b.is_empty()));
+    }
+
+    #[test]
+    fn effects_from_wheel_action_maps_each_variant() {
+        assert_eq!(effects_from_wheel_action(WheelAction::Noop), vec![]);
+        assert_eq!(
+            effects_from_wheel_action(WheelAction::WriteToPty(b"x".to_vec())),
+            vec![MouseEffect::Write(b"x".to_vec())]
+        );
+        assert_eq!(
+            effects_from_wheel_action(WheelAction::ScrollViewport(3)),
+            vec![MouseEffect::Scroll(3)]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn horizontal_modifiers_strip_shift_on_macos() {
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::ShiftLeft);
+        let cfg = OzmaMouseConfig::default();
+        let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
+        assert!(
+            !mods.shift,
+            "macOS converts Shift+wheel to horizontal at the OS level; the report must not carry the Shift bit"
+        );
     }
 }
