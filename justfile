@@ -75,10 +75,10 @@ icon *args:
 
 # build and package the ozmux .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
-bundle-macos *args:
+bundle-macos *args: ozmd-web
     python3 scripts/bundle_macos.py {{ args }}
 
 # setup-cef-release then bundle with notarization
 [macos]
-release-macos *args: setup-cef-release
+release-macos *args: setup-cef-release ozmd-web
     python3 scripts/bundle_macos.py --notarize {{ args }}

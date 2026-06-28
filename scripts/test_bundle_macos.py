@@ -13,6 +13,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bundle_macos as bm
 
 
+def _write_fake_macho(dest: Path) -> None:
+    # NOTE: shutil.copy (not copy2) avoids PermissionError from SIP-restricted flags on /usr/bin/true
+    shutil.copy("/usr/bin/true", dest)
+    dest.chmod(0o755)
+
+
 class PureHelpers(unittest.TestCase):
     def test_zip_name(self):
         self.assertEqual(bm.zip_name("ozmux", "0.1.0", "arm64"), "ozmux-0.1.0-arm64.zip")
@@ -46,8 +52,8 @@ class CaskTemplate(unittest.TestCase):
     def test_template_has_companion_binary_stanzas(self):
         tmpl = (bm.REPO_ROOT / "build" / "macos" / "homebrew" / "ozmux.rb.tmpl").read_text()
         self.assertIn('app "ozmux.app"', tmpl)
-        self.assertIn('binary "#{appdir}/ozmux.app/Contents/Resources/ozbrowser"', tmpl)
-        self.assertIn('binary "#{appdir}/ozmux.app/Contents/Resources/ozmd"', tmpl)
+        for name in bm.COMPANION_BINS:
+            self.assertIn(f'binary "#{{appdir}}/ozmux.app/Contents/Resources/{name}"', tmpl)
 
 
 class PlistLogic(unittest.TestCase):
@@ -197,9 +203,9 @@ class ConfigResolution(unittest.TestCase):
 
     def test_resolve_companion_defaults(self):
         cfg = bm.resolve_config(self._parse(["--version", "0.1.0", "--skip-build"]))
-        names = [p.name for p in cfg.companion_bins]
+        names = list(cfg.companion_bins.keys())
         self.assertEqual(names, ["ozbrowser", "ozmd"])
-        for p in cfg.companion_bins:
+        for p in cfg.companion_bins.values():
             self.assertIn("aarch64-apple-darwin", str(p))
             self.assertIn("dist", str(p))
 
@@ -208,7 +214,14 @@ class ConfigResolution(unittest.TestCase):
             "--version", "0.1.0", "--skip-build",
             "--ozbrowser-bin", "/tmp/ob", "--ozmd-bin", "/tmp/om",
         ]))
-        self.assertEqual(cfg.companion_bins, [Path("/tmp/ob"), Path("/tmp/om")])
+        self.assertEqual(cfg.companion_bins, {"ozbrowser": Path("/tmp/ob"), "ozmd": Path("/tmp/om")})
+
+    def test_resolve_companion_override_expands_user(self):
+        cfg = bm.resolve_config(self._parse([
+            "--version", "0.1.0", "--skip-build", "--ozbrowser-bin", "~/bins/ozbrowser",
+        ]))
+        self.assertFalse(str(cfg.companion_bins["ozbrowser"]).startswith("~"))
+        self.assertTrue(str(cfg.companion_bins["ozbrowser"]).endswith("/bins/ozbrowser"))
 
     def test_verify_prerequisites_missing_companion(self):
         with tempfile.TemporaryDirectory() as d:
@@ -229,23 +242,18 @@ class ConfigResolution(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class AssembleAndEmbed(unittest.TestCase):
-    def _macho(self, dest: Path) -> None:
-        # NOTE: shutil.copy (not copy2) avoids PermissionError from SIP-restricted flags on /usr/bin/true
-        shutil.copy("/usr/bin/true", dest)
-        dest.chmod(0o755)
-
     def _fake_cef(self, root: Path) -> Path:
         fw = root / "Chromium Embedded Framework.framework"
         (fw / "Libraries").mkdir(parents=True)
-        self._macho(fw / "Chromium Embedded Framework")
-        self._macho(fw / "Libraries" / "libEGL.dylib")
+        _write_fake_macho(fw / "Chromium Embedded Framework")
+        _write_fake_macho(fw / "Libraries" / "libEGL.dylib")
         (fw / "Resources").mkdir()
         (fw / "Resources" / "icudtl.dat").write_bytes(b"fake")
         return fw
 
     def _cfg(self, d: Path) -> "bm.BundleConfig":
-        self._macho(d / "ozmux")
-        self._macho(d / "helper")
+        _write_fake_macho(d / "ozmux")
+        _write_fake_macho(d / "helper")
         fw = self._fake_cef(d)
         return bm.BundleConfig(
             version="9.9.9", app_name="ozmux", bin_name="ozmux",
@@ -288,23 +296,18 @@ class AssembleAndEmbed(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class CopyCompanions(unittest.TestCase):
-    def _macho(self, dest: Path) -> None:
-        # NOTE: shutil.copy (not copy2) avoids PermissionError from SIP-restricted flags on /usr/bin/true
-        shutil.copy("/usr/bin/true", dest)
-        dest.chmod(0o755)
-
     def test_copy_companions_into_resources(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            self._macho(d / "ozbrowser")
-            self._macho(d / "ozmd")
+            _write_fake_macho(d / "ozbrowser")
+            _write_fake_macho(d / "ozmd")
             cfg = bm.BundleConfig(
                 version="9.9.9", app_name="ozmux", bin_name="ozmux",
                 bundle_id_base="not.elm.ozmux", arch="arm64",
                 target_triple="aarch64-apple-darwin",
                 bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
                 out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
-                companion_bins=[d / "ozbrowser", d / "ozmd"],
+                companion_bins={"ozbrowser": d / "ozbrowser", "ozmd": d / "ozmd"},
             )
             resources = cfg.app_path / "Contents" / "Resources"
             resources.mkdir(parents=True)
@@ -314,30 +317,45 @@ class CopyCompanions(unittest.TestCase):
                 self.assertTrue(dest.is_file())
                 self.assertTrue(os.access(dest, os.X_OK))
 
+    def test_override_basename_embeds_under_canonical_name(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            _write_fake_macho(d / "ozbrowser-cli")
+            _write_fake_macho(d / "ozmd-v2")
+            cfg = bm.BundleConfig(
+                version="9.9.9", app_name="ozmux", bin_name="ozmux",
+                bundle_id_base="not.elm.ozmux", arch="arm64",
+                target_triple="aarch64-apple-darwin",
+                bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
+                out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
+                companion_bins={"ozbrowser": d / "ozbrowser-cli", "ozmd": d / "ozmd-v2"},
+            )
+            (cfg.app_path / "Contents" / "Resources").mkdir(parents=True)
+            bm.copy_companions(cfg)
+            resources = cfg.app_path / "Contents" / "Resources"
+            self.assertTrue((resources / "ozbrowser").is_file())
+            self.assertTrue((resources / "ozmd").is_file())
+            self.assertFalse((resources / "ozbrowser-cli").exists())
+
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class EndToEnd(unittest.TestCase):
-    def _macho(self, dest: Path) -> None:
-        # NOTE: shutil.copy (not copy2) avoids PermissionError from SIP-restricted flags on /usr/bin/true
-        shutil.copy("/usr/bin/true", dest)
-        dest.chmod(0o755)
-
     def _unsigned_macho(self, dest: Path) -> None:
-        self._macho(dest)
+        _write_fake_macho(dest)
         subprocess.run(["codesign", "--remove-signature", str(dest)], check=True)
 
     def _fake_cef(self, root: Path) -> Path:
         fw = root / "Chromium Embedded Framework.framework"
         (fw / "Libraries").mkdir(parents=True)
-        self._macho(fw / "Chromium Embedded Framework")
-        self._macho(fw / "Libraries" / "libEGL.dylib")
+        _write_fake_macho(fw / "Chromium Embedded Framework")
+        _write_fake_macho(fw / "Libraries" / "libEGL.dylib")
         return fw
 
     def test_main_adhoc_end_to_end(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            self._macho(d / "ozmux")
-            self._macho(d / "helper")
+            _write_fake_macho(d / "ozmux")
+            _write_fake_macho(d / "helper")
             self._unsigned_macho(d / "ozbrowser")
             self._unsigned_macho(d / "ozmd")
             fw = self._fake_cef(d)
@@ -372,6 +390,70 @@ class EndToEnd(unittest.TestCase):
                     ["codesign", "--verify", str(resources / name)],
                     check=True,
                 )
+
+
+class CompanionSigning(unittest.TestCase):
+    def test_companions_signed_hardened_without_entitlements(self):
+        recorded = []
+
+        def fake_run(argv, redact=()):
+            recorded.append(argv)
+
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            app = d / "out" / "ozmux.app"
+            (app / "Contents" / "Resources").mkdir(parents=True)
+            cef = app / "Contents" / "Frameworks" / "Chromium Embedded Framework.framework"
+            (cef / "Libraries").mkdir(parents=True)
+            cfg = bm.BundleConfig(
+                version="9.9.9", app_name="ozmux", bin_name="ozmux",
+                bundle_id_base="not.elm.ozmux", arch="arm64",
+                target_triple="aarch64-apple-darwin",
+                bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
+                out_dir=d / "out",
+                sign_identity="Developer ID Application: TEST", no_sign=False, notarize=False,
+                companion_bins={"ozbrowser": d / "ozbrowser", "ozmd": d / "ozmd"},
+            )
+            orig = bm.run
+            bm.run = fake_run
+            try:
+                bm.codesign_bundle(cfg)
+            finally:
+                bm.run = orig
+
+        resources = app / "Contents" / "Resources"
+        sign_argvs = [a for a in recorded if a[:1] == ["codesign"] and "--sign" in a]
+
+        def argv_for(path):
+            return next(a for a in sign_argvs if a[-1] == str(path))
+
+        for name in ("ozbrowser", "ozmd"):
+            a = argv_for(resources / name)
+            self.assertIn("--options", a)            # hardened runtime kept
+            self.assertNotIn("--entitlements", a)    # least privilege: no CEF grants
+        # the outer app IS signed with the CEF entitlements
+        self.assertIn("--entitlements", argv_for(app))
+
+
+class OzmdWebAssetsGuard(unittest.TestCase):
+    def test_missing_assets_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / ".gitkeep").write_text("")
+            (d / ".gitignore").write_text("*\n")
+            with self.assertRaises(SystemExit):
+                bm.verify_ozmd_web_assets(d)
+
+    def test_present_assets_ok(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            (d / "index.html").write_text("<html></html>")
+            bm.verify_ozmd_web_assets(d)
+
+    def test_missing_dir_raises(self):
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(SystemExit):
+                bm.verify_ozmd_web_assets(Path(d) / "does-not-exist")
 
 
 class NotarizeGuards(unittest.TestCase):
