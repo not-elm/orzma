@@ -1,36 +1,40 @@
 //! Webview pointer routing for the tmux mouse gesture system.
 //!
-//! Owns `TmuxWebviewPress`, `TmuxWebviewRouteParams`, and the systems that
-//! forward left-button press/release and pointer motion to the inline CEF
-//! child under the cursor.
+//! Resolves the inline CEF child under the cursor on the tmux pane the pointer
+//! is over (`tmux_pane_at_phys`) and delegates the CEF forwarding + focus to the
+//! mode-agnostic core in `crate::webview_pointer`. Owns the tmux-specific glue:
+//! the `TmuxGestureButtons` hand-off of non-consumed events to `tmux_gesture`,
+//! and the `SelectPane` trigger so the keyboard/paste target follows a consumed
+//! inline click.
 
 use super::super::TmuxActiveSet;
-use super::super::pane_hit::{phys_to_pane_local, tmux_pane_at_phys};
+use super::super::pane_hit::tmux_pane_at_phys;
 use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
 use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture, cell_dims};
 use crate::input::InputPhase;
 use crate::ui::copy_search::CopyPrompt;
-use bevy::ecs::system::SystemParam;
+use crate::webview_pointer::{
+    WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
+    route_webview_left_click,
+};
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
-use bevy::picking::pointer::PointerButton;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
-use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{NonInteractive, Webview, webview_hit_at, webview_local_dip};
+use ozma_webview::{NonInteractive, Webview};
 use ozmux_tmux::TmuxPane;
 
-/// Plugin that registers the tmux webview pointer-routing systems and their
-/// `TmuxWebviewPress` resource.
+/// Plugin that registers the tmux webview pointer-routing systems and the shared
+/// `WebviewPress` resource.
 pub(super) struct WebviewPointerPlugin;
 
 impl Plugin for WebviewPointerPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<TmuxWebviewPress>()
+        app.init_resource::<WebviewPress>()
             .add_systems(
                 Update,
                 tmux_webview_pointer
@@ -46,25 +50,6 @@ impl Plugin for WebviewPointerPlugin {
     }
 }
 
-/// Tracks the CEF child that is currently pressed (a left press inside an
-/// interactive inline rect was forwarded to it) so the matching release routes
-/// to the same child even if the pointer drifted off-rect.
-#[derive(Resource, Default)]
-pub(super) struct TmuxWebviewPress(pub(super) Option<Entity>);
-
-/// Inline-routing params for `tmux_webview_pointer`, bundled to stay within
-/// Bevy's system-parameter limit. `focused_webview` / `browsers` are optional
-/// so CEF-less tests construct the system (state effects still apply).
-#[derive(SystemParam)]
-pub(super) struct TmuxWebviewRouteParams<'w, 's> {
-    pub(super) focused_webview: Option<ResMut<'w, FocusedWebview>>,
-    pub(super) children: Query<'w, 's, &'static Children>,
-    pub(super) webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
-    pub(super) webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
-    pub(super) overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
-    pub(super) browsers: Option<NonSend<'w, Browsers>>,
-}
-
 /// Offers each frame's left-button events to the inline webview layer BEFORE
 /// `tmux_gesture` (which is ordered after it via `.after(tmux_webview_pointer)`),
 /// handing off the non-consumed ones through `TmuxGestureButtons`.
@@ -75,14 +60,14 @@ pub(super) struct TmuxWebviewRouteParams<'w, 's> {
 /// suppressed frame (no focused primary window, or a copy-search prompt owns
 /// input) it drains the reader and the buffer, resets the gesture to
 /// `Idle`, and resolves an in-flight inline press: with no window it drops
-/// `TmuxWebviewPress` WITHOUT a CEF mouse-up (there is no cursor/scale to place
+/// `WebviewPress` WITHOUT a CEF mouse-up (there is no cursor/scale to place
 /// it); with a window present it `release_webview_press`es so the focused page
 /// is not left logically pressed with no matching mouse-up.
 ///
 /// On an active frame `TmuxGestureButtons` is cleared at the start (invariant 7)
 /// so non-consumed events never accumulate across frames. Non-`Left` events are
 /// skipped (never buffered). Each `Left` event is routed through
-/// `route_tmux_webview_left_click`; a consumed press additionally triggers
+/// `route_webview_left_click`; a consumed press additionally triggers
 /// `SelectPane(host_pane)` so the keyboard/paste target follows the click
 /// (invariant 3, `Pressed` only), and a non-consumed event is pushed into the
 /// buffer for `tmux_gesture` to drain.
@@ -95,9 +80,9 @@ pub(super) struct TmuxWebviewRouteParams<'w, 's> {
 pub(super) fn tmux_webview_pointer(
     mut commands: Commands,
     mut buffer: ResMut<TmuxGestureButtons>,
-    mut webview_press: ResMut<TmuxWebviewPress>,
+    mut webview_press: ResMut<WebviewPress>,
     mut gesture: ResMut<TmuxMouseGesture>,
-    mut webview_route: TmuxWebviewRouteParams,
+    mut webview_route: WebviewRouteParams,
     mut buttons: MessageReader<MouseButtonInput>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -120,7 +105,6 @@ pub(super) fn tmux_webview_pointer(
         release_webview_press(
             &mut webview_press,
             &webview_route,
-            &panes,
             cursor_phys,
             cell_w,
             cell_h,
@@ -135,10 +119,9 @@ pub(super) fn tmux_webview_pointer(
         if let Some(cursor_phys) = cursor_phys
             && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
         {
-            let consumed = route_tmux_webview_left_click(
+            let consumed = route_webview_left_click(
                 &mut webview_press,
                 &mut webview_route,
-                &panes,
                 terminal,
                 local_phys,
                 cursor_phys,
@@ -163,44 +146,12 @@ pub(super) fn tmux_webview_pointer(
     }
 }
 
-/// Releases an in-flight webview press to CEF (mouse-up at the last
-/// cursor) and clears the marker. Called by `tmux_webview_pointer` on the
-/// suppressed path (modal open / window unfocused) so the focused web page is
-/// not left logically pressed with no matching mouse-up.
-fn release_webview_press(
-    webview_press: &mut TmuxWebviewPress,
-    route: &TmuxWebviewRouteParams,
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    cursor_phys: Option<Vec2>,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale: f32,
-) {
-    let Some(child) = webview_press.0.take() else {
-        return;
-    };
-    if let Some(cursor_phys) = cursor_phys
-        && let Some(browsers) = route.browsers.as_deref()
-        && let Some(dip) = tmux_webview_release_dip(
-            route,
-            panes,
-            child,
-            cursor_phys,
-            cell_w_phys,
-            cell_h_phys,
-            scale,
-        )
-    {
-        browsers.send_mouse_click(&child, dip, PointerButton::Primary, true);
-    }
-}
-
-/// Forwards pointer motion over an interactive inline rect of a tmux pane to
-/// the child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
-/// whatever mouse buttons are held so the one system serves both hover and an
-/// in-rect drag. `CursorMoved`-driven (one forward per frame, latest position), and
-/// focus-gated inside `bevy_cef` so motion over an unfocused browser is
-/// dropped browser-side. `Browsers` is optional so CEF-less tests construct it.
+/// Forwards pointer motion over an interactive inline rect of the tmux pane
+/// under the cursor to the child's CEF browser via the shared
+/// `forward_webview_move`. `CursorMoved`-driven (one forward per frame, latest
+/// position), so the one system serves both hover and an in-rect drag. Skipped
+/// while a copy-search prompt owns input. `Browsers` is optional so CEF-less
+/// tests construct it.
 fn forward_tmux_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -228,130 +179,16 @@ fn forward_tmux_webview_mouse_moves(
     let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys) else {
         return;
     };
-    let Ok(overlays) = overlay_rects.get(terminal) else {
-        return;
-    };
-    let Some(hit) = webview_hit_at(
-        &children, &webviews, overlays, terminal, local_phys, cell_w, cell_h, scale,
-    ) else {
-        return;
-    };
-    if let Some(browsers) = browsers.as_ref() {
-        browsers.send_mouse_move(
-            &hit.child,
-            mouse_buttons.get_pressed(),
-            hit.local_dip,
-            false,
-        );
-    }
-}
-
-/// Routes a left press/release through the webview layer, returning
-/// `true` when the event was consumed and must NOT reach the tmux gesture
-/// pipeline. A press inside an
-/// interactive rect sets `FocusedWebview`, issues the UNGATED `set_focus`
-/// BEFORE the gated `send_mouse_click` (CEF drops clicks to a browser with no
-/// `focused_frame()`, so the first click would otherwise be swallowed),
-/// forwards the press in DIP, and records the in-flight press; a press outside
-/// every rect clears an inline `FocusedWebview` and returns `false`. Release
-/// forwards the click-up to the recorded child (drift-tolerant) and clears.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "inline routing needs the webview press state, route params, and pointer geometry"
-)]
-fn route_tmux_webview_left_click(
-    webview_press: &mut TmuxWebviewPress,
-    route: &mut TmuxWebviewRouteParams,
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    terminal: Entity,
-    local_phys: Vec2,
-    cursor_phys: Vec2,
-    button_state: ButtonState,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale: f32,
-) -> bool {
-    match button_state {
-        ButtonState::Pressed => {
-            webview_press.0 = None;
-            let hit = route.overlay_rects.get(terminal).ok().and_then(|overlays| {
-                webview_hit_at(
-                    &route.children,
-                    &route.webviews,
-                    overlays,
-                    terminal,
-                    local_phys,
-                    cell_w_phys,
-                    cell_h_phys,
-                    scale,
-                )
-            });
-            let Some(hit) = hit else {
-                if let Some(focused) = route.focused_webview.as_deref_mut()
-                    && focused
-                        .0
-                        .is_some_and(|current| route.webview_parents.contains(current))
-                {
-                    focused.0 = None;
-                }
-                return false;
-            };
-            if let Some(focused) = route.focused_webview.as_deref_mut()
-                && focused.0 != Some(hit.child)
-            {
-                focused.0 = Some(hit.child);
-            }
-            if let Some(browsers) = route.browsers.as_deref() {
-                browsers.set_focus(&hit.child, true);
-                browsers.send_mouse_click(&hit.child, hit.local_dip, PointerButton::Primary, false);
-            }
-            webview_press.0 = Some(hit.child);
-            true
-        }
-        ButtonState::Released => {
-            let Some(child) = webview_press.0.take() else {
-                return false;
-            };
-            if let Some(browsers) = route.browsers.as_deref()
-                && let Some(dip) = tmux_webview_release_dip(
-                    route,
-                    panes,
-                    child,
-                    cursor_phys,
-                    cell_w_phys,
-                    cell_h_phys,
-                    scale,
-                )
-            {
-                browsers.send_mouse_click(&child, dip, PointerButton::Primary, true);
-            }
-            true
-        }
-    }
-}
-
-/// Webview-local DIP for a release on `child`, WITHOUT containment (a pointer
-/// that drifted off the rect still produces a release position). `None` when
-/// the child/terminal/rect chain is gone.
-fn tmux_webview_release_dip(
-    route: &TmuxWebviewRouteParams,
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    child: Entity,
-    cursor_phys: Vec2,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale: f32,
-) -> Option<Vec2> {
-    let terminal = route.webview_parents.get(child).ok()?.parent();
-    let (_, _, node, transform) = panes.get(terminal).ok()?;
-    let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
-    let (view, _) = route.webviews.get(child).ok()?;
-    webview_local_dip(
-        route.overlay_rects.get(terminal).ok()?,
-        view.slot,
+    forward_webview_move(
+        &children,
+        &webviews,
+        &overlay_rects,
+        browsers.as_deref(),
+        &mouse_buttons,
+        terminal,
         local_phys,
-        cell_w_phys,
-        cell_h_phys,
+        cell_w,
+        cell_h,
         scale,
-    )
+    );
 }

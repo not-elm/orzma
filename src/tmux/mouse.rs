@@ -438,6 +438,7 @@ fn continuation_ctx(
 mod tests {
     use super::*;
     use crate::tmux::pane_hit::tmux_pane_at_phys;
+    use crate::webview_pointer::WebviewPress;
     use bevy::input::ButtonState;
     use bevy::input::mouse::MouseButtonInput;
     use bevy_cef::prelude::FocusedWebview;
@@ -445,7 +446,6 @@ mod tests {
     use ozma_tty_renderer::prelude::TerminalOverlays;
     use ozma_webview::{NonInteractive, Webview, webview_hit_at};
     use ozmux_tmux::CopyModeQueries;
-    use webview::TmuxWebviewPress;
 
     #[test]
     fn gesture_state_default_is_idle() {
@@ -485,7 +485,7 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
-        app.init_resource::<TmuxWebviewPress>();
+        app.init_resource::<WebviewPress>();
         app.init_resource::<CopyModeQueries>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
@@ -528,7 +528,7 @@ mod tests {
         app.add_message::<MouseButtonInput>();
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
-        app.init_resource::<TmuxWebviewPress>();
+        app.init_resource::<WebviewPress>();
         app.init_resource::<CopyModeQueries>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
@@ -825,12 +825,12 @@ mod tests {
     #[test]
     fn suppressed_frame_releases_in_flight_webview_press() {
         let (mut app, _pane, child) = make_gesture_webview_app();
-        app.world_mut().resource_mut::<TmuxWebviewPress>().0 = Some(child);
+        app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
         set_modal_open(&mut app, true);
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         app.update();
         assert_eq!(
-            app.world().resource::<TmuxWebviewPress>().0,
+            app.world().resource::<WebviewPress>().0,
             None,
             "a window-exists-but-suppressed frame must release the in-flight inline press"
         );

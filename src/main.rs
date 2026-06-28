@@ -5,12 +5,14 @@ mod bootstrap;
 mod cef_profile;
 mod configs;
 mod default_input;
+mod default_webview;
 mod font;
 mod input;
 mod system_set;
 mod theme;
 mod tmux;
 mod ui;
+mod webview_pointer;
 mod window_title;
 
 use crate::app_mode::{AppMode, DefaultModePlugin};
@@ -21,6 +23,7 @@ use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
 use default_input::DefaultHostInputPlugin;
+use default_webview::DefaultWebviewPointerPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
 use input::copy_mode::CopyModeInputPlugin;
@@ -89,6 +92,7 @@ fn main() {
             ImeOverlayPlugin,
             OptionAsAltPlugin,
             DefaultHostInputPlugin,
+            DefaultWebviewPointerPlugin,
             CopyModeInputPlugin,
         ))
         .run();
