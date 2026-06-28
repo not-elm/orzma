@@ -58,6 +58,9 @@ sequence to mount it as an in-process webview at that cell geometry
 program through the `window.ozma` bridge. Use one of the SDKs above for a
 ready-made client.
 
+See [docs/ozma_webview_protocol.md](docs/ozma_webview_protocol.md) for the full
+protocol specification.
+
 ## Configuration
 
 ozmux reads `~/.config/ozmux/config.toml` (override the path with
