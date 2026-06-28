@@ -19,7 +19,7 @@ pub(crate) enum AppMode {
 
 /// Root of the Default-mode UI subtree, mounted under `UiRoot`.
 ///
-/// Adoption (`crate::tmux::adopt`) despawns this container when it promotes the
+/// Adoption (`crate::mode::tmux::adopt`) despawns this container when it promotes the
 /// Default shell to the tmux gateway, so `ensure_default_mode_ui` lazily spawns
 /// a fresh Default shell on the next return to `AppMode::Default`.
 #[derive(Component)]

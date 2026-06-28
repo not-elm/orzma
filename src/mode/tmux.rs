@@ -69,7 +69,7 @@ impl Plugin for OzmuxTmuxPlugin {
 /// Sends `detach-client` over the live connection, if any.
 ///
 /// The `%exit` notification tmux emits in response drives the teardown path
-/// (see `crate::tmux::adopt`), which closes the connection and returns to
+/// (see `crate::mode::tmux::adopt`), which closes the connection and returns to
 /// `AppMode::Default`. Callers must NOT also set `NextState(Default)` directly:
 /// the connection stays live until tmux acknowledges the detach, and the
 /// teardown owns the mode transition.

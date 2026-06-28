@@ -113,7 +113,7 @@ fn maintain_input_gates(
 }
 
 /// The Default shell whose INTERACTIVE inline webview rect is under the cursor,
-/// or `None`. Mirrors `crate::tmux::gate::claimed_webview_pane` for the single
+/// or `None`. Mirrors `crate::mode::tmux::gate::claimed_webview_pane` for the single
 /// Default surface: resolve the topmost `OzmaTerminal` under the cursor, then
 /// hit-test its active overlay rects (`webview_hit_at` skips `NonInteractive`
 /// children). A claimed surface is marked `MouseDisabled` so

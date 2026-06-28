@@ -1,7 +1,7 @@
 //! Default-mode (`AppMode::Default`) webview pointer routing: forwards left
 //! press/release and pointer motion to the inline CEF child under the cursor on
 //! the single Default shell surface, via the mode-agnostic core in
-//! `crate::webview_pointer`. The tmux equivalent is `crate::tmux::mouse::webview`;
+//! `crate::webview_pointer`. The tmux equivalent is `crate::mode::tmux::mouse::webview`;
 //! this is the single-surface analogue (no pane arbitration / gesture hand-off).
 //!
 //! The pointer system runs EVERY frame in `AppMode::Default` (not message-gated)

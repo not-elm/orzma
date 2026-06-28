@@ -652,7 +652,7 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 /// # Invariants
 ///
 /// The target pane MUST be the pane under the cursor, not `ActivePane`:
-/// `ozma_terminal::dispatch_mouse_wheel` and `crate::tmux::gate` both key off the
+/// `ozma_terminal::dispatch_mouse_wheel` and `crate::mode::tmux::gate` both key off the
 /// cursor pane, so keying this system off the active pane would let both fire on
 /// different panes (cursor pane ≠ active pane) and double-act. The
 /// "complement gated solely by `MouseDisabled`" invariant holds only when both

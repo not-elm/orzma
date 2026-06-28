@@ -8,10 +8,10 @@ mod default_input;
 mod default_webview;
 mod font;
 mod input;
+mod mode;
 mod surface_geom;
 mod system_set;
 mod theme;
-mod tmux;
 mod ui;
 mod webview_pointer;
 mod window_title;
@@ -30,12 +30,12 @@ use input::OzmuxShortcutPlugin;
 use input::copy_mode::CopyModeInputPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
+use mode::tmux::OzmuxTmuxPlugin;
 use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
 use ozmux_webview_host::WebviewAssetRegistry;
-use tmux::OzmuxTmuxPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
     OzmuxUiPlugin, confirm_prompt::ConfirmPromptPlugin, copy_mode::CopyModePlugin,
@@ -156,7 +156,7 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
 /// The UTF-8 `LC_CTYPE` ozmux installs when the inherited locale is not UTF-8.
 /// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
 /// writes it on. Also the fallback advertised to tmux panes
-/// (`crate::tmux::locale`).
+/// (`crate::mode::tmux::locale`).
 pub(crate) const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment

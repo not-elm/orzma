@@ -437,7 +437,7 @@ fn continuation_ctx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tmux::pane_hit::tmux_pane_at_phys;
+    use crate::mode::tmux::pane_hit::tmux_pane_at_phys;
     use crate::webview_pointer::WebviewPress;
     use bevy::input::ButtonState;
     use bevy::input::mouse::MouseButtonInput;
