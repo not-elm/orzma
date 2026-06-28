@@ -48,11 +48,13 @@ impl Default for WheelConfig {
 
 pub use crate::mouse_encode::CellCoord;
 
-/// Wheel direction. Horizontal wheels are out of scope.
+/// Wheel direction (vertical and horizontal).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WheelDir {
     Up,
     Down,
+    Left,
+    Right,
 }
 
 /// Modifier state captured at the moment the wheel event fires.
@@ -110,8 +112,32 @@ fn encode_wheel_report(
     let cb_base: u8 = match direction {
         WheelDir::Up => 64,
         WheelDir::Down => 65,
+        WheelDir::Left => 66,
+        WheelDir::Right => 67,
     };
     encode_protocol_event(modes, cb_base, cell, protocol_mods_from(mods), false, false)
+}
+
+/// Emits `min(|notches|, cap)` concatenated wheel reports for a mouse-mode
+/// pane, or `Noop` when the cap rounds the count to zero. Shared by the
+/// vertical (`route`) and horizontal (`route_horizontal`) mouse-protocol paths.
+fn emit_protocol_reports(
+    modes: TermMode,
+    direction: WheelDir,
+    notches: i32,
+    mouse_cell: CellCoord,
+    mods: WheelModifiers,
+    cfg: &WheelConfig,
+) -> WheelAction {
+    let count = notches.unsigned_abs().min(cfg.max_protocol_events_per_frame);
+    if count == 0 {
+        return WheelAction::Noop;
+    }
+    let mut buf = Vec::new();
+    for _ in 0..count {
+        buf.extend_from_slice(&encode_wheel_report(modes, direction, mods, mouse_cell));
+    }
+    WheelAction::WriteToPty(buf)
 }
 
 impl WheelAction {
@@ -151,16 +177,7 @@ impl WheelAction {
             TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
         );
         if any_mouse {
-            let count = (notches.unsigned_abs()).min(cfg.max_protocol_events_per_frame);
-            if count == 0 {
-                return WheelAction::Noop;
-            }
-            let mut buf = Vec::new();
-            for _ in 0..count {
-                let one = encode_wheel_report(modes, direction, mods, mouse_cell);
-                buf.extend_from_slice(&one);
-            }
-            return WheelAction::WriteToPty(buf);
+            return emit_protocol_reports(modes, direction, notches, mouse_cell, mods, cfg);
         }
 
         // NOTE: no Shift bypass to host scrollback here. `scroll_display`
@@ -191,6 +208,37 @@ impl WheelAction {
         let viewport_delta = -notches * lines_per;
         WheelAction::ScrollViewport(viewport_delta)
     }
+
+    /// Decides what to do with a horizontal wheel input.
+    ///
+    /// `notches` is sign-significant (negative = left, positive = right).
+    /// Horizontal wheel only has meaning for mouse-mode applications: when any of
+    /// `MOUSE_REPORT_CLICK`, `MOUSE_DRAG`, `MOUSE_MOTION` is set, it emits
+    /// `min(|notches|, max_protocol_events_per_frame)` SGR/X10 reports with `cb`
+    /// 66 (left) / 67 (right). Outside a mouse mode there is no horizontal
+    /// scrollback or alt-screen translation, so it returns `Noop`.
+    pub fn route_horizontal(
+        modes: TermMode,
+        notches: i32,
+        mouse_cell: CellCoord,
+        mods: WheelModifiers,
+        cfg: &WheelConfig,
+    ) -> Self {
+        if notches == 0 {
+            return WheelAction::Noop;
+        }
+        let direction = if notches < 0 {
+            WheelDir::Left
+        } else {
+            WheelDir::Right
+        };
+        if modes.intersects(
+            TermMode::MOUSE_REPORT_CLICK | TermMode::MOUSE_DRAG | TermMode::MOUSE_MOTION,
+        ) {
+            return emit_protocol_reports(modes, direction, notches, mouse_cell, mods, cfg);
+        }
+        WheelAction::Noop
+    }
 }
 
 /// Emits `n` SS3-form arrow-key sequences for the alt-screen
@@ -203,6 +251,7 @@ fn alt_screen_arrow_bytes(direction: WheelDir, n: u32) -> Vec<u8> {
     let suffix = match direction {
         WheelDir::Up => b'A',
         WheelDir::Down => b'B',
+        WheelDir::Left | WheelDir::Right => unreachable!(),
     };
     let mut out = Vec::with_capacity(n as usize * 3);
     for _ in 0..n {
@@ -560,5 +609,78 @@ mod route_tests {
             &cfg_default(),
         );
         assert_eq!(action, WheelAction::WriteToPty(b"\x1b[<65;1;1M".to_vec()));
+    }
+
+    #[test]
+    fn horizontal_mouse_mode_emits_left_and_right() {
+        let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        let at = CellCoord { col: 43, row: 11 };
+        let left = WheelAction::route_horizontal(modes, -1, at, WheelModifiers::default(), &cfg_default());
+        assert_eq!(left, WheelAction::WriteToPty(b"\x1b[<66;43;11M".to_vec()));
+        let right = WheelAction::route_horizontal(modes, 1, at, WheelModifiers::default(), &cfg_default());
+        assert_eq!(right, WheelAction::WriteToPty(b"\x1b[<67;43;11M".to_vec()));
+    }
+
+    #[test]
+    fn horizontal_without_mouse_mode_is_noop() {
+        // No horizontal scrollback or alt-screen translation: normal AND alt-screen are Noop.
+        assert_eq!(
+            WheelAction::route_horizontal(TermMode::empty(), -2, cell(), WheelModifiers::default(), &cfg_default()),
+            WheelAction::Noop
+        );
+        let alt = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
+        assert_eq!(
+            WheelAction::route_horizontal(alt, 2, cell(), WheelModifiers::default(), &cfg_default()),
+            WheelAction::Noop
+        );
+    }
+
+    #[test]
+    fn horizontal_zero_notches_is_noop() {
+        let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        assert_eq!(
+            WheelAction::route_horizontal(modes, 0, cell(), WheelModifiers::default(), &cfg_default()),
+            WheelAction::Noop
+        );
+    }
+
+    #[test]
+    fn horizontal_x10_fallback_right() {
+        let modes = TermMode::MOUSE_DRAG; // no SGR_MOUSE → X10
+        let action = WheelAction::route_horizontal(modes, 1, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &cfg_default());
+        // cb 67 + 32 = 99; col/row 1 + 32 = 33
+        assert_eq!(action, WheelAction::WriteToPty(vec![0x1b, b'[', b'M', 99, 33, 33]));
+    }
+
+    #[test]
+    fn horizontal_concats_and_caps() {
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let cfg = WheelConfig { max_protocol_events_per_frame: 4, ..WheelConfig::default() };
+        let action = WheelAction::route_horizontal(modes, 20, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &cfg);
+        let one = b"\x1b[<67;1;1M";
+        let mut expected = Vec::new();
+        for _ in 0..4 {
+            expected.extend_from_slice(one);
+        }
+        assert_eq!(action, WheelAction::WriteToPty(expected));
+    }
+
+    #[test]
+    fn horizontal_zero_cap_is_noop() {
+        let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
+        let cfg = WheelConfig { max_protocol_events_per_frame: 0, ..WheelConfig::default() };
+        assert_eq!(
+            WheelAction::route_horizontal(modes, 5, cell(), WheelModifiers::default(), &cfg),
+            WheelAction::Noop
+        );
+    }
+
+    #[test]
+    fn horizontal_ctrl_modifier_bit() {
+        let modes = TermMode::SGR_MOUSE | TermMode::MOUSE_REPORT_CLICK;
+        let mods = WheelModifiers { ctrl: true, ..Default::default() };
+        let action = WheelAction::route_horizontal(modes, -1, CellCoord { col: 1, row: 1 }, mods, &cfg_default());
+        // 66 + 16 (ctrl) = 82
+        assert_eq!(action, WheelAction::WriteToPty(b"\x1b[<82;1;1M".to_vec()));
     }
 }
