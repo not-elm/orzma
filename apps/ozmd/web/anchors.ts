@@ -13,6 +13,12 @@ export function installHeadingAnchors(root: HTMLElement): void {
     if (slug.length === 0) {
       continue;
     }
+    // NOTE: skip a slug that collides with an existing id (e.g. the renderer's
+    // positional `h{n}` heading ids) so getElementById keeps resolving to the real
+    // heading rather than this injected anchor.
+    if (root.querySelector(`[id="${slug}"]`) !== null) {
+      continue;
+    }
     const anchor = document.createElement('span');
     anchor.className = 'ozmd-anchor';
     anchor.id = slug;

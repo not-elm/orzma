@@ -42,14 +42,7 @@ impl Document {
 /// # Errors
 /// Returns an error if the path does not exist or is not a regular file.
 pub(crate) fn resolve_path(arg: &str) -> io::Result<PathBuf> {
-    let path = fs::canonicalize(arg)?;
-    if !path.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "not a regular file",
-        ));
-    }
-    Ok(path)
+    require_regular_file(arg)
 }
 
 /// Reads and parses the Markdown file at `path` into a [`Document`].
@@ -65,7 +58,11 @@ pub(crate) fn load(path: &Path) -> io::Result<Document> {
 /// # Errors
 /// Returns an error if the path does not exist or is not a regular file.
 pub(crate) fn resolve_link(base_dir: &Path, target: &str) -> io::Result<PathBuf> {
-    let path = fs::canonicalize(base_dir.join(target))?;
+    require_regular_file(base_dir.join(target))
+}
+
+fn require_regular_file(path: impl AsRef<Path>) -> io::Result<PathBuf> {
+    let path = fs::canonicalize(path)?;
     if !path.is_file() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,

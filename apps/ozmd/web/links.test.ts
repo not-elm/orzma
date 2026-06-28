@@ -64,4 +64,12 @@ describe('classifyLink', () => {
       fragment: null,
     });
   });
+
+  it('classifies percent-encoded extension correctly (Fix 3)', () => {
+    expect(classifyLink('docs/notes%2Emd')).toEqual({
+      kind: 'markdown',
+      path: 'docs/notes.md',
+      fragment: null,
+    });
+  });
 });

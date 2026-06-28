@@ -32,6 +32,7 @@ pub(crate) struct NavigateRequest {
     /// The link's raw path (relative or absolute), percent-decoded by the page.
     pub(crate) path: String,
     /// The link's `#fragment`, if any, to scroll to after the document loads.
+    #[serde(default)]
     pub(crate) fragment: Option<String>,
 }
 

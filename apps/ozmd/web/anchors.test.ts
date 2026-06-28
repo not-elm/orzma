@@ -25,4 +25,10 @@ describe('installHeadingAnchors', () => {
     const ids = Array.from(div.querySelectorAll('span.ozmd-anchor')).map((s) => s.id);
     expect(ids).toEqual(['repeat', 'repeat-1']);
   });
+
+  it('skips injecting a slug that collides with an existing positional id (Fix 2)', () => {
+    const div = build('<h2 id="h0">Intro</h2><h2 id="h1">H0</h2>');
+    expect(div.querySelector('h2:nth-of-type(2) > span.ozmd-anchor')).toBeNull();
+    expect(div.querySelectorAll('[id="h0"]').length).toBe(1);
+  });
 });

@@ -29,7 +29,7 @@ export function classifyLink(href: string): LinkTarget {
   const pathPart = hash === -1 ? raw : raw.slice(0, hash);
   const fragment = hash === -1 ? null : decode(raw.slice(hash + 1));
   const path = decode(pathPart);
-  if (/\.(md|markdown)$/i.test(pathPart)) {
+  if (/\.(md|markdown)$/i.test(path)) {
     return { kind: 'markdown', path, fragment };
   }
   return { kind: 'file', path };

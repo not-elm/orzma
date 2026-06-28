@@ -169,6 +169,15 @@ impl App {
         }
     }
 
+    /// Clears search state when the viewed document changes (matches/bar are stale).
+    pub(crate) fn clear_search_state(&mut self) {
+        self.search_active = false;
+        self.search_query.clear();
+        if self.mode == Mode::Search {
+            self.mode = Mode::Normal;
+        }
+    }
+
     fn resolve_chord(&mut self, c: char) -> Vec<Cmd> {
         match c {
             'g' => vec![Cmd::Scroll(ScrollAction::Top)],

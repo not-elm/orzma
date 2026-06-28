@@ -10,6 +10,7 @@ mod ui;
 mod watcher;
 
 use crate::app::{App, Cmd};
+use crate::document::Document;
 use crate::protocol::{
     Content, NavigateRequest, OpenExternal, OpenPath, Scroll, ScrollState, ScrollTo, Search,
     SearchCount, SearchNav,
@@ -47,6 +48,7 @@ struct Session {
     live: LiveStatus,
     latest_ratio: f64,
     flash: Option<String>,
+    search_status: Option<SearchCount>,
 }
 
 impl Session {
@@ -63,6 +65,7 @@ impl Session {
             live: LiveStatus::Watching,
             latest_ratio: 0.0,
             flash: None,
+            search_status: None,
         }
     }
 
@@ -70,14 +73,18 @@ impl Session {
         (self.latest_ratio * 100.0).round() as u16
     }
 
+    fn base_dir(&self) -> &Path {
+        self.current_path.parent().unwrap_or_else(|| Path::new("."))
+    }
+
     fn navigate(
         &mut self,
         request: NavigateRequest,
-        shared: &Arc<Mutex<document::Document>>,
+        shared: &Arc<Mutex<Document>>,
         view: &WebviewHandle,
         reload_tx: &mpsc::Sender<()>,
     ) {
-        let base = self.current_path.parent().unwrap_or_else(|| Path::new("."));
+        let base = self.base_dir();
         match document::resolve_link(base, &request.path) {
             Ok(target) if document::is_markdown(&target) => {
                 let previous = HistoryEntry {
@@ -97,19 +104,21 @@ impl Session {
 
     fn back(
         &mut self,
-        shared: &Arc<Mutex<document::Document>>,
+        shared: &Arc<Mutex<Document>>,
         view: &WebviewHandle,
         reload_tx: &mpsc::Sender<()>,
     ) {
         match self.history.pop() {
             Some(entry) => {
-                let _ = self.load_and_show(
+                if !self.load_and_show(
                     &entry.path,
                     ScrollTo::Ratio { ratio: entry.ratio },
                     shared,
                     view,
                     reload_tx,
-                );
+                ) {
+                    self.history.push(entry);
+                }
             }
             None => self.flash = Some("no previous page".to_owned()),
         }
@@ -119,7 +128,7 @@ impl Session {
         &mut self,
         target: &Path,
         scroll_to: ScrollTo,
-        shared: &Arc<Mutex<document::Document>>,
+        shared: &Arc<Mutex<Document>>,
         view: &WebviewHandle,
         reload_tx: &mpsc::Sender<()>,
     ) -> bool {
@@ -142,6 +151,8 @@ impl Session {
         self.last_fp = document::fingerprint(target).ok();
         self.live = LiveStatus::Watching;
         self.flash = None;
+        self.search_status = None;
+        self.state.clear_search_state();
         self.state.set_outline(doc.outline.clone());
         let content = content_for(&doc, scroll_to);
         if let Ok(mut guard) = shared.lock() {
@@ -151,7 +162,7 @@ impl Session {
         true
     }
 
-    fn reload(&mut self, shared: &Arc<Mutex<document::Document>>, view: &WebviewHandle) {
+    fn reload(&mut self, shared: &Arc<Mutex<Document>>, view: &WebviewHandle) {
         let fp = match document::fingerprint(&self.current_path) {
             Ok(fp) => fp,
             Err(_) => {
@@ -174,6 +185,7 @@ impl Session {
         // permanently suppress a later reload with the same fingerprint.
         self.last_fp = Some(fp);
         self.live = LiveStatus::Watching;
+        self.flash = None;
         self.state.set_outline(doc.outline.clone());
         let content = content_for(&doc, ScrollTo::Preserve);
         if let Ok(mut guard) = shared.lock() {
@@ -258,7 +270,7 @@ fn run() -> anyhow::Result<()> {
 fn register_view(
     ozma: &Ozma,
     asset_dir: &tempfile::TempDir,
-    shared: Arc<Mutex<document::Document>>,
+    shared: Arc<Mutex<Document>>,
 ) -> anyhow::Result<WebviewHandle> {
     let ready_doc = Arc::clone(&shared);
     let view = ozma.register(
@@ -291,7 +303,7 @@ fn event_loop(
     current_watcher: FileWatcher,
     ozma: &Ozma,
     view: &WebviewHandle,
-    shared: &Arc<Mutex<document::Document>>,
+    shared: &Arc<Mutex<Document>>,
     start_path: PathBuf,
     reload_tx: mpsc::Sender<()>,
     reload_rx: &mpsc::Receiver<()>,
@@ -303,11 +315,9 @@ fn event_loop(
     session
         .state
         .set_outline(shared.lock().unwrap().outline.clone());
-    let mut search_status: Option<SearchCount> = None;
-
     loop {
         for c in view.read_events::<SearchCount>() {
-            search_status = Some(c);
+            session.search_status = Some(c);
         }
         for s in view.read_events::<ScrollState>() {
             session.latest_ratio = s.ratio.clamp(0.0, 1.0);
@@ -324,10 +334,7 @@ fn event_loop(
             }
         }
         for op in view.read_events::<OpenPath>() {
-            let base = session
-                .current_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."));
+            let base = session.base_dir();
             match document::resolve_link(base, &op.path) {
                 Ok(target) => spawn_open(&target),
                 Err(_) => session.flash = Some(format!("cannot open {}", op.path)),
@@ -352,7 +359,7 @@ fn event_loop(
                 &session.file_name,
                 session.live,
                 percent,
-                search_status,
+                session.search_status,
                 session.flash.as_deref(),
             );
         })?;
@@ -380,7 +387,7 @@ fn event_loop(
                         let _ = view.emit("searchNav", &SearchNav { dir });
                     }
                     Cmd::ClearSearch => {
-                        search_status = None;
+                        session.search_status = None;
                         let _ = view.emit("clearSearch", &());
                     }
                 }
@@ -389,7 +396,7 @@ fn event_loop(
     }
 }
 
-fn content_for(doc: &document::Document, scroll_to: ScrollTo) -> Content {
+fn content_for(doc: &Document, scroll_to: ScrollTo) -> Content {
     Content {
         markdown: doc.text.clone(),
         base_dir: doc.base_dir.display().to_string(),
