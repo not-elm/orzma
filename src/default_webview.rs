@@ -15,7 +15,7 @@
 
 use crate::app_mode::AppMode;
 use crate::input::InputPhase;
-use crate::tmux::pane_hit::phys_to_pane_local;
+use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,

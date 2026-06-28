@@ -510,7 +510,7 @@ pub(crate) fn cell_at_pane(
 }
 
 /// Maps a window physical-pixel point to a node's local physical px with origin
-/// at the node's top-left corner. Mirrors `tmux_pane_hit::phys_to_pane_local`
+/// at the node's top-left corner. Mirrors `crate::surface_geom::phys_to_pane_local`
 /// (the affine inverse of `UiGlobalTransform` via `ComputedNode::normalize_point`).
 fn phys_to_pane_local(
     node: &ComputedNode,

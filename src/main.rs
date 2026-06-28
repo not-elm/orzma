@@ -8,6 +8,7 @@ mod default_input;
 mod default_webview;
 mod font;
 mod input;
+mod surface_geom;
 mod system_set;
 mod theme;
 mod tmux;

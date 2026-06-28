@@ -8,7 +8,7 @@
 //! (`ozma_webview`), so `bevy_cef`'s native picking cannot reach them; this
 //! manual forwarding is the only path that delivers clicks to them.
 
-use crate::tmux::pane_hit::phys_to_pane_local;
+use crate::surface_geom::phys_to_pane_local;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseScrollUnit};
