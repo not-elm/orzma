@@ -265,3 +265,19 @@ Mount handle `nf2k7q9w3x1m5a8b0c4d6e7f` as a 24×80 view, then unmount it:
 \x1b]5379;mount;nf2k7q9w3x1m5a8b0c4d6e7f;24;80\x1b\
 \x1b]5379;unmount;nf2k7q9w3x1m5a8b0c4d6e7f\x1b\
 ```
+
+## The `ozma://` origin
+
+`dir` and `inline` registrations are served from a per-handle origin
+`ozma://<handle>/`. A request for an empty path resolves to `index.html`. The
+scheme is standard, secure, CORS-enabled, fetch-enabled, and display-isolated,
+so normal `fetch`, ES modules, and same-origin requests work within the
+handle's origin. Each handle is its own isolated origin.
+
+- **`dir`** — files are served from the registered `root`. Path traversal
+  (`..`, absolute paths, percent-encoded escapes) is rejected; each file is
+  capped at 64 MiB; the content type is inferred from the file extension.
+- **`inline`** — the single registered document is served only at `index.html`;
+  any subresource request returns 404. Use `dir` for multi-file content.
+- **`url`** — the remote `http(s)` page is loaded directly and has **no**
+  `ozma://` origin.
