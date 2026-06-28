@@ -15,6 +15,9 @@ catalogs:
     esbuild:
       specifier: ^0.27.0
       version: 0.27.7
+    github-slugger:
+      specifier: ^2.0.0
+      version: 2.0.0
     highlight.js:
       specifier: ^11.0.0
       version: 11.11.1
@@ -62,6 +65,9 @@ importers:
       dompurify:
         specifier: 'catalog:'
         version: 3.4.10
+      github-slugger:
+        specifier: 'catalog:'
+        version: 2.0.0
       highlight.js:
         specifier: 'catalog:'
         version: 11.11.1
@@ -1040,6 +1046,9 @@ packages:
 
   get-tsconfig@4.14.0:
     resolution: {integrity: sha512-yTb+8DXzDREzgvYmh6s9vHsSVCHeC0G3PI5bEXNBHtmshPnO+S5O7qgLEOn0I5QvMy6kpZN8K1NKGyilLb93wA==}
+
+  github-slugger@2.0.0:
+    resolution: {integrity: sha512-IaOQ9puYtjrkq7Y0Ygl9KDZnrf/aiUJYUpVf89y8kyaxbRG7Y1SrX/jaumrv81vc61+kiMempujsM3Yw7w5qcw==}
 
   gopd@1.2.0:
     resolution: {integrity: sha512-ZUKRh6/kUFoAiTAtTYPZJ3hw9wNxx+BIBOijnlG9PnrJsCcSjs1wyyD6vJpaYtgnzDrKYRSqf3OO6Rfa93xsRg==}
@@ -2468,6 +2477,8 @@ snapshots:
     dependencies:
       resolve-pkg-maps: 1.0.0
     optional: true
+
+  github-slugger@2.0.0: {}
 
   gopd@1.2.0: {}
 
