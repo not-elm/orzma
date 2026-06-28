@@ -279,3 +279,51 @@ handle's origin. Each handle is its own isolated origin.
   any subresource request returns 404. Use `dir` for multi-file content.
 - **`url`** — the remote `http(s)` page is loaded directly and has **no**
   `ozma://` origin.
+
+## The `window.ozma` bridge
+
+Bridged webviews expose a frozen `window.ozma` object to page scripts.
+`dir` and `inline` views are always bridged; a `url` view is bridged only when
+registered with `bridge:true`. A page should feature-detect before using it.
+
+### API
+
+| Method | Returns | Meaning |
+| --- | --- | --- |
+| `call(method, params?)` | `Promise` | Invoke a program method; resolves with the program's `reply` value, rejects with `Error(error)`. |
+| `on(event, handler)` | `void` | Subscribe to a program `emit`. |
+| `off(event, handler)` | `void` | Remove a handler by reference. |
+| `emit(event, payload?)` | `void` | Send a one-way event to the program (arrives as `op:"event"`). |
+
+A `call` has **no client-side timeout** — if the program never replies, the
+Promise stays pending. The host injects a rejection when it cannot route the
+call: `no_owner` (the view has no registering connection), `owner_unavailable`
+(the connection's writer is gone), or `owner_disconnected` (the program
+disconnected with the call in flight).
+
+### Binary round-trip
+
+A **top-level** `Uint8Array` round-trips through the bridge — it is tagged
+`{"__u8":"<base64>"}` on the wire and decoded back to a `Uint8Array`. This
+applies to a `call`'s `params`, a resolved `value`, and an event `payload`.
+Bytes **nested** inside an object or array are **not** tagged and are silently
+lost. Pass binary as the top-level value, not as a field.
+
+### Example
+
+Using the [`@ozma/web`](../sdk/ozma-web) client:
+
+```ts
+import { ozma, isOzmaAvailable } from "@ozma/web";
+
+if (isOzmaAvailable()) {
+  // Request / response — annotate the reply type.
+  const res = await ozma.call<{ saved: boolean }>("save", { text: "hi" });
+
+  // Subscribe to a program event — annotate the payload.
+  ozma.on<{ n: number }>("tick", (payload) => console.log(payload.n));
+
+  // One-way event to the program.
+  ozma.emit("ready", { ok: true });
+}
+```
