@@ -376,25 +376,20 @@ pub(crate) fn wheel_delta_cells(unit: MouseScrollUnit, y: f32, cell_h: f32) -> f
     }
 }
 
-/// Adds `delta_cells` to the accumulator and returns whole notches to emit
-/// (positive = up/older), carrying the remainder. Resets the residual on a
-/// sign flip, then processes the new delta at full magnitude.
-pub(crate) fn accumulate_notches(
-    acc: &mut WheelAccumulator,
-    delta_cells: f32,
-    cells_per_notch: f32,
-) -> i32 {
-    if acc.residual_cells != 0.0
-        && delta_cells != 0.0
-        && acc.residual_cells.signum() != delta_cells.signum()
-    {
-        acc.residual_cells = 0.0;
+/// Adds `delta_cells` to `residual` and returns whole notches to emit
+/// (positive = up/older for the vertical axis, right for the horizontal axis),
+/// carrying the remainder. Resets `residual` on a sign flip, then processes the
+/// new delta at full magnitude. A zero / negative-zero delta has no direction
+/// and must not trip the sign-flip reset.
+pub(crate) fn accumulate_notches(residual: &mut f32, delta_cells: f32, cells_per_notch: f32) -> i32 {
+    if *residual != 0.0 && delta_cells != 0.0 && (*residual).signum() != delta_cells.signum() {
+        *residual = 0.0;
     }
     let threshold = cells_per_notch.max(f32::EPSILON);
-    acc.residual_cells += delta_cells;
-    let notches = (acc.residual_cells / threshold).trunc() as i32;
+    *residual += delta_cells;
+    let notches = (*residual / threshold).trunc() as i32;
     if notches != 0 {
-        acc.residual_cells -= notches as f32 * threshold;
+        *residual -= notches as f32 * threshold;
     }
     notches
 }
@@ -662,7 +657,7 @@ pub(crate) fn dispatch_mouse_wheel(
         .read()
         .map(|ev| wheel_delta_cells(ev.unit, ev.y, ctx.cell_h))
         .sum();
-    let raw = accumulate_notches(&mut gesture_acc, delta_cells, cfg.cells_per_notch);
+    let raw = accumulate_notches(&mut gesture_acc.residual_cells, delta_cells, cfg.cells_per_notch);
     if raw == 0 {
         return;
     }
@@ -1857,9 +1852,9 @@ mod tests {
     #[test]
     fn accumulator_emits_on_threshold_and_carries_remainder() {
         let mut acc = WheelAccumulator::default();
-        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
-        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1);
-        assert_eq!(accumulate_notches(&mut acc, -1.0, 0.5), -2);
+        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 0);
+        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 1);
+        assert_eq!(accumulate_notches(&mut acc.residual_cells, -1.0, 0.5), -2);
     }
 
     #[test]
@@ -1869,16 +1864,16 @@ mod tests {
         let b = world.spawn_empty().id();
         let mut acc = WheelAccumulator::default();
         acc.retarget(a);
-        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
+        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 0);
         acc.retarget(a);
         assert_eq!(
-            accumulate_notches(&mut acc, 0.3, 0.5),
+            accumulate_notches(&mut acc.residual_cells, 0.3, 0.5),
             1,
             "0.3 + 0.3 = 0.6 → one notch on the same target"
         );
         acc.retarget(b);
         assert_eq!(
-            accumulate_notches(&mut acc, 0.3, 0.5),
+            accumulate_notches(&mut acc.residual_cells, 0.3, 0.5),
             0,
             "switching target clears the carried residual"
         );
@@ -1889,9 +1884,9 @@ mod tests {
         // A zero / negative-zero delta has no direction and must NOT trip the
         // sign-flip reset (signum(-0.0) == -1.0 would otherwise drop the carry).
         let mut acc = WheelAccumulator::default();
-        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 0);
-        assert_eq!(accumulate_notches(&mut acc, -0.0, 0.5), 0);
-        assert_eq!(accumulate_notches(&mut acc, 0.3, 0.5), 1);
+        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 0);
+        assert_eq!(accumulate_notches(&mut acc.residual_cells, -0.0, 0.5), 0);
+        assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 1);
     }
 
     #[test]
