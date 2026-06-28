@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -112,19 +113,25 @@ def run_pnpm_licenses(version: str) -> list[dict]:
         ["pnpm", "licenses", "list", "--prod", "--json"],
         cwd=NPM_DIR, capture_output=True, text=True, check=True,
     ).stdout
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as inp_f:
+    inp_f = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    try:
         inp_f.write(listed)
-        inp_path = inp_f.name
-    with tempfile.NamedTemporaryFile(mode="r", suffix=".json", delete=False) as out_f:
-        out_path = out_f.name
-    subprocess.run(
-        [
-            "pnpm", "dlx", f"@quantco/pnpm-licenses@{version}",
-            "list", "--json-input-file", inp_path, "--output-file", out_path,
-        ],
-        cwd=REPO_ROOT, capture_output=True, text=True, check=True,
-    )
-    return json.loads(Path(out_path).read_text(encoding="utf-8"))
+        inp_f.close()
+        out_fd, out_path = tempfile.mkstemp(suffix=".json")
+        os.close(out_fd)
+        try:
+            subprocess.run(
+                [
+                    "pnpm", "dlx", f"@quantco/pnpm-licenses@{version}",
+                    "list", "--json-input-file", inp_f.name, "--output-file", out_path,
+                ],
+                cwd=REPO_ROOT, capture_output=True, text=True, check=True,
+            )
+            return json.loads(Path(out_path).read_text(encoding="utf-8"))
+        finally:
+            Path(out_path).unlink(missing_ok=True)
+    finally:
+        Path(inp_f.name).unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> None:
