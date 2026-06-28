@@ -8,6 +8,8 @@ cef_framework_lib := cef_dir / "Chromium Embedded Framework.framework" / "Librar
 cef_debug_render_process := "bevy_cef_debug_render_process"
 bevy_cef_render_process := "bevy_cef_render_process"
 bevy_cef_version := "0.11.0"
+cargo_about_version := "0.9.0"
+pnpm_licenses_version := "2.4.2"
 
 # CARGO_HOME/bin when CARGO_HOME is set and non-empty, else ~/.cargo/bin.
 # env(key, default) returns the default only when the var is ABSENT, so the
@@ -82,3 +84,15 @@ bundle-macos *args: ozmd-web
 [macos]
 release-macos *args: setup-cef-release ozmd-web
     python3 scripts/bundle_macos.py --notarize {{ args }}
+
+# refresh the vendored Chromium credits from the provisioned CEF dir (run on cef_version bump)
+licenses-refresh-cef:
+    cp "{{ cef_dir }}/CREDITS.html" licenses/chromium/CREDITS.html
+
+# generate licenses/THIRD-PARTY-LICENSES.md from all dependency licenses
+licenses:
+    python3 scripts/generate_licenses.py --cargo-about-version {{ cargo_about_version }} --pnpm-licenses-version {{ pnpm_licenses_version }}
+
+# regenerate and fail if the committed licenses file is stale (CI drift gate)
+licenses-check: licenses
+    git diff --exit-code licenses/THIRD-PARTY-LICENSES.md

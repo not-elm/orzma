@@ -311,6 +311,18 @@ def copy_companions(cfg: BundleConfig) -> None:
         print(f"  Embedded companion {name}")
 
 
+def copy_licenses(cfg: BundleConfig) -> None:
+    resources = cfg.resources_path
+    resources.mkdir(parents=True, exist_ok=True)
+    for src in (
+        REPO_ROOT / "licenses" / "THIRD-PARTY-LICENSES.md",
+        REPO_ROOT / "licenses" / "chromium" / "CREDITS.html",
+    ):
+        dest = resources / src.name
+        shutil.copy2(src, dest)
+        print(f"  Embedded license file {src.name}")
+
+
 def strip_xattrs(cfg: BundleConfig) -> None:
     run(xattr_strip_argv(cfg.app_path))
 
@@ -415,6 +427,7 @@ def main(argv: list[str] | None = None) -> None:
     assemble_app(cfg)
     embed_cef(cfg)
     copy_companions(cfg)
+    copy_licenses(cfg)
     strip_xattrs(cfg)
     if not cfg.no_sign:
         codesign_bundle(cfg)

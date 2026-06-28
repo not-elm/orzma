@@ -1,0 +1,14 @@
+{{! Markdown fragment: one block per license, used by Task 4's orchestrator. }}
+{{#each licenses}}
+### {{name}}{{#if id}} — `{{id}}`{{/if}}
+
+Used by:
+{{#each used_by}}
+- {{crate.name}} {{crate.version}}
+{{/each}}
+
+~~~text
+{{{text}}}
+~~~
+
+{{/each}}
