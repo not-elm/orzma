@@ -3,8 +3,6 @@
 //! entry clickable to `select-window`.
 
 use crate::font::{PowerlineFont, TerminalUiFont};
-use crate::input::InputPhase;
-use crate::input::tmux::window_bar_input::{switch_window_on_click, window_entry_hover_cursor};
 use crate::theme;
 use crate::ui::palette;
 use bevy::prelude::*;
@@ -67,14 +65,6 @@ impl Plugin for WindowBarPlugin {
             rebuild_window_bar
                 .run_if(window_bar_dirty)
                 .after(TmuxProjectionSet)
-                .in_set(super::TmuxActiveSet),
-        )
-        .add_systems(
-            Update,
-            (
-                switch_window_on_click.in_set(InputPhase::Dispatch),
-                window_entry_hover_cursor.after(InputPhase::Hover),
-            )
                 .in_set(super::TmuxActiveSet),
         );
     }

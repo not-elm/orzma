@@ -50,6 +50,16 @@ impl Plugin for DefaultHostInputPlugin {
     }
 }
 
+/// Returns `true` when host-side keyboard input should be suppressed: IME
+/// composing, window not focused, or a webview owns the keyboard.
+pub(crate) fn should_disable_input(
+    composing: bool,
+    window_focused: bool,
+    webview_focused: bool,
+) -> bool {
+    composing || !window_focused || webview_focused
+}
+
 /// Inline-webview hit-test inputs for the mouse rect-claim, bundled to stay
 /// within Bevy's system-parameter limit. `metrics` is optional so the gate still
 /// runs before cell metrics exist (no claim possible yet).
@@ -203,14 +213,6 @@ fn apply_ime_commit_to_terminal(
         key: TerminalKey::Text(ev.text.clone()),
         modifiers: TerminalModifiers::default(),
     });
-}
-
-pub(crate) fn should_disable_input(
-    composing: bool,
-    window_focused: bool,
-    webview_focused: bool,
-) -> bool {
-    composing || !window_focused || webview_focused
 }
 
 fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutAction) -> bool {

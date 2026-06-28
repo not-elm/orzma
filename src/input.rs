@@ -1,11 +1,11 @@
-//! Keyboard shortcut handling: dispatcher systems. The shortcut binding
-//! table comes from the loaded `OzmuxConfigsResource`; this module owns
-//! no chord data.
+//! Root of the host input pipeline: keyboard, mouse, focus, gesture and binding
+//! primitives, IME, hyperlink-hover, shortcuts, option-as-alt, and the
+//! per-mode (`default_mode`, `tmux`) dispatchers.
 
-pub(crate) mod bindings;
+mod bindings;
 pub(crate) mod default_mode;
 pub(crate) mod focus;
-pub(crate) mod gesture;
+mod gesture;
 pub(crate) mod hyperlink;
 pub(crate) mod ime;
 pub(crate) mod keyboard;

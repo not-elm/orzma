@@ -7,8 +7,10 @@
 //! cursor is left to `bevy_cef`'s `SystemCursorIconPlugin`. Surfaces with input
 //! suppressed (`MouseDisabled`: copy mode, IME, focused webview, unfocused
 //! window) are skipped, so hover never advertises a link the mouse dispatcher
-//! would refuse to open. Hyperlink activation (Cmd/Ctrl-click open) is owned by
-//! `ozma_terminal`'s shared mouse systems, not here.
+//! would refuse to open. Hyperlink activation (Cmd/Ctrl-click → `OpenUri`) now lives in
+//! `crate::input::mouse` (deciders `decide_button`/`resolve_button_event`);
+//! `ozma_terminal` keeps only the apply observer (`on_terminal_mouse_effects` →
+//! `try_open_uri`).
 
 use crate::input::focus::MouseDisabled;
 use crate::input::{InputPhase, current_modifiers};

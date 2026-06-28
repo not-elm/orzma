@@ -2,9 +2,9 @@
 //! `KeyboardFocused` terminal; also provides the modifier-reading helper used
 //! by the mouse dispatch.
 
-use crate::input::InputPhase;
 use crate::input::bindings::{ReservedChord, TerminalInputBindings};
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
+use crate::input::{InputPhase, current_modifiers};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -30,11 +30,12 @@ impl Plugin for KeyboardInputPlugin {
 
 /// Returns the terminal modifier state from the `ButtonInput<KeyCode>` resource.
 pub(crate) fn current_terminal_modifiers(keys: &ButtonInput<KeyCode>) -> TerminalModifiers {
+    let m = current_modifiers(keys);
     TerminalModifiers {
-        ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
-        shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        alt: keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight),
-        meta: keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight),
+        ctrl: m.ctrl,
+        shift: m.shift,
+        alt: m.alt,
+        meta: m.meta,
     }
 }
 

@@ -59,7 +59,7 @@ impl Plugin for FocusSyncPlugin {
 /// focus until its child despawns (or focus moves off it), at which point the
 /// sync falls through to the clear path below, which maps the active terminal
 /// pane to `None`.
-pub(crate) fn sync_focused_webview(
+fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
     active_pane: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     webviews: Query<(), With<WebviewSource>>,

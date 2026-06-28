@@ -1,8 +1,8 @@
 //! Per-pane input gating for `AppMode::Tmux`: every pane is `KeyboardDisabled`
 //! (keys pass through to tmux), and `MouseDisabled` whenever a modal owns input,
 //! the pane is in copy mode, the focused webview belongs to the pane, or
-//! an interactive webview under the cursor claims the press — so
-//! `ozma_terminal`'s shared mouse systems yield to the tmux-specific gestures.
+//! an interactive webview under the cursor claims the press — so the
+//! `crate::input::mouse` shared systems yield to the tmux-specific gestures.
 
 use super::pane_hit::tmux_pane_at_phys;
 use crate::input::InputPhase;

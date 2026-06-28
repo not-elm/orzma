@@ -17,6 +17,7 @@ use crate::input::tmux::forward::ForwardPlugin;
 use crate::input::tmux::gate::GatePlugin;
 use crate::input::tmux::input::InputPlugin;
 use crate::input::tmux::mouse::MousePlugin;
+use crate::input::tmux::window_bar_input::WindowBarInputPlugin;
 use crate::mode::AppMode;
 use adopt::AdoptPlugin;
 use bevy::prelude::*;
@@ -50,14 +51,18 @@ impl Plugin for OzmuxTmuxPlugin {
                 ForwardPlugin,
                 CopyModePlugin,
                 WindowBarPlugin,
+                WindowBarInputPlugin,
                 DividerHandlePlugin,
                 PaneFocusPlugin,
                 GatePlugin,
                 WebviewTokensPlugin,
+            ))
+            .add_plugins((
                 TmuxLocalePlugin,
                 TmuxModeUiPlugin,
-            ))
-            .add_plugins((ConfirmPromptPlugin, RenamePromptPlugin));
+                ConfirmPromptPlugin,
+                RenamePromptPlugin,
+            ));
     }
 }
 
