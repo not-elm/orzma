@@ -12,6 +12,8 @@ cask "ozmux" do
   depends_on formula: "tmux"
 
   app "ozmux.app"
+  binary "#{appdir}/ozmux.app/Contents/Resources/ozbrowser"
+  binary "#{appdir}/ozmux.app/Contents/Resources/ozmd"
 
   caveats do
     "If macOS blocks the app (un-notarized build), clear quarantine:\n" \

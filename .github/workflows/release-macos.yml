@@ -35,6 +35,18 @@ jobs:
       - name: Provision CEF + release render process
         run: just setup-cef-release
 
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Build ozmd web assets
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+
       - name: Import signing certificate
         if: env.MACOS_CERT_P12 != ''
         uses: apple-actions/import-codesign-certs@v3

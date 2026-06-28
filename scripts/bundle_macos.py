@@ -11,7 +11,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 APP_NAME = "ozmux"
@@ -21,6 +21,7 @@ ARCH = "arm64"
 TARGET_TRIPLE = "aarch64-apple-darwin"
 CARGO_PROFILE = "dist"
 HELPER_SUFFIXES = ("", " (GPU)", " (Renderer)", " (Plugin)")
+COMPANION_BINS = ("ozbrowser", "ozmd")
 MIN_MACOS = "11.0"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -76,6 +77,13 @@ def cargo_build_argv(triple: str, profile: str) -> list[str]:
             "--locked", "--no-default-features"]
 
 
+def companion_cargo_build_argv(triple: str, profile: str, names: tuple[str, ...]) -> list[str]:
+    argv = ["cargo", "build", "--profile", profile, "--target", triple, "--locked"]
+    for name in names:
+        argv += ["-p", name]
+    return argv
+
+
 def lipo_archs_argv(path: Path) -> list[str]:
     return ["lipo", "-archs", str(path)]
 
@@ -96,6 +104,10 @@ def codesign_argv(identity: str, path: Path, *, hardened: bool, entitlements: Pa
 
 def codesign_verify_argv(path: Path) -> list[str]:
     return ["codesign", "--verify", "--deep", "--strict", str(path)]
+
+
+def codesign_verify_one_argv(path: Path) -> list[str]:
+    return ["codesign", "--verify", str(path)]
 
 
 def xattr_strip_argv(path: Path) -> list[str]:
@@ -141,6 +153,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Bundle ozmux into a CEF-embedded macOS .app")
     p.add_argument("--version")
     p.add_argument("--bin")
+    p.add_argument("--ozbrowser-bin")
+    p.add_argument("--ozmd-bin")
     p.add_argument("--skip-build", action="store_true")
     p.add_argument("--no-sign", action="store_true")
     p.add_argument("--sign-identity")
@@ -166,6 +180,13 @@ def resolve_config(args: argparse.Namespace) -> BundleConfig:
     if notarize and args.no_sign:
         print("==> WARNING: --no-sign skips signing; disabling notarization")
         notarize = False
+    companion_bins = {}
+    for name in COMPANION_BINS:
+        override = getattr(args, f"{name}_bin", None)
+        if override:
+            companion_bins[name] = Path(override).expanduser()
+        else:
+            companion_bins[name] = REPO_ROOT / "target" / TARGET_TRIPLE / CARGO_PROFILE / name
     return BundleConfig(
         version=version, app_name=APP_NAME, bin_name=BIN_NAME, bundle_id_base=BUNDLE_ID_BASE,
         arch=ARCH, target_triple=TARGET_TRIPLE, bin_source=bin_source,
@@ -173,6 +194,7 @@ def resolve_config(args: argparse.Namespace) -> BundleConfig:
         helper_bin=Path(args.helper_bin).expanduser(),
         out_dir=Path(args.out_dir), sign_identity=sign_identity,
         no_sign=args.no_sign, notarize=notarize,
+        companion_bins=companion_bins,
     )
 
 
@@ -187,6 +209,11 @@ def verify_prerequisites(cfg: BundleConfig) -> None:
         raise SystemExit(
             f"render-process helper not found: {cfg.helper_bin} (run `just setup-cef-release`)"
         )
+    for name, src in cfg.companion_bins.items():
+        if not src.is_file():
+            raise SystemExit(
+                f"companion binary not found: {src} (build first or pass --{name}-bin)"
+            )
 
 
 def run(argv: list[str], redact: tuple[str, ...] = ()) -> None:
@@ -274,6 +301,16 @@ def embed_cef(cfg: BundleConfig) -> None:
         print(f"  Created {helper_name}.app")
 
 
+def copy_companions(cfg: BundleConfig) -> None:
+    resources = cfg.resources_path
+    resources.mkdir(parents=True, exist_ok=True)
+    for name, src in cfg.companion_bins.items():
+        dest = resources / name
+        shutil.copy2(src, dest)
+        dest.chmod(0o755)
+        print(f"  Embedded companion {name}")
+
+
 def strip_xattrs(cfg: BundleConfig) -> None:
     run(xattr_strip_argv(cfg.app_path))
 
@@ -295,6 +332,21 @@ def codesign_bundle(cfg: BundleConfig) -> None:
     for suffix in HELPER_SUFFIXES:
         helper_app = frameworks / f"{cfg.bin_name} Helper{suffix}.app"
         run(codesign_argv(cfg.sign_identity, helper_app, hardened=hardened, entitlements=entitlements))
+
+    resources = cfg.resources_path
+    # NOTE: companions are plain CLIs (no CEF) exposed directly on the user's
+    # PATH; sign them with the hardened runtime but WITHOUT entitlements. They
+    # must not inherit the CEF grants (JIT, unsigned-executable-memory, disabled
+    # library validation) — least privilege. Do not unify this with the helper
+    # signing above.
+    # NOTE: codesign --verify --deep --strict on the outer app does NOT descend
+    # into plain executables in Contents/Resources, so verify each companion
+    # explicitly here — otherwise a broken signing loop ships unsigned binaries
+    # with no error on the local/ad-hoc path.
+    for name in cfg.companion_bins:
+        run(codesign_argv(cfg.sign_identity, resources / name,
+                          hardened=hardened, entitlements=None))
+        run(codesign_verify_one_argv(resources / name))
 
     run(codesign_argv(cfg.sign_identity, cfg.app_path, hardened=hardened, entitlements=entitlements))
     run(codesign_verify_argv(cfg.app_path))
@@ -332,8 +384,24 @@ def package(cfg: BundleConfig) -> str:
     return digest
 
 
+def verify_ozmd_web_assets(assets_dir: Path | None = None) -> None:
+    assets = assets_dir if assets_dir is not None else REPO_ROOT / "apps" / "ozmd" / "assets"
+    real = (
+        [p for p in assets.glob("*") if p.name not in {".gitignore", ".gitkeep"}]
+        if assets.is_dir() else []
+    )
+    if not real:
+        raise SystemExit(
+            "ozmd web assets missing: apps/ozmd/assets/ has only placeholders. "
+            "Run `pnpm build` (or `just ozmd-web`) before bundling, "
+            "or ozmd will ship a blank viewer."
+        )
+
+
 def cargo_build(cfg: BundleConfig) -> None:
     run(cargo_build_argv(cfg.target_triple, CARGO_PROFILE))
+    verify_ozmd_web_assets()
+    run(companion_cargo_build_argv(cfg.target_triple, CARGO_PROFILE, COMPANION_BINS))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -346,6 +414,7 @@ def main(argv: list[str] | None = None) -> None:
     verify_prerequisites(cfg)
     assemble_app(cfg)
     embed_cef(cfg)
+    copy_companions(cfg)
     strip_xattrs(cfg)
     if not cfg.no_sign:
         codesign_bundle(cfg)
@@ -373,6 +442,7 @@ class BundleConfig:
     sign_identity: str
     no_sign: bool
     notarize: bool
+    companion_bins: dict[str, Path] = field(default_factory=dict)
 
     @property
     def app_path(self) -> Path:
@@ -381,6 +451,10 @@ class BundleConfig:
     @property
     def zip_path(self) -> Path:
         return self.out_dir / zip_name(self.app_name, self.version, self.arch)
+
+    @property
+    def resources_path(self) -> Path:
+        return self.app_path / "Contents" / "Resources"
 
 
 if __name__ == "__main__":

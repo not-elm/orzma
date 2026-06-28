@@ -1,9 +1,10 @@
-# ozmux
+# ozmux (Ozma Terminal Multiplexer)
 
-A terminal multiplexer built as a single
-[Bevy](https://bevyengine.org/) application (`ozmux`). Terminal emulation,
-GPU rendering, layout, input, and in-process CEF webview rendering all run in
-one ECS world.
+> [!CAUTION]
+> This app is still in early development and may introduce breaking changes.
+
+ozmux is a terminal emulator that can render webviews directly inside the
+terminal, with built-in tmux integration.
 
 ## Installation
 
@@ -20,48 +21,51 @@ and pulls in `tmux` as a dependency. Upgrade later with:
 brew upgrade --cask ozmux
 ```
 
-## Prerequisites
+The companion apps `ozmd` and `ozbrowser` (built with the `ratatui-ozma` SDK)
+are installed from source with `just install-apps`.
 
-- Rust 1.95 (pinned by `rust-toolchain.toml`)
-- Node + `pnpm@10.30.2` (for the `@ozma/web` TypeScript package; dev/CI use Node 24)
-- [`just`](https://just.systems/) — the task runner (`brew install just` or `cargo install just`)
-- The Chromium Embedded Framework, installed once:
-  ```bash
-  just setup-cef
-  ```
+## Features
 
-## Run
+### Webview
 
-```bash
-pnpm install
-cargo run               # or: just run
-```
+ozmux can display webviews inside the terminal, which opens up new
+possibilities for TUI applications. For example:
 
-## Layout
+- render rich graphics such as charts
+- embed games built with WebAssembly
+- host a local frontend (e.g. a dev server on localhost)
 
-- `src/` — the `ozmux` Bevy binary
-- `crates/` — `ozma_tty_engine`, `ozma_tty_renderer`, `extension_host`, `multiplexer`, `configs`
-- `sdk/ozma-web` — `@ozma/web` (in-page `window.ozma` bridge client for webview pages)
+### Tmux Integration
 
-## Webviews
+ozmux supports tmux through its control mode (`tmux -CC`), so your existing
+`tmux.conf` keybindings work as-is. ozmux starts as a plain single-pane
+terminal; running `tmux -CC` inside it switches to integration mode, where
+tmux windows and panes are rendered natively.
 
-A program in the shell can render a webview **inline in the terminal text flow**
-(a live CEF webview composited in the terminal shader, scrolling with the text).
-It registers content over the control plane to mint a handle, then writes an OSC
-5379 `mount;<handle>` sequence:
+## SDK
 
-```sh
-printf '\033]5379;mount;%s;12;48\033\\' "$handle"
-printf '\n%.0s' $(seq 12)
-```
+- [ratatui-ozma](sdk/ratatui-ozma) — Rust SDK: a ratatui widget and RPC
+  handler for embedding ozmux webviews from a TUI app.
+- [@ozma/web](sdk/ozma-web) — TypeScript client for the in-page `window.ozma`
+  bridge.
 
-For a runnable end-to-end client (register → mount → `window.ozma` back-channel)
-see [`examples/dyn_webview_client.rs`](examples/dyn_webview_client.rs). Click the
-view to focus it; keys, wheel, and IME then route to the page; `Ctrl+Shift+Escape`
-returns focus to the terminal. Full protocol, focus model, and limits:
-[`docs/dyn-webview.md`](docs/dyn-webview.md) and
-[`docs/webview.md`](docs/webview.md).
+## Ozma Webview Protocol
 
-## Development
+A program registers webview content over ozmux's control socket to mint an
+opaque handle, then writes an `OSC 5379;mount;<handle>;<rows>;<cols>` escape
+sequence to mount it as an in-process webview at that cell geometry
+(`OSC 5379;unmount;<handle>` tears it down). The page talks back to the host
+program through the `window.ozma` bridge. Use one of the SDKs above for a
+ready-made client.
 
-See `CLAUDE.md` for architecture and `.claude/rules/` for coding conventions.
+## Configuration
+
+ozmux reads `~/.config/ozmux/config.toml`, resolved against built-in
+defaults. Override the file path with `$OZMUX_CONFIG`, or the config
+directory with `$XDG_CONFIG_HOME`. Configurable areas include theme colors,
+fonts, keyboard and shortcut bindings, mouse behavior, inactive-pane dimming,
+and the default shell.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
