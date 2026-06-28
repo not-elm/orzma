@@ -4,13 +4,11 @@
 use crate::ui::root::OzmuxUiRootPlugin;
 use bevy::prelude::*;
 
-pub(crate) mod confirm_prompt;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod copy_search;
 pub(crate) mod ime_overlay;
 pub mod palette;
-pub(crate) mod rename_prompt;
 pub mod root;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never

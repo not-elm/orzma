@@ -9,15 +9,15 @@
 //! cell-deltas (so trackpad / high-resolution `Pixel` scrolling quantizes the
 //! same way the native terminal path does); every other case is ceded to ozma.
 
+use super::confirm_prompt::{ConfirmState, parse_confirm_before};
 use super::pane_hit::tmux_pane_at_phys;
+use super::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::mode::AppMode;
-use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
-use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;

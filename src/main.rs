@@ -36,9 +36,8 @@ use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
 use ozmux_webview_host::WebviewAssetRegistry;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
-    OzmuxUiPlugin, confirm_prompt::ConfirmPromptPlugin, copy_mode::CopyModePlugin,
-    copy_mode_indicator::CopyModeIndicatorPlugin, copy_search::CopyPromptPlugin,
-    rename_prompt::RenamePromptPlugin,
+    OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
+    copy_search::CopyPromptPlugin,
 };
 
 fn main() {
@@ -82,8 +81,6 @@ fn main() {
             CopyModeIndicatorPlugin,
         ))
         .add_plugins(CopyPromptPlugin)
-        .add_plugins(ConfirmPromptPlugin)
-        .add_plugins(RenamePromptPlugin)
         .add_plugins(WindowTitlePlugin)
         .add_plugins((
             HyperlinkInputPlugin,

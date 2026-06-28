@@ -1,6 +1,7 @@
 //! tmux feature plugin: aggregates all tmux runtime sub-plugins.
 
 mod adopt;
+mod confirm_prompt;
 mod copy_mode;
 mod divider_handle;
 mod forward;
@@ -12,6 +13,7 @@ mod mouse;
 mod paint_rescue;
 mod pane_focus;
 mod pane_hit;
+mod rename_prompt;
 mod render;
 mod webview_tokens;
 mod window_bar;
@@ -20,6 +22,7 @@ mod window_bar_input;
 use crate::mode::AppMode;
 use adopt::AdoptPlugin;
 use bevy::prelude::*;
+use confirm_prompt::ConfirmPromptPlugin;
 use copy_mode::CopyModePlugin;
 use divider_handle::DividerHandlePlugin;
 use forward::ForwardPlugin;
@@ -31,6 +34,7 @@ use mouse::MousePlugin;
 use ozmux_tmux::{TmuxClient, TmuxConnectionClosed, TmuxSessionPlugin};
 use paint_rescue::PaintRescuePlugin;
 use pane_focus::PaneFocusPlugin;
+use rename_prompt::RenamePromptPlugin;
 use render::RenderPlugin;
 use webview_tokens::WebviewTokensPlugin;
 use window_bar::WindowBarPlugin;
@@ -58,7 +62,8 @@ impl Plugin for OzmuxTmuxPlugin {
                 WebviewTokensPlugin,
                 TmuxLocalePlugin,
                 TmuxModeUiPlugin,
-            ));
+            ))
+            .add_plugins((ConfirmPromptPlugin, RenamePromptPlugin));
     }
 }
 
