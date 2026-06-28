@@ -109,3 +109,105 @@ Registrations are processed one at a time per connection, and each
 `register`'s reply arrives in request order. `register` has no request id —
 correlation is positional. (The back-channel `call`/`reply` pair below uses an
 explicit `reqId` instead.)
+
+### Program → host messages
+
+Every program line carries an `op`:
+
+| `op` | Fields | Meaning |
+| --- | --- | --- |
+| `hello` | `token` | Handshake; first line only. |
+| `register` | `kind` + per-kind fields | Register content, mint a handle. |
+| `unregister` | `handle` | Release a handle owned by this connection; despawns its mounted views. |
+| `reply` | `reqId`, `ok`, `value?`, `error?` | Answer a host `call` (use the `call`'s `reqId`). |
+| `emit` | `handle`, `event`, `payload` | Push an event to the handle's pages (delivered to `window.ozma.on`). |
+| `focus` | `handle` (string or `null`), `instance` (string or `null`) | Set app-owned focus to a mounted view, or `null` to blur. |
+| `navigate` | `handle`, `action` | Navigate a mounted view in place. |
+
+`navigate.action` is one of the strings `"back"`, `"forward"`, `"reload"`, or
+the object `{"to":"<http(s) url>"}` (`to` is valid only on a `url` view).
+
+### Register kinds
+
+`register` carries a `kind` discriminator and its fields:
+
+| `kind` | Required | Optional (default) | Served at |
+| --- | --- | --- | --- |
+| `dir` | `root` (absolute dir path), `entry` (safe relative path, e.g. `index.html`) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `ozma://<handle>/` |
+| `inline` | `html` (full document, ≤ 4 MiB) | `interactive` (`true`), `forward_keys` (`[]`), `preload` (`[]`) | `ozma://<handle>/index.html` |
+| `url` | `url` (`http`/`https` only) | `interactive` (`true`), `bridge` (`false`), `forward_keys` (`[]`), `preload` (`[]`) | the remote URL directly (no `ozma://` origin) |
+
+- `interactive` — whether the mounted view accepts pointer/keyboard input.
+- `bridge` (`url` only) — opt into the `window.ozma` back-channel. `dir` and
+  `inline` are always bridged; a `url` view is bridged only with `bridge:true`.
+- `preload` — an array of JavaScript source strings injected before the page's
+  own scripts (after the host bridge). Honored only for bridged views.
+
+### Forward keys
+
+`forward_keys` lists key chords the host passes through to the pane's PTY
+instead of letting the focused webview consume them. Each chord is:
+
+```json
+{"mods":["alt"],"key":"h"}
+```
+
+`mods` is any subset of `"alt"`, `"ctrl"`, `"shift"`, `"meta"`. `key` is one of:
+a lowercase letter `a`–`z`, a digit `0`–`9`, `tab`, `backtab`, `f1`–`f12`,
+`esc`, `" "` (space), `up`, `down`, `pageup`, `pagedown`. Unrecognized chords
+are silently ignored.
+
+### Host → program messages
+
+Every host push carries an `op`:
+
+| `op` | Fields | Meaning / response |
+| --- | --- | --- |
+| `call` | `handle`, `reqId`, `method`, `params` | A page `window.ozma.call(method, params)`. Respond with a `reply` carrying the same `reqId`. |
+| `event` | `handle`, `event`, `payload` | A page `window.ozma.emit(event, payload)`. Fire-and-forget; no response. |
+| `compositing` | `handle`, `active` (bool) | The view first composited (`true`) or was unmounted after compositing (`false`). |
+
+Two directional details that are easy to get wrong:
+
+- **`emit` vs. `event`.** A page's `window.ozma.emit(name, …)` arrives at the
+  program as `op:"event"`. A program's own `emit` message (`op:"emit"`) is
+  delivered to pages' `window.ozma.on(name, …)`. Same idea ("named event"), two
+  `op` values depending on direction.
+- **`urlChanged`.** For a `url` view, the host reports top-level address changes
+  as an `op:"call"` with `method:"urlChanged"` and `params:{"url":"<new>"}`.
+  Despite the `call` shape it is fire-and-forget — any `reply` is discarded. Use
+  it to track page-driven navigation.
+
+### Register reply & error codes
+
+A successful `register` replies `{"ok":true,"handle":"<handle>"}`. A rejected one
+replies `{"ok":false,"error":"<code>"}`:
+
+| `error` | Cause |
+| --- | --- |
+| `invalid_root` | `dir.root` is not an absolute path to an existing directory. |
+| `unsafe_entry` | `dir.entry` is empty, absolute, or contains `..`/`.`. |
+| `html_too_large` | `inline.html` exceeds 4 MiB. |
+| `invalid_url` | `url.url` does not parse or has no host. |
+| `unsupported_scheme` | `url.url` is not `http`/`https`. |
+| `internal` | The host failed to process the request. |
+
+### Handle semantics
+
+A handle is opaque, unique per registration, lowercase, and matches
+`^[a-z0-9._-]{1,128}$` (a subset of the OSC `view_id` charset, so a handle is
+always a valid `mount` argument). Treat it as a token: do not parse it. Each
+handle owns one isolated `ozma://<handle>/` origin.
+
+### Example exchange
+
+Program-to-host lines are marked `C→S`, host-to-program lines `S→C`:
+
+```json
+C→S {"op":"hello","token":"ozma:4294967306"}
+C→S {"op":"register","kind":"inline","html":"<!doctype html><body>hi</body>"}
+S→C {"ok":true,"handle":"nf2k7q9w3x1m5a8b0c4d6e7f"}
+S→C {"op":"call","handle":"nf2k7q9w3x1m5a8b0c4d6e7f","reqId":"0","method":"save","params":{"text":"hi"}}
+C→S {"op":"reply","reqId":"0","ok":true,"value":{"saved":true}}
+C→S {"op":"emit","handle":"nf2k7q9w3x1m5a8b0c4d6e7f","event":"tick","payload":{"n":1}}
+```
