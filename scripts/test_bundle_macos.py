@@ -130,6 +130,16 @@ class CommandBuilders(unittest.TestCase):
     def test_stapler_argv(self):
         self.assertEqual(bm.stapler_argv(Path("/tmp/a.app")), ["xcrun", "stapler", "staple", "/tmp/a.app"])
 
+    def test_companion_cargo_build_argv(self):
+        self.assertEqual(
+            bm.companion_cargo_build_argv("aarch64-apple-darwin", "dist", ("ozbrowser", "ozmd")),
+            ["cargo", "build", "--profile", "dist", "--target", "aarch64-apple-darwin",
+             "--locked", "-p", "ozbrowser", "-p", "ozmd"],
+        )
+
+    def test_companion_bins_constant(self):
+        self.assertEqual(bm.COMPANION_BINS, ("ozbrowser", "ozmd"))
+
     def test_compute_sha256(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
             f.write(b"hello")

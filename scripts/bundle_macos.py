@@ -21,6 +21,7 @@ ARCH = "arm64"
 TARGET_TRIPLE = "aarch64-apple-darwin"
 CARGO_PROFILE = "dist"
 HELPER_SUFFIXES = ("", " (GPU)", " (Renderer)", " (Plugin)")
+COMPANION_BINS = ("ozbrowser", "ozmd")
 MIN_MACOS = "11.0"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -74,6 +75,13 @@ def build_helper_plist(name: str, bundle_id: str) -> dict:
 def cargo_build_argv(triple: str, profile: str) -> list[str]:
     return ["cargo", "build", "--profile", profile, "--target", triple,
             "--locked", "--no-default-features"]
+
+
+def companion_cargo_build_argv(triple: str, profile: str, names: tuple[str, ...]) -> list[str]:
+    argv = ["cargo", "build", "--profile", profile, "--target", triple, "--locked"]
+    for name in names:
+        argv += ["-p", name]
+    return argv
 
 
 def lipo_archs_argv(path: Path) -> list[str]:
