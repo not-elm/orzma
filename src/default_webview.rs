@@ -13,8 +13,8 @@
 //! gets the click); off-rect the press clears webview focus here and falls
 //! through to the terminal.
 
-use crate::app_mode::AppMode;
 use crate::input::InputPhase;
+use crate::mode::AppMode;
 use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{

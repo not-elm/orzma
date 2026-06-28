@@ -17,7 +17,7 @@ mod webview_tokens;
 mod window_bar;
 mod window_bar_input;
 
-use crate::app_mode::AppMode;
+use crate::mode::AppMode;
 use adopt::AdoptPlugin;
 use bevy::prelude::*;
 use copy_mode::CopyModePlugin;

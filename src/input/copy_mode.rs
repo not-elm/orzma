@@ -5,11 +5,11 @@
 //! `app_shortcut_handler` (`src/default_input.rs`); this module owns only the
 //! keys handled WHILE copy mode is active.
 
-use crate::app_mode::AppMode;
 use crate::default_input::should_disable_input;
 use crate::input::InputPhase;
 use crate::input::current_modifiers;
 use crate::input::ime::ImeState;
+use crate::mode::AppMode;
 use crate::ui::copy_mode::{CopyModeState, ExitCopyMode};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;

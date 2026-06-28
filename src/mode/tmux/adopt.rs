@@ -12,7 +12,8 @@
 //! survives) or the gateway child process actually exiting — despawning the
 //! gateway entity (and its `TmuxClient`) and returning to [`AppMode::Default`].
 
-use crate::app_mode::{AppMode, DefaultModeUi};
+use crate::app_mode::DefaultModeUi;
+use crate::mode::AppMode;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;

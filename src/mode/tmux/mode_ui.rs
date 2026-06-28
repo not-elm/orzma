@@ -1,7 +1,7 @@
 //! Mode-scoped UI for `AppMode::Tmux`: spawns the Tmux subtree under `UiRoot`
 //! while in Tmux mode and relies on `DespawnOnExit` to remove it on exit.
 
-use crate::app_mode::AppMode;
+use crate::mode::AppMode;
 use crate::mode::tmux::window_bar::spawn_window_bar;
 use crate::ui::UiRoot;
 use bevy::prelude::*;

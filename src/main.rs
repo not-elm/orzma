@@ -16,9 +16,10 @@ mod ui;
 mod webview_pointer;
 mod window_title;
 
-use crate::app_mode::{AppMode, DefaultModePlugin};
+use crate::app_mode::DefaultModePlugin;
 use crate::cef_profile::CefProfileDir;
 use crate::input::hyperlink::HyperlinkInputPlugin;
+use crate::mode::AppMode;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;

@@ -1,21 +1,11 @@
-//! AppMode state enum and the Default-mode UI subtree lifecycle plugin.
+//! Default-mode UI subtree lifecycle plugin.
 
+use crate::mode::AppMode;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use ozma_terminal::{KeyboardFocused, OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use ozma_tty_engine::ControlModeWatch;
 use ozma_webview::ControlPlaneHandle;
-
-/// Application mode. `Default` is the default (single PTY, no tmux).
-/// `Tmux` activates the tmux multiplexer backend.
-#[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub(crate) enum AppMode {
-    /// Single PTY terminal, Alacritty VT emulation, no tmux.
-    #[default]
-    Default,
-    /// tmux backend, multiplexer layout.
-    Tmux,
-}
 
 /// Root of the Default-mode UI subtree, mounted under `UiRoot`.
 ///
@@ -114,6 +104,7 @@ fn ensure_default_mode_ui(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mode::AppMode;
     use bevy::state::app::StatesPlugin;
     use ozma_webview::TokenRegistry;
     use std::path::PathBuf;
