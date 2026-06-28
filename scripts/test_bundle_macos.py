@@ -42,6 +42,14 @@ class PureHelpers(unittest.TestCase):
         self.assertEqual(cfg.zip_path, Path("/tmp/out/ozmux-1.2.3-arm64.zip"))
 
 
+class CaskTemplate(unittest.TestCase):
+    def test_template_has_companion_binary_stanzas(self):
+        tmpl = (bm.REPO_ROOT / "build" / "macos" / "homebrew" / "ozmux.rb.tmpl").read_text()
+        self.assertIn('app "ozmux.app"', tmpl)
+        self.assertIn('binary "#{appdir}/ozmux.app/Contents/Resources/ozbrowser"', tmpl)
+        self.assertIn('binary "#{appdir}/ozmux.app/Contents/Resources/ozmd"', tmpl)
+
+
 class PlistLogic(unittest.TestCase):
     def test_merge_cef_keys_into_empty(self):
         out = bm.merge_cef_keys({})
