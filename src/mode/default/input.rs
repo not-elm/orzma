@@ -207,7 +207,7 @@ fn apply_ime_commit_to_terminal(
     });
 }
 
-pub(crate) fn should_disable_input(
+pub(super) fn should_disable_input(
     composing: bool,
     window_focused: bool,
     webview_focused: bool,
