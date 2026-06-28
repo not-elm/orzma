@@ -274,9 +274,7 @@ scheme is standard, secure, CORS-enabled, fetch-enabled, and display-isolated,
 so normal `fetch`, ES modules, and same-origin requests work within the
 handle's origin. Each handle is its own isolated origin.
 
-- **`dir`** — files are served from the registered `root`. Path traversal
-  (`..`, absolute paths, percent-encoded escapes) is rejected; each file is
-  capped at 64 MiB; the content type is inferred from the file extension.
+- **`dir`** — files are served from the registered `root`. Requests that escape the root — a `..` or `.` path component, an absolute path, or their percent-encoded forms — are rejected; each file is capped at 64 MiB; the content type is inferred from the file extension.
 - **`inline`** — the single registered document is served only at `index.html`;
   any subresource request returns 404. Use `dir` for multi-file content.
 - **`url`** — the remote `http(s)` page is loaded directly and has **no**
