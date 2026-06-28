@@ -1,12 +1,10 @@
-//! Shared tmux pane hit-testing and cell geometry. One home for the pointer
-//! → (pane, local-physical-px, cell) math used by hyperlink hover, the tmux
-//! mouse gesture system, webview pointer routing, and copy-mode.
+//! Shared terminal-surface geometry: cursor physical-pixel → pane-local px →
+//! cell (column/row/side). Mode-agnostic — used by the pointer router
+//! (`crate::webview_pointer`), both mode pipelines, and hyperlink hover. The
+//! `TmuxPane`-specific hit-test lives in `crate::mode::tmux::pane_hit`.
 
-use bevy::ecs::entity::Entity;
-use bevy::ecs::system::Query;
 use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use ozmux_tmux::{PaneId, TmuxPane};
 
 /// Which half of a cell the pointer fell in (left vs. right of the midline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,24 +22,6 @@ pub(crate) fn phys_to_pane_local(
 ) -> Option<Vec2> {
     node.normalize_point(*transform, cursor_phys_px)
         .map(|normalized| (normalized + Vec2::splat(0.5)) * node.size)
-}
-
-/// The first `TmuxPane` under `cursor_phys_px`, with the pointer in pane-local
-/// physical px. Skips panes without a laid-out node.
-pub(crate) fn tmux_pane_at_phys(
-    panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    cursor_phys_px: Vec2,
-) -> Option<(Entity, PaneId, Vec2)> {
-    for (entity, pane, node, transform) in panes.iter() {
-        if !node.contains_point(*transform, cursor_phys_px) {
-            continue;
-        }
-        let Some(local) = phys_to_pane_local(node, transform, cursor_phys_px) else {
-            continue;
-        };
-        return Some((entity, pane.id, local));
-    }
-    None
 }
 
 /// 1-indexed `(col, row, side)` of the cell at `local_phys`, clamped to the

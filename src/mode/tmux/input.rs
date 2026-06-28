@@ -9,15 +9,16 @@
 //! cell-deltas (so trackpad / high-resolution `Pixel` scrolling quantizes the
 //! same way the native terminal path does); every other case is ceded to ozma.
 
+use super::confirm_prompt::{ConfirmState, parse_confirm_before};
 use super::pane_hit::tmux_pane_at_phys;
-use crate::app_mode::AppMode;
+use super::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
-use crate::ui::confirm_prompt::{ConfirmState, parse_confirm_before};
+use crate::mode::AppMode;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
-use crate::ui::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
+use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -31,7 +32,7 @@ use ozma_terminal::{Clipboard, build_paste_bytes};
 use ozma_tty_engine::{TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{ForwardKeys, NonInteractive, Webview, focused_webview_of, webview_hit_at};
+use ozma_webview::{ForwardKeys, NonInteractive, Webview};
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 use ozmux_tmux::{
     ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
@@ -570,37 +571,26 @@ fn resolve_tmux_webview_wheel_target(
     scale_factor: f32,
 ) -> Option<TmuxWebviewWheelTarget> {
     let (terminal, _pane_id, local_phys) = tmux_pane_at_phys(&params.panes, cursor_phys)?;
-    let focused_child = focused_webview_of(
-        Some(&params.focused_webview),
+    let (child, position_dip) = webview_wheel_target(
+        &params.focused_webview,
         &params.webview_parents,
-        Some(terminal),
-    )?;
-    let overlays = params.overlay_rects.get(terminal).ok()?;
-    let hit = webview_hit_at(
         &params.children,
         &params.webviews,
-        overlays,
+        &params.overlay_rects,
         terminal,
         local_phys,
         cell_w_phys,
         cell_h_phys,
         scale_factor,
     )?;
-    (hit.child == focused_child).then_some(TmuxWebviewWheelTarget {
-        child: hit.child,
-        position_dip: hit.local_dip,
+    Some(TmuxWebviewWheelTarget {
+        child,
+        position_dip,
     })
 }
 
 /// Converts one `MouseWheel` event to the RAW CEF wheel delta (`Line → ×120`,
 /// `Pixel` unchanged, NO sign flip) — identical to native `inline_wheel_delta`.
-fn tmux_webview_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
-    match unit {
-        MouseScrollUnit::Line => Vec2::new(x, y) * 120.0,
-        MouseScrollUnit::Pixel => Vec2::new(x, y),
-    }
-}
-
 /// Which layer owns a wheel gesture over a tmux pane.
 ///
 /// `forward_wheel_to_tmux` handles only `CopyMode` and `AltScreenResidual`;
@@ -662,7 +652,7 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 /// # Invariants
 ///
 /// The target pane MUST be the pane under the cursor, not `ActivePane`:
-/// `ozma_terminal::dispatch_mouse_wheel` and `crate::tmux::gate` both key off the
+/// `ozma_terminal::dispatch_mouse_wheel` and `crate::mode::tmux::gate` both key off the
 /// cursor pane, so keying this system off the active pane would let both fire on
 /// different panes (cursor pane ≠ active pane) and double-act. The
 /// "complement gated solely by `MouseDisabled`" invariant holds only when both
@@ -800,7 +790,7 @@ const MAX_NOTCHES_PER_FRAME: usize = 10;
 /// scroll up / toward older lines); `Pixel` units (macOS trackpads,
 /// high-resolution wheels) are divided by the cell height so a fixed pixel
 /// travel maps to a consistent number of lines. Inline-routed events are
-/// forwarded RAW to CEF via `tmux_webview_wheel_delta` (no sign flip).
+/// forwarded RAW to CEF via `webview_wheel_delta` (no sign flip).
 fn aggregate_tmux_wheel_cells(
     wheel: &mut MessageReader<MouseWheel>,
     target: Option<TmuxWebviewWheelTarget>,
@@ -815,7 +805,7 @@ fn aggregate_tmux_wheel_cells(
                 browsers.send_mouse_wheel(
                     &target.child,
                     target.position_dip,
-                    tmux_webview_wheel_delta(ev.unit, ev.x, ev.y),
+                    webview_wheel_delta(ev.unit, ev.x, ev.y),
                 );
             }
             continue;

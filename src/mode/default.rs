@@ -1,35 +1,28 @@
-//! AppMode state enum and the Default-mode UI subtree lifecycle plugin.
+//! Default-mode (`AppMode::Default`) processing: the single-PTY shell UI
+//! lifecycle, host-side input gates/shortcuts, and webview pointer routing.
 
+mod copy_mode;
+mod input;
+mod webview;
+
+pub(crate) use copy_mode::CopyModeInputPlugin;
+pub(crate) use input::DefaultHostInputPlugin;
+pub(crate) use webview::DefaultWebviewPointerPlugin;
+
+use crate::mode::AppMode;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use ozma_terminal::{KeyboardFocused, OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use ozma_tty_engine::ControlModeWatch;
 use ozma_webview::ControlPlaneHandle;
 
-/// Application mode. `Default` is the default (single PTY, no tmux).
-/// `Tmux` activates the tmux multiplexer backend.
-#[derive(States, Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub(crate) enum AppMode {
-    /// Single PTY terminal, Alacritty VT emulation, no tmux.
-    #[default]
-    Default,
-    /// tmux backend, multiplexer layout.
-    Tmux,
-}
-
 /// Root of the Default-mode UI subtree, mounted under `UiRoot`.
 ///
-/// Adoption (`crate::tmux::adopt`) despawns this container when it promotes the
+/// Adoption (`crate::mode::tmux::adopt`) despawns this container when it promotes the
 /// Default shell to the tmux gateway, so `ensure_default_mode_ui` lazily spawns
 /// a fresh Default shell on the next return to `AppMode::Default`.
 #[derive(Component)]
 pub(crate) struct DefaultModeUi;
-
-/// Marker for the single Default-mode shell terminal entity. Persists across
-/// `AppMode::Default` ↔ `AppMode::Tmux` round-trips when the Default shell
-/// is not adopted as the tmux gateway.
-#[derive(Component)]
-struct DefaultShell;
 
 /// Bevy plugin that ensures the Default-mode UI subtree (a single
 /// `OzmaTerminal` under `DefaultModeUi`) exists while in `AppMode::Default`.
@@ -111,9 +104,16 @@ fn ensure_default_mode_ui(
     }
 }
 
+/// Marker for the single Default-mode shell terminal entity. Persists across
+/// `AppMode::Default` ↔ `AppMode::Tmux` round-trips when the Default shell
+/// is not adopted as the tmux gateway.
+#[derive(Component)]
+struct DefaultShell;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mode::AppMode;
     use bevy::state::app::StatesPlugin;
     use ozma_webview::TokenRegistry;
     use std::path::PathBuf;

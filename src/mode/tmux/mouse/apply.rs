@@ -6,7 +6,7 @@
 
 use super::TmuxMouseGesture;
 use super::effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
-use crate::tmux::copy_mode::cursor_deltas;
+use crate::mode::tmux::copy_mode::cursor_deltas;
 use bevy::prelude::*;
 use ozmux_tmux::{
     CopyModeQueries, CopyQueryKind, PaneId, ResizePaneX, ResizePaneY, SelectPane, ShowBuffer,
