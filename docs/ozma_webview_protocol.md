@@ -211,3 +211,57 @@ S→C {"op":"call","handle":"nf2k7q9w3x1m5a8b0c4d6e7f","reqId":"0","method":"sav
 C→S {"op":"reply","reqId":"0","ok":true,"value":{"saved":true}}
 C→S {"op":"emit","handle":"nf2k7q9w3x1m5a8b0c4d6e7f","event":"tick","payload":{"n":1}}
 ```
+
+## OSC 5379 — mount / unmount
+
+Once a handle is registered, the program mounts it by writing an OSC 5379 escape
+sequence to its terminal. The sequence is framed `ESC ] 5379 ; <params> ST`,
+where `ST` (string terminator) is `ESC \` or `BEL`. In raw bytes:
+
+```text
+mount:    \x1b]5379;mount;<view_id>;<rows>;<cols>\x1b\
+unmount:  \x1b]5379;unmount;<view_id>\x1b\
+```
+
+### mount
+
+```text
+OSC 5379 ; mount ; <view_id> ; <rows> ; <cols> [ ; <instance_id> ] ST
+```
+
+- `view_id` — the handle from `register`; charset `^[A-Za-z0-9._-]{1,128}$`.
+- `rows` — decimal `1`–`200`. `cols` — decimal `1`–`400`. Digits only, no sign.
+- `instance_id` — optional, same charset as `view_id`. It lets one handle mount
+  several independent placements. A trailing empty field (`mount;<id>;3;20;`) is
+  malformed.
+
+The view occupies a `rows`×`cols` rectangle of terminal cells, inline at the
+cursor.
+
+### unmount
+
+```text
+OSC 5379 ; unmount [ ; <view_id> [ ; <instance_id> ] ] ST
+```
+
+- No `view_id` → unmount all of this program's inline views on the terminal.
+- `view_id` only → unmount that handle's default instance.
+- `view_id` + `instance_id` → unmount that specific placement.
+
+An `instance_id` is addressable only alongside a `view_id`.
+
+### Ownership and malformed sequences
+
+A `mount;<handle>` takes effect only in the pane whose `$OZMA_TOKEN` registered
+that handle — a program mounts its own handles in its own pane. Any malformed
+sequence (bad charset, out-of-range dimensions, empty fields) is silently
+dropped; the host reports no error.
+
+### Example
+
+Mount handle `nf2k7q9w3x1m5a8b0c4d6e7f` as a 24×80 view, then unmount it:
+
+```text
+\x1b]5379;mount;nf2k7q9w3x1m5a8b0c4d6e7f;24;80\x1b\
+\x1b]5379;unmount;nf2k7q9w3x1m5a8b0c4d6e7f\x1b\
+```
