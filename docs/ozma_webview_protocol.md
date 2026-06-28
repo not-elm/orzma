@@ -327,3 +327,34 @@ if (isOzmaAvailable()) {
   ozma.emit("ready", { ok: true });
 }
 ```
+
+## Lifecycle & teardown
+
+- `unregister{handle}` releases a handle and despawns its mounted views.
+- Closing the control connection purges all of that program's handles, despawns
+  their views, and rejects every in-flight `call` with `owner_disconnected`.
+- The `compositing` push reports a view's first paint (`active:true`) and its
+  teardown after compositing (`active:false`).
+
+## Security model
+
+- **Same user only.** The host rejects any control connection whose peer user id
+  differs from ozmux's.
+- **Scoped to one pane.** A connection's token binds it to the pane that issued
+  `$OZMA_TOKEN`; a program may only mount, focus, navigate, and emit to handles
+  it registered.
+- **Unguessable, isolated handles.** Handles are 128-bit random values, each its
+  own `ozma://` origin.
+- **Authorized replies.** Back-channel `reqId`s are a shared, monotonic counter
+  and therefore guessable, so the host authorizes a `reply` by its originating
+  connection: a program replaying another connection's `reqId` can neither
+  settle nor drop that call.
+
+## SDKs
+
+Prefer a ready-made client over implementing the wire protocol directly:
+
+- [`ratatui-ozma`](../sdk/ratatui-ozma) — Rust SDK for the program side (a
+  ratatui widget plus a back-channel RPC handler).
+- [`@ozma/web`](../sdk/ozma-web) — TypeScript client for the page-side
+  `window.ozma` bridge.
