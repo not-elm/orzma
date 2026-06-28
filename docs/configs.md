@@ -11,9 +11,11 @@ ozmux resolves the config path in this order:
 2. `$XDG_CONFIG_HOME/ozmux/config.toml` — if `$XDG_CONFIG_HOME` is set.
 3. `~/.config/ozmux/config.toml` — the default.
 
-Unknown sections or keys are rejected at startup, so typos fail fast rather
-than being silently ignored. Most invalid values are startup errors too; the
-few that are silently clamped or reverted are noted inline below.
+Unknown sections are rejected at startup, as are unknown keys in `[ozma]`,
+`[keyboard]`, and `[shortcuts.bindings]`. Unknown keys in `[font]`, `[mouse]`,
+and `[inactive_pane]` are silently ignored. Most invalid values are startup
+errors too; the few that are silently clamped or reverted are noted inline
+below.
 
 ## Example config
 
@@ -45,7 +47,7 @@ option_as_alt = "none"   # "none" | "left" | "right" | "both"
 lines_per_notch = 3              # u32. Lines scrolled per wheel notch.
 fine_modifier = "alt"            # "alt" | "ctrl" | "shift" | "none". Modifier for fine (slow) scroll.
 fine_lines = 1                   # u32. Lines per notch while fine_modifier is held.
-cells_per_notch = 0.5            # f32. Horizontal wheel accumulation threshold per notch.
+cells_per_notch = 0.5            # f32. Vertical wheel accumulation threshold per notch.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
 click_drift_px = 8.0             # f32. Max pointer drift (logical px) between clicks of a multi-click.
 drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.
