@@ -47,3 +47,65 @@ over the same control socket. Unmounting (or disconnecting) tears it down.
 The control socket carries every horizontal arrow between the program and the
 host; OSC 5379 carries the mount/unmount; the page bridge carries the
 `window.ozma` arrows on the right.
+
+## The control socket
+
+### Transport
+
+The control socket is a local Unix **stream** socket speaking **NDJSON**:
+exactly one JSON object per line, terminated by `\n` (a trailing `\r` is
+tolerated). Each line travels in one direction. The connection is long-lived —
+it stays open for as long as the program wants its registrations to live.
+
+### Discovery
+
+ozmux injects two environment variables into every pane's PTY. A program reads
+them from its own environment:
+
+- `$OZMA_SOCK` — the absolute path to the control socket. Connect to this path
+  verbatim; do not reconstruct it.
+- `$OZMA_TOKEN` — the per-pane handshake token. Treat it as opaque (it is
+  currently of the form `ozma:<bits>`, but do not parse it).
+
+If either variable is absent, the program is not running inside an ozmux pane
+and cannot use the protocol.
+
+### Peer authentication
+
+The host checks that the connecting peer's user id equals ozmux's own user id
+and silently drops the connection otherwise. Only processes running as the same
+user can connect.
+
+### Handshake
+
+The **first** line a program sends MUST be a `hello` carrying `$OZMA_TOKEN`:
+
+```json
+{"op":"hello","token":"ozma:4294967306"}
+```
+
+The token binds the connection to the pane it was issued for. If the first line
+is not a valid `hello`, or the token does not resolve, the host closes the
+connection without a reply. A second `hello` on an already-handshaked
+connection is ignored.
+
+### Reply vs. push
+
+After the handshake, two kinds of line arrive **from** the host on the same
+connection, and a client must tell them apart:
+
+- A **register reply** is the only host line with **no `op` field** — it is
+  either `{"ok":true,"handle":"…"}` or `{"ok":false,"error":"…"}`.
+- Every **host-initiated push** (`call`, `event`, `compositing`) carries an
+  `op` field.
+
+So: a line with an `op` is a push; a line without one is the reply to your most
+recent `register`. This is the one framing rule a from-scratch client must get
+right.
+
+### Register ordering
+
+Registrations are processed one at a time per connection, and each
+`register`'s reply arrives in request order. `register` has no request id —
+correlation is positional. (The back-channel `call`/`reply` pair below uses an
+explicit `reqId` instead.)
