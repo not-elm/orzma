@@ -60,11 +60,9 @@ ready-made client.
 
 ## Configuration
 
-ozmux reads `~/.config/ozmux/config.toml`, resolved against built-in
-defaults. Override the file path with `$OZMUX_CONFIG`, or the config
-directory with `$XDG_CONFIG_HOME`. Configurable areas include theme colors,
-fonts, keyboard and shortcut bindings, mouse behavior, inactive-pane dimming,
-and the default shell.
+ozmux reads `~/.config/ozmux/config.toml` (override the path with
+`$OZMUX_CONFIG`, or the config directory with `$XDG_CONFIG_HOME`). See
+[docs/configs.md](docs/configs.md) for all options and their defaults.
 
 ## License
 
