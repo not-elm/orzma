@@ -82,3 +82,7 @@ bundle-macos *args: ozmd-web
 [macos]
 release-macos *args: setup-cef-release ozmd-web
     python3 scripts/bundle_macos.py --notarize {{ args }}
+
+# refresh the vendored Chromium credits from the provisioned CEF dir (run on cef_version bump)
+licenses-refresh-cef:
+    cp "{{ cef_dir }}/CREDITS.html" licenses/chromium/CREDITS.html
