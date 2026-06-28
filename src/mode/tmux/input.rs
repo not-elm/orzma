@@ -834,6 +834,7 @@ fn consume_wheel_notches(
         accumulator.residual_cells = 0.0;
         accumulator.last_pane = Some(pane);
     } else if accumulator.residual_cells != 0.0
+        && delta_cells != 0.0
         && accumulator.residual_cells.signum() != delta_cells.signum()
     {
         accumulator.residual_cells = 0.0;

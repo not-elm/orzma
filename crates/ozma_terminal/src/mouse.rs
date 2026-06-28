@@ -700,10 +700,10 @@ pub(crate) fn dispatch_mouse_wheel(
         effects.extend(decide_wheel(modes, -raw_v, cell, mods, &cfg.wheel));
     }
     if raw_h != 0 {
-        // NOTE: positive ev.x → Right (cb 67); confirm against a live Neovim and
-        // flip to `-raw_h` if reversed (winit's macOS PixelDelta horizontal sign
-        // is historically opposite X11/Wayland, so the on-screen direction is
-        // runtime-verified, not assumed).
+        // TODO: verify the horizontal direction against a live Neovim and flip
+        // `raw_h` to `-raw_h` if reversed. winit's macOS PixelDelta horizontal
+        // sign is historically opposite X11/Wayland, so positive ev.x → Right
+        // (cb 67) is assumed here, not yet runtime-confirmed.
         let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
         effects.extend(effects_from_wheel_action(WheelAction::route_horizontal(
             modes, raw_h, cell, mods, &cfg.wheel,
@@ -1931,6 +1931,13 @@ mod tests {
             accumulate_notches(&mut acc.residual_cells, 0.3, 0.5),
             0,
             "switching target clears the carried residual"
+        );
+        assert_eq!(accumulate_notches(&mut acc.residual_cells_h, 0.3, 0.5), 0);
+        acc.retarget(a);
+        assert_eq!(
+            accumulate_notches(&mut acc.residual_cells_h, 0.3, 0.5),
+            0,
+            "a target change must clear the carried horizontal residual too"
         );
     }
 
