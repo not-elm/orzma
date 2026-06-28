@@ -348,20 +348,22 @@ pub(crate) fn decide_button(
     effects
 }
 
-/// Carries the sub-notch wheel remainder across frames, scoped to the last
-/// terminal the wheel targeted.
+/// Carries the sub-notch wheel remainder across frames, per axis, scoped to the
+/// last terminal the wheel targeted.
 #[derive(Resource, Default)]
 pub(crate) struct WheelAccumulator {
     residual_cells: f32,
+    residual_cells_h: f32,
     last_target: Option<Entity>,
 }
 
 impl WheelAccumulator {
-    /// Resets the residual when the wheel target changes, so a sub-notch fraction
-    /// accumulated over one terminal cannot bleed into the next.
+    /// Resets both residuals when the wheel target changes, so a sub-notch
+    /// fraction accumulated over one terminal cannot bleed into the next.
     fn retarget(&mut self, entity: Entity) {
         if self.last_target != Some(entity) {
             self.residual_cells = 0.0;
+            self.residual_cells_h = 0.0;
             self.last_target = Some(entity);
         }
     }
@@ -659,22 +661,38 @@ pub(crate) fn dispatch_mouse_wheel(
     };
 
     gesture_acc.retarget(target);
-    let delta_cells: f32 = wheel
-        .read()
-        .map(|ev| wheel_delta_cells(ev.unit, ev.y, ctx.cell_h))
-        .sum();
-    let raw = accumulate_notches(&mut gesture_acc.residual_cells, delta_cells, cfg.cells_per_notch);
-    if raw == 0 {
+    let (delta_v, delta_h) = wheel.read().fold((0.0f32, 0.0f32), |(v, h), ev| {
+        (
+            v + wheel_delta_cells(ev.unit, ev.y, ctx.cell_h),
+            h + wheel_delta_cells(ev.unit, ev.x, ctx.cell_w),
+        )
+    });
+    let raw_v = accumulate_notches(&mut gesture_acc.residual_cells, delta_v, cfg.cells_per_notch);
+    let raw_h = accumulate_notches(&mut gesture_acc.residual_cells_h, delta_h, cfg.cells_per_notch);
+    if raw_v == 0 && raw_h == 0 {
         return;
     }
-    // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
-    let notches = -raw;
     let cell = ctx
         .hit(cursor_phys)
         .map(|(cell, _)| cell)
         .unwrap_or(CellCoord { col: 1, row: 1 });
-    let mods = build_wheel_modifiers(&keys, &cfg);
-    let effects = decide_wheel(handle.current_modes(), notches, cell, mods, &cfg.wheel);
+    let modes = handle.current_modes();
+    let mut effects = Vec::new();
+    if raw_v != 0 {
+        // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
+        let mods = build_wheel_modifiers(&keys, &cfg);
+        effects.extend(decide_wheel(modes, -raw_v, cell, mods, &cfg.wheel));
+    }
+    if raw_h != 0 {
+        // NOTE: positive ev.x → Right (cb 67); confirm against a live Neovim and
+        // flip to `-raw_h` if reversed (winit's macOS PixelDelta horizontal sign
+        // is historically opposite X11/Wayland, so the on-screen direction is
+        // runtime-verified, not assumed).
+        let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
+        effects.extend(effects_from_wheel_action(WheelAction::route_horizontal(
+            modes, raw_h, cell, mods, &cfg.wheel,
+        )));
+    }
     if !effects.is_empty() {
         commands.trigger(TerminalMouseEffects {
             entity: target,
@@ -1956,6 +1974,128 @@ mod tests {
         assert!(
             !mods.shift,
             "macOS converts Shift+wheel to horizontal at the OS level; the report must not carry the Shift bit"
+        );
+    }
+
+    fn make_wheel_app(enable_modes: &[u8]) -> App {
+        use bevy::window::WindowResolution;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseWheel>()
+            .init_resource::<OzmaMouseConfig>()
+            .init_resource::<WheelAccumulator>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Clipboard>()
+            .init_resource::<CapturedEffects>()
+            .insert_resource(test_metrics())
+            .add_observer(
+                |ev: On<TerminalMouseEffects>, mut cap: ResMut<CapturedEffects>| {
+                    cap.0.push(ev.effects.clone());
+                },
+            )
+            .add_systems(Update, dispatch_mouse_wheel);
+
+        let mut handle = TerminalHandle::detached(100, 37);
+        handle.advance(enable_modes);
+        app.world_mut().spawn((
+            OzmaTerminal,
+            handle,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            TerminalGrid {
+                cols: 100,
+                rows: 37,
+                ..default()
+            },
+        ));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app
+    }
+
+    fn write_wheel(app: &mut App, x: f32, y: f32) {
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x,
+                y,
+                window: Entity::PLACEHOLDER,
+            });
+    }
+
+    #[test]
+    fn dispatch_pure_horizontal_right_emits_sgr_67() {
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.5, 0.0);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0.iter().flatten().any(
+                |e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))
+            ),
+            "a +x wheel in mouse mode must emit an SGR wheel-right (cb 67) report, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn dispatch_horizontal_left_emits_sgr_66() {
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, -0.5, 0.0);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0.iter().flatten().any(
+                |e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<66;"))
+            ),
+            "a -x wheel in mouse mode must emit an SGR wheel-left (cb 66) report, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn dispatch_diagonal_emits_both_axes_in_one_trigger() {
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.5, -0.5);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        assert_eq!(cap.0.len(), 1, "both axes must arrive in ONE trigger, got {:?}", cap.0);
+        let frame = &cap.0[0];
+        assert!(
+            frame.iter().any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<65;"))),
+            "vertical (down, cb 65) report missing: {frame:?}"
+        );
+        assert!(
+            frame.iter().any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
+            "horizontal (right, cb 67) report missing: {frame:?}"
+        );
+    }
+
+    #[test]
+    fn dispatch_horizontal_without_mouse_mode_emits_no_report() {
+        let mut app = make_wheel_app(b"");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.5, 0.0);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0.iter().flatten().all(|e| !matches!(e, MouseEffect::Write(_))),
+            "horizontal wheel outside a mouse mode must not emit a report, got {:?}",
+            cap.0
         );
     }
 }
