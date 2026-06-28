@@ -21,7 +21,8 @@ pub use input::{
     KeyboardDisabled, KeyboardFocused, OzmaTerminalInputSet, ReservedChord, TerminalInputBindings,
 };
 pub use mouse::{
-    FineModifier, MouseDisabled, OzmaMouseConfig, OzmaTerminalMouseSet, TerminalForwardInput,
+    FineModifier, MouseDisabled, MouseEffect, OzmaMouseConfig, OzmaTerminalMouseSet,
+    TerminalForwardInput, TerminalMouseEffects,
 };
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,

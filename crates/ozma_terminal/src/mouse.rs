@@ -239,7 +239,7 @@ pub(crate) fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
 /// separate from application so the decision logic is unit-testable without a
 /// `TerminalHandle` (which has no public constructor).
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum MouseEffect {
+pub enum MouseEffect {
     /// Write these bytes to the PTY.
     Write(Vec<u8>),
     /// Start a new local selection at `point`.
@@ -277,12 +277,19 @@ pub struct TerminalForwardInput {
 /// dispatch systems stay read-only on the terminal and all mutation lives in one
 /// place (`on_terminal_mouse_effects`), mirroring `PasteAction` / `on_paste`.
 #[derive(EntityEvent, Debug, Clone)]
-pub(crate) struct TerminalMouseEffects {
+pub struct TerminalMouseEffects {
     /// The terminal entity to apply the effects to.
     #[event_target]
-    pub(crate) entity: Entity,
+    entity: Entity,
     /// The decided effects, applied in order.
-    pub(crate) effects: Vec<MouseEffect>,
+    effects: Vec<MouseEffect>,
+}
+
+impl TerminalMouseEffects {
+    /// Builds a mouse-effects event targeting `entity` with `effects` applied in order.
+    pub fn new(entity: Entity, effects: Vec<MouseEffect>) -> Self {
+        Self { entity, effects }
+    }
 }
 
 /// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
