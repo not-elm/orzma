@@ -204,10 +204,15 @@ perpendicular trackpad jitter does not cross the threshold. Axis-locking
 this iteration.
 
 Sensitivity caveat: a horizontal cell (`advance_phys`, ~8px) is ~half a vertical
-cell (`line_height_phys`, ~16px), so a shared `cells_per_notch` makes horizontal
-~2× more sensitive per pixel of travel, each notch a full app-side column jump.
-Ship v1 with the shared threshold but felt-test on a trackpad; a horizontal-only
-threshold is a possible future knob (not added now).
+cell (`line_height_phys`, ~16px). Dividing `ev.x` by the cell WIDTH under a
+shared `cells_per_notch` therefore made horizontal ~2× more sensitive per pixel
+of finger travel. **RESOLVED** after trackpad testing: both axes divide by
+`line_height_phys` (cell height), so the per-pixel notch rate is uniform across
+axes. In a mouse-mode report the pitch is a pure sensitivity threshold (each
+notch = one report; the application decides columns), so a common pitch is
+correct — the horizontal "cell" need not be a literal column. (NVim's default
+`mousescroll=hor:6` vs `ver:3` further scales the per-report effect, but that is
+NVim's config, not ours.)
 
 ## Configuration
 
@@ -252,8 +257,11 @@ No `ozmux_configs` test changes (no config surface change).
 
 ## Assumptions to validate in review
 
-1. Horizontal axis pitch is the cell advance width (`advance_phys`), the
-   horizontal analog of `line_height_phys` used for vertical.
+1. Horizontal sensitivity is matched to vertical by dividing `ev.x` by the cell
+   HEIGHT (`line_height_phys`) — the same pitch the vertical axis uses — NOT the
+   cell width. Trackpad testing confirmed the cell-width pitch (`advance_phys`,
+   ~½ of `line_height_phys`) made horizontal ~2× too sensitive; see "Axis
+   handling".
 2. Independent x/y accumulation (no axis-lock) is acceptable for v1.
 3. No new configuration key is desired for enabling/inverting horizontal scroll.
 4. SGR `cb = 66/67` (xterm buttons 6/7) is the correct wire encoding for

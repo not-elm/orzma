@@ -662,9 +662,13 @@ pub(crate) fn dispatch_mouse_wheel(
 
     gesture_acc.retarget(target);
     let (delta_v, delta_h) = wheel.read().fold((0.0f32, 0.0f32), |(v, h), ev| {
+        // NOTE: BOTH axes divide by cell_h (line height), not cell_w, so a given
+        // finger distance yields the same notch rate horizontally and vertically.
+        // Using the narrower cell_w (advance_phys, ~half of line_height_phys) made
+        // horizontal ~2x too sensitive — do not "correct" ev.x to ctx.cell_w.
         (
             v + wheel_delta_cells(ev.unit, ev.y, ctx.cell_h),
-            h + wheel_delta_cells(ev.unit, ev.x, ctx.cell_w),
+            h + wheel_delta_cells(ev.unit, ev.x, ctx.cell_h),
         )
     });
     let raw_v = accumulate_notches(&mut gesture_acc.residual_cells, delta_v, cfg.cells_per_notch);
@@ -2096,6 +2100,49 @@ mod tests {
             cap.0.iter().flatten().all(|e| !matches!(e, MouseEffect::Write(_))),
             "horizontal wheel outside a mouse mode must not emit a report, got {:?}",
             cap.0
+        );
+    }
+
+    #[test]
+    fn pixel_horizontal_sensitivity_matches_vertical() {
+        // Equal Pixel-unit deltas on both axes must emit equal report counts.
+        // Regression: horizontal divided ev.x by cell_w (~half of cell_h), so a
+        // given finger distance fired ~2x the notches and scrolled too far.
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Pixel,
+                x: 16.0,
+                y: 16.0,
+                window: Entity::PLACEHOLDER,
+            });
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        let count = |needle: &[u8]| -> usize {
+            cap.0
+                .iter()
+                .flatten()
+                .filter_map(|e| match e {
+                    MouseEffect::Write(b) => Some(b),
+                    _ => None,
+                })
+                .map(|b| b.windows(needle.len()).filter(|w| *w == needle).count())
+                .sum()
+        };
+        // test_metrics: cell_w = 8, cell_h = 16. y=16 → up reports (cb 64);
+        // x=16 → right reports (cb 67).
+        let vertical = count(b"\x1b[<64;");
+        let horizontal = count(b"\x1b[<67;");
+        assert!(
+            vertical > 0 && horizontal > 0,
+            "both axes must emit reports, got v={vertical} h={horizontal}"
+        );
+        assert_eq!(
+            horizontal, vertical,
+            "equal Pixel deltas must emit equal report counts (horizontal sensitivity \
+             must match vertical), got v={vertical} h={horizontal}"
         );
     }
 }
