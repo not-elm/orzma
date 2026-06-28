@@ -1,7 +1,7 @@
 //! Forwards focused keyboard and mouse-wheel input to the active tmux pane.
 //! Keyboard forwarding intercepts a fixed set of ozmux GUI chords and copy-mode
 //! entry commands. Mouse-wheel forwarding handles only the cases
-//! `ozma_terminal::dispatch_mouse_wheel` does not own (it now runs on every tmux
+//! `crate::input::mouse::dispatch_mouse_wheel` does not own (it now runs on every tmux
 //! pane, gated off solely by `MouseDisabled`): an inline webview under the
 //! pointer (forwarded to CEF), a copy-mode pane (a targeted `send-keys -X
 //! scroll-up|scroll-down`), and the alt-screen residual where ozma's viewport
@@ -594,7 +594,7 @@ fn resolve_tmux_webview_wheel_target(
 /// Which layer owns a wheel gesture over a tmux pane.
 ///
 /// `forward_wheel_to_tmux` handles only `CopyMode` and `AltScreenResidual`;
-/// every other case is `CededToOzma` — `ozma_terminal::dispatch_mouse_wheel`
+/// every other case is `CededToOzma` — `crate::input::mouse::dispatch_mouse_wheel`
 /// runs on the same pane (gated off only by `MouseDisabled`) and owns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WheelOwner {
@@ -633,7 +633,7 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 }
 
 /// Forwards mouse-wheel events to the tmux pane UNDER THE POINTER for the cases
-/// `ozma_terminal::dispatch_mouse_wheel` does NOT usefully own.
+/// `crate::input::mouse::dispatch_mouse_wheel` does NOT usefully own.
 ///
 /// A focused webview under the pointer claims the wheel first
 /// (`resolve_tmux_webview_wheel_target`): each event is forwarded RAW to that
@@ -652,7 +652,7 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 /// # Invariants
 ///
 /// The target pane MUST be the pane under the cursor, not `ActivePane`:
-/// `ozma_terminal::dispatch_mouse_wheel` and `crate::mode::tmux::gate` both key off the
+/// `crate::input::mouse::dispatch_mouse_wheel` and `crate::input::tmux::gate` both key off the
 /// cursor pane, so keying this system off the active pane would let both fire on
 /// different panes (cursor pane ≠ active pane) and double-act. The
 /// "complement gated solely by `MouseDisabled`" invariant holds only when both

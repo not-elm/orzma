@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn sync_preserves_app_declared_focus_from_control_plane() {
+    fn sync_preserves_app_declared_inline_focus() {
         // NOTE: ozma_webview's apply_control_events and its supporting resource types
         // (OzmaRegistry, ControlEvents, etc.) are pub(crate) and unreachable from the
         // binary. Setting FocusedWebview directly produces the same world state that

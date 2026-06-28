@@ -1,14 +1,14 @@
 //! Default-mode (`AppMode::Default`) webview pointer routing: forwards left
 //! press/release and pointer motion to the inline CEF child under the cursor on
 //! the single Default shell surface, via the mode-agnostic core in
-//! `crate::webview_pointer`. The tmux equivalent is `crate::mode::tmux::mouse::webview`;
+//! `crate::webview_pointer`. The tmux equivalent is `crate::input::tmux::mouse::webview`;
 //! this is the single-surface analogue (no pane arbitration / gesture hand-off).
 //!
 //! The pointer system runs EVERY frame in `AppMode::Default` (not message-gated)
 //! so an in-flight press is released when input is suppressed (window unfocused /
 //! modal), never leaving CEF logically pressed. Double-handling with the
 //! terminal's `dispatch_mouse_buttons` is avoided by the `MouseDisabled`
-//! rect-claim gate in `crate::mode::default::input::maintain_input_gates`: over an
+//! rect-claim gate in `crate::input::default_mode::maintain_input_gates`: over an
 //! interactive rect the shell is `MouseDisabled` (dispatch yields, the webview
 //! gets the click); off-rect the press clears webview focus here and falls
 //! through to the terminal.
@@ -185,7 +185,7 @@ fn forward_default_webview_mouse_moves(
 /// Forwards the mouse wheel to the FOCUSED inline webview under the cursor on the
 /// Default shell (raw CEF wheel, focus-gated). When no focused webview is under
 /// the pointer the reader is drained and the wheel cedes to
-/// `ozma_terminal::dispatch_mouse_wheel` (terminal scrollback) through its own
+/// `crate::input::mouse::dispatch_mouse_wheel` (terminal scrollback) through its own
 /// reader; over the rect the shell is `MouseDisabled` (rect-claim gate), so that
 /// dispatcher yields and only the page scrolls. Gated to wheel frames.
 fn forward_default_webview_wheel(
