@@ -8,10 +8,10 @@
 //! cursor all coincide, and sets a `ColResize` / `RowResize` cursor on the
 //! primary window while the pointer is over a divider.
 
-use super::mouse::divider_at;
 use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
+use crate::input::tmux::mouse::divider_at;
 use crate::theme;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};

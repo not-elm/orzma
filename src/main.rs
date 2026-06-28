@@ -14,7 +14,10 @@ mod webview_pointer;
 mod window_title;
 
 use crate::cef_profile::CefProfileDir;
+use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
+use crate::input::keyboard::KeyboardInputPlugin;
+use crate::input::mouse::MouseInputPlugin;
 use crate::mode::AppMode;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
@@ -22,10 +25,10 @@ use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
+use input::default_mode::DefaultHostInputPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
 use mode::default::CopyModeInputPlugin;
-use mode::default::DefaultHostInputPlugin;
 use mode::default::DefaultModePlugin;
 use mode::default::DefaultWebviewPointerPlugin;
 use mode::tmux::OzmuxTmuxPlugin;
@@ -83,7 +86,10 @@ fn main() {
         .add_plugins(CopyPromptPlugin)
         .add_plugins(WindowTitlePlugin)
         .add_plugins((
+            FocusSyncPlugin,
             HyperlinkInputPlugin,
+            KeyboardInputPlugin,
+            MouseInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
             OptionAsAltPlugin,

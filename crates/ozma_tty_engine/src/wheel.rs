@@ -129,7 +129,9 @@ fn emit_protocol_reports(
     mods: WheelModifiers,
     cfg: &WheelConfig,
 ) -> WheelAction {
-    let count = notches.unsigned_abs().min(cfg.max_protocol_events_per_frame);
+    let count = notches
+        .unsigned_abs()
+        .min(cfg.max_protocol_events_per_frame);
     if count == 0 {
         return WheelAction::Noop;
     }
@@ -615,9 +617,11 @@ mod route_tests {
     fn horizontal_mouse_mode_emits_left_and_right() {
         let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
         let at = CellCoord { col: 43, row: 11 };
-        let left = WheelAction::route_horizontal(modes, -1, at, WheelModifiers::default(), &cfg_default());
+        let left =
+            WheelAction::route_horizontal(modes, -1, at, WheelModifiers::default(), &cfg_default());
         assert_eq!(left, WheelAction::WriteToPty(b"\x1b[<66;43;11M".to_vec()));
-        let right = WheelAction::route_horizontal(modes, 1, at, WheelModifiers::default(), &cfg_default());
+        let right =
+            WheelAction::route_horizontal(modes, 1, at, WheelModifiers::default(), &cfg_default());
         assert_eq!(right, WheelAction::WriteToPty(b"\x1b[<67;43;11M".to_vec()));
     }
 
@@ -625,12 +629,24 @@ mod route_tests {
     fn horizontal_without_mouse_mode_is_noop() {
         // No horizontal scrollback or alt-screen translation: normal AND alt-screen are Noop.
         assert_eq!(
-            WheelAction::route_horizontal(TermMode::empty(), -2, cell(), WheelModifiers::default(), &cfg_default()),
+            WheelAction::route_horizontal(
+                TermMode::empty(),
+                -2,
+                cell(),
+                WheelModifiers::default(),
+                &cfg_default()
+            ),
             WheelAction::Noop
         );
         let alt = TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL;
         assert_eq!(
-            WheelAction::route_horizontal(alt, 2, cell(), WheelModifiers::default(), &cfg_default()),
+            WheelAction::route_horizontal(
+                alt,
+                2,
+                cell(),
+                WheelModifiers::default(),
+                &cfg_default()
+            ),
             WheelAction::Noop
         );
     }
@@ -639,7 +655,13 @@ mod route_tests {
     fn horizontal_zero_notches_is_noop() {
         let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
         assert_eq!(
-            WheelAction::route_horizontal(modes, 0, cell(), WheelModifiers::default(), &cfg_default()),
+            WheelAction::route_horizontal(
+                modes,
+                0,
+                cell(),
+                WheelModifiers::default(),
+                &cfg_default()
+            ),
             WheelAction::Noop
         );
     }
@@ -647,16 +669,34 @@ mod route_tests {
     #[test]
     fn horizontal_x10_fallback_right() {
         let modes = TermMode::MOUSE_DRAG; // no SGR_MOUSE → X10
-        let action = WheelAction::route_horizontal(modes, 1, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &cfg_default());
+        let action = WheelAction::route_horizontal(
+            modes,
+            1,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &cfg_default(),
+        );
         // cb 67 + 32 = 99; col/row 1 + 32 = 33
-        assert_eq!(action, WheelAction::WriteToPty(vec![0x1b, b'[', b'M', 99, 33, 33]));
+        assert_eq!(
+            action,
+            WheelAction::WriteToPty(vec![0x1b, b'[', b'M', 99, 33, 33])
+        );
     }
 
     #[test]
     fn horizontal_concats_and_caps() {
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
-        let cfg = WheelConfig { max_protocol_events_per_frame: 4, ..WheelConfig::default() };
-        let action = WheelAction::route_horizontal(modes, 20, CellCoord { col: 1, row: 1 }, WheelModifiers::default(), &cfg);
+        let cfg = WheelConfig {
+            max_protocol_events_per_frame: 4,
+            ..WheelConfig::default()
+        };
+        let action = WheelAction::route_horizontal(
+            modes,
+            20,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &cfg,
+        );
         let one = b"\x1b[<67;1;1M";
         let mut expected = Vec::new();
         for _ in 0..4 {
@@ -668,7 +708,10 @@ mod route_tests {
     #[test]
     fn horizontal_zero_cap_is_noop() {
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
-        let cfg = WheelConfig { max_protocol_events_per_frame: 0, ..WheelConfig::default() };
+        let cfg = WheelConfig {
+            max_protocol_events_per_frame: 0,
+            ..WheelConfig::default()
+        };
         assert_eq!(
             WheelAction::route_horizontal(modes, 5, cell(), WheelModifiers::default(), &cfg),
             WheelAction::Noop
@@ -678,8 +721,17 @@ mod route_tests {
     #[test]
     fn horizontal_ctrl_modifier_bit() {
         let modes = TermMode::SGR_MOUSE | TermMode::MOUSE_REPORT_CLICK;
-        let mods = WheelModifiers { ctrl: true, ..Default::default() };
-        let action = WheelAction::route_horizontal(modes, -1, CellCoord { col: 1, row: 1 }, mods, &cfg_default());
+        let mods = WheelModifiers {
+            ctrl: true,
+            ..Default::default()
+        };
+        let action = WheelAction::route_horizontal(
+            modes,
+            -1,
+            CellCoord { col: 1, row: 1 },
+            mods,
+            &cfg_default(),
+        );
         // 66 + 16 (ctrl) = 82
         assert_eq!(action, WheelAction::WriteToPty(b"\x1b[<82;1;1M".to_vec()));
     }

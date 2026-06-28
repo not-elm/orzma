@@ -12,11 +12,13 @@ mod decide;
 mod effect;
 mod webview;
 
-use super::copy_mode::{CopyModeSnapshot, cell_at_pane};
 use super::pane_hit::tmux_pane_at_phys;
-use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
+use crate::input::gesture::ClickTracker;
+use crate::mode::tmux::TmuxActiveSet;
+use crate::mode::tmux::copy_mode::{CopyModeSnapshot, cell_at_pane};
+use crate::mode::tmux::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
@@ -27,8 +29,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 pub(crate) use decide::divider_at;
 use decide::{
-    ClickTracker, ContinuationCtx, PressHit, ReleaseCtx, decide_continuation, decide_press,
-    decide_release,
+    ContinuationCtx, PressHit, ReleaseCtx, decide_continuation, decide_press, decide_release,
 };
 use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use ozma_tty_renderer::TerminalCellMetricsResource;
@@ -50,7 +51,7 @@ impl Plugin for MousePlugin {
                     .run_if(pointer_active)
                     .after(tmux_webview_pointer)
                     .in_set(InputPhase::Dispatch)
-                    .in_set(super::TmuxActiveSet),
+                    .in_set(TmuxActiveSet),
             )
             .add_plugins((webview::WebviewPointerPlugin, apply::ApplyPlugin));
     }
@@ -437,7 +438,7 @@ fn continuation_ctx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mode::tmux::pane_hit::tmux_pane_at_phys;
+    use crate::input::tmux::pane_hit::tmux_pane_at_phys;
     use crate::webview_pointer::WebviewPress;
     use bevy::input::ButtonState;
     use bevy::input::mouse::MouseButtonInput;

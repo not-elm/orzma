@@ -1,20 +1,22 @@
 //! Per-pane input gating for `AppMode::Tmux`: every pane is `KeyboardDisabled`
 //! (keys pass through to tmux), and `MouseDisabled` whenever a modal owns input,
 //! the pane is in copy mode, the focused webview belongs to the pane, or
-//! an interactive webview under the cursor claims the press — so
-//! `ozma_terminal`'s shared mouse systems yield to the tmux-specific gestures.
+//! an interactive webview under the cursor claims the press — so the
+//! `crate::input::mouse` shared systems yield to the tmux-specific gestures.
 
 use super::pane_hit::tmux_pane_at_phys;
-use super::rename_prompt::RenamePrompt;
+use crate::input::InputPhase;
+use crate::input::focus::KeyboardDisabled;
+use crate::input::focus::MouseDisabled;
 use crate::input::ime::ImeState;
 use crate::mode::AppMode;
+use crate::mode::tmux::rename_prompt::RenamePrompt;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{KeyboardDisabled, MouseDisabled, OzmaTerminalInputSet, OzmaTerminalMouseSet};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview, webview_hit_at};
@@ -28,8 +30,7 @@ impl Plugin for GatePlugin {
         app.add_systems(
             Update,
             maintain_tmux_input_gates
-                .before(OzmaTerminalInputSet)
-                .before(OzmaTerminalMouseSet)
+                .before(InputPhase::Hover)
                 .run_if(in_state(AppMode::Tmux)),
         );
     }

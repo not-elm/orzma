@@ -5,9 +5,10 @@
 //! `app_shortcut_handler` (`src/mode/default/input.rs`); this module owns only the
 //! keys handled WHILE copy mode is active.
 
-use super::input::should_disable_input;
 use crate::input::InputPhase;
 use crate::input::current_modifiers;
+use crate::input::default_mode::should_disable_input;
+use crate::input::focus::KeyboardFocused;
 use crate::input::ime::ImeState;
 use crate::mode::AppMode;
 use crate::ui::copy_mode::{CopyModeState, ExitCopyMode};
@@ -17,7 +18,7 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{Clipboard, KeyboardFocused, OzmaTerminal};
+use ozma_terminal::{Clipboard, OzmaTerminal};
 use ozma_tty_engine::{Coalescer, SelectionType, TerminalHandle, ViMotion};
 use ozmux_configs::shortcuts::Modifiers;
 

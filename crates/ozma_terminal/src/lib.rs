@@ -4,25 +4,18 @@ mod action;
 mod clipboard;
 mod exit;
 mod hyperlink;
-mod input;
 mod layout;
 mod mouse;
 mod spawn;
 
 use crate::action::OzmaActionPlugin;
-use crate::input::OzmaInputPlugin;
 use crate::mouse::OzmaMousePlugin;
 use crate::spawn::on_add_inject_render;
 use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 pub use action::PasteAction;
 use bevy::prelude::*;
 pub use clipboard::{Clipboard, build_paste_bytes};
-pub use input::{
-    KeyboardDisabled, KeyboardFocused, OzmaTerminalInputSet, ReservedChord, TerminalInputBindings,
-};
-pub use mouse::{
-    FineModifier, MouseDisabled, OzmaMouseConfig, OzmaTerminalMouseSet, TerminalForwardInput,
-};
+pub use mouse::{MouseEffect, TerminalForwardInput, TerminalMouseEffects};
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
     resolve_shell,
@@ -43,13 +36,7 @@ impl Plugin for OzmaTerminalPlugin {
         app.insert_resource(OzmaTerminalConfig {
             shell: self.config_shell.clone(),
         })
-        .add_plugins((
-            ExitPlugin,
-            LayoutPlugin,
-            OzmaActionPlugin,
-            OzmaInputPlugin,
-            OzmaMousePlugin,
-        ))
+        .add_plugins((ExitPlugin, LayoutPlugin, OzmaActionPlugin, OzmaMousePlugin))
         .add_observer(on_add_inject_render);
     }
 }

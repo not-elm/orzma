@@ -4,6 +4,8 @@
 //! DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
+use crate::input::focus::MouseDisabled;
+use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
@@ -18,10 +20,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{
-    KeyboardDisabled, KeyboardFocused, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet,
-    OzmaTerminalMouseSet,
-};
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
@@ -37,8 +36,7 @@ impl Plugin for DefaultHostInputPlugin {
         app.add_systems(
             Update,
             maintain_input_gates
-                .before(OzmaTerminalInputSet)
-                .before(OzmaTerminalMouseSet)
+                .before(InputPhase::Hover)
                 .run_if(in_state(AppMode::Default)),
         )
         .add_systems(
@@ -50,6 +48,16 @@ impl Plugin for DefaultHostInputPlugin {
         )
         .add_observer(apply_ime_commit_to_terminal);
     }
+}
+
+/// Returns `true` when host-side keyboard input should be suppressed: IME
+/// composing, window not focused, or a webview owns the keyboard.
+pub(crate) fn should_disable_input(
+    composing: bool,
+    window_focused: bool,
+    webview_focused: bool,
+) -> bool {
+    composing || !window_focused || webview_focused
 }
 
 /// Inline-webview hit-test inputs for the mouse rect-claim, bundled to stay
@@ -113,7 +121,7 @@ fn maintain_input_gates(
 }
 
 /// The Default shell whose INTERACTIVE inline webview rect is under the cursor,
-/// or `None`. Mirrors `crate::mode::tmux::gate::claimed_webview_pane` for the single
+/// or `None`. Mirrors `crate::input::tmux::gate::claimed_webview_pane` for the single
 /// Default surface: resolve the topmost `OzmaTerminal` under the cursor, then
 /// hit-test its active overlay rects (`webview_hit_at` skips `NonInteractive`
 /// children). A claimed surface is marked `MouseDisabled` so
@@ -205,14 +213,6 @@ fn apply_ime_commit_to_terminal(
         key: TerminalKey::Text(ev.text.clone()),
         modifiers: TerminalModifiers::default(),
     });
-}
-
-pub(super) fn should_disable_input(
-    composing: bool,
-    window_focused: bool,
-    webview_focused: bool,
-) -> bool {
-    composing || !window_focused || webview_focused
 }
 
 fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutAction) -> bool {

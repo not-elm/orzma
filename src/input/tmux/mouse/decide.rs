@@ -9,6 +9,7 @@
 
 use super::GestureState;
 use super::effect::{MultiSelectKind, TmuxMouseEffect};
+use crate::input::gesture::ClickTracker;
 use crate::mode::tmux::render::DividerPixelRect;
 use bevy::prelude::*;
 use ozmux_tmux::PaneId;
@@ -69,29 +70,6 @@ pub(super) struct ContinuationCtx {
     /// frame stays `PendingMultiSelect` and retries (the observer would
     /// otherwise drop the multi-select+copy with no client).
     pub(super) client_present: bool,
-}
-
-/// Tracks consecutive-click count using a timeout + positional drift gate.
-#[derive(Default)]
-pub(super) struct ClickTracker {
-    last: Option<(Duration, Vec2, u8)>,
-}
-
-impl ClickTracker {
-    /// Registers a press at `now` / `pos` and returns the resulting click count
-    /// (1 = single, 2 = double, 3 = triple, capped at 3). `cfg` is
-    /// `(double_click_timeout, click_drift_px)` in logical units.
-    pub(super) fn register(&mut self, now: Duration, pos: Vec2, cfg: (Duration, f32)) -> u8 {
-        let (timeout, drift) = cfg;
-        let count = match self.last {
-            Some((t, p, c)) if now.saturating_sub(t) <= timeout && p.distance(pos) <= drift => {
-                (c + 1).min(3)
-            }
-            _ => 1,
-        };
-        self.last = Some((now, pos, count));
-        count
-    }
 }
 
 /// Resolves a left press into the gesture-state transition and effects.

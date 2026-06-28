@@ -1,95 +1,41 @@
-//! Default terminal keyboard dispatcher. Reads `KeyboardInput` and, per press,
-//! fires `PasteAction`, forwards a raw key as `TerminalKeyInput`, or skips it:
-//! host-reserved chords and unhandled meta/Cmd chords are dropped. Routed to the
-//! single `KeyboardFocused` entity and gated per entity by `KeyboardDisabled`.
+//! Host keyboard input dispatch: routes `KeyboardInput` messages to the single
+//! `KeyboardFocused` terminal; also provides the modifier-reading helper used
+//! by the mouse dispatch.
 
-use crate::action::PasteAction;
-use crate::spawn::OzmaTerminal;
+use crate::input::bindings::{ReservedChord, TerminalInputBindings};
+use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
+use crate::input::{InputPhase, current_modifiers};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use ozma_terminal::{OzmaTerminal, PasteAction};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 
-/// When present on an `OzmaTerminal` entity, the crate's default keyboard
-/// dispatcher skips it entirely — the host routes keyboard input elsewhere
-/// (tmux, a focused webview, an open picker, IME composition).
-#[derive(Component)]
-pub struct KeyboardDisabled;
-
-/// When present on an `OzmaTerminal` entity, that terminal is the keyboard
-/// focus: the crate's keyboard dispatcher routes raw keys to it, and the host
-/// routes IME commits and anchors the OS candidate window to it. The host owns
-/// focus policy and maintains the "exactly one focused" invariant; a terminal
-/// with no `KeyboardFocused` receives no keyboard input.
-#[derive(Component)]
-pub struct KeyboardFocused;
-
-/// A keyboard chord, as a physical `KeyCode` plus the four modifier bits.
-/// Config-agnostic plain data the host supplies in `TerminalInputBindings`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct ReservedChord {
-    /// The physical key.
-    pub key_code: KeyCode,
-    /// Control held.
-    pub ctrl: bool,
-    /// Shift held.
-    pub shift: bool,
-    /// Alt/Option held.
-    pub alt: bool,
-    /// Meta/Cmd/Super held.
-    pub meta: bool,
-}
-
-/// Host-supplied input policy: the chord that triggers the built-in Paste
-/// action, plus the chords the dispatcher must skip (the host handles those).
-/// Both are populated together so the "paste is not also reserved" invariant
-/// lives in one place.
-///
-/// `Default` is `Cmd+V` paste + empty reserved, so a spawn-and-go consumer
-/// still gets working paste and forwards everything else.
-#[derive(Resource)]
-pub struct TerminalInputBindings {
-    /// The chord that triggers `PasteAction`.
-    pub paste: ReservedChord,
-    /// Chords the dispatcher skips for the host to handle.
-    pub reserved: Vec<ReservedChord>,
-}
-
-impl Default for TerminalInputBindings {
-    fn default() -> Self {
-        Self {
-            paste: ReservedChord {
-                key_code: KeyCode::KeyV,
-                ctrl: false,
-                shift: false,
-                alt: false,
-                meta: true,
-            },
-            reserved: Vec::new(),
-        }
-    }
-}
-
-/// System set containing the default terminal keyboard dispatcher. Hosts that
-/// maintain `KeyboardDisabled` should schedule their maintainer
-/// `.before(OzmaTerminalInputSet)`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct OzmaTerminalInputSet;
-
 /// Registers `TerminalInputBindings` and the default keyboard dispatcher.
-pub(crate) struct OzmaInputPlugin;
+pub(crate) struct KeyboardInputPlugin;
 
-impl Plugin for OzmaInputPlugin {
+impl Plugin for KeyboardInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerminalInputBindings>()
             .add_message::<KeyboardInput>()
             .add_systems(
                 Update,
                 dispatch_input
-                    .in_set(OzmaTerminalInputSet)
+                    .in_set(InputPhase::FocusedKey)
                     .run_if(on_message::<KeyboardInput>),
             );
+    }
+}
+
+/// Returns the terminal modifier state from the `ButtonInput<KeyCode>` resource.
+pub(crate) fn current_terminal_modifiers(keys: &ButtonInput<KeyCode>) -> TerminalModifiers {
+    let m = current_modifiers(keys);
+    TerminalModifiers {
+        ctrl: m.ctrl,
+        shift: m.shift,
+        alt: m.alt,
+        meta: m.meta,
     }
 }
 
@@ -144,15 +90,6 @@ fn dispatch_input(
     }
 }
 
-pub(crate) fn current_terminal_modifiers(keys: &ButtonInput<KeyCode>) -> TerminalModifiers {
-    TerminalModifiers {
-        ctrl: keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight),
-        shift: keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight),
-        alt: keys.pressed(KeyCode::AltLeft) || keys.pressed(KeyCode::AltRight),
-        meta: keys.pressed(KeyCode::SuperLeft) || keys.pressed(KeyCode::SuperRight),
-    }
-}
-
 fn chord_matches(chord: &ReservedChord, key_code: KeyCode, mods: &TerminalModifiers) -> bool {
     chord.key_code == key_code
         && chord.ctrl == mods.ctrl
@@ -196,10 +133,9 @@ mod tests {
     fn test_app() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<KeyboardInput>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Captured>()
-            .add_plugins(OzmaInputPlugin)
+            .add_plugins(KeyboardInputPlugin)
             .add_observer(|ev: On<PasteAction>, mut c: ResMut<Captured>| {
                 let _ = ev;
                 c.paste += 1;
