@@ -14,6 +14,7 @@ mod webview_pointer;
 mod window_title;
 
 use crate::cef_profile::CefProfileDir;
+use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::mode::AppMode;
 use crate::window_title::WindowTitlePlugin;
@@ -83,6 +84,7 @@ fn main() {
         .add_plugins(CopyPromptPlugin)
         .add_plugins(WindowTitlePlugin)
         .add_plugins((
+            FocusSyncPlugin,
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,

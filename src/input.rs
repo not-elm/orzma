@@ -2,6 +2,7 @@
 //! table comes from the loaded `OzmuxConfigsResource`; this module owns
 //! no chord data.
 
+pub(crate) mod focus;
 pub(crate) mod hyperlink;
 pub(crate) mod ime;
 pub(crate) mod option_as_alt;

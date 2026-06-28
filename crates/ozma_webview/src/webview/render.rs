@@ -1,14 +1,10 @@
 //! CEF webview wiring for the `window.ozma` Tier 1 back-channel: registers the
-//! `ozma://` dynamic asset scheme, keeps `bevy_cef`'s `FocusedWebview` in
-//! step with the active pane, and routes the `ozma.call` frames the page bridge
+//! `ozma://` dynamic asset scheme and routes the `ozma.call` frames the page bridge
 //! emits to the registering program over the control socket.
 
-use super::mount::Webview;
-use super::osc::NonInteractive;
 use crate::control_plane::{ConnectionWriters, OzmuxRpc, WebviewOwner};
 use bevy::prelude::*;
 use bevy_cef::prelude::*;
-use ozma_terminal::{KeyboardFocused, OzmaTerminal, OzmaTerminalInputSet};
 use ozmux_webview_host::WebviewAssetRegistry;
 use ozmux_webview_host::ozma_scheme::custom_ozma_scheme;
 use serde_json::Value;
@@ -86,55 +82,7 @@ impl Plugin for RenderPlugin {
             .add_observer(drop_ozmux_inflight_on_webview_despawn)
             .add_observer(log_webview_load_started)
             .add_observer(log_webview_load_finished)
-            .add_observer(log_webview_load_error)
-            .add_systems(Update, sync_focused_webview.after(OzmaTerminalInputSet));
-    }
-}
-
-/// Keeps `bevy_cef`'s `FocusedWebview` in step with ozmux's active pane.
-///
-/// bevy_cef only updates `FocusedWebview` when a *webview* node is clicked
-/// (`set_focus_on_press`), so moving focus to a terminal pane (a non-webview)
-/// leaves the webview focused: its DOM text area keeps the caret and
-/// `send_key_event` keeps routing keystrokes to it. Driving `FocusedWebview`
-/// from the active pane fixes both — keyboard follows the focused pane, and CEF
-/// blurs the webview on focus-leave (`bevy_cef`'s `apply_webview_focus` releases
-/// CEF focus when `FocusedWebview` becomes `None`).
-///
-/// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
-/// webview child (`Webview`) whose `ChildOf` parent is a live
-/// `OzmaTerminal` surface — active or not — that inline focus stands (spec §7, single
-/// focus source). This covers click-granted focus and the app-declared focus
-/// set via the control-plane `SetFocus` op, and means switching the active
-/// pane does NOT clear a webview's focus: the webview keeps keyboard
-/// focus until its child despawns (or focus moves off it), at which point the
-/// sync falls through to the clear path below, which maps the active terminal
-/// pane to `None`.
-pub(crate) fn sync_focused_webview(
-    mut focused: ResMut<FocusedWebview>,
-    active_pane: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
-    webviews: Query<(), With<WebviewSource>>,
-    non_interactive: Query<(), With<NonInteractive>>,
-    webview_parents: Query<&ChildOf, With<Webview>>,
-    surfaces: Query<(), With<OzmaTerminal>>,
-) {
-    // NOTE: a despawned inline child fails `webview_parents.get` here and so
-    // falls through to the clear path below, which resolves to `None` and
-    // clears it — that fall-through is the GC for surface inline focus; a
-    // later edit that short-circuits this arm before the despawn check would
-    // leak focus.
-    if let Some(child) = focused.0
-        && let Ok(parent) = webview_parents.get(child)
-        && surfaces.contains(parent.parent())
-    {
-        return;
-    }
-
-    let active_surface = active_pane.iter().next();
-    let active = active_surface
-        .filter(|surface| webviews.contains(*surface) && !non_interactive.contains(*surface));
-    if focused.0 != active {
-        focused.0 = active;
+            .add_observer(log_webview_load_error);
     }
 }
 
@@ -312,50 +260,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn focused_webview_follows_active_pane() {
-        // Regression: moving focus to a terminal pane must clear FocusedWebview,
-        // so bevy_cef blurs the webview (releasing its DOM text area
-        // and stopping keyboard from routing to it). When the webview pane is
-        // active, its webview must be focused.
-        use ozma_terminal::{KeyboardFocused, OzmaTerminal};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        // The active OzmaTerminal IS the active surface. The webview pane carries a
-        // WebviewSource; the terminal pane does not.
-        let terminal_pane = app.world_mut().spawn(OzmaTerminal).id();
-        let ext_pane = app
-            .world_mut()
-            .spawn((OzmaTerminal, WebviewSource::new("ozma://memo/index.html")))
-            .id();
-
-        let set_active = move |app: &mut App, active: Entity, inactive: Entity| {
-            app.world_mut().entity_mut(active).insert(KeyboardFocused);
-            app.world_mut()
-                .entity_mut(inactive)
-                .remove::<KeyboardFocused>();
-            app.update();
-        };
-
-        set_active(&mut app, ext_pane, terminal_pane);
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(ext_pane),
-            "active webview pane must focus its webview"
-        );
-
-        set_active(&mut app, terminal_pane, ext_pane);
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "moving focus to the terminal pane must clear the focused webview",
-        );
-    }
-
-    #[test]
     fn ozmux_frame_deserializes_from_bare_emitted_object() {
         let raw = r#"{"kind":"call","id":"c0","name":"greet","payload":{"x":1}}"#;
         let frame: OzmuxFrame = serde_json::from_str(raw).expect("transparent newtype");
@@ -363,99 +267,6 @@ mod tests {
         assert_eq!(frame.0["id"], "c0");
         assert_eq!(frame.0["name"], "greet");
         assert_eq!(frame.0["payload"]["x"], 1);
-    }
-
-    #[test]
-    fn non_interactive_webview_surface_never_takes_keyboard_focus() {
-        use crate::webview::osc::NonInteractive;
-        use ozma_terminal::{KeyboardFocused, OzmaTerminal};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        // The active OzmaTerminal carries a NonInteractive WebviewSource: it must
-        // never be focused.
-        app.world_mut().spawn((
-            OzmaTerminal,
-            KeyboardFocused,
-            WebviewSource::new("ozma://memo/index.html"),
-            NonInteractive,
-        ));
-
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "NonInteractive webview surface must never become FocusedWebview"
-        );
-    }
-
-    #[test]
-    fn tmux_pane_inline_focus_is_preserved() {
-        use ozma_terminal::OzmaTerminal;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        let pane = app.world_mut().spawn(OzmaTerminal).id();
-        let child = app
-            .world_mut()
-            .spawn((
-                ChildOf(pane),
-                Webview {
-                    view_id: "v".into(),
-                    instance_id: None,
-                    slot: 0,
-                },
-            ))
-            .id();
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            Some(child),
-            "an inline child of a live OzmaTerminal must keep FocusedWebview across the per-frame sync",
-        );
-    }
-
-    #[test]
-    fn tmux_pane_inline_focus_is_gc_on_despawn() {
-        use ozma_terminal::OzmaTerminal;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.init_resource::<FocusedWebview>();
-        app.add_systems(Update, sync_focused_webview);
-
-        let pane = app.world_mut().spawn(OzmaTerminal).id();
-        let child = app
-            .world_mut()
-            .spawn((
-                ChildOf(pane),
-                Webview {
-                    view_id: "v".into(),
-                    instance_id: None,
-                    slot: 0,
-                },
-            ))
-            .id();
-        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
-        app.world_mut().entity_mut(child).despawn();
-
-        app.update();
-
-        assert_eq!(
-            app.world().resource::<FocusedWebview>().0,
-            None,
-            "a despawned inline child must be GC'd out of FocusedWebview",
-        );
     }
 
     #[test]
