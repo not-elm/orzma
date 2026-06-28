@@ -1,36 +1,30 @@
 //! tmux feature plugin: aggregates all tmux runtime sub-plugins.
 
 mod adopt;
-mod confirm_prompt;
-mod copy_mode;
+pub(crate) mod confirm_prompt;
+pub(crate) mod copy_mode;
 mod divider_handle;
-mod forward;
-mod gate;
-mod input;
 mod locale;
 mod mode_ui;
-mod mouse;
 mod paint_rescue;
 mod pane_focus;
-mod pane_hit;
-mod rename_prompt;
-mod render;
+pub(crate) mod rename_prompt;
+pub(crate) mod render;
 mod webview_tokens;
-mod window_bar;
-mod window_bar_input;
+pub(crate) mod window_bar;
 
+use crate::input::tmux::forward::ForwardPlugin;
+use crate::input::tmux::gate::GatePlugin;
+use crate::input::tmux::input::InputPlugin;
+use crate::input::tmux::mouse::MousePlugin;
 use crate::mode::AppMode;
 use adopt::AdoptPlugin;
 use bevy::prelude::*;
 use confirm_prompt::ConfirmPromptPlugin;
 use copy_mode::CopyModePlugin;
 use divider_handle::DividerHandlePlugin;
-use forward::ForwardPlugin;
-use gate::GatePlugin;
-use input::InputPlugin;
 use locale::TmuxLocalePlugin;
 use mode_ui::TmuxModeUiPlugin;
-use mouse::MousePlugin;
 use ozmux_tmux::{TmuxClient, TmuxConnectionClosed, TmuxSessionPlugin};
 use paint_rescue::PaintRescuePlugin;
 use pane_focus::PaneFocusPlugin;
@@ -69,7 +63,7 @@ impl Plugin for OzmuxTmuxPlugin {
 
 /// SystemSet applied to every tmux Update system. Runs only in `AppMode::Tmux`.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-struct TmuxActiveSet;
+pub(crate) struct TmuxActiveSet;
 
 /// Sends `detach-client` over the live connection, if any.
 ///
@@ -78,7 +72,7 @@ struct TmuxActiveSet;
 /// `AppMode::Default`. Callers must NOT also set `NextState(Default)` directly:
 /// the connection stays live until tmux acknowledges the detach, and the
 /// teardown owns the mode transition.
-fn request_detach(client: &mut TmuxClient) {
+pub(crate) fn request_detach(client: &mut TmuxClient) {
     if let Err(error) = client.send_raw("detach-client") {
         tracing::warn!(?error, "detach-client send failed");
     }

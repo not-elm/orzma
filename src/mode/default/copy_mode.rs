@@ -5,9 +5,9 @@
 //! `app_shortcut_handler` (`src/mode/default/input.rs`); this module owns only the
 //! keys handled WHILE copy mode is active.
 
-use super::input::should_disable_input;
 use crate::input::InputPhase;
 use crate::input::current_modifiers;
+use crate::input::default_mode::should_disable_input;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::ImeState;
 use crate::mode::AppMode;

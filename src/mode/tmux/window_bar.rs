@@ -2,9 +2,9 @@
 //! window list (`<index>:<name>`), with the active window highlighted and each
 //! entry clickable to `select-window`.
 
-use super::window_bar_input::{switch_window_on_click, window_entry_hover_cursor};
 use crate::font::{PowerlineFont, TerminalUiFont};
 use crate::input::InputPhase;
+use crate::input::tmux::window_bar_input::{switch_window_on_click, window_entry_hover_cursor};
 use crate::theme;
 use crate::ui::palette;
 use bevy::prelude::*;

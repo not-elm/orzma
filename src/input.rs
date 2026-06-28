@@ -3,6 +3,7 @@
 //! no chord data.
 
 pub(crate) mod bindings;
+pub(crate) mod default_mode;
 pub(crate) mod focus;
 pub(crate) mod gesture;
 pub(crate) mod hyperlink;
@@ -11,6 +12,7 @@ pub(crate) mod keyboard;
 pub(crate) mod mouse;
 pub(crate) mod option_as_alt;
 pub(crate) mod shortcuts;
+pub(crate) mod tmux;
 
 use crate::system_set::OzmuxSystems;
 use bevy::prelude::*;

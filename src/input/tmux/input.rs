@@ -9,13 +9,13 @@
 //! cell-deltas (so trackpad / high-resolution `Pixel` scrolling quantizes the
 //! same way the native terminal path does); every other case is ceded to ozma.
 
-use super::confirm_prompt::{ConfirmState, parse_confirm_before};
 use super::pane_hit::tmux_pane_at_phys;
-use super::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::mode::AppMode;
+use crate::mode::tmux::confirm_prompt::{ConfirmState, parse_confirm_before};
+use crate::mode::tmux::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};
@@ -56,7 +56,7 @@ impl Plugin for InputPlugin {
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
             )
-                .in_set(super::TmuxActiveSet),
+                .in_set(crate::mode::tmux::TmuxActiveSet),
         );
     }
 }
@@ -301,7 +301,7 @@ fn forward_keys_to_tmux(
                 ShortcutAction::ReleaseWebviewFocus => {}
                 ShortcutAction::DetachSession => {
                     if let Some(client) = client.as_deref_mut() {
-                        super::request_detach(client);
+                        crate::mode::tmux::request_detach(client);
                     }
                 }
                 ShortcutAction::EnterCopyMode => {}

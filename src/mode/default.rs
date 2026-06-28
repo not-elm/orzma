@@ -2,11 +2,9 @@
 //! lifecycle, host-side input gates/shortcuts, and webview pointer routing.
 
 mod copy_mode;
-mod input;
 mod webview;
 
 pub(crate) use copy_mode::CopyModeInputPlugin;
-pub(crate) use input::DefaultHostInputPlugin;
 pub(crate) use webview::DefaultWebviewPointerPlugin;
 
 use crate::input::focus::KeyboardFocused;

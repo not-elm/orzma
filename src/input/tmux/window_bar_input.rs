@@ -1,14 +1,14 @@
 //! tmux window-bar interaction: click a window entry to `select-window`, and a
 //! pointer cursor while hovering an entry.
 
-use super::window_bar::WindowEntry;
+use crate::mode::tmux::window_bar::WindowEntry;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_tmux::{SelectWindow, TmuxClient};
 
 /// Routes a press on a window entry to `select-window`: sends the tmux
 /// `select-window -t @N` command for the pressed entry's window id.
-pub(super) fn switch_window_on_click(
+pub(crate) fn switch_window_on_click(
     mut client: Option<Single<&mut TmuxClient>>,
     entries: Query<(&Interaction, &WindowEntry), Changed<Interaction>>,
 ) {
@@ -29,7 +29,7 @@ pub(super) fn switch_window_on_click(
 /// read as clickable. Runs after `InputPhase::Hover` so it wins over the
 /// hyperlink system's baseline cursor write; leaving an entry reverts to that
 /// baseline when the hyperlink system re-asserts.
-pub(super) fn window_entry_hover_cursor(
+pub(crate) fn window_entry_hover_cursor(
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     entries: Query<&Interaction, With<WindowEntry>>,
 ) {

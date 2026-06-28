@@ -7,11 +7,11 @@
 //! and the `SelectPane` trigger so the keyboard/paste target follows a consumed
 //! inline click.
 
-use super::super::TmuxActiveSet;
 use super::super::pane_hit::tmux_pane_at_phys;
 use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
 use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture, cell_dims};
 use crate::input::InputPhase;
+use crate::mode::tmux::TmuxActiveSet;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
