@@ -326,8 +326,8 @@ class EndToEnd(unittest.TestCase):
             d = Path(d)
             self._macho(d / "ozmux")
             self._macho(d / "helper")
-            (d / "ozbrowser").write_bytes(b"")
-            (d / "ozmd").write_bytes(b"")
+            self._macho(d / "ozbrowser")
+            self._macho(d / "ozmd")
             fw = self._fake_cef(d)
             out = d / "out"
             bm.main([
@@ -344,7 +344,10 @@ class EndToEnd(unittest.TestCase):
             sha_file = out / "ozmux-9.9.9-arm64.zip.sha256"
             self.assertTrue(sha_file.is_file())
             self.assertEqual(bm.compute_sha256(zip_path), sha_file.read_text().split()[0])
-            # ad-hoc signature must verify
+            resources = out / "ozmux.app" / "Contents" / "Resources"
+            self.assertTrue((resources / "ozbrowser").is_file())
+            self.assertTrue((resources / "ozmd").is_file())
+            # ad-hoc signature must verify deep+strict — fails if a nested companion is unsigned
             subprocess.run(
                 ["codesign", "--verify", "--deep", "--strict", str(out / "ozmux.app")],
                 check=True,

@@ -329,6 +329,11 @@ def codesign_bundle(cfg: BundleConfig) -> None:
         helper_app = frameworks / f"{cfg.bin_name} Helper{suffix}.app"
         run(codesign_argv(cfg.sign_identity, helper_app, hardened=hardened, entitlements=entitlements))
 
+    resources = cfg.app_path / "Contents" / "Resources"
+    for src in cfg.companion_bins:
+        run(codesign_argv(cfg.sign_identity, resources / src.name,
+                          hardened=hardened, entitlements=entitlements))
+
     run(codesign_argv(cfg.sign_identity, cfg.app_path, hardened=hardened, entitlements=entitlements))
     run(codesign_verify_argv(cfg.app_path))
 
