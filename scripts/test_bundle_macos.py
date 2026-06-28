@@ -187,6 +187,37 @@ class ConfigResolution(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 bm.verify_prerequisites(cfg)
 
+    def test_resolve_companion_defaults(self):
+        cfg = bm.resolve_config(self._parse(["--version", "0.1.0", "--skip-build"]))
+        names = [p.name for p in cfg.companion_bins]
+        self.assertEqual(names, ["ozbrowser", "ozmd"])
+        for p in cfg.companion_bins:
+            self.assertIn("aarch64-apple-darwin", str(p))
+            self.assertIn("dist", str(p))
+
+    def test_resolve_companion_overrides(self):
+        cfg = bm.resolve_config(self._parse([
+            "--version", "0.1.0", "--skip-build",
+            "--ozbrowser-bin", "/tmp/ob", "--ozmd-bin", "/tmp/om",
+        ]))
+        self.assertEqual(cfg.companion_bins, [Path("/tmp/ob"), Path("/tmp/om")])
+
+    def test_verify_prerequisites_missing_companion(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            # main bin, cef dir, helper all present; only a companion is missing
+            (d / "ozmux").write_bytes(b"")
+            (d / "helper").write_bytes(b"")
+            cef = d / "cef"
+            cef.mkdir()
+            cfg = bm.resolve_config(bm.build_arg_parser().parse_args([
+                "--version", "0.1.0", "--bin", str(d / "ozmux"),
+                "--cef-framework", str(cef), "--helper-bin", str(d / "helper"),
+                "--ozbrowser-bin", str(d / "missing-ob"), "--ozmd-bin", str(d / "missing-om"),
+            ]))
+            with self.assertRaises(SystemExit):
+                bm.verify_prerequisites(cfg)
+
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class AssembleAndEmbed(unittest.TestCase):
@@ -266,6 +297,8 @@ class EndToEnd(unittest.TestCase):
             d = Path(d)
             self._macho(d / "ozmux")
             self._macho(d / "helper")
+            (d / "ozbrowser").write_bytes(b"")
+            (d / "ozmd").write_bytes(b"")
             fw = self._fake_cef(d)
             out = d / "out"
             bm.main([
@@ -273,6 +306,8 @@ class EndToEnd(unittest.TestCase):
                 "--bin", str(d / "ozmux"),
                 "--cef-framework", str(fw),
                 "--helper-bin", str(d / "helper"),
+                "--ozbrowser-bin", str(d / "ozbrowser"),
+                "--ozmd-bin", str(d / "ozmd"),
                 "--out-dir", str(out),
             ])
             zip_path = out / "ozmux-9.9.9-arm64.zip"

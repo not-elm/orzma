@@ -11,7 +11,7 @@ import plistlib
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 APP_NAME = "ozmux"
@@ -149,6 +149,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Bundle ozmux into a CEF-embedded macOS .app")
     p.add_argument("--version")
     p.add_argument("--bin")
+    p.add_argument("--ozbrowser-bin")
+    p.add_argument("--ozmd-bin")
     p.add_argument("--skip-build", action="store_true")
     p.add_argument("--no-sign", action="store_true")
     p.add_argument("--sign-identity")
@@ -174,6 +176,13 @@ def resolve_config(args: argparse.Namespace) -> BundleConfig:
     if notarize and args.no_sign:
         print("==> WARNING: --no-sign skips signing; disabling notarization")
         notarize = False
+    companion_bins = []
+    for name in COMPANION_BINS:
+        override = getattr(args, f"{name}_bin")
+        if override:
+            companion_bins.append(Path(override))
+        else:
+            companion_bins.append(REPO_ROOT / "target" / TARGET_TRIPLE / CARGO_PROFILE / name)
     return BundleConfig(
         version=version, app_name=APP_NAME, bin_name=BIN_NAME, bundle_id_base=BUNDLE_ID_BASE,
         arch=ARCH, target_triple=TARGET_TRIPLE, bin_source=bin_source,
@@ -181,6 +190,7 @@ def resolve_config(args: argparse.Namespace) -> BundleConfig:
         helper_bin=Path(args.helper_bin).expanduser(),
         out_dir=Path(args.out_dir), sign_identity=sign_identity,
         no_sign=args.no_sign, notarize=notarize,
+        companion_bins=companion_bins,
     )
 
 
@@ -195,6 +205,11 @@ def verify_prerequisites(cfg: BundleConfig) -> None:
         raise SystemExit(
             f"render-process helper not found: {cfg.helper_bin} (run `just setup-cef-release`)"
         )
+    for src in cfg.companion_bins:
+        if not src.is_file():
+            raise SystemExit(
+                f"companion binary not found: {src} (build first or pass --{src.name}-bin)"
+            )
 
 
 def run(argv: list[str], redact: tuple[str, ...] = ()) -> None:
@@ -381,6 +396,7 @@ class BundleConfig:
     sign_identity: str
     no_sign: bool
     notarize: bool
+    companion_bins: list[Path] = field(default_factory=list)
 
     @property
     def app_path(self) -> Path:
