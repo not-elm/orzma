@@ -7,7 +7,6 @@
 use crate::font::FontConfig;
 use crate::inactive_pane::InactivePaneConfig;
 use crate::shortcuts::Shortcuts;
-use crate::theme::Theme;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 use serde::Deserialize;
 
@@ -19,7 +18,6 @@ pub mod mouse;
 pub mod ozma;
 pub mod path;
 pub mod shortcuts;
-pub mod theme;
 
 /// Fully-resolved ozmux configuration.
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -27,8 +25,6 @@ pub mod theme;
 pub struct OzmuxConfigs {
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
-    /// Theme configuration.
-    pub theme: Theme,
     /// Font configuration.
     pub font: FontConfig,
     /// Mouse-input configuration.

@@ -1,5 +1,4 @@
-//! Hardcoded palette + size constants for the Bevy UI. Token loading from
-//! the `ozmux_configs` theme module is deferred to a later phase.
+//! Hardcoded palette + size constants for the Bevy UI.
 //!
 //! Values are tuned to approximate cmux/tmux-style chrome: cool blue-grey
 //! pane content, distinctly darker tab bar, very subtle pane dividers.
