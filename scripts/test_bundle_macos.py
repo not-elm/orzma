@@ -279,6 +279,35 @@ class AssembleAndEmbed(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
+class CopyCompanions(unittest.TestCase):
+    def _macho(self, dest: Path) -> None:
+        # NOTE: shutil.copy (not copy2) avoids PermissionError from SIP-restricted flags on /usr/bin/true
+        shutil.copy("/usr/bin/true", dest)
+        dest.chmod(0o755)
+
+    def test_copy_companions_into_resources(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            self._macho(d / "ozbrowser")
+            self._macho(d / "ozmd")
+            cfg = bm.BundleConfig(
+                version="9.9.9", app_name="ozmux", bin_name="ozmux",
+                bundle_id_base="not.elm.ozmux", arch="arm64",
+                target_triple="aarch64-apple-darwin",
+                bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
+                out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
+                companion_bins=[d / "ozbrowser", d / "ozmd"],
+            )
+            resources = cfg.app_path / "Contents" / "Resources"
+            resources.mkdir(parents=True)
+            bm.copy_companions(cfg)
+            for name in ("ozbrowser", "ozmd"):
+                dest = resources / name
+                self.assertTrue(dest.is_file())
+                self.assertTrue(os.access(dest, os.X_OK))
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class EndToEnd(unittest.TestCase):
     def _macho(self, dest: Path) -> None:
         # NOTE: shutil.copy (not copy2) avoids PermissionError from SIP-restricted flags on /usr/bin/true

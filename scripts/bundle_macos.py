@@ -297,6 +297,16 @@ def embed_cef(cfg: BundleConfig) -> None:
         print(f"  Created {helper_name}.app")
 
 
+def copy_companions(cfg: BundleConfig) -> None:
+    resources = cfg.app_path / "Contents" / "Resources"
+    resources.mkdir(parents=True, exist_ok=True)
+    for src in cfg.companion_bins:
+        dest = resources / src.name
+        shutil.copy2(src, dest)
+        dest.chmod(0o755)
+        print(f"  Embedded companion {src.name}")
+
+
 def strip_xattrs(cfg: BundleConfig) -> None:
     run(xattr_strip_argv(cfg.app_path))
 
@@ -357,6 +367,7 @@ def package(cfg: BundleConfig) -> str:
 
 def cargo_build(cfg: BundleConfig) -> None:
     run(cargo_build_argv(cfg.target_triple, CARGO_PROFILE))
+    run(companion_cargo_build_argv(cfg.target_triple, CARGO_PROFILE, COMPANION_BINS))
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -369,6 +380,7 @@ def main(argv: list[str] | None = None) -> None:
     verify_prerequisites(cfg)
     assemble_app(cfg)
     embed_cef(cfg)
+    copy_companions(cfg)
     strip_xattrs(cfg)
     if not cfg.no_sign:
         codesign_bundle(cfg)
