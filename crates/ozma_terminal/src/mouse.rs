@@ -383,7 +383,11 @@ pub(crate) fn wheel_delta_cells(unit: MouseScrollUnit, y: f32, cell_h: f32) -> f
 /// carrying the remainder. Resets `residual` on a sign flip, then processes the
 /// new delta at full magnitude. A zero / negative-zero delta has no direction
 /// and must not trip the sign-flip reset.
-pub(crate) fn accumulate_notches(residual: &mut f32, delta_cells: f32, cells_per_notch: f32) -> i32 {
+pub(crate) fn accumulate_notches(
+    residual: &mut f32,
+    delta_cells: f32,
+    cells_per_notch: f32,
+) -> i32 {
     if *residual != 0.0 && delta_cells != 0.0 && (*residual).signum() != delta_cells.signum() {
         *residual = 0.0;
     }
@@ -671,8 +675,16 @@ pub(crate) fn dispatch_mouse_wheel(
             h + wheel_delta_cells(ev.unit, ev.x, ctx.cell_h),
         )
     });
-    let raw_v = accumulate_notches(&mut gesture_acc.residual_cells, delta_v, cfg.cells_per_notch);
-    let raw_h = accumulate_notches(&mut gesture_acc.residual_cells_h, delta_h, cfg.cells_per_notch);
+    let raw_v = accumulate_notches(
+        &mut gesture_acc.residual_cells,
+        delta_v,
+        cfg.cells_per_notch,
+    );
+    let raw_h = accumulate_notches(
+        &mut gesture_acc.residual_cells_h,
+        delta_h,
+        cfg.cells_per_notch,
+    );
     if raw_v == 0 && raw_h == 0 {
         return;
     }
@@ -844,7 +856,10 @@ fn build_wheel_modifiers(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> 
 /// horizontal scroll while Shift stays physically held; stripping the Shift bit
 /// keeps the report a plain `<ScrollWheelLeft/Right>` rather than the shifted
 /// (and by default unmapped) variant. Other platforms pass modifiers through.
-fn build_wheel_modifiers_horizontal(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> WheelModifiers {
+fn build_wheel_modifiers_horizontal(
+    keys: &ButtonInput<KeyCode>,
+    cfg: &OzmaMouseConfig,
+) -> WheelModifiers {
     let mut mods = build_wheel_modifiers(keys, cfg);
     if cfg!(target_os = "macos") {
         mods.shift = false;
@@ -2046,9 +2061,10 @@ mod tests {
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
-            cap.0.iter().flatten().any(
-                |e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))
-            ),
+            cap.0
+                .iter()
+                .flatten()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
             "a +x wheel in mouse mode must emit an SGR wheel-right (cb 67) report, got {:?}",
             cap.0
         );
@@ -2062,9 +2078,10 @@ mod tests {
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
-            cap.0.iter().flatten().any(
-                |e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<66;"))
-            ),
+            cap.0
+                .iter()
+                .flatten()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<66;"))),
             "a -x wheel in mouse mode must emit an SGR wheel-left (cb 66) report, got {:?}",
             cap.0
         );
@@ -2077,14 +2094,23 @@ mod tests {
         write_wheel(&mut app, 0.5, -0.5);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
-        assert_eq!(cap.0.len(), 1, "both axes must arrive in ONE trigger, got {:?}", cap.0);
+        assert_eq!(
+            cap.0.len(),
+            1,
+            "both axes must arrive in ONE trigger, got {:?}",
+            cap.0
+        );
         let frame = &cap.0[0];
         assert!(
-            frame.iter().any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<65;"))),
+            frame
+                .iter()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<65;"))),
             "vertical (down, cb 65) report missing: {frame:?}"
         );
         assert!(
-            frame.iter().any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
+            frame
+                .iter()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
             "horizontal (right, cb 67) report missing: {frame:?}"
         );
     }
@@ -2097,7 +2123,10 @@ mod tests {
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
-            cap.0.iter().flatten().all(|e| !matches!(e, MouseEffect::Write(_))),
+            cap.0
+                .iter()
+                .flatten()
+                .all(|e| !matches!(e, MouseEffect::Write(_))),
             "horizontal wheel outside a mouse mode must not emit a report, got {:?}",
             cap.0
         );
