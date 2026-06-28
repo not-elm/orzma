@@ -50,7 +50,7 @@ impl Plugin for DefaultWebviewPointerPlugin {
                 Update,
                 forward_default_webview_mouse_moves
                     .in_set(InputPhase::Hover)
-                    .run_if(in_state(AppMode::Default)),
+                    .run_if(in_state(AppMode::Default).and(on_message::<CursorMoved>)),
             )
             .add_systems(
                 Update,

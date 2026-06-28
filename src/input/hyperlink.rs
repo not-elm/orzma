@@ -12,6 +12,7 @@
 
 use crate::input::{InputPhase, current_modifiers};
 use crate::tmux::pane_hit::{cell_at_local, phys_to_pane_local};
+use crate::webview_pointer::topmost_surface_at;
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
@@ -121,21 +122,6 @@ fn hyperlink_hover_and_cursor(
     };
 
     apply_cursor(&mut cursor_icons, cursor_decision(target));
-}
-
-/// Returns the topmost `OzmaTerminal` surface whose node contains `cursor_phys`,
-/// or `None` when the cursor is over none. "Topmost" is the highest
-/// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); a higher
-/// index is drawn later, i.e. on top. Equal stack indices (only possible before
-/// the first layout pass assigns them) break by `Entity` for determinism.
-fn topmost_surface_at<'a>(
-    cursor_phys: Vec2,
-    candidates: impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)>,
-) -> Option<Entity> {
-    candidates
-        .filter(|&(_, node, transform)| node.contains_point(*transform, cursor_phys))
-        .max_by_key(|&(entity, node, _)| (node.stack_index(), entity))
-        .map(|(entity, _, _)| entity)
 }
 
 /// Clears every per-cursor field of the hover state, including
