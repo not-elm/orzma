@@ -41,7 +41,7 @@ over the same control socket. Unmounting (or disconnecting) tears it down.
         │  {op:reply,reqId,value} ─────►│──── resolve Promise ─────►│
         │  {op:emit,event,payload} ────►│──── window.ozma.on ──────►│
         │◄──── {op:event,…} ◄ window.ozma.emit ─────────────────────│
-        │  OSC 5379;unmount;handle ────►│  despawn webview ─────────►│
+        │  OSC 5379;unmount;handle ────►│  remove webview ──────────►│
 ```
 
 The control socket carries every horizontal arrow between the program and the
@@ -118,7 +118,7 @@ Every program line carries an `op`:
 | --- | --- | --- |
 | `hello` | `token` | Handshake; first line only. |
 | `register` | `kind` + per-kind fields | Register content, mint a handle. |
-| `unregister` | `handle` | Release a handle owned by this connection; despawns its mounted views. |
+| `unregister` | `handle` | Release a handle owned by this connection; removes its mounted views. |
 | `reply` | `reqId`, `ok`, `value?`, `error?` | Answer a host `call` (use the `call`'s `reqId`). |
 | `emit` | `handle`, `event`, `payload` | Push an event to the handle's pages (delivered to `window.ozma.on`). |
 | `focus` | `handle` (string or `null`), `instance` (string or `null`) | Set app-owned focus to a mounted view, or `null` to blur. |
@@ -206,10 +206,10 @@ Program-to-host lines are marked `C→S`, host-to-program lines `S→C`:
 ```json
 C→S {"op":"hello","token":"ozma:4294967306"}
 C→S {"op":"register","kind":"inline","html":"<!doctype html><body>hi</body>"}
-S→C {"ok":true,"handle":"nf2k7q9w3x1m5a8b0c4d6e7f"}
-S→C {"op":"call","handle":"nf2k7q9w3x1m5a8b0c4d6e7f","reqId":"0","method":"save","params":{"text":"hi"}}
+S→C {"ok":true,"handle":"nf2k7q5w3x3m5a6b2c4d6e7f"}
+S→C {"op":"call","handle":"nf2k7q5w3x3m5a6b2c4d6e7f","reqId":"0","method":"save","params":{"text":"hi"}}
 C→S {"op":"reply","reqId":"0","ok":true,"value":{"saved":true}}
-C→S {"op":"emit","handle":"nf2k7q9w3x1m5a8b0c4d6e7f","event":"tick","payload":{"n":1}}
+C→S {"op":"emit","handle":"nf2k7q5w3x3m5a6b2c4d6e7f","event":"tick","payload":{"n":1}}
 ```
 
 ## OSC 5379 — mount / unmount
@@ -259,11 +259,11 @@ dropped; the host reports no error.
 
 ### Example
 
-Mount handle `nf2k7q9w3x1m5a8b0c4d6e7f` as a 24×80 view, then unmount it:
+Mount handle `nf2k7q5w3x3m5a6b2c4d6e7f` as a 24×80 view, then unmount it:
 
 ```text
-\x1b]5379;mount;nf2k7q9w3x1m5a8b0c4d6e7f;24;80\x1b\
-\x1b]5379;unmount;nf2k7q9w3x1m5a8b0c4d6e7f\x1b\
+\x1b]5379;mount;nf2k7q5w3x3m5a6b2c4d6e7f;24;80\x1b\
+\x1b]5379;unmount;nf2k7q5w3x3m5a6b2c4d6e7f\x1b\
 ```
 
 ## The `ozma://` origin
@@ -274,7 +274,10 @@ scheme is standard, secure, CORS-enabled, fetch-enabled, and display-isolated,
 so normal `fetch`, ES modules, and same-origin requests work within the
 handle's origin. Each handle is its own isolated origin.
 
-- **`dir`** — files are served from the registered `root`. Requests that escape the root — a `..` or `.` path component, an absolute path, or their percent-encoded forms — are rejected; each file is capped at 64 MiB; the content type is inferred from the file extension.
+- **`dir`** — files are served from the registered `root`. Requests that escape
+  the root — a `..` or `.` path component, an absolute path, or their
+  percent-encoded forms — are rejected; each file is capped at 64 MiB; the
+  content type is inferred from the file extension.
 - **`inline`** — the single registered document is served only at `index.html`;
   any subresource request returns 404. Use `dir` for multi-file content.
 - **`url`** — the remote `http(s)` page is loaded directly and has **no**
@@ -330,8 +333,8 @@ if (isOzmaAvailable()) {
 
 ## Lifecycle & teardown
 
-- `unregister{handle}` releases a handle and despawns its mounted views.
-- Closing the control connection purges all of that program's handles, despawns
+- `unregister{handle}` releases a handle and removes its mounted views.
+- Closing the control connection purges all of that program's handles, removes
   their views, and rejects every in-flight `call` with `owner_disconnected`.
 - The `compositing` push reports a view's first paint (`active:true`) and its
   teardown after compositing (`active:false`).
