@@ -314,6 +314,10 @@ class EndToEnd(unittest.TestCase):
         shutil.copy("/usr/bin/true", dest)
         dest.chmod(0o755)
 
+    def _unsigned_macho(self, dest: Path) -> None:
+        self._macho(dest)
+        subprocess.run(["codesign", "--remove-signature", str(dest)], check=True)
+
     def _fake_cef(self, root: Path) -> Path:
         fw = root / "Chromium Embedded Framework.framework"
         (fw / "Libraries").mkdir(parents=True)
@@ -326,8 +330,8 @@ class EndToEnd(unittest.TestCase):
             d = Path(d)
             self._macho(d / "ozmux")
             self._macho(d / "helper")
-            self._macho(d / "ozbrowser")
-            self._macho(d / "ozmd")
+            self._unsigned_macho(d / "ozbrowser")
+            self._unsigned_macho(d / "ozmd")
             fw = self._fake_cef(d)
             out = d / "out"
             bm.main([
@@ -347,11 +351,19 @@ class EndToEnd(unittest.TestCase):
             resources = out / "ozmux.app" / "Contents" / "Resources"
             self.assertTrue((resources / "ozbrowser").is_file())
             self.assertTrue((resources / "ozmd").is_file())
-            # ad-hoc signature must verify deep+strict — fails if a nested companion is unsigned
+            # ad-hoc signature must verify deep+strict on the outer bundle
             subprocess.run(
                 ["codesign", "--verify", "--deep", "--strict", str(out / "ozmux.app")],
                 check=True,
             )
+            # NOTE: codesign --verify --deep --strict on the outer bundle does not descend into
+            # plain executables inside Contents/Resources (only into sub-bundles). We must
+            # explicitly verify each companion so the test fails if the signing loop is removed.
+            for name in ("ozbrowser", "ozmd"):
+                subprocess.run(
+                    ["codesign", "--verify", str(resources / name)],
+                    check=True,
+                )
 
 
 class NotarizeGuards(unittest.TestCase):
