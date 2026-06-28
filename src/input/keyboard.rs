@@ -1,11 +1,6 @@
 //! Host keyboard primitives shared by the terminal keyboard dispatch and the
 //! mouse dispatch (modifier reading). Gains the relocated `dispatch_input` in Task 5.
 
-#![expect(
-    dead_code,
-    reason = "primitives wired into the host mouse/keyboard dispatch in Task 4"
-)]
-
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalModifiers;
 

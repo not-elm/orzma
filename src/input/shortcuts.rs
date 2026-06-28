@@ -4,8 +4,9 @@
 //! stays free of any `bevy` dependency.
 
 use crate::configs::OzmuxConfigsResource;
+use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use bevy::prelude::*;
-use ozma_terminal::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
+use ozma_terminal::{ReservedChord, TerminalInputBindings};
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
@@ -326,7 +327,7 @@ mod tests {
         assert_eq!(out.wheel.max_protocol_events_per_frame, 5);
         assert_eq!(out.wheel.lines_per_notch, mc.lines_per_notch);
         assert_eq!(out.cells_per_notch, 1.0);
-        assert_eq!(out.fine_modifier, ozma_terminal::FineModifier::Ctrl);
+        assert_eq!(out.fine_modifier, FineModifier::Ctrl);
         assert_eq!(
             out.double_click_timeout,
             std::time::Duration::from_millis(mc.double_click_timeout_ms as u64)

@@ -1,10 +1,6 @@
-//! Click, wheel, and drag gesture primitives for the host mouse dispatch.
-//! Gains the relocated mouse dispatch systems in Task 4.
-
-#![expect(
-    dead_code,
-    reason = "primitives wired into the host mouse/keyboard dispatch in Task 4"
-)]
+//! Click, wheel, and drag gesture primitives (multi-click tracking, drag-phase
+//! state, and wheel-notch accumulation) consumed by the shared mouse dispatch in
+//! `crate::input::mouse`.
 
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
@@ -59,7 +55,7 @@ pub(crate) struct OzmaMouseGesture {
     /// carried by `CursorMoved` while a button is held. Lets a drag continue
     /// when `Window::cursor_position()` masks an off-window cursor; cleared on
     /// every gesture reset and on release.
-    last_cursor_phys: Option<Vec2>,
+    pub(crate) last_cursor_phys: Option<Vec2>,
 }
 
 /// Consecutive-click counter using a timeout + positional-drift gate.
@@ -88,15 +84,15 @@ impl ClickTracker {
 /// last terminal the wheel targeted.
 #[derive(Resource, Default)]
 pub(crate) struct WheelAccumulator {
-    residual_cells: f32,
-    residual_cells_h: f32,
+    pub(crate) residual_cells: f32,
+    pub(crate) residual_cells_h: f32,
     last_target: Option<Entity>,
 }
 
 impl WheelAccumulator {
     /// Resets both residuals when the wheel target changes, so a sub-notch
     /// fraction accumulated over one terminal cannot bleed into the next.
-    fn retarget(&mut self, entity: Entity) {
+    pub(crate) fn retarget(&mut self, entity: Entity) {
         if self.last_target != Some(entity) {
             self.residual_cells = 0.0;
             self.residual_cells_h = 0.0;
@@ -185,6 +181,26 @@ mod tests {
         let mut t = g.click;
         let cfg = (Duration::from_millis(400), 8.0f32);
         assert_eq!(t.register(Duration::from_millis(0), Vec2::ZERO, cfg), 1);
+    }
+
+    #[test]
+    fn drag_gesture_phase_transitions() {
+        let armed = DragGesture {
+            origin: CellCoord { col: 1, row: 1 },
+            side: Side::Left,
+            ty: SelectionType::Simple,
+            phase: DragPhase::Armed,
+        };
+        assert_eq!(armed.phase, DragPhase::Armed);
+        assert_eq!((armed.origin.col, armed.origin.row), (1, 1));
+        assert_eq!(armed.side, Side::Left);
+        assert_eq!(armed.ty, SelectionType::Simple);
+
+        let started = DragGesture {
+            phase: DragPhase::Started,
+            ..armed
+        };
+        assert_eq!(started.phase, DragPhase::Started);
     }
 
     #[test]

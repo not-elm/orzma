@@ -20,10 +20,7 @@ pub use clipboard::{Clipboard, build_paste_bytes};
 pub use input::{
     KeyboardDisabled, KeyboardFocused, OzmaTerminalInputSet, ReservedChord, TerminalInputBindings,
 };
-pub use mouse::{
-    FineModifier, MouseDisabled, MouseEffect, OzmaMouseConfig, OzmaTerminalMouseSet,
-    TerminalForwardInput, TerminalMouseEffects,
-};
+pub use mouse::{MouseEffect, OzmaTerminalMouseSet, TerminalForwardInput, TerminalMouseEffects};
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
     resolve_shell,

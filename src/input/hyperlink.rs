@@ -10,6 +10,7 @@
 //! would refuse to open. Hyperlink activation (Cmd/Ctrl-click open) is owned by
 //! `ozma_terminal`'s shared mouse systems, not here.
 
+use crate::input::focus::MouseDisabled;
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface_geom::{cell_at_local, phys_to_pane_local};
 use crate::webview_pointer::topmost_surface_at;
@@ -21,7 +22,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
-use ozma_terminal::{MouseDisabled, OzmaTerminal};
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;

@@ -6,6 +6,7 @@
 
 use super::pane_hit::tmux_pane_at_phys;
 use super::rename_prompt::RenamePrompt;
+use crate::input::focus::MouseDisabled;
 use crate::input::ime::ImeState;
 use crate::mode::AppMode;
 use crate::ui::copy_mode::CopyModeState;
@@ -14,7 +15,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{KeyboardDisabled, MouseDisabled, OzmaTerminalInputSet, OzmaTerminalMouseSet};
+use ozma_terminal::{KeyboardDisabled, OzmaTerminalInputSet, OzmaTerminalMouseSet};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview, webview_hit_at};

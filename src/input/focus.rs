@@ -1,14 +1,22 @@
 //! Host-owned webview focus sync: keeps bevy_cef's `FocusedWebview` in step with
 //! the `KeyboardFocused` terminal surface. Moved out of `ozma_webview` so the
-//! library no longer reads `KeyboardFocused`. The marker components
-//! (`KeyboardFocused`/`KeyboardDisabled`/`MouseDisabled`) move into this module
-//! in later tasks.
+//! library no longer reads `KeyboardFocused`. Also owns the `MouseDisabled`
+//! input-suppression marker; the remaining marker components
+//! (`KeyboardFocused`/`KeyboardDisabled`) move into this module in later tasks.
 
 use crate::input::InputPhase;
 use bevy::prelude::*;
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
 use ozma_terminal::{KeyboardFocused, OzmaTerminal};
 use ozma_webview::{NonInteractive, Webview};
+
+/// When present on an `OzmaTerminal` entity, the host's mouse dispatchers and
+/// hover-cursor system skip it — it is removed from the hit-test candidate set,
+/// so the pointer falls through to the next terminal below it. The host marks
+/// every terminal `MouseDisabled` for modal suppression (picker / IME / focused
+/// webview / unfocused window).
+#[derive(Component)]
+pub(crate) struct MouseDisabled;
 
 /// Registers the webview focus-sync system.
 pub(crate) struct FocusSyncPlugin;

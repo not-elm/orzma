@@ -2,11 +2,13 @@
 //! table comes from the loaded `OzmuxConfigsResource`; this module owns
 //! no chord data.
 
+pub(crate) mod bindings;
 pub(crate) mod focus;
 pub(crate) mod gesture;
 pub(crate) mod hyperlink;
 pub(crate) mod ime;
 pub(crate) mod keyboard;
+pub(crate) mod mouse;
 pub(crate) mod option_as_alt;
 pub(crate) mod shortcuts;
 

@@ -17,6 +17,7 @@ use super::pane_hit::tmux_pane_at_phys;
 use super::render::{DividerPixelRect, PackedTmuxLayout};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
+use crate::input::gesture::ClickTracker;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
@@ -27,8 +28,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 pub(crate) use decide::divider_at;
 use decide::{
-    ClickTracker, ContinuationCtx, PressHit, ReleaseCtx, decide_continuation, decide_press,
-    decide_release,
+    ContinuationCtx, PressHit, ReleaseCtx, decide_continuation, decide_press, decide_release,
 };
 use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use ozma_tty_renderer::TerminalCellMetricsResource;

@@ -16,6 +16,7 @@ mod window_title;
 use crate::cef_profile::CefProfileDir;
 use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
+use crate::input::mouse::MouseInputPlugin;
 use crate::mode::AppMode;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
@@ -86,6 +87,7 @@ fn main() {
         .add_plugins((
             FocusSyncPlugin,
             HyperlinkInputPlugin,
+            MouseInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
             OptionAsAltPlugin,

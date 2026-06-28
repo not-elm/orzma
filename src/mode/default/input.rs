@@ -4,6 +4,7 @@
 //! DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
+use crate::input::focus::MouseDisabled;
 use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
@@ -19,8 +20,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use ozma_terminal::{
-    KeyboardDisabled, KeyboardFocused, MouseDisabled, OzmaTerminal, OzmaTerminalInputSet,
-    OzmaTerminalMouseSet,
+    KeyboardDisabled, KeyboardFocused, OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet,
 };
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
