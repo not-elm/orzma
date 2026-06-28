@@ -15,17 +15,11 @@ use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 pub use action::PasteAction;
 use bevy::prelude::*;
 pub use clipboard::{Clipboard, build_paste_bytes};
-pub use mouse::{MouseEffect, OzmaTerminalMouseSet, TerminalForwardInput, TerminalMouseEffects};
+pub use mouse::{MouseEffect, TerminalForwardInput, TerminalMouseEffects};
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
     resolve_shell,
 };
-
-/// System set containing the default terminal keyboard dispatcher. Hosts that
-/// maintain `KeyboardDisabled` should schedule their maintainer
-/// `.before(OzmaTerminalInputSet)`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct OzmaTerminalInputSet;
 
 /// Bevy plugin that registers the Ozma VT terminal subsystems.
 ///

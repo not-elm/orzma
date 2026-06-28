@@ -20,7 +20,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{OzmaTerminal, OzmaTerminalInputSet, OzmaTerminalMouseSet};
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
@@ -36,8 +36,7 @@ impl Plugin for DefaultHostInputPlugin {
         app.add_systems(
             Update,
             maintain_input_gates
-                .before(OzmaTerminalInputSet)
-                .before(OzmaTerminalMouseSet)
+                .before(InputPhase::Hover)
                 .run_if(in_state(AppMode::Default)),
         )
         .add_systems(

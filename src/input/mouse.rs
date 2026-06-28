@@ -6,6 +6,7 @@
 //! Gated per entity by `MouseDisabled` (the host marks modal / suppressed
 //! surfaces), so it runs in both `AppMode`s for surfaces that still own the mouse.
 
+use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::current_modifiers;
 use crate::input::focus::MouseDisabled;
@@ -22,7 +23,7 @@ use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
-use ozma_terminal::{MouseEffect, OzmaTerminal, OzmaTerminalMouseSet, TerminalMouseEffects};
+use ozma_terminal::{MouseEffect, OzmaTerminal, TerminalMouseEffects};
 use ozma_tty_engine::{
     ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
     MouseButtonKind, Point, ProtocolModifiers, Side, TermMode, TerminalHandle, TerminalModifiers,
@@ -33,8 +34,8 @@ use ozma_tty_renderer::schema::TerminalGrid;
 use std::time::Duration;
 
 /// Registers the shared mouse dispatch systems and their gesture / config
-/// resources. Both dispatchers run in `OzmaTerminalMouseSet` (the surviving
-/// library ordering anchor) and only when a mouse message arrived this frame.
+/// resources. Both dispatchers run in `InputPhase::Dispatch` and only when a
+/// mouse message arrived this frame.
 pub(crate) struct MouseInputPlugin;
 
 impl Plugin for MouseInputPlugin {
@@ -45,7 +46,7 @@ impl Plugin for MouseInputPlugin {
             .add_systems(
                 Update,
                 (dispatch_mouse_buttons, dispatch_mouse_wheel)
-                    .in_set(OzmaTerminalMouseSet)
+                    .in_set(InputPhase::Dispatch)
                     .run_if(
                         on_message::<MouseButtonInput>
                             .or(on_message::<CursorMoved>)

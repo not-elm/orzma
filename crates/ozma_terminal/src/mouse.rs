@@ -3,22 +3,14 @@
 //! intent type, and the apply observer (`on_terminal_mouse_effects`) that writes
 //! the decided effects to the `TerminalHandle` / `Clipboard` (or forwards them to
 //! a PTY-less backend). The mode-neutral mouse dispatch that DECIDES these
-//! effects lives in the host (`crate::input::mouse` in the binary);
-//! `OzmaTerminalMouseSet` is kept here as the ordering anchor the host schedules
-//! its `MouseDisabled` gate maintainer `.before(...)` and its dispatch
-//! `.in_set(...)` against.
+//! effects lives in the host (`crate::input::mouse` in the binary), scheduled
+//! in `InputPhase::Dispatch`.
 
 use crate::clipboard::Clipboard;
 use crate::hyperlink::try_open_uri;
 use crate::spawn::OzmaTerminal;
 use bevy::prelude::*;
 use ozma_tty_engine::{Coalescer, Point, PtyHandle, SelectionType, Side, TerminalHandle};
-
-/// Ordering anchor for the host's mouse dispatch. The crate no longer owns any
-/// mouse systems; the host registers its dispatch `.in_set(OzmaTerminalMouseSet)`
-/// and schedules its `MouseDisabled` gate maintainer `.before(OzmaTerminalMouseSet)`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub struct OzmaTerminalMouseSet;
 
 /// A resolved intent the apply step writes to the handle / clipboard. Kept
 /// separate from application so the decision logic is unit-testable without a

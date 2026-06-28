@@ -6,6 +6,7 @@
 
 use super::pane_hit::tmux_pane_at_phys;
 use super::rename_prompt::RenamePrompt;
+use crate::input::InputPhase;
 use crate::input::focus::KeyboardDisabled;
 use crate::input::focus::MouseDisabled;
 use crate::input::ime::ImeState;
@@ -16,7 +17,6 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{OzmaTerminalInputSet, OzmaTerminalMouseSet};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview, webview_hit_at};
@@ -30,8 +30,7 @@ impl Plugin for GatePlugin {
         app.add_systems(
             Update,
             maintain_tmux_input_gates
-                .before(OzmaTerminalInputSet)
-                .before(OzmaTerminalMouseSet)
+                .before(InputPhase::Hover)
                 .run_if(in_state(AppMode::Tmux)),
         );
     }
