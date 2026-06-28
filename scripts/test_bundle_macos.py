@@ -339,6 +339,25 @@ class CopyCompanions(unittest.TestCase):
 
 
 @unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
+class CopyLicenses(unittest.TestCase):
+    def test_copy_licenses_into_resources(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = Path(d)
+            cfg = bm.BundleConfig(
+                version="9.9.9", app_name="ozmux", bin_name="ozmux",
+                bundle_id_base="not.elm.ozmux", arch="arm64",
+                target_triple="aarch64-apple-darwin",
+                bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
+                out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
+            )
+            (cfg.app_path / "Contents" / "Resources").mkdir(parents=True)
+            bm.copy_licenses(cfg)
+            resources = cfg.app_path / "Contents" / "Resources"
+            self.assertTrue((resources / "THIRD-PARTY-LICENSES.md").is_file())
+            self.assertTrue((resources / "CREDITS.html").is_file())
+
+
+@unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class EndToEnd(unittest.TestCase):
     def _unsigned_macho(self, dest: Path) -> None:
         _write_fake_macho(dest)
