@@ -16,6 +16,7 @@
     "katex": "catalog:",
     "mermaid": "catalog:",
     "dompurify": "catalog:",
+    "github-slugger": "catalog:",
     "highlight.js": "catalog:"
   },
   "devDependencies": {

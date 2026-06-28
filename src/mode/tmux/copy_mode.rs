@@ -2,7 +2,7 @@
 //!
 //! While a pane is in tmux copy mode its live `TerminalHandle` keeps advancing
 //! (`route_tmux_output` never drops `%output`), but its emit to the rendered
-//! grid is gated (see `tmux_render::route_tmux_output`). This plugin paints the
+//! grid is gated (see `crate::mode::tmux::render::route_tmux_output`). This plugin paints the
 //! scrolled view instead: it polls `#{...}` copy-mode state, captures the
 //! scrolled viewport with `capture-pane`, and feeds the captured bytes into a
 //! per-pane scratch handle whose `flush_emit` rebuilds the pane's `TerminalGrid`.
@@ -13,6 +13,7 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
+use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -107,7 +108,7 @@ fn decide_capture(
 /// changes (so `Changed<CopyModeSnapshot>` is meaningful), and read back to
 /// diff against the next reply.
 #[derive(Component)]
-pub(crate) struct CopyModeSnapshot(pub(crate) CopyState);
+pub(super) struct CopyModeSnapshot(pub(super) CopyState);
 
 /// A per-pane scratch terminal used only to parse `capture-pane` bytes into the
 /// pane's rendered grid while in copy mode. The pane's live handle stays
@@ -470,7 +471,7 @@ fn buffer_reply_to_text(lines: &[String]) -> String {
 /// one command: a positive horizontal delta emits `cursor-right`, negative
 /// `cursor-left`; a positive vertical delta emits `cursor-down`, negative
 /// `cursor-up`. A zero delta on an axis emits nothing.
-pub(crate) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
+pub(super) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
     let mut out = Vec::new();
     let (cx, cy) = (cur.0 as i32, cur.1 as i32);
     let (tx, ty) = (target.0 as i32, target.1 as i32);
@@ -494,7 +495,7 @@ pub(crate) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> 
 /// the projection is degenerate (zero-area node). The point is clamped (not
 /// rejected) when it falls outside the pane so a drag that leaves the pane edge
 /// still extends the selection to the nearest cell.
-pub(crate) fn cell_at_pane(
+pub(super) fn cell_at_pane(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
     cursor_phys: Vec2,
@@ -507,18 +508,6 @@ pub(crate) fn cell_at_pane(
     let col = ((local.x / cell_w_phys).floor().max(0.0) as u32).min(cols.saturating_sub(1) as u32);
     let row = ((local.y / cell_h_phys).floor().max(0.0) as u32).min(rows.saturating_sub(1) as u32);
     Some((col as u16, row as u16))
-}
-
-/// Maps a window physical-pixel point to a node's local physical px with origin
-/// at the node's top-left corner. Mirrors `tmux_pane_hit::phys_to_pane_local`
-/// (the affine inverse of `UiGlobalTransform` via `ComputedNode::normalize_point`).
-fn phys_to_pane_local(
-    node: &ComputedNode,
-    transform: &UiGlobalTransform,
-    cursor_phys: Vec2,
-) -> Option<Vec2> {
-    node.normalize_point(*transform, cursor_phys)
-        .map(|normalized| (normalized + Vec2::splat(0.5)) * node.size)
 }
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ catalog:
   katex: ^0.16.11
   mermaid: ^11.0.0
   dompurify: ^3.1.6
+  github-slugger: ^2.0.0
   jsdom: ^25.0.0
 
 catalogMode: strict
