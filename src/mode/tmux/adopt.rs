@@ -12,12 +12,13 @@
 //! survives) or the gateway child process actually exiting — despawning the
 //! gateway entity (and its `TmuxClient`) and returning to [`AppMode::Default`].
 
+use crate::input::focus::KeyboardFocused;
 use crate::mode::AppMode;
 use crate::mode::default::DefaultModeUi;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_terminal::{KeyboardFocused, cells_for};
+use ozma_terminal::cells_for;
 use ozma_tty_engine::{ControlModeDetected, TerminalChildExit, TerminalResize};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{

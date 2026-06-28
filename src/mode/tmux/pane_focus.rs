@@ -7,9 +7,9 @@
 //! (`mouse::MousePlugin`).
 
 use crate::configs::OzmuxConfigsResource;
+use crate::input::focus::KeyboardFocused;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
-use ozma_terminal::KeyboardFocused;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::material::PaneInactiveStyle;
 use ozmux_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
@@ -142,7 +142,6 @@ mod tests {
 
     #[test]
     fn active_pane_gains_keyboard_focus_and_inactive_loses_it() {
-        use ozma_terminal::KeyboardFocused;
         use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
         use tmux_control_parser::CellDims;
 

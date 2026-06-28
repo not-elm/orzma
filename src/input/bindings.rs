@@ -1,11 +1,58 @@
-//! Host-owned mouse input policy: the `OzmaMouseConfig` resource and its
-//! `FineModifier` selector. Populated from `ozmux_configs` at startup
-//! (`crate::input::shortcuts::populate_mouse_config`) and consumed by the shared
-//! mouse dispatch in `crate::input::mouse`.
+//! Host-owned keyboard and mouse input policy: `TerminalInputBindings` /
+//! `ReservedChord` for keyboard dispatch, and `OzmaMouseConfig` / `FineModifier`
+//! for mouse. Keyboard bindings are populated from the resolved shortcut table
+//! (`crate::input::shortcuts::populate_input_bindings`); mouse config from
+//! `ozmux_configs` at startup (`crate::input::shortcuts::populate_mouse_config`).
 
 use bevy::prelude::*;
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
+
+/// A keyboard chord, as a physical `KeyCode` plus the four modifier bits.
+/// Config-agnostic plain data the host supplies in `TerminalInputBindings`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReservedChord {
+    /// The physical key.
+    pub key_code: KeyCode,
+    /// Control held.
+    pub ctrl: bool,
+    /// Shift held.
+    pub shift: bool,
+    /// Alt/Option held.
+    pub alt: bool,
+    /// Meta/Cmd/Super held.
+    pub meta: bool,
+}
+
+/// Host-supplied input policy: the chord that triggers the built-in Paste
+/// action, plus the chords the dispatcher must skip (the host handles those).
+/// Both are populated together so the "paste is not also reserved" invariant
+/// lives in one place.
+///
+/// `Default` is `Cmd+V` paste + empty reserved, so a spawn-and-go consumer
+/// still gets working paste and forwards everything else.
+#[derive(Resource)]
+pub(crate) struct TerminalInputBindings {
+    /// The chord that triggers `PasteAction`.
+    pub paste: ReservedChord,
+    /// Chords the dispatcher skips for the host to handle.
+    pub reserved: Vec<ReservedChord>,
+}
+
+impl Default for TerminalInputBindings {
+    fn default() -> Self {
+        Self {
+            paste: ReservedChord {
+                key_code: KeyCode::KeyV,
+                ctrl: false,
+                shift: false,
+                alt: false,
+                meta: true,
+            },
+            reserved: Vec::new(),
+        }
+    }
+}
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
 /// Default `Alt`: on macOS Shift+wheel becomes horizontal scroll at the OS

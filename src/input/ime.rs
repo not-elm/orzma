@@ -7,6 +7,7 @@
 //! `Window::ime_enabled` and `.ime_position`).
 
 use crate::input::InputPhase;
+use crate::input::focus::KeyboardFocused;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::entity::Entity;
@@ -21,7 +22,6 @@ use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::KeyboardFocused;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
 use ozma_webview::{Webview, focused_webview_of};

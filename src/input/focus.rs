@@ -1,14 +1,27 @@
-//! Host-owned webview focus sync: keeps bevy_cef's `FocusedWebview` in step with
-//! the `KeyboardFocused` terminal surface. Moved out of `ozma_webview` so the
-//! library no longer reads `KeyboardFocused`. Also owns the `MouseDisabled`
-//! input-suppression marker; the remaining marker components
-//! (`KeyboardFocused`/`KeyboardDisabled`) move into this module in later tasks.
+//! Host-owned focus sync and input-suppression markers: keeps bevy_cef's
+//! `FocusedWebview` in step with the active pane, and defines `KeyboardFocused`,
+//! `KeyboardDisabled`, and `MouseDisabled` — the three components the host uses
+//! to route keyboard and mouse input.
 
 use crate::input::InputPhase;
 use bevy::prelude::*;
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
-use ozma_terminal::{KeyboardFocused, OzmaTerminal};
+use ozma_terminal::OzmaTerminal;
 use ozma_webview::{NonInteractive, Webview};
+
+/// When present on an `OzmaTerminal` entity, the crate's default keyboard
+/// dispatcher skips it entirely — the host routes keyboard input elsewhere
+/// (tmux, a focused webview, an open picker, IME composition).
+#[derive(Component)]
+pub(crate) struct KeyboardDisabled;
+
+/// When present on an `OzmaTerminal` entity, that terminal is the keyboard
+/// focus: the crate's keyboard dispatcher routes raw keys to it, and the host
+/// routes IME commits and anchors the OS candidate window to it. The host owns
+/// focus policy and maintains the "exactly one focused" invariant; a terminal
+/// with no `KeyboardFocused` receives no keyboard input.
+#[derive(Component)]
+pub(crate) struct KeyboardFocused;
 
 /// When present on an `OzmaTerminal` entity, the host's mouse dispatchers and
 /// hover-cursor system skip it — it is removed from the hit-test candidate set,
@@ -84,7 +97,6 @@ mod tests {
         // so bevy_cef blurs the webview (releasing its DOM text area
         // and stopping keyboard from routing to it). When the webview pane is
         // active, its webview must be focused.
-        use ozma_terminal::{KeyboardFocused, OzmaTerminal};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -124,8 +136,6 @@ mod tests {
 
     #[test]
     fn non_interactive_webview_surface_never_takes_keyboard_focus() {
-        use ozma_terminal::{KeyboardFocused, OzmaTerminal};
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
@@ -151,8 +161,6 @@ mod tests {
 
     #[test]
     fn tmux_pane_inline_focus_is_preserved() {
-        use ozma_terminal::OzmaTerminal;
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
@@ -183,8 +191,6 @@ mod tests {
 
     #[test]
     fn tmux_pane_inline_focus_is_gc_on_despawn() {
-        use ozma_terminal::OzmaTerminal;
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.init_resource::<FocusedWebview>();
@@ -221,7 +227,6 @@ mod tests {
         // binary. Setting FocusedWebview directly produces the same world state that
         // apply_control_events(SetFocus) would — the sync behavior under test is
         // identical regardless of how FocusedWebview was last written.
-        use ozma_terminal::OzmaTerminal;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)

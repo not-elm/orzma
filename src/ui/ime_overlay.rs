@@ -8,6 +8,7 @@
 mod layout;
 
 use crate::font::TerminalUiFont;
+use crate::input::focus::KeyboardFocused;
 use crate::input::ime::ImeState;
 use crate::input::ime::resolve_focused_surface;
 use bevy::app::{App, Plugin, PostUpdate, Startup};
@@ -29,7 +30,6 @@ use bevy::ui::{
 };
 use bevy::window::{PrimaryWindow, Window};
 use layout::{CaretVisual, PlacedCell, compute_overlay_layout};
-use ozma_terminal::KeyboardFocused;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalFontInitSet;
 use ozma_tty_renderer::TerminalFontSize;
@@ -679,7 +679,6 @@ mod tests {
     use bevy::math::Vec2;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
-    use ozma_terminal::KeyboardFocused;
     use ozma_tty_renderer::CellMetrics;
     use ozmux_tmux::PaneId;
     use ozmux_tmux::{ActivePane, TmuxPane};

@@ -9,10 +9,11 @@ pub(crate) use copy_mode::CopyModeInputPlugin;
 pub(crate) use input::DefaultHostInputPlugin;
 pub(crate) use webview::DefaultWebviewPointerPlugin;
 
+use crate::input::focus::KeyboardFocused;
 use crate::mode::AppMode;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use ozma_terminal::{KeyboardFocused, OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
+use ozma_terminal::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use ozma_tty_engine::ControlModeWatch;
 use ozma_webview::ControlPlaneHandle;
 

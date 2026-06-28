@@ -4,9 +4,8 @@
 //! stays free of any `bevy` dependency.
 
 use crate::configs::OzmuxConfigsResource;
-use crate::input::bindings::{FineModifier, OzmaMouseConfig};
+use crate::input::bindings::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
 use bevy::prelude::*;
-use ozma_terminal::{ReservedChord, TerminalInputBindings};
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
