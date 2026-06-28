@@ -10,7 +10,6 @@ mod mouse;
 mod spawn;
 
 use crate::action::OzmaActionPlugin;
-use crate::hyperlink::HyperlinkPlugin;
 use crate::input::OzmaInputPlugin;
 use crate::mouse::OzmaMousePlugin;
 use crate::spawn::on_add_inject_render;
@@ -50,7 +49,6 @@ impl Plugin for OzmaTerminalPlugin {
             OzmaActionPlugin,
             OzmaInputPlugin,
             OzmaMousePlugin,
-            HyperlinkPlugin,
         ))
         .add_observer(on_add_inject_render);
     }

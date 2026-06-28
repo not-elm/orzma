@@ -1060,7 +1060,7 @@ mod tests {
             "first adoption must send the on-attach enumeration"
         );
 
-        // Teardown, mirroring src/tmux/adopt.rs::teardown's crate-facing effect:
+        // Teardown, mirroring src/mode/tmux/adopt.rs::teardown's crate-facing effect:
         // despawn the gateway (taking its TmuxClient, EnumerationState, and
         // TmuxAttached marker with it) and trigger TmuxConnectionReset (which
         // resets the projection).

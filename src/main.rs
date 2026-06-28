@@ -1,42 +1,43 @@
 //! ozmux Bevy GUI entry point.
 
-mod app_mode;
 mod bootstrap;
 mod cef_profile;
 mod configs;
-mod default_input;
 mod font;
 mod input;
+mod mode;
+mod surface_geom;
 mod system_set;
 mod theme;
-mod tmux;
 mod ui;
+mod webview_pointer;
 mod window_title;
 
-use crate::app_mode::{AppMode, DefaultModePlugin};
 use crate::cef_profile::CefProfileDir;
 use crate::input::hyperlink::HyperlinkInputPlugin;
+use crate::mode::AppMode;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
-use default_input::DefaultHostInputPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxShortcutPlugin;
-use input::copy_mode::CopyModeInputPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
+use mode::default::CopyModeInputPlugin;
+use mode::default::DefaultHostInputPlugin;
+use mode::default::DefaultModePlugin;
+use mode::default::DefaultWebviewPointerPlugin;
+use mode::tmux::OzmuxTmuxPlugin;
 use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
 use ozmux_webview_host::WebviewAssetRegistry;
-use tmux::OzmuxTmuxPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
-    OzmuxUiPlugin, confirm_prompt::ConfirmPromptPlugin, copy_mode::CopyModePlugin,
-    copy_mode_indicator::CopyModeIndicatorPlugin, copy_search::CopyPromptPlugin,
-    rename_prompt::RenamePromptPlugin,
+    OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
+    copy_search::CopyPromptPlugin,
 };
 
 fn main() {
@@ -80,8 +81,6 @@ fn main() {
             CopyModeIndicatorPlugin,
         ))
         .add_plugins(CopyPromptPlugin)
-        .add_plugins(ConfirmPromptPlugin)
-        .add_plugins(RenamePromptPlugin)
         .add_plugins(WindowTitlePlugin)
         .add_plugins((
             HyperlinkInputPlugin,
@@ -89,6 +88,7 @@ fn main() {
             ImeOverlayPlugin,
             OptionAsAltPlugin,
             DefaultHostInputPlugin,
+            DefaultWebviewPointerPlugin,
             CopyModeInputPlugin,
         ))
         .run();
@@ -151,7 +151,7 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
 /// The UTF-8 `LC_CTYPE` ozmux installs when the inherited locale is not UTF-8.
 /// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
 /// writes it on. Also the fallback advertised to tmux panes
-/// (`crate::tmux::locale`).
+/// (`crate::mode::tmux::locale`).
 pub(crate) const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment

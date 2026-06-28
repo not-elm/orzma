@@ -4,14 +4,18 @@
 //! DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
 //! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
-use crate::app_mode::AppMode;
 use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::ResolvedShortcuts;
 use crate::input::{InputPhase, current_modifiers};
+use crate::mode::AppMode;
+use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
+use crate::webview_pointer::topmost_surface_at;
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
+use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use ozma_terminal::{
@@ -19,6 +23,9 @@ use ozma_terminal::{
     OzmaTerminalMouseSet,
 };
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_renderer::prelude::TerminalOverlays;
+use ozma_webview::{NonInteractive, Webview, webview_hit_at};
 use ozmux_configs::shortcuts::ShortcutAction;
 use ozmux_tmux::TmuxPane;
 
@@ -45,6 +52,23 @@ impl Plugin for DefaultHostInputPlugin {
     }
 }
 
+/// Inline-webview hit-test inputs for the mouse rect-claim, bundled to stay
+/// within Bevy's system-parameter limit. `metrics` is optional so the gate still
+/// runs before cell metrics exist (no claim possible yet).
+#[derive(SystemParam)]
+struct WebviewClaimParams<'w, 's> {
+    metrics: Option<Res<'w, TerminalCellMetricsResource>>,
+    surfaces: Query<
+        'w,
+        's,
+        (Entity, &'static ComputedNode, &'static UiGlobalTransform),
+        With<OzmaTerminal>,
+    >,
+    children: Query<'w, 's, &'static Children>,
+    webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
+    overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
+}
+
 fn maintain_input_gates(
     mut commands: Commands,
     ime: Res<ImeState>,
@@ -59,23 +83,62 @@ fn maintain_input_gates(
         ),
         With<OzmaTerminal>,
     >,
+    claim: WebviewClaimParams,
 ) {
-    let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    let global_disable =
+    let window = windows.single().ok();
+    let focused = window.map(|w| w.focused).unwrap_or(false);
+    let keyboard_disable =
         should_disable_input(ime.is_composing(), focused, focused_webview.0.is_some());
+    // NOTE: mouse is NOT disabled on webview focus alone — only over an
+    // interactive inline rect (the rect-claim) — so an off-rect click still
+    // reaches `dispatch_mouse_buttons` (and clears webview focus in the router).
+    // Re-adding `focused_webview.0.is_some()` here would swallow that fallthrough
+    // click, stranding the user on a focused webview.
+    let mouse_modal = ime.is_composing() || !focused;
+    let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
     for (entity, has_keyboard, has_mouse, in_copy_mode) in terminals.iter() {
-        let disable = global_disable || in_copy_mode;
-        if disable && !has_keyboard {
+        let disable_keyboard = keyboard_disable || in_copy_mode;
+        let disable_mouse = mouse_modal || in_copy_mode || Some(entity) == claimed;
+        if disable_keyboard && !has_keyboard {
             commands.entity(entity).insert(KeyboardDisabled);
-        } else if !disable && has_keyboard {
+        } else if !disable_keyboard && has_keyboard {
             commands.entity(entity).remove::<KeyboardDisabled>();
         }
-        if disable && !has_mouse {
+        if disable_mouse && !has_mouse {
             commands.entity(entity).insert(MouseDisabled);
-        } else if !disable && has_mouse {
+        } else if !disable_mouse && has_mouse {
             commands.entity(entity).remove::<MouseDisabled>();
         }
     }
+}
+
+/// The Default shell whose INTERACTIVE inline webview rect is under the cursor,
+/// or `None`. Mirrors `crate::mode::tmux::gate::claimed_webview_pane` for the single
+/// Default surface: resolve the topmost `OzmaTerminal` under the cursor, then
+/// hit-test its active overlay rects (`webview_hit_at` skips `NonInteractive`
+/// children). A claimed surface is marked `MouseDisabled` so
+/// `dispatch_mouse_buttons` yields the click to the webview router.
+fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<Entity> {
+    let metrics = claim.metrics.as_deref()?;
+    let scale = window.scale_factor();
+    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
+    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let cursor_phys = window.cursor_position()? * scale;
+    let terminal = topmost_surface_at(cursor_phys, claim.surfaces.iter())?;
+    let (_, node, transform) = claim.surfaces.get(terminal).ok()?;
+    let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
+    let overlays = claim.overlay_rects.get(terminal).ok()?;
+    webview_hit_at(
+        &claim.children,
+        &claim.webviews,
+        overlays,
+        terminal,
+        local_phys,
+        cell_w,
+        cell_h,
+        scale,
+    )?;
+    Some(terminal)
 }
 
 fn app_shortcut_handler(
@@ -131,8 +194,8 @@ fn apply_ime_commit_to_terminal(
     terminals: Query<(), (With<OzmaTerminal>, Without<TmuxPane>)>,
 ) {
     // NOTE: discriminate on TmuxPane absence — tmux panes are also OzmaTerminal
-    // entities (src/tmux/render.rs), and their commits go out via the tmux
-    // observer in src/tmux/forward.rs. Without this filter the commit would be
+    // entities (src/mode/tmux/render.rs), and their commits go out via the tmux
+    // observer in src/mode/tmux/forward.rs. Without this filter the commit would be
     // double-delivered.
     if terminals.get(ev.entity).is_err() {
         return;
@@ -144,7 +207,7 @@ fn apply_ime_commit_to_terminal(
     });
 }
 
-pub(crate) fn should_disable_input(
+pub(super) fn should_disable_input(
     composing: bool,
     window_focused: bool,
     webview_focused: bool,
@@ -261,5 +324,108 @@ mod tests {
             false,
             ShortcutAction::Quit
         ));
+    }
+
+    /// Default shell (`OzmaTerminal`, no `TmuxPane`) at window center (400,300),
+    /// size 800x600, with one interactive inline rect rows 2..12, cols 3..43
+    /// (phys y 32..192, x 24..344 at the 8x16 px cell pitch). Runs
+    /// `maintain_input_gates`. Returns `(app, shell)`.
+    fn make_gate_app() -> (App, Entity) {
+        use bevy::math::IVec4;
+        use bevy::window::WindowResolution;
+        use ozma_tty_renderer::CellMetrics;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.init_resource::<ImeState>();
+        app.init_resource::<FocusedWebview>();
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        });
+        app.add_systems(Update, maintain_input_gates);
+
+        let mut overlays = TerminalOverlays::default();
+        overlays.rects[0] = IVec4::new(2, 3, 10, 40);
+        let shell = app
+            .world_mut()
+            .spawn((
+                OzmaTerminal,
+                ComputedNode {
+                    size: Vec2::new(800.0, 600.0),
+                    ..ComputedNode::DEFAULT
+                },
+                UiGlobalTransform::from_xy(400.0, 300.0),
+                overlays,
+            ))
+            .id();
+        app.world_mut().spawn((
+            ChildOf(shell),
+            Webview {
+                view_id: "w".into(),
+                instance_id: None,
+                slot: 0,
+            },
+        ));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        (app, shell)
+    }
+
+    fn set_gate_cursor(app: &mut App, phys: Vec2) {
+        use bevy::math::DVec2;
+        let win = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(win)
+            .unwrap()
+            .set_physical_cursor_position(Some(DVec2::new(phys.x as f64, phys.y as f64)));
+    }
+
+    #[test]
+    fn cursor_over_webview_rect_disables_mouse() {
+        let (mut app, shell) = make_gate_app();
+        set_gate_cursor(&mut app, Vec2::new(40.0, 48.0));
+        app.update();
+        assert!(
+            app.world().entity(shell).contains::<MouseDisabled>(),
+            "the cursor over an interactive webview rect must MouseDisable the shell so \
+             dispatch_mouse_buttons yields the click to the webview router"
+        );
+    }
+
+    #[test]
+    fn focused_webview_off_rect_keeps_mouse_enabled() {
+        let (mut app, shell) = make_gate_app();
+        let child = app
+            .world_mut()
+            .query_filtered::<Entity, With<Webview>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
+        set_gate_cursor(&mut app, Vec2::new(400.0, 400.0));
+        app.update();
+        assert!(
+            !app.world().entity(shell).contains::<MouseDisabled>(),
+            "webview focus alone must NOT MouseDisable the shell — an off-rect click must fall \
+             through to the terminal (and clear webview focus in the router)"
+        );
     }
 }

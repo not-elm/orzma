@@ -30,6 +30,7 @@ pub(crate) fn draw(
     live: LiveStatus,
     scroll_percent: u16,
     search: Option<SearchCount>,
+    flash: Option<&str>,
 ) {
     let search_open = app.mode() == Mode::Search || app.search_active();
     let vchunks = Layout::default()
@@ -41,7 +42,7 @@ pub(crate) fn draw(
         ])
         .split(frame.area());
 
-    draw_status(frame, vchunks[0], file_name, live, scroll_percent);
+    draw_status(frame, vchunks[0], file_name, live, scroll_percent, flash);
     draw_body(frame, placements, vchunks[1], app, handle_id);
     if search_open {
         draw_search(frame, vchunks[2], app, search);
@@ -54,12 +55,17 @@ fn draw_status(
     file_name: &str,
     live: LiveStatus,
     scroll_percent: u16,
+    flash: Option<&str>,
 ) {
     let dot = match live {
         LiveStatus::Watching => "● live",
         LiveStatus::Missing => "○ missing",
     };
-    let line = Line::from(format!("ozmd · {file_name}    {dot}    {scroll_percent}%"));
+    let base = format!("ozmd · {file_name}    {dot}    {scroll_percent}%");
+    let line = match flash {
+        Some(msg) => Line::from(format!("{base}    {msg}")),
+        None => Line::from(base),
+    };
     frame.render_widget(
         Paragraph::new(line).style(Style::default().add_modifier(Modifier::REVERSED)),
         area,

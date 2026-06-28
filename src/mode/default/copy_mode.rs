@@ -2,14 +2,14 @@
 //! decider, a gather system that reads `KeyboardInput` for the focused
 //! copy-mode terminal, and an observer that applies each intent through the
 //! engine's vi/selection/scroll API. Entry (`Cmd+S`) lives in
-//! `app_shortcut_handler` (`src/default_input.rs`); this module owns only the
+//! `app_shortcut_handler` (`src/mode/default/input.rs`); this module owns only the
 //! keys handled WHILE copy mode is active.
 
-use crate::app_mode::AppMode;
-use crate::default_input::should_disable_input;
+use super::input::should_disable_input;
 use crate::input::InputPhase;
 use crate::input::current_modifiers;
 use crate::input::ime::ImeState;
+use crate::mode::AppMode;
 use crate::ui::copy_mode::{CopyModeState, ExitCopyMode};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
