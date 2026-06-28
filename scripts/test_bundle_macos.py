@@ -338,7 +338,6 @@ class CopyCompanions(unittest.TestCase):
             self.assertFalse((resources / "ozbrowser-cli").exists())
 
 
-@unittest.skipUnless(sys.platform == "darwin", "macOS-only integration test")
 class CopyLicenses(unittest.TestCase):
     def test_copy_licenses_into_resources(self):
         with tempfile.TemporaryDirectory() as d:
