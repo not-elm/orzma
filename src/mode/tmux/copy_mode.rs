@@ -2,7 +2,7 @@
 //!
 //! While a pane is in tmux copy mode its live `TerminalHandle` keeps advancing
 //! (`route_tmux_output` never drops `%output`), but its emit to the rendered
-//! grid is gated (see `tmux_render::route_tmux_output`). This plugin paints the
+//! grid is gated (see `crate::mode::tmux::render::route_tmux_output`). This plugin paints the
 //! scrolled view instead: it polls `#{...}` copy-mode state, captures the
 //! scrolled viewport with `capture-pane`, and feeds the captured bytes into a
 //! per-pane scratch handle whose `flush_emit` rebuilds the pane's `TerminalGrid`.
@@ -13,6 +13,7 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
+use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -507,18 +508,6 @@ pub(crate) fn cell_at_pane(
     let col = ((local.x / cell_w_phys).floor().max(0.0) as u32).min(cols.saturating_sub(1) as u32);
     let row = ((local.y / cell_h_phys).floor().max(0.0) as u32).min(rows.saturating_sub(1) as u32);
     Some((col as u16, row as u16))
-}
-
-/// Maps a window physical-pixel point to a node's local physical px with origin
-/// at the node's top-left corner. Mirrors `crate::surface_geom::phys_to_pane_local`
-/// (the affine inverse of `UiGlobalTransform` via `ComputedNode::normalize_point`).
-fn phys_to_pane_local(
-    node: &ComputedNode,
-    transform: &UiGlobalTransform,
-    cursor_phys: Vec2,
-) -> Option<Vec2> {
-    node.normalize_point(*transform, cursor_phys)
-        .map(|normalized| (normalized + Vec2::splat(0.5)) * node.size)
 }
 
 #[cfg(test)]

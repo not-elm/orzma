@@ -23,12 +23,6 @@ use ozma_webview::ControlPlaneHandle;
 #[derive(Component)]
 pub(crate) struct DefaultModeUi;
 
-/// Marker for the single Default-mode shell terminal entity. Persists across
-/// `AppMode::Default` ↔ `AppMode::Tmux` round-trips when the Default shell
-/// is not adopted as the tmux gateway.
-#[derive(Component)]
-struct DefaultShell;
-
 /// Bevy plugin that ensures the Default-mode UI subtree (a single
 /// `OzmaTerminal` under `DefaultModeUi`) exists while in `AppMode::Default`.
 ///
@@ -108,6 +102,12 @@ fn ensure_default_mode_ui(
         }
     }
 }
+
+/// Marker for the single Default-mode shell terminal entity. Persists across
+/// `AppMode::Default` ↔ `AppMode::Tmux` round-trips when the Default shell
+/// is not adopted as the tmux gateway.
+#[derive(Component)]
+struct DefaultShell;
 
 #[cfg(test)]
 mod tests {

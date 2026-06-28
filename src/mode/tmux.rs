@@ -11,7 +11,7 @@ mod mode_ui;
 mod mouse;
 mod paint_rescue;
 mod pane_focus;
-pub(crate) mod pane_hit;
+mod pane_hit;
 mod render;
 mod webview_tokens;
 mod window_bar;
@@ -34,10 +34,6 @@ use pane_focus::PaneFocusPlugin;
 use render::RenderPlugin;
 use webview_tokens::WebviewTokensPlugin;
 use window_bar::WindowBarPlugin;
-
-/// SystemSet applied to every tmux Update system. Runs only in `AppMode::Tmux`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct TmuxActiveSet;
 
 /// Bevy plugin aggregating all tmux runtime sub-plugins.
 pub struct OzmuxTmuxPlugin;
@@ -66,6 +62,10 @@ impl Plugin for OzmuxTmuxPlugin {
     }
 }
 
+/// SystemSet applied to every tmux Update system. Runs only in `AppMode::Tmux`.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct TmuxActiveSet;
+
 /// Sends `detach-client` over the live connection, if any.
 ///
 /// The `%exit` notification tmux emits in response drives the teardown path
@@ -73,7 +73,7 @@ impl Plugin for OzmuxTmuxPlugin {
 /// `AppMode::Default`. Callers must NOT also set `NextState(Default)` directly:
 /// the connection stays live until tmux acknowledges the detach, and the
 /// teardown owns the mode transition.
-pub(crate) fn request_detach(client: &mut TmuxClient) {
+fn request_detach(client: &mut TmuxClient) {
     if let Err(error) = client.send_raw("detach-client") {
         tracing::warn!(?error, "detach-client send failed");
     }
