@@ -3,6 +3,8 @@ import 'highlight.js/styles/github-dark.css';
 import { ozma } from '@ozma/web';
 import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
+import { installHeadingAnchors } from './anchors';
+import { classifyLink } from './links';
 import { renderMarkdown } from './render';
 import { Search } from './search';
 
@@ -14,9 +16,16 @@ const search = new Search();
 let mermaidSeq = 0;
 let renderGeneration = 0;
 
+type ScrollTo =
+  | { kind: 'preserve' }
+  | { kind: 'top' }
+  | { kind: 'ratio'; ratio: number }
+  | { kind: 'slug'; slug: string };
+
 interface ContentPayload {
   markdown: string;
   baseDir: string;
+  scrollTo: ScrollTo;
 }
 
 function headingEls(): HTMLElement[] {
@@ -65,6 +74,37 @@ function restoreScrollAnchor(anchor: ScrollAnchor): void {
   window.scrollTo({ top: max > 0 ? anchor.ratio * max : 0 });
 }
 
+function scrollToAnchor(fragment: string): boolean {
+  const el = document.getElementById(fragment);
+  if (el === null) {
+    return false;
+  }
+  el.scrollIntoView({ block: 'start' });
+  reportScrollState();
+  return true;
+}
+
+function applyScrollTarget(scrollTo: ScrollTo, anchor: ScrollAnchor): void {
+  switch (scrollTo.kind) {
+    case 'preserve':
+      restoreScrollAnchor(anchor);
+      break;
+    case 'top':
+      window.scrollTo({ top: 0 });
+      break;
+    case 'ratio': {
+      const max = scrollMax();
+      window.scrollTo({ top: max > 0 ? scrollTo.ratio * max : 0 });
+      break;
+    }
+    case 'slug':
+      if (!scrollToAnchor(scrollTo.slug)) {
+        window.scrollTo({ top: 0 });
+      }
+      break;
+  }
+}
+
 function reportScrollState(): void {
   const max = scrollMax();
   const ratio = max > 0 ? window.scrollY / max : 0;
@@ -107,14 +147,14 @@ async function setContent(payload: ContentPayload): Promise<void> {
   const generation = ++renderGeneration;
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
+  installHeadingAnchors(content);
   await renderMermaid();
   // NOTE: a newer setContent superseded this one during the await (rapid reloads
-  // race) — skip the stale scroll restore so only the latest render positions the
-  // viewport.
+  // race) — skip the stale scroll so only the latest render positions the viewport.
   if (generation !== renderGeneration) {
     return;
   }
-  restoreScrollAnchor(anchor);
+  applyScrollTarget(payload.scrollTo, anchor);
   reportScrollState();
 }
 
@@ -168,6 +208,40 @@ ozma.on('searchNav', (p: { dir: 'next' | 'prev' }) => {
 });
 ozma.on('clearSearch', () => {
   search.clear(content);
+});
+
+content.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+  const a = target.closest('a');
+  if (a === null) {
+    return;
+  }
+  const raw = a.getAttribute('href');
+  if (raw === null) {
+    return;
+  }
+  const link = classifyLink(raw);
+  e.preventDefault();
+  switch (link.kind) {
+    case 'anchor':
+      scrollToAnchor(link.fragment);
+      break;
+    case 'markdown':
+      reportScrollState();
+      ozma.emit('navigate', { path: link.path, fragment: link.fragment });
+      break;
+    case 'file':
+      ozma.emit('openPath', { path: link.path });
+      break;
+    case 'external':
+      ozma.emit('openExternal', { url: link.url });
+      break;
+    case 'ignore':
+      break;
+  }
 });
 
 window.addEventListener('scroll', reportScrollState, { passive: true });
