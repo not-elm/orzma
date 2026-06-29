@@ -99,73 +99,17 @@ fn dispatch_mouse_buttons(
         return;
     };
 
+    let now = time.elapsed();
     for ev in buttons.read() {
-        let kind = match ev.state {
-            ButtonState::Pressed => ButtonEventKind::Press,
-            ButtonState::Released => ButtonEventKind::Release,
-        };
-        let target = if kind == ButtonEventKind::Press {
-            topmost_surface_at(
-                frame.cursor_phys,
-                terminals
-                    .iter()
-                    .map(|(e, _, node, transform, _)| (e, node, transform)),
-            )
-        } else {
-            gesture.held.map(|h| h.entity)
-        };
-        let Some(target) = target else {
-            continue;
-        };
-        let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
-            gesture.reset();
-            continue;
-        };
-        let ctx = CellContext {
-            node,
-            transform,
-            grid,
-            cell_w: frame.cell_w,
-            cell_h: frame.cell_h,
-        };
-        let modes = handle.current_modes();
-        let Some((evt, link)) = resolve_button_event(
+        process_button_event(
+            &mut commands,
             &mut gesture,
-            &ctx,
-            ev,
-            frame.cursor_phys,
-            frame.scale,
-            frame.modifier_held,
-            time.elapsed(),
+            &terminals,
+            &frame,
             &cfg,
-        ) else {
-            continue;
-        };
-        let decided = decide_button(
-            &mut gesture,
-            modes,
-            evt,
-            frame.mods,
-            frame.modifier_held,
-            link,
-            &cfg.buttons,
+            ev,
+            now,
         );
-        let opened = matches!(decided.as_slice(), [MouseEffect::OpenUri(_)]);
-        match evt.kind {
-            ButtonEventKind::Press if !opened => {
-                gesture.held = Some(HeldPointer {
-                    entity: target,
-                    button: evt.button,
-                    last_cell: evt.cell,
-                });
-            }
-            ButtonEventKind::Release => {
-                gesture.held = None;
-                gesture.last_cursor_phys = None;
-            }
-            _ => {}
-        }
-        trigger_mouse_effects(&mut commands, target, decided);
     }
 
     let Some(held) = gesture.held else {
@@ -246,6 +190,96 @@ fn resolve_frame(
         mods: protocol_mods(keys),
         modifier_held: link_modifier_held(&current_modifiers(keys)),
     })
+}
+
+/// Resolves `target` to its `(CellContext, TermMode)` for this frame, or `None`
+/// when the entity is no longer a live surface (the caller resets the gesture).
+fn ctx_for<'a>(
+    terminals: &'a TerminalSurfaces<'_, '_>,
+    target: Entity,
+    frame: &FrameContext,
+) -> Option<(CellContext<'a>, TermMode)> {
+    let (_, handle, node, transform, grid) = terminals.get(target).ok()?;
+    let ctx = CellContext {
+        node,
+        transform,
+        grid,
+        cell_w: frame.cell_w,
+        cell_h: frame.cell_h,
+    };
+    Some((ctx, handle.current_modes()))
+}
+
+/// Processes one `MouseButtonInput`: hit-tests the target (press) or the locked
+/// held entity (release), drives `resolve_button_event` + `decide_button`,
+/// updates the held-pointer state, and triggers the decided effects.
+fn process_button_event(
+    commands: &mut Commands,
+    gesture: &mut OzmaMouseGesture,
+    terminals: &TerminalSurfaces<'_, '_>,
+    frame: &FrameContext,
+    cfg: &OzmaMouseConfig,
+    ev: &MouseButtonInput,
+    now: Duration,
+) {
+    let kind = match ev.state {
+        ButtonState::Pressed => ButtonEventKind::Press,
+        ButtonState::Released => ButtonEventKind::Release,
+    };
+    let target = if kind == ButtonEventKind::Press {
+        topmost_surface_at(
+            frame.cursor_phys,
+            terminals
+                .iter()
+                .map(|(e, _, node, transform, _)| (e, node, transform)),
+        )
+    } else {
+        gesture.held.map(|h| h.entity)
+    };
+    let Some(target) = target else {
+        return;
+    };
+    let Some((ctx, modes)) = ctx_for(terminals, target, frame) else {
+        gesture.reset();
+        return;
+    };
+    let Some((evt, link)) = resolve_button_event(
+        gesture,
+        &ctx,
+        ev,
+        frame.cursor_phys,
+        frame.scale,
+        frame.modifier_held,
+        now,
+        cfg,
+    ) else {
+        return;
+    };
+    let decided = decide_button(
+        gesture,
+        modes,
+        evt,
+        frame.mods,
+        frame.modifier_held,
+        link,
+        &cfg.buttons,
+    );
+    let opened = matches!(decided.as_slice(), [MouseEffect::OpenUri(_)]);
+    match evt.kind {
+        ButtonEventKind::Press if !opened => {
+            gesture.held = Some(HeldPointer {
+                entity: target,
+                button: evt.button,
+                last_cell: evt.cell,
+            });
+        }
+        ButtonEventKind::Release => {
+            gesture.held = None;
+            gesture.last_cursor_phys = None;
+        }
+        _ => {}
+    }
+    trigger_mouse_effects(commands, target, decided);
 }
 
 /// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
