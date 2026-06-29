@@ -381,7 +381,7 @@ mod tests {
     fn dispatch_diagonal_emits_both_axes() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         // Disable the dominant-axis lock so a diagonal keeps both axes; this
-        // test guards the batching (both axes in ONE trigger), not the lock.
+        // test guards that both axes are emitted from one dispatch run, not the lock.
         disable_axis_lock(&mut app);
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_wheel(&mut app, 0.5 * phys_right_sign(), -0.5);

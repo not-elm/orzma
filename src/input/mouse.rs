@@ -1,9 +1,10 @@
 //! Shared mouse-dispatch plumbing for every `OzmaTerminal` surface. Hosts the
-//! `MouseInputPlugin` aggregator and the hit-test / effect primitives
-//! (`CellContext`, `cell_at_*`, the `MouseEffect` IR, and `trigger_mouse_effects`)
-//! shared by the per-path dispatchers in `button` and `wheel`. Gated per entity
-//! by `MouseDisabled`, so dispatch runs in both `AppMode`s for surfaces that still
-//! own the mouse.
+//! `MouseInputPlugin` aggregator, the hit-test primitives (`CellContext`,
+//! `cell_at_*`, `hit_candidates`, the `TerminalSurfaces` query alias) shared by
+//! the per-path dispatchers in `button` and `wheel`, and the `MouseEffect` IR +
+//! `trigger_mouse_effects` used by the `button` path only (the `wheel` path
+//! triggers its `EntityEvent`s directly). Gated per entity by `MouseDisabled`,
+//! so dispatch runs in both `AppMode`s for surfaces that still own the mouse.
 
 use crate::input::bindings::OzmaMouseConfig;
 use crate::input::focus::MouseDisabled;
@@ -33,9 +34,10 @@ impl Plugin for MouseInputPlugin {
     }
 }
 
-/// Host-private decision IR: the deciders (`decide_button` / `decide_wheel`)
-/// return an ordered `Vec` of these, which `trigger_mouse_effects` fans out
-/// to per-operation `EntityEvent`s on the target terminal.
+/// Host-private decision IR for the button path: `decide_button` returns an
+/// ordered `Vec` of these, which `trigger_mouse_effects` fans out to
+/// per-operation `EntityEvent`s on the target terminal. (The wheel path triggers
+/// its `EntityEvent`s directly from `WheelAction`, bypassing this IR.)
 #[derive(Debug, Clone, PartialEq)]
 enum MouseEffect {
     Write(Vec<u8>),
