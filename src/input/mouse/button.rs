@@ -44,6 +44,21 @@ impl Plugin for MouseButtonInputPlugin {
     }
 }
 
+/// The button-dispatch terminal-surface query, aliased so the long type is not
+/// repeated across the per-stage helper signatures.
+type TerminalSurfaces<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static TerminalHandle,
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        &'static TerminalGrid,
+    ),
+    (With<OzmaTerminal>, Without<MouseDisabled>),
+>;
+
 /// The shared mouse-button dispatcher. Hit-tests the topmost terminal under the
 /// cursor on press, locks drag/release to that terminal, tracks clicks and drag
 /// state, drives `decide_button`, and fans the decided effects out to
@@ -55,16 +70,7 @@ fn dispatch_mouse_buttons(
     mut gesture: ResMut<OzmaMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
     mut cursor_moved: MessageReader<CursorMoved>,
-    terminals: Query<
-        (
-            Entity,
-            &TerminalHandle,
-            &ComputedNode,
-            &UiGlobalTransform,
-            &TerminalGrid,
-        ),
-        (With<OzmaTerminal>, Without<MouseDisabled>),
-    >,
+    terminals: TerminalSurfaces,
     cfg: Res<OzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
