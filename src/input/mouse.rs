@@ -107,18 +107,15 @@ fn dispatch_mouse_buttons(
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok(window) = windows.single() else {
-        buttons.clear();
-        cursor_moved.clear();
-        gesture.reset();
-        return;
+    let window = match windows.single() {
+        Ok(window) if window.focused => window,
+        _ => {
+            buttons.clear();
+            cursor_moved.clear();
+            gesture.reset();
+            return;
+        }
     };
-    if !window.focused || terminals.is_empty() {
-        buttons.clear();
-        cursor_moved.clear();
-        gesture.reset();
-        return;
-    }
     let scale = window.scale_factor();
 
     // NOTE: read CursorMoved BEFORE the button loop so a same-frame
