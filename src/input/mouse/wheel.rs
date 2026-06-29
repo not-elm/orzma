@@ -14,10 +14,10 @@ use crate::input::gesture::{
 };
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::webview_pointer::topmost_surface_at;
-use bevy::input::mouse::MouseWheel;
+use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::PrimaryWindow;
+use bevy::window::{CursorMoved, PrimaryWindow};
 use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{
     CellCoord, TermMode, TerminalHandle, TerminalModifiers, WheelAction, WheelConfig,
@@ -27,16 +27,20 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 
 /// Registers the mouse-wheel dispatcher and its accumulator resource. Runs in
-/// `InputPhase::Dispatch`, gated to frames carrying a wheel message.
+/// `InputPhase::Dispatch`, gated to frames carrying any mouse message — a
+/// cursor-only frame must still run `WheelAccumulator::retarget` so a pane's
+/// sub-notch residual is cleared when the cursor moves to another terminal.
 pub(super) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WheelAccumulator>().add_systems(
             Update,
-            dispatch_mouse_wheel
-                .in_set(InputPhase::Dispatch)
-                .run_if(on_message::<MouseWheel>),
+            dispatch_mouse_wheel.in_set(InputPhase::Dispatch).run_if(
+                on_message::<MouseButtonInput>
+                    .or(on_message::<CursorMoved>)
+                    .or(on_message::<MouseWheel>),
+            ),
         );
     }
 }

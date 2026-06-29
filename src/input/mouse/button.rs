@@ -14,7 +14,7 @@ use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::webview_pointer::topmost_surface_at;
 use bevy::input::ButtonState;
-use bevy::input::mouse::{MouseButton, MouseButtonInput};
+use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -29,17 +29,20 @@ use ozma_tty_renderer::schema::TerminalGrid;
 use std::time::Duration;
 
 /// Registers the mouse-button dispatcher and its gesture resource. Runs in
-/// `InputPhase::Dispatch`, gated to frames carrying a button or cursor-move
-/// message.
+/// `InputPhase::Dispatch`, gated to frames carrying any mouse message — the
+/// focus/empty-candidate guard must still run on wheel-only frames to drain
+/// readers and reset the gesture.
 pub(super) struct MouseButtonInputPlugin;
 
 impl Plugin for MouseButtonInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OzmaMouseGesture>().add_systems(
             Update,
-            dispatch_mouse_buttons
-                .in_set(InputPhase::Dispatch)
-                .run_if(on_message::<MouseButtonInput>.or(on_message::<CursorMoved>)),
+            dispatch_mouse_buttons.in_set(InputPhase::Dispatch).run_if(
+                on_message::<MouseButtonInput>
+                    .or(on_message::<CursorMoved>)
+                    .or(on_message::<MouseWheel>),
+            ),
         );
     }
 }
@@ -92,6 +95,7 @@ fn dispatch_mouse_buttons(
         &mut gesture,
         &mut buttons,
         &mut cursor_moved,
+        &terminals,
         &windows,
         &metrics,
         &keys,
@@ -123,12 +127,13 @@ fn resolve_frame(
     gesture: &mut OzmaMouseGesture,
     buttons: &mut MessageReader<MouseButtonInput>,
     cursor_moved: &mut MessageReader<CursorMoved>,
+    terminals: &TerminalSurfaces<'_, '_>,
     windows: &Query<&Window, With<PrimaryWindow>>,
     metrics: &TerminalCellMetricsResource,
     keys: &ButtonInput<KeyCode>,
 ) -> Option<FrameContext> {
     let window = match windows.single() {
-        Ok(window) if window.focused => window,
+        Ok(window) if window.focused && !terminals.is_empty() => window,
         _ => {
             buttons.clear();
             cursor_moved.clear();
