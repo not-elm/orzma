@@ -5,7 +5,7 @@
 //! `trigger_mouse_effects`. Registered by `MouseWheelInputPlugin`; skips
 //! `MouseDisabled` surfaces.
 
-use super::{CellContext, MouseEffect, trigger_mouse_effects};
+use super::CellContext;
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::focus::MouseDisabled;
@@ -18,11 +18,8 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
-use ozma_terminal::OzmaTerminal;
-use ozma_tty_engine::{
-    CellCoord, TermMode, TerminalHandle, TerminalModifiers, WheelAction, WheelConfig,
-    WheelModifiers,
-};
+use ozma_terminal::{OzmaTerminal, TerminalMouseWrite, TerminalViewportScroll};
+use ozma_tty_engine::{CellCoord, TerminalHandle, TerminalModifiers, WheelAction, WheelModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 
@@ -138,11 +135,14 @@ fn dispatch_mouse_wheel(
         .map(|(cell, _)| cell)
         .unwrap_or(CellCoord { col: 1, row: 1 });
     let modes = handle.current_modes();
-    let mut effects = Vec::new();
     if raw_v != 0 {
         // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
         let mods = build_wheel_modifiers(&keys, &cfg);
-        effects.extend(decide_wheel(modes, -raw_v, cell, mods, &cfg.wheel));
+        apply_wheel_action(
+            &mut commands,
+            target,
+            WheelAction::route(modes, -raw_v, cell, mods, &cfg.wheel),
+        );
     }
     if raw_h != 0 {
         // NOTE: macOS/winit reports a physical-right trackpad scroll as a
@@ -156,32 +156,24 @@ fn dispatch_mouse_wheel(
             raw_h
         };
         let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
-        effects.extend(effects_from_wheel_action(WheelAction::route_horizontal(
-            modes, signed_h, cell, mods, &cfg.wheel,
-        )));
+        apply_wheel_action(
+            &mut commands,
+            target,
+            WheelAction::route_horizontal(modes, signed_h, cell, mods, &cfg.wheel),
+        );
     }
-    trigger_mouse_effects(&mut commands, target, effects);
 }
 
-/// Pure wheel decision. `notches` is in the engine convention (negative =
-/// up/older); callers negate the Bevy-derived up-positive value before calling.
-fn decide_wheel(
-    modes: TermMode,
-    notches: i32,
-    cell: CellCoord,
-    mods: WheelModifiers,
-    cfg: &WheelConfig,
-) -> Vec<MouseEffect> {
-    effects_from_wheel_action(WheelAction::route(modes, notches, cell, mods, cfg))
-}
-
-/// Maps a routed `WheelAction` to host effects. Shared by the vertical
-/// (`route`) and horizontal (`route_horizontal`) wheel paths.
-fn effects_from_wheel_action(action: WheelAction) -> Vec<MouseEffect> {
+/// Applies one routed `WheelAction` as the matching per-operation `EntityEvent`.
+fn apply_wheel_action(commands: &mut Commands, entity: Entity, action: WheelAction) {
     match action {
-        WheelAction::Noop => Vec::new(),
-        WheelAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
-        WheelAction::ScrollViewport(lines) => vec![MouseEffect::Scroll(lines)],
+        WheelAction::WriteToPty(bytes) => {
+            commands.trigger(TerminalMouseWrite { entity, bytes });
+        }
+        WheelAction::ScrollViewport(lines) => {
+            commands.trigger(TerminalViewportScroll { entity, lines });
+        }
+        WheelAction::Noop => {}
     }
 }
 
@@ -223,6 +215,7 @@ fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::mouse::MouseEffect;
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
@@ -295,45 +288,6 @@ mod tests {
             axis_lock_ratio: 0.0,
             ..default()
         });
-    }
-
-    #[test]
-    fn scrollback_up_returns_positive_viewport_scroll() {
-        // Bevy +y (wheel up) → caller negates → engine notches negative → into history.
-        let fx = decide_wheel(
-            TermMode::empty(),
-            -1,
-            CellCoord { col: 1, row: 1 },
-            WheelModifiers::default(),
-            &WheelConfig::default(),
-        );
-        assert_eq!(fx, vec![MouseEffect::Scroll(3)]);
-    }
-
-    #[test]
-    fn app_capture_wheel_forwards_bytes() {
-        let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
-        let fx = decide_wheel(
-            modes,
-            -1,
-            CellCoord { col: 1, row: 1 },
-            WheelModifiers::default(),
-            &WheelConfig::default(),
-        );
-        assert!(matches!(fx.as_slice(), [MouseEffect::Write(b)] if !b.is_empty()));
-    }
-
-    #[test]
-    fn effects_from_wheel_action_maps_each_variant() {
-        assert_eq!(effects_from_wheel_action(WheelAction::Noop), vec![]);
-        assert_eq!(
-            effects_from_wheel_action(WheelAction::WriteToPty(b"x".to_vec())),
-            vec![MouseEffect::Write(b"x".to_vec())]
-        );
-        assert_eq!(
-            effects_from_wheel_action(WheelAction::ScrollViewport(3)),
-            vec![MouseEffect::Scroll(3)]
-        );
     }
 
     #[cfg(target_os = "macos")]

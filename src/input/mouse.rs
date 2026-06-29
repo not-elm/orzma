@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use ozma_terminal::{
     OzmaTerminal, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
-    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate, TerminalViewportScroll,
+    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
 };
 use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TerminalHandle};
 use ozma_tty_renderer::schema::TerminalGrid;
@@ -50,7 +50,6 @@ enum MouseEffect {
     },
     SelClear,
     Copy,
-    Scroll(i32),
     OpenUri(String),
 }
 
@@ -78,9 +77,6 @@ fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<M
             }
             MouseEffect::SelClear => commands.trigger(TerminalSelectionClear { entity }),
             MouseEffect::Copy => commands.trigger(TerminalSelectionCopy { entity }),
-            MouseEffect::Scroll(lines) => {
-                commands.trigger(TerminalViewportScroll { entity, lines })
-            }
             MouseEffect::OpenUri(uri) => commands.trigger(TerminalOpenUri { entity, uri }),
         }
     }
@@ -212,11 +208,6 @@ mod test_support {
         .add_observer(
             |_ev: On<TerminalSelectionCopy>, mut cap: ResMut<CapturedEffects>| {
                 cap.0.push(MouseEffect::Copy);
-            },
-        )
-        .add_observer(
-            |ev: On<TerminalViewportScroll>, mut cap: ResMut<CapturedEffects>| {
-                cap.0.push(MouseEffect::Scroll(ev.lines));
             },
         )
         .add_observer(
