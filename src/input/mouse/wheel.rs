@@ -46,7 +46,7 @@ impl Plugin for MouseWheelInputPlugin {
 /// `decide_wheel`, and fans the decided effects out to per-operation
 /// `EntityEvent`s via `trigger_mouse_effects`. Skips `MouseDisabled`
 /// terminals; an empty candidate set drains the wheel events.
-pub(super) fn dispatch_mouse_wheel(
+fn dispatch_mouse_wheel(
     mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,
     mut wheel: MessageReader<MouseWheel>,
@@ -161,7 +161,7 @@ pub(super) fn dispatch_mouse_wheel(
 
 /// Pure wheel decision. `notches` is in the engine convention (negative =
 /// up/older); callers negate the Bevy-derived up-positive value before calling.
-pub(super) fn decide_wheel(
+fn decide_wheel(
     modes: TermMode,
     notches: i32,
     cell: CellCoord,
@@ -173,7 +173,7 @@ pub(super) fn decide_wheel(
 
 /// Maps a routed `WheelAction` to host effects. Shared by the vertical
 /// (`route`) and horizontal (`route_horizontal`) wheel paths.
-pub(super) fn effects_from_wheel_action(action: WheelAction) -> Vec<MouseEffect> {
+fn effects_from_wheel_action(action: WheelAction) -> Vec<MouseEffect> {
     match action {
         WheelAction::Noop => Vec::new(),
         WheelAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
@@ -185,7 +185,7 @@ pub(super) fn effects_from_wheel_action(action: WheelAction) -> Vec<MouseEffect>
 /// horizontal scroll while Shift stays physically held; stripping the Shift bit
 /// keeps the report a plain `<ScrollWheelLeft/Right>` rather than the shifted
 /// (and by default unmapped) variant. Other platforms pass modifiers through.
-pub(super) fn build_wheel_modifiers_horizontal(
+fn build_wheel_modifiers_horizontal(
     keys: &ButtonInput<KeyCode>,
     cfg: &OzmaMouseConfig,
 ) -> WheelModifiers {
@@ -213,5 +213,276 @@ fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
         FineModifier::Ctrl => m.ctrl,
         FineModifier::Alt => m.alt,
         FineModifier::None => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::mouse::test_support::{
+        CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
+    };
+    use bevy::input::mouse::MouseScrollUnit;
+    use ozma_terminal::Clipboard;
+
+    fn make_wheel_app(enable_modes: &[u8]) -> App {
+        use bevy::window::WindowResolution;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<MouseWheel>()
+            .init_resource::<OzmaMouseConfig>()
+            .init_resource::<WheelAccumulator>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<Clipboard>()
+            .init_resource::<CapturedEffects>()
+            .insert_resource(test_metrics())
+            .add_systems(Update, dispatch_mouse_wheel);
+        add_effect_capture_observers(&mut app);
+
+        let mut handle = TerminalHandle::detached(100, 37);
+        handle.advance(enable_modes);
+        app.world_mut().spawn((
+            OzmaTerminal,
+            handle,
+            ComputedNode {
+                size: Vec2::new(800.0, 600.0),
+                ..ComputedNode::DEFAULT
+            },
+            UiGlobalTransform::from_xy(400.0, 300.0),
+            TerminalGrid {
+                cols: 100,
+                rows: 37,
+                ..default()
+            },
+        ));
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                resolution: WindowResolution::new(800, 600),
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app
+    }
+
+    fn write_wheel(app: &mut App, x: f32, y: f32) {
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                x,
+                y,
+                window: Entity::PLACEHOLDER,
+            });
+    }
+
+    /// Sign of `MouseWheel.x` for a physical-right trackpad scroll on this
+    /// platform: negative on macOS (winit's PixelDelta is opposite X11/Wayland),
+    /// positive elsewhere. Lets the direction tests assert the same SGR button
+    /// on every target instead of being cfg-gated to macOS.
+    fn phys_right_sign() -> f32 {
+        if cfg!(target_os = "macos") { -1.0 } else { 1.0 }
+    }
+
+    fn disable_axis_lock(app: &mut App) {
+        app.insert_resource(OzmaMouseConfig {
+            axis_lock_ratio: 0.0,
+            ..default()
+        });
+    }
+
+    #[test]
+    fn scrollback_up_returns_positive_viewport_scroll() {
+        // Bevy +y (wheel up) → caller negates → engine notches negative → into history.
+        let fx = decide_wheel(
+            TermMode::empty(),
+            -1,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &WheelConfig::default(),
+        );
+        assert_eq!(fx, vec![MouseEffect::Scroll(3)]);
+    }
+
+    #[test]
+    fn app_capture_wheel_forwards_bytes() {
+        let modes = TermMode::MOUSE_REPORT_CLICK | TermMode::SGR_MOUSE;
+        let fx = decide_wheel(
+            modes,
+            -1,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &WheelConfig::default(),
+        );
+        assert!(matches!(fx.as_slice(), [MouseEffect::Write(b)] if !b.is_empty()));
+    }
+
+    #[test]
+    fn effects_from_wheel_action_maps_each_variant() {
+        assert_eq!(effects_from_wheel_action(WheelAction::Noop), vec![]);
+        assert_eq!(
+            effects_from_wheel_action(WheelAction::WriteToPty(b"x".to_vec())),
+            vec![MouseEffect::Write(b"x".to_vec())]
+        );
+        assert_eq!(
+            effects_from_wheel_action(WheelAction::ScrollViewport(3)),
+            vec![MouseEffect::Scroll(3)]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn horizontal_modifiers_strip_shift_on_macos() {
+        let mut keys = ButtonInput::<KeyCode>::default();
+        keys.press(KeyCode::ShiftLeft);
+        let cfg = OzmaMouseConfig::default();
+        let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
+        assert!(
+            !mods.shift,
+            "macOS converts Shift+wheel to horizontal at the OS level; the report must not carry the Shift bit"
+        );
+    }
+
+    #[test]
+    fn dispatch_pure_horizontal_right_emits_sgr_67() {
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.5 * phys_right_sign(), 0.0);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0
+                .iter()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
+            "a physical-right wheel in mouse mode must emit an SGR wheel-right (cb 67) report, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn dispatch_horizontal_left_emits_sgr_66() {
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, -0.5 * phys_right_sign(), 0.0);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0
+                .iter()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<66;"))),
+            "a physical-left wheel in mouse mode must emit an SGR wheel-left (cb 66) report, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn dispatch_diagonal_emits_both_axes() {
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        // Disable the dominant-axis lock so a diagonal keeps both axes; this
+        // test guards the batching (both axes in ONE trigger), not the lock.
+        disable_axis_lock(&mut app);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.5 * phys_right_sign(), -0.5);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0
+                .iter()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<65;"))),
+            "vertical (down, cb 65) report missing: {:?}",
+            cap.0
+        );
+        assert!(
+            cap.0
+                .iter()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
+            "horizontal (right, cb 67) report missing: {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn dispatch_axis_lock_drops_jitter_during_vertical_scroll() {
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        // Vertical-dominant swipe whose horizontal component (0.6 cells) is on
+        // its own past cells_per_notch (0.5) and WOULD emit a notch unlocked;
+        // |x|/hypot = 0.29 < 0.9, so the default lock must drop it (no cb 66/67).
+        // A smaller jitter would not discriminate — it makes no notch either way.
+        write_wheel(&mut app, 0.6, -2.0);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        let has = |needle: &[u8]| {
+            cap.0
+                .iter()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(needle)))
+        };
+        assert!(has(b"\x1b[<65;"), "vertical (down, cb 65) report missing");
+        assert!(
+            !has(b"\x1b[<66;") && !has(b"\x1b[<67;"),
+            "off-axis jitter must NOT emit a horizontal report, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn dispatch_horizontal_without_mouse_mode_emits_no_report() {
+        let mut app = make_wheel_app(b"");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.5, 0.0);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0.iter().all(|e| !matches!(e, MouseEffect::Write(_))),
+            "horizontal wheel outside a mouse mode must not emit a report, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn pixel_horizontal_sensitivity_matches_vertical() {
+        // Equal Pixel-unit deltas on both axes must emit equal report counts.
+        // Regression: horizontal divided ev.x by cell_w (~half of cell_h), so a
+        // given finger distance fired ~2x the notches and scrolled too far.
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        // Disable the dominant-axis lock; this test compares per-axis
+        // sensitivity, which needs both axes to survive an equal-delta gesture.
+        disable_axis_lock(&mut app);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
+            .write(MouseWheel {
+                unit: MouseScrollUnit::Pixel,
+                x: 16.0 * phys_right_sign(),
+                y: 16.0,
+                window: Entity::PLACEHOLDER,
+            });
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        let count = |needle: &[u8]| -> usize {
+            cap.0
+                .iter()
+                .filter_map(|e| match e {
+                    MouseEffect::Write(b) => Some(b),
+                    _ => None,
+                })
+                .map(|b| b.windows(needle.len()).filter(|w| *w == needle).count())
+                .sum()
+        };
+        // test_metrics: cell_w = 8, cell_h = 16. y=16 → up reports (cb 64);
+        // a physical-right x → right reports (cb 67).
+        let vertical = count(b"\x1b[<64;");
+        let horizontal = count(b"\x1b[<67;");
+        assert!(
+            vertical > 0 && horizontal > 0,
+            "both axes must emit reports, got v={vertical} h={horizontal}"
+        );
+        assert_eq!(
+            horizontal, vertical,
+            "equal Pixel deltas must emit equal report counts (horizontal sensitivity \
+             must match vertical), got v={vertical} h={horizontal}"
+        );
     }
 }
