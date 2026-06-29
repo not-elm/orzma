@@ -36,7 +36,7 @@ use std::time::Duration;
 /// Registers the shared mouse dispatch systems and their gesture / config
 /// resources. Both dispatchers run in `InputPhase::Dispatch` and only when a
 /// mouse message arrived this frame.
-pub(crate) struct MouseInputPlugin;
+pub(super) struct MouseInputPlugin;
 
 impl Plugin for MouseInputPlugin {
     fn build(&self, app: &mut App) {

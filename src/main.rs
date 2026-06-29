@@ -24,7 +24,7 @@ use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
-use input::OzmuxShortcutPlugin;
+use input::OzmuxInputPlugin;
 use input::default_mode::DefaultHostInputPlugin;
 use input::ime::ImePlugin;
 use input::option_as_alt::OptionAsAltPlugin;
@@ -75,7 +75,7 @@ fn main() {
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxBootstrapPlugin,
-            OzmuxShortcutPlugin,
+            OzmuxInputPlugin,
             OzmuxUiPlugin,
             OzmaWebviewPlugin {
                 ozma_assets: ozma_registry,
@@ -88,11 +88,8 @@ fn main() {
         .add_plugins((
             FocusSyncPlugin,
             HyperlinkInputPlugin,
-            KeyboardInputPlugin,
-            MouseInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
-            OptionAsAltPlugin,
             DefaultHostInputPlugin,
             DefaultWebviewPointerPlugin,
             CopyModeInputPlugin,

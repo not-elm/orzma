@@ -14,7 +14,13 @@ pub(crate) mod option_as_alt;
 pub(crate) mod shortcuts;
 pub(crate) mod tmux;
 
-use crate::{input::shortcuts::ShortcutsPlugin, system_set::OzmuxSystems};
+use crate::{
+    input::{
+        keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
+        shortcuts::ShortcutsPlugin,
+    },
+    system_set::OzmuxSystems,
+};
 use bevy::prelude::*;
 use ozmux_configs::shortcuts::Modifiers;
 
@@ -33,11 +39,17 @@ pub(crate) enum InputPhase {
 }
 
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline.
-pub struct OzmuxShortcutPlugin;
+pub struct OzmuxInputPlugin;
 
-impl Plugin for OzmuxShortcutPlugin {
+impl Plugin for OzmuxInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(ShortcutsPlugin).configure_sets(
+        app.add_plugins((
+            ShortcutsPlugin,
+            OptionAsAltPlugin,
+            KeyboardInputPlugin,
+            MouseInputPlugin,
+        ))
+        .configure_sets(
             Update,
             (
                 InputPhase::Hover,

@@ -7,7 +7,7 @@ use bevy::prelude::*;
 
 /// Bevy plugin that applies the configured macOS Option-as-Alt mode to the
 /// primary window. Empty on non-macOS targets.
-pub(crate) struct OptionAsAltPlugin;
+pub(super) struct OptionAsAltPlugin;
 
 impl Plugin for OptionAsAltPlugin {
     fn build(&self, app: &mut App) {

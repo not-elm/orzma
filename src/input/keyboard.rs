@@ -13,7 +13,7 @@ use ozma_terminal::{OzmaTerminal, PasteAction};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 
 /// Registers `TerminalInputBindings` and the default keyboard dispatcher.
-pub(crate) struct KeyboardInputPlugin;
+pub(super) struct KeyboardInputPlugin;
 
 impl Plugin for KeyboardInputPlugin {
     fn build(&self, app: &mut App) {
