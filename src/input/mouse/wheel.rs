@@ -1,14 +1,13 @@
 //! Mouse-wheel dispatch for every `OzmaTerminal` surface: scrollback and
 //! app-forward wheel reporting with sub-notch accumulation and dominant-axis
 //! lock. Hit-tests the cursor to a cell, drives the engine's pure `WheelAction`
-//! router, and fans the decided effects out via the shared
-//! `trigger_mouse_effects`. Registered by `MouseWheelInputPlugin`; skips
+//! router, and triggers the matched per-operation `EntityEvent` directly via
+//! `apply_wheel_action`. Registered by `MouseWheelInputPlugin`; skips
 //! `MouseDisabled` surfaces.
 
-use super::CellContext;
+use super::{CellContext, TerminalSurfaces, hit_candidates};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
-use crate::input::focus::MouseDisabled;
 use crate::input::gesture::{
     WheelAccumulator, accumulate_notches, lock_dominant_axis, wheel_delta_cells,
 };
@@ -16,12 +15,10 @@ use crate::input::keyboard::current_terminal_modifiers;
 use crate::webview_pointer::topmost_surface_at;
 use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
-use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
-use ozma_terminal::{OzmaTerminal, TerminalMouseWrite, TerminalViewportScroll};
-use ozma_tty_engine::{CellCoord, TerminalHandle, TerminalModifiers, WheelAction, WheelModifiers};
+use ozma_terminal::{TerminalMouseWrite, TerminalViewportScroll};
+use ozma_tty_engine::{CellCoord, TermMode, TerminalModifiers, WheelAction, WheelModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::schema::TerminalGrid;
 
 /// Registers the mouse-wheel dispatcher and its accumulator resource. Runs in
 /// `InputPhase::Dispatch`, gated to frames carrying any mouse message — a
@@ -42,6 +39,17 @@ impl Plugin for MouseWheelInputPlugin {
     }
 }
 
+/// A resolved wheel target for one frame: the surface entity, the cell under the
+/// cursor, the cell height (for delta scaling), and the terminal modes. A plain
+/// `Copy` value — the cell is resolved during `resolve_wheel_target`, so nothing
+/// downstream needs the borrowed `CellContext`.
+struct WheelTarget {
+    target: Entity,
+    cell: CellCoord,
+    cell_h: f32,
+    modes: TermMode,
+}
+
 /// The shared wheel dispatcher: routes to the topmost terminal under the cursor,
 /// resets the accumulator on a target change, accumulates notches, drives
 /// `decide_wheel`, and fans the decided effects out to per-operation
@@ -51,48 +59,54 @@ fn dispatch_mouse_wheel(
     mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,
     mut wheel: MessageReader<MouseWheel>,
-    terminals: Query<
-        (
-            Entity,
-            &TerminalHandle,
-            &ComputedNode,
-            &UiGlobalTransform,
-            &TerminalGrid,
-        ),
-        (With<OzmaTerminal>, Without<MouseDisabled>),
-    >,
+    terminals: TerminalSurfaces,
     cfg: Res<OzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let Ok(window) = windows.single() else {
+    let Some(wt) = resolve_wheel_target(&terminals, &windows, &metrics) else {
         wheel.clear();
         return;
     };
-    if !window.focused || terminals.is_empty() {
-        wheel.clear();
+    gesture_acc.retarget(wt.target);
+    let (raw_v, raw_h) = accumulate_wheel(&mut gesture_acc, &mut wheel, wt.cell_h, &cfg);
+    if raw_v == 0 && raw_h == 0 {
         return;
+    }
+    apply_wheel(
+        &mut commands,
+        wt.target,
+        wt.cell,
+        wt.modes,
+        raw_v,
+        raw_h,
+        &keys,
+        &cfg,
+    );
+}
+
+/// Resolves the window/focus/empty-set guard + cursor → topmost surface for this
+/// frame to a `WheelTarget`, or `None` on any miss (the caller drains the wheel
+/// reader). The cell is resolved eagerly via a local `CellContext` (one cheap
+/// projection even on a frame that accumulates no notch) so the result is a
+/// lifetime-free value.
+fn resolve_wheel_target(
+    terminals: &TerminalSurfaces<'_, '_>,
+    windows: &Query<&Window, With<PrimaryWindow>>,
+    metrics: &TerminalCellMetricsResource,
+) -> Option<WheelTarget> {
+    let window = windows.single().ok()?;
+    if !window.focused || terminals.is_empty() {
+        return None;
     }
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let Some(cursor_phys) = window.cursor_position().map(|c| c * window.scale_factor()) else {
-        wheel.clear();
-        return;
-    };
-    let Some(target) = topmost_surface_at(
-        cursor_phys,
-        terminals
-            .iter()
-            .map(|(e, _, node, transform, _)| (e, node, transform)),
-    ) else {
-        wheel.clear();
-        return;
-    };
-    let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
-        wheel.clear();
-        return;
-    };
+    let cursor_phys = window
+        .cursor_position()
+        .map(|c| c * window.scale_factor())?;
+    let target = topmost_surface_at(cursor_phys, hit_candidates(terminals))?;
+    let (_, handle, node, transform, grid) = terminals.get(target).ok()?;
     let ctx = CellContext {
         node,
         transform,
@@ -100,16 +114,34 @@ fn dispatch_mouse_wheel(
         cell_w,
         cell_h,
     };
+    let cell = ctx
+        .hit(cursor_phys)
+        .map(|(cell, _)| cell)
+        .unwrap_or(CellCoord { col: 1, row: 1 });
+    Some(WheelTarget {
+        target,
+        cell,
+        cell_h,
+        modes: handle.current_modes(),
+    })
+}
 
-    gesture_acc.retarget(target);
+/// Folds this frame's wheel deltas, applies the dominant-axis lock, and
+/// accumulates whole notches per axis. Returns `(raw_v, raw_h)`.
+fn accumulate_wheel(
+    gesture_acc: &mut WheelAccumulator,
+    wheel: &mut MessageReader<MouseWheel>,
+    cell_h: f32,
+    cfg: &OzmaMouseConfig,
+) -> (i32, i32) {
     let (delta_v, delta_h) = wheel.read().fold((0.0f32, 0.0f32), |(v, h), ev| {
         // NOTE: BOTH axes divide by cell_h (line height), not cell_w, so a given
         // finger distance yields the same notch rate horizontally and vertically.
         // Using the narrower cell_w (advance_phys, ~half of line_height_phys) made
-        // horizontal ~2x too sensitive — do not "correct" ev.x to ctx.cell_w.
+        // horizontal ~2x too sensitive — do not "correct" ev.x to cell_w.
         (
-            v + wheel_delta_cells(ev.unit, ev.y, ctx.cell_h),
-            h + wheel_delta_cells(ev.unit, ev.x, ctx.cell_h),
+            v + wheel_delta_cells(ev.unit, ev.y, cell_h),
+            h + wheel_delta_cells(ev.unit, ev.x, cell_h),
         )
     });
     // NOTE: do NOT also clear the suppressed axis's residual here. The lock
@@ -127,19 +159,26 @@ fn dispatch_mouse_wheel(
         delta_h,
         cfg.cells_per_notch,
     );
-    if raw_v == 0 && raw_h == 0 {
-        return;
-    }
-    let cell = ctx
-        .hit(cursor_phys)
-        .map(|(cell, _)| cell)
-        .unwrap_or(CellCoord { col: 1, row: 1 });
-    let modes = handle.current_modes();
+    (raw_v, raw_h)
+}
+
+/// Routes each non-zero axis to a `WheelAction` (vertical negated to the engine
+/// convention; horizontal macOS sign flip) and applies it via `apply_wheel_action`.
+fn apply_wheel(
+    commands: &mut Commands,
+    target: Entity,
+    cell: CellCoord,
+    modes: TermMode,
+    raw_v: i32,
+    raw_h: i32,
+    keys: &ButtonInput<KeyCode>,
+    cfg: &OzmaMouseConfig,
+) {
     if raw_v != 0 {
         // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
-        let mods = build_wheel_modifiers(&keys, &cfg);
+        let mods = build_wheel_modifiers(keys, cfg);
         apply_wheel_action(
-            &mut commands,
+            commands,
             target,
             WheelAction::route(modes, -raw_v, cell, mods, &cfg.wheel),
         );
@@ -155,9 +194,9 @@ fn dispatch_mouse_wheel(
         } else {
             raw_h
         };
-        let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
+        let mods = build_wheel_modifiers_horizontal(keys, cfg);
         apply_wheel_action(
-            &mut commands,
+            commands,
             target,
             WheelAction::route_horizontal(modes, signed_h, cell, mods, &cfg.wheel),
         );
@@ -220,7 +259,10 @@ mod tests {
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
     use bevy::input::mouse::MouseScrollUnit;
-    use ozma_terminal::Clipboard;
+    use bevy::ui::{ComputedNode, UiGlobalTransform};
+    use ozma_terminal::{Clipboard, OzmaTerminal};
+    use ozma_tty_engine::TerminalHandle;
+    use ozma_tty_renderer::schema::TerminalGrid;
 
     fn make_wheel_app(enable_modes: &[u8]) -> App {
         use bevy::window::WindowResolution;
