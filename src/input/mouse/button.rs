@@ -111,36 +111,7 @@ fn dispatch_mouse_buttons(
             now,
         );
     }
-
-    let Some(held) = gesture.held else {
-        return;
-    };
-    let Ok((_, handle, node, transform, grid)) = terminals.get(held.entity) else {
-        gesture.reset();
-        return;
-    };
-    let ctx = CellContext {
-        node,
-        transform,
-        grid,
-        cell_w: frame.cell_w,
-        cell_h: frame.cell_h,
-    };
-    let modes = handle.current_modes();
-    if let Some((drag_effects, new_cell)) = synthesize_drag(
-        &mut gesture,
-        &ctx,
-        frame.cursor_phys,
-        modes,
-        frame.mods,
-        frame.modifier_held,
-        &cfg.buttons,
-    ) {
-        if let Some(h) = gesture.held.as_mut() {
-            h.last_cell = new_cell;
-        }
-        trigger_mouse_effects(&mut commands, held.entity, drag_effects);
-    }
+    synthesize_held_drag(&mut commands, &mut gesture, &terminals, &frame, &cfg);
 }
 
 /// Resolves the window guard and the per-frame cursor/constants for one run, or
@@ -280,6 +251,39 @@ fn process_button_event(
         _ => {}
     }
     trigger_mouse_effects(commands, target, decided);
+}
+
+/// Synthesizes a drag-motion effect for the held pointer when the cursor crossed
+/// into a new cell, updating the held last-cell and triggering the effect. A
+/// no-op when nothing is held; resets the gesture if the held surface is gone.
+fn synthesize_held_drag(
+    commands: &mut Commands,
+    gesture: &mut OzmaMouseGesture,
+    terminals: &TerminalSurfaces<'_, '_>,
+    frame: &FrameContext,
+    cfg: &OzmaMouseConfig,
+) {
+    let Some(held) = gesture.held else {
+        return;
+    };
+    let Some((ctx, modes)) = ctx_for(terminals, held.entity, frame) else {
+        gesture.reset();
+        return;
+    };
+    if let Some((drag_effects, new_cell)) = synthesize_drag(
+        gesture,
+        &ctx,
+        frame.cursor_phys,
+        modes,
+        frame.mods,
+        frame.modifier_held,
+        &cfg.buttons,
+    ) {
+        if let Some(h) = gesture.held.as_mut() {
+            h.last_cell = new_cell;
+        }
+        trigger_mouse_effects(commands, held.entity, drag_effects);
+    }
 }
 
 /// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
