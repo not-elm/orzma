@@ -50,11 +50,11 @@ struct WheelTarget {
     modes: TermMode,
 }
 
-/// The shared wheel dispatcher: routes to the topmost terminal under the cursor,
-/// resets the accumulator on a target change, accumulates notches, drives
-/// `decide_wheel`, and fans the decided effects out to per-operation
-/// `EntityEvent`s via `trigger_mouse_effects`. Skips `MouseDisabled`
-/// terminals; an empty candidate set drains the wheel events.
+/// The shared wheel dispatcher: resolves the topmost terminal under the cursor
+/// (`resolve_wheel_target`), resets the accumulator on a target change,
+/// accumulates notches (`accumulate_wheel`), and routes each non-zero axis to a
+/// `WheelAction` applied as a per-operation `EntityEvent` (`apply_wheel`). Skips
+/// `MouseDisabled` terminals; an empty candidate set drains the wheel events.
 fn dispatch_mouse_wheel(
     mut commands: Commands,
     mut gesture_acc: ResMut<WheelAccumulator>,
