@@ -14,7 +14,7 @@ pub(crate) mod option_as_alt;
 pub(crate) mod shortcuts;
 pub(crate) mod tmux;
 
-use crate::system_set::OzmuxSystems;
+use crate::{input::shortcuts::ShortcutsPlugin, system_set::OzmuxSystems};
 use bevy::prelude::*;
 use ozmux_configs::shortcuts::Modifiers;
 
@@ -37,26 +37,16 @@ pub struct OzmuxShortcutPlugin;
 
 impl Plugin for OzmuxShortcutPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<shortcuts::ResolvedShortcuts>()
-            .add_systems(
-                Startup,
-                (
-                    shortcuts::build_resolved_shortcuts,
-                    shortcuts::populate_input_bindings,
-                    shortcuts::populate_mouse_config,
-                )
-                    .chain(),
+        app.add_plugins(ShortcutsPlugin).configure_sets(
+            Update,
+            (
+                InputPhase::Hover,
+                InputPhase::Dispatch,
+                InputPhase::FocusedKey,
             )
-            .configure_sets(
-                Update,
-                (
-                    InputPhase::Hover,
-                    InputPhase::Dispatch,
-                    InputPhase::FocusedKey,
-                )
-                    .chain()
-                    .in_set(OzmuxSystems::Input),
-            );
+                .chain()
+                .in_set(OzmuxSystems::Input),
+        );
     }
 }
 

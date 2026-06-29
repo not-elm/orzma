@@ -11,6 +11,22 @@ use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
 use std::time::Duration;
 
+pub(super) struct ShortcutsPlugin;
+
+impl Plugin for ShortcutsPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<ResolvedShortcuts>().add_systems(
+            Startup,
+            (
+                build_resolved_shortcuts,
+                populate_input_bindings,
+                populate_mouse_config,
+            )
+                .chain(),
+        );
+    }
+}
+
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
 /// the exact modifier set required, and the action to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,7 +126,7 @@ fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut> {
 /// `Commands::insert_resource`) so the table is populated the moment this
 /// system runs, with no window in which a same-schedule reader could observe
 /// the empty default.
-pub(crate) fn build_resolved_shortcuts(
+fn build_resolved_shortcuts(
     mut resolved: ResMut<ResolvedShortcuts>,
     configs: Res<OzmuxConfigsResource>,
 ) {
@@ -120,7 +136,7 @@ pub(crate) fn build_resolved_shortcuts(
 /// `Startup` system: inserts `TerminalInputBindings` derived from the resolved
 /// shortcut table, replacing the crate default. Runs after
 /// `build_resolved_shortcuts`.
-pub(crate) fn populate_input_bindings(mut commands: Commands, resolved: Res<ResolvedShortcuts>) {
+fn populate_input_bindings(mut commands: Commands, resolved: Res<ResolvedShortcuts>) {
     commands.insert_resource(resolved.input_bindings());
 }
 
@@ -149,7 +165,7 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
 }
 
 /// `Startup` system: inserts `OzmaMouseConfig` from the resolved `[mouse]` block.
-pub(crate) fn populate_mouse_config(mut commands: Commands, configs: Res<OzmuxConfigsResource>) {
+fn populate_mouse_config(mut commands: Commands, configs: Res<OzmuxConfigsResource>) {
     commands.insert_resource(ozma_mouse_config(&configs.mouse));
 }
 
