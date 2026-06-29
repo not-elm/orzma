@@ -341,7 +341,10 @@ mod tests {
         assert_eq!(out.wheel.max_protocol_events_per_frame, 5);
         assert_eq!(out.wheel.lines_per_notch, mc.lines_per_notch);
         assert_eq!(out.cells_per_notch, 1.0);
-        assert_eq!(out.axis_lock_ratio, 0.5, "non-default value must flow through");
+        assert_eq!(
+            out.axis_lock_ratio, 0.5,
+            "non-default value must flow through"
+        );
         assert_eq!(out.fine_modifier, FineModifier::Ctrl);
         assert_eq!(
             out.double_click_timeout,
