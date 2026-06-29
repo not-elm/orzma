@@ -12,7 +12,7 @@
 use super::pane_hit::tmux_pane_at_phys;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::shortcuts::ResolvedShortcuts;
+use crate::input::shortcuts::Shortcuts;
 use crate::mode::AppMode;
 use crate::mode::tmux::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::mode::tmux::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
@@ -124,7 +124,7 @@ fn forward_keys_to_tmux(
         Res<ButtonInput<KeyCode>>,
         Res<crate::input::ime::ImeState>,
         Res<KeyBindings>,
-        Res<ResolvedShortcuts>,
+        Res<Shortcuts>,
     ),
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,

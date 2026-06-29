@@ -7,7 +7,7 @@
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::input::shortcuts::ResolvedShortcuts;
+use crate::input::shortcuts::Shortcuts;
 use crate::input::{InputPhase, current_modifiers};
 use crate::mode::AppMode;
 use crate::surface_geom::phys_to_pane_local;
@@ -154,7 +154,7 @@ fn app_shortcut_handler(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
-    shortcuts: Res<ResolvedShortcuts>,
+    shortcuts: Res<Shortcuts>,
     ime: Res<ImeState>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,

@@ -15,10 +15,10 @@ pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ResolvedShortcuts>().add_systems(
+        app.init_resource::<Shortcuts>().add_systems(
             Startup,
             (
-                build_resolved_shortcuts,
+                build_shortcuts,
                 populate_input_bindings,
                 populate_mouse_config,
             )
@@ -30,7 +30,7 @@ impl Plugin for ShortcutsPlugin {
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
 /// the exact modifier set required, and the action to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ResolvedShortcut {
+struct OzmuxShortcut {
     keycode: KeyCode,
     modifiers: Modifiers,
     action: ShortcutAction,
@@ -39,9 +39,9 @@ struct ResolvedShortcut {
 /// The startup-resolved ozmux shortcut table. Built once from
 /// `OzmuxConfigsResource`; consumed by the tmux keyboard dispatcher.
 #[derive(Resource, Default, Debug, Clone)]
-pub(crate) struct ResolvedShortcuts(Vec<ResolvedShortcut>);
+pub(crate) struct Shortcuts(Vec<OzmuxShortcut>);
 
-impl ResolvedShortcuts {
+impl Shortcuts {
     /// Returns the GUI action bound to `(keycode, mods)`, if any. Excludes
     /// `ReleaseWebviewFocus`, which is meaningful only while a webview
     /// holds focus and is matched separately via `is_release_webview_focus`.
@@ -97,28 +97,6 @@ impl ResolvedShortcuts {
     }
 }
 
-/// Resolves every bound chord in `bindings` to a `ResolvedShortcut`, skipping
-/// (with a warning) any chord whose logical key has no physical `KeyCode`.
-fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut> {
-    let mut out = Vec::new();
-    for (label, bound, action) in bindings.iter() {
-        let Some(chord) = bound else { continue };
-        match key_to_keycode(&chord.key) {
-            Some(keycode) => out.push(ResolvedShortcut {
-                keycode,
-                modifiers: chord.modifiers,
-                action,
-            }),
-            None => tracing::warn!(
-                label,
-                chord = %chord,
-                "shortcut key has no physical KeyCode mapping; ignoring binding"
-            ),
-        }
-    }
-    out
-}
-
 /// `Startup` system: resolves the configured shortcut bindings into
 /// `ResolvedShortcuts`, replacing the empty default inserted at plugin build.
 ///
@@ -126,18 +104,20 @@ fn resolve_from_bindings(bindings: &Bindings) -> Vec<ResolvedShortcut> {
 /// `Commands::insert_resource`) so the table is populated the moment this
 /// system runs, with no window in which a same-schedule reader could observe
 /// the empty default.
-fn build_resolved_shortcuts(
-    mut resolved: ResMut<ResolvedShortcuts>,
-    configs: Res<OzmuxConfigsResource>,
-) {
+fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsResource>) {
     resolved.0 = resolve_from_bindings(&configs.shortcuts.bindings);
 }
 
 /// `Startup` system: inserts `TerminalInputBindings` derived from the resolved
 /// shortcut table, replacing the crate default. Runs after
 /// `build_resolved_shortcuts`.
-fn populate_input_bindings(mut commands: Commands, resolved: Res<ResolvedShortcuts>) {
+fn populate_input_bindings(mut commands: Commands, resolved: Res<Shortcuts>) {
     commands.insert_resource(resolved.input_bindings());
+}
+
+/// `Startup` system: inserts `OzmaMouseConfig` from the resolved `[mouse]` block.
+fn populate_mouse_config(mut commands: Commands, configs: Res<OzmuxConfigsResource>) {
+    commands.insert_resource(ozma_mouse_config(&configs.mouse));
 }
 
 /// Maps the resolved `[mouse]` config block to the terminal crate's
@@ -164,9 +144,26 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
     }
 }
 
-/// `Startup` system: inserts `OzmaMouseConfig` from the resolved `[mouse]` block.
-fn populate_mouse_config(mut commands: Commands, configs: Res<OzmuxConfigsResource>) {
-    commands.insert_resource(ozma_mouse_config(&configs.mouse));
+/// Resolves every bound chord in `bindings` to a `ResolvedShortcut`, skipping
+/// (with a warning) any chord whose logical key has no physical `KeyCode`.
+fn resolve_from_bindings(bindings: &Bindings) -> Vec<OzmuxShortcut> {
+    let mut out = Vec::new();
+    for (label, bound, action) in bindings.iter() {
+        let Some(chord) = bound else { continue };
+        match key_to_keycode(&chord.key) {
+            Some(keycode) => out.push(OzmuxShortcut {
+                keycode,
+                modifiers: chord.modifiers,
+                action,
+            }),
+            None => tracing::warn!(
+                label,
+                chord = %chord,
+                "shortcut key has no physical KeyCode mapping; ignoring binding"
+            ),
+        }
+    }
+    out
 }
 
 /// Maps a config logical `Key` to the physical `KeyCode` ozmux matches on.
@@ -265,13 +262,13 @@ mod tests {
 
     #[test]
     fn default_bindings_resolve_to_five() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
         assert_eq!(r.0.len(), 5);
     }
 
     #[test]
     fn match_gui_action_resolves_defaults() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
             Some(ShortcutAction::Paste)
@@ -288,7 +285,7 @@ mod tests {
 
     #[test]
     fn match_gui_action_requires_exact_modifiers() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true)),
             None
@@ -301,7 +298,7 @@ mod tests {
 
     #[test]
     fn match_gui_action_excludes_release_webview_focus() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
         assert_eq!(
             r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
             None
@@ -310,7 +307,7 @@ mod tests {
 
     #[test]
     fn unmatched_chord_is_none() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
         assert_eq!(
             r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true)),
             None
@@ -323,7 +320,7 @@ mod tests {
 
     #[test]
     fn is_release_webview_focus_matches_default_chord() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
         assert!(r.is_release_webview_focus(KeyCode::Escape, mods(true, true, false, false)));
         assert!(!r.is_release_webview_focus(KeyCode::KeyV, mods(false, false, false, true)));
     }
@@ -352,7 +349,7 @@ mod tests {
 
     #[test]
     fn input_bindings_excludes_paste_from_reserved() {
-        let r = ResolvedShortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
         let b = r.input_bindings();
         assert_eq!(b.paste.key_code, KeyCode::KeyV);
         assert!(b.paste.meta && !b.paste.ctrl && !b.paste.shift && !b.paste.alt);
