@@ -1,61 +1,34 @@
-//! Mode-neutral shared mouse dispatch for every `OzmaTerminal` surface: app
-//! reporting, local text selection + copy, wheel scrollback, and Cmd-click
-//! hyperlink open. Reads Bevy mouse input, hit-tests the cursor to a cell, and
-//! drives the engine's pure `ButtonAction` / `WheelAction` routers, fanning the
-//! decided effects out to per-operation `EntityEvent`s via `trigger_mouse_effects`.
-//! Gated per entity by `MouseDisabled` (the host marks modal / suppressed
-//! surfaces), so it runs in both `AppMode`s for surfaces that still own the mouse.
+//! Shared mouse-dispatch plumbing for every `OzmaTerminal` surface. Hosts the
+//! `MouseInputPlugin` aggregator and the hit-test / effect primitives
+//! (`CellContext`, `cell_at_*`, the `MouseEffect` IR, and `trigger_mouse_effects`)
+//! shared by the per-path dispatchers in `button` and `wheel`. Gated per entity
+//! by `MouseDisabled`, so dispatch runs in both `AppMode`s for surfaces that still
+//! own the mouse.
 
-use crate::input::InputPhase;
-use crate::input::bindings::{FineModifier, OzmaMouseConfig};
-use crate::input::current_modifiers;
-use crate::input::focus::MouseDisabled;
-use crate::input::gesture::{
-    DragGesture, DragPhase, HeldPointer, OzmaMouseGesture, WheelAccumulator, accumulate_notches,
-    lock_dominant_axis, wheel_delta_cells,
-};
-use crate::input::hyperlink::link_modifier_held;
-use crate::input::keyboard::current_terminal_modifiers;
-use crate::webview_pointer::topmost_surface_at;
-use bevy::input::ButtonState;
-use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
+use crate::input::bindings::OzmaMouseConfig;
+use crate::input::mouse::button::MouseButtonInputPlugin;
+use crate::input::mouse::wheel::MouseWheelInputPlugin;
 use bevy::prelude::*;
-use bevy::time::{Real, Time};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use bevy::window::{CursorMoved, PrimaryWindow};
 use ozma_terminal::{
-    OzmaTerminal, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
-    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate, TerminalViewportScroll,
+    TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy,
+    TerminalSelectionStart, TerminalSelectionUpdate, TerminalViewportScroll,
 };
-use ozma_tty_engine::{
-    ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
-    MouseButtonKind, Point, ProtocolModifiers, SelectionType, Side, TermMode, TerminalHandle,
-    TerminalModifiers, WheelAction, WheelConfig, WheelModifiers,
-};
-use ozma_tty_renderer::TerminalCellMetricsResource;
+use ozma_tty_engine::{CellCoord, Point, SelectionType, Side};
 use ozma_tty_renderer::schema::TerminalGrid;
-use std::time::Duration;
 
-/// Registers the shared mouse dispatch systems and their gesture / config
-/// resources. Both dispatchers run in `InputPhase::Dispatch` and only when a
-/// mouse message arrived this frame.
+mod button;
+mod wheel;
+
+/// Aggregates the per-path mouse dispatch plugins and the shared config
+/// resource. The button and wheel dispatchers live in `button` / `wheel` and
+/// register themselves.
 pub(super) struct MouseInputPlugin;
 
 impl Plugin for MouseInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OzmaMouseConfig>()
-            .init_resource::<OzmaMouseGesture>()
-            .init_resource::<WheelAccumulator>()
-            .add_systems(
-                Update,
-                (dispatch_mouse_buttons, dispatch_mouse_wheel)
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(
-                        on_message::<MouseButtonInput>
-                            .or(on_message::<CursorMoved>)
-                            .or(on_message::<MouseWheel>),
-                    ),
-            );
+        app.add_plugins((MouseButtonInputPlugin, MouseWheelInputPlugin))
+            .init_resource::<OzmaMouseConfig>();
     }
 }
 
@@ -78,371 +51,6 @@ enum MouseEffect {
     Copy,
     Scroll(i32),
     OpenUri(String),
-}
-
-/// The shared mouse-button dispatcher. Hit-tests the topmost terminal under the
-/// cursor on press, locks drag/release to that terminal, tracks clicks and drag
-/// state, drives `decide_button`, and fans the decided effects out to
-/// per-operation `EntityEvent`s via `trigger_mouse_effects`. Skips any
-/// `OzmaTerminal` carrying `MouseDisabled`; an empty candidate set (modal
-/// suppression) drains events and resets the gesture.
-fn dispatch_mouse_buttons(
-    mut commands: Commands,
-    mut gesture: ResMut<OzmaMouseGesture>,
-    mut buttons: MessageReader<MouseButtonInput>,
-    mut cursor_moved: MessageReader<CursorMoved>,
-    terminals: Query<
-        (
-            Entity,
-            &TerminalHandle,
-            &ComputedNode,
-            &UiGlobalTransform,
-            &TerminalGrid,
-        ),
-        (With<OzmaTerminal>, Without<MouseDisabled>),
-    >,
-    cfg: Res<OzmaMouseConfig>,
-    metrics: Res<TerminalCellMetricsResource>,
-    keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time<Real>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-) {
-    let window = match windows.single() {
-        Ok(window) if window.focused => window,
-        _ => {
-            buttons.clear();
-            cursor_moved.clear();
-            gesture.reset();
-            return;
-        }
-    };
-    let scale = window.scale_factor();
-
-    // NOTE: read CursorMoved BEFORE the button loop so a same-frame
-    // release/press sees the refreshed position. It is the only source of the
-    // off-window cursor — Window::cursor_position() masks out-of-bounds
-    // positions that winit still reports while a button is held. The live
-    // position wins when present; write only on a real change so idle motion
-    // does not dirty the gesture resource every frame.
-    let moved_phys = cursor_moved.read().last().map(|m| m.position * scale);
-    let live = window.cursor_position().map(|c| c * scale);
-    if let Some(latest) = live.or(moved_phys)
-        && gesture.last_cursor_phys != Some(latest)
-    {
-        gesture.last_cursor_phys = Some(latest);
-    }
-    let active = gesture.held.is_some() || gesture.drag.is_some();
-    let Some(cursor_phys) = effective_drag_cursor(live, active, gesture.last_cursor_phys) else {
-        buttons.clear();
-        gesture.reset();
-        return;
-    };
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let mods = protocol_mods(&keys);
-    let modifier_held = link_modifier_held(&current_modifiers(&keys));
-
-    for ev in buttons.read() {
-        let kind = match ev.state {
-            ButtonState::Pressed => ButtonEventKind::Press,
-            ButtonState::Released => ButtonEventKind::Release,
-        };
-        let target = if kind == ButtonEventKind::Press {
-            topmost_surface_at(
-                cursor_phys,
-                terminals
-                    .iter()
-                    .map(|(e, _, node, transform, _)| (e, node, transform)),
-            )
-        } else {
-            gesture.held.map(|h| h.entity)
-        };
-        let Some(target) = target else {
-            continue;
-        };
-        let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
-            gesture.reset();
-            continue;
-        };
-        let ctx = CellContext {
-            node,
-            transform,
-            grid,
-            cell_w,
-            cell_h,
-        };
-        let modes = handle.current_modes();
-        let Some((evt, link)) = resolve_button_event(
-            &mut gesture,
-            &ctx,
-            ev,
-            cursor_phys,
-            scale,
-            modifier_held,
-            time.elapsed(),
-            &cfg,
-        ) else {
-            continue;
-        };
-        let decided = decide_button(
-            &mut gesture,
-            modes,
-            evt,
-            mods,
-            modifier_held,
-            link,
-            &cfg.buttons,
-        );
-        let opened = matches!(decided.as_slice(), [MouseEffect::OpenUri(_)]);
-        match evt.kind {
-            ButtonEventKind::Press if !opened => {
-                gesture.held = Some(HeldPointer {
-                    entity: target,
-                    button: evt.button,
-                    last_cell: evt.cell,
-                });
-            }
-            ButtonEventKind::Release => {
-                gesture.held = None;
-                gesture.last_cursor_phys = None;
-            }
-            _ => {}
-        }
-        trigger_mouse_effects(&mut commands, target, decided);
-    }
-
-    let Some(held) = gesture.held else {
-        return;
-    };
-    let Ok((_, handle, node, transform, grid)) = terminals.get(held.entity) else {
-        gesture.reset();
-        return;
-    };
-    let ctx = CellContext {
-        node,
-        transform,
-        grid,
-        cell_w,
-        cell_h,
-    };
-    let modes = handle.current_modes();
-    if let Some((drag_effects, new_cell)) = synthesize_drag(
-        &mut gesture,
-        &ctx,
-        cursor_phys,
-        modes,
-        mods,
-        modifier_held,
-        &cfg.buttons,
-    ) {
-        if let Some(h) = gesture.held.as_mut() {
-            h.last_cell = new_cell;
-        }
-        trigger_mouse_effects(&mut commands, held.entity, drag_effects);
-    }
-}
-
-/// The shared wheel dispatcher: routes to the topmost terminal under the cursor,
-/// resets the accumulator on a target change, accumulates notches, drives
-/// `decide_wheel`, and fans the decided effects out to per-operation
-/// `EntityEvent`s via `trigger_mouse_effects`. Skips `MouseDisabled`
-/// terminals; an empty candidate set drains the wheel events.
-fn dispatch_mouse_wheel(
-    mut commands: Commands,
-    mut gesture_acc: ResMut<WheelAccumulator>,
-    mut wheel: MessageReader<MouseWheel>,
-    terminals: Query<
-        (
-            Entity,
-            &TerminalHandle,
-            &ComputedNode,
-            &UiGlobalTransform,
-            &TerminalGrid,
-        ),
-        (With<OzmaTerminal>, Without<MouseDisabled>),
-    >,
-    cfg: Res<OzmaMouseConfig>,
-    metrics: Res<TerminalCellMetricsResource>,
-    keys: Res<ButtonInput<KeyCode>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-) {
-    let Ok(window) = windows.single() else {
-        wheel.clear();
-        return;
-    };
-    if !window.focused || terminals.is_empty() {
-        wheel.clear();
-        return;
-    }
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let Some(cursor_phys) = window.cursor_position().map(|c| c * window.scale_factor()) else {
-        wheel.clear();
-        return;
-    };
-    let Some(target) = topmost_surface_at(
-        cursor_phys,
-        terminals
-            .iter()
-            .map(|(e, _, node, transform, _)| (e, node, transform)),
-    ) else {
-        wheel.clear();
-        return;
-    };
-    let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
-        wheel.clear();
-        return;
-    };
-    let ctx = CellContext {
-        node,
-        transform,
-        grid,
-        cell_w,
-        cell_h,
-    };
-
-    gesture_acc.retarget(target);
-    let (delta_v, delta_h) = wheel.read().fold((0.0f32, 0.0f32), |(v, h), ev| {
-        // NOTE: BOTH axes divide by cell_h (line height), not cell_w, so a given
-        // finger distance yields the same notch rate horizontally and vertically.
-        // Using the narrower cell_w (advance_phys, ~half of line_height_phys) made
-        // horizontal ~2x too sensitive — do not "correct" ev.x to ctx.cell_w.
-        (
-            v + wheel_delta_cells(ev.unit, ev.y, ctx.cell_h),
-            h + wheel_delta_cells(ev.unit, ev.x, ctx.cell_h),
-        )
-    });
-    // NOTE: do NOT also clear the suppressed axis's residual here. The lock
-    // zeros the off-axis delta before accumulation, so it adds 0 and cannot leak
-    // a notch; clearing would instead wipe genuine sub-notch progress on a
-    // deliberate horizontal swipe whose slow frames dip below the lock ratio.
-    let (delta_v, delta_h) = lock_dominant_axis(delta_v, delta_h, cfg.axis_lock_ratio);
-    let raw_v = accumulate_notches(
-        &mut gesture_acc.residual_cells,
-        delta_v,
-        cfg.cells_per_notch,
-    );
-    let raw_h = accumulate_notches(
-        &mut gesture_acc.residual_cells_h,
-        delta_h,
-        cfg.cells_per_notch,
-    );
-    if raw_v == 0 && raw_h == 0 {
-        return;
-    }
-    let cell = ctx
-        .hit(cursor_phys)
-        .map(|(cell, _)| cell)
-        .unwrap_or(CellCoord { col: 1, row: 1 });
-    let modes = handle.current_modes();
-    let mut effects = Vec::new();
-    if raw_v != 0 {
-        // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
-        let mods = build_wheel_modifiers(&keys, &cfg);
-        effects.extend(decide_wheel(modes, -raw_v, cell, mods, &cfg.wheel));
-    }
-    if raw_h != 0 {
-        // NOTE: macOS/winit reports a physical-right trackpad scroll as a
-        // negative MouseWheel.x (opposite X11/Wayland), so negate ONLY on
-        // macOS to map physical-right → Right (cb 67). Other platforms already
-        // match the engine's positive=right convention; gating mirrors the
-        // macOS-only handling in `build_wheel_modifiers_horizontal`.
-        let signed_h = if cfg!(target_os = "macos") {
-            -raw_h
-        } else {
-            raw_h
-        };
-        let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
-        effects.extend(effects_from_wheel_action(WheelAction::route_horizontal(
-            modes, signed_h, cell, mods, &cfg.wheel,
-        )));
-    }
-    trigger_mouse_effects(&mut commands, target, effects);
-}
-
-/// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
-/// click state) and returns the effects to apply. A Cmd/Ctrl-click on a linked
-/// cell opens the URL and consumes the event; otherwise the engine's
-/// `ButtonAction::route` decides forward-to-app vs local selection.
-fn decide_button(
-    gesture: &mut OzmaMouseGesture,
-    modes: TermMode,
-    evt: ButtonEvent,
-    mods: ProtocolModifiers,
-    modifier_held: bool,
-    link_at_cell: Option<String>,
-    cfg: &ButtonConfig,
-) -> Vec<MouseEffect> {
-    if evt.kind == ButtonEventKind::Press
-        && evt.button == MouseButtonKind::Left
-        && modifier_held
-        && let Some(uri) = link_at_cell
-    {
-        return vec![MouseEffect::OpenUri(uri)];
-    }
-
-    let mut effects = match ButtonAction::route(modes, evt, mods, cfg) {
-        ButtonAction::Noop => Vec::new(),
-        ButtonAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
-        ButtonAction::ClearAndWriteToPty(b) => vec![MouseEffect::SelClear, MouseEffect::Write(b)],
-        ButtonAction::ArmDrag { ty, cell, side } => {
-            gesture.drag = Some(DragGesture {
-                origin: cell,
-                side,
-                ty,
-                phase: DragPhase::Armed,
-            });
-            vec![MouseEffect::SelClear]
-        }
-        ButtonAction::StartLocalSelection { ty, cell, side } => {
-            gesture.drag = Some(DragGesture {
-                origin: cell,
-                side,
-                ty,
-                phase: DragPhase::Started,
-            });
-            vec![MouseEffect::SelStart {
-                point: to_viewport_point(cell),
-                side,
-                ty,
-            }]
-        }
-        ButtonAction::UpdateLocalSelection { cell, side } => update_selection(gesture, cell, side),
-        ButtonAction::ClearLocalSelection => {
-            gesture.drag = None;
-            vec![MouseEffect::SelClear]
-        }
-    };
-
-    if evt.kind == ButtonEventKind::Release && evt.button == MouseButtonKind::Left {
-        if effects.is_empty() && matches!(&gesture.drag, Some(d) if d.phase == DragPhase::Started) {
-            effects.push(MouseEffect::Copy);
-        }
-        gesture.drag = None;
-    }
-    effects
-}
-
-/// Pure wheel decision. `notches` is in the engine convention (negative =
-/// up/older); callers negate the Bevy-derived up-positive value before calling.
-fn decide_wheel(
-    modes: TermMode,
-    notches: i32,
-    cell: CellCoord,
-    mods: WheelModifiers,
-    cfg: &WheelConfig,
-) -> Vec<MouseEffect> {
-    effects_from_wheel_action(WheelAction::route(modes, notches, cell, mods, cfg))
-}
-
-/// Maps a routed `WheelAction` to host effects. Shared by the vertical
-/// (`route`) and horizontal (`route_horizontal`) wheel paths.
-fn effects_from_wheel_action(action: WheelAction) -> Vec<MouseEffect> {
-    match action {
-        WheelAction::Noop => Vec::new(),
-        WheelAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
-        WheelAction::ScrollViewport(lines) => vec![MouseEffect::Scroll(lines)],
-    }
 }
 
 /// Fans an ordered `Vec<MouseEffect>` out to per-operation `EntityEvent`s on
@@ -474,199 +82,6 @@ fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<M
             }
             MouseEffect::OpenUri(uri) => commands.trigger(TerminalOpenUri { entity, uri }),
         }
-    }
-}
-
-/// Resolves one `MouseButtonInput` to a `ButtonEvent` + optional link URI, or
-/// `None` when it maps to no terminal button or no cell. Encapsulates button
-/// mapping, the off-node release fallback, click-count registration, and the
-/// modifier-gated hyperlink lookup.
-fn resolve_button_event(
-    gesture: &mut OzmaMouseGesture,
-    ctx: &CellContext,
-    ev: &MouseButtonInput,
-    cursor_phys: Vec2,
-    scale: f32,
-    modifier_held: bool,
-    now: Duration,
-    cfg: &OzmaMouseConfig,
-) -> Option<(ButtonEvent, Option<String>)> {
-    let button = map_button(ev.button)?;
-    let kind = match ev.state {
-        ButtonState::Pressed => ButtonEventKind::Press,
-        ButtonState::Released => ButtonEventKind::Release,
-    };
-    // NOTE: a release with the cursor off the terminal node must still be
-    // processed (via the last tracked cell) — otherwise `held`/`drag` stick and
-    // later cursor motion replays stale selection / forward reports.
-    let release_fallback = (kind == ButtonEventKind::Release)
-        .then(|| gesture.held.map(|h| (h.last_cell, Side::Left)))
-        .flatten();
-    let (cell, side) = ctx.hit(cursor_phys).or(release_fallback)?;
-    let click_count = if kind == ButtonEventKind::Press {
-        gesture.click.register(
-            now,
-            cursor_phys / scale,
-            (cfg.double_click_timeout, cfg.click_drift_px),
-        )
-    } else {
-        1
-    };
-    let link = (kind == ButtonEventKind::Press && button == MouseButtonKind::Left && modifier_held)
-        .then(|| {
-            ctx.grid
-                .hyperlink_at((cell.row - 1) as u16, (cell.col - 1) as u16)
-                .map(|(_id, uri)| uri.as_str().to_string())
-        })
-        .flatten();
-    Some((
-        ButtonEvent {
-            kind,
-            button,
-            cell,
-            side,
-            click_count,
-        },
-        link,
-    ))
-}
-
-/// Synthesizes a drag-motion effect set when a held pointer crosses into a new
-/// cell. Returns the decided effects and the new last-cell to record, or `None`
-/// when no button is held, the pointer is off-node, or it has not moved.
-fn synthesize_drag(
-    gesture: &mut OzmaMouseGesture,
-    ctx: &CellContext,
-    cursor_phys: Vec2,
-    modes: TermMode,
-    mods: ProtocolModifiers,
-    modifier_held: bool,
-    cfg: &ButtonConfig,
-) -> Option<(Vec<MouseEffect>, CellCoord)> {
-    let held = gesture.held?;
-    let (cell, side) = ctx.hit(cursor_phys)?;
-    if held.last_cell == cell {
-        return None;
-    }
-    let evt = ButtonEvent {
-        kind: ButtonEventKind::Drag,
-        button: held.button,
-        cell,
-        side,
-        click_count: 1,
-    };
-    let effects = decide_button(gesture, modes, evt, mods, modifier_held, None, cfg);
-    Some((effects, cell))
-}
-
-/// Lazily materializes an armed selection on the first cell change, then extends.
-fn update_selection(
-    gesture: &mut OzmaMouseGesture,
-    cell: CellCoord,
-    side: Side,
-) -> Vec<MouseEffect> {
-    let Some(drag) = gesture.drag.as_mut() else {
-        return Vec::new();
-    };
-    match drag.phase {
-        DragPhase::Armed => {
-            if cell == drag.origin {
-                return Vec::new();
-            }
-            let origin = drag.origin;
-            let ty = drag.ty;
-            let origin_side = drag.side;
-            drag.phase = DragPhase::Started;
-            vec![
-                MouseEffect::SelStart {
-                    point: to_viewport_point(origin),
-                    side: origin_side,
-                    ty,
-                },
-                MouseEffect::SelUpdate {
-                    point: to_viewport_point(cell),
-                    side,
-                },
-            ]
-        }
-        DragPhase::Started => {
-            vec![MouseEffect::SelUpdate {
-                point: to_viewport_point(cell),
-                side,
-            }]
-        }
-    }
-}
-
-/// The physical cursor position to drive the gesture with this frame.
-///
-/// `live` is `window.cursor_position()` (already `None` once the pointer leaves
-/// the window, since Bevy bounds-masks off-window positions); `active` is
-/// whether a gesture is in flight (a button is held or a drag is started);
-/// `last` is the last observed physical position. Returns the live position
-/// when present, the last-known position while a gesture is active (so an
-/// off-window drag keeps extending), or `None` when idle with no cursor (the
-/// caller then resets the gesture).
-fn effective_drag_cursor(live: Option<Vec2>, active: bool, last: Option<Vec2>) -> Option<Vec2> {
-    match (live, active) {
-        (Some(c), _) => Some(c),
-        (None, true) => last,
-        (None, false) => None,
-    }
-}
-
-/// Builds `WheelModifiers` from the held keys + the fine-scroll config.
-fn build_wheel_modifiers(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> WheelModifiers {
-    let m = current_terminal_modifiers(keys);
-    WheelModifiers {
-        shift: m.shift,
-        ctrl: m.ctrl,
-        alt: m.alt,
-        fine: fine_held(cfg.fine_modifier, &m),
-    }
-}
-
-/// Horizontal-wheel modifiers. On macOS the OS converts Shift+wheel into a
-/// horizontal scroll while Shift stays physically held; stripping the Shift bit
-/// keeps the report a plain `<ScrollWheelLeft/Right>` rather than the shifted
-/// (and by default unmapped) variant. Other platforms pass modifiers through.
-fn build_wheel_modifiers_horizontal(
-    keys: &ButtonInput<KeyCode>,
-    cfg: &OzmaMouseConfig,
-) -> WheelModifiers {
-    let mut mods = build_wheel_modifiers(keys, cfg);
-    if cfg!(target_os = "macos") {
-        mods.shift = false;
-    }
-    mods
-}
-
-fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
-    match modifier {
-        FineModifier::Shift => m.shift,
-        FineModifier::Ctrl => m.ctrl,
-        FineModifier::Alt => m.alt,
-        FineModifier::None => true,
-    }
-}
-
-fn map_button(b: MouseButton) -> Option<MouseButtonKind> {
-    match b {
-        MouseButton::Left => Some(MouseButtonKind::Left),
-        MouseButton::Middle => Some(MouseButtonKind::Middle),
-        MouseButton::Right => Some(MouseButtonKind::Right),
-        _ => None,
-    }
-}
-
-/// Builds `ProtocolModifiers` from the held keys.
-fn protocol_mods(keys: &ButtonInput<KeyCode>) -> ProtocolModifiers {
-    let m = current_terminal_modifiers(keys);
-    ProtocolModifiers {
-        shift: m.shift,
-        ctrl: m.ctrl,
-        alt: m.alt,
-        meta: m.meta,
     }
 }
 
@@ -706,12 +121,6 @@ fn cell_at_cursor(
     Some(cell_at_local(local, cell_w, cell_h, cols, rows))
 }
 
-/// Converts a 1-indexed protocol `CellCoord` into the engine's viewport-relative
-/// selection `Point` (row 0 = top of viewport; the engine translates for scroll).
-fn to_viewport_point(cell: CellCoord) -> Point {
-    Point::new(Line(cell.row as i32 - 1), Column(cell.col as usize - 1))
-}
-
 /// Read-only hit-test context for one gather run: the terminal node geometry,
 /// cell pitch, and grid dimensions — so helpers resolve a cursor to a cell
 /// without re-threading seven arguments.
@@ -739,10 +148,21 @@ impl CellContext<'_> {
 
 #[cfg(test)]
 mod tests {
+    use super::button::*;
+    use super::wheel::*;
     use super::*;
+    use crate::input::focus::MouseDisabled;
+    use crate::input::gesture::{DragGesture, DragPhase, OzmaMouseGesture, WheelAccumulator};
+    use crate::webview_pointer::topmost_surface_at;
+    use bevy::input::ButtonState;
     use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseScrollUnit, MouseWheel};
-    use ozma_terminal::Clipboard;
-    use ozma_tty_engine::{ButtonEvent, ButtonEventKind, MouseButtonKind, SelectionType};
+    use bevy::window::{CursorMoved, PrimaryWindow};
+    use ozma_terminal::{Clipboard, OzmaTerminal};
+    use ozma_tty_engine::{
+        ButtonConfig, ButtonEvent, ButtonEventKind, MouseButtonKind, ProtocolModifiers,
+        SelectionType, TermMode, TerminalHandle, WheelAction, WheelConfig, WheelModifiers,
+    };
+    use ozma_tty_renderer::TerminalCellMetricsResource;
 
     #[test]
     fn effective_drag_cursor_truth_table() {
@@ -1650,7 +1070,6 @@ mod tests {
         let has = |needle: &[u8]| {
             cap.0
                 .iter()
-                .flatten()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(needle)))
         };
         assert!(has(b"\x1b[<65;"), "vertical (down, cb 65) report missing");
