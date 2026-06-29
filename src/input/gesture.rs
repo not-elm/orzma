@@ -58,6 +58,17 @@ pub(crate) struct OzmaMouseGesture {
     pub(crate) last_cursor_phys: Option<Vec2>,
 }
 
+impl OzmaMouseGesture {
+    /// Resets the in-progress gesture: drops any drag, held button, and cached
+    /// cursor position. The multi-click counter is preserved so a follow-up
+    /// click can still chain.
+    pub(crate) fn reset(&mut self) {
+        self.drag = None;
+        self.held = None;
+        self.last_cursor_phys = None;
+    }
+}
+
 /// Consecutive-click counter using a timeout + positional-drift gate.
 #[derive(Default)]
 pub(crate) struct ClickTracker {

@@ -6,33 +6,33 @@ Rust code in this repo (`src/`, `crates/*`) follows the rules below. Edition 202
 
 Required:
 
-| Pattern | Example | Why |
-| --- | --- | --- |
+| Pattern                 | Example                 | Why                                                                            |
+| ----------------------- | ----------------------- | ------------------------------------------------------------------------------ |
 | Rust 2018+ module files | `foo.rs` + `foo/bar.rs` | One file declares the module; no ambiguity about which file is the module root |
 
 Forbidden:
 
-| Pattern | Example | Why |
-| --- | --- | --- |
+| Pattern                 | Example      | Why                                                                          |
+| ----------------------- | ------------ | ---------------------------------------------------------------------------- |
 | `mod.rs` as module root | `foo/mod.rs` | Hard to navigate (many files all named `mod.rs`); editor tabs look identical |
 
 ## Comments
 
 Non-doc line comments are restricted. The only permitted forms:
 
-| Form | Use |
-| --- | --- |
-| `// TODO: <text>` | Work to address later |
-| `// NOTE: <text>` | A **critical caveat** — only when overlooking it causes real harm; see the bar below |
-| `// SAFETY: <text>` | Required justification for any `unsafe { ... }` block (rustc / clippy idiom) |
+| Form                | Use                                                                                  |
+| ------------------- | ------------------------------------------------------------------------------------ |
+| `// TODO: <text>`   | Work to address later                                                                |
+| `// NOTE: <text>`   | A **critical caveat** — only when overlooking it causes real harm; see the bar below |
+| `// SAFETY: <text>` | Required justification for any `unsafe { ... }` block (rustc / clippy idiom)         |
 
 Forbidden:
 
-| Pattern | Example | Why |
-| --- | --- | --- |
-| Plain narrative comments | `// increments counter` | What the code does belongs in identifiers |
-| Block comments | `/* ... */` | Same |
-| Commented-out code | `// let x = old_impl();` | History lives in git |
+| Pattern                                                  | Example                        | Why                                                                 |
+| -------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------------- |
+| Plain narrative comments                                 | `// increments counter`        | What the code does belongs in identifiers                           |
+| Block comments                                           | `/* ... */`                    | Same                                                                |
+| Commented-out code                                       | `// let x = old_impl();`       | History lives in git                                                |
 | `// NOTE:` for merely non-obvious or "good to know" info | `// NOTE: this is the handler` | NOTE is for critical caveats only — rename the identifier or delete |
 
 A `// NOTE:` is reserved for a **critical caveat**: something that, if a
@@ -51,10 +51,10 @@ Note: `///` and `//!` are **doc comments**, not "line comments" for this rule �
 
 Required:
 
-| Place | Style |
-| --- | --- |
+| Place                                                                                      | Style                                               |
+| ------------------------------------------------------------------------------------------ | --------------------------------------------------- |
 | Every externally-public item (`pub` only — not `pub(crate)`, `pub(super)`, `pub(in path)`) | `///` — one-line summary, blank line, optional body |
-| Each file-level module — `lib.rs`, `main.rs`, and every `foo.rs` that declares a module | `//!` — module-level purpose in 1–3 lines |
+| Each file-level module — `lib.rs`, `main.rs`, and every `foo.rs` that declares a module    | `//!` — module-level purpose in 1–3 lines           |
 
 Equivalent attribute forms (`#[doc = "..."]`, `#[doc = include_str!("README.md")]`) count as doc comments and satisfy this rule.
 
@@ -72,10 +72,10 @@ Style guide:
 
 Forbidden:
 
-| Pattern | Why |
-| --- | --- |
-| Externally `pub` item with no doc | Public API owes the reader an explanation |
-| Placeholder doc like `/// TODO: write this` | Don't ship empty docs |
+| Pattern                                     | Why                                       |
+| ------------------------------------------- | ----------------------------------------- |
+| Externally `pub` item with no doc           | Public API owes the reader an explanation |
+| Placeholder doc like `/// TODO: write this` | Don't ship empty docs                     |
 
 ## Imports
 
@@ -90,21 +90,21 @@ Exception:
 
 Forbidden:
 
-| Pattern | Example | Why |
-| --- | --- | --- |
-| `use` inside non-test functions or blocks | `fn f() { use std::io; ... }` | Spreads scope across the file |
-| Blank lines between `std` / external / crate `use`s | `use std::...;\n\nuse tokio::...;` | We do not group |
-| Glob import in consumer code | `use foo::*;` | Hides which symbols are in scope |
+| Pattern                                             | Example                            | Why                              |
+| --------------------------------------------------- | ---------------------------------- | -------------------------------- |
+| `use` inside non-test functions or blocks           | `fn f() { use std::io; ... }`      | Spreads scope across the file    |
+| Blank lines between `std` / external / crate `use`s | `use std::...;\n\nuse tokio::...;` | We do not group                  |
+| Glob import in consumer code                        | `use foo::*;`                      | Hides which symbols are in scope |
 
-Note on preludes: a module that *defines* a prelude (i.e., re-exports curated names for downstream consumers) may itself use `pub use foo::*;` inside its own definition. The rule above forbids glob imports in **consumer** code.
+Note on preludes: a module that _defines_ a prelude (i.e., re-exports curated names for downstream consumers) may itself use `pub use foo::*;` inside its own definition. The rule above forbids glob imports in **consumer** code.
 
 Required — import, don't inline:
 
 - Prefer `use` imports over inline fully-qualified paths. If a type is used in a function signature or system body, it belongs in the `use` block at the top of the file, not written out inline as `some_crate::some_module::Type` at the call site.
 
-| Pattern | Example | Fix |
-| --- | --- | --- |
-| Inline path in signature / body | `fn f(x: foo::bar::Baz)` | Add `use foo::bar::Baz;` and write `fn f(x: Baz)` |
+| Pattern                                   | Example                                         | Fix                                                                       |
+| ----------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------- |
+| Inline path in signature / body           | `fn f(x: foo::bar::Baz)`                        | Add `use foo::bar::Baz;` and write `fn f(x: Baz)`                         |
 | Inline path in `run_if` or type parameter | `.add_message::<bevy::window::WindowResized>()` | `use bevy::window::WindowResized;` then `.add_message::<WindowResized>()` |
 
 ## Naming — Query parameters
@@ -116,8 +116,8 @@ Bevy `Query` system parameters must not use a `_q` suffix. Use a descriptive nou
 
 Forbidden:
 
-| Pattern | Example | Fix |
-| --- | --- | --- |
+| Pattern                              | Example                       | Fix                         |
+| ------------------------------------ | ----------------------------- | --------------------------- |
 | `_q` suffix on any `Query` parameter | `window_q: Query<&Window, …>` | `window: Query<&Window, …>` |
 
 ## Visibility — minimize scope
@@ -128,13 +128,13 @@ scope needs it. Reach for the narrowest visibility that compiles.
 
 Ladder, from narrowest to widest — pick the first one that works:
 
-| Visibility | Use when |
-| --- | --- |
-| (none — private) | Only used inside the defining module |
-| `pub(super)` | Only used by the immediate parent module |
-| `pub(in path)` | Used by a specific subtree of the crate |
-| `pub(crate)` | Used elsewhere in this crate, but not exported |
-| `pub` | Part of the crate's external API |
+| Visibility       | Use when                                       |
+| ---------------- | ---------------------------------------------- |
+| (none — private) | Only used inside the defining module           |
+| `pub(super)`     | Only used by the immediate parent module       |
+| `pub(in path)`   | Used by a specific subtree of the crate        |
+| `pub(crate)`     | Used elsewhere in this crate, but not exported |
+| `pub`            | Part of the crate's external API               |
 
 Required:
 
@@ -174,16 +174,16 @@ narrow:
 
 Forbidden:
 
-| Pattern | Why |
-| --- | --- |
+| Pattern                                                                  | Why                                                                                                                                              |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Any visibility wider than private on items with no out-of-module callers | The item is only used inside its defining module; it must be private. Applies symmetrically to `pub`, `pub(crate)`, `pub(super)`, `pub(in path)` |
-| `pub` fields on structs with invariants | Bypasses any validation in constructors / setters |
-| `pub use` re-exports for items that no external consumer references | Same as above; widens the surface for no caller |
+| `pub` fields on structs with invariants                                  | Bypasses any validation in constructors / setters                                                                                                |
+| `pub use` re-exports for items that no external consumer references      | Same as above; widens the surface for no caller                                                                                                  |
 
 Not forbidden (but recommended to review):
 
-| Pattern | Why it's not strict |
-| --- | --- |
+| Pattern                                                      | Why it's not strict                                                                                                                                                                                               |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `pub` on items with cross-module-but-not-cross-crate callers | Library crates may publish APIs for downstream consumers we don't see in this workspace. Demote to `pub(crate)` when you're confident the item is not part of the intended external surface; keep `pub` otherwise |
 
 Recommended workflow when adding a new item:
@@ -209,8 +209,8 @@ Recommended workflow when reviewing existing code:
 
 Tooling note: `#![warn(unreachable_pub)]` catches `pub` items that
 nothing outside the crate can reach. It is useful for one-off audits
-of the *optional* `pub` → `pub(crate)` narrowing, but it does **not**
-catch the *mandatory* "module-scoped items must be private" rule —
+of the _optional_ `pub` → `pub(crate)` narrowing, but it does **not**
+catch the _mandatory_ "module-scoped items must be private" rule —
 the lint only fires for items reachable from outside the crate, not
 for items reachable from outside their module but still inside the
 crate. For the mandatory rule, manual grep-based review is the only
@@ -262,21 +262,21 @@ signature — the same "surface first" reasoning behind item ordering.
 
 Required:
 
-| Pattern | Example |
-| --- | --- |
+| Pattern                                      | Example                                                               |
+| -------------------------------------------- | --------------------------------------------------------------------- |
 | Mutable params grouped first, then immutable | `fn reflow(mut windows: Query<&mut Window>, settings: Res<Settings>)` |
 
 Forbidden:
 
-| Pattern | Example | Why |
-| --- | --- | --- |
+| Pattern                                   | Example                                                               | Why                            |
+| ----------------------------------------- | --------------------------------------------------------------------- | ------------------------------ |
 | An immutable param ahead of a mutable one | `fn reflow(settings: Res<Settings>, mut windows: Query<&mut Window>)` | Mutable params must come first |
 
 Exceptions — these override the style rule:
 
 - A **fixed structural leading position** is exempt and never reordered: a
   method's `self` receiver (`&self` / `&mut self`), and a Bevy observer
-  system's `On<E>` trigger (the system *input*, which `bevy_ecs` requires to
+  system's `On<E>` trigger (the system _input_, which `bevy_ecs` requires to
   be first). The mutable-first ordering governs only the parameters that
   **follow** such a slot — e.g.
   `fn on_paste(ev: On<E>, mut clipboard: ResMut<Clipboard>, q: Query<&T>)` is
@@ -302,10 +302,10 @@ scheduler reason about the dependency.
 
 Required:
 
-| Instead of (in-body) | Use (at registration) |
-| --- | --- |
+| Instead of (in-body)                                           | Use (at registration)                          |
+| -------------------------------------------------------------- | ---------------------------------------------- |
 | `fn sys(res: Res<T>) { if !res.is_changed() { return; } ... }` | `sys.run_if(resource_exists_and_changed::<T>)` |
-| `fn sys(res: Res<T>) { if !res.is_added() { return; } ... }` | `sys.run_if(resource_added::<T>)` |
+| `fn sys(res: Res<T>) { if !res.is_added() { return; } ... }`   | `sys.run_if(resource_added::<T>)`              |
 
 - Prefer `resource_exists_and_changed::<T>` over bare
   `resource_changed::<T>` unless the resource is guaranteed to exist for
@@ -322,7 +322,7 @@ Not covered by this rule (leave as-is):
 - Per-entity / per-component change detection inside a query loop
   (`query.iter().any(|c| c.is_changed())`) — that is not a whole-system
   gate and has no `run_if` equivalent.
-- Bodies that branch on change state to do *different* work (not an
+- Bodies that branch on change state to do _different_ work (not an
   all-or-nothing early return).
 
 ## Change detection — let mutation drive it, don't force it manually
@@ -330,18 +330,18 @@ Not covered by this rule (leave as-is):
 Bevy emits a change notification automatically when you write through a
 `ResMut` / `Mut` (any `DerefMut`); readers gate on that via `run_if`
 (see the section above) or `Changed<T>` / `Added<T>` queries. A design
-that follows ordinary ECS data flow therefore never needs to *manually*
+that follows ordinary ECS data flow therefore never needs to _manually_
 announce that something changed. Manual notification breaks the contract
 that "changed" means "the value actually changed", so every downstream
 `run_if`/`Changed` consumer can no longer trust it.
 
 Forbidden:
 
-| Pattern | Why |
-| --- | --- |
-| `res.set_changed()` / `query_item.set_changed()` | Forces a notification the mutation itself should have produced |
-| `*res.bypass_change_detection() = …; res.set_changed();` | Suppresses the real change then re-emits it by hand — the honest form is one ordinary write through `&mut` |
-| `res.bypass_change_detection()` used to *hide* a genuine mutation from readers | Silently desyncs consumers gated on `Changed` / `run_if` |
+| Pattern                                                                        | Why                                                                                                        |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `res.set_changed()` / `query_item.set_changed()`                               | Forces a notification the mutation itself should have produced                                             |
+| `*res.bypass_change_detection() = …; res.set_changed();`                       | Suppresses the real change then re-emits it by hand — the honest form is one ordinary write through `&mut` |
+| `res.bypass_change_detection()` used to _hide_ a genuine mutation from readers | Silently desyncs consumers gated on `Changed` / `run_if`                                                   |
 
 Root cause and fix: this dance almost always appears because the code
 writes through the mutable reference **unconditionally every frame** (so
@@ -370,7 +370,7 @@ the `Node` fields when they actually change" pattern is the model).
 
 Escape hatch (justify with a `// NOTE:`, and `#[expect]` where a lint
 applies): genuine interior mutation that change detection cannot observe
-— e.g. a component owning a handle/buffer whose *contents* are mutated in
+— e.g. a component owning a handle/buffer whose _contents_ are mutated in
 place (no `DerefMut` on the component) while a downstream system must
 still be told — or a documented workaround for a specific upstream Bevy
 bug. "It's simpler" or "I mutate it every frame anyway" is not a valid
@@ -428,8 +428,8 @@ Required:
 
 Forbidden:
 
-| Pattern | Why |
-| --- | --- |
+| Pattern                                                                                                           | Why                                                 |
+| ----------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | `add_systems` / `add_observer` in a parent/aggregator plugin for a system or observer defined in a different file | Hoists registration away from the code it registers |
 
 Exception:
@@ -447,10 +447,6 @@ immutable reads with broad `&mut` access, and traps the decision logic behind
 ECS params (and resources with no public constructor), making it untestable.
 Split such systems along the gather → decide → apply seam.
 
-- **Pure decision helpers** take plain data and return *effect values* (an enum
-  / `Vec` of intents), touching no world state — unit-testable without an `App`.
-  Example: `decide_button` / `decide_wheel` (`crates/ozma_terminal/src/mouse.rs`)
-  return `Vec<MouseEffect>`.
 - **Apply via an `EntityEvent` + observer** (the repo idiom). The gather system
   queries the target **immutably**, computes effects, and `commands.trigger(...)`s
   them; the observer holds the `&mut` access and writes the world. See
@@ -463,18 +459,18 @@ Split such systems along the gather → decide → apply seam.
 
 Required:
 
-| Instead of (one system does everything) | Use |
-| --- | --- |
+| Instead of (one system does everything)                      | Use                                                                                        |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
 | Read input, decide, and write the world inline in one system | A pure decide helper returning effect values + an `EntityEvent`/observer that applies them |
-| Decision logic interleaved with `&mut` world access | Decision over borrowed data returning intents; mutation isolated to the apply observer |
-| A 40-plus-line inline block in a system body | A named helper `fn` the system calls |
+| Decision logic interleaved with `&mut` world access          | Decision over borrowed data returning intents; mutation isolated to the apply observer     |
+| A 40-plus-line inline block in a system body                 | A named helper `fn` the system calls                                                       |
 
 Forbidden:
 
-| Pattern | Why |
-| --- | --- |
-| `.pipe()` to chain a gather system into an apply system | Not this repo's idiom — it sequences with `EntityEvent` + observer and `.chain()` / system-sets, and uses `.pipe()` nowhere |
-| A long system whose only structure is sequential gather/decide/apply phases that could each be a helper or observer | Defeats single-responsibility; hides the apply surface |
+| Pattern                                                                                                             | Why                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `.pipe()` to chain a gather system into an apply system                                                             | Not this repo's idiom — it sequences with `EntityEvent` + observer and `.chain()` / system-sets, and uses `.pipe()` nowhere |
+| A long system whose only structure is sequential gather/decide/apply phases that could each be a helper or observer | Defeats single-responsibility; hides the apply surface                                                                      |
 
 Rationale: a gather system that ends in `commands.trigger(Effects { .. })` makes
 its effect on the world legible at the signature, and the observer is the one

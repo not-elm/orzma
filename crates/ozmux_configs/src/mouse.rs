@@ -167,7 +167,11 @@ mod tests {
             cfg.normalize();
             cfg.axis_lock_ratio
         };
-        assert_eq!(clamp(9.0), 1.0, "a 0.9 typo of 9 must clamp, not kill scroll");
+        assert_eq!(
+            clamp(9.0),
+            1.0,
+            "a 0.9 typo of 9 must clamp, not kill scroll"
+        );
         assert_eq!(clamp(90.0), 1.0);
         assert_eq!(clamp(-1.0), 0.0);
         assert_eq!(clamp(0.7), 0.7, "an in-range value is left untouched");
