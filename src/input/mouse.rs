@@ -6,15 +6,16 @@
 //! own the mouse.
 
 use crate::input::bindings::OzmaMouseConfig;
+use crate::input::focus::MouseDisabled;
 use crate::input::mouse::button::MouseButtonInputPlugin;
 use crate::input::mouse::wheel::MouseWheelInputPlugin;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use ozma_terminal::{
-    TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy,
-    TerminalSelectionStart, TerminalSelectionUpdate, TerminalViewportScroll,
+    OzmaTerminal, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
+    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate, TerminalViewportScroll,
 };
-use ozma_tty_engine::{CellCoord, Point, SelectionType, Side};
+use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TerminalHandle};
 use ozma_tty_renderer::schema::TerminalGrid;
 
 mod button;
@@ -119,6 +120,31 @@ fn cell_at_cursor(
         .normalize_point(*transform, cursor_phys)
         .map(|n| (n + Vec2::splat(0.5)) * node.size)?;
     Some(cell_at_local(local, cell_w, cell_h, cols, rows))
+}
+
+/// The terminal-surface query shared by the button and wheel dispatchers,
+/// aliased so the long type is not repeated across their helper signatures.
+type TerminalSurfaces<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static TerminalHandle,
+        &'static ComputedNode,
+        &'static UiGlobalTransform,
+        &'static TerminalGrid,
+    ),
+    (With<OzmaTerminal>, Without<MouseDisabled>),
+>;
+
+/// The `(entity, node, transform)` candidates `topmost_surface_at` hit-tests,
+/// projected from the surface query — one adapter shared by both dispatchers.
+fn hit_candidates<'a>(
+    terminals: &'a TerminalSurfaces<'_, '_>,
+) -> impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)> {
+    terminals
+        .iter()
+        .map(|(e, _, node, transform, _)| (e, node, transform))
 }
 
 /// Read-only hit-test context for one gather run: the terminal node geometry,

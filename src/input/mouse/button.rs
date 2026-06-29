@@ -4,11 +4,10 @@
 //! effects out via the shared `trigger_mouse_effects`. Registered by
 //! `MouseButtonInputPlugin`; skips `MouseDisabled` surfaces.
 
-use super::{CellContext, MouseEffect, trigger_mouse_effects};
+use super::{CellContext, MouseEffect, TerminalSurfaces, hit_candidates, trigger_mouse_effects};
 use crate::input::InputPhase;
 use crate::input::bindings::OzmaMouseConfig;
 use crate::input::current_modifiers;
-use crate::input::focus::MouseDisabled;
 use crate::input::gesture::{DragGesture, DragPhase, HeldPointer, OzmaMouseGesture};
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
@@ -17,15 +16,12 @@ use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
-use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{
     ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
-    MouseButtonKind, Point, ProtocolModifiers, Side, TermMode, TerminalHandle,
+    MouseButtonKind, Point, ProtocolModifiers, Side, TermMode,
 };
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::schema::TerminalGrid;
 use std::time::Duration;
 
 /// Registers the mouse-button dispatcher and its gesture resource. Runs in
@@ -46,21 +42,6 @@ impl Plugin for MouseButtonInputPlugin {
         );
     }
 }
-
-/// The button-dispatch terminal-surface query, aliased so the long type is not
-/// repeated across the per-stage helper signatures.
-type TerminalSurfaces<'w, 's> = Query<
-    'w,
-    's,
-    (
-        Entity,
-        &'static TerminalHandle,
-        &'static ComputedNode,
-        &'static UiGlobalTransform,
-        &'static TerminalGrid,
-    ),
-    (With<OzmaTerminal>, Without<MouseDisabled>),
->;
 
 /// Per-frame constants computed once and threaded into the per-event and
 /// per-drag helpers.
@@ -194,12 +175,7 @@ fn process_button_event(
         ButtonState::Released => ButtonEventKind::Release,
     };
     let target = if kind == ButtonEventKind::Press {
-        topmost_surface_at(
-            frame.cursor_phys,
-            terminals
-                .iter()
-                .map(|(e, _, node, transform, _)| (e, node, transform)),
-        )
+        topmost_surface_at(frame.cursor_phys, hit_candidates(terminals))
     } else {
         gesture.held.map(|h| h.entity)
     };
@@ -512,11 +488,16 @@ fn map_button(b: MouseButton) -> Option<MouseButtonKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::focus::MouseDisabled;
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
+    use bevy::ui::{ComputedNode, UiGlobalTransform};
     use ozma_terminal::Clipboard;
+    use ozma_terminal::OzmaTerminal;
     use ozma_tty_engine::SelectionType;
+    use ozma_tty_engine::TerminalHandle;
+    use ozma_tty_renderer::schema::TerminalGrid;
 
     fn make_selection_app() -> App {
         use bevy::window::WindowResolution;
