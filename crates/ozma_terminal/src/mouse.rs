@@ -89,11 +89,12 @@ pub struct TerminalViewportScroll {
     pub lines: i32,
 }
 
-/// Opens `uri` in the host browser / handler. `entity` is carried for
-/// family uniformity; the apply does not read it.
+/// Opens `uri` in the host browser / handler, gated on the target terminal
+/// still existing.
 #[derive(EntityEvent, Debug, Clone)]
 pub struct TerminalOpenUri {
-    /// The terminal entity the link belongs to (unused by the apply).
+    /// The terminal entity the link belongs to; the open is suppressed if it
+    /// no longer exists.
     #[event_target]
     pub entity: Entity,
     /// The URI to open.
@@ -308,9 +309,13 @@ fn on_terminal_selection_copy(
     }
 }
 
-/// Applies a `TerminalOpenUri`: opens the link in the host handler.
-fn on_terminal_open_uri(ev: On<TerminalOpenUri>) {
-    try_open_uri(&ev.uri);
+/// Applies a `TerminalOpenUri`: opens the link in the host handler, but only
+/// while the target terminal still exists — parity with the legacy apply
+/// path, which gated every effect behind the target's presence.
+fn on_terminal_open_uri(ev: On<TerminalOpenUri>, terminals: Query<(), With<OzmaTerminal>>) {
+    if terminals.get(ev.entity).is_ok() {
+        try_open_uri(&ev.uri);
+    }
 }
 
 #[cfg(test)]
@@ -352,13 +357,25 @@ mod tests {
     }
 
     #[test]
-    fn detached_selection_start_event_sets_selection_via_vt_only() {
+    fn detached_selection_start_event_sets_selection_and_emits_frame() {
         use ozma_tty_engine::TerminalHandle;
+        use ozma_tty_renderer::schema::{FrameDelta, FrameSnapshot};
+
+        #[derive(Resource, Default)]
+        struct FramesEmitted(usize);
 
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .init_resource::<Clipboard>()
-            .add_observer(on_terminal_selection_start);
+        app.init_resource::<Clipboard>()
+            .init_resource::<FramesEmitted>()
+            .add_observer(on_terminal_selection_start)
+            .add_observer(
+                |_ev: On<FrameSnapshot>, mut emitted: ResMut<FramesEmitted>| {
+                    emitted.0 += 1;
+                },
+            )
+            .add_observer(|_ev: On<FrameDelta>, mut emitted: ResMut<FramesEmitted>| {
+                emitted.0 += 1;
+            });
 
         let handle = TerminalHandle::detached(10, 5);
         let entity = app.world_mut().spawn((OzmaTerminal, handle)).id();
@@ -369,12 +386,16 @@ mod tests {
             side: Side::Left,
             ty: SelectionType::Simple,
         });
-        app.update();
+        app.world_mut().flush();
 
         let handle = app.world().entity(entity).get::<TerminalHandle>().unwrap();
         assert!(
             handle.selection_to_string().is_some(),
             "TerminalSelectionStart on a PTY-less OzmaTerminal must set a selection via vt_only"
+        );
+        assert!(
+            app.world().resource::<FramesEmitted>().0 >= 1,
+            "the detached selection apply must flush_emit a frame so the renderer repaints"
         );
     }
 
