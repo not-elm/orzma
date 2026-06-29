@@ -1,8 +1,8 @@
 //! Mode-neutral shared mouse dispatch for every `OzmaTerminal` surface: app
 //! reporting, local text selection + copy, wheel scrollback, and Cmd-click
 //! hyperlink open. Reads Bevy mouse input, hit-tests the cursor to a cell, and
-//! drives the engine's pure `ButtonAction` / `WheelAction` routers, emitting the
-//! decided effects to `ozma_terminal`'s apply observer via `TerminalMouseEffects`.
+//! drives the engine's pure `ButtonAction` / `WheelAction` routers, fanning the
+//! decided effects out to per-operation `EntityEvent`s via `trigger_mouse_effects`.
 //! Gated per entity by `MouseDisabled` (the host marks modal / suppressed
 //! surfaces), so it runs in both `AppMode`s for surfaces that still own the mouse.
 
@@ -23,11 +23,14 @@ use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
-use ozma_terminal::{MouseEffect, OzmaTerminal, TerminalMouseEffects};
+use ozma_terminal::{
+    OzmaTerminal, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
+    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate, TerminalViewportScroll,
+};
 use ozma_tty_engine::{
     ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
-    MouseButtonKind, Point, ProtocolModifiers, Side, TermMode, TerminalHandle, TerminalModifiers,
-    WheelAction, WheelConfig, WheelModifiers,
+    MouseButtonKind, Point, ProtocolModifiers, SelectionType, Side, TermMode, TerminalHandle,
+    TerminalModifiers, WheelAction, WheelConfig, WheelModifiers,
 };
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
@@ -56,9 +59,31 @@ impl Plugin for MouseInputPlugin {
     }
 }
 
+/// Host-private decision IR: the deciders (`decide_button` / `decide_wheel`)
+/// return an ordered `Vec` of these, which `trigger_mouse_effects` fans out
+/// to per-operation `EntityEvent`s on the target terminal.
+#[derive(Debug, Clone, PartialEq)]
+enum MouseEffect {
+    Write(Vec<u8>),
+    SelStart {
+        point: Point,
+        side: Side,
+        ty: SelectionType,
+    },
+    SelUpdate {
+        point: Point,
+        side: Side,
+    },
+    SelClear,
+    Copy,
+    Scroll(i32),
+    OpenUri(String),
+}
+
 /// The shared mouse-button dispatcher. Hit-tests the topmost terminal under the
 /// cursor on press, locks drag/release to that terminal, tracks clicks and drag
-/// state, drives `decide_button`, and triggers `TerminalMouseEffects`. Skips any
+/// state, drives `decide_button`, and fans the decided effects out to
+/// per-operation `EntityEvent`s via `trigger_mouse_effects`. Skips any
 /// `OzmaTerminal` carrying `MouseDisabled`; an empty candidate set (modal
 /// suppression) drains events and resets the gesture.
 fn dispatch_mouse_buttons(
@@ -194,9 +219,7 @@ fn dispatch_mouse_buttons(
             }
             _ => {}
         }
-        if !decided.is_empty() {
-            commands.trigger(TerminalMouseEffects::new(target, decided));
-        }
+        trigger_mouse_effects(&mut commands, target, decided);
     }
 
     let Some(held) = gesture.held else {
@@ -228,15 +251,14 @@ fn dispatch_mouse_buttons(
         if let Some(h) = gesture.held.as_mut() {
             h.last_cell = new_cell;
         }
-        if !drag_effects.is_empty() {
-            commands.trigger(TerminalMouseEffects::new(held.entity, drag_effects));
-        }
+        trigger_mouse_effects(&mut commands, held.entity, drag_effects);
     }
 }
 
 /// The shared wheel dispatcher: routes to the topmost terminal under the cursor,
 /// resets the accumulator on a target change, accumulates notches, drives
-/// `decide_wheel`, and triggers `TerminalMouseEffects`. Skips `MouseDisabled`
+/// `decide_wheel`, and fans the decided effects out to per-operation
+/// `EntityEvent`s via `trigger_mouse_effects`. Skips `MouseDisabled`
 /// terminals; an empty candidate set drains the wheel events.
 fn dispatch_mouse_wheel(
     mut commands: Commands,
@@ -348,9 +370,7 @@ fn dispatch_mouse_wheel(
             modes, signed_h, cell, mods, &cfg.wheel,
         )));
     }
-    if !effects.is_empty() {
-        commands.trigger(TerminalMouseEffects::new(target, effects));
-    }
+    trigger_mouse_effects(&mut commands, target, effects);
 }
 
 /// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
@@ -435,6 +455,38 @@ fn effects_from_wheel_action(action: WheelAction) -> Vec<MouseEffect> {
         WheelAction::Noop => Vec::new(),
         WheelAction::WriteToPty(b) => vec![MouseEffect::Write(b)],
         WheelAction::ScrollViewport(lines) => vec![MouseEffect::Scroll(lines)],
+    }
+}
+
+/// Fans an ordered `Vec<MouseEffect>` out to per-operation `EntityEvent`s on
+/// `entity`, preserving order (Bevy's command queue is FIFO and each trigger
+/// resolves before the next).
+fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<MouseEffect>) {
+    for effect in effects {
+        match effect {
+            MouseEffect::Write(bytes) => commands.trigger(TerminalMouseWrite { entity, bytes }),
+            MouseEffect::SelStart { point, side, ty } => {
+                commands.trigger(TerminalSelectionStart {
+                    entity,
+                    point,
+                    side,
+                    ty,
+                });
+            }
+            MouseEffect::SelUpdate { point, side } => {
+                commands.trigger(TerminalSelectionUpdate {
+                    entity,
+                    point,
+                    side,
+                });
+            }
+            MouseEffect::SelClear => commands.trigger(TerminalSelectionClear { entity }),
+            MouseEffect::Copy => commands.trigger(TerminalSelectionCopy { entity }),
+            MouseEffect::Scroll(lines) => {
+                commands.trigger(TerminalViewportScroll { entity, lines })
+            }
+            MouseEffect::OpenUri(uri) => commands.trigger(TerminalOpenUri { entity, uri }),
+        }
     }
 }
 
@@ -726,7 +778,52 @@ mod tests {
     }
 
     #[derive(Resource, Default)]
-    struct CapturedEffects(Vec<Vec<MouseEffect>>);
+    struct CapturedEffects(Vec<MouseEffect>);
+
+    fn add_effect_capture_observers(app: &mut App) {
+        app.add_observer(
+            |ev: On<TerminalMouseWrite>, mut cap: ResMut<CapturedEffects>| {
+                cap.0.push(MouseEffect::Write(ev.bytes.clone()));
+            },
+        )
+        .add_observer(
+            |ev: On<TerminalSelectionStart>, mut cap: ResMut<CapturedEffects>| {
+                cap.0.push(MouseEffect::SelStart {
+                    point: ev.point,
+                    side: ev.side,
+                    ty: ev.ty,
+                });
+            },
+        )
+        .add_observer(
+            |ev: On<TerminalSelectionUpdate>, mut cap: ResMut<CapturedEffects>| {
+                cap.0.push(MouseEffect::SelUpdate {
+                    point: ev.point,
+                    side: ev.side,
+                });
+            },
+        )
+        .add_observer(
+            |_ev: On<TerminalSelectionClear>, mut cap: ResMut<CapturedEffects>| {
+                cap.0.push(MouseEffect::SelClear);
+            },
+        )
+        .add_observer(
+            |_ev: On<TerminalSelectionCopy>, mut cap: ResMut<CapturedEffects>| {
+                cap.0.push(MouseEffect::Copy);
+            },
+        )
+        .add_observer(
+            |ev: On<TerminalViewportScroll>, mut cap: ResMut<CapturedEffects>| {
+                cap.0.push(MouseEffect::Scroll(ev.lines));
+            },
+        )
+        .add_observer(
+            |ev: On<TerminalOpenUri>, mut cap: ResMut<CapturedEffects>| {
+                cap.0.push(MouseEffect::OpenUri(ev.uri.clone()));
+            },
+        );
+    }
 
     fn make_selection_app() -> App {
         use bevy::window::WindowResolution;
@@ -741,12 +838,8 @@ mod tests {
             .init_resource::<Clipboard>()
             .init_resource::<CapturedEffects>()
             .insert_resource(test_metrics())
-            .add_observer(
-                |ev: On<TerminalMouseEffects>, mut cap: ResMut<CapturedEffects>| {
-                    cap.0.push(ev.effects().to_vec());
-                },
-            )
             .add_systems(Update, dispatch_mouse_buttons);
+        add_effect_capture_observers(&mut app);
 
         let handle = TerminalHandle::detached(100, 37);
         // Node at window center (400,300), size 800x600 -> top-left (0,0).
@@ -859,7 +952,6 @@ mod tests {
         let pinned = cap
             .0
             .iter()
-            .flatten()
             .any(|e| matches!(e, MouseEffect::SelUpdate { point, .. } if point.column.0 == 99));
         assert!(
             pinned,
@@ -891,10 +983,7 @@ mod tests {
 
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
-            cap.0
-                .iter()
-                .flatten()
-                .any(|e| matches!(e, MouseEffect::Copy)),
+            cap.0.iter().any(|e| matches!(e, MouseEffect::Copy)),
             "releasing after leaving the window must copy the selection, got {:?}",
             cap.0
         );
@@ -1446,12 +1535,8 @@ mod tests {
             .init_resource::<Clipboard>()
             .init_resource::<CapturedEffects>()
             .insert_resource(test_metrics())
-            .add_observer(
-                |ev: On<TerminalMouseEffects>, mut cap: ResMut<CapturedEffects>| {
-                    cap.0.push(ev.effects().to_vec());
-                },
-            )
             .add_systems(Update, dispatch_mouse_wheel);
+        add_effect_capture_observers(&mut app);
 
         let mut handle = TerminalHandle::detached(100, 37);
         handle.advance(enable_modes);
@@ -1516,7 +1601,6 @@ mod tests {
         assert!(
             cap.0
                 .iter()
-                .flatten()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
             "a physical-right wheel in mouse mode must emit an SGR wheel-right (cb 67) report, got {:?}",
             cap.0
@@ -1533,7 +1617,6 @@ mod tests {
         assert!(
             cap.0
                 .iter()
-                .flatten()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<66;"))),
             "a physical-left wheel in mouse mode must emit an SGR wheel-left (cb 66) report, got {:?}",
             cap.0
@@ -1541,7 +1624,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_diagonal_emits_both_axes_in_one_trigger() {
+    fn dispatch_diagonal_emits_both_axes() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         // Disable the dominant-axis lock so a diagonal keeps both axes; this
         // test guards the batching (both axes in ONE trigger), not the lock.
@@ -1550,24 +1633,19 @@ mod tests {
         write_wheel(&mut app, 0.5 * phys_right_sign(), -0.5);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
-        assert_eq!(
-            cap.0.len(),
-            1,
-            "both axes must arrive in ONE trigger, got {:?}",
-            cap.0
-        );
-        let frame = &cap.0[0];
         assert!(
-            frame
+            cap.0
                 .iter()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<65;"))),
-            "vertical (down, cb 65) report missing: {frame:?}"
+            "vertical (down, cb 65) report missing: {:?}",
+            cap.0
         );
         assert!(
-            frame
+            cap.0
                 .iter()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
-            "horizontal (right, cb 67) report missing: {frame:?}"
+            "horizontal (right, cb 67) report missing: {:?}",
+            cap.0
         );
     }
 
@@ -1604,10 +1682,7 @@ mod tests {
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
-            cap.0
-                .iter()
-                .flatten()
-                .all(|e| !matches!(e, MouseEffect::Write(_))),
+            cap.0.iter().all(|e| !matches!(e, MouseEffect::Write(_))),
             "horizontal wheel outside a mouse mode must not emit a report, got {:?}",
             cap.0
         );
@@ -1636,7 +1711,6 @@ mod tests {
         let count = |needle: &[u8]| -> usize {
             cap.0
                 .iter()
-                .flatten()
                 .filter_map(|e| match e {
                     MouseEffect::Write(b) => Some(b),
                     _ => None,

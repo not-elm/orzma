@@ -15,7 +15,10 @@ use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 pub use action::PasteAction;
 use bevy::prelude::*;
 pub use clipboard::{Clipboard, build_paste_bytes};
-pub use mouse::{MouseEffect, TerminalForwardInput, TerminalMouseEffects};
+pub use mouse::{
+    TerminalForwardInput, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
+    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate, TerminalViewportScroll,
+};
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
     resolve_shell,
