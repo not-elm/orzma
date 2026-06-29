@@ -52,6 +52,15 @@ pub struct MouseConfig {
     /// fractional line deltas; raise to `1.0` for a traditional
     /// discrete-notch wheel that already emits `y = 1.0` per click.
     pub cells_per_notch: f32,
+    /// Dominant-axis lock strength for trackpad scrolling. The horizontal
+    /// component of a swipe is emitted only when it dominates the gesture
+    /// (`|x| / hypot(x, y) >= axis_lock_ratio`); otherwise it is dropped so
+    /// jitter during a vertical scroll cannot leak a horizontal notch.
+    /// Meaningful range `0.0..=1.0`, higher = stricter (more biased to
+    /// vertical). Default `0.9` ⇒ horizontal needs `|x| >= ~2.06·|y|`, matching
+    /// Alacritty. `1.0` allows horizontal only for a pure-horizontal gesture;
+    /// `0.0` disables the lock.
+    pub axis_lock_ratio: f32,
     /// Max gap (ms) between consecutive clicks counted as a double /
     /// triple click. Default mirrors macOS HIG.
     pub double_click_timeout_ms: u32,
@@ -85,6 +94,7 @@ impl Default for MouseConfig {
             fine_lines: 1,
             max_protocol_events_per_frame: 8,
             cells_per_notch: 0.5,
+            axis_lock_ratio: 0.9,
             double_click_timeout_ms: 400,
             click_drift_px: 8.0,
             autoscroll_base_period_ms: 50,
@@ -108,6 +118,7 @@ mod tests {
         assert_eq!(cfg.fine_lines, 1);
         assert_eq!(cfg.max_protocol_events_per_frame, 8);
         assert_eq!(cfg.cells_per_notch, 0.5);
+        assert_eq!(cfg.axis_lock_ratio, 0.9);
         assert_eq!(cfg.double_click_timeout_ms, 400);
         assert_eq!(cfg.click_drift_px, 8.0);
         assert_eq!(cfg.autoscroll_base_period_ms, 50);

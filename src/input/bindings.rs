@@ -80,6 +80,10 @@ pub(crate) struct OzmaMouseConfig {
     pub wheel: WheelConfig,
     /// Cells of wheel travel per emitted notch (smooth-scroll accumulation).
     pub cells_per_notch: f32,
+    /// Dominant-axis lock strength: horizontal scroll survives only when
+    /// `|x| / hypot(x, y) >= axis_lock_ratio`, else it is dropped. Range
+    /// `0.0..=1.0` (`0.0` = off, `1.0` = pure-horizontal only).
+    pub axis_lock_ratio: f32,
     /// Max gap between clicks counted as a double / triple click.
     pub double_click_timeout: Duration,
     /// Max cursor drift (logical px) between clicks of one chord.
@@ -96,6 +100,7 @@ impl Default for OzmaMouseConfig {
             },
             wheel: WheelConfig::default(),
             cells_per_notch: 0.5,
+            axis_lock_ratio: 0.9,
             double_click_timeout: Duration::from_millis(400),
             click_drift_px: 8.0,
             fine_modifier: FineModifier::Alt,
@@ -116,6 +121,7 @@ mod tests {
         );
         assert_eq!(cfg.wheel.max_protocol_events_per_frame, 8);
         assert_eq!(cfg.cells_per_notch, 0.5);
+        assert_eq!(cfg.axis_lock_ratio, 0.9);
         assert_eq!(
             cfg.double_click_timeout,
             std::time::Duration::from_millis(400)

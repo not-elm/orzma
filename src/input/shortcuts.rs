@@ -133,6 +133,7 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
             max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
         },
         cells_per_notch: mc.cells_per_notch,
+        axis_lock_ratio: mc.axis_lock_ratio,
         double_click_timeout: Duration::from_millis(mc.double_click_timeout_ms as u64),
         click_drift_px: mc.click_drift_px,
         fine_modifier: match mc.fine_modifier {
@@ -339,6 +340,7 @@ mod tests {
         assert_eq!(out.wheel.max_protocol_events_per_frame, 5);
         assert_eq!(out.wheel.lines_per_notch, mc.lines_per_notch);
         assert_eq!(out.cells_per_notch, 1.0);
+        assert_eq!(out.axis_lock_ratio, mc.axis_lock_ratio);
         assert_eq!(out.fine_modifier, FineModifier::Ctrl);
         assert_eq!(
             out.double_click_timeout,

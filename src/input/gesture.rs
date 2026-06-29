@@ -132,6 +132,29 @@ pub(crate) fn accumulate_notches(
     notches
 }
 
+/// Dominant-axis lock for a single frame's `(vertical, horizontal)` cell delta,
+/// Alacritty-style: keeps the axis the gesture is travelling along and zeros the
+/// other, so trackpad jitter on the off-axis cannot leak a stray notch.
+///
+/// `ratio` is the share of the gesture's magnitude the horizontal component must
+/// reach to count as horizontal: horizontal survives only when
+/// `|h| / hypot(v, h) >= ratio` (with `ratio = 0.9` that is `|h| >= ~2.06·|v|`),
+/// biasing toward vertical. Meaningful range is `0.0..=1.0`: `0.0` (or any
+/// negative) disables the lock and `1.0` is strictest (only a pure-horizontal
+/// gesture, `v == 0`, scrolls horizontally). The comparison is `>=`, not `>`, so
+/// `1.0` does not silently kill all horizontal scroll. A zero/zero delta passes
+/// through so an idle frame is not mistaken for a locked vertical gesture.
+pub(crate) fn lock_dominant_axis(vertical: f32, horizontal: f32, ratio: f32) -> (f32, f32) {
+    if ratio <= 0.0 || (vertical == 0.0 && horizontal == 0.0) {
+        return (vertical, horizontal);
+    }
+    if horizontal.abs() / vertical.hypot(horizontal) >= ratio {
+        (0.0, horizontal)
+    } else {
+        (vertical, 0.0)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -252,5 +275,43 @@ mod tests {
         assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 0);
         assert_eq!(accumulate_notches(&mut acc.residual_cells, -0.0, 0.5), 0);
         assert_eq!(accumulate_notches(&mut acc.residual_cells, 0.3, 0.5), 1);
+    }
+
+    #[test]
+    fn axis_lock_keeps_dominant_axis_and_zeros_the_other() {
+        // Mostly-vertical swipe with a little horizontal jitter → pure vertical.
+        assert_eq!(lock_dominant_axis(1.0, 0.2, 0.9), (1.0, 0.0));
+        // Mostly-horizontal swipe → pure horizontal.
+        assert_eq!(lock_dominant_axis(0.2, 1.0, 0.9), (0.0, 1.0));
+        // Pure axes pass through unchanged.
+        assert_eq!(lock_dominant_axis(1.0, 0.0, 0.9), (1.0, 0.0));
+        assert_eq!(lock_dominant_axis(0.0, 1.0, 0.9), (0.0, 1.0));
+    }
+
+    #[test]
+    fn axis_lock_diagonal_45_degrees_resolves_to_vertical() {
+        // |h|/hypot = 0.707 < 0.9, so a 45° gesture collapses to vertical.
+        let (v, h) = lock_dominant_axis(1.0, 1.0, 0.9);
+        assert_eq!((v, h), (1.0, 0.0));
+    }
+
+    #[test]
+    fn axis_lock_passes_zero_zero_through() {
+        assert_eq!(lock_dominant_axis(0.0, 0.0, 0.9), (0.0, 0.0));
+    }
+
+    #[test]
+    fn axis_lock_ratio_zero_disables_the_lock() {
+        // A diagonal that would otherwise collapse to vertical keeps both axes.
+        assert_eq!(lock_dominant_axis(1.0, 0.5, 0.0), (1.0, 0.5));
+    }
+
+    #[test]
+    fn axis_lock_ratio_one_still_allows_pure_horizontal() {
+        // Strictest setting: a pure-horizontal gesture must still scroll
+        // horizontally (|h|/hypot == 1.0 >= 1.0), and any vertical component
+        // collapses to vertical.
+        assert_eq!(lock_dominant_axis(0.0, 1.0, 1.0), (0.0, 1.0));
+        assert_eq!(lock_dominant_axis(0.01, 1.0, 1.0), (0.01, 0.0));
     }
 }

@@ -12,7 +12,7 @@ use crate::input::current_modifiers;
 use crate::input::focus::MouseDisabled;
 use crate::input::gesture::{
     DragGesture, DragPhase, HeldPointer, OzmaMouseGesture, WheelAccumulator, accumulate_notches,
-    wheel_delta_cells,
+    lock_dominant_axis, wheel_delta_cells,
 };
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
@@ -303,6 +303,17 @@ fn dispatch_mouse_wheel(
             h + wheel_delta_cells(ev.unit, ev.x, ctx.cell_h),
         )
     });
+    let moving = delta_v != 0.0 || delta_h != 0.0;
+    let (delta_v, delta_h) = lock_dominant_axis(delta_v, delta_h, cfg.axis_lock_ratio);
+    // NOTE: clearing the dropped axis's residual is required — without it a slow
+    // off-axis leak accumulates across frames and the lock eventually emits a
+    // stray notch on the axis it was meant to suppress.
+    if moving && delta_h == 0.0 {
+        gesture_acc.residual_cells_h = 0.0;
+    }
+    if moving && delta_v == 0.0 {
+        gesture_acc.residual_cells = 0.0;
+    }
     let raw_v = accumulate_notches(
         &mut gesture_acc.residual_cells,
         delta_v,
@@ -1486,6 +1497,7 @@ mod tests {
             });
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn dispatch_pure_horizontal_right_emits_sgr_67() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
@@ -1504,6 +1516,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn dispatch_horizontal_left_emits_sgr_66() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
@@ -1522,9 +1535,16 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn dispatch_diagonal_emits_both_axes_in_one_trigger() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        // Disable the dominant-axis lock so a diagonal keeps both axes; this
+        // test guards the batching (both axes in ONE trigger), not the lock.
+        app.insert_resource(OzmaMouseConfig {
+            axis_lock_ratio: 0.0,
+            ..default()
+        });
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
         // -x is a physical-right scroll on macOS (cb 67).
         write_wheel(&mut app, -0.5, -0.5);
@@ -1552,6 +1572,29 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_axis_lock_drops_jitter_during_vertical_scroll() {
+        let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        // Vertical-dominant swipe with horizontal jitter: |x|/hypot = 0.2 < 0.9,
+        // so the default lock must collapse it to pure vertical (no cb 66/67).
+        write_wheel(&mut app, 0.2, -1.0);
+        app.update();
+        let cap = app.world().resource::<CapturedEffects>();
+        let has = |needle: &[u8]| {
+            cap.0
+                .iter()
+                .flatten()
+                .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(needle)))
+        };
+        assert!(has(b"\x1b[<65;"), "vertical (down, cb 65) report missing");
+        assert!(
+            !has(b"\x1b[<66;") && !has(b"\x1b[<67;"),
+            "off-axis jitter must NOT emit a horizontal report, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
     fn dispatch_horizontal_without_mouse_mode_emits_no_report() {
         let mut app = make_wheel_app(b"");
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
@@ -1568,12 +1611,19 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn pixel_horizontal_sensitivity_matches_vertical() {
         // Equal Pixel-unit deltas on both axes must emit equal report counts.
         // Regression: horizontal divided ev.x by cell_w (~half of cell_h), so a
         // given finger distance fired ~2x the notches and scrolled too far.
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
+        // Disable the dominant-axis lock; this test compares per-axis
+        // sensitivity, which needs both axes to survive an equal-delta gesture.
+        app.insert_resource(OzmaMouseConfig {
+            axis_lock_ratio: 0.0,
+            ..default()
+        });
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
