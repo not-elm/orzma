@@ -110,17 +110,13 @@ fn dispatch_mouse_buttons(
     let Ok(window) = windows.single() else {
         buttons.clear();
         cursor_moved.clear();
-        gesture.drag = None;
-        gesture.held = None;
-        gesture.last_cursor_phys = None;
+        gesture.reset();
         return;
     };
     if !window.focused || terminals.is_empty() {
         buttons.clear();
         cursor_moved.clear();
-        gesture.drag = None;
-        gesture.held = None;
-        gesture.last_cursor_phys = None;
+        gesture.reset();
         return;
     }
     let scale = window.scale_factor();
@@ -141,9 +137,7 @@ fn dispatch_mouse_buttons(
     let active = gesture.held.is_some() || gesture.drag.is_some();
     let Some(cursor_phys) = effective_drag_cursor(live, active, gesture.last_cursor_phys) else {
         buttons.clear();
-        gesture.drag = None;
-        gesture.held = None;
-        gesture.last_cursor_phys = None;
+        gesture.reset();
         return;
     };
     let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
@@ -170,9 +164,7 @@ fn dispatch_mouse_buttons(
             continue;
         };
         let Ok((_, handle, node, transform, grid)) = terminals.get(target) else {
-            gesture.held = None;
-            gesture.drag = None;
-            gesture.last_cursor_phys = None;
+            gesture.reset();
             continue;
         };
         let ctx = CellContext {
@@ -226,9 +218,7 @@ fn dispatch_mouse_buttons(
         return;
     };
     let Ok((_, handle, node, transform, grid)) = terminals.get(held.entity) else {
-        gesture.held = None;
-        gesture.drag = None;
-        gesture.last_cursor_phys = None;
+        gesture.reset();
         return;
     };
     let ctx = CellContext {
