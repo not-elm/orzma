@@ -56,10 +56,9 @@ pub struct MouseConfig {
     /// component of a swipe is emitted only when it dominates the gesture
     /// (`|x| / hypot(x, y) >= axis_lock_ratio`); otherwise it is dropped so
     /// jitter during a vertical scroll cannot leak a horizontal notch.
-    /// Meaningful range `0.0..=1.0`, higher = stricter (more biased to
-    /// vertical). Default `0.9` ⇒ horizontal needs `|x| >= ~2.06·|y|`, matching
-    /// Alacritty. `1.0` allows horizontal only for a pure-horizontal gesture;
-    /// `0.0` disables the lock.
+    /// Clamped to `0.0..=1.0`; higher = stricter (more biased to vertical).
+    /// Default `0.9` matches Alacritty. `1.0` allows horizontal only for a
+    /// pure-horizontal gesture; `0.0` disables the lock.
     pub axis_lock_ratio: f32,
     /// Max gap (ms) between consecutive clicks counted as a double /
     /// triple click. Default mirrors macOS HIG.
@@ -84,6 +83,20 @@ pub struct MouseConfig {
     pub drag_threshold_px: f32,
     /// Half-width (logical px) of a pane divider's grab zone for resize.
     pub divider_grab_tolerance_px: f32,
+}
+
+impl MouseConfig {
+    /// Clamps `axis_lock_ratio` to `0.0..=1.0` (NaN falls back to the default),
+    /// so an out-of-range or non-finite config value cannot silently disable
+    /// horizontal scrolling.
+    pub(crate) fn normalize(&mut self) {
+        let default = Self::default().axis_lock_ratio;
+        self.axis_lock_ratio = if self.axis_lock_ratio.is_finite() {
+            self.axis_lock_ratio.clamp(0.0, 1.0)
+        } else {
+            default
+        };
+    }
 }
 
 impl Default for MouseConfig {
@@ -142,6 +155,24 @@ mod tests {
     fn fine_modifier_parses_lowercase() {
         let cfg: MouseConfig = toml::from_str(r#"fine_modifier = "ctrl""#).unwrap();
         assert_eq!(cfg.fine_modifier, FineModifier::Ctrl);
+    }
+
+    #[test]
+    fn normalize_clamps_axis_lock_ratio() {
+        let clamp = |raw: f32| {
+            let mut cfg = MouseConfig {
+                axis_lock_ratio: raw,
+                ..MouseConfig::default()
+            };
+            cfg.normalize();
+            cfg.axis_lock_ratio
+        };
+        assert_eq!(clamp(9.0), 1.0, "a 0.9 typo of 9 must clamp, not kill scroll");
+        assert_eq!(clamp(90.0), 1.0);
+        assert_eq!(clamp(-1.0), 0.0);
+        assert_eq!(clamp(0.7), 0.7, "an in-range value is left untouched");
+        assert_eq!(clamp(f32::NAN), 0.9, "NaN falls back to the default");
+        assert_eq!(clamp(f32::INFINITY), 0.9, "inf falls back to the default");
     }
 
     #[test]

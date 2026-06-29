@@ -303,17 +303,11 @@ fn dispatch_mouse_wheel(
             h + wheel_delta_cells(ev.unit, ev.x, ctx.cell_h),
         )
     });
-    let moving = delta_v != 0.0 || delta_h != 0.0;
+    // NOTE: do NOT also clear the suppressed axis's residual here. The lock
+    // zeros the off-axis delta before accumulation, so it adds 0 and cannot leak
+    // a notch; clearing would instead wipe genuine sub-notch progress on a
+    // deliberate horizontal swipe whose slow frames dip below the lock ratio.
     let (delta_v, delta_h) = lock_dominant_axis(delta_v, delta_h, cfg.axis_lock_ratio);
-    // NOTE: clearing the dropped axis's residual is required — without it a slow
-    // off-axis leak accumulates across frames and the lock eventually emits a
-    // stray notch on the axis it was meant to suppress.
-    if moving && delta_h == 0.0 {
-        gesture_acc.residual_cells_h = 0.0;
-    }
-    if moving && delta_v == 0.0 {
-        gesture_acc.residual_cells = 0.0;
-    }
     let raw_v = accumulate_notches(
         &mut gesture_acc.residual_cells,
         delta_v,
@@ -1497,13 +1491,26 @@ mod tests {
             });
     }
 
-    #[cfg(target_os = "macos")]
+    /// Sign of `MouseWheel.x` for a physical-right trackpad scroll on this
+    /// platform: negative on macOS (winit's PixelDelta is opposite X11/Wayland),
+    /// positive elsewhere. Lets the direction tests assert the same SGR button
+    /// on every target instead of being cfg-gated to macOS.
+    fn phys_right_sign() -> f32 {
+        if cfg!(target_os = "macos") { -1.0 } else { 1.0 }
+    }
+
+    fn disable_axis_lock(app: &mut App) {
+        app.insert_resource(OzmaMouseConfig {
+            axis_lock_ratio: 0.0,
+            ..default()
+        });
+    }
+
     #[test]
     fn dispatch_pure_horizontal_right_emits_sgr_67() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
-        // macOS reports a physical-right scroll as a negative MouseWheel.x.
-        write_wheel(&mut app, -0.5, 0.0);
+        write_wheel(&mut app, 0.5 * phys_right_sign(), 0.0);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
@@ -1511,18 +1518,16 @@ mod tests {
                 .iter()
                 .flatten()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
-            "a physical-right wheel (-x) in mouse mode must emit an SGR wheel-right (cb 67) report, got {:?}",
+            "a physical-right wheel in mouse mode must emit an SGR wheel-right (cb 67) report, got {:?}",
             cap.0
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn dispatch_horizontal_left_emits_sgr_66() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
-        // macOS reports a physical-left scroll as a positive MouseWheel.x.
-        write_wheel(&mut app, 0.5, 0.0);
+        write_wheel(&mut app, -0.5 * phys_right_sign(), 0.0);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
@@ -1530,24 +1535,19 @@ mod tests {
                 .iter()
                 .flatten()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<66;"))),
-            "a physical-left wheel (+x) in mouse mode must emit an SGR wheel-left (cb 66) report, got {:?}",
+            "a physical-left wheel in mouse mode must emit an SGR wheel-left (cb 66) report, got {:?}",
             cap.0
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn dispatch_diagonal_emits_both_axes_in_one_trigger() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         // Disable the dominant-axis lock so a diagonal keeps both axes; this
         // test guards the batching (both axes in ONE trigger), not the lock.
-        app.insert_resource(OzmaMouseConfig {
-            axis_lock_ratio: 0.0,
-            ..default()
-        });
+        disable_axis_lock(&mut app);
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
-        // -x is a physical-right scroll on macOS (cb 67).
-        write_wheel(&mut app, -0.5, -0.5);
+        write_wheel(&mut app, 0.5 * phys_right_sign(), -0.5);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert_eq!(
@@ -1575,9 +1575,11 @@ mod tests {
     fn dispatch_axis_lock_drops_jitter_during_vertical_scroll() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
-        // Vertical-dominant swipe with horizontal jitter: |x|/hypot = 0.2 < 0.9,
-        // so the default lock must collapse it to pure vertical (no cb 66/67).
-        write_wheel(&mut app, 0.2, -1.0);
+        // Vertical-dominant swipe whose horizontal component (0.6 cells) is on
+        // its own past cells_per_notch (0.5) and WOULD emit a notch unlocked;
+        // |x|/hypot = 0.29 < 0.9, so the default lock must drop it (no cb 66/67).
+        // A smaller jitter would not discriminate — it makes no notch either way.
+        write_wheel(&mut app, 0.6, -2.0);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         let has = |needle: &[u8]| {
@@ -1611,7 +1613,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "macos")]
     #[test]
     fn pixel_horizontal_sensitivity_matches_vertical() {
         // Equal Pixel-unit deltas on both axes must emit equal report counts.
@@ -1620,16 +1621,13 @@ mod tests {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         // Disable the dominant-axis lock; this test compares per-axis
         // sensitivity, which needs both axes to survive an equal-delta gesture.
-        app.insert_resource(OzmaMouseConfig {
-            axis_lock_ratio: 0.0,
-            ..default()
-        });
+        disable_axis_lock(&mut app);
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
             .write(MouseWheel {
                 unit: MouseScrollUnit::Pixel,
-                x: -16.0,
+                x: 16.0 * phys_right_sign(),
                 y: 16.0,
                 window: Entity::PLACEHOLDER,
             });
@@ -1647,7 +1645,7 @@ mod tests {
                 .sum()
         };
         // test_metrics: cell_w = 8, cell_h = 16. y=16 → up reports (cb 64);
-        // x=-16 (physical-right on macOS) → right reports (cb 67).
+        // a physical-right x → right reports (cb 67).
         let vertical = count(b"\x1b[<64;");
         let horizontal = count(b"\x1b[<67;");
         assert!(

@@ -333,6 +333,7 @@ mod tests {
             fine_modifier: CfgFine::Ctrl,
             max_protocol_events_per_frame: 5,
             cells_per_notch: 1.0,
+            axis_lock_ratio: 0.5,
             ..MouseConfig::default()
         };
         let out = ozma_mouse_config(&mc);
@@ -340,7 +341,7 @@ mod tests {
         assert_eq!(out.wheel.max_protocol_events_per_frame, 5);
         assert_eq!(out.wheel.lines_per_notch, mc.lines_per_notch);
         assert_eq!(out.cells_per_notch, 1.0);
-        assert_eq!(out.axis_lock_ratio, mc.axis_lock_ratio);
+        assert_eq!(out.axis_lock_ratio, 0.5, "non-default value must flow through");
         assert_eq!(out.fine_modifier, FineModifier::Ctrl);
         assert_eq!(
             out.double_click_timeout,

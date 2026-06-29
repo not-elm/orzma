@@ -142,10 +142,10 @@ pub(crate) fn accumulate_notches(
 /// biasing toward vertical. Meaningful range is `0.0..=1.0`: `0.0` (or any
 /// negative) disables the lock and `1.0` is strictest (only a pure-horizontal
 /// gesture, `v == 0`, scrolls horizontally). The comparison is `>=`, not `>`, so
-/// `1.0` does not silently kill all horizontal scroll. A zero/zero delta passes
-/// through so an idle frame is not mistaken for a locked vertical gesture.
+/// `1.0` does not silently kill all horizontal scroll. A zero horizontal delta
+/// (the common pure-vertical frame) short-circuits before the `hypot`.
 pub(crate) fn lock_dominant_axis(vertical: f32, horizontal: f32, ratio: f32) -> (f32, f32) {
-    if ratio <= 0.0 || (vertical == 0.0 && horizontal == 0.0) {
+    if ratio <= 0.0 || horizontal == 0.0 {
         return (vertical, horizontal);
     }
     if horizontal.abs() / vertical.hypot(horizontal) >= ratio {
@@ -279,11 +279,8 @@ mod tests {
 
     #[test]
     fn axis_lock_keeps_dominant_axis_and_zeros_the_other() {
-        // Mostly-vertical swipe with a little horizontal jitter → pure vertical.
         assert_eq!(lock_dominant_axis(1.0, 0.2, 0.9), (1.0, 0.0));
-        // Mostly-horizontal swipe → pure horizontal.
         assert_eq!(lock_dominant_axis(0.2, 1.0, 0.9), (0.0, 1.0));
-        // Pure axes pass through unchanged.
         assert_eq!(lock_dominant_axis(1.0, 0.0, 0.9), (1.0, 0.0));
         assert_eq!(lock_dominant_axis(0.0, 1.0, 0.9), (0.0, 1.0));
     }
