@@ -48,6 +48,7 @@ lines_per_notch = 3              # u32. Lines scrolled per wheel notch.
 fine_modifier = "alt"            # "alt" | "ctrl" | "shift" | "none". Modifier for fine (slow) scroll.
 fine_lines = 1                   # u32. Lines per notch while fine_modifier is held.
 cells_per_notch = 0.5            # f32. Vertical wheel accumulation threshold per notch.
+axis_lock_ratio = 0.9            # f32 in 0.0..=1.0. Trackpad dominant-axis lock: horizontal scroll kept only when |x|/hypot(x,y) >= this. 0.0 disables; 1.0 = pure-horizontal only.
 double_click_timeout_ms = 400    # u32. Max ms between clicks to count as double/triple.
 click_drift_px = 8.0             # f32. Max pointer drift (logical px) between clicks of a multi-click.
 drag_threshold_px = 4.0          # f32. Pointer travel (logical px) before a press becomes a drag.

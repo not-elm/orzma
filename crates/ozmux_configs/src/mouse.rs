@@ -52,6 +52,14 @@ pub struct MouseConfig {
     /// fractional line deltas; raise to `1.0` for a traditional
     /// discrete-notch wheel that already emits `y = 1.0` per click.
     pub cells_per_notch: f32,
+    /// Dominant-axis lock strength for trackpad scrolling. The horizontal
+    /// component of a swipe is emitted only when it dominates the gesture
+    /// (`|x| / hypot(x, y) >= axis_lock_ratio`); otherwise it is dropped so
+    /// jitter during a vertical scroll cannot leak a horizontal notch.
+    /// Clamped to `0.0..=1.0`; higher = stricter (more biased to vertical).
+    /// Default `0.9` matches Alacritty. `1.0` allows horizontal only for a
+    /// pure-horizontal gesture; `0.0` disables the lock.
+    pub axis_lock_ratio: f32,
     /// Max gap (ms) between consecutive clicks counted as a double /
     /// triple click. Default mirrors macOS HIG.
     pub double_click_timeout_ms: u32,
@@ -77,6 +85,20 @@ pub struct MouseConfig {
     pub divider_grab_tolerance_px: f32,
 }
 
+impl MouseConfig {
+    /// Clamps `axis_lock_ratio` to `0.0..=1.0` (NaN falls back to the default),
+    /// so an out-of-range or non-finite config value cannot silently disable
+    /// horizontal scrolling.
+    pub(crate) fn normalize(&mut self) {
+        let default = Self::default().axis_lock_ratio;
+        self.axis_lock_ratio = if self.axis_lock_ratio.is_finite() {
+            self.axis_lock_ratio.clamp(0.0, 1.0)
+        } else {
+            default
+        };
+    }
+}
+
 impl Default for MouseConfig {
     fn default() -> Self {
         Self {
@@ -85,6 +107,7 @@ impl Default for MouseConfig {
             fine_lines: 1,
             max_protocol_events_per_frame: 8,
             cells_per_notch: 0.5,
+            axis_lock_ratio: 0.9,
             double_click_timeout_ms: 400,
             click_drift_px: 8.0,
             autoscroll_base_period_ms: 50,
@@ -108,6 +131,7 @@ mod tests {
         assert_eq!(cfg.fine_lines, 1);
         assert_eq!(cfg.max_protocol_events_per_frame, 8);
         assert_eq!(cfg.cells_per_notch, 0.5);
+        assert_eq!(cfg.axis_lock_ratio, 0.9);
         assert_eq!(cfg.double_click_timeout_ms, 400);
         assert_eq!(cfg.click_drift_px, 8.0);
         assert_eq!(cfg.autoscroll_base_period_ms, 50);
@@ -131,6 +155,24 @@ mod tests {
     fn fine_modifier_parses_lowercase() {
         let cfg: MouseConfig = toml::from_str(r#"fine_modifier = "ctrl""#).unwrap();
         assert_eq!(cfg.fine_modifier, FineModifier::Ctrl);
+    }
+
+    #[test]
+    fn normalize_clamps_axis_lock_ratio() {
+        let clamp = |raw: f32| {
+            let mut cfg = MouseConfig {
+                axis_lock_ratio: raw,
+                ..MouseConfig::default()
+            };
+            cfg.normalize();
+            cfg.axis_lock_ratio
+        };
+        assert_eq!(clamp(9.0), 1.0, "a 0.9 typo of 9 must clamp, not kill scroll");
+        assert_eq!(clamp(90.0), 1.0);
+        assert_eq!(clamp(-1.0), 0.0);
+        assert_eq!(clamp(0.7), 0.7, "an in-range value is left untouched");
+        assert_eq!(clamp(f32::NAN), 0.9, "NaN falls back to the default");
+        assert_eq!(clamp(f32::INFINITY), 0.9, "inf falls back to the default");
     }
 
     #[test]

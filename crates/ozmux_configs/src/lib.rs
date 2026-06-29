@@ -81,6 +81,7 @@ impl OzmuxConfigs {
 
     fn normalize(&mut self) {
         self.inactive_pane.normalize();
+        self.mouse.normalize();
     }
 
     fn validate(&self) -> OzmuxConfigsResult<()> {
