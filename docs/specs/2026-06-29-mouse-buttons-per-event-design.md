@@ -71,6 +71,13 @@ is FIFO and each `trigger` command fully resolves before the next (see
 research note below), so e.g. `[SelClear, Write]` is observed as
 `SelClear` then `Write`.
 
+This `Vec<MouseEffect> → trigger` step is a small `match` in the gather
+system; it **relocates** (does not eliminate) the variant `match` that
+lives in the apply observer today. The win is on the apply side:
+mutation is split into focused single-op observers, and the
+attached/detached branch is centralized in one helper rather than the
+two-arm duplication (`apply_effect` / `apply_effect_detached`) today.
+
 ### New apply-side EntityEvents (in `crates/ozma_terminal/src/mouse.rs`)
 
 One event per operation, each carrying the target `entity` via
@@ -89,20 +96,41 @@ One event per operation, each carrying the target `entity` via
 `TerminalForwardInput` is unchanged (still emitted by the write path in
 the PTY-less case).
 
+Each event is built in the host (`src/input/mouse.rs`) but defined and
+applied in `ozma_terminal`, so — like `TerminalMouseEffects` today — each
+needs `pub` fields or a `pub fn new(...)` for cross-crate construction.
+This turns today's single cross-crate constructor into seven, and the
+events must be `pub` (the host crate triggers them), widening
+`ozma_terminal`'s surface from one carrier type to seven with no
+in-workspace consumer beyond their own observers. Accepted as the cost of
+per-operation discoverability / future observability; `pub(crate)` is not
+an option because the host crate constructs and triggers them.
+
 ### One observer per event
 
 `on_terminal_mouse_effects` is replaced by one observer per event, each
-registered in `OzmaMousePlugin` and each holding the
-`(&mut TerminalHandle, Option<&mut PtyHandle>, Option<&mut Coalescer>)`
-query. Each observer encapsulates its own attached-vs-detached branch:
+registered in `OzmaMousePlugin`. Each observer takes ONLY the access it
+needs — not a uniform query:
 
-- **Attached (PTY + Coalescer present):** apply through the coalescer
-  exactly as `apply_effect` does today.
-- **Detached (no PTY):** the selection/scroll observers mutate via the
-  `*_vt_only` methods and then call `handle.flush_emit(&mut commands,
-  entity)`; the write observer triggers `TerminalForwardInput`; the copy
-  observer writes the clipboard; the open-uri observer calls
-  `try_open_uri`.
+- **Handle-touching observers** (`TerminalMouseWrite`,
+  `TerminalSelectionStart` / `…Update` / `…Clear`,
+  `TerminalViewportScroll`) take
+  `(&mut TerminalHandle, Option<&mut PtyHandle>, Option<&mut Coalescer>)`,
+  and the attached-vs-detached branch is centralized in ONE private
+  helper, `apply_to_terminal(...)`, so the branch is written once rather
+  than copied into ~5 observers:
+  - **Attached (PTY + Coalescer present):** apply through the coalescer
+    exactly as `apply_effect` does today.
+  - **Detached (no PTY):** mutate via the `*_vt_only` methods, then call
+    `handle.flush_emit(&mut commands, entity)`. `TerminalMouseWrite` in
+    the detached case forwards via `TerminalForwardInput` instead of
+    touching the handle.
+- **`TerminalSelectionCopy`** takes a read-only `&TerminalHandle` +
+  `&mut Clipboard` (no PTY / coalescer) and writes `selection_to_string()`
+  to the clipboard.
+- **`TerminalOpenUri`** takes neither the handle nor the clipboard; it
+  only calls `try_open_uri(uri)`. See the OpenUri note under
+  "Architecture / scope" below.
 
 Each event maps to exactly ONE observer, so the "same event, multiple
 observers run in arbitrary order" caveat (research point 5) does not
@@ -114,10 +142,30 @@ The current detached path batches: it applies all effects in one
 `TerminalMouseEffects`, then calls `flush_emit` once. With per-event
 observers, a single press whose decided effects are `[SelStart,
 SelUpdate]` triggers two observers that each call `flush_emit`, i.e. two
-frame emits in that frame. This is **correct** — each `flush_emit`
-collects and emits only its own incremental dirty rows — and the extra
+frame emits in that frame. This is **correct**, for a precise reason:
+`emit` resets per-emit state each call — it updates `prev_cursor` /
+`prev_selection`, and `emit_delta` calls `term.reset_damage()` — so a
+second same-frame `flush_emit` sees only what changed since the first.
+The emit *driver* differs by op: `TerminalViewportScroll` stages real row
+damage, whereas the selection `*_vt_only` mutators stage NO row damage —
+their emit fires because `is_noop_emit` compares
+`prev_selection != current selection`. Either way the net result (two
+emits for `[SelStart, SelUpdate]` vs one today) is correct. The extra
 emit is rare (selection drag steps only) and low-cost. Accepted as-is; no
 coalescing machinery is added.
+
+### OpenUri handling (Architecture / scope)
+
+`TerminalOpenUri` touches neither the `TerminalHandle` nor the
+`Clipboard` — its observer only calls `try_open_uri(uri)`, which is
+`pub(crate)` in `ozma_terminal` (`crates/ozma_terminal/src/hyperlink.rs`).
+The observer therefore MUST live in `ozma_terminal`; handling OpenUri in
+the host gather system instead would force widening `try_open_uri` to
+`pub` (or duplicating it), which this design rejects. The event keeps an
+`entity` field for uniformity with the other six, but the apply does not
+read it. (An alternative — a non-`EntityEvent` plain event carrying just
+`uri` — was considered and rejected to keep all seven events in one
+`#[event_target]` family.)
 
 ## Components and data flow
 
@@ -137,6 +185,8 @@ coalescing machinery is added.
   on_terminal_selection_copy    -> clipboard.write(selection_to_string)
   on_terminal_viewport_scroll   -> handle.scroll[ _vt_only ] (+flush_emit if detached)
   on_terminal_open_uri          -> try_open_uri
+  (write/selection/scroll arms share one private apply_to_terminal(...)
+   for the attached-vs-detached branch; copy + open_uri do not branch)
 ```
 
 ## Testing
