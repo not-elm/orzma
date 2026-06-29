@@ -93,13 +93,15 @@ fn dispatch_mouse_buttons(
 ) {
     let Some(frame) = resolve_frame(
         &mut gesture,
-        &mut buttons,
         &mut cursor_moved,
         &terminals,
         &windows,
         &metrics,
         &keys,
     ) else {
+        buttons.clear();
+        cursor_moved.clear();
+        gesture.reset();
         return;
     };
 
@@ -125,7 +127,6 @@ fn dispatch_mouse_buttons(
 /// already drained by the read).
 fn resolve_frame(
     gesture: &mut OzmaMouseGesture,
-    buttons: &mut MessageReader<MouseButtonInput>,
     cursor_moved: &mut MessageReader<CursorMoved>,
     terminals: &TerminalSurfaces<'_, '_>,
     windows: &Query<&Window, With<PrimaryWindow>>,
@@ -135,9 +136,6 @@ fn resolve_frame(
     let window = match windows.single() {
         Ok(window) if window.focused && !terminals.is_empty() => window,
         _ => {
-            buttons.clear();
-            cursor_moved.clear();
-            gesture.reset();
             return None;
         }
     };
@@ -150,14 +148,7 @@ fn resolve_frame(
         gesture.last_cursor_phys = Some(latest);
     }
     let active = gesture.held.is_some() || gesture.drag.is_some();
-    let cursor_phys = match effective_drag_cursor(live, active, gesture.last_cursor_phys) {
-        Some(cursor) => cursor,
-        None => {
-            buttons.clear();
-            gesture.reset();
-            return None;
-        }
-    };
+    let cursor_phys = effective_drag_cursor(live, active, gesture.last_cursor_phys)?;
     Some(FrameContext {
         cursor_phys,
         scale,
