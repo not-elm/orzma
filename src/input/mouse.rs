@@ -328,13 +328,19 @@ fn dispatch_mouse_wheel(
         effects.extend(decide_wheel(modes, -raw_v, cell, mods, &cfg.wheel));
     }
     if raw_h != 0 {
-        // TODO: verify the horizontal direction against a live Neovim and flip
-        // `raw_h` to `-raw_h` if reversed. winit's macOS PixelDelta horizontal
-        // sign is historically opposite X11/Wayland, so positive ev.x → Right
-        // (cb 67) is assumed here, not yet runtime-confirmed.
+        // NOTE: macOS/winit reports a physical-right trackpad scroll as a
+        // negative MouseWheel.x (opposite X11/Wayland), so negate ONLY on
+        // macOS to map physical-right → Right (cb 67). Other platforms already
+        // match the engine's positive=right convention; gating mirrors the
+        // macOS-only handling in `build_wheel_modifiers_horizontal`.
+        let signed_h = if cfg!(target_os = "macos") {
+            -raw_h
+        } else {
+            raw_h
+        };
         let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
         effects.extend(effects_from_wheel_action(WheelAction::route_horizontal(
-            modes, raw_h, cell, mods, &cfg.wheel,
+            modes, signed_h, cell, mods, &cfg.wheel,
         )));
     }
     if !effects.is_empty() {
@@ -1484,7 +1490,8 @@ mod tests {
     fn dispatch_pure_horizontal_right_emits_sgr_67() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
-        write_wheel(&mut app, 0.5, 0.0);
+        // macOS reports a physical-right scroll as a negative MouseWheel.x.
+        write_wheel(&mut app, -0.5, 0.0);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
@@ -1492,7 +1499,7 @@ mod tests {
                 .iter()
                 .flatten()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<67;"))),
-            "a +x wheel in mouse mode must emit an SGR wheel-right (cb 67) report, got {:?}",
+            "a physical-right wheel (-x) in mouse mode must emit an SGR wheel-right (cb 67) report, got {:?}",
             cap.0
         );
     }
@@ -1501,7 +1508,8 @@ mod tests {
     fn dispatch_horizontal_left_emits_sgr_66() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
-        write_wheel(&mut app, -0.5, 0.0);
+        // macOS reports a physical-left scroll as a positive MouseWheel.x.
+        write_wheel(&mut app, 0.5, 0.0);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert!(
@@ -1509,7 +1517,7 @@ mod tests {
                 .iter()
                 .flatten()
                 .any(|e| matches!(e, MouseEffect::Write(b) if b.starts_with(b"\x1b[<66;"))),
-            "a -x wheel in mouse mode must emit an SGR wheel-left (cb 66) report, got {:?}",
+            "a physical-left wheel (+x) in mouse mode must emit an SGR wheel-left (cb 66) report, got {:?}",
             cap.0
         );
     }
@@ -1518,7 +1526,8 @@ mod tests {
     fn dispatch_diagonal_emits_both_axes_in_one_trigger() {
         let mut app = make_wheel_app(b"\x1b[?1000;1006h");
         set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
-        write_wheel(&mut app, 0.5, -0.5);
+        // -x is a physical-right scroll on macOS (cb 67).
+        write_wheel(&mut app, -0.5, -0.5);
         app.update();
         let cap = app.world().resource::<CapturedEffects>();
         assert_eq!(
@@ -1570,7 +1579,7 @@ mod tests {
             .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
             .write(MouseWheel {
                 unit: MouseScrollUnit::Pixel,
-                x: 16.0,
+                x: -16.0,
                 y: 16.0,
                 window: Entity::PLACEHOLDER,
             });
@@ -1588,7 +1597,7 @@ mod tests {
                 .sum()
         };
         // test_metrics: cell_w = 8, cell_h = 16. y=16 → up reports (cb 64);
-        // x=16 → right reports (cb 67).
+        // x=-16 (physical-right on macOS) → right reports (cb 67).
         let vertical = count(b"\x1b[<64;");
         let horizontal = count(b"\x1b[<67;");
         assert!(
