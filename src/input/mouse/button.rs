@@ -59,6 +59,17 @@ type TerminalSurfaces<'w, 's> = Query<
     (With<OzmaTerminal>, Without<MouseDisabled>),
 >;
 
+/// Per-frame constants computed once and threaded into the per-event and
+/// per-drag helpers.
+struct FrameContext {
+    cursor_phys: Vec2,
+    scale: f32,
+    cell_w: f32,
+    cell_h: f32,
+    mods: ProtocolModifiers,
+    modifier_held: bool,
+}
+
 /// The shared mouse-button dispatcher. Hit-tests the topmost terminal under the
 /// cursor on press, locks drag/release to that terminal, tracks clicks and drag
 /// state, drives `decide_button`, and fans the decided effects out to
@@ -77,33 +88,16 @@ fn dispatch_mouse_buttons(
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    let window = match windows.single() {
-        Ok(window) if window.focused => window,
-        _ => {
-            buttons.clear();
-            cursor_moved.clear();
-            gesture.reset();
-            return;
-        }
-    };
-    let scale = window.scale_factor();
-    let moved_phys = cursor_moved.read().last().map(|m| m.position * scale);
-    let live = window.cursor_position().map(|c| c * scale);
-    if let Some(latest) = live.or(moved_phys)
-        && gesture.last_cursor_phys != Some(latest)
-    {
-        gesture.last_cursor_phys = Some(latest);
-    }
-    let active = gesture.held.is_some() || gesture.drag.is_some();
-    let Some(cursor_phys) = effective_drag_cursor(live, active, gesture.last_cursor_phys) else {
-        buttons.clear();
-        gesture.reset();
+    let Some(frame) = resolve_frame(
+        &mut gesture,
+        &mut buttons,
+        &mut cursor_moved,
+        &windows,
+        &metrics,
+        &keys,
+    ) else {
         return;
     };
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
-    let mods = protocol_mods(&keys);
-    let modifier_held = link_modifier_held(&current_modifiers(&keys));
 
     for ev in buttons.read() {
         let kind = match ev.state {
@@ -112,7 +106,7 @@ fn dispatch_mouse_buttons(
         };
         let target = if kind == ButtonEventKind::Press {
             topmost_surface_at(
-                cursor_phys,
+                frame.cursor_phys,
                 terminals
                     .iter()
                     .map(|(e, _, node, transform, _)| (e, node, transform)),
@@ -131,17 +125,17 @@ fn dispatch_mouse_buttons(
             node,
             transform,
             grid,
-            cell_w,
-            cell_h,
+            cell_w: frame.cell_w,
+            cell_h: frame.cell_h,
         };
         let modes = handle.current_modes();
         let Some((evt, link)) = resolve_button_event(
             &mut gesture,
             &ctx,
             ev,
-            cursor_phys,
-            scale,
-            modifier_held,
+            frame.cursor_phys,
+            frame.scale,
+            frame.modifier_held,
             time.elapsed(),
             &cfg,
         ) else {
@@ -151,8 +145,8 @@ fn dispatch_mouse_buttons(
             &mut gesture,
             modes,
             evt,
-            mods,
-            modifier_held,
+            frame.mods,
+            frame.modifier_held,
             link,
             &cfg.buttons,
         );
@@ -185,17 +179,17 @@ fn dispatch_mouse_buttons(
         node,
         transform,
         grid,
-        cell_w,
-        cell_h,
+        cell_w: frame.cell_w,
+        cell_h: frame.cell_h,
     };
     let modes = handle.current_modes();
     if let Some((drag_effects, new_cell)) = synthesize_drag(
         &mut gesture,
         &ctx,
-        cursor_phys,
+        frame.cursor_phys,
         modes,
-        mods,
-        modifier_held,
+        frame.mods,
+        frame.modifier_held,
         &cfg.buttons,
     ) {
         if let Some(h) = gesture.held.as_mut() {
@@ -203,6 +197,55 @@ fn dispatch_mouse_buttons(
         }
         trigger_mouse_effects(&mut commands, held.entity, drag_effects);
     }
+}
+
+/// Resolves the window guard and the per-frame cursor/constants for one run, or
+/// `None` after performing the same reader-drains + gesture reset the inline
+/// guards did. Window missing/unfocused drains both readers; a cursor that
+/// `effective_drag_cursor` rejects drains only `buttons` (`cursor_moved` was
+/// already drained by the read).
+fn resolve_frame(
+    gesture: &mut OzmaMouseGesture,
+    buttons: &mut MessageReader<MouseButtonInput>,
+    cursor_moved: &mut MessageReader<CursorMoved>,
+    windows: &Query<&Window, With<PrimaryWindow>>,
+    metrics: &TerminalCellMetricsResource,
+    keys: &ButtonInput<KeyCode>,
+) -> Option<FrameContext> {
+    let window = match windows.single() {
+        Ok(window) if window.focused => window,
+        _ => {
+            buttons.clear();
+            cursor_moved.clear();
+            gesture.reset();
+            return None;
+        }
+    };
+    let scale = window.scale_factor();
+    let moved_phys = cursor_moved.read().last().map(|m| m.position * scale);
+    let live = window.cursor_position().map(|c| c * scale);
+    if let Some(latest) = live.or(moved_phys)
+        && gesture.last_cursor_phys != Some(latest)
+    {
+        gesture.last_cursor_phys = Some(latest);
+    }
+    let active = gesture.held.is_some() || gesture.drag.is_some();
+    let cursor_phys = match effective_drag_cursor(live, active, gesture.last_cursor_phys) {
+        Some(cursor) => cursor,
+        None => {
+            buttons.clear();
+            gesture.reset();
+            return None;
+        }
+    };
+    Some(FrameContext {
+        cursor_phys,
+        scale,
+        cell_w: metrics.metrics.advance_phys.floor().max(1.0),
+        cell_h: metrics.metrics.line_height_phys.floor().max(1.0),
+        mods: protocol_mods(keys),
+        modifier_held: link_modifier_held(&current_modifiers(keys)),
+    })
 }
 
 /// Pure per-event decision for a mouse button. Mutates `gesture` (drag phase /
