@@ -36,27 +36,6 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 use std::time::Duration;
 
-/// Host-private decision IR: the deciders (`decide_button` / `decide_wheel`)
-/// return an ordered `Vec` of these, which `trigger_mouse_effects` fans out
-/// to per-operation `EntityEvent`s on the target terminal.
-#[derive(Debug, Clone, PartialEq)]
-enum MouseEffect {
-    Write(Vec<u8>),
-    SelStart {
-        point: Point,
-        side: Side,
-        ty: SelectionType,
-    },
-    SelUpdate {
-        point: Point,
-        side: Side,
-    },
-    SelClear,
-    Copy,
-    Scroll(i32),
-    OpenUri(String),
-}
-
 /// Registers the shared mouse dispatch systems and their gesture / config
 /// resources. Both dispatchers run in `InputPhase::Dispatch` and only when a
 /// mouse message arrived this frame.
@@ -80,9 +59,31 @@ impl Plugin for MouseInputPlugin {
     }
 }
 
+/// Host-private decision IR: the deciders (`decide_button` / `decide_wheel`)
+/// return an ordered `Vec` of these, which `trigger_mouse_effects` fans out
+/// to per-operation `EntityEvent`s on the target terminal.
+#[derive(Debug, Clone, PartialEq)]
+enum MouseEffect {
+    Write(Vec<u8>),
+    SelStart {
+        point: Point,
+        side: Side,
+        ty: SelectionType,
+    },
+    SelUpdate {
+        point: Point,
+        side: Side,
+    },
+    SelClear,
+    Copy,
+    Scroll(i32),
+    OpenUri(String),
+}
+
 /// The shared mouse-button dispatcher. Hit-tests the topmost terminal under the
 /// cursor on press, locks drag/release to that terminal, tracks clicks and drag
-/// state, drives `decide_button`, and triggers `TerminalMouseEffects`. Skips any
+/// state, drives `decide_button`, and fans the decided effects out to
+/// per-operation `EntityEvent`s via `trigger_mouse_effects`. Skips any
 /// `OzmaTerminal` carrying `MouseDisabled`; an empty candidate set (modal
 /// suppression) drains events and resets the gesture.
 fn dispatch_mouse_buttons(
@@ -256,7 +257,8 @@ fn dispatch_mouse_buttons(
 
 /// The shared wheel dispatcher: routes to the topmost terminal under the cursor,
 /// resets the accumulator on a target change, accumulates notches, drives
-/// `decide_wheel`, and triggers `TerminalMouseEffects`. Skips `MouseDisabled`
+/// `decide_wheel`, and fans the decided effects out to per-operation
+/// `EntityEvent`s via `trigger_mouse_effects`. Skips `MouseDisabled`
 /// terminals; an empty candidate set drains the wheel events.
 fn dispatch_mouse_wheel(
     mut commands: Commands,
