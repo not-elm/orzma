@@ -1,5 +1,6 @@
 import { defineConfig } from 'tsup'
 
+/** Tsup build configuration for @ozma/web. */
 export default defineConfig({
   entry: ['src/index.ts'],
   format: ['esm'],
