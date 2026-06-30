@@ -340,6 +340,10 @@ fn apply_capture_reply(
     if !reply.ok {
         return;
     }
+    // NOTE: a misrouted cursor sentinel must not be painted into the copy view.
+    if is_misrouted_cursor_reply(&reply.output) {
+        return;
+    }
     if let Some(pending) = pending {
         refresh.last_scroll.insert(reply.pane, pending.scroll);
     }
@@ -454,6 +458,12 @@ fn build_overlay(state: &CopyState) -> (ViCursor, Option<SelectionRange>) {
 /// off-screen selection endpoints, matching `ViewportPoint`'s convention.
 fn clamp_row(row: i32, rows: u16) -> i16 {
     row.clamp(-1, rows as i32) as i16
+}
+
+/// True when a copy-mode capture reply is a lone Layer-A cursor sentinel line — a
+/// misrouted cursor reply (FIFO desync) that must not be painted into the copy view.
+fn is_misrouted_cursor_reply(output: &[String]) -> bool {
+    output.len() == 1 && output[0].starts_with("OZMUXCUR ")
 }
 
 /// Joins `show-buffer` reply lines into the clipboard text string.
@@ -897,5 +907,12 @@ mod tests {
         let sel = selection.unwrap();
         // sel_start_y=10: 10 - (100-0) = -90 → clamped to -1
         assert_eq!(sel.start.row, -1);
+    }
+
+    #[test]
+    fn misrouted_cursor_reply_is_detected() {
+        assert!(is_misrouted_cursor_reply(&["OZMUXCUR %3 7 2".to_string()]));
+        assert!(!is_misrouted_cursor_reply(&["row one".to_string()]));
+        assert!(!is_misrouted_cursor_reply(&[]));
     }
 }
