@@ -57,6 +57,14 @@ impl TmuxClient {
         self.protocol.send(cmd)
     }
 
+    /// Queues a fire-and-forget relay command (a bound tmux keybinding), fenced so
+    /// its reply blocks are drained and cannot desync the command↔reply FIFO.
+    /// Use this for relayed bindings; use [`TmuxClient::send`] for queries whose
+    /// reply the caller correlates by [`CommandId`].
+    pub fn send_effect(&mut self, cmd: &str) -> TmuxResult<()> {
+        self.protocol.send_effect(cmd)
+    }
+
     /// Returns the control client's name as reported by tmux, or `None` if the
     /// name query has not yet completed.
     pub fn client_name(&self) -> Option<&str> {
@@ -124,5 +132,17 @@ mod tests {
         client.set_per_window_refresh(true);
         assert_eq!(client.client_name(), Some("ozmux-0"));
         assert_eq!(client.supports_per_window_refresh(), Some(true));
+    }
+
+    #[test]
+    fn send_effect_queues_command_and_fence() {
+        let mut client = TmuxClient::new_adopted();
+        client
+            .send_effect("if-shell -F 1 { a } { b }")
+            .expect("send_effect");
+        assert_eq!(
+            client.take_outgoing(),
+            b"if-shell -F 1 { a } { b }\ndisplay-message -p OZMUXFENCE_0\n".to_vec()
+        );
     }
 }
