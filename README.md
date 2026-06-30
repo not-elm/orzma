@@ -51,21 +51,11 @@ tmux windows and panes are rendered natively.
 
 ## Ozma Webview Protocol
 
-A program registers webview content over ozmux's control socket to mint an
-opaque handle, then writes an `OSC 5379;mount;<handle>;<rows>;<cols>` escape
-sequence to mount it as an in-process webview at that cell geometry
-(`OSC 5379;unmount;<handle>` tears it down). The page talks back to the host
-program through the `window.ozma` bridge. Use one of the SDKs above for a
-ready-made client.
-
-See [docs/ozma_webview_protocol.md](docs/ozma_webview_protocol.md) for the full
-protocol specification.
+[docs/ozma_webview_protocol.md](docs/ozma_webview_protocol.md) 
 
 ## Configuration
 
-ozmux reads `~/.config/ozmux/config.toml` (override the path with
-`$OZMUX_CONFIG`, or the config directory with `$XDG_CONFIG_HOME`). See
-[docs/configs.md](docs/configs.md) for all options and their defaults.
+[docs/configs.md](docs/configs.md) 
 
 ## License
 
