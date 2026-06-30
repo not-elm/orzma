@@ -141,6 +141,7 @@ impl Cell {
     ///
     /// Shared by the renderer's glyph resolution and the host paint-rescue's
     /// blank-grid test so the two notions of "renders nothing" cannot drift.
+    #[inline]
     pub fn is_blank(&self) -> bool {
         self.width == 0 || self.text.trim().is_empty()
     }
