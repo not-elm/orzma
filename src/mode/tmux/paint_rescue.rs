@@ -12,8 +12,7 @@ use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::schema::{Cell, TerminalGrid};
-use ozmux_tmux::{PaneId, RequestPaneReseed, TmuxPane, TmuxProjectionSet};
-use std::collections::HashMap;
+use ozmux_tmux::{RequestPaneReseed, TmuxPane, TmuxProjectionSet};
 
 /// Frames the unpainted state must persist before the FIRST reseed request
 /// (filters the ≤1-frame resize transient).
@@ -25,10 +24,6 @@ const RESEED_INFLIGHT_TIMEOUT: u16 = 30;
 /// Per-pane structural-reseed debounce: a streak before the first capture
 /// request, then an in-flight age that re-requests on timeout until painted.
 #[derive(Component, Default)]
-#[expect(
-    dead_code,
-    reason = "fields consumed by the follow-on task migrating ReseedTracker onto this component"
-)]
 struct StructuralReseedState {
     unpainted_streak: u8,
     inflight_age: Option<u16>,
@@ -37,55 +32,25 @@ struct StructuralReseedState {
 /// Per-pane blank-recovery debounce: a blank-grid-vs-live-mirror episode keyed
 /// on the grid seq, repainting from the mirror once the divergence persists.
 #[derive(Component, Default)]
-#[expect(
-    dead_code,
-    reason = "fields consumed by the follow-on task migrating ReseedTracker onto this component"
-)]
 struct BlankRecoveryState {
     streak: u8,
     recovery_seq: Option<u32>,
     settled: bool,
 }
 
-/// Per-pane reseed state: a debounce streak before the first request, then an
-/// in-flight age that re-requests on timeout until the grid paints. The
-/// `blank_*` fields drive the independent blank-grid-vs-live-mirror recovery
-/// (see [`evaluate_blank_recovery`]).
-#[derive(Default)]
-struct ReseedTracker {
-    unpainted_streak: u8,
-    inflight_age: Option<u16>,
-    /// Consecutive frames the grid has been blank while the mirror holds
-    /// content, within the current `blank_recovery_seq` episode.
-    blank_streak: u8,
-    /// The grid `last_seq` the current blank-recovery episode is evaluating. A
-    /// new seq reopens evaluation; `None` forces a fresh evaluation.
-    blank_recovery_seq: Option<u32>,
-    /// Set once a blank episode is resolved (repainted, or the mirror is also
-    /// blank). Stops the per-frame mirror scan until the grid's seq changes.
-    blank_recovery_settled: bool,
-}
-
-/// Per-pane reseed trackers, keyed by `PaneId`.
-#[derive(Resource, Default)]
-struct PaneSeedTrackers(HashMap<PaneId, ReseedTracker>);
-
 /// Wires the structural paint-rescue system after the tmux projection chain.
 pub(crate) struct PaintRescuePlugin;
 
 impl Plugin for PaintRescuePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<PaneSeedTrackers>()
-            .add_observer(prune_tracker_on_pane_removed)
-            .add_observer(repaint_pane_from_mirror)
-            .add_systems(
-                Update,
-                (attach_rescue_state, rescue_unpainted_panes)
-                    .chain()
-                    .after(TmuxProjectionSet)
-                    .before(TmuxLayoutSet)
-                    .in_set(super::TmuxActiveSet),
-            );
+        app.add_observer(repaint_pane_from_mirror).add_systems(
+            Update,
+            (attach_rescue_state, rescue_unpainted_panes)
+                .chain()
+                .after(TmuxProjectionSet)
+                .before(TmuxLayoutSet)
+                .in_set(super::TmuxActiveSet),
+        );
     }
 }
 
@@ -104,22 +69,17 @@ fn grid_needs_full_seed(
     (grid_cols, grid_rows) != (handle_cols, handle_rows) || cells_len != grid_rows as usize
 }
 
-/// Advances a pane's reseed tracker one frame and returns whether to emit a
-/// reseed request now. A painted grid (`!needs_seed`) resets the tracker.
+/// Advances a pane's structural-reseed debounce one frame and returns whether to
+/// emit a reseed request now. A painted grid (`!needs_seed`) resets the state.
 /// Otherwise it debounces `RESEED_DEBOUNCE_FRAMES` consecutive unpainted frames
 /// before the first request, then suppresses while a request is in flight,
 /// re-requesting every `RESEED_INFLIGHT_TIMEOUT` frames until the grid paints.
-fn reseed_decision(tracker: &mut ReseedTracker, needs_seed: bool) -> bool {
+fn reseed_decision(state: &mut StructuralReseedState, needs_seed: bool) -> bool {
     if !needs_seed {
-        // NOTE: reset only the structural-reseed fields, NOT the whole tracker —
-        // the `blank_*` fields belong to the independent blank-recovery state
-        // machine (`evaluate_blank_recovery`), which runs on the common `!needs`
-        // path; clobbering them here would wipe its debounce every frame.
-        tracker.unpainted_streak = 0;
-        tracker.inflight_age = None;
+        *state = StructuralReseedState::default();
         return false;
     }
-    match &mut tracker.inflight_age {
+    match &mut state.inflight_age {
         Some(age) => {
             *age = age.saturating_add(1);
             if *age >= RESEED_INFLIGHT_TIMEOUT {
@@ -130,9 +90,9 @@ fn reseed_decision(tracker: &mut ReseedTracker, needs_seed: bool) -> bool {
             }
         }
         None => {
-            tracker.unpainted_streak = tracker.unpainted_streak.saturating_add(1);
-            if tracker.unpainted_streak >= RESEED_DEBOUNCE_FRAMES {
-                tracker.inflight_age = Some(0);
+            state.unpainted_streak = state.unpainted_streak.saturating_add(1);
+            if state.unpainted_streak >= RESEED_DEBOUNCE_FRAMES {
+                state.inflight_age = Some(0);
                 true
             } else {
                 false
@@ -161,40 +121,38 @@ fn grid_visibly_blank(grid: &TerminalGrid) -> bool {
 /// to repaint it from the live mirror now.
 ///
 /// Fires once the grid has been blank while the mirror still holds content for
-/// [`RESEED_DEBOUNCE_FRAMES`] consecutive frames (filtering the resize transient
-/// where the grid is briefly blank before the resize snapshot lands). The
-/// episode is keyed on the grid `last_seq`: a seq change reopens evaluation, and
-/// once an episode is `settled` (repainted, mirror also blank, or grid painted)
-/// the per-frame mirror scan is skipped until the grid changes again — a
-/// content-gaining mirror always bumps the seq, so this cannot wedge.
+/// [`RESEED_DEBOUNCE_FRAMES`] consecutive frames. The episode is keyed on the
+/// grid `last_seq`: a seq change reopens evaluation, and once an episode is
+/// `settled` (repainted, mirror also blank, or grid painted) the per-frame
+/// mirror scan is skipped until the grid changes again.
 fn evaluate_blank_recovery(
-    tracker: &mut ReseedTracker,
+    state: &mut BlankRecoveryState,
     grid: &TerminalGrid,
     handle: &TerminalHandle,
 ) -> bool {
-    if tracker.blank_recovery_seq != Some(grid.last_seq) {
-        tracker.blank_recovery_seq = Some(grid.last_seq);
-        tracker.blank_streak = 0;
-        tracker.blank_recovery_settled = false;
+    if state.recovery_seq != Some(grid.last_seq) {
+        state.recovery_seq = Some(grid.last_seq);
+        state.streak = 0;
+        state.settled = false;
     }
-    if tracker.blank_recovery_settled {
+    if state.settled {
         return false;
     }
     if !grid_visibly_blank(grid) {
-        tracker.blank_streak = 0;
-        tracker.blank_recovery_settled = true;
+        state.streak = 0;
+        state.settled = true;
         return false;
     }
     if !handle.has_visible_content() {
         // NOTE: grid and mirror both blank — a genuinely empty pane with nothing
         // to restore. Settling here (not just returning) is load-bearing: it
         // stops the per-frame mirror scan until the grid's seq changes.
-        tracker.blank_recovery_settled = true;
+        state.settled = true;
         return false;
     }
-    tracker.blank_streak = tracker.blank_streak.saturating_add(1);
-    if tracker.blank_streak >= RESEED_DEBOUNCE_FRAMES {
-        tracker.blank_recovery_settled = true;
+    state.streak = state.streak.saturating_add(1);
+    if state.streak >= RESEED_DEBOUNCE_FRAMES {
+        state.settled = true;
         true
     } else {
         false
@@ -205,39 +163,40 @@ fn evaluate_blank_recovery(
 /// structurally unpainted (see [`grid_needs_full_seed`]) once the state has
 /// held for [`RESEED_DEBOUNCE_FRAMES`], then re-requests every
 /// [`RESEED_INFLIGHT_TIMEOUT`] frames until the grid paints. Copy-mode panes
-/// are skipped — they paint via the separate `CopyRenderHandle` (Component 3).
+/// are skipped — they paint via the separate `CopyRenderHandle`.
 ///
-/// Separately, recovers a grid that went *blank* (structurally fine, so the
-/// reseed path above ignores it) while its live mirror still holds content: it
-/// triggers [`RepaintLiveMirror`], whose observer repaints from the
-/// authoritative mirror. This automates the manual-scroll workaround for the
-/// persistent-blank-pane bug — the only path that previously re-synced an idle
-/// pane out of a blank-but-sized grid. The gather query stays read-only; the
-/// `&mut TerminalHandle` write lives in the observer (apply-via-observer idiom).
+/// Separately, recovers a grid that went *blank* (structurally fine) while its
+/// live mirror still holds content: it triggers [`RepaintLiveMirror`], whose
+/// observer repaints from the authoritative mirror. The gather query stays
+/// read-only on the handle; the `&mut TerminalHandle` write lives in the observer.
 fn rescue_unpainted_panes(
     mut commands: Commands,
-    mut trackers: ResMut<PaneSeedTrackers>,
     mut reseed: MessageWriter<RequestPaneReseed>,
-    panes: Query<(Entity, &TmuxPane, &TerminalHandle, &TerminalGrid), Without<CopyModeState>>,
+    mut panes: Query<
+        (
+            Entity,
+            &TmuxPane,
+            &TerminalHandle,
+            &TerminalGrid,
+            &mut StructuralReseedState,
+            &mut BlankRecoveryState,
+        ),
+        Without<CopyModeState>,
+    >,
 ) {
-    for (entity, pane, handle, grid) in panes.iter() {
+    for (entity, pane, handle, grid, mut reseed_state, mut blank_state) in panes.iter_mut() {
         let (h_cols, h_rows, _) = handle.read_geometry();
         let needs = grid_needs_full_seed(grid.cols, grid.rows, grid.cells.len(), h_cols, h_rows);
-        let tracker = trackers.0.entry(pane.id).or_default();
-        if reseed_decision(tracker, needs) {
+        if reseed_decision(&mut reseed_state, needs) {
             reseed.write(RequestPaneReseed { pane: pane.id });
         }
         if needs {
-            // NOTE: structural reseed owns this pane; reopening blank-recovery
-            // (clearing `blank_recovery_seq`) is required so it re-evaluates once
-            // the grid is structurally repainted — otherwise a settled episode
-            // would suppress recovery after the reseed lands.
-            tracker.blank_streak = 0;
-            tracker.blank_recovery_seq = None;
-            tracker.blank_recovery_settled = false;
+            // NOTE: structural reseed owns this pane; reopen blank-recovery so it
+            // re-evaluates once the grid is structurally repainted.
+            *blank_state = BlankRecoveryState::default();
             continue;
         }
-        if evaluate_blank_recovery(tracker, grid, handle) {
+        if evaluate_blank_recovery(&mut blank_state, grid, handle) {
             commands.trigger(RepaintLiveMirror { entity });
         }
     }
@@ -280,19 +239,10 @@ fn repaint_pane_from_mirror(
     }
 }
 
-fn prune_tracker_on_pane_removed(
-    ev: On<Remove, TmuxPane>,
-    mut trackers: ResMut<PaneSeedTrackers>,
-    panes: Query<&TmuxPane>,
-) {
-    if let Ok(pane) = panes.get(ev.entity) {
-        trackers.0.remove(&pane.id);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozmux_tmux::PaneId;
 
     #[test]
     fn zero_grid_against_sized_handle_needs_seed() {
@@ -316,7 +266,7 @@ mod tests {
 
     #[test]
     fn reseed_emits_after_debounce_frames() {
-        let mut t = ReseedTracker::default();
+        let mut t = StructuralReseedState::default();
         assert!(!reseed_decision(&mut t, true));
         assert!(!reseed_decision(&mut t, true));
         assert!(reseed_decision(&mut t, true));
@@ -324,7 +274,7 @@ mod tests {
 
     #[test]
     fn reseed_suppresses_while_in_flight_then_retries_on_timeout() {
-        let mut t = ReseedTracker::default();
+        let mut t = StructuralReseedState::default();
         for _ in 0..RESEED_DEBOUNCE_FRAMES {
             reseed_decision(&mut t, true);
         }
@@ -336,7 +286,7 @@ mod tests {
 
     #[test]
     fn reseed_resets_when_painted() {
-        let mut t = ReseedTracker::default();
+        let mut t = StructuralReseedState::default();
         for _ in 0..RESEED_DEBOUNCE_FRAMES {
             reseed_decision(&mut t, true);
         }
@@ -347,7 +297,7 @@ mod tests {
 
     #[test]
     fn reseed_ignores_one_frame_transient() {
-        let mut t = ReseedTracker::default();
+        let mut t = StructuralReseedState::default();
         assert!(!reseed_decision(&mut t, true));
         assert!(!reseed_decision(&mut t, false));
         assert!(!reseed_decision(&mut t, true));
@@ -427,7 +377,7 @@ mod tests {
 
     #[test]
     fn blank_recovery_fires_after_debounce_then_settles() {
-        let mut t = ReseedTracker::default();
+        let mut t = BlankRecoveryState::default();
         let grid = blank_grid(5);
         let mut painted = TerminalHandle::detached(4, 2);
         painted.advance(b"hi");
@@ -441,20 +391,20 @@ mod tests {
 
     #[test]
     fn blank_recovery_skips_when_mirror_is_also_blank() {
-        let mut t = ReseedTracker::default();
+        let mut t = BlankRecoveryState::default();
         let grid = blank_grid(5);
         let blank = TerminalHandle::detached(4, 2);
         for _ in 0..(RESEED_DEBOUNCE_FRAMES + 2) {
             assert!(!evaluate_blank_recovery(&mut t, &grid, &blank));
         }
         // Settled on the first blank-mirror frame: no streak accumulates.
-        assert!(t.blank_recovery_settled);
-        assert_eq!(t.blank_streak, 0);
+        assert!(t.settled);
+        assert_eq!(t.streak, 0);
     }
 
     #[test]
     fn blank_recovery_resets_on_seq_change() {
-        let mut t = ReseedTracker::default();
+        let mut t = BlankRecoveryState::default();
         let mut painted = TerminalHandle::detached(4, 2);
         painted.advance(b"hi");
         // Two blank frames at seq 5, then a new seq reopens the episode, so the
@@ -462,12 +412,12 @@ mod tests {
         evaluate_blank_recovery(&mut t, &blank_grid(5), &painted);
         evaluate_blank_recovery(&mut t, &blank_grid(5), &painted);
         assert!(!evaluate_blank_recovery(&mut t, &blank_grid(6), &painted));
-        assert_eq!(t.blank_streak, 1);
+        assert_eq!(t.streak, 1);
     }
 
     #[test]
     fn blank_recovery_ignores_painted_grid() {
-        let mut t = ReseedTracker::default();
+        let mut t = BlankRecoveryState::default();
         let grid = TerminalGrid {
             cols: 4,
             rows: 2,
@@ -478,7 +428,7 @@ mod tests {
         let mut painted = TerminalHandle::detached(4, 2);
         painted.advance(b"hi");
         assert!(!evaluate_blank_recovery(&mut t, &grid, &painted));
-        assert_eq!(t.blank_streak, 0);
+        assert_eq!(t.streak, 0);
     }
 
     #[test]
@@ -490,10 +440,12 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
-        app.init_resource::<PaneSeedTrackers>();
         app.init_resource::<Messages<RequestPaneReseed>>();
         app.add_observer(repaint_pane_from_mirror);
-        app.add_systems(Update, rescue_unpainted_panes);
+        app.add_systems(
+            Update,
+            (attach_rescue_state, rescue_unpainted_panes).chain(),
+        );
 
         let dims = CellDims {
             width: 4,
@@ -584,14 +536,16 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
-        app.init_resource::<PaneSeedTrackers>();
         app.init_resource::<Messages<RequestPaneReseed>>();
         app.init_resource::<SnapHits>();
         app.add_observer(|_snap: On<FrameSnapshot>, mut hits: ResMut<SnapHits>| {
             hits.0 += 1;
         });
         app.add_observer(repaint_pane_from_mirror);
-        app.add_systems(Update, rescue_unpainted_panes);
+        app.add_systems(
+            Update,
+            (attach_rescue_state, rescue_unpainted_panes).chain(),
+        );
 
         let dims = CellDims {
             width: 4,
