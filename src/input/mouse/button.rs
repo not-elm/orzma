@@ -5,8 +5,8 @@
 //! `MouseButtonInputPlugin`; skips `MouseDisabled` surfaces.
 
 use super::{
-    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, hit_candidates,
-    trigger_mouse_effects,
+    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates,
+    on_any_mouse_message, trigger_mouse_effects,
 };
 use crate::input::InputPhase;
 use crate::input::bindings::OzmaMouseConfig;
@@ -16,7 +16,7 @@ use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::webview_pointer::topmost_surface_at;
 use bevy::input::ButtonState;
-use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
+use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::window::{CursorMoved, PrimaryWindow};
@@ -37,11 +37,9 @@ impl Plugin for MouseButtonInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OzmaMouseGesture>().add_systems(
             Update,
-            dispatch_mouse_buttons.in_set(InputPhase::Dispatch).run_if(
-                on_message::<MouseButtonInput>
-                    .or(on_message::<CursorMoved>)
-                    .or(on_message::<MouseWheel>),
-            ),
+            dispatch_mouse_buttons
+                .in_set(InputPhase::Dispatch)
+                .run_if(on_any_mouse_message()),
         );
     }
 }
@@ -133,11 +131,12 @@ fn resolve_frame(
     }
     let active = gesture.held.is_some() || gesture.drag.is_some();
     let cursor_phys = effective_drag_cursor(live, active, gesture.last_cursor_phys)?;
+    let (cell_w, cell_h) = cell_pitch(metrics);
     Some(FrameContext {
         cursor_phys,
         scale,
-        cell_w: metrics.metrics.advance_phys.floor().max(1.0),
-        cell_h: metrics.metrics.line_height_phys.floor().max(1.0),
+        cell_w,
+        cell_h,
         mods: protocol_mods(keys),
         modifier_held: link_modifier_held(&current_modifiers(keys)),
     })
@@ -165,10 +164,7 @@ fn process_button_event(
     ev: &MouseButtonInput,
     now: Duration,
 ) {
-    let kind = match ev.state {
-        ButtonState::Pressed => ButtonEventKind::Press,
-        ButtonState::Released => ButtonEventKind::Release,
-    };
+    let kind = button_kind(ev.state);
     let target = if kind == ButtonEventKind::Press {
         topmost_surface_at(frame.cursor_phys, hit_candidates(terminals))
     } else {
@@ -365,10 +361,7 @@ fn resolve_button_event(
     cfg: &OzmaMouseConfig,
 ) -> Option<(ButtonEvent, Option<String>)> {
     let button = map_button(ev.button)?;
-    let kind = match ev.state {
-        ButtonState::Pressed => ButtonEventKind::Press,
-        ButtonState::Released => ButtonEventKind::Release,
-    };
+    let kind = button_kind(ev.state);
     // NOTE: a release with the cursor off the terminal node must still be
     // processed (via the last tracked cell) — otherwise `held`/`drag` stick and
     // later cursor motion replays stale selection / forward reports.
@@ -477,6 +470,13 @@ fn map_button(b: MouseButton) -> Option<MouseButtonKind> {
         MouseButton::Middle => Some(MouseButtonKind::Middle),
         MouseButton::Right => Some(MouseButtonKind::Right),
         _ => None,
+    }
+}
+
+fn button_kind(state: ButtonState) -> ButtonEventKind {
+    match state {
+        ButtonState::Pressed => ButtonEventKind::Press,
+        ButtonState::Released => ButtonEventKind::Release,
     }
 }
 

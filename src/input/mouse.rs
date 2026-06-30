@@ -10,13 +10,16 @@ use crate::input::bindings::OzmaMouseConfig;
 use crate::input::focus::MouseDisabled;
 use crate::input::mouse::button::MouseButtonInputPlugin;
 use crate::input::mouse::wheel::MouseWheelInputPlugin;
+use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::window::CursorMoved;
 use ozma_terminal::{
     OzmaTerminal, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
     TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
 };
 use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
+use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 
 mod button;
@@ -32,6 +35,16 @@ impl Plugin for MouseInputPlugin {
         app.add_plugins((MouseButtonInputPlugin, MouseWheelInputPlugin))
             .init_resource::<OzmaMouseConfig>();
     }
+}
+
+/// Run condition shared by the button and wheel dispatchers: true on any frame
+/// carrying a mouse message (button, cursor move, or wheel). A cursor-only frame
+/// must still run so the dispatchers retarget / reset; defining it once keeps the
+/// two per-file plugins' gating in lockstep.
+pub(super) fn on_any_mouse_message() -> impl SystemCondition<()> {
+    on_message::<MouseButtonInput>
+        .or(on_message::<CursorMoved>)
+        .or(on_message::<MouseWheel>)
 }
 
 /// Host-private decision IR for the button path: `decide_button` returns an
@@ -143,6 +156,16 @@ fn hit_candidates<'a>(
     terminals
         .iter()
         .map(|(e, _, node, transform, _)| (e, node, transform))
+}
+
+/// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to `>= 1` so
+/// a degenerate metric cannot divide by zero. Shared by both dispatchers' cursor
+/// → cell projection.
+fn cell_pitch(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
+    (
+        metrics.metrics.advance_phys.floor().max(1.0),
+        metrics.metrics.line_height_phys.floor().max(1.0),
+    )
 }
 
 /// Read-only hit-test context for one gather run: the terminal node geometry,

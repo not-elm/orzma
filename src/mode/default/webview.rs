@@ -185,7 +185,7 @@ fn forward_default_webview_mouse_moves(
 /// Forwards the mouse wheel to the FOCUSED inline webview under the cursor on the
 /// Default shell (raw CEF wheel, focus-gated). When no focused webview is under
 /// the pointer the reader is drained and the wheel cedes to
-/// `crate::input::mouse::dispatch_mouse_wheel` (terminal scrollback) through its own
+/// `crate::input::mouse::wheel::dispatch_mouse_wheel` (terminal scrollback) through its own
 /// reader; over the rect the shell is `MouseDisabled` (rect-claim gate), so that
 /// dispatcher yields and only the page scrolls. Gated to wheel frames.
 fn forward_default_webview_wheel(

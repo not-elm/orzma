@@ -135,6 +135,18 @@ pub struct Cell {
     pub hyperlink_id: Option<HyperlinkId>,
 }
 
+impl Cell {
+    /// Whether this cell paints no glyph: a zero-width cell (combining mark /
+    /// wide-char spacer) or one whose text is empty or all whitespace.
+    ///
+    /// Shared by the renderer's glyph resolution and the host paint-rescue's
+    /// blank-grid test so the two notions of "renders nothing" cannot drift.
+    #[inline]
+    pub fn is_blank(&self) -> bool {
+        self.width == 0 || self.text.trim().is_empty()
+    }
+}
+
 /// A row of runs ordered left-to-right.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Row {
