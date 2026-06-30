@@ -550,11 +550,9 @@ fn apply_reply(
             let Some(lines) = enumeration.capture_awaiting_cursor.remove(&pane) else {
                 return;
             };
-            // NOTE: only paint when the reply is THIS pane's cursor sentinel. A
-            // missing sentinel or a mismatched pane id means a FIFO desync misrouted
-            // the reply — discard the reseed (the pane keeps its current mirror; the
-            // next dims change re-seeds it). Do not force a retry: pre-B1 the FIFO is
-            // still desynced and an immediate re-capture would mis-route again.
+            // NOTE: do not retry on a missing sentinel or pane-id mismatch — the
+            // reply was misrouted by a still-desynced FIFO, so an immediate re-capture
+            // would mis-route again. Discard; the next dims-change reseed recovers.
             if !ok {
                 tracing::warn!(pane = pane.0, "cursor-position query failed");
                 return;

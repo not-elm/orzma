@@ -3,7 +3,6 @@
 
 use crate::error::{TmuxError, TmuxResult};
 use std::collections::VecDeque;
-use std::fmt;
 use tmux_control_parser::{BlockAssembler, ControlEvent, Frame};
 use tracing::{debug, warn};
 
@@ -47,30 +46,21 @@ pub enum ClientEvent {
     Notification(ControlEvent),
 }
 
-/// Per-effect fence token; `Display` renders the line tmux echoes back
-/// (`OZMUXFENCE_<n>`). The counter is internal `ProtocolClient` state, so no real
-/// binding's output collides with it. It is NOT a secret, though: a binding that
-/// deliberately emits the exact current token (`display-message -p OZMUXFENCE_0`)
-/// could end its own drain early — self-sabotage, not a realistic accidental case;
-/// a per-client high-entropy salt would close even that.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct FenceToken(u64);
-
-impl fmt::Display for FenceToken {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "OZMUXFENCE_{}", self.0)
-    }
-}
-
 /// One slot in the command↔reply FIFO: a correlated query reply, or a drain that
-/// swallows an effect command's reply blocks up to its fence token.
+/// swallows an effect command's reply blocks up to its fence line.
+///
+/// `fence` is the `OZMUXFENCE_<n>` line tmux echoes back, formatted once in
+/// `send_effect`. The counter is internal `ProtocolClient` state, so no real
+/// binding's output collides with it — it is not a secret, though: a binding that
+/// deliberately emits the exact current line could end its own drain early
+/// (self-sabotage, not a realistic accidental case).
 #[derive(Debug)]
 enum PendingSlot {
     /// A normal correlated query: the next `flags=1` block surfaces as its reply.
     Reply(CommandId),
     /// A fenced effect: consume `flags=1` blocks until the `ok` block whose body is
-    /// exactly `token`. `seen` counts drained blocks for the runaway backstop.
-    Drain { token: FenceToken, seen: u16 },
+    /// exactly `fence`. `seen` counts drained blocks for the runaway backstop.
+    Drain { fence: String, seen: u16 },
 }
 
 /// Safety cap: a single `Drain` consuming more than this many blocks without its
@@ -138,15 +128,15 @@ impl ProtocolClient {
         if raw.contains('\n') || raw.contains('\r') {
             return Err(TmuxError::InvalidCommand);
         }
-        let token = FenceToken(self.next_fence);
+        let fence = format!("OZMUXFENCE_{}", self.next_fence);
         self.next_fence += 1;
-        let fence_line = format!("display-message -p {token}");
         self.outgoing.extend_from_slice(raw.as_bytes());
         self.outgoing.push(b'\n');
-        self.outgoing.extend_from_slice(fence_line.as_bytes());
+        self.outgoing
+            .extend_from_slice(format!("display-message -p {fence}").as_bytes());
         self.outgoing.push(b'\n');
         self.pending
-            .push_back(PendingSlot::Drain { token, seen: 0 });
+            .push_back(PendingSlot::Drain { fence, seen: 0 });
         Ok(())
     }
 
@@ -183,6 +173,25 @@ impl ProtocolClient {
         self.next_id += 1;
         self.pending.push_back(PendingSlot::Reply(id));
         id
+    }
+
+    /// Advances the front `Drain` slot by one `flags=1` reply block and returns the
+    /// action the caller should take. Scopes the `front_mut` borrow to this call so
+    /// the caller is free to `pop_front` afterward.
+    fn step_drain(&mut self, ok: bool, body: &[String]) -> DrainStep {
+        let Some(PendingSlot::Drain { fence, seen }) = self.pending.front_mut() else {
+            unreachable!("front was Drain")
+        };
+        if ok && body.len() == 1 && body[0] == *fence {
+            DrainStep::Done
+        } else {
+            *seen = seen.saturating_add(1);
+            if *seen > MAX_DRAIN_BLOCKS {
+                DrainStep::Runaway(fence.clone(), *seen)
+            } else {
+                DrainStep::Consumed
+            }
+        }
     }
 
     /// Number of commands awaiting a reply (test/diagnostic accessor).
@@ -245,48 +254,26 @@ impl ProtocolClient {
                             output: body,
                         }))
                     }
-                    Some(PendingSlot::Drain { .. }) => {
-                        let step = {
-                            let Some(PendingSlot::Drain { token, seen }) = self.pending.front_mut()
-                            else {
-                                unreachable!("front was Drain")
-                            };
-                            let want = token.to_string();
-                            if ok && body.len() == 1 && body[0] == want {
-                                DrainStep::Done
-                            } else {
-                                *seen = seen.saturating_add(1);
-                                if *seen > MAX_DRAIN_BLOCKS {
-                                    DrainStep::Runaway(want, *seen)
-                                } else {
-                                    DrainStep::Consumed
-                                }
-                            }
-                        };
-                        match step {
-                            DrainStep::Consumed => Ok(None),
-                            DrainStep::Done => {
-                                self.pending.pop_front();
-                                Ok(None)
-                            }
-                            DrainStep::Runaway(fence, drained) => {
-                                // NOTE: abandon the runaway Drain (pop it) and recover
-                                // locally rather than returning an error: the sole
-                                // production feed() caller swallows feed() errors, so an
-                                // error would drop the events already collected in this
-                                // chunk (including %output) AND leave the slot wedged. The
-                                // fence never arrived — the stream is desynced or a relay's
-                                // own output matched the token early; log loudly instead.
-                                self.pending.pop_front();
-                                warn!(
-                                    fence = %fence,
-                                    drained,
-                                    "fenced effect drain exceeded cap; abandoning fence (possible reply desync)"
-                                );
-                                Ok(None)
-                            }
+                    Some(PendingSlot::Drain { .. }) => match self.step_drain(ok, &body) {
+                        DrainStep::Consumed => Ok(None),
+                        DrainStep::Done => {
+                            self.pending.pop_front();
+                            Ok(None)
                         }
-                    }
+                        DrainStep::Runaway(fence, drained) => {
+                            // NOTE: recover locally (pop + log), never return an error — the
+                            // sole production feed() caller swallows feed() errors, so an error
+                            // would drop this chunk's already-collected events (incl. %output)
+                            // and leave the slot wedged.
+                            self.pending.pop_front();
+                            warn!(
+                                fence = %fence,
+                                drained,
+                                "fenced effect drain exceeded cap; abandoning fence (possible reply desync)"
+                            );
+                            Ok(None)
+                        }
+                    },
                     // NOTE: a flags=1 reply with no pending command means the FIFO
                     // is already desynced (more client replies than sent commands).
                     // Closing the transport over it would blank the whole

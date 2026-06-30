@@ -341,7 +341,6 @@ fn apply_capture_reply(
     if !reply.ok {
         return;
     }
-    // NOTE: a misrouted cursor sentinel must not be painted into the copy view.
     if is_cursor_sentinel_reply(&reply.output) {
         return;
     }
