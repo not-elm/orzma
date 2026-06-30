@@ -229,7 +229,7 @@ fn handle_confirm_input(
             None => {}
             Some(ConfirmStep::Confirm) => {
                 if let Some(client) = client.as_deref_mut()
-                    && let Err(e) = client.send_raw(&state.command)
+                    && let Err(e) = client.send_effect(&state.command)
                 {
                     tracing::warn!(?e, "confirm-before command send failed");
                 }
