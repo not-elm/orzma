@@ -68,6 +68,7 @@ edition = "2024"
 license = "MIT"
 readme = "README.md"
 authors = ["notelm"]
+repository = "https://github.com/not-elm/ozmux"
 publish = false
 
 [workspace.dependencies]
