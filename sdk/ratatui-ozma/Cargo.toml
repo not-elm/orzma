@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 readme.workspace = true
 authors.workspace = true
+repository.workspace = true
+publish = true
+description = "Ratatui backend for the ozma in-process webview bridge"
 
 [dependencies]
 ratatui = "0.29"
