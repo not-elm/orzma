@@ -518,9 +518,22 @@ mod tests {
             "attach inserts BlankRecoveryState",
         );
 
-        // A second pass must not re-insert (Without<StructuralReseedState> filter).
+        // NOTE: prove idempotency — mutate the state, then a second pass must NOT
+        // re-insert (which would reset it); the Without<StructuralReseedState> filter
+        // must exclude the already-attached pane.
+        app.world_mut()
+            .get_mut::<StructuralReseedState>(pane)
+            .unwrap()
+            .unpainted_streak = 7;
         app.update();
-        assert!(app.world().get::<StructuralReseedState>(pane).is_some());
+        assert_eq!(
+            app.world()
+                .get::<StructuralReseedState>(pane)
+                .unwrap()
+                .unpainted_streak,
+            7,
+            "second pass must not re-insert (a re-insert would reset the streak to 0)",
+        );
     }
 
     #[test]
