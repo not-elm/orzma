@@ -74,6 +74,16 @@ enum PendingSlot {
 /// fence means the FIFO is desynced (see `TmuxError::ReplyDesync`).
 const MAX_DRAIN_BLOCKS: u16 = 256;
 
+/// Outcome of feeding one `flags=1` block to a front `Drain` slot.
+enum DrainStep {
+    /// Non-terminating block consumed; keep draining.
+    Consumed,
+    /// Fence token seen; the drain is complete.
+    Done,
+    /// Cap exceeded without the fence — abandon the runaway drain.
+    Runaway(String, u16),
+}
+
 /// Sans-IO core driving a [`BlockAssembler`] with command/reply correlation.
 #[derive(Debug, Default)]
 pub struct ProtocolClient {
@@ -129,7 +139,8 @@ impl ProtocolClient {
         self.outgoing.push(b'\n');
         self.outgoing.extend_from_slice(fence_line.as_bytes());
         self.outgoing.push(b'\n');
-        self.pending.push_back(PendingSlot::Drain { token, seen: 0 });
+        self.pending
+            .push_back(PendingSlot::Drain { token, seen: 0 });
         Ok(())
     }
 
@@ -229,29 +240,38 @@ impl ProtocolClient {
                         }))
                     }
                     Some(PendingSlot::Drain { .. }) => {
-                        let token_matched = {
+                        let step = {
                             let Some(PendingSlot::Drain { token, seen }) =
                                 self.pending.front_mut()
                             else {
                                 unreachable!("front was Drain")
                             };
-                            let matched =
-                                ok && body.len() == 1 && body[0] == token.to_string();
-                            if !matched {
-                                *seen += 1;
+                            if ok && body.len() == 1 && body[0] == token.to_string() {
+                                DrainStep::Done
+                            } else {
+                                *seen = seen.saturating_add(1);
                                 if *seen > MAX_DRAIN_BLOCKS {
-                                    return Err(TmuxError::ReplyDesync {
-                                        fence: token.to_string(),
-                                        drained: *seen,
-                                    });
+                                    DrainStep::Runaway(token.to_string(), *seen)
+                                } else {
+                                    DrainStep::Consumed
                                 }
                             }
-                            matched
                         };
-                        if token_matched {
-                            self.pending.pop_front();
+                        match step {
+                            DrainStep::Consumed => Ok(None),
+                            DrainStep::Done => {
+                                self.pending.pop_front();
+                                Ok(None)
+                            }
+                            DrainStep::Runaway(fence, drained) => {
+                                // NOTE: pop the runaway Drain so the FIFO unblocks. The sole
+                                // production feed() caller swallows this error, so leaving the
+                                // slot at the front would re-fire every frame (warning spam,
+                                // never recovering). saturating_add already guarded the u16.
+                                self.pending.pop_front();
+                                Err(TmuxError::ReplyDesync { fence, drained })
+                            }
                         }
-                        Ok(None)
                     }
                     // NOTE: a flags=1 reply with no pending command means the FIFO
                     // is already desynced (more client replies than sent commands).
@@ -878,9 +898,15 @@ mod tests {
         c.send_effect("x").unwrap();
         let _ = c.take_outgoing();
         // An %error whose body coincidentally equals the token must NOT end the drain.
-        let events = c.feed(b"%begin 1 1 1\nOZMUXFENCE_0\n%error 1 1 1\n").unwrap();
+        let events = c
+            .feed(b"%begin 1 1 1\nOZMUXFENCE_0\n%error 1 1 1\n")
+            .unwrap();
         assert!(events.is_empty());
-        assert_eq!(c.pending_len(), 1, "drain stays open after a failed fence-like block");
+        assert_eq!(
+            c.pending_len(),
+            1,
+            "drain stays open after a failed fence-like block"
+        );
         let events2 = c.feed(b"%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n").unwrap();
         assert!(events2.is_empty());
         assert_eq!(c.pending_len(), 0);
@@ -911,6 +937,21 @@ mod tests {
         }
         let err = c.feed(&stream).unwrap_err();
         assert!(matches!(err, TmuxError::ReplyDesync { .. }));
+        // Recovery: the runaway Drain must be abandoned (popped) so the FIFO unblocks.
+        assert_eq!(c.pending_len(), 0, "runaway Drain was abandoned and FIFO unblocked");
+        let id = c.send("x").unwrap();
+        let _ = c.take_outgoing();
+        let events = c.feed(b"%begin 1 300 1\nOK\n%end 1 300 1\n").unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::CommandComplete {
+                id,
+                number: 300,
+                ok: true,
+                output: vec!["OK".to_string()],
+            }],
+            "FIFO unblocked: subsequent command correlates normally"
+        );
     }
 
     #[test]
