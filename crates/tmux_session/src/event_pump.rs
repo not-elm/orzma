@@ -44,6 +44,15 @@ pub(crate) fn parse_cursor_pos(output: &[String]) -> Option<(PaneId, u16, u16)> 
     Some((PaneId(pane), x, y))
 }
 
+/// True when a reply body is a lone, well-formed Layer-A cursor sentinel
+/// (`OZMUXCUR %<pane> <x> <y>`). Used to reject a cursor reply that a FIFO desync
+/// misrouted onto a capture slot. Requiring the full parse (not just an `OZMUXCUR `
+/// prefix) keeps it from false-discarding real single-line pane content that merely
+/// starts with the marker.
+pub fn is_cursor_sentinel_reply(output: &[String]) -> bool {
+    output.len() == 1 && parse_cursor_pos(output).is_some()
+}
+
 /// Joins `capture-pane -p -e` reply lines into VT bytes for seeding a pane's
 /// screen: a clean-state prefix (reset scroll region + origin mode + SGR, then
 /// cursor-home + clear-screen) so the snapshot repaints from a clean grid with
@@ -343,10 +352,21 @@ mod tests {
             parse_cursor_pos(&["OZMUXCUR %2 3 5".to_string()]),
             Some((PaneId(2), 3, 5))
         );
-        // Missing sentinel / malformed / wrong shape -> None (misrouted reply).
         assert_eq!(parse_cursor_pos(&["3 5".to_string()]), None);
         assert_eq!(parse_cursor_pos(&["OZMUXCUR %2 nope".to_string()]), None);
         assert_eq!(parse_cursor_pos(&["nope".to_string()]), None);
+    }
+
+    #[test]
+    fn cursor_sentinel_reply_requires_full_parse_not_just_prefix() {
+        assert!(is_cursor_sentinel_reply(&["OZMUXCUR %2 54 39".to_string()]));
+        assert!(!is_cursor_sentinel_reply(&["OZMUXCUR foo".to_string()]));
+        assert!(!is_cursor_sentinel_reply(&["row one".to_string()]));
+        assert!(!is_cursor_sentinel_reply(&[
+            "OZMUXCUR %2 54 39".to_string(),
+            "second line".to_string(),
+        ]));
+        assert!(!is_cursor_sentinel_reply(&[]));
     }
 
     #[test]

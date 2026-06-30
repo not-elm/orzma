@@ -11,8 +11,8 @@ use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{EnumerationState, PendingReply, version_supports_per_window_refresh};
 use crate::event_pump::{
     capture_to_bytes, capture_to_bytes_with_cursor, detect_session_switch, detect_window_added,
-    detect_window_switch, first_reply_line, log_transport_event, parse_active_pane,
-    parse_cursor_pos, trigger_notification, trigger_seed,
+    detect_window_switch, first_reply_line, is_cursor_sentinel_reply, log_transport_event,
+    parse_active_pane, parse_cursor_pos, trigger_notification, trigger_seed,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, ModeKeys, parse_list_keys, parse_prefix};
@@ -525,7 +525,7 @@ fn apply_reply(
             }
         }
         PendingReply::Capture { pane } if ok => {
-            if is_cursor_sentinel(output) {
+            if is_cursor_sentinel_reply(output) {
                 // NOTE: a misrouted cursor reply landed on this capture slot (a FIFO
                 // desync). Discard it and clear the pane's pending-cursor state so the
                 // "OZMUXCUR …" line is never stashed/painted as captured content.
@@ -555,8 +555,11 @@ fn apply_reply(
             // the reply — discard the reseed (the pane keeps its current mirror; the
             // next dims change re-seeds it). Do not force a retry: pre-B1 the FIFO is
             // still desynced and an immediate re-capture would mis-route again.
-            let Some((reply_pane, cx, cy)) = ok.then(|| parse_cursor_pos(output)).flatten()
-            else {
+            if !ok {
+                tracing::warn!(pane = pane.0, "cursor-position query failed");
+                return;
+            }
+            let Some((reply_pane, cx, cy)) = parse_cursor_pos(output) else {
                 return;
             };
             if reply_pane != pane {
@@ -580,13 +583,6 @@ fn send_session_enumeration(client: &mut TmuxClient, enumeration: &mut Enumerati
     if let Err(error) = client.send(SubscribeWindowFlags) {
         tracing::warn!(?error, "failed to subscribe to window flags");
     }
-}
-
-/// True when a capture reply body is a lone Layer-A cursor sentinel line — a
-/// misrouted cursor reply (FIFO desync) that must not be stashed or painted as
-/// pane content.
-fn is_cursor_sentinel(output: &[String]) -> bool {
-    output.len() == 1 && output[0].starts_with("OZMUXCUR ")
 }
 
 #[cfg(test)]
@@ -1117,17 +1113,6 @@ mod tests {
             enumeration_pending_nonempty(&mut app),
             "second adoption must re-send the on-attach enumeration"
         );
-    }
-
-    #[test]
-    fn cursor_sentinel_only_matches_lone_ozmuxcur_line() {
-        assert!(is_cursor_sentinel(&["OZMUXCUR %2 54 39".to_string()]));
-        assert!(!is_cursor_sentinel(&["real pane content".to_string()]));
-        assert!(!is_cursor_sentinel(&[
-            "OZMUXCUR %2 54 39".to_string(),
-            "second line".to_string(),
-        ]));
-        assert!(!is_cursor_sentinel(&[]));
     }
 
     #[test]

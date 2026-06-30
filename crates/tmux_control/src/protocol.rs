@@ -48,8 +48,11 @@ pub enum ClientEvent {
 }
 
 /// Per-effect fence token; `Display` renders the line tmux echoes back
-/// (`OZMUXFENCE_<n>`). The counter is internal `ProtocolClient` state a binding
-/// cannot observe, so a relay's own output cannot forge it.
+/// (`OZMUXFENCE_<n>`). The counter is internal `ProtocolClient` state, so no real
+/// binding's output collides with it. It is NOT a secret, though: a binding that
+/// deliberately emits the exact current token (`display-message -p OZMUXFENCE_0`)
+/// could end its own drain early — self-sabotage, not a realistic accidental case;
+/// a per-client high-entropy salt would close even that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FenceToken(u64);
 
@@ -71,7 +74,9 @@ enum PendingSlot {
 }
 
 /// Safety cap: a single `Drain` consuming more than this many blocks without its
-/// fence means the FIFO is desynced (see `TmuxError::ReplyDesync`).
+/// fence means the FIFO is desynced. The drain is then abandoned (popped) and a
+/// warning logged — never a real binding, since the separate fence line always
+/// terminates the drain.
 const MAX_DRAIN_BLOCKS: u16 = 256;
 
 /// Outcome of feeding one `flags=1` block to a front `Drain` slot.
@@ -80,7 +85,8 @@ enum DrainStep {
     Consumed,
     /// Fence token seen; the drain is complete.
     Done,
-    /// Cap exceeded without the fence — abandon the runaway drain.
+    /// Cap exceeded without the fence — abandon the runaway drain (`fence` token
+    /// for the log, count drained).
     Runaway(String, u16),
 }
 
@@ -241,17 +247,17 @@ impl ProtocolClient {
                     }
                     Some(PendingSlot::Drain { .. }) => {
                         let step = {
-                            let Some(PendingSlot::Drain { token, seen }) =
-                                self.pending.front_mut()
+                            let Some(PendingSlot::Drain { token, seen }) = self.pending.front_mut()
                             else {
                                 unreachable!("front was Drain")
                             };
-                            if ok && body.len() == 1 && body[0] == token.to_string() {
+                            let want = token.to_string();
+                            if ok && body.len() == 1 && body[0] == want {
                                 DrainStep::Done
                             } else {
                                 *seen = seen.saturating_add(1);
                                 if *seen > MAX_DRAIN_BLOCKS {
-                                    DrainStep::Runaway(token.to_string(), *seen)
+                                    DrainStep::Runaway(want, *seen)
                                 } else {
                                     DrainStep::Consumed
                                 }
@@ -264,12 +270,20 @@ impl ProtocolClient {
                                 Ok(None)
                             }
                             DrainStep::Runaway(fence, drained) => {
-                                // NOTE: pop the runaway Drain so the FIFO unblocks. The sole
-                                // production feed() caller swallows this error, so leaving the
-                                // slot at the front would re-fire every frame (warning spam,
-                                // never recovering). saturating_add already guarded the u16.
+                                // NOTE: abandon the runaway Drain (pop it) and recover
+                                // locally rather than returning an error: the sole
+                                // production feed() caller swallows feed() errors, so an
+                                // error would drop the events already collected in this
+                                // chunk (including %output) AND leave the slot wedged. The
+                                // fence never arrived — the stream is desynced or a relay's
+                                // own output matched the token early; log loudly instead.
                                 self.pending.pop_front();
-                                Err(TmuxError::ReplyDesync { fence, drained })
+                                warn!(
+                                    fence = %fence,
+                                    drained,
+                                    "fenced effect drain exceeded cap; abandoning fence (possible reply desync)"
+                                );
+                                Ok(None)
                             }
                         }
                     }
@@ -926,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn effect_drain_backstop_errors_on_runaway() {
+    fn effect_drain_backstop_recovers_on_runaway() {
         let mut c = ProtocolClient::new();
         c.send_effect("x").unwrap();
         let _ = c.take_outgoing();
@@ -935,10 +949,15 @@ mod tests {
             let n = i + 10;
             stream.extend_from_slice(format!("%begin 1 {n} 1\nnope\n%end 1 {n} 1\n").as_bytes());
         }
-        let err = c.feed(&stream).unwrap_err();
-        assert!(matches!(err, TmuxError::ReplyDesync { .. }));
-        // Recovery: the runaway Drain must be abandoned (popped) so the FIFO unblocks.
-        assert_eq!(c.pending_len(), 0, "runaway Drain was abandoned and FIFO unblocked");
+        let events = c
+            .feed(&stream)
+            .expect("runaway is abandoned locally (logged), not surfaced as a feed() error");
+        assert!(events.is_empty(), "drained blocks surface nothing");
+        assert_eq!(
+            c.pending_len(),
+            0,
+            "runaway Drain was abandoned and FIFO unblocked"
+        );
         let id = c.send("x").unwrap();
         let _ = c.take_outgoing();
         let events = c.feed(b"%begin 1 300 1\nOK\n%end 1 300 1\n").unwrap();
