@@ -408,6 +408,33 @@ impl TerminalHandle {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
+    /// Returns `true` when the visible viewport holds any non-whitespace glyph.
+    ///
+    /// The host paint-rescue uses this to tell a rendered grid that went blank
+    /// from a transient (recoverable: the live mirror still has content) from a
+    /// genuinely empty pane (nothing to restore). Scans only the visible rows.
+    ///
+    /// NOTE: glyph-only — a cell visible solely through a non-default background
+    /// or reverse video reads as blank. This intentionally matches the host's
+    /// equally glyph-only grid-blank test so the two agree (a mismatch would let
+    /// the recovery repaint-loop); the cost is that a purely color-block pane is
+    /// not auto-recovered. The `'\0'` exclusion mirrors `frame_builder`'s
+    /// unallocated-cell normalization (`'\0'` → `' '` in the emitted grid): an
+    /// unallocated viewport renders blank, so it must read blank here too, or the
+    /// recovery would repaint-loop on the `'\0'`-vs-space divergence.
+    pub fn has_visible_content(&self) -> bool {
+        let rows = self.term.screen_lines() as u16;
+        for viewport_y in 0..rows {
+            let line = viewport_row_to_line(&self.term, viewport_y as i32);
+            for cell in &self.term.grid()[line] {
+                if cell.c != '\0' && !cell.c.is_whitespace() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     /// Enters vi (copy) mode. Idempotent — a second call while already
     /// in vi mode is a no-op rather than a toggle-off. Schedules a Full
     /// damage emit so the renderer observes the new mode (`Term::toggle_vi_mode`
@@ -2946,6 +2973,21 @@ mod tests {
         h.resize_grid_only(40, 10);
         let (cols, rows, _) = h.read_geometry();
         assert_eq!((cols, rows), (40, 10));
+    }
+
+    #[test]
+    fn has_visible_content_distinguishes_blank_from_painted() {
+        let blank = TerminalHandle::detached(20, 5);
+        assert!(
+            !blank.has_visible_content(),
+            "a fresh detached handle has no glyphs"
+        );
+        let mut painted = TerminalHandle::detached(20, 5);
+        painted.advance(b"hi");
+        assert!(
+            painted.has_visible_content(),
+            "a handle with advanced text reports visible content"
+        );
     }
 
     #[test]

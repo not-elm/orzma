@@ -930,7 +930,7 @@ fn resolve_glyph_index(
     atlas: &mut GlyphAtlas,
     phys_font_size: u16,
 ) -> u32 {
-    if cell.width == 0 || cell.text.is_empty() || cell.text.trim().is_empty() {
+    if cell.is_blank() {
         return u32::MAX;
     }
     let codepoint = cell.text.chars().next().map(|c| c as u32).unwrap_or(0);
