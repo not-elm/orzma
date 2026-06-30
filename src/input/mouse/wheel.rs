@@ -5,7 +5,7 @@
 //! `apply_wheel_action`. Registered by `MouseWheelInputPlugin`; skips
 //! `MouseDisabled` surfaces.
 
-use super::{CellContext, TerminalSurfaces, hit_candidates};
+use super::{CellContext, TerminalSurfaces, cell_pitch, hit_candidates, on_any_mouse_message};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::gesture::{
@@ -13,9 +13,9 @@ use crate::input::gesture::{
 };
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::webview_pointer::topmost_surface_at;
-use bevy::input::mouse::{MouseButtonInput, MouseWheel};
+use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
-use bevy::window::{CursorMoved, PrimaryWindow};
+use bevy::window::PrimaryWindow;
 use ozma_terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use ozma_tty_engine::{CellCoord, TermMode, TerminalModifiers, WheelAction, WheelModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
@@ -30,24 +30,22 @@ impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<WheelAccumulator>().add_systems(
             Update,
-            dispatch_mouse_wheel.in_set(InputPhase::Dispatch).run_if(
-                on_message::<MouseButtonInput>
-                    .or(on_message::<CursorMoved>)
-                    .or(on_message::<MouseWheel>),
-            ),
+            dispatch_mouse_wheel
+                .in_set(InputPhase::Dispatch)
+                .run_if(on_any_mouse_message()),
         );
     }
 }
 
-/// A resolved wheel target for one frame: the surface entity, the cell under the
-/// cursor, the cell height (for delta scaling), and the terminal modes. A plain
-/// `Copy` value — the cell is resolved during `resolve_wheel_target`, so nothing
-/// downstream needs the borrowed `CellContext`.
+/// A resolved wheel target for one frame: the surface entity, the cell height
+/// (for delta scaling), and the physical cursor position. The cursor → cell
+/// projection and `current_modes()` read are deferred to [`resolve_wheel_cell`]
+/// so a cursor-only / sub-notch frame (the common case during pointer motion)
+/// pays only the cheap retarget, not a matrix-inverse projection it discards.
 struct WheelTarget {
     target: Entity,
-    cell: CellCoord,
     cell_h: f32,
-    modes: TermMode,
+    cursor_phys: Vec2,
 }
 
 /// The shared wheel dispatcher: resolves the topmost terminal under the cursor
@@ -74,11 +72,16 @@ fn dispatch_mouse_wheel(
     if raw_v == 0 && raw_h == 0 {
         return;
     }
+    // A whole notch fired: only now project the cursor to a cell and read modes.
+    let Some((cell, modes)) = resolve_wheel_cell(&terminals, wt.target, wt.cursor_phys, &metrics)
+    else {
+        return;
+    };
     apply_wheel(
         &mut commands,
         wt.target,
-        wt.cell,
-        wt.modes,
+        cell,
+        modes,
         raw_v,
         raw_h,
         &keys,
@@ -88,9 +91,9 @@ fn dispatch_mouse_wheel(
 
 /// Resolves the window/focus/empty-set guard + cursor → topmost surface for this
 /// frame to a `WheelTarget`, or `None` on any miss (the caller drains the wheel
-/// reader). The cell is resolved eagerly via a local `CellContext` (one cheap
-/// projection even on a frame that accumulates no notch) so the result is a
-/// lifetime-free value.
+/// reader). Deliberately does NOT project the cursor to a cell or read the
+/// terminal modes — those are deferred to [`resolve_wheel_cell`] so a frame that
+/// accumulates no whole notch pays only the cheap retarget.
 fn resolve_wheel_target(
     terminals: &TerminalSurfaces<'_, '_>,
     windows: &Query<&Window, With<PrimaryWindow>>,
@@ -100,12 +103,30 @@ fn resolve_wheel_target(
     if !window.focused || terminals.is_empty() {
         return None;
     }
-    let cell_w = metrics.metrics.advance_phys.floor().max(1.0);
-    let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
+    let (_, cell_h) = cell_pitch(metrics);
     let cursor_phys = window
         .cursor_position()
         .map(|c| c * window.scale_factor())?;
     let target = topmost_surface_at(cursor_phys, hit_candidates(terminals))?;
+    Some(WheelTarget {
+        target,
+        cell_h,
+        cursor_phys,
+    })
+}
+
+/// Projects `cursor_phys` to the cell under it and reads the target's terminal
+/// modes — the per-notch work deferred out of [`resolve_wheel_target`]. `None`
+/// when the entity is no longer a live surface. A cursor off the node falls back
+/// to cell `(1, 1)` (the same default the eager path used) so a wheel just past
+/// the edge still scrolls.
+fn resolve_wheel_cell(
+    terminals: &TerminalSurfaces<'_, '_>,
+    target: Entity,
+    cursor_phys: Vec2,
+    metrics: &TerminalCellMetricsResource,
+) -> Option<(CellCoord, TermMode)> {
+    let (cell_w, cell_h) = cell_pitch(metrics);
     let (_, handle, node, transform, grid) = terminals.get(target).ok()?;
     let ctx = CellContext {
         node,
@@ -118,12 +139,7 @@ fn resolve_wheel_target(
         .hit(cursor_phys)
         .map(|(cell, _)| cell)
         .unwrap_or(CellCoord { col: 1, row: 1 });
-    Some(WheelTarget {
-        target,
-        cell,
-        cell_h,
-        modes: handle.current_modes(),
-    })
+    Some((cell, handle.current_modes()))
 }
 
 /// Folds this frame's wheel deltas, applies the dominant-axis lock, and
@@ -438,6 +454,80 @@ mod tests {
             cap.0.iter().all(|e| !matches!(e, MouseEffect::Write(_))),
             "horizontal wheel outside a mouse mode must not emit a report, got {:?}",
             cap.0
+        );
+    }
+
+    #[derive(Resource, Default)]
+    struct CapturedScrolls(Vec<i32>);
+
+    fn capture_viewport_scrolls(app: &mut App) {
+        app.init_resource::<CapturedScrolls>();
+        app.add_observer(
+            |ev: On<TerminalViewportScroll>, mut cap: ResMut<CapturedScrolls>| {
+                cap.0.push(ev.lines);
+            },
+        );
+    }
+
+    #[test]
+    fn dispatch_vertical_without_mouse_mode_scrolls_viewport() {
+        // No app mouse mode: a vertical wheel must route to the scrollback path
+        // (WheelAction::ScrollViewport -> TerminalViewportScroll), not a report.
+        let mut app = make_wheel_app(b"");
+        capture_viewport_scrolls(&mut app);
+        set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+        write_wheel(&mut app, 0.0, 1.0);
+        app.update();
+        let scrolls = app.world().resource::<CapturedScrolls>();
+        let total: i32 = scrolls.0.iter().sum();
+        // Magnitude passthrough: the host must forward the engine's
+        // `notches * lines_per_notch` count unscaled. lines_per_notch defaults to
+        // 3, so the scroll is a non-zero multiple of 3 — guards against
+        // apply_wheel_action clamping (e.g. to +/-1) or rescaling the count.
+        assert!(
+            total != 0 && total.rem_euclid(3) == 0,
+            "viewport scroll must pass the engine's lines_per_notch (3) multiple through unscaled, got {total} from {:?}",
+            scrolls.0
+        );
+        let cap = app.world().resource::<CapturedEffects>();
+        assert!(
+            cap.0.iter().all(|e| !matches!(e, MouseEffect::Write(_))),
+            "scrollback scroll must not also emit an app report, got {:?}",
+            cap.0
+        );
+    }
+
+    #[test]
+    fn dispatch_vertical_scrollback_direction_flips_with_wheel() {
+        // Guard the -raw_v sign: opposite wheel directions must produce
+        // opposite-signed viewport scrolls.
+        let up = {
+            let mut app = make_wheel_app(b"");
+            capture_viewport_scrolls(&mut app);
+            set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+            write_wheel(&mut app, 0.0, 1.0);
+            app.update();
+            app.world()
+                .resource::<CapturedScrolls>()
+                .0
+                .iter()
+                .sum::<i32>()
+        };
+        let down = {
+            let mut app = make_wheel_app(b"");
+            capture_viewport_scrolls(&mut app);
+            set_phys_cursor(&mut app, Vec2::new(40.0, 48.0));
+            write_wheel(&mut app, 0.0, -1.0);
+            app.update();
+            app.world()
+                .resource::<CapturedScrolls>()
+                .0
+                .iter()
+                .sum::<i32>()
+        };
+        assert!(
+            up != 0 && down != 0 && up.signum() != down.signum(),
+            "wheel up and down must scroll the viewport in opposite directions, got up={up} down={down}"
         );
     }
 
