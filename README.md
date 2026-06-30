@@ -42,6 +42,13 @@ ozmux supports tmux through its control mode (`tmux -CC`), so your existing
 terminal; running `tmux -CC` inside it switches to integration mode, where
 tmux windows and panes are rendered natively.
 
+## CLI Tools
+
+| name                                    | description            |
+| --------------------------------------- | ---------------------- |
+| [ozmd](./apps/ozmd/README.md)           | A rich markdown viewer |
+| [ozbrowser](./apps/ozbrowser/README.md) | A tiny browser         |
+
 ## SDK
 
 - [ratatui-ozma](sdk/ratatui-ozma) — Rust SDK: a ratatui widget and RPC
@@ -51,11 +58,11 @@ tmux windows and panes are rendered natively.
 
 ## Ozma Webview Protocol
 
-[docs/ozma_webview_protocol.md](docs/ozma_webview_protocol.md) 
+[docs/ozma_webview_protocol.md](docs/ozma_webview_protocol.md)
 
 ## Configuration
 
-[docs/configs.md](docs/configs.md) 
+[docs/configs.md](docs/configs.md)
 
 ## License
 
