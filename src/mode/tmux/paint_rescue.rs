@@ -22,6 +22,31 @@ const RESEED_DEBOUNCE_FRAMES: u8 = 3;
 /// the dedicated in-flight age (spec §3.2) so a lost reply does not wedge a pane.
 const RESEED_INFLIGHT_TIMEOUT: u16 = 30;
 
+/// Per-pane structural-reseed debounce: a streak before the first capture
+/// request, then an in-flight age that re-requests on timeout until painted.
+#[derive(Component, Default)]
+#[expect(
+    dead_code,
+    reason = "fields consumed by the follow-on task migrating ReseedTracker onto this component"
+)]
+struct StructuralReseedState {
+    unpainted_streak: u8,
+    inflight_age: Option<u16>,
+}
+
+/// Per-pane blank-recovery debounce: a blank-grid-vs-live-mirror episode keyed
+/// on the grid seq, repainting from the mirror once the divergence persists.
+#[derive(Component, Default)]
+#[expect(
+    dead_code,
+    reason = "fields consumed by the follow-on task migrating ReseedTracker onto this component"
+)]
+struct BlankRecoveryState {
+    streak: u8,
+    recovery_seq: Option<u32>,
+    settled: bool,
+}
+
 /// Per-pane reseed state: a debounce streak before the first request, then an
 /// in-flight age that re-requests on timeout until the grid paints. The
 /// `blank_*` fields drive the independent blank-grid-vs-live-mirror recovery
@@ -55,7 +80,8 @@ impl Plugin for PaintRescuePlugin {
             .add_observer(repaint_pane_from_mirror)
             .add_systems(
                 Update,
-                rescue_unpainted_panes
+                (attach_rescue_state, rescue_unpainted_panes)
+                    .chain()
                     .after(TmuxProjectionSet)
                     .before(TmuxLayoutSet)
                     .in_set(super::TmuxActiveSet),
@@ -214,6 +240,22 @@ fn rescue_unpainted_panes(
         if evaluate_blank_recovery(tracker, grid, handle) {
             commands.trigger(RepaintLiveMirror { entity });
         }
+    }
+}
+
+/// Attaches the per-pane rescue state components once per pane. `TmuxPane` is
+/// defined in `ozmux_tmux`, so the binary cannot `#[require]` these onto it; the
+/// `Without<StructuralReseedState>` filter makes this run exactly once per pane
+/// (both components are always inserted together).
+fn attach_rescue_state(
+    mut commands: Commands,
+    panes: Query<Entity, (With<TmuxPane>, Without<StructuralReseedState>)>,
+) {
+    for entity in panes.iter() {
+        commands.entity(entity).insert((
+            StructuralReseedState::default(),
+            BlankRecoveryState::default(),
+        ));
     }
 }
 
@@ -490,6 +532,43 @@ mod tests {
             row0.starts_with("hi"),
             "blank grid with a content-bearing mirror repaints to live content, got {row0:?}",
         );
+    }
+
+    #[test]
+    fn attach_inserts_both_state_components_once() {
+        use tmux_control_parser::CellDims;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_systems(Update, attach_rescue_state);
+
+        let pane = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 4,
+                    height: 2,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+
+        app.update();
+
+        assert!(
+            app.world().get::<StructuralReseedState>(pane).is_some(),
+            "attach inserts StructuralReseedState",
+        );
+        assert!(
+            app.world().get::<BlankRecoveryState>(pane).is_some(),
+            "attach inserts BlankRecoveryState",
+        );
+
+        // A second pass must not re-insert (Without<StructuralReseedState> filter).
+        app.update();
+        assert!(app.world().get::<StructuralReseedState>(pane).is_some());
     }
 
     #[test]
