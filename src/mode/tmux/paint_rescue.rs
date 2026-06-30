@@ -23,7 +23,7 @@ const RESEED_INFLIGHT_TIMEOUT: u16 = 30;
 
 /// Per-pane structural-reseed debounce: a streak before the first capture
 /// request, then an in-flight age that re-requests on timeout until painted.
-#[derive(Component, Default)]
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
 struct StructuralReseedState {
     unpainted_streak: u8,
     inflight_age: Option<u16>,
@@ -31,7 +31,7 @@ struct StructuralReseedState {
 
 /// Per-pane blank-recovery debounce: a blank-grid-vs-live-mirror episode keyed
 /// on the grid seq, repainting from the mirror once the divergence persists.
-#[derive(Component, Default)]
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
 struct BlankRecoveryState {
     streak: u8,
     recovery_seq: Option<u32>,
@@ -187,17 +187,33 @@ fn rescue_unpainted_panes(
     for (entity, pane, handle, grid, mut reseed_state, mut blank_state) in panes.iter_mut() {
         let (h_cols, h_rows, _) = handle.read_geometry();
         let needs = grid_needs_full_seed(grid.cols, grid.rows, grid.cells.len(), h_cols, h_rows);
-        if reseed_decision(&mut reseed_state, needs) {
+        // NOTE: run the deciders on a local copy and write back through the
+        // `Mut` only on a real change. A bare `&mut`/`*state = ...` every frame
+        // would mark these components `Changed` for every pane every frame
+        // (steady state included), defeating any future `Changed`/`run_if`
+        // consumer — the repo change-detection rule. `*state` reads via `Deref`
+        // (no change tick); the guarded assignment is the only `DerefMut`.
+        let mut next_reseed = *reseed_state;
+        if reseed_decision(&mut next_reseed, needs) {
             reseed.write(RequestPaneReseed { pane: pane.id });
         }
+        if *reseed_state != next_reseed {
+            *reseed_state = next_reseed;
+        }
         if needs {
-            // NOTE: structural reseed owns this pane; reopen blank-recovery so it
+            // Structural reseed owns this pane; reopen blank-recovery so it
             // re-evaluates once the grid is structurally repainted.
-            *blank_state = BlankRecoveryState::default();
+            if *blank_state != BlankRecoveryState::default() {
+                *blank_state = BlankRecoveryState::default();
+            }
             continue;
         }
-        if evaluate_blank_recovery(&mut blank_state, grid, handle) {
+        let mut next_blank = *blank_state;
+        if evaluate_blank_recovery(&mut next_blank, grid, handle) {
             commands.trigger(RepaintLiveMirror { entity });
+        }
+        if *blank_state != next_blank {
+            *blank_state = next_blank;
         }
     }
 }
@@ -588,6 +604,87 @@ mod tests {
             app.world().resource::<SnapHits>().0,
             0,
             "a genuinely blank pane (blank mirror) must not be repainted — no repaint loop",
+        );
+    }
+
+    #[test]
+    fn steady_pane_does_not_re_mark_state_changed_each_frame() {
+        use bevy::ecs::message::Messages;
+        use ozma_tty_renderer::prelude::TerminalGridPlugin;
+        use tmux_control_parser::CellDims;
+
+        #[derive(Resource, Default)]
+        struct ChangedHits {
+            reseed: u32,
+            blank: u32,
+        }
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.init_resource::<Messages<RequestPaneReseed>>();
+        app.init_resource::<ChangedHits>();
+        app.add_observer(repaint_pane_from_mirror);
+        app.add_systems(
+            Update,
+            (
+                attach_rescue_state,
+                rescue_unpainted_panes,
+                |reseed: Query<(), Changed<StructuralReseedState>>,
+                 blank: Query<(), Changed<BlankRecoveryState>>,
+                 mut hits: ResMut<ChangedHits>| {
+                    hits.reseed += reseed.iter().count() as u32;
+                    hits.blank += blank.iter().count() as u32;
+                },
+            )
+                .chain(),
+        );
+
+        // A painted, non-copy-mode pane in steady state: grid has a glyph and the
+        // handle geometry matches the grid dims, so neither the structural reseed
+        // nor the blank-recovery path mutates after it first settles.
+        let mut handle = TerminalHandle::detached(4, 2);
+        handle.advance(b"hi");
+        app.world_mut().spawn((
+            TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 4,
+                    height: 2,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            },
+            handle,
+            TerminalGrid {
+                cols: 4,
+                rows: 2,
+                cells: vec![vec![cell("h"), cell("i")], vec![cell(" ")]],
+                ..Default::default()
+            },
+        ));
+
+        // Let the attach "added" tick and the first settling write clear.
+        for _ in 0..4 {
+            app.update();
+        }
+        {
+            let mut hits = app.world_mut().resource_mut::<ChangedHits>();
+            hits.reseed = 0;
+            hits.blank = 0;
+        }
+        // Now steady: further frames must not re-mark either component Changed.
+        for _ in 0..3 {
+            app.update();
+        }
+        let hits = app.world().resource::<ChangedHits>();
+        assert_eq!(
+            (hits.reseed, hits.blank),
+            (0, 0),
+            "a steady pane must not re-mark its rescue components Changed each frame \
+             (conditional write-back), got reseed={} blank={}",
+            hits.reseed,
+            hits.blank,
         );
     }
 }
