@@ -1,0 +1,91 @@
+name: publish-sdk
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-sdk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      needs_npm: ${{ steps.ver.outputs.needs_npm }}
+      needs_crates: ${{ steps.ver.outputs.needs_crates }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read version and check registries
+        id: ver
+        run: |
+          VERSION="$(cat VERSION)"
+
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            if [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+              echo "Tag ${GITHUB_REF_NAME} does not match VERSION ${VERSION}" >&2
+              exit 1
+            fi
+          fi
+
+          HTTP_NPM=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://registry.npmjs.org/@ozma/web/${VERSION}")
+          if [ "${HTTP_NPM}" = "200" ]; then
+            NEEDS_NPM=false
+          else
+            NEEDS_NPM=true
+          fi
+
+          HTTP_CRATES=$(curl -s -A "github-actions/publish-sdk" \
+            -o /dev/null -w "%{http_code}" \
+            "https://crates.io/api/v1/crates/ratatui-ozma/${VERSION}")
+          if [ "${HTTP_CRATES}" = "200" ]; then
+            NEEDS_CRATES=false
+          else
+            NEEDS_CRATES=true
+          fi
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "needs_npm=${NEEDS_NPM}" >> "$GITHUB_OUTPUT"
+          echo "needs_crates=${NEEDS_CRATES}" >> "$GITHUB_OUTPUT"
+
+  publish-npm:
+    needs: check
+    if: needs.check.outputs.needs_npm == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @ozma/web build
+      - run: pnpm --filter @ozma/web publish --no-git-checks --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-crates:
+    needs: check
+    if: needs.check.outputs.needs_crates == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: publish-crates
+      - run: cargo publish -p ratatui-ozma --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

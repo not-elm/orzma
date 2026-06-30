@@ -23,6 +23,10 @@ default: help
 help:
     @just --list
 
+# bump all package versions to <version> (updates VERSION, Cargo.toml, sdk/ozma-web/package.json)
+bump-version version:
+    bash scripts/bump-version.sh {{ version }}
+
 # run the ozmux Bevy app
 run:
     cargo run

@@ -1,15 +1,17 @@
 {
   "name": "@ozma/web",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "In-page TypeScript client for the ozma webview bridge (window.ozma).",
   "type": "module",
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
     }
   },
+  "files": ["dist"],
   "scripts": {
+    "build": "tsup",
     "check-types": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -19,6 +21,7 @@
   "packageManager": "pnpm@10.30.2",
   "devDependencies": {
     "@types/node": "catalog:",
+    "tsup": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }
