@@ -5,7 +5,7 @@
 //! `apply_wheel_action`. Registered by `MouseWheelInputPlugin`; skips
 //! `MouseDisabled` surfaces.
 
-use super::{CellContext, TerminalSurfaces, hit_candidates};
+use super::{TerminalSurfaces, cell_context_for, hit_candidates};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::gesture::{
@@ -43,6 +43,7 @@ impl Plugin for MouseWheelInputPlugin {
 /// cursor, the cell height (for delta scaling), and the terminal modes. A plain
 /// `Copy` value — the cell is resolved during `resolve_wheel_target`, so nothing
 /// downstream needs the borrowed `CellContext`.
+#[derive(Clone, Copy)]
 struct WheelTarget {
     target: Entity,
     cell: CellCoord,
@@ -106,14 +107,7 @@ fn resolve_wheel_target(
         .cursor_position()
         .map(|c| c * window.scale_factor())?;
     let target = topmost_surface_at(cursor_phys, hit_candidates(terminals))?;
-    let (_, handle, node, transform, grid) = terminals.get(target).ok()?;
-    let ctx = CellContext {
-        node,
-        transform,
-        grid,
-        cell_w,
-        cell_h,
-    };
+    let (ctx, modes) = cell_context_for(terminals, target, cell_w, cell_h)?;
     let cell = ctx
         .hit(cursor_phys)
         .map(|(cell, _)| cell)
@@ -122,7 +116,7 @@ fn resolve_wheel_target(
         target,
         cell,
         cell_h,
-        modes: handle.current_modes(),
+        modes,
     })
 }
 

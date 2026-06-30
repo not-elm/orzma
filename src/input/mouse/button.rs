@@ -4,7 +4,10 @@
 //! effects out via the shared `trigger_mouse_effects`. Registered by
 //! `MouseButtonInputPlugin`; skips `MouseDisabled` surfaces.
 
-use super::{CellContext, MouseEffect, TerminalSurfaces, hit_candidates, trigger_mouse_effects};
+use super::{
+    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, hit_candidates,
+    trigger_mouse_effects,
+};
 use crate::input::InputPhase;
 use crate::input::bindings::OzmaMouseConfig;
 use crate::input::current_modifiers;
@@ -102,10 +105,10 @@ fn dispatch_mouse_buttons(
 }
 
 /// Resolves the window guard and the per-frame cursor/constants for one run, or
-/// `None` after performing the same reader-drains + gesture reset the inline
-/// guards did. Window missing/unfocused drains both readers; a cursor that
-/// `effective_drag_cursor` rejects drains only `buttons` (`cursor_moved` was
-/// already drained by the read).
+/// `None` when the frame should be skipped (window missing/unfocused, empty
+/// candidate set, or a cursor `effective_drag_cursor` rejects). On `None` the
+/// caller drains the input readers and resets the gesture — this fn does not
+/// (it reads `cursor_moved` only to refresh `last_cursor_phys`).
 fn resolve_frame(
     gesture: &mut OzmaMouseGesture,
     cursor_moved: &mut MessageReader<CursorMoved>,
@@ -147,15 +150,7 @@ fn ctx_for<'a>(
     target: Entity,
     frame: &FrameContext,
 ) -> Option<(CellContext<'a>, TermMode)> {
-    let (_, handle, node, transform, grid) = terminals.get(target).ok()?;
-    let ctx = CellContext {
-        node,
-        transform,
-        grid,
-        cell_w: frame.cell_w,
-        cell_h: frame.cell_h,
-    };
-    Some((ctx, handle.current_modes()))
+    cell_context_for(terminals, target, frame.cell_w, frame.cell_h)
 }
 
 /// Processes one `MouseButtonInput`: hit-tests the target (press) or the locked
