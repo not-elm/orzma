@@ -1,6 +1,6 @@
 {
   "name": "@ozma/web",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "In-page TypeScript client for the ozma webview bridge (window.ozma).",
   "type": "module",
   "exports": {
