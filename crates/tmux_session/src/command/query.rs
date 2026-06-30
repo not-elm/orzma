@@ -56,14 +56,16 @@ impl TmuxCommand for CapturePane {
     }
 }
 
-/// `display-message -p -t %<id> '#{cursor_x} #{cursor_y}'` — a pane's real cursor.
+/// `display-message -p -t %<id> 'OZMUXCUR #{pane_id} #{cursor_x} #{cursor_y}'` — a
+/// pane's real cursor, tagged with a sentinel + pane id so a reply misrouted by a
+/// FIFO desync is rejected by the reseed instead of painted (Layer A).
 pub(crate) struct CursorQuery {
     pub id: PaneId,
 }
 impl TmuxCommand for CursorQuery {
     fn into_raw_command(self) -> String {
         format!(
-            "display-message -p -t %{} '#{{cursor_x}} #{{cursor_y}}'",
+            "display-message -p -t %{} 'OZMUXCUR #{{pane_id}} #{{cursor_x}} #{{cursor_y}}'",
             self.id.0
         )
     }
@@ -161,7 +163,7 @@ mod tests {
     fn cursor_query_targets_pane() {
         assert_eq!(
             CursorQuery { id: PaneId(4) }.into_raw_command(),
-            "display-message -p -t %4 '#{cursor_x} #{cursor_y}'"
+            "display-message -p -t %4 'OZMUXCUR #{pane_id} #{cursor_x} #{cursor_y}'"
         );
     }
 
