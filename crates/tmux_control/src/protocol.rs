@@ -3,6 +3,7 @@
 
 use crate::error::{TmuxError, TmuxResult};
 use std::collections::VecDeque;
+use std::fmt;
 use tmux_control_parser::{BlockAssembler, ControlEvent, Frame};
 use tracing::{debug, warn};
 
@@ -46,13 +47,41 @@ pub enum ClientEvent {
     Notification(ControlEvent),
 }
 
+/// Per-effect fence token; `Display` renders the line tmux echoes back
+/// (`OZMUXFENCE_<n>`). The counter is internal `ProtocolClient` state a binding
+/// cannot observe, so a relay's own output cannot forge it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FenceToken(u64);
+
+impl fmt::Display for FenceToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "OZMUXFENCE_{}", self.0)
+    }
+}
+
+/// One slot in the command↔reply FIFO: a correlated query reply, or a drain that
+/// swallows an effect command's reply blocks up to its fence token.
+#[derive(Debug)]
+enum PendingSlot {
+    /// A normal correlated query: the next `flags=1` block surfaces as its reply.
+    Reply(CommandId),
+    /// A fenced effect: consume `flags=1` blocks until the `ok` block whose body is
+    /// exactly `token`. `seen` counts drained blocks for the runaway backstop.
+    Drain { token: FenceToken, seen: u16 },
+}
+
+/// Safety cap: a single `Drain` consuming more than this many blocks without its
+/// fence means the FIFO is desynced (see `TmuxError::ReplyDesync`).
+const MAX_DRAIN_BLOCKS: u16 = 256;
+
 /// Sans-IO core driving a [`BlockAssembler`] with command/reply correlation.
 #[derive(Debug, Default)]
 pub struct ProtocolClient {
     assembler: BlockAssembler,
     line_buf: Vec<u8>,
-    pending: VecDeque<CommandId>,
+    pending: VecDeque<PendingSlot>,
     next_id: u64,
+    next_fence: u64,
     outgoing: Vec<u8>,
 }
 
@@ -79,6 +108,29 @@ impl ProtocolClient {
     /// Drains the outgoing buffer for the transport to write to tmux's stdin.
     pub fn take_outgoing(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.outgoing)
+    }
+
+    /// Queues a fire-and-forget effect command (a relayed tmux binding) followed by
+    /// a fence line, and registers a `Drain` slot so the command's reply blocks —
+    /// however many tmux emits for a multi-statement binding — are consumed up to the
+    /// fence instead of stealing later queries' reply slots.
+    ///
+    /// Rejects an embedded `\n`/`\r` like [`ProtocolClient::send`]. The fence is a
+    /// SEPARATE line (not appended with `;`) so a parse error in `raw` cannot suppress
+    /// it: the fence always parses, runs, and terminates the drain.
+    pub fn send_effect(&mut self, raw: &str) -> TmuxResult<()> {
+        if raw.contains('\n') || raw.contains('\r') {
+            return Err(TmuxError::InvalidCommand);
+        }
+        let token = FenceToken(self.next_fence);
+        self.next_fence += 1;
+        let fence_line = format!("display-message -p {token}");
+        self.outgoing.extend_from_slice(raw.as_bytes());
+        self.outgoing.push(b'\n');
+        self.outgoing.extend_from_slice(fence_line.as_bytes());
+        self.outgoing.push(b'\n');
+        self.pending.push_back(PendingSlot::Drain { token, seen: 0 });
+        Ok(())
     }
 
     /// Feeds a raw byte chunk; returns the events it produced (possibly empty).
@@ -112,7 +164,7 @@ impl ProtocolClient {
     fn register_pending(&mut self) -> CommandId {
         let id = CommandId(self.next_id);
         self.next_id += 1;
-        self.pending.push_back(id);
+        self.pending.push_back(PendingSlot::Reply(id));
         id
     }
 
@@ -164,13 +216,43 @@ impl ProtocolClient {
                 if !is_client_command_reply(flags) {
                     return Ok(None);
                 }
-                match self.pending.pop_front() {
-                    Some(id) => Ok(Some(ClientEvent::CommandComplete {
-                        id,
-                        number,
-                        ok,
-                        output: body,
-                    })),
+                match self.pending.front() {
+                    Some(PendingSlot::Reply(_)) => {
+                        let Some(PendingSlot::Reply(id)) = self.pending.pop_front() else {
+                            unreachable!("front was Reply")
+                        };
+                        Ok(Some(ClientEvent::CommandComplete {
+                            id,
+                            number,
+                            ok,
+                            output: body,
+                        }))
+                    }
+                    Some(PendingSlot::Drain { .. }) => {
+                        let token_matched = {
+                            let Some(PendingSlot::Drain { token, seen }) =
+                                self.pending.front_mut()
+                            else {
+                                unreachable!("front was Drain")
+                            };
+                            let matched =
+                                ok && body.len() == 1 && body[0] == token.to_string();
+                            if !matched {
+                                *seen += 1;
+                                if *seen > MAX_DRAIN_BLOCKS {
+                                    return Err(TmuxError::ReplyDesync {
+                                        fence: token.to_string(),
+                                        drained: *seen,
+                                    });
+                                }
+                            }
+                            matched
+                        };
+                        if token_matched {
+                            self.pending.pop_front();
+                        }
+                        Ok(None)
+                    }
                     // NOTE: a flags=1 reply with no pending command means the FIFO
                     // is already desynced (more client replies than sent commands).
                     // Closing the transport over it would blank the whole
@@ -714,5 +796,164 @@ mod tests {
         let events = c.feed(b"%begin 1 1 1\nlast-line%end 1 1 1\n").unwrap();
         assert!(events.is_empty());
         assert_eq!(c.pending_len(), 1);
+    }
+
+    #[test]
+    fn send_effect_queues_raw_then_fence() {
+        let mut c = ProtocolClient::new();
+        c.send_effect("if-shell -F 1 { display-message a } { display-message b }")
+            .unwrap();
+        assert_eq!(
+            c.take_outgoing(),
+            b"if-shell -F 1 { display-message a } { display-message b }\ndisplay-message -p OZMUXFENCE_0\n"
+                .to_vec()
+        );
+    }
+
+    #[test]
+    fn effect_drains_all_blocks_until_fence() {
+        let mut c = ProtocolClient::new();
+        c.send_effect("if-shell -F 1 { a } { b }").unwrap();
+        let _ = c.take_outgoing();
+        let events = c
+            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\n%end 1 2 1\n%begin 1 3 1\nOZMUXFENCE_0\n%end 1 3 1\n")
+            .unwrap();
+        assert!(events.is_empty(), "all relay+fence blocks drained");
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn effect_drain_keeps_following_query_correlated() {
+        let mut c = ProtocolClient::new();
+        c.send_effect("if-shell -F 1 { a } { b }").unwrap();
+        let q = c.send("capture-pane -p -t %1").unwrap();
+        let _ = c.take_outgoing();
+        let events = c
+            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\n%end 1 2 1\n%begin 1 3 1\nOZMUXFENCE_0\n%end 1 3 1\n%begin 1 4 1\nSCREEN\n%end 1 4 1\n")
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::CommandComplete {
+                id: q,
+                number: 4,
+                ok: true,
+                output: vec!["SCREEN".to_string()],
+            }]
+        );
+    }
+
+    #[test]
+    fn effect_drain_passes_notifications_through() {
+        let mut c = ProtocolClient::new();
+        c.send_effect("select-pane -t %0").unwrap();
+        let _ = c.take_outgoing();
+        let events = c
+            .feed(b"%begin 1 1 1\n%end 1 1 1\n%output %0 hi\n%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n")
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::Notification(ControlEvent::Output {
+                pane: PaneId(0),
+                data: b"hi".to_vec(),
+            })]
+        );
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn effect_drain_survives_relay_parse_error() {
+        let mut c = ProtocolClient::new();
+        c.send_effect("nonexistent-xyz").unwrap();
+        let _ = c.take_outgoing();
+        let events = c
+            .feed(b"%begin 1 1 1\nparse error\n%error 1 1 1\n%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n")
+            .unwrap();
+        assert!(events.is_empty());
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn effect_drain_ignores_failed_fence_like_error() {
+        let mut c = ProtocolClient::new();
+        c.send_effect("x").unwrap();
+        let _ = c.take_outgoing();
+        // An %error whose body coincidentally equals the token must NOT end the drain.
+        let events = c.feed(b"%begin 1 1 1\nOZMUXFENCE_0\n%error 1 1 1\n").unwrap();
+        assert!(events.is_empty());
+        assert_eq!(c.pending_len(), 1, "drain stays open after a failed fence-like block");
+        let events2 = c.feed(b"%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n").unwrap();
+        assert!(events2.is_empty());
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn back_to_back_effects_drain_independently() {
+        let mut c = ProtocolClient::new();
+        c.send_effect("a").unwrap();
+        c.send_effect("b").unwrap();
+        let _ = c.take_outgoing();
+        let events = c
+            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n%begin 1 3 1\n%end 1 3 1\n%begin 1 4 1\nOZMUXFENCE_1\n%end 1 4 1\n")
+            .unwrap();
+        assert!(events.is_empty());
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn effect_drain_backstop_errors_on_runaway() {
+        let mut c = ProtocolClient::new();
+        c.send_effect("x").unwrap();
+        let _ = c.take_outgoing();
+        let mut stream = Vec::new();
+        for i in 0..=256u32 {
+            let n = i + 10;
+            stream.extend_from_slice(format!("%begin 1 {n} 1\nnope\n%end 1 {n} 1\n").as_bytes());
+        }
+        let err = c.feed(&stream).unwrap_err();
+        assert!(matches!(err, TmuxError::ReplyDesync { .. }));
+    }
+
+    #[test]
+    fn relayed_if_shell_keeps_two_pane_reseed_correlated() {
+        // The end-to-end regression: a relayed if-shell (2 blocks) before a two-pane
+        // reseed must NOT shift the FIFO, so the cursor reply "54 39" stays the cursor
+        // reply and never lands on a capture slot.
+        let mut c = ProtocolClient::new();
+        c.send_effect("if-shell -F 1 { display-message a } { display-message b }")
+            .unwrap();
+        let cap_p1 = c.send("capture-pane -p -e -t %1").unwrap();
+        let cur_p1 = c
+            .send("display-message -p -t %1 'OZMUXCUR #{pane_id} #{cursor_x} #{cursor_y}'")
+            .unwrap();
+        let cap_p2 = c.send("capture-pane -p -e -t %2").unwrap();
+        let cur_p2 = c
+            .send("display-message -p -t %2 'OZMUXCUR #{pane_id} #{cursor_x} #{cursor_y}'")
+            .unwrap();
+        let _ = c.take_outgoing();
+        let stream = concat!(
+            "%begin 1 100 1\n%end 1 100 1\n",
+            "%begin 1 101 1\n%end 1 101 1\n",
+            "%begin 1 102 1\nOZMUXFENCE_0\n%end 1 102 1\n",
+            "%begin 1 103 1\nP1\n%end 1 103 1\n",
+            "%begin 1 104 1\nOZMUXCUR %1 54 39\n%end 1 104 1\n",
+            "%begin 1 105 1\nP2\n%end 1 105 1\n",
+            "%begin 1 106 1\nOZMUXCUR %2 7 12\n%end 1 106 1\n",
+        );
+        let events = c.feed(stream.as_bytes()).unwrap();
+        let body = |id: CommandId| {
+            events
+                .iter()
+                .find_map(|e| match e {
+                    ClientEvent::CommandComplete { id: i, output, .. } if *i == id => {
+                        Some(output.clone())
+                    }
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(body(cap_p1), vec!["P1".to_string()]);
+        assert_eq!(body(cur_p1), vec!["OZMUXCUR %1 54 39".to_string()]);
+        assert_eq!(body(cap_p2), vec!["P2".to_string()]);
+        assert_eq!(body(cur_p2), vec!["OZMUXCUR %2 7 12".to_string()]);
     }
 }

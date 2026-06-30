@@ -14,4 +14,13 @@ pub enum TmuxError {
     /// A command string contained an embedded newline.
     #[error("command contains an embedded newline")]
     InvalidCommand,
+    /// A fenced effect command drained more reply blocks than the safety cap
+    /// without seeing its fence token — the FIFO is desynced; close the transport.
+    #[error("reply correlation desynced: drained {drained} blocks without fence {fence:?}")]
+    ReplyDesync {
+        /// The fence token that never arrived.
+        fence: String,
+        /// How many blocks were drained before giving up.
+        drained: u16,
+    },
 }
