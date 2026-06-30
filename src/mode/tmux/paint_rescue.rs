@@ -25,7 +25,15 @@ const RESEED_INFLIGHT_TIMEOUT: u16 = 30;
 /// request, then an in-flight age that re-requests on timeout until painted.
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
 struct StructuralReseedState {
+    /// Consecutive unpainted frames counted before the first reseed request.
+    /// Once it reaches [`RESEED_DEBOUNCE_FRAMES`] the first `capture-pane`
+    /// request fires and `inflight_age` takes over; this debounce filters the
+    /// ≤1-frame resize transient so a momentary unpaint is not re-seeded.
     unpainted_streak: u8,
+    /// Whether a reseed request is in flight. `None` while still debouncing (no
+    /// request sent yet); `Some(age)` after a request, where `age` counts frames
+    /// since the last request and re-requests every [`RESEED_INFLIGHT_TIMEOUT`]
+    /// frames until the grid paints — so a lost capture reply cannot wedge a pane.
     inflight_age: Option<u16>,
 }
 
@@ -33,8 +41,20 @@ struct StructuralReseedState {
 /// on the grid seq, repainting from the mirror once the divergence persists.
 #[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
 struct BlankRecoveryState {
+    /// Consecutive frames the grid has been blank while the live mirror still
+    /// holds content, within the current `recovery_seq` episode. The repaint
+    /// fires once it reaches [`RESEED_DEBOUNCE_FRAMES`], filtering the resize
+    /// transient where the grid is briefly blank before the resize snapshot lands.
     streak: u8,
+    /// The grid `last_seq` the current episode is evaluating. A different seq
+    /// (the grid changed) reopens evaluation — resetting `streak` and `settled`;
+    /// `None` forces a fresh evaluation. Keying on the seq is what lets a settled
+    /// episode stop re-scanning until the grid actually changes again.
     recovery_seq: Option<u32>,
+    /// Whether the current episode is resolved: the repaint fired, the mirror was
+    /// also blank (genuinely empty pane, nothing to restore), or the grid is no
+    /// longer blank. Suppresses the per-frame grid/mirror scan until
+    /// `recovery_seq` changes.
     settled: bool,
 }
 
