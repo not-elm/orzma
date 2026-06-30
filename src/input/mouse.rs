@@ -18,7 +18,7 @@ use ozma_terminal::{
     OzmaTerminal, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
     TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
 };
-use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TerminalHandle};
+use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 
@@ -191,6 +191,26 @@ impl CellContext<'_> {
             self.grid.rows,
         )
     }
+}
+
+/// Resolves `target` to its `(CellContext, TermMode)` at the given cell pitch,
+/// or `None` when it is no longer a live surface. Shared by the button and wheel
+/// dispatchers so both build a hit-test context the same way.
+fn cell_context_for<'a>(
+    terminals: &'a TerminalSurfaces<'_, '_>,
+    target: Entity,
+    cell_w: f32,
+    cell_h: f32,
+) -> Option<(CellContext<'a>, TermMode)> {
+    let (_, handle, node, transform, grid) = terminals.get(target).ok()?;
+    let ctx = CellContext {
+        node,
+        transform,
+        grid,
+        cell_w,
+        cell_h,
+    };
+    Some((ctx, handle.current_modes()))
 }
 
 #[cfg(test)]

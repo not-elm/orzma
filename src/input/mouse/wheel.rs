@@ -5,7 +5,7 @@
 //! `apply_wheel_action`. Registered by `MouseWheelInputPlugin`; skips
 //! `MouseDisabled` surfaces.
 
-use super::{CellContext, TerminalSurfaces, cell_pitch, hit_candidates, on_any_mouse_message};
+use super::{TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates, on_any_mouse_message};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::gesture::{
@@ -119,7 +119,8 @@ fn resolve_wheel_target(
 /// modes — the per-notch work deferred out of [`resolve_wheel_target`]. `None`
 /// when the entity is no longer a live surface. A cursor off the node falls back
 /// to cell `(1, 1)` (the same default the eager path used) so a wheel just past
-/// the edge still scrolls.
+/// the edge still scrolls. Builds the hit-test context via the shared
+/// [`cell_context_for`] kernel.
 fn resolve_wheel_cell(
     terminals: &TerminalSurfaces<'_, '_>,
     target: Entity,
@@ -127,19 +128,12 @@ fn resolve_wheel_cell(
     metrics: &TerminalCellMetricsResource,
 ) -> Option<(CellCoord, TermMode)> {
     let (cell_w, cell_h) = cell_pitch(metrics);
-    let (_, handle, node, transform, grid) = terminals.get(target).ok()?;
-    let ctx = CellContext {
-        node,
-        transform,
-        grid,
-        cell_w,
-        cell_h,
-    };
+    let (ctx, modes) = cell_context_for(terminals, target, cell_w, cell_h)?;
     let cell = ctx
         .hit(cursor_phys)
         .map(|(cell, _)| cell)
         .unwrap_or(CellCoord { col: 1, row: 1 });
-    Some((cell, handle.current_modes()))
+    Some((cell, modes))
 }
 
 /// Folds this frame's wheel deltas, applies the dominant-axis lock, and
