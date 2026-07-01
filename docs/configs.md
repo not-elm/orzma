@@ -71,10 +71,14 @@ webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webvie
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
 
 [shortcuts]
-# Optional leader chord (tmux-style). A value of "<Leader>x" fires as
-# "press the leader, then x". Set to a chord string (e.g. "Ctrl+A"); "" or
-# omitted disables the leader. Choose a leader distinct from your tmux prefix.
+# The leader for "<Leader>..." bindings. Either a full chord ("Ctrl+A": press
+# the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
+# tap the modifier with no other key, then the next key). "" or omitted disables
+# it. "Shift" is not allowed as a tap. Choose a leader distinct from your tmux prefix.
 leader = ""
+# Modifier-tap window (ms): a press+release within this time, with no intervening
+# key or mouse press, counts as a tap. Default 300; 0 reverts to 300.
+leader-tap-timeout-ms = 300
 
 # Each action takes ONE value: a direct chord ("Cmd+V"), a leader-scoped
 # chord ("<Leader>s" = leader then s), or "" to unbind. Rebinding to a chord
@@ -117,4 +121,4 @@ startup.
 Note: some actions only take effect in one mode. `enter-copy-mode` is active in
 Default (single-terminal) mode only — under tmux, copy mode is entered through
 tmux's own key bindings. `detach-session` is active under tmux only. This applies
-whether the action is bound directly or as a leader-scoped chord (e.g. `<Leader>s`).
+whether the action is bound directly or as a leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is a chord or a modifier tap.
