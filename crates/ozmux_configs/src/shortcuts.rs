@@ -35,6 +35,36 @@ pub enum Key {
 }
 
 impl Key {
+    /// True when this logical key resolves to a physical `KeyCode` at runtime,
+    /// so a leader bound to it can actually fire.
+    ///
+    /// # Invariants
+    ///
+    /// The accepted domain MUST mirror `key_to_keycode` in
+    /// `src/input/shortcuts.rs` exactly: an ASCII-alphanumeric `Char` and the
+    /// named keys below map; `Plus`, `Other`, and any non-alphanumeric `Char`
+    /// do not. A divergence would let an unmappable leader pass config
+    /// validation yet resolve to no `KeyCode`, silently disabling the whole
+    /// prefix table.
+    pub fn maps_to_physical_key(&self) -> bool {
+        // NOTE: keep this domain in lockstep with `key_to_keycode`
+        // (src/input/shortcuts.rs); a divergence silently disables the prefix
+        // table (see the invariant above).
+        match self {
+            Key::Char(c) => c.is_ascii_alphanumeric(),
+            Key::Escape
+            | Key::Space
+            | Key::Enter
+            | Key::Tab
+            | Key::Backspace
+            | Key::ArrowUp
+            | Key::ArrowDown
+            | Key::ArrowLeft
+            | Key::ArrowRight => true,
+            Key::Plus | Key::Other(_) => false,
+        }
+    }
+
     fn from_token(s: &str) -> Self {
         match s {
             "Escape" => Key::Escape,
@@ -486,6 +516,30 @@ pub enum ShortcutAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_to_physical_key_true_for_alphanumeric_and_named() {
+        assert!(Key::Char('a').maps_to_physical_key());
+        assert!(Key::Char('Z').maps_to_physical_key());
+        assert!(Key::Char('7').maps_to_physical_key());
+        assert!(Key::Escape.maps_to_physical_key());
+        assert!(Key::Space.maps_to_physical_key());
+        assert!(Key::Enter.maps_to_physical_key());
+        assert!(Key::Tab.maps_to_physical_key());
+        assert!(Key::Backspace.maps_to_physical_key());
+        assert!(Key::ArrowUp.maps_to_physical_key());
+        assert!(Key::ArrowDown.maps_to_physical_key());
+        assert!(Key::ArrowLeft.maps_to_physical_key());
+        assert!(Key::ArrowRight.maps_to_physical_key());
+    }
+
+    #[test]
+    fn maps_to_physical_key_false_for_plus_other_and_punctuation() {
+        assert!(!Key::Plus.maps_to_physical_key());
+        assert!(!Key::Other("f12".into()).maps_to_physical_key());
+        assert!(!Key::Char('.').maps_to_physical_key());
+        assert!(!Key::Char('-').maps_to_physical_key());
+    }
 
     #[test]
     fn key_parses_single_char() {

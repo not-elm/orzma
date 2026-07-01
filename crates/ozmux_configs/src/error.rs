@@ -54,6 +54,17 @@ pub enum OzmuxConfigsError {
         action: &'static str,
     },
 
+    /// The configured leader chord's logical key has no physical `KeyCode`
+    /// mapping, so the whole `[shortcuts.prefix_bindings]` table would be
+    /// silently unreachable.
+    #[error(
+        "leader chord {chord} has no physical key mapping; shortcuts.prefix_bindings would be unreachable"
+    )]
+    UnmappableLeader {
+        /// The unmappable leader chord.
+        chord: crate::shortcuts::KeyChord,
+    },
+
     /// The configured font size is outside the supported range.
     #[error("font size {size} is out of range (expected 0 < size <= 200)")]
     InvalidFontSize {

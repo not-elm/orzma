@@ -5,6 +5,7 @@
 
 use crate::configs::OzmuxConfigsResource;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
+use crate::mode::AppMode;
 use bevy::prelude::*;
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
@@ -15,16 +16,47 @@ pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Shortcuts>().add_systems(
-            Startup,
-            (
-                build_shortcuts,
-                populate_input_bindings,
-                populate_mouse_config,
+        app.init_resource::<Shortcuts>()
+            .init_resource::<LeaderPending>()
+            .configure_sets(Update, LeaderGate::Read.before(LeaderGate::Advance))
+            .add_systems(
+                Startup,
+                (
+                    build_shortcuts,
+                    populate_input_bindings,
+                    populate_mouse_config,
+                )
+                    .chain(),
             )
-                .chain(),
-        );
+            .add_systems(OnExit(AppMode::Tmux), reset_leader_pending)
+            .add_systems(OnExit(AppMode::Default), reset_leader_pending);
     }
+}
+
+/// Shared leader-pending flag: `true` between a leader chord and its second key.
+/// Owned by `ShortcutsPlugin`; advanced by both the tmux and Default keyboard
+/// dispatchers and read by `dispatch_input` to suppress PTY typing mid-sequence.
+#[derive(Resource, Default)]
+pub(crate) struct LeaderPending(
+    /// `true` while a leader chord is pending its second key.
+    pub(crate) bool,
+);
+
+/// Orders the two `FocusedKey` systems that touch `LeaderPending` so
+/// `dispatch_input` (`Read`) observes the end-of-previous-frame value before
+/// `app_shortcut_handler` (`Advance`) steps the leader machine and clears it.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum LeaderGate {
+    /// `dispatch_input`: reads `LeaderPending` to gate PTY typing.
+    Read,
+    /// `app_shortcut_handler`: advances the leader state machine.
+    Advance,
+}
+
+/// Clears `LeaderPending` on an `AppMode` transition so a leader engaged in one
+/// mode never fires its second key after switching modes.
+fn reset_leader_pending(mut leader_pending: ResMut<LeaderPending>) {
+    leader_pending.0 = false;
 }
 
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
@@ -75,8 +107,10 @@ impl Shortcuts {
     }
 
     /// Derives the crate's `TerminalInputBindings` from the direct table: the
-    /// Paste chord becomes `paste`; every other direct chord becomes a
-    /// `reserved` entry the crate dispatcher skips for the host to handle.
+    /// Paste chord becomes `paste`; every other direct chord — plus the leader
+    /// chord — becomes a `reserved` entry the crate dispatcher skips for the
+    /// host to handle. Reserving the leader keeps `dispatch_input` from typing
+    /// it into the PTY while the leader engages.
     pub(crate) fn input_bindings(&self) -> TerminalInputBindings {
         let mut paste = None;
         let mut reserved = Vec::new();
@@ -94,6 +128,15 @@ impl Shortcuts {
                 reserved.push(chord);
             }
         }
+        if let Some((keycode, modifiers)) = self.leader {
+            reserved.push(ReservedChord {
+                key_code: keycode,
+                ctrl: modifiers.ctrl,
+                shift: modifiers.shift,
+                alt: modifiers.alt,
+                meta: modifiers.meta,
+            });
+        }
         TerminalInputBindings {
             paste: paste.unwrap_or_else(|| TerminalInputBindings::default().paste),
             reserved,
@@ -106,10 +149,18 @@ impl Shortcuts {
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)`, if any.
+    /// Excludes `ReleaseWebviewFocus` (mirrors `match_gui_action`): leader
+    /// dispatch only runs when no webview is focused, so a leader-scoped
+    /// release-webview-focus could never fire — resolving it to `Swallow`
+    /// avoids a dead `RunAction`.
     fn match_prefix_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<ShortcutAction> {
         self.prefix
             .iter()
-            .find(|s| s.keycode == keycode && s.modifiers == mods)
+            .find(|s| {
+                s.action != ShortcutAction::ReleaseWebviewFocus
+                    && s.keycode == keycode
+                    && s.modifiers == mods
+            })
             .map(|s| s.action)
     }
 }
@@ -137,6 +188,13 @@ pub(crate) fn step_leader(
     keycode: KeyCode,
     mods: Modifiers,
 ) -> LeaderStep {
+    // NOTE: a bare modifier press must NOT touch `pending`. The second chord's
+    // modifier (e.g. Ctrl) emits its own `Pressed` event ahead of the main key;
+    // stepping on it would consume the pending leader by parity and abort the
+    // sequence before the real key arrives.
+    if is_modifier_key(keycode) {
+        return LeaderStep::Passthrough;
+    }
     if *pending {
         *pending = false;
         return match shortcuts.match_prefix_action(keycode, mods) {
@@ -237,10 +295,30 @@ fn resolve_from_bindings<'a>(
     out
 }
 
+/// True for the bare left/right modifier keys, which emit their own `Pressed`
+/// events ahead of a chord's main key.
+fn is_modifier_key(keycode: KeyCode) -> bool {
+    matches!(
+        keycode,
+        KeyCode::ControlLeft
+            | KeyCode::ControlRight
+            | KeyCode::ShiftLeft
+            | KeyCode::ShiftRight
+            | KeyCode::AltLeft
+            | KeyCode::AltRight
+            | KeyCode::SuperLeft
+            | KeyCode::SuperRight
+    )
+}
+
 /// Maps a config logical `Key` to the physical `KeyCode` ozmux matches on.
 /// Returns `None` for keys with no stable physical mapping (`Plus`, `Other`,
 /// non-alphanumeric chars).
 fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
+    // NOTE: keep this accepted domain in lockstep with
+    // `ozmux_configs::shortcuts::Key::maps_to_physical_key`; a divergence lets
+    // an unmappable leader pass config validation yet resolve to no `KeyCode`,
+    // silently disabling the whole prefix table.
     Some(match key {
         ConfigKey::Char(c) => match c.to_ascii_lowercase() {
             'a' => KeyCode::KeyA,
@@ -327,6 +405,99 @@ mod tests {
         assert!(s.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
         assert!(!s.is_leader(KeyCode::KeyA, mods(false, false, false, false)));
         assert!(!s.is_leader(KeyCode::KeyB, mods(true, false, false, false)));
+    }
+
+    #[test]
+    fn match_prefix_action_excludes_release_webview_focus() {
+        let s = Shortcuts {
+            direct: Vec::new(),
+            prefix: vec![OzmuxShortcut {
+                keycode: KeyCode::KeyR,
+                modifiers: mods(false, false, false, false),
+                action: ShortcutAction::ReleaseWebviewFocus,
+            }],
+            leader: Some((KeyCode::KeyA, mods(true, false, false, false))),
+        };
+        assert_eq!(
+            s.match_prefix_action(KeyCode::KeyR, mods(false, false, false, false)),
+            None,
+            "a leader-scoped release-webview-focus resolves to Swallow, not a dead RunAction",
+        );
+    }
+
+    #[test]
+    fn input_bindings_reserves_the_leader_chord() {
+        let mut s = direct_only(&Bindings::default());
+        s.leader = Some((KeyCode::KeyA, mods(true, false, false, false)));
+        let b = s.input_bindings();
+        assert!(
+            b.reserved.iter().any(|c| c.key_code == KeyCode::KeyA
+                && c.ctrl
+                && !c.shift
+                && !c.alt
+                && !c.meta),
+            "the leader chord must be reserved so dispatch_input never types it into the PTY",
+        );
+    }
+
+    #[test]
+    fn step_leader_ignores_bare_modifier_and_survives_to_second_chord() {
+        // Reproduces [0]: the second chord's Ctrl modifier emits its own Pressed
+        // event before KeyD; it must not consume `pending`. Leader Ctrl+B,
+        // prefix detach-session = Ctrl+D.
+        let sc = Shortcuts {
+            direct: Vec::new(),
+            prefix: vec![OzmuxShortcut {
+                keycode: KeyCode::KeyD,
+                modifiers: mods(true, false, false, false),
+                action: ShortcutAction::DetachSession,
+            }],
+            leader: Some((KeyCode::KeyB, mods(true, false, false, false))),
+        };
+        let mut pending = false;
+        assert!(matches!(
+            step_leader(
+                &mut pending,
+                &sc,
+                KeyCode::ControlLeft,
+                mods(true, false, false, false)
+            ),
+            LeaderStep::Passthrough
+        ));
+        assert!(!pending, "a bare modifier must not engage the leader");
+        assert!(matches!(
+            step_leader(
+                &mut pending,
+                &sc,
+                KeyCode::KeyB,
+                mods(true, false, false, false)
+            ),
+            LeaderStep::Swallow
+        ));
+        assert!(pending, "the leader chord engages pending");
+        assert!(matches!(
+            step_leader(
+                &mut pending,
+                &sc,
+                KeyCode::ControlLeft,
+                mods(true, false, false, false)
+            ),
+            LeaderStep::Passthrough
+        ));
+        assert!(
+            pending,
+            "a bare modifier must NOT clear pending mid-sequence"
+        );
+        assert!(matches!(
+            step_leader(
+                &mut pending,
+                &sc,
+                KeyCode::KeyD,
+                mods(true, false, false, false)
+            ),
+            LeaderStep::RunAction(ShortcutAction::DetachSession)
+        ));
+        assert!(!pending);
     }
 
     #[test]

@@ -7,7 +7,7 @@
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::input::shortcuts::{LeaderStep, Shortcuts, step_leader};
+use crate::input::shortcuts::{LeaderGate, LeaderPending, LeaderStep, Shortcuts, step_leader};
 use crate::input::{InputPhase, current_modifiers};
 use crate::mode::AppMode;
 use crate::surface_geom::phys_to_pane_local;
@@ -20,7 +20,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::OzmaTerminal;
+use ozma_terminal::{OzmaTerminal, PasteAction};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
@@ -43,6 +43,7 @@ impl Plugin for DefaultHostInputPlugin {
             Update,
             app_shortcut_handler
                 .in_set(InputPhase::FocusedKey)
+                .in_set(LeaderGate::Advance)
                 .run_if(in_state(AppMode::Default))
                 .run_if(on_message::<KeyboardInput>),
         )
@@ -154,7 +155,7 @@ fn app_shortcut_handler(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
-    mut leader_pending: Local<bool>,
+    mut leader_pending: ResMut<LeaderPending>,
     shortcuts: Res<Shortcuts>,
     ime: Res<ImeState>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
@@ -163,7 +164,7 @@ fn app_shortcut_handler(
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if ime.is_composing() || !focused {
-        *leader_pending = false;
+        leader_pending.0 = false;
         events.clear();
         return;
     }
@@ -174,7 +175,7 @@ fn app_shortcut_handler(
             continue;
         }
         if webview_focused && shortcuts.is_release_webview_focus(ev.key_code, mods) {
-            *leader_pending = false;
+            leader_pending.0 = false;
             focused_webview.0 = None;
             continue;
         }
@@ -182,16 +183,25 @@ fn app_shortcut_handler(
         // keyboard (v0 scope, mirrors tmux mode); resetting `leader_pending`
         // here instead of stepping the state machine prevents a stale leader
         // from firing once keyboard focus returns to the terminal.
-        let Some(action) = (if webview_focused {
-            *leader_pending = false;
-            shortcuts.match_gui_action(ev.key_code, mods)
+        let (action, via_leader) = if webview_focused {
+            leader_pending.0 = false;
+            (shortcuts.match_gui_action(ev.key_code, mods), false)
         } else {
-            match step_leader(&mut leader_pending, &shortcuts, ev.key_code, mods) {
-                LeaderStep::RunAction(a) => Some(a),
-                LeaderStep::Swallow => None,
-                LeaderStep::Passthrough => shortcuts.match_gui_action(ev.key_code, mods),
+            // NOTE: OS key auto-repeat delivers extra Pressed events; feeding
+            // them to step_leader would toggle `pending` by parity. Treat a
+            // repeat as Passthrough without stepping the machine.
+            let step = if ev.repeat {
+                LeaderStep::Passthrough
+            } else {
+                step_leader(&mut leader_pending.0, &shortcuts, ev.key_code, mods)
+            };
+            match step {
+                LeaderStep::RunAction(a) => (Some(a), true),
+                LeaderStep::Swallow => (None, false),
+                LeaderStep::Passthrough => (shortcuts.match_gui_action(ev.key_code, mods), false),
             }
-        }) else {
+        };
+        let Some(action) = action else {
             continue;
         };
         if gui_action_suppressed_by_webview(webview_focused, action) {
@@ -207,7 +217,16 @@ fn app_shortcut_handler(
                 }
             }
             ShortcutAction::DetachSession => {}
-            ShortcutAction::Paste | ShortcutAction::ReleaseWebviewFocus => {}
+            ShortcutAction::Paste => {
+                // NOTE: only the leader-scoped paste fires here; a direct Cmd+V
+                // is handled by `dispatch_input`. Firing on the direct path too
+                // would double-paste. While a leader is pending, `dispatch_input`
+                // is suppressed ([1b]), so the leader path never double-fires.
+                if via_leader && let Ok(entity) = terminal.single() {
+                    commands.trigger(PasteAction { entity });
+                }
+            }
+            ShortcutAction::ReleaseWebviewFocus => {}
         }
     }
 }

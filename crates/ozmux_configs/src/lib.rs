@@ -111,6 +111,13 @@ impl OzmuxConfigs {
                 action,
             });
         }
+        if let Some(leader) = self.shortcuts.prefix.as_ref()
+            && !leader.key.maps_to_physical_key()
+        {
+            return Err(OzmuxConfigsError::UnmappableLeader {
+                chord: leader.clone(),
+            });
+        }
         let size = self.font.size;
         if !(size > 0.0 && size <= 200.0) {
             return Err(OzmuxConfigsError::InvalidFontSize { size });
@@ -240,6 +247,19 @@ release-webview-focus = "Cmd+V"
     #[test]
     fn validate_allows_prefix_with_bindings() {
         let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unmappable_leader() {
+        let toml_str = "[shortcuts]\nprefix = \"Cmd+Plus\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n";
+        let err = parse_validated(toml_str).unwrap_err();
+        assert!(matches!(err, OzmuxConfigsError::UnmappableLeader { .. }));
+    }
+
+    #[test]
+    fn validate_accepts_mappable_leader() {
+        let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.prefix_bindings]\nenter-copy-mode = \"s\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 }

@@ -4,6 +4,7 @@
 
 use crate::input::bindings::{ReservedChord, TerminalInputBindings};
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
+use crate::input::shortcuts::{LeaderGate, LeaderPending};
 use crate::input::{InputPhase, current_modifiers};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
@@ -23,6 +24,7 @@ impl Plugin for KeyboardInputPlugin {
                 Update,
                 dispatch_input
                     .in_set(InputPhase::FocusedKey)
+                    .in_set(LeaderGate::Read)
                     .run_if(on_message::<KeyboardInput>),
             );
     }
@@ -44,6 +46,7 @@ fn dispatch_input(
     mut events: MessageReader<KeyboardInput>,
     bindings: Res<TerminalInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
+    leader_pending: Res<LeaderPending>,
     terminal: Query<
         Entity,
         (
@@ -61,6 +64,14 @@ fn dispatch_input(
         events.clear();
         return;
     };
+    // NOTE: while a leader chord is pending its second key, suppress PTY typing
+    // so the second key reaches only the leader machine. This system is ordered
+    // (LeaderGate::Read.before(Advance)) ahead of `app_shortcut_handler`, so it
+    // reads the end-of-previous-frame value before that handler clears it.
+    if leader_pending.0 {
+        events.clear();
+        return;
+    }
     let mods = current_terminal_modifiers(&keys);
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
@@ -135,6 +146,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Captured>()
+            .init_resource::<LeaderPending>()
             .add_plugins(KeyboardInputPlugin)
             .add_observer(|ev: On<PasteAction>, mut c: ResMut<Captured>| {
                 let _ = ev;
@@ -185,6 +197,21 @@ mod tests {
         let c = app.world().resource::<Captured>();
         assert_eq!(c.paste, 1);
         assert!(c.keys.is_empty());
+    }
+
+    #[test]
+    fn leader_pending_suppresses_pty_typing() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert!(
+            c.keys.is_empty(),
+            "a pending leader must suppress PTY typing so the second key reaches only the leader machine"
+        );
+        assert_eq!(c.paste, 0);
     }
 
     #[test]
