@@ -285,14 +285,18 @@ fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
     }
 }
 
-/// User-facing shortcut configuration. Wraps the named-field `Bindings`
-/// table. Single field — kept as a struct rather than aliased so the
-/// existing `/configs/shortcuts` HTTP wire shape stays stable.
+/// User-facing shortcut configuration: the leader chord plus the direct and
+/// leader-scoped binding tables.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct Shortcuts {
-    /// The named-field binding table. See `Bindings` for the field list and merge semantics.
+    /// The leader chord for `prefix_bindings` (empty string or absent = disabled).
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub prefix: Option<KeyChord>,
+    /// The direct-chord binding table. See `Bindings`.
     pub bindings: Bindings,
+    /// The leader-scoped binding table (reached after `prefix`). See `PrefixBindings`.
+    pub prefix_bindings: PrefixBindings,
 }
 
 /// User-facing shortcut configuration. Each Action gets its own named
@@ -375,18 +379,89 @@ impl Bindings {
     /// (via BTreeMap key order) for deterministic error output. Caller maps
     /// the Vec into `OzmuxConfigsError::DuplicateChords`.
     pub fn validate_no_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
-        let mut by_chord: BTreeMap<KeyChord, Vec<&'static str>> = BTreeMap::new();
-        for (label, bound, _action) in self.iter() {
-            if let Some(chord) = bound {
-                by_chord.entry(chord.clone()).or_default().push(label);
-            }
+        conflicts(self.iter())
+    }
+}
+
+/// Detects chord collisions across a binding table's entries. Returns a `Vec`
+/// sorted by chord (BTreeMap key order) for deterministic error output. Shared
+/// by `Bindings` and `PrefixBindings`.
+fn conflicts<'a>(
+    entries: impl Iterator<Item = (&'static str, &'a Option<KeyChord>, ShortcutAction)>,
+) -> Result<(), Vec<DuplicateChord>> {
+    let mut by_chord: BTreeMap<KeyChord, Vec<&'static str>> = BTreeMap::new();
+    for (label, bound, _action) in entries {
+        if let Some(chord) = bound {
+            by_chord.entry(chord.clone()).or_default().push(label);
         }
-        let dupes: Vec<DuplicateChord> = by_chord
-            .into_iter()
-            .filter(|(_, labels)| labels.len() >= 2)
-            .map(|(chord, actions)| DuplicateChord { chord, actions })
-            .collect();
-        if dupes.is_empty() { Ok(()) } else { Err(dupes) }
+    }
+    let dupes: Vec<DuplicateChord> = by_chord
+        .into_iter()
+        .filter(|(_, labels)| labels.len() >= 2)
+        .map(|(chord, actions)| DuplicateChord { chord, actions })
+        .collect();
+    if dupes.is_empty() { Ok(()) } else { Err(dupes) }
+}
+
+/// Leader-scoped shortcut bindings (`[shortcuts.prefix_bindings]`). Same action
+/// set as `Bindings`, but every field defaults to `None`: nothing is
+/// leader-scoped unless explicitly bound.
+///
+/// A distinct type from `Bindings` is load-bearing: `#[serde(default)]` fills
+/// fields missing from a partial table from `Default`. `Bindings::default()`
+/// binds `Cmd+V` etc., so reusing `Bindings` here would make a partial
+/// `[shortcuts.prefix_bindings]` silently inherit those active chords.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
+pub struct PrefixBindings {
+    /// Leader-scoped paste binding.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub paste: Option<KeyChord>,
+    /// Leader-scoped release-webview-focus binding.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub release_webview_focus: Option<KeyChord>,
+    /// Leader-scoped quit binding.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub quit: Option<KeyChord>,
+    /// Leader-scoped enter-copy-mode binding.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub enter_copy_mode: Option<KeyChord>,
+    /// Leader-scoped detach-session binding.
+    #[serde(deserialize_with = "deser_chord_or_unbind")]
+    pub detach_session: Option<KeyChord>,
+}
+
+impl PrefixBindings {
+    /// Yields `(action_label, &Option<KeyChord>, Action)` for every action, in
+    /// the same order and labels as `Bindings::iter`.
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &Option<KeyChord>, ShortcutAction)> + '_ {
+        [
+            ("paste", &self.paste, ShortcutAction::Paste),
+            (
+                "release-webview-focus",
+                &self.release_webview_focus,
+                ShortcutAction::ReleaseWebviewFocus,
+            ),
+            ("quit", &self.quit, ShortcutAction::Quit),
+            (
+                "enter-copy-mode",
+                &self.enter_copy_mode,
+                ShortcutAction::EnterCopyMode,
+            ),
+            (
+                "detach-session",
+                &self.detach_session,
+                ShortcutAction::DetachSession,
+            ),
+        ]
+        .into_iter()
+    }
+
+    /// Detects chord collisions within the leader-scoped table.
+    pub fn validate_no_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
+        conflicts(self.iter())
     }
 }
 
@@ -653,7 +728,7 @@ mod tests {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         // The Bindings struct serializes its fields in declaration order.
         // The kebab-case rename applies.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        let expected = r#"{"prefix":null,"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}},"prefix_bindings":{"paste":null,"release-webview-focus":null,"quit":null,"enter-copy-mode":null,"detach-session":null}}"#;
         assert_eq!(json, expected);
     }
 
@@ -684,5 +759,64 @@ mod tests {
             .find_map(|(_, bound, action)| (bound.as_ref() == Some(&chord)).then_some(action))
             .expect("Cmd+V must resolve");
         assert!(matches!(action, ShortcutAction::Paste));
+    }
+
+    #[test]
+    fn prefix_bindings_default_is_all_none() {
+        let p = PrefixBindings::default();
+        assert!(p.iter().all(|(_, bound, _)| bound.is_none()));
+        assert_eq!(p.iter().count(), 5);
+    }
+
+    #[test]
+    fn shortcuts_parses_prefix_and_prefix_bindings() {
+        let toml = r#"
+prefix = "Ctrl+A"
+[bindings]
+[prefix_bindings]
+enter-copy-mode = "s"
+detach-session = "d"
+"#;
+        let s: Shortcuts = toml::from_str(toml).unwrap();
+        assert_eq!(s.prefix, Some(parse_key_chord("Ctrl+A").unwrap()));
+        assert_eq!(
+            s.prefix_bindings.enter_copy_mode,
+            Some(parse_key_chord("s").unwrap())
+        );
+        assert_eq!(
+            s.prefix_bindings.detach_session,
+            Some(parse_key_chord("d").unwrap())
+        );
+        assert!(s.prefix_bindings.paste.is_none());
+    }
+
+    #[test]
+    fn shortcuts_default_prefix_is_none_and_bindings_unchanged() {
+        let s = Shortcuts::default();
+        assert!(s.prefix.is_none());
+        assert!(s.prefix_bindings.iter().all(|(_, b, _)| b.is_none()));
+        assert_eq!(s.bindings.paste, Some(parse_key_chord("Cmd+V").unwrap()));
+    }
+
+    #[test]
+    fn prefix_bindings_detects_internal_conflict() {
+        let p = PrefixBindings {
+            enter_copy_mode: Some(parse_key_chord("d").unwrap()),
+            detach_session: Some(parse_key_chord("d").unwrap()),
+            ..Default::default()
+        };
+        let err = p.validate_no_conflicts().unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert!(err[0].actions.contains(&"enter-copy-mode"));
+        assert!(err[0].actions.contains(&"detach-session"));
+    }
+
+    #[test]
+    fn prefix_bindings_rejects_unknown_field() {
+        let toml = r#"
+[prefix_bindings]
+resize-pane-down = "d"
+"#;
+        assert!(toml::from_str::<Shortcuts>(toml).is_err());
     }
 }
