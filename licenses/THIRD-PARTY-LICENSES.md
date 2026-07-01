@@ -5530,6 +5530,7 @@ SOFTWARE.
 ### MIT License — `MIT`
 
 Used by:
+- ratatui-ozma 0.1.0
 - accesskit 0.21.1
 - accesskit_consumer 0.31.0
 - accesskit_macos 0.22.2

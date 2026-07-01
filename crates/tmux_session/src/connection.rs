@@ -10,7 +10,7 @@ use tmux_control::{ClientEvent, CommandId, ProtocolClient, TmuxCommand, TmuxResu
 /// Holds the sans-IO [`ProtocolClient`] directly (no `Rc`/`RefCell`): the
 /// component is accessed through exclusive `&mut` query access, so interior
 /// mutability is unnecessary. Inserted on adoption and removed when the gateway
-/// entity is despawned on teardown. Requires [`EnumerationState`] so a gateway
+/// entity is despawned on teardown. Requires `EnumerationState` so a gateway
 /// always carries its in-flight reply correlation alongside the client.
 #[derive(Component, Debug, Default)]
 #[require(EnumerationState)]
