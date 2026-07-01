@@ -10,7 +10,9 @@ use bevy::prelude::*;
 use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
-use ozmux_configs::shortcuts::{Key as ConfigKey, KeyChord, Modifiers, ShortcutAction};
+use ozmux_configs::shortcuts::{
+    Key as ConfigKey, KeyChord, Leader, Modifiers, ShortcutAction, TapModifier,
+};
 use std::time::Duration;
 
 pub(super) struct ShortcutsPlugin;
@@ -62,6 +64,15 @@ pub(crate) enum LeaderGate {
     Advance,
 }
 
+/// The leader resolved to runtime form: a physical chord, or a modifier tap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResolvedLeader {
+    /// Chord leader: exact `(KeyCode, Modifiers)` to match.
+    Chord(KeyCode, Modifiers),
+    /// Modifier-tap leader: the bare modifier to detect a tap on.
+    Tap(TapModifier),
+}
+
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
 /// the exact modifier set required, and the action to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,7 +89,8 @@ struct OzmuxShortcut {
 pub(crate) struct Shortcuts {
     direct: Vec<OzmuxShortcut>,
     prefix: Vec<OzmuxShortcut>,
-    leader: Option<(KeyCode, Modifiers)>,
+    leader: Option<ResolvedLeader>,
+    tap_timeout: Duration,
 }
 
 impl Shortcuts {
@@ -124,7 +136,7 @@ impl Shortcuts {
                 reserved.push(chord);
             }
         }
-        if let Some((keycode, modifiers)) = self.leader {
+        if let Some(ResolvedLeader::Chord(keycode, modifiers)) = self.leader {
             reserved.push(ReservedChord {
                 key_code: keycode,
                 ctrl: modifiers.ctrl,
@@ -141,7 +153,18 @@ impl Shortcuts {
 
     /// True when `(keycode, mods)` is the configured leader chord.
     fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        self.leader == Some((keycode, mods))
+        matches!(self.leader, Some(ResolvedLeader::Chord(kc, m)) if kc == keycode && m == mods)
+    }
+
+    #[expect(
+        dead_code,
+        reason = "consumed by the modifier-tap detection system added in Task 3"
+    )]
+    fn tap_modifier(&self) -> Option<TapModifier> {
+        match self.leader {
+            Some(ResolvedLeader::Tap(m)) => Some(m),
+            _ => None,
+        }
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)`, if any.
@@ -234,13 +257,18 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsRes
     let sc = &configs.shortcuts;
     resolved.direct = resolve_from_chords(sc.direct_chords());
     resolved.prefix = resolve_from_chords(sc.leader_chords());
-    resolved.leader = sc.leader.as_ref().and_then(|chord| match key_to_keycode(&chord.key) {
-        Some(keycode) => Some((keycode, chord.modifiers)),
-        None => {
-            tracing::warn!(chord = %chord, "shortcut leader key has no physical KeyCode mapping; prefix disabled");
-            None
-        }
-    });
+    resolved.tap_timeout = Duration::from_millis(sc.leader_tap_timeout_ms);
+    resolved.leader = match sc.leader.as_ref() {
+        None => None,
+        Some(Leader::ModifierTap(m)) => Some(ResolvedLeader::Tap(*m)),
+        Some(Leader::Chord(chord)) => match key_to_keycode(&chord.key) {
+            Some(keycode) => Some(ResolvedLeader::Chord(keycode, chord.modifiers)),
+            None => {
+                tracing::warn!(chord = %chord, "shortcut leader key has no physical KeyCode mapping; prefix disabled");
+                None
+            }
+        },
+    };
     if resolved.leader.is_none() && !resolved.prefix.is_empty() {
         tracing::warn!(
             "shortcuts.<Leader> bindings are set but the leader is unset or unmappable; they are unreachable"
@@ -405,6 +433,7 @@ mod tests {
             direct: resolve_from_chords(config.direct_chords()),
             prefix: Vec::new(),
             leader: None,
+            tap_timeout: Duration::from_millis(300),
         }
     }
 
@@ -413,7 +442,11 @@ mod tests {
         let s = Shortcuts {
             direct: Vec::new(),
             prefix: Vec::new(),
-            leader: Some((KeyCode::KeyA, mods(true, false, false, false))),
+            leader: Some(ResolvedLeader::Chord(
+                KeyCode::KeyA,
+                mods(true, false, false, false),
+            )),
+            tap_timeout: Duration::from_millis(300),
         };
         assert!(s.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
         assert!(!s.is_leader(KeyCode::KeyA, mods(false, false, false, false)));
@@ -429,7 +462,11 @@ mod tests {
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::ReleaseWebviewFocus,
             }],
-            leader: Some((KeyCode::KeyA, mods(true, false, false, false))),
+            leader: Some(ResolvedLeader::Chord(
+                KeyCode::KeyA,
+                mods(true, false, false, false),
+            )),
+            tap_timeout: Duration::from_millis(300),
         };
         assert_eq!(
             s.match_prefix_action(KeyCode::KeyR, mods(false, false, false, false)),
@@ -441,7 +478,10 @@ mod tests {
     #[test]
     fn input_bindings_reserves_the_leader_chord() {
         let mut s = direct_only(&ConfigShortcuts::default());
-        s.leader = Some((KeyCode::KeyA, mods(true, false, false, false)));
+        s.leader = Some(ResolvedLeader::Chord(
+            KeyCode::KeyA,
+            mods(true, false, false, false),
+        ));
         let b = s.input_bindings();
         assert!(
             b.reserved.iter().any(|c| c.key_code == KeyCode::KeyA
@@ -465,7 +505,11 @@ mod tests {
                 modifiers: mods(true, false, false, false),
                 action: ShortcutAction::DetachSession,
             }],
-            leader: Some((KeyCode::KeyB, mods(true, false, false, false))),
+            leader: Some(ResolvedLeader::Chord(
+                KeyCode::KeyB,
+                mods(true, false, false, false),
+            )),
+            tap_timeout: Duration::from_millis(300),
         };
         let mut pending = false;
         assert!(matches!(
@@ -522,7 +566,11 @@ mod tests {
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::EnterCopyMode,
             }],
-            leader: Some((KeyCode::KeyA, mods(true, false, false, false))),
+            leader: Some(ResolvedLeader::Chord(
+                KeyCode::KeyA,
+                mods(true, false, false, false),
+            )),
+            tap_timeout: Duration::from_millis(300),
         };
         assert_eq!(
             s.match_prefix_action(KeyCode::KeyS, mods(false, false, false, false)),
@@ -694,7 +742,11 @@ mod tests {
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::EnterCopyMode,
             }],
-            leader: Some((KeyCode::KeyA, mods(true, false, false, false))),
+            leader: Some(ResolvedLeader::Chord(
+                KeyCode::KeyA,
+                mods(true, false, false, false),
+            )),
+            tap_timeout: Duration::from_millis(300),
         }
     }
 
