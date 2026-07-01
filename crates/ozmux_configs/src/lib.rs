@@ -95,20 +95,19 @@ impl OzmuxConfigs {
         if sc.has_leader_bindings() && sc.leader.is_none() {
             return Err(OzmuxConfigsError::PrefixBindingsWithoutLeader);
         }
-        if let Some(leader) = sc.leader.as_ref()
-            && let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
-        {
-            return Err(OzmuxConfigsError::LeaderShadowsDirectBinding {
-                chord: leader.clone(),
-                action,
-            });
-        }
-        if let Some(leader) = sc.leader.as_ref()
-            && !leader.key.maps_to_physical_key()
-        {
-            return Err(OzmuxConfigsError::UnmappableLeader {
-                chord: leader.clone(),
-            });
+        if let Some(leader) = sc.leader.as_ref() {
+            if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
+            {
+                return Err(OzmuxConfigsError::LeaderShadowsDirectBinding {
+                    chord: leader.clone(),
+                    action,
+                });
+            }
+            if !leader.key.maps_to_physical_key() {
+                return Err(OzmuxConfigsError::UnmappableLeader {
+                    chord: leader.clone(),
+                });
+            }
         }
         let size = self.font.size;
         if !(size > 0.0 && size <= 200.0) {

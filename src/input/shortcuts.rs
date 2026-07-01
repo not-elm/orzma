@@ -31,10 +31,13 @@ impl Plugin for ShortcutsPlugin {
             )
             .add_systems(OnExit(AppMode::Tmux), reset_leader_pending)
             .add_systems(OnExit(AppMode::Default), reset_leader_pending)
+            // NOTE: webview focus moves on mouse clicks (no `KeyboardInput`), so the
+            // keyboard dispatchers never see the round-trip; without this reset a
+            // leader engaged before a mouse-only webview focus/blur would consume the
+            // next terminal keystroke as its second key.
             .add_systems(
                 Update,
-                reset_leader_on_webview_focus_change
-                    .run_if(resource_exists_and_changed::<FocusedWebview>),
+                reset_leader_pending.run_if(resource_exists_and_changed::<FocusedWebview>),
             );
     }
 }
@@ -86,14 +89,7 @@ impl Shortcuts {
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<ShortcutAction> {
-        self.direct
-            .iter()
-            .find(|s| {
-                s.action != ShortcutAction::ReleaseWebviewFocus
-                    && s.keycode == keycode
-                    && s.modifiers == mods
-            })
-            .map(|s| s.action)
+        Self::match_action_in(&self.direct, keycode, mods)
     }
 
     /// True when `(keycode, mods)` matches the configured release-webview-focus
@@ -154,7 +150,17 @@ impl Shortcuts {
     /// release-webview-focus could never fire — resolving it to `Swallow`
     /// avoids a dead `RunAction`.
     fn match_prefix_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<ShortcutAction> {
-        self.prefix
+        Self::match_action_in(&self.prefix, keycode, mods)
+    }
+
+    /// Returns the first action in `table` bound to `(keycode, mods)`, excluding
+    /// `ReleaseWebviewFocus` (matched separately via `is_release_webview_focus`).
+    fn match_action_in(
+        table: &[OzmuxShortcut],
+        keycode: KeyCode,
+        mods: Modifiers,
+    ) -> Option<ShortcutAction> {
+        table
             .iter()
             .find(|s| {
                 s.action != ShortcutAction::ReleaseWebviewFocus
@@ -209,18 +215,12 @@ pub(crate) fn step_leader(
     LeaderStep::Passthrough
 }
 
-/// Clears `LeaderPending` on an `AppMode` transition so a leader engaged in one
-/// mode never fires its second key after switching modes.
+/// Clears `LeaderPending` on an `AppMode` transition or a webview focus change,
+/// so a leader engaged in one context never fires its second key in another.
 fn reset_leader_pending(mut leader_pending: ResMut<LeaderPending>) {
-    leader_pending.0 = false;
-}
-
-/// Clears `LeaderPending` whenever webview focus changes. Webview focus moves on
-/// mouse clicks (no `KeyboardInput`), so the keyboard dispatchers never see the
-/// round-trip; without this a leader engaged before a mouse-only webview
-/// focus/blur would consume the next terminal keystroke as its second key.
-fn reset_leader_on_webview_focus_change(mut leader_pending: ResMut<LeaderPending>) {
-    leader_pending.0 = false;
+    if leader_pending.0 {
+        leader_pending.0 = false;
+    }
 }
 
 /// `Startup` system: resolves the configured shortcut bindings into
