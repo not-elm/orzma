@@ -93,7 +93,7 @@ mod tests {
             .get_resource::<OzmuxConfigsResource>()
             .expect("plugin must insert resource");
         let defaults = OzmuxConfigs::default();
-        assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
+        assert_eq!(res.shortcuts, defaults.shortcuts);
     }
 
     #[test]
@@ -113,7 +113,7 @@ mod tests {
             .get_resource::<OzmuxConfigsResource>()
             .expect("plugin must insert resource on NotFound");
         let defaults = OzmuxConfigs::default();
-        assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
+        assert_eq!(res.shortcuts, defaults.shortcuts);
 
         // SAFETY: env mutation cleanup under the same env_guard.
         unsafe {
@@ -138,7 +138,7 @@ mod tests {
             .get_resource::<OzmuxConfigsResource>()
             .expect("plugin must still insert a resource on broken-toml fallback");
         let defaults = OzmuxConfigs::default();
-        assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
+        assert_eq!(res.shortcuts, defaults.shortcuts);
 
         unsafe {
             std::env::remove_var("OZMUX_CONFIG");
