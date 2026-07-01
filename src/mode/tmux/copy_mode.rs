@@ -24,8 +24,7 @@ use ozma_tty_renderer::schema::{
 };
 use ozmux_tmux::{
     CopyModeCapture, CopyModeQueries, CopyModeReply, CopyQueryKind, CopyState, CopyStateQuery,
-    PaneId, TmuxClient, TmuxPane, TmuxProjectionSet, absolute_to_visible_row,
-    is_cursor_sentinel_reply, parse_copy_state,
+    PaneId, TmuxClient, TmuxPane, TmuxProjectionSet, absolute_to_visible_row, parse_copy_state,
 };
 use std::collections::HashMap;
 
@@ -339,9 +338,6 @@ fn apply_capture_reply(
     // out (≤ STALE_STATE_RESEND_UPDATES frames).
     let pending = refresh.capture_in_flight.remove(&reply.pane);
     if !reply.ok {
-        return;
-    }
-    if is_cursor_sentinel_reply(&reply.output) {
         return;
     }
     if let Some(pending) = pending {

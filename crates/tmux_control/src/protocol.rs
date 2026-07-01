@@ -970,11 +970,11 @@ mod tests {
             .unwrap();
         let cap_p1 = c.send("capture-pane -p -e -t %1").unwrap();
         let cur_p1 = c
-            .send("display-message -p -t %1 'OZMUXCUR #{pane_id} #{cursor_x} #{cursor_y}'")
+            .send("display-message -p -t %1 '#{cursor_x} #{cursor_y}'")
             .unwrap();
         let cap_p2 = c.send("capture-pane -p -e -t %2").unwrap();
         let cur_p2 = c
-            .send("display-message -p -t %2 'OZMUXCUR #{pane_id} #{cursor_x} #{cursor_y}'")
+            .send("display-message -p -t %2 '#{cursor_x} #{cursor_y}'")
             .unwrap();
         let _ = c.take_outgoing();
         let stream = concat!(
@@ -982,9 +982,9 @@ mod tests {
             "%begin 1 101 1\n%end 1 101 1\n",
             "%begin 1 102 1\nOZMUXFENCE_0\n%end 1 102 1\n",
             "%begin 1 103 1\nP1\n%end 1 103 1\n",
-            "%begin 1 104 1\nOZMUXCUR %1 54 39\n%end 1 104 1\n",
+            "%begin 1 104 1\n54 39\n%end 1 104 1\n",
             "%begin 1 105 1\nP2\n%end 1 105 1\n",
-            "%begin 1 106 1\nOZMUXCUR %2 7 12\n%end 1 106 1\n",
+            "%begin 1 106 1\n7 12\n%end 1 106 1\n",
         );
         let events = c.feed(stream.as_bytes()).unwrap();
         let body = |id: CommandId| {
@@ -999,8 +999,8 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(body(cap_p1), vec!["P1".to_string()]);
-        assert_eq!(body(cur_p1), vec!["OZMUXCUR %1 54 39".to_string()]);
+        assert_eq!(body(cur_p1), vec!["54 39".to_string()]);
         assert_eq!(body(cap_p2), vec!["P2".to_string()]);
-        assert_eq!(body(cur_p2), vec!["OZMUXCUR %2 7 12".to_string()]);
+        assert_eq!(body(cur_p2), vec!["7 12".to_string()]);
     }
 }

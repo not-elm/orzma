@@ -11,8 +11,8 @@ use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{EnumerationState, PendingReply, version_supports_per_window_refresh};
 use crate::event_pump::{
     capture_to_bytes, capture_to_bytes_with_cursor, detect_session_switch, detect_window_added,
-    detect_window_switch, first_reply_line, is_cursor_sentinel_reply, log_transport_event,
-    parse_active_pane, parse_cursor_pos, trigger_notification, trigger_seed,
+    detect_window_switch, first_reply_line, log_transport_event, parse_active_pane,
+    parse_cursor_pos, trigger_notification, trigger_seed,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
 use crate::keybindings::{KeyBindings, ModeKeys, parse_list_keys, parse_prefix};
@@ -525,13 +525,7 @@ fn apply_reply(
             }
         }
         PendingReply::Capture { pane } if ok => {
-            if is_cursor_sentinel_reply(output) {
-                // NOTE: a misrouted cursor reply landed on this capture slot (a FIFO
-                // desync). Discard it and clear the pane's pending-cursor state so the
-                // "OZMUXCUR …" line is never stashed/painted as captured content.
-                enumeration.panes_with_cursor_pending.remove(&pane);
-                enumeration.capture_awaiting_cursor.remove(&pane);
-            } else if enumeration.panes_with_cursor_pending.contains(&pane) {
+            if enumeration.panes_with_cursor_pending.contains(&pane) {
                 enumeration
                     .capture_awaiting_cursor
                     .insert(pane, output.to_vec());
@@ -550,19 +544,12 @@ fn apply_reply(
             let Some(lines) = enumeration.capture_awaiting_cursor.remove(&pane) else {
                 return;
             };
-            // NOTE: do not retry on a missing sentinel or pane-id mismatch — the
-            // reply was misrouted by a still-desynced FIFO, so an immediate re-capture
-            // would mis-route again. Discard; the next dims-change reseed recovers.
-            if !ok {
+            let (cx, cy) = if ok {
+                parse_cursor_pos(output).unwrap_or((0, 0))
+            } else {
                 tracing::warn!(pane = pane.0, "cursor-position query failed");
-                return;
-            }
-            let Some((reply_pane, cx, cy)) = parse_cursor_pos(output) else {
-                return;
+                (0, 0)
             };
-            if reply_pane != pane {
-                return;
-            }
             pane_output.write(PaneOutput {
                 pane,
                 data: capture_to_bytes_with_cursor(&lines, cx, cy),

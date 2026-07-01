@@ -27,30 +27,11 @@ pub(crate) fn first_reply_line(ok: bool, output: &[String], what: &str) -> Optio
         .map(str::to_owned)
 }
 
-/// Parses an `'OZMUXCUR %<pane> <cursor_x> <cursor_y>'` reply line into
-/// `(PaneId, col, row)`. Returns `None` when the sentinel is absent or the line is
-/// malformed — under a FIFO desync the reply may belong to another command, so the
-/// caller (Layer A) discards it rather than painting it. Mirrors `parse_active_pane`'s
-/// `split_whitespace` + `strip_prefix('%')` style.
-pub(crate) fn parse_cursor_pos(output: &[String]) -> Option<(PaneId, u16, u16)> {
+/// Parses a `'#{cursor_x} #{cursor_y}'` reply line into `(col, row)`.
+pub(crate) fn parse_cursor_pos(output: &[String]) -> Option<(u16, u16)> {
     let line = output.first()?;
-    let mut parts = line.split_whitespace();
-    if parts.next()? != "OZMUXCUR" {
-        return None;
-    }
-    let pane = parts.next()?.strip_prefix('%')?.parse().ok()?;
-    let x = parts.next()?.parse().ok()?;
-    let y = parts.next()?.parse().ok()?;
-    Some((PaneId(pane), x, y))
-}
-
-/// True when a reply body is a lone, well-formed Layer-A cursor sentinel
-/// (`OZMUXCUR %<pane> <x> <y>`). Used to reject a cursor reply that a FIFO desync
-/// misrouted onto a capture slot. Requiring the full parse (not just an `OZMUXCUR `
-/// prefix) keeps it from false-discarding real single-line pane content that merely
-/// starts with the marker.
-pub fn is_cursor_sentinel_reply(output: &[String]) -> bool {
-    output.len() == 1 && parse_cursor_pos(output).is_some()
+    let (x, y) = line.trim().split_once(' ')?;
+    Some((x.parse().ok()?, y.parse().ok()?))
 }
 
 /// Joins `capture-pane -p -e` reply lines into VT bytes for seeding a pane's
@@ -347,26 +328,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_cursor_pos_reads_pane_col_row() {
-        assert_eq!(
-            parse_cursor_pos(&["OZMUXCUR %2 3 5".to_string()]),
-            Some((PaneId(2), 3, 5))
-        );
-        assert_eq!(parse_cursor_pos(&["3 5".to_string()]), None);
-        assert_eq!(parse_cursor_pos(&["OZMUXCUR %2 nope".to_string()]), None);
+    fn parse_cursor_pos_reads_col_row() {
+        assert_eq!(parse_cursor_pos(&["3 5".to_string()]), Some((3, 5)));
         assert_eq!(parse_cursor_pos(&["nope".to_string()]), None);
-    }
-
-    #[test]
-    fn cursor_sentinel_reply_requires_full_parse_not_just_prefix() {
-        assert!(is_cursor_sentinel_reply(&["OZMUXCUR %2 54 39".to_string()]));
-        assert!(!is_cursor_sentinel_reply(&["OZMUXCUR foo".to_string()]));
-        assert!(!is_cursor_sentinel_reply(&["row one".to_string()]));
-        assert!(!is_cursor_sentinel_reply(&[
-            "OZMUXCUR %2 54 39".to_string(),
-            "second line".to_string(),
-        ]));
-        assert!(!is_cursor_sentinel_reply(&[]));
     }
 
     #[test]

@@ -33,7 +33,6 @@ pub use enumerate::{
     CopyState, LIST_WINDOWS_FORMAT, WindowRow, absolute_to_visible_row, parse_copy_state,
     parse_window_rows,
 };
-pub use event_pump::is_cursor_sentinel_reply;
 pub use events::{TmuxConnectionClosed, TmuxConnectionReset};
 pub use input::{KeyMods, bevy_key_to_tmux_name};
 pub use keybindings::{
