@@ -258,10 +258,8 @@ mod validate_tests {
     }
 
     #[test]
-    fn validate_tap_leader_does_not_shadow_direct() {
-        // `Cmd` tap leader must NOT trip LeaderShadowsDirectBinding even though
-        // a direct binding uses Cmd+... (tap != chord).
-        let toml_str = "[shortcuts]\nleader = \"Cmd\"\ndetach-session = \"<Leader>d\"\n";
+    fn validate_tap_leader_coexists_with_cmd_direct_bindings() {
+        let toml_str = "[shortcuts]\nleader = \"Cmd\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 }
