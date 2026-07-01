@@ -118,6 +118,43 @@ impl Shortcuts {
     }
 }
 
+/// Outcome of one `step_leader` call for a single pressed key. `Passthrough`
+/// means the key is not leader-related and the caller proceeds with its normal
+/// dispatch.
+pub(crate) enum LeaderStep {
+    /// A leader-scoped binding matched; run this action.
+    RunAction(ShortcutAction),
+    /// Consume the key with no effect (the leader itself, or an unmatched second
+    /// key that abandons the sequence).
+    Swallow,
+    /// Not leader-related; fall through to the caller's normal dispatch.
+    Passthrough,
+}
+
+/// Advances the ozmux leader state machine for one pressed key, threading
+/// `pending` across frames (mirrors the tmux `plan_forward` prefix dispatch).
+/// Swallows the leader itself and any unmatched second key; returns
+/// `Passthrough` for unrelated keys.
+pub(crate) fn step_leader(
+    pending: &mut bool,
+    shortcuts: &Shortcuts,
+    keycode: KeyCode,
+    mods: Modifiers,
+) -> LeaderStep {
+    if *pending {
+        *pending = false;
+        return match shortcuts.match_prefix_action(keycode, mods) {
+            Some(action) => LeaderStep::RunAction(action),
+            None => LeaderStep::Swallow,
+        };
+    }
+    if shortcuts.is_leader(keycode, mods) {
+        *pending = true;
+        return LeaderStep::Swallow;
+    }
+    LeaderStep::Passthrough
+}
+
 /// `Startup` system: resolves the configured shortcut bindings into
 /// `ResolvedShortcuts`, replacing the empty default inserted at plugin build.
 ///
@@ -466,5 +503,100 @@ mod tests {
                 .any(|c| c.key_code == KeyCode::KeyV && c.meta),
             "the paste chord must not appear in reserved",
         );
+    }
+
+    fn leader_fixture() -> Shortcuts {
+        Shortcuts {
+            direct: Vec::new(),
+            prefix: vec![OzmuxShortcut {
+                keycode: KeyCode::KeyS,
+                modifiers: mods(false, false, false, false),
+                action: ShortcutAction::EnterCopyMode,
+            }],
+            leader: Some((KeyCode::KeyA, mods(true, false, false, false))),
+        }
+    }
+
+    #[test]
+    fn leader_press_sets_pending_and_swallows() {
+        let sc = leader_fixture();
+        let mut pending = false;
+        let step = step_leader(
+            &mut pending,
+            &sc,
+            KeyCode::KeyA,
+            mods(true, false, false, false),
+        );
+        assert!(matches!(step, LeaderStep::Swallow));
+        assert!(pending);
+    }
+
+    #[test]
+    fn pending_plus_bound_key_runs_action_and_clears_pending() {
+        let sc = leader_fixture();
+        let mut pending = true;
+        let step = step_leader(
+            &mut pending,
+            &sc,
+            KeyCode::KeyS,
+            mods(false, false, false, false),
+        );
+        assert!(matches!(
+            step,
+            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+        ));
+        assert!(!pending);
+    }
+
+    #[test]
+    fn pending_plus_unbound_key_swallows_and_clears_pending() {
+        let sc = leader_fixture();
+        let mut pending = true;
+        let step = step_leader(
+            &mut pending,
+            &sc,
+            KeyCode::KeyZ,
+            mods(false, false, false, false),
+        );
+        assert!(matches!(step, LeaderStep::Swallow));
+        assert!(!pending);
+    }
+
+    #[test]
+    fn unrelated_key_passes_through() {
+        let sc = leader_fixture();
+        let mut pending = false;
+        let step = step_leader(
+            &mut pending,
+            &sc,
+            KeyCode::KeyB,
+            mods(false, false, false, false),
+        );
+        assert!(matches!(step, LeaderStep::Passthrough));
+        assert!(!pending);
+    }
+
+    #[test]
+    fn same_frame_leader_then_bound_key_resolves() {
+        let sc = leader_fixture();
+        let mut pending = false;
+        let first = step_leader(
+            &mut pending,
+            &sc,
+            KeyCode::KeyA,
+            mods(true, false, false, false),
+        );
+        assert!(matches!(first, LeaderStep::Swallow));
+        let second = step_leader(
+            &mut pending,
+            &sc,
+            KeyCode::KeyS,
+            mods(false, false, false, false),
+        );
+        assert!(matches!(
+            second,
+            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+        ));
+        assert!(!pending);
     }
 }
