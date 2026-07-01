@@ -57,7 +57,9 @@ impl Plugin for ShortcutsPlugin {
             // next terminal keystroke as its second key.
             .add_systems(
                 Update,
-                reset_leader_pending.run_if(resource_exists_and_changed::<FocusedWebview>),
+                reset_leader_pending
+                    .run_if(resource_exists_and_changed::<FocusedWebview>)
+                    .before(LeaderGate::Detect),
             );
     }
 }
@@ -297,41 +299,43 @@ fn detect_modifier_tap(
     shortcuts: Res<Shortcuts>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
+    // `run_if(tap_leader_enabled)` guarantees this is `Some`.
     let Some(modifier) = shortcuts.tap_modifier() else {
-        keys.clear();
         return;
     };
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    if !focused {
-        if state.armed.is_some() {
-            state.armed = None;
-        }
+    let mut armed = state.armed;
+    if !focused || mouse.get_just_pressed().next().is_some() {
+        // NOTE: a mouse press anywhere this frame (or lost focus) invalidates the
+        // tap gesture — disarm and drain this frame's key events without arming or
+        // firing. Draining here (own reader cursor) prevents a same-frame
+        // `Cmd-down` + click from arming and firing on the next `Cmd-up`.
+        armed = None;
         keys.clear();
-        return;
-    }
-    let now = time.elapsed();
-    let timeout = shortcuts.tap_timeout;
-    if mouse.get_just_pressed().next().is_some() {
-        step_tap(&mut state.armed, TapEvent::MousePress, now, timeout);
-    }
-    for ev in keys.read() {
-        if ev.repeat {
-            continue;
-        }
-        let event = if is_tap_modifier_key(ev.key_code, modifier) {
-            match ev.state {
-                ButtonState::Pressed => TapEvent::TargetDown,
-                ButtonState::Released => TapEvent::TargetUp,
+    } else {
+        let now = time.elapsed();
+        let timeout = shortcuts.tap_timeout;
+        for ev in keys.read() {
+            if ev.repeat {
+                continue;
             }
-        } else if ev.state == ButtonState::Pressed {
-            TapEvent::OtherDown
-        } else {
-            continue;
-        };
-        if step_tap(&mut state.armed, event, now, timeout) == TapOutcome::Fired && !leader_pending.0
-        {
-            leader_pending.0 = true;
+            let event = if is_tap_modifier_key(ev.key_code, modifier) {
+                match ev.state {
+                    ButtonState::Pressed => TapEvent::TargetDown,
+                    ButtonState::Released => TapEvent::TargetUp,
+                }
+            } else if ev.state == ButtonState::Pressed {
+                TapEvent::OtherDown
+            } else {
+                continue;
+            };
+            if step_tap(&mut armed, event, now, timeout) == TapOutcome::Fired && !leader_pending.0 {
+                leader_pending.0 = true;
+            }
         }
+    }
+    if armed != state.armed {
+        state.armed = armed;
     }
 }
 
@@ -433,8 +437,6 @@ enum TapEvent {
     TargetDown,
     /// A non-target key was pressed (a chord is forming — disarm).
     OtherDown,
-    /// A mouse button was pressed (e.g. Cmd+click — disarm).
-    MousePress,
     /// The target modifier was released.
     TargetUp,
 }
@@ -450,7 +452,9 @@ enum TapOutcome {
 
 /// Pure transition for the modifier-tap machine. `armed` holds the target's
 /// down-time (or `None` when not armed). A tap fires on `TargetUp` iff the
-/// target is still armed within `timeout`; any other-key or mouse press disarms.
+/// target is still armed within `timeout`; any other-key press disarms.
+/// Mouse presses are handled at the frame level by the caller before `step_tap`
+/// is invoked.
 fn step_tap(
     armed: &mut Option<Duration>,
     event: TapEvent,
@@ -462,7 +466,7 @@ fn step_tap(
             *armed = Some(now);
             TapOutcome::None
         }
-        TapEvent::OtherDown | TapEvent::MousePress => {
+        TapEvent::OtherDown => {
             *armed = None;
             TapOutcome::None
         }
@@ -480,15 +484,11 @@ fn step_tap(
 
 /// True when `keycode` is a left/right variant of `modifier`.
 fn is_tap_modifier_key(keycode: KeyCode, modifier: TapModifier) -> bool {
-    matches!(
-        (modifier, keycode),
-        (TapModifier::Meta, KeyCode::SuperLeft | KeyCode::SuperRight)
-            | (
-                TapModifier::Ctrl,
-                KeyCode::ControlLeft | KeyCode::ControlRight
-            )
-            | (TapModifier::Alt, KeyCode::AltLeft | KeyCode::AltRight)
-    )
+    match modifier {
+        TapModifier::Meta => matches!(keycode, KeyCode::SuperLeft | KeyCode::SuperRight),
+        TapModifier::Ctrl => matches!(keycode, KeyCode::ControlLeft | KeyCode::ControlRight),
+        TapModifier::Alt => matches!(keycode, KeyCode::AltLeft | KeyCode::AltRight),
+    }
 }
 
 /// True for the bare left/right modifier keys, which emit their own `Pressed`
@@ -608,17 +608,6 @@ mod tests {
         let mut armed = None;
         step_tap(&mut armed, TapEvent::TargetDown, ms(0), ms(300));
         step_tap(&mut armed, TapEvent::OtherDown, ms(50), ms(300));
-        assert_eq!(
-            step_tap(&mut armed, TapEvent::TargetUp, ms(100), ms(300)),
-            TapOutcome::None
-        );
-    }
-
-    #[test]
-    fn step_tap_mouse_press_disarms() {
-        let mut armed = None;
-        step_tap(&mut armed, TapEvent::TargetDown, ms(0), ms(300));
-        step_tap(&mut armed, TapEvent::MousePress, ms(50), ms(300));
         assert_eq!(
             step_tap(&mut armed, TapEvent::TargetUp, ms(100), ms(300)),
             TapOutcome::None
@@ -1172,6 +1161,27 @@ mod tests {
         assert!(
             !app.world().resource::<LeaderPending>().0,
             "mouse press in a keyboard-less frame must disarm the tap and suppress the leader"
+        );
+    }
+
+    #[test]
+    fn detect_modifier_tap_same_frame_mouse_press_suppresses_tap() {
+        let mut app = tap_app();
+        // Same frame: target-modifier down AND a mouse press.
+        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        // Next frame: the mouse is no longer just-pressed; only the release arrives.
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
+        app.update();
+        assert!(
+            !app.world().resource::<LeaderPending>().0,
+            "a mouse press in the same frame as the modifier press must suppress the tap"
         );
     }
 }

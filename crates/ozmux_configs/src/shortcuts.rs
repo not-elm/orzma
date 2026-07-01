@@ -519,11 +519,15 @@ where
 /// returns it. Returns `None` for `Shift`, any `+`-joined chord, or a
 /// non-modifier token, so those fall through to chord parsing.
 fn single_tap_modifier(value: &str) -> Option<TapModifier> {
-    match value.to_ascii_lowercase().as_str() {
-        "cmd" | "command" | "meta" | "super" => Some(TapModifier::Meta),
-        "ctrl" => Some(TapModifier::Ctrl),
-        "alt" | "opt" | "option" => Some(TapModifier::Alt),
-        _ => None,
+    let (mods, _) = parse_modifier_to_bit(value)?;
+    if mods.meta {
+        Some(TapModifier::Meta)
+    } else if mods.ctrl {
+        Some(TapModifier::Ctrl)
+    } else if mods.alt {
+        Some(TapModifier::Alt)
+    } else {
+        None
     }
 }
 
