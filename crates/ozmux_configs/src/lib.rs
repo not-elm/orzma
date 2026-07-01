@@ -80,6 +80,7 @@ impl OzmuxConfigs {
     }
 
     fn normalize(&mut self) {
+        self.shortcuts.normalize();
         self.inactive_pane.normalize();
         self.mouse.normalize();
     }
@@ -95,7 +96,7 @@ impl OzmuxConfigs {
         if sc.has_leader_bindings() && sc.leader.is_none() {
             return Err(OzmuxConfigsError::PrefixBindingsWithoutLeader);
         }
-        if let Some(leader) = sc.leader.as_ref() {
+        if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
             if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
             {
                 return Err(OzmuxConfigsError::LeaderShadowsDirectBinding {
@@ -247,6 +248,20 @@ mod validate_tests {
     #[test]
     fn validate_accepts_mappable_leader() {
         let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-copy-mode = \"<Leader>s\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_bare_modifier_tap_leader() {
+        let toml_str = "[shortcuts]\nleader = \"Cmd\"\ndetach-session = \"<Leader>d\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    #[test]
+    fn validate_tap_leader_does_not_shadow_direct() {
+        // `Cmd` tap leader must NOT trip LeaderShadowsDirectBinding even though
+        // a direct binding uses Cmd+... (tap != chord).
+        let toml_str = "[shortcuts]\nleader = \"Cmd\"\ndetach-session = \"<Leader>d\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 }

@@ -264,6 +264,27 @@ pub struct DuplicateChord {
     pub actions: Vec<&'static str>,
 }
 
+/// A bare modifier that can act as a tap leader. `Shift` is intentionally
+/// excluded (too noisy as a tap).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TapModifier {
+    /// `Cmd` / `Command` / `Meta` / `Super`.
+    Meta,
+    /// `Ctrl`.
+    Ctrl,
+    /// `Alt` / `Opt` / `Option`.
+    Alt,
+}
+
+/// The leader in either form: a key-containing chord, or a bare modifier tap.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Leader {
+    /// A chord leader (`Ctrl+A`): press+release the chord, then the next key.
+    Chord(KeyChord),
+    /// A modifier-tap leader (`Cmd`): tap the bare modifier, then the next key.
+    ModifierTap(TapModifier),
+}
+
 /// A resolved shortcut binding: a direct chord, or a leader-scoped chord
 /// reached after the configured `leader`. The `<Leader>` token in a config
 /// value selects the `Leader` variant.
@@ -299,9 +320,10 @@ impl Binding {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
 pub struct Shortcuts {
-    /// The leader chord for `<Leader>`-scoped bindings (empty/absent = disabled).
+    /// The leader for `<Leader>`-scoped bindings: a chord (`Ctrl+A`) or a bare
+    /// modifier tap (`Cmd`). Empty/absent = disabled.
     #[serde(deserialize_with = "deser_leader", serialize_with = "ser_leader")]
-    pub leader: Option<KeyChord>,
+    pub leader: Option<Leader>,
     /// Paste the system clipboard into the active terminal.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
@@ -333,6 +355,10 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub detach_session: Option<Binding>,
+    /// Timeout (ms) for a modifier-tap leader: press+release within this window
+    /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
+    /// normalized to 300.
+    pub leader_tap_timeout_ms: u64,
 }
 
 impl Default for Shortcuts {
@@ -344,6 +370,7 @@ impl Default for Shortcuts {
             quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
             enter_copy_mode: Some(Binding::Direct(parse_default_chord("Cmd+S"))),
             detach_session: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+D"))),
+            leader_tap_timeout_ms: 300,
         }
     }
 }
@@ -411,6 +438,14 @@ impl Shortcuts {
     /// True when at least one leader-scoped binding is set.
     pub(crate) fn has_leader_bindings(&self) -> bool {
         self.leader_chords().next().is_some()
+    }
+
+    /// Normalizes numeric fields: a `leader_tap_timeout_ms` of 0 is meaningless
+    /// (a tap would never fit), so it reverts to the 300 default.
+    pub(crate) fn normalize(&mut self) {
+        if self.leader_tap_timeout_ms == 0 {
+            self.leader_tap_timeout_ms = 300;
+        }
     }
 }
 
@@ -480,9 +515,40 @@ where
     ser.serialize_str(&text)
 }
 
-/// serde field deserializer for the leader chord: empty string is `None`;
-/// any other string parses via `parse_key_chord`.
-fn deser_leader<'de, D>(d: D) -> Result<Option<KeyChord>, D::Error>
+/// If `value` is exactly one allowed tap-modifier token (case-insensitive),
+/// returns it. Returns `None` for `Shift`, any `+`-joined chord, or a
+/// non-modifier token, so those fall through to chord parsing.
+fn single_tap_modifier(value: &str) -> Option<TapModifier> {
+    match value.to_ascii_lowercase().as_str() {
+        "cmd" | "command" | "meta" | "super" => Some(TapModifier::Meta),
+        "ctrl" => Some(TapModifier::Ctrl),
+        "alt" | "opt" | "option" => Some(TapModifier::Alt),
+        _ => None,
+    }
+}
+
+/// The canonical token a `TapModifier` serializes to.
+fn tap_modifier_token(m: TapModifier) -> &'static str {
+    match m {
+        TapModifier::Meta => "Cmd",
+        TapModifier::Ctrl => "Ctrl",
+        TapModifier::Alt => "Alt",
+    }
+}
+
+/// Parses a non-empty `leader` value: a single allowed tap-modifier token →
+/// `ModifierTap`; anything else → `parse_key_chord` → `Chord`. A bare `Shift`
+/// (and any other bare modifier) errors via `parse_key_chord` (no key).
+fn parse_leader(value: &str) -> Result<Leader, KeyChordParseError> {
+    if let Some(m) = single_tap_modifier(value) {
+        return Ok(Leader::ModifierTap(m));
+    }
+    parse_key_chord(value).map(Leader::Chord)
+}
+
+/// serde field deserializer for the leader: empty string → `None`; a bare
+/// tap-modifier → `ModifierTap`; otherwise a chord.
+fn deser_leader<'de, D>(d: D) -> Result<Option<Leader>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -490,15 +556,20 @@ where
     if s.is_empty() {
         return Ok(None);
     }
-    parse_key_chord(&s).map(Some).map_err(DeError::custom)
+    parse_leader(&s).map(Some).map_err(DeError::custom)
 }
 
-/// serde field serializer for the leader chord: `None` → `""`, `Some(c)` → `c`.
-fn ser_leader<S>(value: &Option<KeyChord>, ser: S) -> Result<S::Ok, S::Error>
+/// serde field serializer for the leader: `None` → `""`, `Chord(c)` → `c`,
+/// `ModifierTap(m)` → its canonical token.
+fn ser_leader<S>(value: &Option<Leader>, ser: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    let text = value.as_ref().map(KeyChord::to_string).unwrap_or_default();
+    let text = match value {
+        None => String::new(),
+        Some(Leader::Chord(chord)) => chord.to_string(),
+        Some(Leader::ModifierTap(m)) => tap_modifier_token(*m).to_string(),
+    };
     ser.serialize_str(&text)
 }
 
@@ -869,7 +940,10 @@ enter-copy-mode = "<Leader>s"
 detach-session = "<Leader>d"
 "#;
         let s: Shortcuts = toml::from_str(toml).unwrap();
-        assert_eq!(s.leader, Some(parse_key_chord("Ctrl+A").unwrap()));
+        assert_eq!(
+            s.leader,
+            Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap()))
+        );
         assert_eq!(
             s.enter_copy_mode,
             Some(Binding::Leader(parse_key_chord("s").unwrap()))
@@ -920,14 +994,14 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D"}"#;
+        let expected = r#"{"leader":"","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","leader-tap-timeout-ms":300}"#;
         assert_eq!(json, expected);
     }
 
     #[test]
     fn serialize_leader_binding_emits_leader_token() {
         let s = Shortcuts {
-            leader: Some(parse_key_chord("Ctrl+A").unwrap()),
+            leader: Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap())),
             detach_session: Some(Binding::Leader(parse_key_chord("d").unwrap())),
             ..Default::default()
         };
@@ -940,5 +1014,81 @@ detach-session = "<Leader>d"
             json.contains(r#""detach-session":"<Leader>D""#),
             "a Leader binding serializes with the <Leader> token; got {json}"
         );
+    }
+
+    #[test]
+    fn parse_leader_bare_modifiers() {
+        assert_eq!(
+            parse_leader("Cmd").unwrap(),
+            Leader::ModifierTap(TapModifier::Meta)
+        );
+        assert_eq!(
+            parse_leader("command").unwrap(),
+            Leader::ModifierTap(TapModifier::Meta)
+        );
+        assert_eq!(
+            parse_leader("Super").unwrap(),
+            Leader::ModifierTap(TapModifier::Meta)
+        );
+        assert_eq!(
+            parse_leader("Ctrl").unwrap(),
+            Leader::ModifierTap(TapModifier::Ctrl)
+        );
+        assert_eq!(
+            parse_leader("Option").unwrap(),
+            Leader::ModifierTap(TapModifier::Alt)
+        );
+    }
+
+    #[test]
+    fn parse_leader_chord_still_works() {
+        assert_eq!(
+            parse_leader("Ctrl+A").unwrap(),
+            Leader::Chord(parse_key_chord("Ctrl+A").unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_leader_rejects_bare_shift() {
+        assert!(parse_leader("Shift").is_err());
+    }
+
+    #[test]
+    fn shortcuts_parses_bare_modifier_leader_and_timeout() {
+        let toml =
+            "leader = \"Cmd\"\nleader-tap-timeout-ms = 250\ndetach-session = \"<Leader>d\"\n";
+        let s: Shortcuts = toml::from_str(toml).unwrap();
+        assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
+        assert_eq!(s.leader_tap_timeout_ms, 250);
+    }
+
+    #[test]
+    fn shortcuts_leader_shift_is_parse_error() {
+        assert!(toml::from_str::<Shortcuts>("leader = \"Shift\"\n").is_err());
+    }
+
+    #[test]
+    fn shortcuts_default_timeout_is_300() {
+        assert_eq!(Shortcuts::default().leader_tap_timeout_ms, 300);
+    }
+
+    #[test]
+    fn normalize_clamps_zero_timeout_to_300() {
+        let mut s = Shortcuts {
+            leader_tap_timeout_ms: 0,
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(s.leader_tap_timeout_ms, 300);
+    }
+
+    #[test]
+    fn serialize_bare_modifier_leader_emits_token() {
+        let s = Shortcuts {
+            leader: Some(Leader::ModifierTap(TapModifier::Meta)),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""leader":"Cmd""#), "got {json}");
     }
 }
