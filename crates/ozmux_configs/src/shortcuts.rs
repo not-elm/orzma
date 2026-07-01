@@ -254,7 +254,7 @@ pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
     })
 }
 
-/// One or more chord-collision entry. Carried inside
+/// One chord-collision entry. Carried inside
 /// `OzmuxConfigsError::DuplicateChords` (defined in `error.rs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateChord {

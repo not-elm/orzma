@@ -43,7 +43,7 @@ pub enum OzmuxConfigsError {
     #[error("a <Leader> binding is set but no [shortcuts] leader is configured")]
     PrefixBindingsWithoutLeader,
 
-    /// The configured leader chord duplicates a direct `[shortcuts.bindings]`
+    /// The configured leader chord duplicates a direct `[shortcuts]` binding's
     /// chord. The leader is matched first, so that direct binding would be
     /// unreachable.
     #[error("leader chord {chord} shadows the direct binding for {action}")]
@@ -55,10 +55,9 @@ pub enum OzmuxConfigsError {
     },
 
     /// The configured leader chord's logical key has no physical `KeyCode`
-    /// mapping, so the whole `[shortcuts.prefix_bindings]` table would be
-    /// silently unreachable.
+    /// mapping, so its `<Leader>` bindings would be silently unreachable.
     #[error(
-        "leader chord {chord} has no physical key mapping; shortcuts.prefix_bindings would be unreachable"
+        "leader chord {chord} has no physical key mapping; its <Leader> bindings would be unreachable"
     )]
     UnmappableLeader {
         /// The unmappable leader chord.

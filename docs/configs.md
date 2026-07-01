@@ -72,8 +72,8 @@ webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = f
 
 [shortcuts]
 # Optional leader chord (tmux-style). A value of "<Leader>x" fires as
-# "press the leader, then x". "" or omitted disables the leader. Choose a
-# leader distinct from your tmux prefix.
+# "press the leader, then x". Set to a chord string (e.g. "Ctrl+A"); "" or
+# omitted disables the leader. Choose a leader distinct from your tmux prefix.
 leader = ""
 
 # Each action takes ONE value: a direct chord ("Cmd+V"), a leader-scoped
