@@ -70,14 +70,29 @@ tint = 0.85               # f32 0..=1. Tint strength (0 = off, 1 = full tint).
 webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webview overlays.
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
 
+[shortcuts]
+# Optional leader chord (tmux-style). Bindings under [shortcuts.prefix_bindings]
+# fire as "press the leader, then the key". "" or omitted disables the leader.
+# Choose a leader distinct from your tmux prefix; a bare-key leader (e.g. "a")
+# steals that key from the terminal entirely.
+prefix = ""
+
 [shortcuts.bindings]
-# Rebind with a chord string, or unbind with "". Two actions may not share
-# the same chord (startup error). See "Chord syntax" below.
+# Direct chords. Rebind with a chord string, or unbind with "". Two actions may
+# not share the same chord (startup error). See "Chord syntax" below.
 paste                 = "Cmd+V"
 release-webview-focus = "Ctrl+Shift+Escape"
 quit                  = "Cmd+Q"
 enter-copy-mode       = "Cmd+S"
 detach-session        = "Ctrl+Shift+D"
+
+[shortcuts.prefix_bindings]
+# Leader-scoped bindings: each value is the key pressed AFTER the leader. All
+# unbound by default. Requires [shortcuts] prefix to be set. The leader must not
+# equal any direct-binding chord, and two leader-scoped actions may not share a
+# chord (startup errors). Same key in both tables is fine (different key-spaces).
+# enter-copy-mode = "s"   # leader -> s   (Default mode only; see note below)
+# detach-session  = "d"   # leader -> d   (tmux mode only; see note below)
 ```
 
 ## Chord syntax
@@ -106,3 +121,8 @@ startup.
 | `quit` | `Cmd+Q` | Quit ozmux. |
 | `enter-copy-mode` | `Cmd+S` | Enter copy mode. |
 | `detach-session` | `Ctrl+Shift+D` | Detach the current tmux session. |
+
+Note: some actions only take effect in one mode. `enter-copy-mode` is active in
+Default (single-terminal) mode only — under tmux, copy mode is entered through
+tmux's own key bindings. `detach-session` is active under tmux only. This applies
+whether the action is bound directly or under the prefix.
