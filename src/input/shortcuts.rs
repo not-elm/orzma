@@ -40,6 +40,9 @@ impl Plugin for ShortcutsPlugin {
                 )
                     .chain(),
             )
+            // NOTE: intentionally not gated on `on_message::<KeyboardInput>` — must run on
+            // keyboard-less frames so a mouse press (e.g. Cmd+click mid-tap) can disarm
+            // `state.armed`; gating it on `on_message` would silently break that disarm.
             .add_systems(
                 Update,
                 detect_modifier_tap
@@ -300,7 +303,9 @@ fn detect_modifier_tap(
     };
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if !focused {
-        state.armed = None;
+        if state.armed.is_some() {
+            state.armed = None;
+        }
         keys.clear();
         return;
     }
@@ -567,6 +572,7 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::input::keyboard::Key;
     use ozmux_configs::shortcuts::{Binding, Shortcuts as ConfigShortcuts};
 
     fn ms(n: u64) -> Duration {
@@ -1092,5 +1098,80 @@ mod tests {
             LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
         ));
         assert!(!pending);
+    }
+
+    #[test]
+    fn step_tap_fires_at_exact_timeout_boundary() {
+        let mut armed = None;
+        step_tap(&mut armed, TapEvent::TargetDown, ms(0), ms(300));
+        assert_eq!(
+            step_tap(&mut armed, TapEvent::TargetUp, ms(300), ms(300)),
+            TapOutcome::Fired
+        );
+    }
+
+    fn tap_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<KeyboardInput>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .insert_resource(ModifierTapState::default())
+            .insert_resource(LeaderPending(false))
+            .insert_resource(Shortcuts {
+                direct: Vec::new(),
+                prefix: Vec::new(),
+                leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
+                tap_timeout: Duration::from_millis(300),
+            })
+            .add_systems(Update, detect_modifier_tap);
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app
+    }
+
+    fn tap_key(app: &mut App, key_code: KeyCode, state: ButtonState) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key: Key::Super,
+            state,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+    }
+
+    #[test]
+    fn detect_modifier_tap_fires_on_quick_tap() {
+        let mut app = tap_app();
+        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
+        app.update();
+        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
+        app.update();
+        assert!(
+            app.world().resource::<LeaderPending>().0,
+            "a quick modifier tap must engage LeaderPending"
+        );
+    }
+
+    #[test]
+    fn detect_modifier_tap_mouse_press_on_keyboardless_frame_disarms() {
+        let mut app = tap_app();
+        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Pressed);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
+        app.update();
+        assert!(
+            !app.world().resource::<LeaderPending>().0,
+            "mouse press in a keyboard-less frame must disarm the tap and suppress the leader"
+        );
     }
 }

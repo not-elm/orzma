@@ -121,4 +121,5 @@ startup.
 Note: some actions only take effect in one mode. `enter-copy-mode` is active in
 Default (single-terminal) mode only — under tmux, copy mode is entered through
 tmux's own key bindings. `detach-session` is active under tmux only. This applies
-whether the action is bound directly or as a leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is a chord or a modifier tap.
+whether the action is bound directly or as a leader-scoped key (e.g. `<Leader>s`),
+and regardless of whether the leader is a chord or a modifier tap.
