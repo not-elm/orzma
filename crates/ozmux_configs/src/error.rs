@@ -33,14 +33,14 @@ pub enum OzmuxConfigsError {
     #[error("duplicate chord(s) in shortcuts.bindings: {}", format_dupes(.0))]
     DuplicateChords(Vec<crate::shortcuts::DuplicateChord>),
 
-    /// One or more KeyChord collisions across the `[shortcuts.prefix_bindings]`
-    /// table. Collected in a single pass; reported all-at-once.
-    #[error("duplicate chord(s) in shortcuts.prefix_bindings: {}", format_dupes(.0))]
+    /// One or more KeyChord collisions among leader-scoped (`<Leader>`)
+    /// bindings. Collected in a single pass; reported all-at-once.
+    #[error("duplicate chord(s) among <Leader> bindings: {}", format_dupes(.0))]
     DuplicatePrefixChords(Vec<crate::shortcuts::DuplicateChord>),
 
-    /// `[shortcuts.prefix_bindings]` has entries but no `[shortcuts] prefix`
-    /// leader is configured, so none of them are reachable.
-    #[error("shortcuts.prefix_bindings is set but no [shortcuts] prefix leader is configured")]
+    /// A `<Leader>`-scoped binding is set but no `[shortcuts] leader` is
+    /// configured, so it is unreachable.
+    #[error("a <Leader> binding is set but no [shortcuts] leader is configured")]
     PrefixBindingsWithoutLeader,
 
     /// The configured leader chord duplicates a direct `[shortcuts.bindings]`

@@ -85,33 +85,25 @@ impl OzmuxConfigs {
     }
 
     fn validate(&self) -> OzmuxConfigsResult<()> {
-        if let Err(dupes) = self.shortcuts.bindings.validate_no_conflicts() {
+        let sc = &self.shortcuts;
+        if let Err(dupes) = sc.validate_no_direct_conflicts() {
             return Err(OzmuxConfigsError::DuplicateChords(dupes));
         }
-        if let Err(dupes) = self.shortcuts.prefix_bindings.validate_no_conflicts() {
+        if let Err(dupes) = sc.validate_no_leader_conflicts() {
             return Err(OzmuxConfigsError::DuplicatePrefixChords(dupes));
         }
-        let any_prefix_binding = self
-            .shortcuts
-            .prefix_bindings
-            .iter()
-            .any(|(_, b, _)| b.is_some());
-        if any_prefix_binding && self.shortcuts.prefix.is_none() {
+        if sc.has_leader_bindings() && sc.leader.is_none() {
             return Err(OzmuxConfigsError::PrefixBindingsWithoutLeader);
         }
-        if let Some(leader) = self.shortcuts.prefix.as_ref()
-            && let Some((action, _, _)) = self
-                .shortcuts
-                .bindings
-                .iter()
-                .find(|(_, bound, _)| bound.as_ref() == Some(leader))
+        if let Some(leader) = sc.leader.as_ref()
+            && let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
         {
             return Err(OzmuxConfigsError::LeaderShadowsDirectBinding {
                 chord: leader.clone(),
                 action,
             });
         }
-        if let Some(leader) = self.shortcuts.prefix.as_ref()
+        if let Some(leader) = sc.leader.as_ref()
             && !leader.key.maps_to_physical_key()
         {
             return Err(OzmuxConfigsError::UnmappableLeader {
@@ -189,10 +181,7 @@ mod validate_tests {
 
     #[test]
     fn validate_detects_chord_conflict() {
-        let toml_str = r#"
-[shortcuts.bindings]
-release-webview-focus = "Cmd+V"
-"#;
+        let toml_str = "[shortcuts]\nrelease-webview-focus = \"Cmd+V\"\n";
         let mut configs: OzmuxConfigs = toml::from_str(toml_str).unwrap();
         configs.normalize();
         let err = configs.validate().unwrap_err();
@@ -207,9 +196,8 @@ release-webview-focus = "Cmd+V"
     }
 
     #[test]
-    fn validate_rejects_prefix_bindings_without_leader() {
-        let err =
-            parse_validated("[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n").unwrap_err();
+    fn validate_rejects_leader_binding_without_leader() {
+        let err = parse_validated("[shortcuts]\ndetach-session = \"<Leader>d\"\n").unwrap_err();
         assert!(matches!(
             err,
             OzmuxConfigsError::PrefixBindingsWithoutLeader
@@ -218,7 +206,7 @@ release-webview-focus = "Cmd+V"
 
     #[test]
     fn validate_rejects_leader_shadowing_direct_binding() {
-        let toml_str = "[shortcuts]\nprefix = \"Cmd+Q\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Cmd+Q\"\ndetach-session = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         match err {
             OzmuxConfigsError::LeaderShadowsDirectBinding { action, .. } => {
@@ -229,37 +217,37 @@ release-webview-focus = "Cmd+V"
     }
 
     #[test]
-    fn validate_rejects_prefix_table_internal_dupe() {
-        let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\nenter-copy-mode = \"d\"\n";
+    fn validate_rejects_leader_table_internal_dupe() {
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\ndetach-session = \"<Leader>d\"\nenter-copy-mode = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         assert!(matches!(err, OzmuxConfigsError::DuplicatePrefixChords(_)));
     }
 
     #[test]
-    fn validate_allows_cross_table_same_key() {
-        let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.bindings]\nenter-copy-mode = \"s\"\n[shortcuts.prefix_bindings]\ndetach-session = \"s\"\n";
+    fn validate_allows_cross_keyspace_same_key() {
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-copy-mode = \"s\"\ndetach-session = \"<Leader>s\"\n";
         assert!(
             parse_validated(toml_str).is_ok(),
-            "direct bare `s` and leader-scoped `s` occupy different key-spaces"
+            "direct `s` and leader-scoped `s` occupy different key-spaces"
         );
     }
 
     #[test]
-    fn validate_allows_prefix_with_bindings() {
-        let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n";
+    fn validate_allows_leader_with_bindings() {
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\ndetach-session = \"<Leader>d\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 
     #[test]
     fn validate_rejects_unmappable_leader() {
-        let toml_str = "[shortcuts]\nprefix = \"Cmd+Plus\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Cmd+Plus\"\ndetach-session = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         assert!(matches!(err, OzmuxConfigsError::UnmappableLeader { .. }));
     }
 
     #[test]
     fn validate_accepts_mappable_leader() {
-        let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.prefix_bindings]\nenter-copy-mode = \"s\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-copy-mode = \"<Leader>s\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 }
@@ -281,12 +269,9 @@ mod integration_tests {
     }
 
     #[test]
-    fn empty_toml_returns_default_bindings() {
+    fn empty_toml_returns_default_shortcuts() {
         let c = parse("");
-        assert_eq!(
-            c.shortcuts.bindings,
-            OzmuxConfigs::default().shortcuts.bindings
-        );
+        assert_eq!(c.shortcuts, OzmuxConfigs::default().shortcuts);
     }
 
     #[test]
@@ -299,10 +284,7 @@ mod integration_tests {
 
     #[test]
     fn unknown_binding_field_is_rejected() {
-        let toml_str = r#"
-[shortcuts.bindings]
-resize-pane-down = "Cmd+Shift+J"
-"#;
+        let toml_str = "[shortcuts]\nresize-pane-down = \"Cmd+Shift+J\"\n";
         let err = toml::from_str::<OzmuxConfigs>(toml_str).unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -384,19 +366,20 @@ resize-pane-down = "Cmd+Shift+J"
 
     #[test]
     fn user_override_replaces_one_binding_keeps_others() {
-        let c = parse("[shortcuts.bindings]\nquit = \"Cmd+Shift+Q\"\n");
-        let quit = c.shortcuts.bindings.quit.as_ref().unwrap();
+        use shortcuts::Binding;
+        let c = parse("[shortcuts]\nquit = \"Cmd+Shift+Q\"\n");
+        let quit = c.shortcuts.quit.as_ref().unwrap().chord();
         assert_eq!(quit.key, shortcuts::Key::Char('q'));
         assert!(quit.modifiers.meta && quit.modifiers.shift);
         assert!(
-            c.shortcuts.bindings.paste.is_some(),
+            matches!(c.shortcuts.paste, Some(Binding::Direct(_))),
             "unspecified active bindings keep their defaults",
         );
     }
 
     #[test]
     fn user_unbind_with_empty_string_sets_field_to_none() {
-        let c = parse("[shortcuts.bindings]\nquit = \"\"\n");
-        assert!(c.shortcuts.bindings.quit.is_none());
+        let c = parse("[shortcuts]\nquit = \"\"\n");
+        assert!(c.shortcuts.quit.is_none());
     }
 }
