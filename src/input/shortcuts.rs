@@ -6,7 +6,12 @@
 use crate::configs::OzmuxConfigsResource;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
 use crate::mode::AppMode;
+use bevy::input::ButtonState;
+use bevy::input::keyboard::KeyboardInput;
+use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
+use bevy::time::Real;
+use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
@@ -21,7 +26,11 @@ impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Shortcuts>()
             .init_resource::<LeaderPending>()
-            .configure_sets(Update, LeaderGate::Read.before(LeaderGate::Advance))
+            .init_resource::<ModifierTapState>()
+            .configure_sets(
+                Update,
+                (LeaderGate::Detect, LeaderGate::Read, LeaderGate::Advance).chain(),
+            )
             .add_systems(
                 Startup,
                 (
@@ -30,6 +39,12 @@ impl Plugin for ShortcutsPlugin {
                     populate_mouse_config,
                 )
                     .chain(),
+            )
+            .add_systems(
+                Update,
+                detect_modifier_tap
+                    .in_set(LeaderGate::Detect)
+                    .run_if(tap_leader_enabled),
             )
             .add_systems(OnExit(AppMode::Tmux), reset_leader_pending)
             .add_systems(OnExit(AppMode::Default), reset_leader_pending)
@@ -53,14 +68,23 @@ pub(crate) struct LeaderPending(
     pub(crate) bool,
 );
 
-/// Orders the two `FocusedKey` systems that touch `LeaderPending` so
-/// `dispatch_input` (`Read`) observes the end-of-previous-frame value before
-/// `app_shortcut_handler` (`Advance`) steps the leader machine and clears it.
+/// In-progress modifier-tap state: the target's down-time while armed.
+#[derive(Resource, Default)]
+struct ModifierTapState {
+    armed: Option<Duration>,
+}
+
+/// Orders the three `FocusedKey` systems that touch `LeaderPending` so
+/// `detect_modifier_tap` (`Detect`) sets the flag before `dispatch_input`
+/// (`Read`) observes it, and `app_shortcut_handler` (`Advance`) steps the
+/// leader machine and clears it last.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LeaderGate {
+    /// `detect_modifier_tap`: sets `LeaderPending` on a modifier tap.
+    Detect,
     /// `dispatch_input`: reads `LeaderPending` to gate PTY typing.
     Read,
-    /// `app_shortcut_handler`: advances the leader state machine.
+    /// `app_shortcut_handler` / `forward_keys_to_tmux`: advances the leader.
     Advance,
 }
 
@@ -156,10 +180,6 @@ impl Shortcuts {
         matches!(self.leader, Some(ResolvedLeader::Chord(kc, m)) if kc == keycode && m == mods)
     }
 
-    #[expect(
-        dead_code,
-        reason = "consumed by the modifier-tap detection system added in Task 3"
-    )]
     fn tap_modifier(&self) -> Option<TapModifier> {
         match self.leader {
             Some(ResolvedLeader::Tap(m)) => Some(m),
@@ -238,11 +258,75 @@ pub(crate) fn step_leader(
     LeaderStep::Passthrough
 }
 
-/// Clears `LeaderPending` on an `AppMode` transition or a webview focus change,
-/// so a leader engaged in one context never fires its second key in another.
-fn reset_leader_pending(mut leader_pending: ResMut<LeaderPending>) {
+/// Clears `LeaderPending` and any in-progress modifier tap on an `AppMode`
+/// transition or a webview focus change, so a leader engaged/armed in one
+/// context never fires in another.
+fn reset_leader_pending(
+    mut leader_pending: ResMut<LeaderPending>,
+    mut tap: ResMut<ModifierTapState>,
+) {
     if leader_pending.0 {
         leader_pending.0 = false;
+    }
+    if tap.armed.is_some() {
+        tap.armed = None;
+    }
+}
+
+/// Run condition: only run `detect_modifier_tap` when the leader is a tap.
+fn tap_leader_enabled(shortcuts: Res<Shortcuts>) -> bool {
+    shortcuts.tap_modifier().is_some()
+}
+
+/// Detects a bare modifier tap (press+release within the timeout, no
+/// intervening key or mouse press) and engages `LeaderPending`. Mode-agnostic;
+/// runs in `LeaderGate::Detect` before the dispatchers read/advance the leader.
+///
+/// Gated with `run_if(tap_leader_enabled)`. Reads press AND release
+/// `KeyboardInput` (the dispatchers only read `Pressed`), so it owns the tap
+/// gesture; the second key is handled by the existing `step_leader` pending arm.
+fn detect_modifier_tap(
+    mut state: ResMut<ModifierTapState>,
+    mut leader_pending: ResMut<LeaderPending>,
+    mut keys: MessageReader<KeyboardInput>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    time: Res<Time<Real>>,
+    shortcuts: Res<Shortcuts>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+) {
+    let Some(modifier) = shortcuts.tap_modifier() else {
+        keys.clear();
+        return;
+    };
+    let focused = windows.single().map(|w| w.focused).unwrap_or(false);
+    if !focused {
+        state.armed = None;
+        keys.clear();
+        return;
+    }
+    let now = time.elapsed();
+    let timeout = shortcuts.tap_timeout;
+    if mouse.get_just_pressed().next().is_some() {
+        step_tap(&mut state.armed, TapEvent::MousePress, now, timeout);
+    }
+    for ev in keys.read() {
+        if ev.repeat {
+            continue;
+        }
+        let event = if is_tap_modifier_key(ev.key_code, modifier) {
+            match ev.state {
+                ButtonState::Pressed => TapEvent::TargetDown,
+                ButtonState::Released => TapEvent::TargetUp,
+            }
+        } else if ev.state == ButtonState::Pressed {
+            TapEvent::OtherDown
+        } else {
+            continue;
+        };
+        if step_tap(&mut state.armed, event, now, timeout) == TapOutcome::Fired && !leader_pending.0
+        {
+            leader_pending.0 = true;
+        }
     }
 }
 
@@ -336,6 +420,72 @@ fn resolve_from_chords<'a>(
     out
 }
 
+/// One input the tap machine observes. Key auto-repeats are filtered by the
+/// caller before this is produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TapEvent {
+    /// The target modifier was pressed.
+    TargetDown,
+    /// A non-target key was pressed (a chord is forming — disarm).
+    OtherDown,
+    /// A mouse button was pressed (e.g. Cmd+click — disarm).
+    MousePress,
+    /// The target modifier was released.
+    TargetUp,
+}
+
+/// Result of one `step_tap`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TapOutcome {
+    /// Nothing to do.
+    None,
+    /// A valid tap completed — engage the leader.
+    Fired,
+}
+
+/// Pure transition for the modifier-tap machine. `armed` holds the target's
+/// down-time (or `None` when not armed). A tap fires on `TargetUp` iff the
+/// target is still armed within `timeout`; any other-key or mouse press disarms.
+fn step_tap(
+    armed: &mut Option<Duration>,
+    event: TapEvent,
+    now: Duration,
+    timeout: Duration,
+) -> TapOutcome {
+    match event {
+        TapEvent::TargetDown => {
+            *armed = Some(now);
+            TapOutcome::None
+        }
+        TapEvent::OtherDown | TapEvent::MousePress => {
+            *armed = None;
+            TapOutcome::None
+        }
+        TapEvent::TargetUp => {
+            let fired = matches!(*armed, Some(down_at) if now.saturating_sub(down_at) <= timeout);
+            *armed = None;
+            if fired {
+                TapOutcome::Fired
+            } else {
+                TapOutcome::None
+            }
+        }
+    }
+}
+
+/// True when `keycode` is a left/right variant of `modifier`.
+fn is_tap_modifier_key(keycode: KeyCode, modifier: TapModifier) -> bool {
+    matches!(
+        (modifier, keycode),
+        (TapModifier::Meta, KeyCode::SuperLeft | KeyCode::SuperRight)
+            | (
+                TapModifier::Ctrl,
+                KeyCode::ControlLeft | KeyCode::ControlRight
+            )
+            | (TapModifier::Alt, KeyCode::AltLeft | KeyCode::AltRight)
+    )
+}
+
 /// True for the bare left/right modifier keys, which emit their own `Pressed`
 /// events ahead of a chord's main key.
 pub(crate) fn is_modifier_key(keycode: KeyCode) -> bool {
@@ -418,6 +568,114 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 mod tests {
     use super::*;
     use ozmux_configs::shortcuts::{Binding, Shortcuts as ConfigShortcuts};
+
+    fn ms(n: u64) -> Duration {
+        Duration::from_millis(n)
+    }
+
+    #[test]
+    fn step_tap_fires_on_quick_press_release() {
+        let mut armed = None;
+        assert_eq!(
+            step_tap(&mut armed, TapEvent::TargetDown, ms(0), ms(300)),
+            TapOutcome::None
+        );
+        assert_eq!(
+            step_tap(&mut armed, TapEvent::TargetUp, ms(100), ms(300)),
+            TapOutcome::Fired
+        );
+        assert_eq!(armed, None);
+    }
+
+    #[test]
+    fn step_tap_no_fire_after_timeout() {
+        let mut armed = None;
+        step_tap(&mut armed, TapEvent::TargetDown, ms(0), ms(300));
+        assert_eq!(
+            step_tap(&mut armed, TapEvent::TargetUp, ms(400), ms(300)),
+            TapOutcome::None
+        );
+    }
+
+    #[test]
+    fn step_tap_other_key_disarms() {
+        let mut armed = None;
+        step_tap(&mut armed, TapEvent::TargetDown, ms(0), ms(300));
+        step_tap(&mut armed, TapEvent::OtherDown, ms(50), ms(300));
+        assert_eq!(
+            step_tap(&mut armed, TapEvent::TargetUp, ms(100), ms(300)),
+            TapOutcome::None
+        );
+    }
+
+    #[test]
+    fn step_tap_mouse_press_disarms() {
+        let mut armed = None;
+        step_tap(&mut armed, TapEvent::TargetDown, ms(0), ms(300));
+        step_tap(&mut armed, TapEvent::MousePress, ms(50), ms(300));
+        assert_eq!(
+            step_tap(&mut armed, TapEvent::TargetUp, ms(100), ms(300)),
+            TapOutcome::None
+        );
+    }
+
+    #[test]
+    fn step_tap_release_without_arm_does_nothing() {
+        let mut armed = None;
+        assert_eq!(
+            step_tap(&mut armed, TapEvent::TargetUp, ms(10), ms(300)),
+            TapOutcome::None
+        );
+    }
+
+    #[test]
+    fn is_tap_modifier_key_matches_left_and_right() {
+        assert!(is_tap_modifier_key(KeyCode::SuperLeft, TapModifier::Meta));
+        assert!(is_tap_modifier_key(KeyCode::SuperRight, TapModifier::Meta));
+        assert!(!is_tap_modifier_key(
+            KeyCode::ControlLeft,
+            TapModifier::Meta
+        ));
+        assert!(is_tap_modifier_key(KeyCode::AltRight, TapModifier::Alt));
+    }
+
+    #[test]
+    fn tap_modifier_returns_modifier_for_tap_leader() {
+        let s = Shortcuts {
+            direct: Vec::new(),
+            prefix: Vec::new(),
+            leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
+            tap_timeout: Duration::from_millis(300),
+        };
+        assert_eq!(s.tap_modifier(), Some(TapModifier::Meta));
+    }
+
+    #[test]
+    fn tap_leader_does_not_match_is_leader() {
+        let s = Shortcuts {
+            direct: Vec::new(),
+            prefix: Vec::new(),
+            leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
+            tap_timeout: Duration::from_millis(300),
+        };
+        assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, true)));
+        assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, false)));
+    }
+
+    #[test]
+    fn input_bindings_tap_leader_reserves_nothing_extra() {
+        let s = Shortcuts {
+            direct: Vec::new(),
+            prefix: Vec::new(),
+            leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
+            tap_timeout: Duration::from_millis(300),
+        };
+        let b = s.input_bindings();
+        assert!(
+            b.reserved.is_empty(),
+            "a tap leader has no chord to reserve in TerminalInputBindings",
+        );
+    }
 
     fn mods(ctrl: bool, shift: bool, alt: bool, meta: bool) -> Modifiers {
         Modifiers {

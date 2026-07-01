@@ -12,7 +12,7 @@
 use super::pane_hit::tmux_pane_at_phys;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::shortcuts::{LeaderPending, LeaderStep, Shortcuts, step_leader};
+use crate::input::shortcuts::{LeaderGate, LeaderPending, LeaderStep, Shortcuts, step_leader};
 use crate::mode::AppMode;
 use crate::mode::tmux::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::mode::tmux::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
@@ -51,6 +51,7 @@ impl Plugin for InputPlugin {
             (
                 forward_keys_to_tmux
                     .in_set(InputPhase::FocusedKey)
+                    .in_set(LeaderGate::Advance)
                     .run_if(in_state(AppMode::Tmux))
                     .run_if(on_message::<KeyboardInput>),
                 forward_wheel_to_tmux
