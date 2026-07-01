@@ -40,27 +40,26 @@ impl Plugin for ShortcutsPlugin {
                 )
                     .chain(),
             )
-            // NOTE: intentionally not gated on `on_message::<KeyboardInput>` — must run on
-            // keyboard-less frames so a mouse press (e.g. Cmd+click mid-tap) can disarm
-            // `state.armed`; gating it on `on_message` would silently break that disarm.
             .add_systems(
                 Update,
-                detect_modifier_tap
-                    .in_set(LeaderGate::Detect)
-                    .run_if(tap_leader_enabled),
+                (
+                    // NOTE: intentionally not gated on `on_message::<KeyboardInput>` — must run
+                    // on keyboard-less frames so a mouse press (e.g. Cmd+click mid-tap) can
+                    // disarm `state.armed`; gating it on `on_message` would silently break it.
+                    detect_modifier_tap
+                        .in_set(LeaderGate::Detect)
+                        .run_if(tap_leader_enabled),
+                    // NOTE: webview focus moves on mouse clicks (no `KeyboardInput`), so the
+                    // keyboard dispatchers never see the round-trip; without this reset a
+                    // leader engaged before a mouse-only webview focus/blur would consume the
+                    // next terminal keystroke as its second key.
+                    reset_leader_pending
+                        .run_if(resource_exists_and_changed::<FocusedWebview>)
+                        .before(LeaderGate::Detect),
+                ),
             )
             .add_systems(OnExit(AppMode::Tmux), reset_leader_pending)
-            .add_systems(OnExit(AppMode::Default), reset_leader_pending)
-            // NOTE: webview focus moves on mouse clicks (no `KeyboardInput`), so the
-            // keyboard dispatchers never see the round-trip; without this reset a
-            // leader engaged before a mouse-only webview focus/blur would consume the
-            // next terminal keystroke as its second key.
-            .add_systems(
-                Update,
-                reset_leader_pending
-                    .run_if(resource_exists_and_changed::<FocusedWebview>)
-                    .before(LeaderGate::Detect),
-            );
+            .add_systems(OnExit(AppMode::Default), reset_leader_pending);
     }
 }
 
