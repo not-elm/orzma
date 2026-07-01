@@ -1,7 +1,9 @@
 //! Loads `OzmuxConfigs` synchronously at app build time and exposes it as
-//! a Bevy Resource. Chord-conflict errors (DuplicateChords) are fatal
-//! (exit 2). Parse / IO errors warn and fall back to defaults so the GUI
-//! remains startable for users with stale or invalid config files.
+//! a Bevy Resource. Shortcut-config validation errors (duplicate direct or
+//! prefix chords, a leader that shadows a direct binding, prefix bindings with
+//! no leader) are fatal (exit 2). Parse / IO errors warn and fall back to
+//! defaults so the GUI remains startable for users with stale or invalid
+//! config files.
 
 use bevy::prelude::*;
 use ozmux_configs::OzmuxConfigs;
@@ -24,9 +26,15 @@ impl Plugin for OzmuxConfigsPlugin {
             {
                 OzmuxConfigs::default()
             }
-            // Chord conflicts are an architectural failure that must be surfaced loudly.
-            ozmux_configs::OzmuxConfigsError::DuplicateChords(_) => {
-                eprintln!("ozmux: shortcut config has duplicate chords:\n  {err}");
+            // NOTE: shortcut-config validation failures must exit(2), not fall
+            // through to the warn+default arm below — defaulting would silently
+            // discard the user's ENTIRE config (font, mouse, theme, direct
+            // bindings), not just the offending shortcut.
+            ozmux_configs::OzmuxConfigsError::DuplicateChords(_)
+            | ozmux_configs::OzmuxConfigsError::DuplicatePrefixChords(_)
+            | ozmux_configs::OzmuxConfigsError::PrefixBindingsWithoutLeader
+            | ozmux_configs::OzmuxConfigsError::LeaderShadowsDirectBinding { .. } => {
+                eprintln!("ozmux: shortcut config is invalid:\n  {err}");
                 std::process::exit(2);
             }
             // Any other error (TOML syntax error, stale schema, IO failure): warn + default.
