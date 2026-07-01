@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -43,7 +44,12 @@ def _fenced(text: str) -> str:
 
 
 def render_rust_section(rust_body: str) -> str:
-    return "## Rust crates (Cargo dependencies)\n\n" + rust_body.strip("\n") + "\n"
+    # cargo-about renders a crate's license text with a host-dependent number of
+    # trailing blank lines (e.g. miniz_oxide gains an extra blank on Linux vs
+    # macOS), which desyncs the drift gate across CI and dev machines. Collapse
+    # every run of blank lines to a single one so the output is host-independent.
+    body = re.sub(r"\n{3,}", "\n\n", rust_body.strip("\n"))
+    return "## Rust crates (Cargo dependencies)\n\n" + body + "\n"
 
 
 def render_npm_section(entries: list[dict]) -> str:
