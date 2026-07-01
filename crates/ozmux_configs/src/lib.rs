@@ -211,7 +211,6 @@ release-webview-focus = "Cmd+V"
 
     #[test]
     fn validate_rejects_leader_shadowing_direct_binding() {
-        // Cmd+Q is the default `quit` direct binding.
         let toml_str = "[shortcuts]\nprefix = \"Cmd+Q\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         match err {
@@ -231,9 +230,11 @@ release-webview-focus = "Cmd+V"
 
     #[test]
     fn validate_allows_cross_table_same_key() {
-        // Direct bare `s` and leader-scoped `s` are different key-spaces.
         let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.bindings]\nenter-copy-mode = \"s\"\n[shortcuts.prefix_bindings]\ndetach-session = \"s\"\n";
-        assert!(parse_validated(toml_str).is_ok());
+        assert!(
+            parse_validated(toml_str).is_ok(),
+            "direct bare `s` and leader-scoped `s` occupy different key-spaces"
+        );
     }
 
     #[test]

@@ -74,23 +74,6 @@ impl Shortcuts {
         })
     }
 
-    /// True when `(keycode, mods)` is the configured leader chord.
-    pub(crate) fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        self.leader == Some((keycode, mods))
-    }
-
-    /// Returns the leader-scoped action bound to `(keycode, mods)`, if any.
-    pub(crate) fn match_prefix_action(
-        &self,
-        keycode: KeyCode,
-        mods: Modifiers,
-    ) -> Option<ShortcutAction> {
-        self.prefix
-            .iter()
-            .find(|s| s.keycode == keycode && s.modifiers == mods)
-            .map(|s| s.action)
-    }
-
     /// Derives the crate's `TerminalInputBindings` from the direct table: the
     /// Paste chord becomes `paste`; every other direct chord becomes a
     /// `reserved` entry the crate dispatcher skips for the host to handle.
@@ -115,6 +98,19 @@ impl Shortcuts {
             paste: paste.unwrap_or_else(|| TerminalInputBindings::default().paste),
             reserved,
         }
+    }
+
+    /// True when `(keycode, mods)` is the configured leader chord.
+    fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
+        self.leader == Some((keycode, mods))
+    }
+
+    /// Returns the leader-scoped action bound to `(keycode, mods)`, if any.
+    fn match_prefix_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<ShortcutAction> {
+        self.prefix
+            .iter()
+            .find(|s| s.keycode == keycode && s.modifiers == mods)
+            .map(|s| s.action)
     }
 }
 
@@ -156,7 +152,7 @@ pub(crate) fn step_leader(
 }
 
 /// `Startup` system: resolves the configured shortcut bindings into
-/// `ResolvedShortcuts`, replacing the empty default inserted at plugin build.
+/// `Shortcuts`, replacing the empty default inserted at plugin build.
 ///
 /// Writes through `ResMut` (an immediate change, unlike a deferred
 /// `Commands::insert_resource`) so the table is populated the moment this
@@ -182,7 +178,7 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsRes
 
 /// `Startup` system: inserts `TerminalInputBindings` derived from the resolved
 /// shortcut table, replacing the crate default. Runs after
-/// `build_resolved_shortcuts`.
+/// `build_shortcuts`.
 fn populate_input_bindings(mut commands: Commands, resolved: Res<Shortcuts>) {
     commands.insert_resource(resolved.input_bindings());
 }
@@ -217,7 +213,7 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
     }
 }
 
-/// Resolves every bound chord in `bindings` to a `ResolvedShortcut`, skipping
+/// Resolves every bound chord in `bindings` to an `OzmuxShortcut`, skipping
 /// (with a warning) any chord whose logical key has no physical `KeyCode`.
 fn resolve_from_bindings<'a>(
     bindings: impl Iterator<Item = (&'static str, &'a Option<KeyChord>, ShortcutAction)>,
@@ -577,7 +573,10 @@ mod tests {
     }
 
     #[test]
-    fn same_frame_leader_then_bound_key_resolves() {
+    fn sequential_leader_then_bound_key_threads_pending() {
+        // NOTE: the dispatch loop calls step_leader per event with one shared
+        // `pending` local; this verifies the leader press then the bound key
+        // thread that state correctly across two calls.
         let sc = leader_fixture();
         let mut pending = false;
         let first = step_leader(

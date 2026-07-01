@@ -273,10 +273,10 @@ fn forward_keys_to_tmux(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        // Leader dispatch runs before direct matching and tmux forwarding, and
-        // is mutually exclusive with the tmux prefix: a swallowed/resolved leader
-        // key never reaches plan_forward. NOTE: cfg_mods is a per-frame snapshot,
-        // so a same-frame leader+second-key batch shares one modifier read.
+        // NOTE: leader dispatch must run before direct matching and tmux
+        // forwarding so a swallowed/resolved leader key never reaches
+        // plan_forward. cfg_mods is a per-frame snapshot, so a same-frame
+        // leader+second-key batch shares one modifier read.
         let gui_action = match step_leader(&mut leader_pending, &resolved, ev.key_code, cfg_mods) {
             LeaderStep::RunAction(action) => Some(action),
             LeaderStep::Swallow => {
