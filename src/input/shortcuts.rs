@@ -311,7 +311,7 @@ fn resolve_from_bindings<'a>(
 
 /// True for the bare left/right modifier keys, which emit their own `Pressed`
 /// events ahead of a chord's main key.
-fn is_modifier_key(keycode: KeyCode) -> bool {
+pub(crate) fn is_modifier_key(keycode: KeyCode) -> bool {
     matches!(
         keycode,
         KeyCode::ControlLeft
