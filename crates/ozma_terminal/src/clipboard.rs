@@ -6,9 +6,9 @@ use bevy::ecs::resource::Resource;
 /// Resource wrapping a clipboard backend.
 ///
 /// `arboard::Clipboard::new()` can fail when no display is available
-/// (e.g. headless CI). In that case the backend is
-/// [`ClipboardBackend::Unavailable`] and every `write` call becomes a
-/// no-op (logged at debug level once at init, then silently dropped).
+/// (e.g. headless CI). In that case the backend is unavailable and every
+/// `write` call becomes a no-op (logged at debug level once at init, then
+/// silently dropped).
 /// Copy-mode UI keeps working — the user can still see the selection —
 /// but `y` does not modify the host clipboard. [`Clipboard::in_memory`]
 /// swaps in a process-local backend for deterministic, headless-safe tests.
