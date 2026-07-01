@@ -254,79 +254,7 @@ pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
     })
 }
 
-/// The literal token marking a leader-scoped binding value (`<Leader>x`).
-/// Matched case-insensitively at the START of the value only.
-const LEADER_TOKEN: &str = "<Leader>";
-
-/// Strips a leading, case-insensitive `<Leader>` token, returning the remaining
-/// chord text. `None` when the value is not leader-scoped.
-fn strip_leader_prefix(value: &str) -> Option<&str> {
-    value
-        .get(..LEADER_TOKEN.len())
-        .filter(|head| head.eq_ignore_ascii_case(LEADER_TOKEN))
-        .map(|_| &value[LEADER_TOKEN.len()..])
-}
-
-/// Parses a non-empty config value into a `Binding`: a leading `<Leader>`
-/// selects `Leader`, otherwise `Direct`. The remainder is parsed by
-/// `parse_key_chord`, so `"<Leader>"` (empty remainder) is an error.
-fn parse_binding(value: &str) -> Result<Binding, KeyChordParseError> {
-    match strip_leader_prefix(value) {
-        Some(rest) => parse_key_chord(rest).map(Binding::Leader),
-        None => parse_key_chord(value).map(Binding::Direct),
-    }
-}
-
-/// serde field deserializer for `Option<Binding>`: empty string is unbind
-/// (`None`); any other string parses via `parse_binding`.
-fn deser_binding_or_unbind<'de, D>(d: D) -> Result<Option<Binding>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(d)?;
-    if s.is_empty() {
-        return Ok(None);
-    }
-    parse_binding(&s).map(Some).map_err(DeError::custom)
-}
-
-/// serde field serializer for `Option<Binding>`: `None` → `""`,
-/// `Direct(c)` → `c`, `Leader(c)` → `"<Leader>" + c`.
-fn ser_binding_or_unbind<S>(value: &Option<Binding>, ser: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let text = match value {
-        None => String::new(),
-        Some(Binding::Direct(chord)) => chord.to_string(),
-        Some(Binding::Leader(chord)) => format!("{LEADER_TOKEN}{chord}"),
-    };
-    ser.serialize_str(&text)
-}
-
-/// serde field deserializer for the leader chord: empty string is `None`;
-/// any other string parses via `parse_key_chord`.
-fn deser_leader<'de, D>(d: D) -> Result<Option<KeyChord>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(d)?;
-    if s.is_empty() {
-        return Ok(None);
-    }
-    parse_key_chord(&s).map(Some).map_err(DeError::custom)
-}
-
-/// serde field serializer for the leader chord: `None` → `""`, `Some(c)` → `c`.
-fn ser_leader<S>(value: &Option<KeyChord>, ser: S) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let text = value.as_ref().map(KeyChord::to_string).unwrap_or_default();
-    ser.serialize_str(&text)
-}
-
-/// One chord-collision entry. Carried inside
+/// One or more chord-collision entry. Carried inside
 /// `OzmuxConfigsError::DuplicateChords` (defined in `error.rs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DuplicateChord {
@@ -334,45 +262,6 @@ pub struct DuplicateChord {
     pub chord: KeyChord,
     /// Action labels (kebab-case TOML keys) that share this chord. Length >= 2.
     pub actions: Vec<&'static str>,
-}
-
-fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
-    let lower = token.to_ascii_lowercase();
-    match lower.as_str() {
-        "cmd" | "command" | "meta" | "super" => Some((
-            Modifiers {
-                meta: true,
-                ..Default::default()
-            },
-            "meta",
-        )),
-        "ctrl" => Some((
-            Modifiers {
-                ctrl: true,
-                ..Default::default()
-            },
-            "ctrl",
-        )),
-        "shift" => Some((
-            Modifiers {
-                shift: true,
-                ..Default::default()
-            },
-            "shift",
-        )),
-        "alt" | "opt" | "option" => Some((
-            Modifiers {
-                alt: true,
-                ..Default::default()
-            },
-            "alt",
-        )),
-        _ => None,
-    }
-}
-
-fn parse_default_chord(s: &str) -> KeyChord {
-    parse_key_chord(s).unwrap_or_else(|e| panic!("invalid default chord {s:?}: {e}"))
 }
 
 /// A resolved shortcut binding: a direct chord, or a leader-scoped chord
@@ -541,6 +430,117 @@ pub enum ShortcutAction {
     /// Enters copy mode (Alacritty vi mode) on the focused terminal in
     /// `AppMode::Default`.
     EnterCopyMode,
+}
+
+/// The literal token marking a leader-scoped binding value (`<Leader>x`).
+/// Matched case-insensitively at the START of the value only.
+const LEADER_TOKEN: &str = "<Leader>";
+
+/// Strips a leading, case-insensitive `<Leader>` token, returning the remaining
+/// chord text. `None` when the value is not leader-scoped.
+fn strip_leader_prefix(value: &str) -> Option<&str> {
+    value
+        .get(..LEADER_TOKEN.len())
+        .filter(|head| head.eq_ignore_ascii_case(LEADER_TOKEN))
+        .map(|_| &value[LEADER_TOKEN.len()..])
+}
+
+/// Parses a non-empty config value into a `Binding`: a leading `<Leader>`
+/// selects `Leader`, otherwise `Direct`. The remainder is parsed by
+/// `parse_key_chord`, so `"<Leader>"` (empty remainder) is an error.
+fn parse_binding(value: &str) -> Result<Binding, KeyChordParseError> {
+    match strip_leader_prefix(value) {
+        Some(rest) => parse_key_chord(rest).map(Binding::Leader),
+        None => parse_key_chord(value).map(Binding::Direct),
+    }
+}
+
+/// serde field deserializer for `Option<Binding>`: empty string is unbind
+/// (`None`); any other string parses via `parse_binding`.
+fn deser_binding_or_unbind<'de, D>(d: D) -> Result<Option<Binding>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    if s.is_empty() {
+        return Ok(None);
+    }
+    parse_binding(&s).map(Some).map_err(DeError::custom)
+}
+
+/// serde field serializer for `Option<Binding>`: `None` → `""`,
+/// `Direct(c)` → `c`, `Leader(c)` → `"<Leader>" + c`.
+fn ser_binding_or_unbind<S>(value: &Option<Binding>, ser: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let text = match value {
+        None => String::new(),
+        Some(Binding::Direct(chord)) => chord.to_string(),
+        Some(Binding::Leader(chord)) => format!("{LEADER_TOKEN}{chord}"),
+    };
+    ser.serialize_str(&text)
+}
+
+/// serde field deserializer for the leader chord: empty string is `None`;
+/// any other string parses via `parse_key_chord`.
+fn deser_leader<'de, D>(d: D) -> Result<Option<KeyChord>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    if s.is_empty() {
+        return Ok(None);
+    }
+    parse_key_chord(&s).map(Some).map_err(DeError::custom)
+}
+
+/// serde field serializer for the leader chord: `None` → `""`, `Some(c)` → `c`.
+fn ser_leader<S>(value: &Option<KeyChord>, ser: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let text = value.as_ref().map(KeyChord::to_string).unwrap_or_default();
+    ser.serialize_str(&text)
+}
+
+fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
+    let lower = token.to_ascii_lowercase();
+    match lower.as_str() {
+        "cmd" | "command" | "meta" | "super" => Some((
+            Modifiers {
+                meta: true,
+                ..Default::default()
+            },
+            "meta",
+        )),
+        "ctrl" => Some((
+            Modifiers {
+                ctrl: true,
+                ..Default::default()
+            },
+            "ctrl",
+        )),
+        "shift" => Some((
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            },
+            "shift",
+        )),
+        "alt" | "opt" | "option" => Some((
+            Modifiers {
+                alt: true,
+                ..Default::default()
+            },
+            "alt",
+        )),
+        _ => None,
+    }
+}
+
+fn parse_default_chord(s: &str) -> KeyChord {
+    parse_key_chord(s).unwrap_or_else(|e| panic!("invalid default chord {s:?}: {e}"))
 }
 
 /// Detects chord collisions across a table's bound entries. Returns a `Vec`
@@ -918,5 +918,23 @@ detach-session = "<Leader>d"
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
         let expected = r#"{"leader":"","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D"}"#;
         assert_eq!(json, expected);
+    }
+
+    #[test]
+    fn serialize_leader_binding_emits_leader_token() {
+        let s = Shortcuts {
+            leader: Some(parse_key_chord("Ctrl+A").unwrap()),
+            detach_session: Some(Binding::Leader(parse_key_chord("d").unwrap())),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""leader":"Ctrl+A""#),
+            "leader serializes as its chord string; got {json}"
+        );
+        assert!(
+            json.contains(r#""detach-session":"<Leader>D""#),
+            "a Leader binding serializes with the <Leader> token; got {json}"
+        );
     }
 }

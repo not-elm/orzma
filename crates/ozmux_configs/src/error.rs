@@ -28,9 +28,9 @@ pub enum OzmuxConfigsError {
         source: toml::de::Error,
     },
 
-    /// One or more KeyChord collisions across the `[shortcuts.bindings]` table.
+    /// One or more KeyChord collisions among direct `[shortcuts]` bindings.
     /// Collected in a single pass; reported all-at-once to avoid whack-a-mole.
-    #[error("duplicate chord(s) in shortcuts.bindings: {}", format_dupes(.0))]
+    #[error("duplicate chord(s) among direct [shortcuts] bindings: {}", format_dupes(.0))]
     DuplicateChords(Vec<crate::shortcuts::DuplicateChord>),
 
     /// One or more KeyChord collisions among leader-scoped (`<Leader>`)
