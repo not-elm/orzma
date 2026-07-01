@@ -8,7 +8,7 @@ use crate::input::bindings::{FineModifier, OzmaMouseConfig, ReservedChord, Termi
 use bevy::prelude::*;
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
-use ozmux_configs::shortcuts::{Bindings, Key as ConfigKey, Modifiers, ShortcutAction};
+use ozmux_configs::shortcuts::{Key as ConfigKey, KeyChord, Modifiers, ShortcutAction};
 use std::time::Duration;
 
 pub(super) struct ShortcutsPlugin;
@@ -36,21 +36,25 @@ struct OzmuxShortcut {
     action: ShortcutAction,
 }
 
-/// The startup-resolved ozmux shortcut table. Built once from
-/// `OzmuxConfigsResource`; consumed by the tmux keyboard dispatcher.
+/// The startup-resolved ozmux shortcut tables. Built once from
+/// `OzmuxConfigsResource`; consumed by the tmux and Default keyboard
+/// dispatchers.
 #[derive(Resource, Default, Debug, Clone)]
-pub(crate) struct Shortcuts(Vec<OzmuxShortcut>);
+pub(crate) struct Shortcuts {
+    direct: Vec<OzmuxShortcut>,
+    prefix: Vec<OzmuxShortcut>,
+    leader: Option<(KeyCode, Modifiers)>,
+}
 
 impl Shortcuts {
-    /// Returns the GUI action bound to `(keycode, mods)`, if any. Excludes
-    /// `ReleaseWebviewFocus`, which is meaningful only while a webview
-    /// holds focus and is matched separately via `is_release_webview_focus`.
+    /// Returns the GUI action bound to `(keycode, mods)` in the direct table, if
+    /// any. Excludes `ReleaseWebviewFocus` (matched via `is_release_webview_focus`).
     pub(crate) fn match_gui_action(
         &self,
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<ShortcutAction> {
-        self.0
+        self.direct
             .iter()
             .find(|s| {
                 s.action != ShortcutAction::ReleaseWebviewFocus
@@ -61,22 +65,39 @@ impl Shortcuts {
     }
 
     /// True when `(keycode, mods)` matches the configured release-webview-focus
-    /// chord.
+    /// chord in the direct table.
     pub(crate) fn is_release_webview_focus(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        self.0.iter().any(|s| {
+        self.direct.iter().any(|s| {
             s.action == ShortcutAction::ReleaseWebviewFocus
                 && s.keycode == keycode
                 && s.modifiers == mods
         })
     }
 
-    /// Derives the crate's `TerminalInputBindings` from the resolved table:
-    /// the Paste chord becomes `paste`; every other resolved chord becomes a
+    /// True when `(keycode, mods)` is the configured leader chord.
+    pub(crate) fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
+        self.leader == Some((keycode, mods))
+    }
+
+    /// Returns the leader-scoped action bound to `(keycode, mods)`, if any.
+    pub(crate) fn match_prefix_action(
+        &self,
+        keycode: KeyCode,
+        mods: Modifiers,
+    ) -> Option<ShortcutAction> {
+        self.prefix
+            .iter()
+            .find(|s| s.keycode == keycode && s.modifiers == mods)
+            .map(|s| s.action)
+    }
+
+    /// Derives the crate's `TerminalInputBindings` from the direct table: the
+    /// Paste chord becomes `paste`; every other direct chord becomes a
     /// `reserved` entry the crate dispatcher skips for the host to handle.
     pub(crate) fn input_bindings(&self) -> TerminalInputBindings {
         let mut paste = None;
         let mut reserved = Vec::new();
-        for s in &self.0 {
+        for s in &self.direct {
             let chord = ReservedChord {
                 key_code: s.keycode,
                 ctrl: s.modifiers.ctrl,
@@ -105,7 +126,21 @@ impl Shortcuts {
 /// system runs, with no window in which a same-schedule reader could observe
 /// the empty default.
 fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsResource>) {
-    resolved.0 = resolve_from_bindings(&configs.shortcuts.bindings);
+    let sc = &configs.shortcuts;
+    resolved.direct = resolve_from_bindings(sc.bindings.iter());
+    resolved.prefix = resolve_from_bindings(sc.prefix_bindings.iter());
+    resolved.leader = sc.prefix.as_ref().and_then(|chord| match key_to_keycode(&chord.key) {
+        Some(keycode) => Some((keycode, chord.modifiers)),
+        None => {
+            tracing::warn!(chord = %chord, "shortcut leader key has no physical KeyCode mapping; prefix disabled");
+            None
+        }
+    });
+    if resolved.leader.is_none() && !resolved.prefix.is_empty() {
+        tracing::warn!(
+            "shortcuts.prefix_bindings are set but the leader is unset or unmappable; prefix table is unreachable"
+        );
+    }
 }
 
 /// `Startup` system: inserts `TerminalInputBindings` derived from the resolved
@@ -147,9 +182,11 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
 
 /// Resolves every bound chord in `bindings` to a `ResolvedShortcut`, skipping
 /// (with a warning) any chord whose logical key has no physical `KeyCode`.
-fn resolve_from_bindings(bindings: &Bindings) -> Vec<OzmuxShortcut> {
+fn resolve_from_bindings<'a>(
+    bindings: impl Iterator<Item = (&'static str, &'a Option<KeyChord>, ShortcutAction)>,
+) -> Vec<OzmuxShortcut> {
     let mut out = Vec::new();
-    for (label, bound, action) in bindings.iter() {
+    for (label, bound, action) in bindings {
         let Some(chord) = bound else { continue };
         match key_to_keycode(&chord.key) {
             Some(keycode) => out.push(OzmuxShortcut {
@@ -228,6 +265,7 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozmux_configs::shortcuts::Bindings;
 
     fn mods(ctrl: bool, shift: bool, alt: bool, meta: bool) -> Modifiers {
         Modifiers {
@@ -236,6 +274,64 @@ mod tests {
             alt,
             meta,
         }
+    }
+
+    fn direct_only(bindings: &Bindings) -> Shortcuts {
+        Shortcuts {
+            direct: resolve_from_bindings(bindings.iter()),
+            prefix: Vec::new(),
+            leader: None,
+        }
+    }
+
+    #[test]
+    fn leader_resolves_from_config_chord() {
+        let s = Shortcuts {
+            direct: Vec::new(),
+            prefix: Vec::new(),
+            leader: Some((KeyCode::KeyA, mods(true, false, false, false))),
+        };
+        assert!(s.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
+        assert!(!s.is_leader(KeyCode::KeyA, mods(false, false, false, false)));
+        assert!(!s.is_leader(KeyCode::KeyB, mods(true, false, false, false)));
+    }
+
+    #[test]
+    fn match_prefix_action_resolves_and_requires_exact_mods() {
+        let s = Shortcuts {
+            direct: Vec::new(),
+            prefix: vec![OzmuxShortcut {
+                keycode: KeyCode::KeyS,
+                modifiers: mods(false, false, false, false),
+                action: ShortcutAction::EnterCopyMode,
+            }],
+            leader: Some((KeyCode::KeyA, mods(true, false, false, false))),
+        };
+        assert_eq!(
+            s.match_prefix_action(KeyCode::KeyS, mods(false, false, false, false)),
+            Some(ShortcutAction::EnterCopyMode)
+        );
+        assert_eq!(
+            s.match_prefix_action(KeyCode::KeyS, mods(false, true, false, false)),
+            None
+        );
+        assert_eq!(
+            s.match_prefix_action(KeyCode::KeyD, mods(false, false, false, false)),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_from_bindings_accepts_prefix_bindings_iter() {
+        use ozmux_configs::shortcuts::PrefixBindings;
+        let p = PrefixBindings {
+            detach_session: Some(ozmux_configs::shortcuts::parse_key_chord("d").unwrap()),
+            ..Default::default()
+        };
+        let resolved = resolve_from_bindings(p.iter());
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].keycode, KeyCode::KeyD);
+        assert_eq!(resolved[0].action, ShortcutAction::DetachSession);
     }
 
     #[test]
@@ -263,13 +359,13 @@ mod tests {
 
     #[test]
     fn default_bindings_resolve_to_five() {
-        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
-        assert_eq!(r.0.len(), 5);
+        let r = direct_only(&Bindings::default());
+        assert_eq!(r.direct.len(), 5);
     }
 
     #[test]
     fn match_gui_action_resolves_defaults() {
-        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = direct_only(&Bindings::default());
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
             Some(ShortcutAction::Paste)
@@ -286,7 +382,7 @@ mod tests {
 
     #[test]
     fn match_gui_action_requires_exact_modifiers() {
-        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = direct_only(&Bindings::default());
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, true, false, true)),
             None
@@ -299,7 +395,7 @@ mod tests {
 
     #[test]
     fn match_gui_action_excludes_release_webview_focus() {
-        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = direct_only(&Bindings::default());
         assert_eq!(
             r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
             None
@@ -308,7 +404,7 @@ mod tests {
 
     #[test]
     fn unmatched_chord_is_none() {
-        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = direct_only(&Bindings::default());
         assert_eq!(
             r.match_gui_action(KeyCode::KeyH, mods(false, false, false, true)),
             None
@@ -321,7 +417,7 @@ mod tests {
 
     #[test]
     fn is_release_webview_focus_matches_default_chord() {
-        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = direct_only(&Bindings::default());
         assert!(r.is_release_webview_focus(KeyCode::Escape, mods(true, true, false, false)));
         assert!(!r.is_release_webview_focus(KeyCode::KeyV, mods(false, false, false, true)));
     }
@@ -355,7 +451,7 @@ mod tests {
 
     #[test]
     fn input_bindings_excludes_paste_from_reserved() {
-        let r = Shortcuts(resolve_from_bindings(&Bindings::default()));
+        let r = direct_only(&Bindings::default());
         let b = r.input_bindings();
         assert_eq!(b.paste.key_code, KeyCode::KeyV);
         assert!(b.paste.meta && !b.paste.ctrl && !b.paste.shift && !b.paste.alt);
