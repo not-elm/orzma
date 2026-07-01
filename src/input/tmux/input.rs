@@ -232,11 +232,13 @@ fn forward_keys_to_tmux(
             if let (Some(target), Some(client)) = (target.as_deref(), client.as_deref_mut()) {
                 for action in actions {
                     let result = match action {
-                        Forwarded::Run(cmd) => client.send(&cmd),
-                        Forwarded::Keys(names) => client.send(SendPaneKeys {
-                            pane: target,
-                            names: &names,
-                        }),
+                        Forwarded::Run(cmd) => client.send_effect(&cmd),
+                        Forwarded::Keys(names) => client
+                            .send(SendPaneKeys {
+                                pane: target,
+                                names: &names,
+                            })
+                            .map(|_| ()),
                     };
                     if let Err(e) = result {
                         tracing::warn!(?e, "forward-key send failed");
@@ -341,7 +343,7 @@ fn forward_keys_to_tmux(
         for name in key_names {
             let outcome = outcome_of(copy_mode_dispatch(&bindings, &name));
             if let Some(cmd) = &outcome.command {
-                match client.send(cmd) {
+                match client.send_effect(cmd) {
                     Ok(_) if outcome.bridge => {
                         if let Some(pane_id) = active_pane_id {
                             match client.send(ShowBuffer) {
@@ -414,11 +416,13 @@ fn forward_keys_to_tmux(
         }
         let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
         let result = match action {
-            Forwarded::Run(command) => client.send(&command),
-            Forwarded::Keys(names) => client.send(SendPaneKeys {
-                pane: target,
-                names: &names,
-            }),
+            Forwarded::Run(command) => client.send_effect(&command),
+            Forwarded::Keys(names) => client
+                .send(SendPaneKeys {
+                    pane: target,
+                    names: &names,
+                })
+                .map(|_| ()),
         };
         if let Err(e) = result {
             tracing::warn!(?e, "tmux forward send failed");
