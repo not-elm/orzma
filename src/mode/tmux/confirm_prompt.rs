@@ -4,6 +4,7 @@
 //! instead of forwarding it, and runs the inner command only on confirm.
 
 use crate::font::TerminalUiFont;
+use crate::input::InputPhase;
 use crate::theme;
 use bevy::app::{App, Plugin};
 use bevy::ecs::message::MessageReader;
@@ -26,7 +27,7 @@ impl Plugin for ConfirmPromptPlugin {
             .add_systems(
                 Update,
                 handle_confirm_input
-                    .after(crate::input::InputPhase::FocusedKey)
+                    .after(InputPhase::FocusedKey)
                     .run_if(resource_exists::<ConfirmState>),
             )
             .add_systems(

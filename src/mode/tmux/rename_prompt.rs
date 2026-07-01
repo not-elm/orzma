@@ -6,6 +6,7 @@
 //! command. The recognizer is `RenameKind::parse`.
 
 use crate::font::TerminalUiFont;
+use crate::input::InputPhase;
 use crate::theme;
 use bevy::app::{App, Plugin};
 use bevy::ecs::message::MessageReader;
@@ -28,7 +29,7 @@ impl Plugin for RenamePromptPlugin {
             .add_systems(
                 Update,
                 handle_rename_input
-                    .after(crate::input::InputPhase::FocusedKey)
+                    .after(InputPhase::FocusedKey)
                     .run_if(resource_exists::<RenamePrompt>),
             )
             .add_systems(
