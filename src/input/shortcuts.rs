@@ -7,6 +7,7 @@ use crate::configs::OzmuxConfigsResource;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
 use crate::mode::AppMode;
 use bevy::prelude::*;
+use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use ozmux_configs::shortcuts::{Key as ConfigKey, KeyChord, Modifiers, ShortcutAction};
@@ -29,7 +30,12 @@ impl Plugin for ShortcutsPlugin {
                     .chain(),
             )
             .add_systems(OnExit(AppMode::Tmux), reset_leader_pending)
-            .add_systems(OnExit(AppMode::Default), reset_leader_pending);
+            .add_systems(OnExit(AppMode::Default), reset_leader_pending)
+            .add_systems(
+                Update,
+                reset_leader_on_webview_focus_change
+                    .run_if(resource_exists_and_changed::<FocusedWebview>),
+            );
     }
 }
 
@@ -51,12 +57,6 @@ pub(crate) enum LeaderGate {
     Read,
     /// `app_shortcut_handler`: advances the leader state machine.
     Advance,
-}
-
-/// Clears `LeaderPending` on an `AppMode` transition so a leader engaged in one
-/// mode never fires its second key after switching modes.
-fn reset_leader_pending(mut leader_pending: ResMut<LeaderPending>) {
-    leader_pending.0 = false;
 }
 
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
@@ -207,6 +207,20 @@ pub(crate) fn step_leader(
         return LeaderStep::Swallow;
     }
     LeaderStep::Passthrough
+}
+
+/// Clears `LeaderPending` on an `AppMode` transition so a leader engaged in one
+/// mode never fires its second key after switching modes.
+fn reset_leader_pending(mut leader_pending: ResMut<LeaderPending>) {
+    leader_pending.0 = false;
+}
+
+/// Clears `LeaderPending` whenever webview focus changes. Webview focus moves on
+/// mouse clicks (no `KeyboardInput`), so the keyboard dispatchers never see the
+/// round-trip; without this a leader engaged before a mouse-only webview
+/// focus/blur would consume the next terminal keystroke as its second key.
+fn reset_leader_on_webview_focus_change(mut leader_pending: ResMut<LeaderPending>) {
+    leader_pending.0 = false;
 }
 
 /// `Startup` system: resolves the configured shortcut bindings into

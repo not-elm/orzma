@@ -64,17 +64,19 @@ fn dispatch_input(
         events.clear();
         return;
     };
-    // NOTE: while a leader chord is pending its second key, suppress PTY typing
-    // so the second key reaches only the leader machine. This system is ordered
-    // (LeaderGate::Read.before(Advance)) ahead of `app_shortcut_handler`, so it
-    // reads the end-of-previous-frame value before that handler clears it.
-    if leader_pending.0 {
-        events.clear();
-        return;
-    }
     let mods = current_terminal_modifiers(&keys);
+    // NOTE: while a leader chord is pending its second key, suppress ONLY that
+    // one key (the first Pressed this frame) from the PTY — the leader machine
+    // (`app_shortcut_handler`, ordered after this via LeaderGate::Read.before(
+    // Advance)) consumes it. Clearing the whole batch would drop other keys
+    // typed in the same frame.
+    let mut suppress_leader_second_key = leader_pending.0;
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
+            continue;
+        }
+        if suppress_leader_second_key {
+            suppress_leader_second_key = false;
             continue;
         }
         if bindings

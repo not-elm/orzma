@@ -1,10 +1,10 @@
 //! Loads `OzmuxConfigs` synchronously at app build time and exposes it as
-//! a Bevy Resource. Shortcut-config validation errors (duplicate direct or
-//! prefix chords, a leader that shadows a direct binding, prefix bindings with
-//! no leader, an unmappable leader key) are fatal (exit 2). Parse / IO errors
-//! warn and fall back to
-//! defaults so the GUI remains startable for users with stale or invalid
-//! config files.
+//! a Bevy Resource. Config validation errors (duplicate direct or prefix
+//! chords, a leader that shadows a direct binding, prefix bindings with no
+//! leader, an unmappable leader key, an out-of-range font size) are fatal
+//! (exit 2) so a mistake in one field never silently discards the whole config.
+//! Parse / IO errors warn and fall back to defaults so the GUI remains
+//! startable for users with stale or invalid config files.
 
 use bevy::prelude::*;
 use ozmux_configs::OzmuxConfigs;
@@ -27,16 +27,17 @@ impl Plugin for OzmuxConfigsPlugin {
             {
                 OzmuxConfigs::default()
             }
-            // NOTE: shortcut-config validation failures must exit(2), not fall
-            // through to the warn+default arm below — defaulting would silently
-            // discard the user's ENTIRE config (font, mouse, theme, direct
-            // bindings), not just the offending shortcut.
+            // NOTE: config VALIDATION failures must exit(2), not fall through to
+            // the warn+default arm below — defaulting would silently discard the
+            // user's ENTIRE config (font, mouse, theme, direct bindings), not
+            // just the offending field. Only parse / IO errors warn+default.
             ozmux_configs::OzmuxConfigsError::DuplicateChords(_)
             | ozmux_configs::OzmuxConfigsError::DuplicatePrefixChords(_)
             | ozmux_configs::OzmuxConfigsError::PrefixBindingsWithoutLeader
             | ozmux_configs::OzmuxConfigsError::LeaderShadowsDirectBinding { .. }
-            | ozmux_configs::OzmuxConfigsError::UnmappableLeader { .. } => {
-                eprintln!("ozmux: shortcut config is invalid:\n  {err}");
+            | ozmux_configs::OzmuxConfigsError::UnmappableLeader { .. }
+            | ozmux_configs::OzmuxConfigsError::InvalidFontSize { .. } => {
+                eprintln!("ozmux: config is invalid:\n  {err}");
                 std::process::exit(2);
             }
             // Any other error (TOML syntax error, stale schema, IO failure): warn + default.

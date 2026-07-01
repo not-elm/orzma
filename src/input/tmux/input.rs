@@ -279,8 +279,13 @@ fn forward_keys_to_tmux(
         // leader+second-key batch shares one modifier read.
         // NOTE: OS key auto-repeat delivers extra Pressed events; feeding them
         // to step_leader would toggle `pending` by parity. Treat a repeat as
-        // Passthrough without stepping the machine.
+        // Passthrough without stepping the machine — EXCEPT while a leader is
+        // pending, where a repeat (e.g. a held leader chord) must be swallowed,
+        // not forwarded, or the held chord leaks to the pane on every repeat.
         let step = if ev.repeat {
+            if leader_pending.0 {
+                continue;
+            }
             LeaderStep::Passthrough
         } else {
             step_leader(&mut leader_pending.0, &resolved, ev.key_code, cfg_mods)
