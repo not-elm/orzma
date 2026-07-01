@@ -88,6 +88,29 @@ impl OzmuxConfigs {
         if let Err(dupes) = self.shortcuts.bindings.validate_no_conflicts() {
             return Err(OzmuxConfigsError::DuplicateChords(dupes));
         }
+        if let Err(dupes) = self.shortcuts.prefix_bindings.validate_no_conflicts() {
+            return Err(OzmuxConfigsError::DuplicatePrefixChords(dupes));
+        }
+        let any_prefix_binding = self
+            .shortcuts
+            .prefix_bindings
+            .iter()
+            .any(|(_, b, _)| b.is_some());
+        if any_prefix_binding && self.shortcuts.prefix.is_none() {
+            return Err(OzmuxConfigsError::PrefixBindingsWithoutLeader);
+        }
+        if let Some(leader) = self.shortcuts.prefix.as_ref()
+            && let Some((action, _, _)) = self
+                .shortcuts
+                .bindings
+                .iter()
+                .find(|(_, bound, _)| bound.as_ref() == Some(leader))
+        {
+            return Err(OzmuxConfigsError::LeaderShadowsDirectBinding {
+                chord: leader.clone(),
+                action,
+            });
+        }
         let size = self.font.size;
         if !(size > 0.0 && size <= 200.0) {
             return Err(OzmuxConfigsError::InvalidFontSize { size });
@@ -142,6 +165,12 @@ pub mod test_support {
 mod validate_tests {
     use super::*;
 
+    fn parse_validated(s: &str) -> OzmuxConfigsResult<OzmuxConfigs> {
+        let mut c: OzmuxConfigs = toml::from_str(s).unwrap();
+        c.normalize();
+        c.validate().map(|()| c)
+    }
+
     #[test]
     fn validate_rejects_font_size_out_of_range() {
         let mut configs = OzmuxConfigs::default();
@@ -168,6 +197,49 @@ release-webview-focus = "Cmd+V"
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
         }
+    }
+
+    #[test]
+    fn validate_rejects_prefix_bindings_without_leader() {
+        let err =
+            parse_validated("[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n").unwrap_err();
+        assert!(matches!(
+            err,
+            OzmuxConfigsError::PrefixBindingsWithoutLeader
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_leader_shadowing_direct_binding() {
+        // Cmd+Q is the default `quit` direct binding.
+        let toml_str = "[shortcuts]\nprefix = \"Cmd+Q\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n";
+        let err = parse_validated(toml_str).unwrap_err();
+        match err {
+            OzmuxConfigsError::LeaderShadowsDirectBinding { action, .. } => {
+                assert_eq!(action, "quit")
+            }
+            other => panic!("expected LeaderShadowsDirectBinding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_prefix_table_internal_dupe() {
+        let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\nenter-copy-mode = \"d\"\n";
+        let err = parse_validated(toml_str).unwrap_err();
+        assert!(matches!(err, OzmuxConfigsError::DuplicatePrefixChords(_)));
+    }
+
+    #[test]
+    fn validate_allows_cross_table_same_key() {
+        // Direct bare `s` and leader-scoped `s` are different key-spaces.
+        let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.bindings]\nenter-copy-mode = \"s\"\n[shortcuts.prefix_bindings]\ndetach-session = \"s\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    #[test]
+    fn validate_allows_prefix_with_bindings() {
+        let toml_str = "[shortcuts]\nprefix = \"Ctrl+A\"\n[shortcuts.prefix_bindings]\ndetach-session = \"d\"\n";
+        assert!(parse_validated(toml_str).is_ok());
     }
 }
 

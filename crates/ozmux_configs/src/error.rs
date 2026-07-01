@@ -33,6 +33,27 @@ pub enum OzmuxConfigsError {
     #[error("duplicate chord(s) in shortcuts.bindings: {}", format_dupes(.0))]
     DuplicateChords(Vec<crate::shortcuts::DuplicateChord>),
 
+    /// One or more KeyChord collisions across the `[shortcuts.prefix_bindings]`
+    /// table. Collected in a single pass; reported all-at-once.
+    #[error("duplicate chord(s) in shortcuts.prefix_bindings: {}", format_dupes(.0))]
+    DuplicatePrefixChords(Vec<crate::shortcuts::DuplicateChord>),
+
+    /// `[shortcuts.prefix_bindings]` has entries but no `[shortcuts] prefix`
+    /// leader is configured, so none of them are reachable.
+    #[error("shortcuts.prefix_bindings is set but no [shortcuts] prefix leader is configured")]
+    PrefixBindingsWithoutLeader,
+
+    /// The configured leader chord duplicates a direct `[shortcuts.bindings]`
+    /// chord. The leader is matched first, so that direct binding would be
+    /// unreachable.
+    #[error("leader chord {chord} shadows the direct binding for {action}")]
+    LeaderShadowsDirectBinding {
+        /// The colliding chord (the leader).
+        chord: crate::shortcuts::KeyChord,
+        /// The direct-binding action label it shadows.
+        action: &'static str,
+    },
+
     /// The configured font size is outside the supported range.
     #[error("font size {size} is out of range (expected 0 < size <= 200)")]
     InvalidFontSize {
