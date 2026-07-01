@@ -7,7 +7,7 @@
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::input::shortcuts::Shortcuts;
+use crate::input::shortcuts::{LeaderStep, Shortcuts, step_leader};
 use crate::input::{InputPhase, current_modifiers};
 use crate::mode::AppMode;
 use crate::surface_geom::phys_to_pane_local;
@@ -154,6 +154,7 @@ fn app_shortcut_handler(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
+    mut leader_pending: Local<bool>,
     shortcuts: Res<Shortcuts>,
     ime: Res<ImeState>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
@@ -162,6 +163,7 @@ fn app_shortcut_handler(
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if ime.is_composing() || !focused {
+        *leader_pending = false;
         events.clear();
         return;
     }
@@ -172,10 +174,24 @@ fn app_shortcut_handler(
             continue;
         }
         if webview_focused && shortcuts.is_release_webview_focus(ev.key_code, mods) {
+            *leader_pending = false;
             focused_webview.0 = None;
             continue;
         }
-        let Some(action) = shortcuts.match_gui_action(ev.key_code, mods) else {
+        // NOTE: the leader is honored only when a webview does not own the
+        // keyboard (v0 scope, mirrors tmux mode); resetting `leader_pending`
+        // here instead of stepping the state machine prevents a stale leader
+        // from firing once keyboard focus returns to the terminal.
+        let Some(action) = (if webview_focused {
+            *leader_pending = false;
+            shortcuts.match_gui_action(ev.key_code, mods)
+        } else {
+            match step_leader(&mut leader_pending, &shortcuts, ev.key_code, mods) {
+                LeaderStep::RunAction(a) => Some(a),
+                LeaderStep::Swallow => None,
+                LeaderStep::Passthrough => shortcuts.match_gui_action(ev.key_code, mods),
+            }
+        }) else {
             continue;
         };
         if gui_action_suppressed_by_webview(webview_focused, action) {
