@@ -3,16 +3,24 @@
 
 use bevy::ecs::resource::Resource;
 
-/// Resource wrapping a lazily-initialized `arboard::Clipboard`.
+/// Resource wrapping a clipboard backend.
 ///
 /// `arboard::Clipboard::new()` can fail when no display is available
-/// (e.g. headless CI). In that case the inner `Option` stays `None`
-/// and every `write` call becomes a no-op (logged at debug level once
-/// at init, then silently dropped). Copy-mode UI keeps working — the
-/// user can still see the selection — but `y` does not modify the
-/// host clipboard.
+/// (e.g. headless CI). In that case the backend is
+/// [`ClipboardBackend::Unavailable`] and every `write` call becomes a
+/// no-op (logged at debug level once at init, then silently dropped).
+/// Copy-mode UI keeps working — the user can still see the selection —
+/// but `y` does not modify the host clipboard. [`Clipboard::in_memory`]
+/// swaps in a process-local backend for deterministic, headless-safe tests.
 #[derive(Resource)]
-pub struct Clipboard(Option<arboard::Clipboard>);
+pub struct Clipboard(ClipboardBackend);
+
+/// The concrete clipboard backend behind a [`Clipboard`] resource.
+enum ClipboardBackend {
+    System(arboard::Clipboard),
+    Memory(Option<String>),
+    Unavailable,
+}
 
 impl Default for Clipboard {
     fn default() -> Self {
@@ -23,43 +31,56 @@ impl Default for Clipboard {
 impl Clipboard {
     pub fn new() -> Self {
         match arboard::Clipboard::new() {
-            Ok(cb) => Self(Some(cb)),
+            Ok(cb) => Self(ClipboardBackend::System(cb)),
             Err(e) => {
                 tracing::warn!(
                     target: "ozmux::clipboard",
                     error = ?e,
                     "arboard init failed; clipboard writes will no-op",
                 );
-                Self(None)
+                Self(ClipboardBackend::Unavailable)
             }
         }
     }
 
-    /// Writes `text` to the system clipboard. No-op when arboard is
-    /// unavailable. Failures are logged at warn but never propagated —
-    /// copy mode must not panic on a clipboard failure.
+    /// Returns a clipboard backed by a process-local in-memory buffer.
+    ///
+    /// Reads observe exactly what was last written, with no dependency on a
+    /// display server — used by tests to exercise copy/paste wiring on
+    /// headless hosts where `arboard` is unavailable, without clobbering the
+    /// developer's real clipboard.
+    pub fn in_memory() -> Self {
+        Self(ClipboardBackend::Memory(None))
+    }
+
+    /// Writes `text` to the clipboard. No-op when the backend is unavailable.
+    /// Failures are logged at warn but never propagated — copy mode must not
+    /// panic on a clipboard failure.
     pub fn write(&mut self, text: String) {
-        let Some(cb) = self.0.as_mut() else {
-            tracing::debug!(
-                target: "ozmux::clipboard",
-                "clipboard write skipped: arboard unavailable",
-            );
-            return;
-        };
-        if let Err(e) = cb.set_text(text) {
-            tracing::warn!(
-                target: "ozmux::clipboard",
-                error = ?e,
-                "clipboard write failed",
-            );
+        match &mut self.0 {
+            ClipboardBackend::System(cb) => {
+                if let Err(e) = cb.set_text(text) {
+                    tracing::warn!(
+                        target: "ozmux::clipboard",
+                        error = ?e,
+                        "clipboard write failed",
+                    );
+                }
+            }
+            ClipboardBackend::Memory(slot) => *slot = Some(text),
+            ClipboardBackend::Unavailable => {
+                tracing::debug!(
+                    target: "ozmux::clipboard",
+                    "clipboard write skipped: arboard unavailable",
+                );
+            }
         }
     }
 
-    /// Reads text from the system clipboard. Returns `None` when
-    /// `arboard` is unavailable (headless) or when the clipboard does
-    /// not currently hold UTF-8 text. Empty strings are passed through
-    /// as `Some(String::new())`; the caller is responsible for treating
-    /// empty as a no-op.
+    /// Reads text from the clipboard. Returns `None` when the backend is
+    /// unavailable (headless) or when the clipboard does not currently hold
+    /// UTF-8 text. Empty strings are passed through as `Some(String::new())`;
+    /// the caller is responsible for treating empty as a no-op.
     ///
     /// arboard's behavior on an empty clipboard is platform-dependent —
     /// some backends return `Err(ContentNotAvailable)`, others return
@@ -68,27 +89,30 @@ impl Clipboard {
     /// caller's `text.is_empty()` check at the dispatcher swallows it
     /// without reaching the PTY.
     pub fn read(&mut self) -> Option<String> {
-        let Some(cb) = self.0.as_mut() else {
-            tracing::debug!(
-                target: "ozmux::clipboard",
-                "clipboard read skipped: arboard unavailable",
-            );
-            return None;
-        };
-        match cb.get_text() {
-            Ok(text) => Some(text),
-            Err(arboard::Error::ContentNotAvailable) => {
+        match &mut self.0 {
+            ClipboardBackend::System(cb) => match cb.get_text() {
+                Ok(text) => Some(text),
+                Err(arboard::Error::ContentNotAvailable) => {
+                    tracing::debug!(
+                        target: "ozmux::clipboard",
+                        "clipboard read: nothing available (empty / non-text)",
+                    );
+                    None
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "ozmux::clipboard",
+                        error = ?err,
+                        "clipboard read failed",
+                    );
+                    None
+                }
+            },
+            ClipboardBackend::Memory(slot) => slot.clone(),
+            ClipboardBackend::Unavailable => {
                 tracing::debug!(
                     target: "ozmux::clipboard",
-                    "clipboard read: nothing available (empty / non-text)",
-                );
-                None
-            }
-            Err(err) => {
-                tracing::warn!(
-                    target: "ozmux::clipboard",
-                    error = ?err,
-                    "clipboard read failed",
+                    "clipboard read skipped: arboard unavailable",
                 );
                 None
             }
@@ -159,12 +183,18 @@ mod tests {
 
     #[test]
     fn read_returns_none_when_inner_is_unavailable() {
-        // Force the unavailable-backend branch by constructing the
-        // resource with `Clipboard(None)` directly. This mirrors what
-        // `Clipboard::new` would do on a headless host where
-        // `arboard::Clipboard::new()` fails.
-        let mut cb = Clipboard(None);
+        // Mirrors what `Clipboard::new` produces on a headless host where
+        // `arboard::Clipboard::new()` fails: the unavailable backend.
+        let mut cb = Clipboard(ClipboardBackend::Unavailable);
         assert!(cb.read().is_none(), "headless backend must yield None");
+    }
+
+    #[test]
+    fn in_memory_backend_round_trips_writes() {
+        let mut cb = Clipboard::in_memory();
+        assert!(cb.read().is_none(), "empty in-memory backend yields None");
+        cb.write("hello world".to_string());
+        assert_eq!(cb.read().as_deref(), Some("hello world"));
     }
 
     #[test]

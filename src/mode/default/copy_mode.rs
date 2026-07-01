@@ -420,6 +420,9 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_plugins(CopyModePlugin);
         app.add_observer(on_copy_mode_key_action);
+        // Use a process-local clipboard so the assertion holds on headless CI
+        // (where `arboard` is unavailable) without clobbering the real clipboard.
+        app.insert_resource(Clipboard::in_memory());
 
         let opts = SpawnOptions {
             cols: 20,
