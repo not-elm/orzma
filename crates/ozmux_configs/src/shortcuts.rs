@@ -439,10 +439,8 @@ const LEADER_TOKEN: &str = "<Leader>";
 /// Strips a leading, case-insensitive `<Leader>` token, returning the remaining
 /// chord text. `None` when the value is not leader-scoped.
 fn strip_leader_prefix(value: &str) -> Option<&str> {
-    value
-        .get(..LEADER_TOKEN.len())
-        .filter(|head| head.eq_ignore_ascii_case(LEADER_TOKEN))
-        .map(|_| &value[LEADER_TOKEN.len()..])
+    let (head, rest) = value.split_at_checked(LEADER_TOKEN.len())?;
+    head.eq_ignore_ascii_case(LEADER_TOKEN).then_some(rest)
 }
 
 /// Parses a non-empty config value into a `Binding`: a leading `<Leader>`
@@ -857,6 +855,13 @@ mod tests {
     }
 
     #[test]
+    fn default_shortcuts_has_no_conflicts() {
+        let s = Shortcuts::default();
+        assert!(s.validate_no_direct_conflicts().is_ok());
+        assert!(s.validate_no_leader_conflicts().is_ok());
+    }
+
+    #[test]
     fn shortcuts_parses_flat_leader_and_bindings() {
         let toml = r#"
 leader = "Ctrl+A"
@@ -873,7 +878,6 @@ detach-session = "<Leader>d"
             s.detach_session,
             Some(Binding::Leader(parse_key_chord("d").unwrap()))
         );
-        // Omitted actions keep their active direct defaults.
         assert_eq!(
             s.paste,
             Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
