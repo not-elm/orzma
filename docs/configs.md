@@ -73,9 +73,12 @@ webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = f
 [shortcuts]
 # The leader for "<Leader>..." bindings. Either a full chord ("Ctrl+A": press
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
-# tap the modifier with no other key, then the next key). "" or omitted disables
-# it. "Shift" is not allowed as a tap. Choose a leader distinct from your tmux prefix.
-leader = ""
+# tap the modifier with no other key, then the next key). Defaults to "Cmd", and
+# is active only when at least one action is bound to "<Leader>..." — so you can
+# use "<Leader>p" without setting this, and a stray tap never eats a key when you
+# bind no leader action. Set "" to disable it. "Shift" is not allowed as a tap.
+# Choose a leader distinct from your tmux prefix.
+leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
 # key or mouse press, counts as a tap. Default 300; 0 reverts to 300.
 leader-tap-timeout-ms = 300

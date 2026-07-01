@@ -350,20 +350,27 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsRes
     resolved.direct = resolve_from_chords(sc.direct_chords());
     resolved.prefix = resolve_from_chords(sc.leader_chords());
     resolved.tap_timeout = Duration::from_millis(sc.leader_tap_timeout_ms);
-    resolved.leader = match sc.leader.as_ref() {
-        None => None,
-        Some(Leader::ModifierTap(m)) => Some(ResolvedLeader::Tap(*m)),
-        Some(Leader::Chord(chord)) => match key_to_keycode(&chord.key) {
-            Some(keycode) => Some(ResolvedLeader::Chord(keycode, chord.modifiers)),
-            None => {
-                tracing::warn!(chord = %chord, "shortcut leader key has no physical KeyCode mapping; prefix disabled");
-                None
-            }
-        },
+    // The leader (default Cmd tap) is only meaningful when there are
+    // `<Leader>`-scoped bindings to reach; with none it stays inert, so a
+    // default tap never swallows a key for users who bind no leader action.
+    resolved.leader = if resolved.prefix.is_empty() {
+        None
+    } else {
+        match sc.leader.as_ref() {
+            None => None,
+            Some(Leader::ModifierTap(m)) => Some(ResolvedLeader::Tap(*m)),
+            Some(Leader::Chord(chord)) => match key_to_keycode(&chord.key) {
+                Some(keycode) => Some(ResolvedLeader::Chord(keycode, chord.modifiers)),
+                None => {
+                    tracing::warn!(chord = %chord, "shortcut leader key has no physical KeyCode mapping; <Leader> bindings unreachable");
+                    None
+                }
+            },
+        }
     };
     if resolved.leader.is_none() && !resolved.prefix.is_empty() {
         tracing::warn!(
-            "shortcuts.<Leader> bindings are set but the leader is unset or unmappable; they are unreachable"
+            "shortcuts.<Leader> bindings are set but the leader is disabled or unmappable; they are unreachable"
         );
     }
 }
@@ -572,6 +579,7 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 mod tests {
     use super::*;
     use bevy::input::keyboard::Key;
+    use ozmux_configs::OzmuxConfigs;
     use ozmux_configs::shortcuts::{Binding, Shortcuts as ConfigShortcuts};
 
     fn ms(n: u64) -> Duration {
@@ -1182,5 +1190,37 @@ mod tests {
             !app.world().resource::<LeaderPending>().0,
             "a mouse press in the same frame as the modifier press must suppress the tap"
         );
+    }
+
+    fn resolved_shortcuts(config: OzmuxConfigs) -> Shortcuts {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Shortcuts>()
+            .insert_resource(OzmuxConfigsResource(config))
+            .add_systems(Startup, build_shortcuts);
+        app.update();
+        app.world().resource::<Shortcuts>().clone()
+    }
+
+    #[test]
+    fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
+        let resolved = resolved_shortcuts(OzmuxConfigs::default());
+        assert!(resolved.tap_modifier().is_none());
+        assert!(resolved.leader.is_none());
+    }
+
+    #[test]
+    fn build_shortcuts_activates_default_cmd_leader_with_a_leader_binding() {
+        let config = OzmuxConfigs {
+            shortcuts: ConfigShortcuts {
+                detach_session: Some(Binding::Leader(
+                    ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
+                )),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolved_shortcuts(config);
+        assert_eq!(resolved.tap_modifier(), Some(TapModifier::Meta));
     }
 }

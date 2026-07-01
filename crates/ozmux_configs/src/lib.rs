@@ -93,9 +93,6 @@ impl OzmuxConfigs {
         if let Err(dupes) = sc.validate_no_leader_conflicts() {
             return Err(OzmuxConfigsError::DuplicatePrefixChords(dupes));
         }
-        if sc.has_leader_bindings() && sc.leader.is_none() {
-            return Err(OzmuxConfigsError::PrefixBindingsWithoutLeader);
-        }
         if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
             if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
             {
@@ -193,15 +190,6 @@ mod validate_tests {
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
         }
-    }
-
-    #[test]
-    fn validate_rejects_leader_binding_without_leader() {
-        let err = parse_validated("[shortcuts]\ndetach-session = \"<Leader>d\"\n").unwrap_err();
-        assert!(matches!(
-            err,
-            OzmuxConfigsError::PrefixBindingsWithoutLeader
-        ));
     }
 
     #[test]

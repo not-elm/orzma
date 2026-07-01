@@ -33,7 +33,6 @@ impl Plugin for OzmuxConfigsPlugin {
             // just the offending field. Only parse / IO errors warn+default.
             ozmux_configs::OzmuxConfigsError::DuplicateChords(_)
             | ozmux_configs::OzmuxConfigsError::DuplicatePrefixChords(_)
-            | ozmux_configs::OzmuxConfigsError::PrefixBindingsWithoutLeader
             | ozmux_configs::OzmuxConfigsError::LeaderShadowsDirectBinding { .. }
             | ozmux_configs::OzmuxConfigsError::UnmappableLeader { .. }
             | ozmux_configs::OzmuxConfigsError::InvalidFontSize { .. } => {

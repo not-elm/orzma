@@ -364,7 +364,7 @@ pub struct Shortcuts {
 impl Default for Shortcuts {
     fn default() -> Self {
         Shortcuts {
-            leader: None,
+            leader: Some(Leader::ModifierTap(TapModifier::Meta)),
             paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
             release_webview_focus: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+Escape"))),
             quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
@@ -433,11 +433,6 @@ impl Shortcuts {
     /// Detects chord collisions among leader-scoped bindings.
     pub(crate) fn validate_no_leader_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
         conflicts(self.leader_chords())
-    }
-
-    /// True when at least one leader-scoped binding is set.
-    pub(crate) fn has_leader_bindings(&self) -> bool {
-        self.leader_chords().next().is_some()
     }
 
     /// Normalizes numeric fields: a `leader_tap_timeout_ms` of 0 is meaningless
@@ -915,7 +910,7 @@ mod tests {
     #[test]
     fn shortcuts_default_is_active_direct_bindings() {
         let s = Shortcuts::default();
-        assert!(s.leader.is_none());
+        assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
         assert_eq!(
             s.paste,
             Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
@@ -998,7 +993,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","leader-tap-timeout-ms":300}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","leader-tap-timeout-ms":300}"#;
         assert_eq!(json, expected);
     }
 

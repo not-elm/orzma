@@ -39,11 +39,6 @@ pub enum OzmuxConfigsError {
     #[error("duplicate chord(s) among <Leader> bindings: {}", format_dupes(.0))]
     DuplicatePrefixChords(Vec<DuplicateChord>),
 
-    /// A `<Leader>`-scoped binding is set but no `[shortcuts] leader` is
-    /// configured, so it is unreachable.
-    #[error("a <Leader> binding is set but no [shortcuts] leader is configured")]
-    PrefixBindingsWithoutLeader,
-
     /// The configured leader chord duplicates a direct `[shortcuts]` binding's
     /// chord. The leader is matched first, so that direct binding would be
     /// unreachable.
