@@ -12,7 +12,7 @@
 use super::pane_hit::tmux_pane_at_phys;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::shortcuts::Shortcuts;
+use crate::input::shortcuts::{LeaderStep, Shortcuts, step_leader};
 use crate::mode::AppMode;
 use crate::mode::tmux::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::mode::tmux::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
@@ -118,6 +118,7 @@ fn forward_keys_to_tmux(
     mut focused_webview: ResMut<FocusedWebview>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
+    mut leader_pending: Local<bool>,
     mut handles: Query<&mut TerminalHandle>,
     mut client: Option<Single<&mut TmuxClient>>,
     (keys, ime, bindings, resolved): (
@@ -136,6 +137,7 @@ fn forward_keys_to_tmux(
     // prefix state machine.
     if copy_prompt.open.is_some() {
         *prefix_pending = false;
+        *leader_pending = false;
         events.clear();
         return;
     }
@@ -143,6 +145,7 @@ fn forward_keys_to_tmux(
     // system reads the y/n answer. Drain here so no key leaks to tmux or the pane.
     if confirm_state.is_some() {
         *prefix_pending = false;
+        *leader_pending = false;
         events.clear();
         return;
     }
@@ -150,6 +153,7 @@ fn forward_keys_to_tmux(
     // reads the typed text. Drain here so no key leaks to tmux or the pane.
     if rename.prompt.is_some() {
         *prefix_pending = false;
+        *leader_pending = false;
         events.clear();
         return;
     }
@@ -157,12 +161,14 @@ fn forward_keys_to_tmux(
     // navigation keys would both garble IME composition and double-send.
     if ime.is_composing() {
         *prefix_pending = false;
+        *leader_pending = false;
         events.clear();
         return;
     }
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if !focused {
         *prefix_pending = false;
+        *leader_pending = false;
         events.clear();
         return;
     }
@@ -255,6 +261,7 @@ fn forward_keys_to_tmux(
         }
 
         *prefix_pending = false;
+        *leader_pending = false;
         events.clear();
         return;
     }
@@ -266,8 +273,21 @@ fn forward_keys_to_tmux(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        if let Some(action) = resolved.match_gui_action(ev.key_code, cfg_mods) {
-            // A GUI action abandons any pending tmux prefix sequence.
+        // Leader dispatch runs before direct matching and tmux forwarding, and
+        // is mutually exclusive with the tmux prefix: a swallowed/resolved leader
+        // key never reaches plan_forward. NOTE: cfg_mods is a per-frame snapshot,
+        // so a same-frame leader+second-key batch shares one modifier read.
+        let gui_action = match step_leader(&mut leader_pending, &resolved, ev.key_code, cfg_mods) {
+            LeaderStep::RunAction(action) => Some(action),
+            LeaderStep::Swallow => {
+                *prefix_pending = false;
+                continue;
+            }
+            LeaderStep::Passthrough => resolved.match_gui_action(ev.key_code, cfg_mods),
+        };
+        if let Some(action) = gui_action {
+            // A GUI action (direct or via the leader) abandons any pending tmux
+            // prefix sequence.
             *prefix_pending = false;
             match action {
                 ShortcutAction::Quit => {
