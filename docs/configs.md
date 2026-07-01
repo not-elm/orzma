@@ -12,7 +12,7 @@ ozmux resolves the config path in this order:
 3. `~/.config/ozmux/config.toml` — the default.
 
 Unknown sections are rejected at startup, as are unknown keys in `[ozma]`,
-`[keyboard]`, and `[shortcuts.bindings]`. Unknown keys in `[font]`, `[mouse]`,
+`[keyboard]`, and `[shortcuts]`. Unknown keys in `[font]`, `[mouse]`,
 and `[inactive_pane]` are silently ignored. Most invalid values are startup
 errors too; the few that are silently clamped or reverted are noted inline
 below.
@@ -71,28 +71,20 @@ webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webvie
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
 
 [shortcuts]
-# Optional leader chord (tmux-style). Bindings under [shortcuts.prefix_bindings]
-# fire as "press the leader, then the key". "" or omitted disables the leader.
-# Choose a leader distinct from your tmux prefix; a bare-key leader (e.g. "a")
-# steals that key from the terminal entirely.
-prefix = ""
+# Optional leader chord (tmux-style). A value of "<Leader>x" fires as
+# "press the leader, then x". "" or omitted disables the leader. Choose a
+# leader distinct from your tmux prefix.
+leader = ""
 
-[shortcuts.bindings]
-# Direct chords. Rebind with a chord string, or unbind with "". Two actions may
-# not share the same chord (startup error). See "Chord syntax" below.
+# Each action takes ONE value: a direct chord ("Cmd+V"), a leader-scoped
+# chord ("<Leader>s" = leader then s), or "" to unbind. Rebinding to a chord
+# already used by another action is a startup validation error. A direct
+# chord and a "<Leader>"-prefixed chord with the same key never collide.
 paste                 = "Cmd+V"
 release-webview-focus = "Ctrl+Shift+Escape"
 quit                  = "Cmd+Q"
 enter-copy-mode       = "Cmd+S"
 detach-session        = "Ctrl+Shift+D"
-
-[shortcuts.prefix_bindings]
-# Leader-scoped bindings: each value is the key pressed AFTER the leader. All
-# unbound by default. Requires [shortcuts] prefix to be set. The leader must not
-# equal any direct-binding chord, and two leader-scoped actions may not share a
-# chord (startup errors). Same key in both tables is fine (different key-spaces).
-# enter-copy-mode = "s"   # leader -> s   (Default mode only; see note below)
-# detach-session  = "d"   # leader -> d   (tmux mode only; see note below)
 ```
 
 ## Chord syntax
@@ -125,4 +117,4 @@ startup.
 Note: some actions only take effect in one mode. `enter-copy-mode` is active in
 Default (single-terminal) mode only — under tmux, copy mode is entered through
 tmux's own key bindings. `detach-session` is active under tmux only. This applies
-whether the action is bound directly or under the prefix.
+whether the action is bound directly or as a leader-scoped chord (e.g. `<Leader>s`).
