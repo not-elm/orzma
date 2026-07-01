@@ -81,9 +81,11 @@ mod tests {
     #[test]
     fn plugin_inserts_configs_resource_matching_defaults_when_no_config_file() {
         let _guard = env_guard();
-        // SAFETY: env mutations are serialized by ENV_GUARD for this crate's tests.
+        let nonexistent = std::env::temp_dir().join("ozmux_configs_no_file_defaults.toml");
+        let _ = std::fs::remove_file(&nonexistent);
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
         unsafe {
-            std::env::remove_var("OZMUX_CONFIG");
+            std::env::set_var("OZMUX_CONFIG", &nonexistent);
         }
 
         let mut app = App::new();
@@ -94,6 +96,11 @@ mod tests {
             .expect("plugin must insert resource");
         let defaults = OzmuxConfigs::default();
         assert_eq!(res.shortcuts, defaults.shortcuts);
+
+        // SAFETY: env mutation cleanup under the same env_guard.
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
     }
 
     #[test]
