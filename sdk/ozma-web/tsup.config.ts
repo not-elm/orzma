@@ -1,4 +1,4 @@
-import { defineConfig } from 'tsup'
+import { defineConfig } from 'tsup';
 
 /** Tsup build configuration for @ozma/web. */
 export default defineConfig({
@@ -12,4 +12,4 @@ export default defineConfig({
     compilerOptions: { ignoreDeprecations: '6.0' },
   },
   clean: true,
-})
+});
