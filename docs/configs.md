@@ -109,7 +109,7 @@ select-up-pane        = "<Leader>k"    # select-pane -U
 select-right-pane     = "<Leader>l"    # select-pane -R
 split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
 split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
-kill-pane             = "<Leader>x"    # kill-pane, after a confirm prompt
+kill-pane             = "<Leader>p"    # kill-pane, after a confirm prompt
 zoom-pane             = "<Leader>z"    # resize-pane -Z
 
 # --- window actions (tmux mode only) ---
@@ -236,7 +236,7 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `select-right-pane` | `<Leader>l` | Focus the pane to the right (tmux mode only). |
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (tmux `split-window -h`) (tmux mode only). |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (tmux `split-window -v`) (tmux mode only). |
-| `kill-pane` | `<Leader>x` | Kill the active pane, after a confirm prompt (tmux mode only). |
+| `kill-pane` | `<Leader>p` | Kill the active pane, after a confirm prompt (tmux mode only). |
 | `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (tmux mode only). |
 | `new-window` | `<Leader>c` | Open a new window (tmux mode only). |
 | `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (tmux mode only). |
