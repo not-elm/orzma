@@ -30,7 +30,7 @@ impl Default for Clipboard {
 }
 
 impl Clipboard {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         match arboard::Clipboard::new() {
             Ok(cb) => Self(ClipboardBackend::System(cb)),
             Err(e) => {

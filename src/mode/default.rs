@@ -3,7 +3,7 @@
 
 mod exit;
 mod layout;
-pub(crate) mod spawn;
+mod spawn;
 mod webview;
 
 pub(crate) use webview::DefaultWebviewPointerPlugin;
