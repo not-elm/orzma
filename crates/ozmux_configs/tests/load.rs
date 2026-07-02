@@ -1,4 +1,4 @@
-use ozmux_configs::shortcuts::Key;
+use ozmux_configs::shortcuts::{Binding, Key, parse_key_chord};
 use ozmux_configs::test_support::load_with_overrides;
 use ozmux_configs::{OzmuxConfigs, OzmuxConfigsError};
 use std::path::PathBuf;
@@ -85,4 +85,31 @@ fn syntax_error_surfaces_parse_toml() {
 fn unknown_action_surfaces_parse_toml() {
     let err = load_with_overrides(Some(fixture("unknown_action.toml")), None, None).unwrap_err();
     assert!(matches!(err, OzmuxConfigsError::ParseToml { .. }));
+}
+
+#[test]
+fn tmux_action_rebind_and_unbind() {
+    let configs =
+        load_with_overrides(Some(fixture("tmux_action_binding.toml")), None, None).unwrap();
+    assert_eq!(
+        configs.shortcuts.split_vertical_pane,
+        Some(Binding::Leader(parse_key_chord("g").unwrap()))
+    );
+    assert_eq!(configs.shortcuts.select_window_5, None);
+}
+
+#[test]
+fn duplicate_leader_chord_rejected() {
+    let err = load_with_overrides(Some(fixture("duplicate_leader_binding.toml")), None, None)
+        .unwrap_err();
+    match err {
+        OzmuxConfigsError::DuplicatePrefixChords(dupes) => {
+            assert!(
+                dupes
+                    .iter()
+                    .any(|d| d.actions.contains(&"new-window") && d.actions.contains(&"zoom-pane"))
+            );
+        }
+        other => panic!("expected DuplicatePrefixChords, got {other:?}"),
+    }
 }

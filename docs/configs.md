@@ -74,9 +74,9 @@ webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = f
 # The leader for "<Leader>..." bindings. Either a full chord ("Ctrl+A": press
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
 # tap the modifier with no other key, then the next key). Defaults to "Cmd", and
-# is active only when at least one action is bound to "<Leader>..." — so you can
-# use "<Leader>p" without setting this, and a stray tap never eats a key when you
-# bind no leader action. Set "" to disable it. "Shift" is not allowed as a tap.
+# is active only when at least one action is bound to "<Leader>..." — the stock
+# defaults below already bind two dozen actions to "<Leader>...", so the Cmd tap
+# is armed out of the box. Set "" to disable it. "Shift" is not allowed as a tap.
 # Choose a leader distinct from your tmux prefix.
 leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
@@ -87,11 +87,43 @@ leader-tap-timeout-ms = 300
 # chord ("<Leader>s" = leader then s), or "" to unbind. Rebinding to a chord
 # already used by another action is a startup validation error. A direct
 # chord and a "<Leader>"-prefixed chord with the same key never collide.
-paste                 = "Cmd+V"
+
+# --- existing actions ---
+paste                 = "<Leader>p"    # Was "Cmd+V" pre-tmux-native-shortcuts; set paste = "Cmd+V" to restore.
 release-webview-focus = "Ctrl+Shift+Escape"
 quit                  = "Cmd+Q"
-enter-copy-mode       = "Cmd+S"
-detach-session        = "Ctrl+Shift+D"
+enter-copy-mode       = "Cmd+S"        # Both modes: Alacritty vi mode in Default, tmux copy-mode under tmux.
+detach-session        = "Ctrl+Shift+D" # tmux mode only.
+
+# --- pane actions (tmux mode only) ---
+select-left-pane      = "<Leader>h"    # select-pane -L
+select-down-pane      = "<Leader>j"    # select-pane -D
+select-up-pane        = "<Leader>k"    # select-pane -U
+select-right-pane     = "<Leader>l"    # select-pane -R
+split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
+split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
+kill-pane             = "<Leader>x"    # kill-pane, after a confirm prompt
+zoom-pane             = "<Leader>z"    # resize-pane -Z
+
+# --- window actions (tmux mode only) ---
+new-window            = "<Leader>c"        # new-window
+kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
+next-window           = "<Leader>n"        # next-window
+previous-window       = "<Leader>Shift+N"  # previous-window (p is taken by paste)
+select-window-0       = "<Leader>0"        # select-window -t @<id at tmux index 0>
+select-window-1       = "<Leader>1"
+select-window-2       = "<Leader>2"
+select-window-3       = "<Leader>3"
+select-window-4       = "<Leader>4"
+select-window-5       = "<Leader>5"
+select-window-6       = "<Leader>6"
+select-window-7       = "<Leader>7"
+select-window-8       = "<Leader>8"
+select-window-9       = "<Leader>9"
+
+# --- rename actions (tmux mode only) ---
+rename-window         = "<Leader>r"        # opens the rename prompt for the active window
+rename-session        = "<Leader>Shift+R"  # opens the rename prompt for the session
 ```
 
 ## Chord syntax
@@ -115,14 +147,59 @@ startup.
 
 | Action | Default | What it does |
 | --- | --- | --- |
-| `paste` | `Cmd+V` | Paste from the system clipboard. |
+| `paste` | `<Leader>p` | Paste from the system clipboard. |
 | `release-webview-focus` | `Ctrl+Shift+Escape` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit ozmux. |
 | `enter-copy-mode` | `Cmd+S` | Enter copy mode. |
-| `detach-session` | `Ctrl+Shift+D` | Detach the current tmux session. |
+| `detach-session` | `Ctrl+Shift+D` | Detach the current tmux session (tmux mode only). |
+| `select-left-pane` | `<Leader>h` | Focus the pane to the left (tmux mode only). |
+| `select-down-pane` | `<Leader>j` | Focus the pane below (tmux mode only). |
+| `select-up-pane` | `<Leader>k` | Focus the pane above (tmux mode only). |
+| `select-right-pane` | `<Leader>l` | Focus the pane to the right (tmux mode only). |
+| `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (tmux `split-window -h`) (tmux mode only). |
+| `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (tmux `split-window -v`) (tmux mode only). |
+| `kill-pane` | `<Leader>x` | Kill the active pane, after a confirm prompt (tmux mode only). |
+| `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (tmux mode only). |
+| `new-window` | `<Leader>c` | Open a new window (tmux mode only). |
+| `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (tmux mode only). |
+| `next-window` | `<Leader>n` | Switch to the next window (tmux mode only). |
+| `previous-window` | `<Leader>Shift+N` | Switch to the previous window (tmux mode only). |
+| `select-window-0` | `<Leader>0` | Switch to the window at tmux index 0 (tmux mode only). |
+| `select-window-1` | `<Leader>1` | Switch to the window at tmux index 1 (tmux mode only). |
+| `select-window-2` | `<Leader>2` | Switch to the window at tmux index 2 (tmux mode only). |
+| `select-window-3` | `<Leader>3` | Switch to the window at tmux index 3 (tmux mode only). |
+| `select-window-4` | `<Leader>4` | Switch to the window at tmux index 4 (tmux mode only). |
+| `select-window-5` | `<Leader>5` | Switch to the window at tmux index 5 (tmux mode only). |
+| `select-window-6` | `<Leader>6` | Switch to the window at tmux index 6 (tmux mode only). |
+| `select-window-7` | `<Leader>7` | Switch to the window at tmux index 7 (tmux mode only). |
+| `select-window-8` | `<Leader>8` | Switch to the window at tmux index 8 (tmux mode only). |
+| `select-window-9` | `<Leader>9` | Switch to the window at tmux index 9 (tmux mode only). |
+| `rename-window` | `<Leader>r` | Open the rename prompt for the active window (tmux mode only). |
+| `rename-session` | `<Leader>Shift+R` | Open the rename prompt for the session (tmux mode only). |
 
-Note: some actions only take effect in one mode. `enter-copy-mode` is active in
-Default (single-terminal) mode only — under tmux, copy mode is entered through
-tmux's own key bindings. `detach-session` is active under tmux only. This applies
-whether the action is bound directly or as a leader-scoped key (e.g. `<Leader>s`),
-and regardless of whether the leader is a chord or a modifier tap.
+Note: some actions only take effect in one mode. `enter-copy-mode` now works in
+**both** modes: Alacritty vi mode in Default (single-terminal) mode, tmux
+copy-mode under tmux. `detach-session` and all 24 pane/window/rename actions
+above (`select-*-pane`, `split-*-pane`, `kill-pane`, `zoom-pane`, `new-window`,
+`kill-window`, `next-window`, `previous-window`, `select-window-0`…`9`,
+`rename-window`, `rename-session`) are active under tmux mode only — they are
+inert in Default mode. `paste`, `quit`, and `release-webview-focus` work in
+both modes. This applies whether an action is bound directly or as a
+leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is
+a chord or a modifier tap.
+
+Note on tmux.conf bindings: with the tmux prefix key no longer intercepted by
+ozmux, root-table and prefix-table bindings from your `tmux.conf` do not fire
+inside ozmux — the tmux prefix key passes straight through to the pane like
+any other keystroke. Use the `[shortcuts]` actions above instead. Keys pressed
+**inside tmux copy-mode** are unaffected by this and still follow tmux's own
+copy-mode key tables (`vi-copy-mode-keys` / `emacs-copy-mode-keys`), since
+ozmux forwards them to tmux once copy-mode is active.
+
+Note on the leader: because the stock defaults above bind two dozen actions to
+`<Leader>...`, the `Cmd` tap leader is armed by default — tapping and
+releasing `Cmd` (with no other key/mouse press in between) arms the leader,
+and the very next keystroke either fires a bound `<Leader>` action or is
+swallowed if nothing matches. `LeaderPending` has no expiry: after an
+accidental tap, the next keystroke is consumed one way or the other, it does
+not time out on its own.
