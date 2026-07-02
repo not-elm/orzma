@@ -293,16 +293,18 @@ fn forward_keys_to_tmux(
         // forwarding so a swallowed/resolved leader key never reaches
         // plan_forward. cfg_mods is a per-frame snapshot, so a same-frame
         // leader+second-key batch shares one modifier read.
-        // NOTE: OS key auto-repeat delivers extra Pressed events; feeding them
-        // to step_leader would toggle the phase by parity. Treat a repeat as
-        // Passthrough without stepping the machine — EXCEPT while a leader is
-        // pending, where a repeat (e.g. a held leader chord) must be swallowed,
-        // not forwarded, or the held chord leaks to the pane on every repeat.
+        // NOTE: OS key auto-repeat delivers extra Pressed events. Outside the
+        // repeat window they must not step the machine (pending would toggle by
+        // parity; a held leader chord must stay swallowed, not forwarded).
+        // Inside the window they must step it so held keys keep firing.
         let step = if ev.repeat {
-            if matches!(*leader_phase, LeaderPhase::Pending) {
-                continue;
+            match *leader_phase {
+                LeaderPhase::Pending => continue,
+                LeaderPhase::Repeat { .. } => {
+                    step_leader(&mut leader_phase, &resolved, ev.key_code, cfg_mods, now)
+                }
+                LeaderPhase::Idle => LeaderStep::Passthrough,
             }
-            LeaderStep::Passthrough
         } else {
             step_leader(&mut leader_phase, &resolved, ev.key_code, cfg_mods, now)
         };

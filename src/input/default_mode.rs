@@ -15,7 +15,7 @@ use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use crate::webview_pointer::topmost_surface_at;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -197,9 +197,10 @@ fn app_shortcut_handler(
             (shortcuts.match_gui_action(ev.key_code, mods), false)
         } else {
             // NOTE: OS key auto-repeat delivers extra Pressed events; feeding
-            // them to step_leader would toggle the phase by parity. Treat a
-            // repeat as Passthrough without stepping the machine.
-            let step = if ev.repeat {
+            // them to step_leader outside the repeat window would toggle the
+            // pending phase by parity. Inside the window they must step the
+            // machine so held keys keep firing (tmux parity).
+            let step = if ev.repeat && !matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
                 LeaderStep::Passthrough
             } else {
                 step_leader(&mut leader_phase, &shortcuts, ev.key_code, mods, now)
@@ -266,11 +267,20 @@ fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutActio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::focus::KeyboardFocused;
+    use crate::input::shortcuts::{LeaderPhase, test_shortcuts_with_repeat_prefix};
     use bevy::app::App;
+    use bevy::app::AppExit;
     use bevy::ecs::resource::Resource;
+    use bevy::input::ButtonInput;
+    use bevy::input::ButtonState;
+    use bevy::input::keyboard::{Key, KeyboardInput};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
+    use bevy::window::PrimaryWindow;
+    use ozma_terminal::OzmaTerminal;
     use ozma_tty_engine::TerminalKeyInput;
     use ozmux_tmux::{PaneId, TmuxPane};
+    use std::time::Duration;
     use tmux_control_parser::CellDims;
 
     #[test]
@@ -471,5 +481,86 @@ mod tests {
             "webview focus alone must NOT MouseDisable the shell — an off-rect click must fall \
              through to the terminal (and clear webview focus in the router)"
         );
+    }
+
+    #[derive(Resource, Default)]
+    struct CopyModeHits(u32);
+
+    fn repeat_dispatch_app() -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<KeyboardInput>()
+            .add_message::<AppExit>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ImeState>()
+            .init_resource::<FocusedWebview>()
+            .init_resource::<LeaderPhase>()
+            .init_resource::<CopyModeHits>()
+            .insert_resource(test_shortcuts_with_repeat_prefix(
+                KeyCode::KeyH,
+                ShortcutAction::EnterCopyMode,
+                Duration::from_secs(60),
+            ))
+            .add_systems(Update, app_shortcut_handler)
+            .add_observer(
+                |_ev: On<EnterCopyModeActionEvent>, mut hits: ResMut<CopyModeHits>| {
+                    hits.0 += 1;
+                },
+            );
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app
+    }
+
+    fn send_key_repeat(app: &mut App, key_code: KeyCode, repeat: bool) {
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key: Key::Character("h".into()),
+            state: ButtonState::Pressed,
+            text: None,
+            repeat,
+            window: Entity::PLACEHOLDER,
+        });
+    }
+
+    #[test]
+    fn os_key_repeat_refires_inside_repeat_window() {
+        let mut app = repeat_dispatch_app();
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Repeat {
+            deadline: Duration::from_secs(60),
+        };
+        send_key_repeat(&mut app, KeyCode::KeyH, true);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CopyModeHits>().0,
+            1,
+            "an OS auto-repeat of a repeat-marked key must re-fire inside the window (tmux parity)"
+        );
+        assert!(
+            matches!(
+                *app.world().resource::<LeaderPhase>(),
+                LeaderPhase::Repeat { .. }
+            ),
+            "firing must keep (re-arm) the window"
+        );
+    }
+
+    #[test]
+    fn os_key_repeat_outside_window_stays_passthrough() {
+        let mut app = repeat_dispatch_app();
+        send_key_repeat(&mut app, KeyCode::KeyH, true);
+        app.update();
+        assert_eq!(
+            app.world().resource::<CopyModeHits>().0,
+            0,
+            "auto-repeat with no window open must not step the leader machine"
+        );
+        assert_eq!(*app.world().resource::<LeaderPhase>(), LeaderPhase::Idle);
     }
 }
