@@ -20,10 +20,10 @@ mod plugin;
 
 pub use command::{
     CopyModeCapture, CopyStateQuery, EnterCopyMode, KillPane, KillWindow, NewWindow, NextWindow,
-    PaneDirection, Prompt, PreviousWindow, RefreshClient, RenameSession, RenameWindow,
-    ResizePaneX, ResizePaneY, ResizeWindow, SelectPane, SelectPaneTowards, SelectWindow,
-    SendBytes, SendPaneKeys, SetEnvironmentGlobal, SetEnvironmentInSession, ShowBuffer,
-    SplitDirection, SplitWindow, UnsetEnvironmentGlobal, WindowRefreshClient, ZoomPane,
+    PaneDirection, PreviousWindow, Prompt, RefreshClient, RenameSession, RenameWindow, ResizePaneX,
+    ResizePaneY, ResizeWindow, SelectPane, SelectPaneTowards, SelectWindow, SendBytes,
+    SendPaneKeys, SetEnvironmentGlobal, SetEnvironmentInSession, ShowBuffer, SplitDirection,
+    SplitWindow, UnsetEnvironmentGlobal, WindowRefreshClient, ZoomPane,
 };
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,

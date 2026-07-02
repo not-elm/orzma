@@ -193,7 +193,10 @@ mod tests {
             "kill-pane -t %5"
         );
         assert_eq!(
-            KillWindow { window: WindowId(2) }.into_raw_command(),
+            KillWindow {
+                window: WindowId(2)
+            }
+            .into_raw_command(),
             "kill-window -t @2"
         );
     }
@@ -202,11 +205,17 @@ mod tests {
     fn window_cycle_commands_target_session() {
         assert_eq!(NewWindow.into_raw_command(), "new-window");
         assert_eq!(
-            NextWindow { session: SessionId(1) }.into_raw_command(),
+            NextWindow {
+                session: SessionId(1)
+            }
+            .into_raw_command(),
             "next-window -t $1"
         );
         assert_eq!(
-            PreviousWindow { session: SessionId(1) }.into_raw_command(),
+            PreviousWindow {
+                session: SessionId(1)
+            }
+            .into_raw_command(),
             "previous-window -t $1"
         );
     }
