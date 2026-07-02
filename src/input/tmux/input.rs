@@ -166,10 +166,10 @@ fn forward_keys_to_tmux(
         None => (None, None),
     };
 
-    // NOTE: this must be read before the main loop below — a copy-mode entry
-    // binding pressed while already in copy mode is relayed inside the loop
-    // (not re-intercepted), which would otherwise re-insert CopyModeState each
-    // press.
+    // NOTE: read once before the main loop — the repeat-window close and the
+    // in-loop copy-mode arm must agree on one snapshot of the state; the
+    // EnterCopyMode arm separately re-checks `copy_modes` live for its
+    // re-entry guard.
     let in_copy_mode = active_entity.is_some_and(|e| copy_modes.get(e).is_ok());
 
     // When a webview holds focus it owns the keyboard (bevy_cef routes
@@ -233,10 +233,10 @@ fn forward_keys_to_tmux(
     // Collect forwardable tmux key names in event order. Super-modified keys are
     // matched against the configured ozmux shortcuts or swallowed; none reach tmux.
     // NOTE: an open repeat window must not intercept copy-mode keys — a
-    // repeat-marked key doubling as a copy-mode command (vi h/j/k/l etc.) would
-    // re-fire the bound action and re-arm the window instead of reaching
-    // copy_mode_dispatch. Close the window before stepping; Pending semantics
-    // (leader + second key inside copy mode) stay unchanged.
+    // repeat-marked key doubling as a copy-mode key (vi h/j/k/l etc.) would
+    // re-fire the bound action and re-arm the window instead of reaching the
+    // `resolved_copy.resolve` arm below. Close the window before stepping;
+    // Pending semantics (leader + second key inside copy mode) stay unchanged.
     if in_copy_mode && matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
         *leader_phase = LeaderPhase::Idle;
     }

@@ -4,14 +4,15 @@
 //! `CopyModeState` on exit. Guarded on `TmuxPane`.
 
 use crate::action::vi::{
-    ViExitRequest, ViMotionRequest, ViPromptRequest, ViScrollKind, ViScrollRequest,
-    ViSearchStepRequest, ViSelectionToggleRequest, ViYankRequest,
+    ViExitRequest, ViMotionRequest, ViPromptRequest, ViScrollRequest, ViSearchStepRequest,
+    ViSelectionToggleRequest, ViYankRequest,
 };
 use crate::mode::tmux::copy_mode::CopyModeSnapshot;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use bevy::prelude::*;
 use ozma_tty_engine::{SelectionType, ViMotion};
+use ozmux_configs::copy_mode::CopyScroll;
 use ozmux_tmux::{
     CopyModeQueries, CopyQueryKind, PaneId, ShowBuffer, TmuxClient, TmuxCommand, TmuxPane,
 };
@@ -71,16 +72,16 @@ fn motion_x(motion: ViMotion) -> Option<&'static str> {
 }
 
 /// The tmux `-X` command for a scroll (spec §3 table).
-fn scroll_x(kind: ViScrollKind) -> &'static str {
+fn scroll_x(kind: CopyScroll) -> &'static str {
     match kind {
-        ViScrollKind::PageUp => "page-up",
-        ViScrollKind::PageDown => "page-down",
-        ViScrollKind::HalfUp => "halfpage-up",
-        ViScrollKind::HalfDown => "halfpage-down",
-        ViScrollKind::LineUp => "scroll-up",
-        ViScrollKind::LineDown => "scroll-down",
-        ViScrollKind::Top => "history-top",
-        ViScrollKind::Bottom => "history-bottom",
+        CopyScroll::PageUp => "page-up",
+        CopyScroll::PageDown => "page-down",
+        CopyScroll::HalfPageUp => "halfpage-up",
+        CopyScroll::HalfPageDown => "halfpage-down",
+        CopyScroll::ScrollUp => "scroll-up",
+        CopyScroll::ScrollDown => "scroll-down",
+        CopyScroll::HistoryTop => "history-top",
+        CopyScroll::HistoryBottom => "history-bottom",
     }
 }
 
@@ -94,11 +95,11 @@ fn send_x(client: &mut TmuxClient, pane: PaneId, command: &str) -> bool {
     }
 }
 
-fn selection_present(snapshots: &Query<&CopyModeSnapshot>, entity: Entity) -> bool {
+fn selection_state(snapshots: &Query<&CopyModeSnapshot>, entity: Entity) -> (bool, bool) {
     snapshots
         .get(entity)
-        .map(|s| s.0.selection_present)
-        .unwrap_or(false)
+        .map(|s| (s.0.selection_present, s.0.rectangle))
+        .unwrap_or((false, false))
 }
 
 fn on_vi_motion(
@@ -147,21 +148,24 @@ fn on_vi_selection_toggle(
     let Some(client) = client.as_deref_mut() else {
         return;
     };
-    if selection_present(&snapshots, ev.entity) {
+    let (present, rect_on) = selection_state(&snapshots, ev.entity);
+    if present {
         send_x(client, pane.id, "clear-selection");
         return;
     }
+    // NOTE: tmux's rectangle flag PERSISTS across clear-selection, so starting
+    // a selection must reconcile the flag with the requested kind — blindly
+    // toggling would hand Ctrl+V a linear selection (or `v` a rectangular one)
+    // after an earlier rect selection was cleared.
     match ev.ty {
         SelectionType::Lines => {
             send_x(client, pane.id, "select-line");
         }
-        SelectionType::Block => {
-            if send_x(client, pane.id, "begin-selection") {
+        ty => {
+            let want_rect = ty == SelectionType::Block;
+            if send_x(client, pane.id, "begin-selection") && rect_on != want_rect {
                 send_x(client, pane.id, "rectangle-toggle");
             }
-        }
-        _ => {
-            send_x(client, pane.id, "begin-selection");
         }
     }
 }
@@ -177,14 +181,20 @@ fn on_vi_yank(
     let Ok(pane) = panes.get(ev.entity) else {
         return;
     };
-    // NOTE: with no selection tmux creates no buffer and `show-buffer` would
-    // bridge a STALE buffer into the clipboard — skip entirely (spec §5).
-    if !selection_present(&snapshots, ev.entity) {
-        return;
-    }
     let Some(client) = client.as_deref_mut() else {
         return;
     };
+    // NOTE: with no selection tmux creates no buffer and `show-buffer` would
+    // bridge a STALE buffer into the clipboard — skip the copy and bridge, but
+    // still leave copy mode (stock tmux's Enter and the Default-mode applier
+    // both exit; a dead key would strand the user in copy mode).
+    let (present, _) = selection_state(&snapshots, ev.entity);
+    if !present {
+        if send_x(client, pane.id, "cancel") {
+            commands.entity(ev.entity).remove::<CopyModeState>();
+        }
+        return;
+    }
     if !send_x(client, pane.id, "copy-selection-and-cancel") {
         return;
     }
@@ -254,6 +264,10 @@ mod tests {
     use tmux_control_parser::CellDims;
 
     fn snapshot(selection_present: bool) -> CopyModeSnapshot {
+        snapshot_with_rect(selection_present, false)
+    }
+
+    fn snapshot_with_rect(selection_present: bool, rectangle: bool) -> CopyModeSnapshot {
         CopyModeSnapshot(CopyState {
             pane_in_mode: true,
             scroll_position: 0,
@@ -262,7 +276,7 @@ mod tests {
             cursor_x: 0,
             cursor_y: 0,
             selection_present,
-            rectangle: false,
+            rectangle,
             sel_start_x: 0,
             sel_start_y: 0,
             sel_end_x: 0,
@@ -328,7 +342,7 @@ mod tests {
         });
         app.world_mut().trigger(ViScrollRequest {
             entity: pane,
-            kind: ViScrollKind::HalfDown,
+            kind: CopyScroll::HalfPageDown,
         });
         app.update();
         assert!(outgoing(&mut app, client).contains("send-keys -X -t %7 halfpage-down"));
@@ -370,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn yank_without_selection_sends_nothing() {
+    fn yank_without_selection_cancels_without_copying() {
         let (mut app, client, pane) = app_with(|a| {
             a.add_observer(on_vi_yank);
         });
@@ -379,8 +393,50 @@ mod tests {
             .insert((snapshot(false), CopyModeState));
         app.world_mut().trigger(ViYankRequest { entity: pane });
         app.update();
-        assert!(outgoing(&mut app, client).is_empty());
-        assert!(app.world().entity(pane).contains::<CopyModeState>());
+        let out = outgoing(&mut app, client);
+        assert!(out.contains("send-keys -X -t %7 cancel"), "got {out:?}");
+        assert!(!out.contains("copy-selection"), "got {out:?}");
+        assert!(!out.contains("show-buffer"), "got {out:?}");
+        assert!(!app.world().entity(pane).contains::<CopyModeState>());
+    }
+
+    #[test]
+    fn selection_start_reconciles_stale_rectangle_flag() {
+        let (mut app, client, pane) = app_with(|a| {
+            a.add_observer(on_vi_selection_toggle);
+        });
+        app.world_mut()
+            .entity_mut(pane)
+            .insert(snapshot_with_rect(false, true));
+        app.world_mut().trigger(ViSelectionToggleRequest {
+            entity: pane,
+            ty: SelectionType::Simple,
+        });
+        app.update();
+        let out = outgoing(&mut app, client);
+        let begin = out.find("begin-selection").expect("begin-selection sent");
+        let rect = out
+            .find("rectangle-toggle")
+            .expect("rectangle-toggle must clear the stale rect flag");
+        assert!(begin < rect);
+    }
+
+    #[test]
+    fn rect_selection_with_flag_already_on_does_not_toggle() {
+        let (mut app, client, pane) = app_with(|a| {
+            a.add_observer(on_vi_selection_toggle);
+        });
+        app.world_mut()
+            .entity_mut(pane)
+            .insert(snapshot_with_rect(false, true));
+        app.world_mut().trigger(ViSelectionToggleRequest {
+            entity: pane,
+            ty: SelectionType::Block,
+        });
+        app.update();
+        let out = outgoing(&mut app, client);
+        assert!(out.contains("begin-selection"), "got {out:?}");
+        assert!(!out.contains("rectangle-toggle"), "got {out:?}");
     }
 
     #[test]

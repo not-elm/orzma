@@ -3,13 +3,13 @@
 //! `Without<TmuxPane>` — tmux panes are handled by `vi/tmux_mode.rs`.
 
 use crate::action::vi::{
-    ViExitRequest, ViMotionRequest, ViScrollKind, ViScrollRequest, ViSelectionToggleRequest,
-    ViYankRequest,
+    ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
 use crate::ui::copy_mode::ExitCopyMode;
 use bevy::prelude::*;
 use ozma_terminal::Clipboard;
 use ozma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
+use ozmux_configs::copy_mode::CopyScroll;
 use ozmux_tmux::TmuxPane;
 
 /// Registers the Default-mode VI apply observers. `ViPromptRequest` /
@@ -104,22 +104,22 @@ fn on_vi_exit(ev: On<ViExitRequest>, mut commands: Commands, terminals: LocalTer
 
 /// Applies a scroll. Relative scrolls move the vi cursor with the viewport;
 /// `Top`/`Bottom` snap to the buffer extremes.
-fn apply_scroll(handle: &mut TerminalHandle, coalescer: &mut Coalescer, kind: ViScrollKind) {
+fn apply_scroll(handle: &mut TerminalHandle, coalescer: &mut Coalescer, kind: CopyScroll) {
     match kind {
-        ViScrollKind::PageUp => handle.scroll_page_up(coalescer),
-        ViScrollKind::PageDown => handle.scroll_page_down(coalescer),
-        ViScrollKind::HalfUp => {
+        CopyScroll::PageUp => handle.scroll_page_up(coalescer),
+        CopyScroll::PageDown => handle.scroll_page_down(coalescer),
+        CopyScroll::HalfPageUp => {
             let half = half_page(handle);
             handle.scroll(coalescer, half);
         }
-        ViScrollKind::HalfDown => {
+        CopyScroll::HalfPageDown => {
             let half = half_page(handle);
             handle.scroll(coalescer, -half);
         }
-        ViScrollKind::LineUp => handle.scroll(coalescer, 1),
-        ViScrollKind::LineDown => handle.scroll(coalescer, -1),
-        ViScrollKind::Top => handle.scroll_to_top(coalescer),
-        ViScrollKind::Bottom => handle.scroll_to_bottom(coalescer),
+        CopyScroll::ScrollUp => handle.scroll(coalescer, 1),
+        CopyScroll::ScrollDown => handle.scroll(coalescer, -1),
+        CopyScroll::HistoryTop => handle.scroll_to_top(coalescer),
+        CopyScroll::HistoryBottom => handle.scroll_to_bottom(coalescer),
     }
 }
 
@@ -176,5 +176,51 @@ mod tests {
         app.world_mut().trigger(ViExitRequest { entity: pane });
         app.world_mut().trigger(ViYankRequest { entity: pane });
         app.update();
+    }
+
+    #[test]
+    fn yank_writes_selection_to_clipboard_and_exits() {
+        use crate::ui::copy_mode::{CopyModePlugin, CopyModeState, EnterCopyModeActionEvent};
+        use bevy::ecs::system::RunSystemOnce;
+        use ozma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(CopyModePlugin);
+        app.add_observer(on_vi_yank);
+        // Use a process-local clipboard so the assertion holds on headless CI
+        // (where `arboard` is unavailable) without clobbering the real clipboard.
+        app.insert_resource(Clipboard::in_memory());
+
+        let opts = SpawnOptions {
+            cols: 20,
+            rows: 5,
+            shell: "/bin/sh".into(),
+            cwd: None,
+            env: Vec::new(),
+        };
+        let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
+        let entity = app.world_mut().spawn(bundle).id();
+
+        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.update();
+        app.world_mut()
+            .run_system_once(move |mut q: Query<(&mut TerminalHandle, &mut Coalescer)>| {
+                let (mut h, mut c) = q.get_mut(entity).unwrap();
+                h.advance(b"hello world");
+                h.selection_start(&mut c, SelectionType::Simple);
+                h.vi_motion(&mut c, ViMotion::Last);
+            })
+            .unwrap();
+
+        app.world_mut().trigger(ViYankRequest { entity });
+        app.update();
+
+        assert!(app.world().get::<CopyModeState>(entity).is_none());
+        let text = app.world_mut().resource_mut::<Clipboard>().read();
+        assert!(
+            text.is_some_and(|t| !t.is_empty()),
+            "yank must populate the clipboard"
+        );
     }
 }

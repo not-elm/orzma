@@ -10,28 +10,8 @@ mod tmux_mode;
 use bevy::prelude::*;
 pub(crate) use keymap::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use ozma_tty_engine::{SelectionType, ViMotion};
+use ozmux_configs::copy_mode::CopyScroll;
 use ozmux_tmux::PromptKind;
-
-/// A viewport scroll kind, shared by both appliers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ViScrollKind {
-    /// One page toward history.
-    PageUp,
-    /// One page toward the tail.
-    PageDown,
-    /// Half a page toward history.
-    HalfUp,
-    /// Half a page toward the tail.
-    HalfDown,
-    /// One line toward history.
-    LineUp,
-    /// One line toward the tail.
-    LineDown,
-    /// Oldest history line.
-    Top,
-    /// The live tail.
-    Bottom,
-}
 
 /// Moves the copy cursor on `entity`.
 #[derive(EntityEvent, Debug, Clone)]
@@ -50,7 +30,7 @@ pub(crate) struct ViScrollRequest {
     #[event_target]
     pub entity: Entity,
     /// The scroll to apply.
-    pub kind: ViScrollKind,
+    pub kind: CopyScroll,
 }
 
 /// Toggles a selection of kind `ty` on `entity`.

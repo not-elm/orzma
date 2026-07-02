@@ -27,7 +27,6 @@ use font::FontBridgePlugin;
 use input::OzmuxInputPlugin;
 use input::default_mode::DefaultHostInputPlugin;
 use input::ime::ImePlugin;
-use mode::default::CopyModeInputPlugin;
 use mode::default::DefaultModePlugin;
 use mode::default::DefaultWebviewPointerPlugin;
 use mode::tmux::OzmuxTmuxPlugin;
@@ -92,7 +91,6 @@ fn main() {
             ImeOverlayPlugin,
             DefaultHostInputPlugin,
             DefaultWebviewPointerPlugin,
-            CopyModeInputPlugin,
         ))
         .run();
 }

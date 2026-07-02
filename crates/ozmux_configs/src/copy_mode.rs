@@ -126,6 +126,15 @@ pub fn parse_copy_mode_key(s: &str) -> Result<CopyModeKey, CopyModeKeyParseError
     if s.is_empty() {
         return Err(CopyModeKeyParseError::Empty);
     }
+    // NOTE: a bare "+" would split into two empty tokens and be misread as a
+    // forbidden modifier — and a config parse error discards the user's WHOLE
+    // config (warn + defaults), so "+" must short-circuit before the split.
+    if s == "+" {
+        return Ok(CopyModeKey {
+            ctrl: false,
+            key: CopyModeBaseKey::Char("+".to_string()),
+        });
+    }
     let parts: Vec<&str> = s.split('+').collect();
     let (ctrl, key_token) = match parts.as_slice() {
         [key] => (false, *key),
@@ -159,6 +168,15 @@ pub fn parse_copy_mode_key(s: &str) -> Result<CopyModeKey, CopyModeKeyParseError
         return Ok(CopyModeKey {
             ctrl: true,
             key: CopyModeBaseKey::Char(c.to_ascii_lowercase().to_string()),
+        });
+    }
+    // NOTE: the space BAR arrives as the named logical key, never as the
+    // character " " — a Char(" ") entry would parse fine yet be forever dead,
+    // so normalize it to the named form the resolver actually matches.
+    if c == ' ' {
+        return Ok(CopyModeKey {
+            ctrl: false,
+            key: CopyModeBaseKey::Named(CopyModeNamedKey::Space),
         });
     }
     Ok(CopyModeKey {
@@ -395,7 +413,7 @@ copy_mode_fields! {
     /// Scroll one line down.
     scroll_down => "scroll-down", CopyModeAction::Scroll(CopyScroll::ScrollDown), ["Ctrl+E"];
     /// Toggle a character-wise selection.
-    toggle_selection => "toggle-selection", CopyModeAction::Selection(CopySelection::Simple), ["v"];
+    toggle_selection => "toggle-selection", CopyModeAction::Selection(CopySelection::Simple), ["v", "Space"];
     /// Toggle a line-wise selection.
     toggle_line_selection => "toggle-line-selection", CopyModeAction::Selection(CopySelection::Lines), ["V"];
     /// Toggle a rectangular selection.
@@ -505,11 +523,23 @@ mod tests {
         assert_eq!(parse_copy_mode_key("v").unwrap(), plain("v"));
         assert_eq!(parse_copy_mode_key("V").unwrap(), plain("V"));
         assert_eq!(parse_copy_mode_key("$").unwrap(), plain("$"));
+        assert_eq!(parse_copy_mode_key("+").unwrap(), plain("+"));
         assert_eq!(
             parse_copy_mode_key("Escape").unwrap(),
             CopyModeKey {
                 ctrl: false,
                 key: CopyModeBaseKey::Named(CopyModeNamedKey::Escape),
+            }
+        );
+    }
+
+    #[test]
+    fn parse_normalizes_literal_space_char_to_named_space() {
+        assert_eq!(
+            parse_copy_mode_key(" ").unwrap(),
+            CopyModeKey {
+                ctrl: false,
+                key: CopyModeBaseKey::Named(CopyModeNamedKey::Space),
             }
         );
     }

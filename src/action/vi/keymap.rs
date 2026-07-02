@@ -4,8 +4,8 @@
 //! copy-mode key gathers.
 
 use crate::action::vi::{
-    ViExitRequest, ViMotionRequest, ViPromptRequest, ViScrollKind, ViScrollRequest,
-    ViSearchStepRequest, ViSelectionToggleRequest, ViYankRequest,
+    ViExitRequest, ViMotionRequest, ViPromptRequest, ViScrollRequest, ViSearchStepRequest,
+    ViSelectionToggleRequest, ViYankRequest,
 };
 use crate::configs::OzmuxConfigsResource;
 use bevy::input::keyboard::{Key, KeyCode};
@@ -13,7 +13,7 @@ use bevy::prelude::*;
 use ozma_tty_engine::{SelectionType, ViMotion};
 use ozmux_configs::copy_mode::{
     CopyModeAction, CopyModeBaseKey, CopyModeKey, CopyModeNamedKey, CopyMotion, CopyPromptDir,
-    CopyScroll, CopySearchStep, CopySelection,
+    CopySearchStep, CopySelection,
 };
 use ozmux_configs::shortcuts::Modifiers;
 use ozmux_tmux::PromptKind;
@@ -46,6 +46,13 @@ impl ResolvedCopyModeKeys {
             return None;
         }
         if mods.ctrl {
+            // NOTE: the Ctrl table keys on the physical KeyCode, which cannot
+            // carry Shift — without this guard Ctrl+Shift+F would silently
+            // alias to the Ctrl+F binding (e.g. the stock detach chord
+            // Ctrl+Shift+D would scroll half a page).
+            if mods.shift {
+                return None;
+            }
             return self.0.get(&ResolvedKey::Ctrl(key_code)).copied();
         }
         let key = match logical_key {
@@ -77,10 +84,7 @@ pub(crate) fn trigger_copy_mode_action(
             entity,
             motion: vi_motion(m),
         }),
-        CopyModeAction::Scroll(s) => commands.trigger(ViScrollRequest {
-            entity,
-            kind: scroll_kind(s),
-        }),
+        CopyModeAction::Scroll(s) => commands.trigger(ViScrollRequest { entity, kind: s }),
         CopyModeAction::Selection(s) => commands.trigger(ViSelectionToggleRequest {
             entity,
             ty: selection_type(s),
@@ -227,19 +231,6 @@ fn vi_motion(motion: CopyMotion) -> ViMotion {
     }
 }
 
-fn scroll_kind(scroll: CopyScroll) -> ViScrollKind {
-    match scroll {
-        CopyScroll::HistoryTop => ViScrollKind::Top,
-        CopyScroll::HistoryBottom => ViScrollKind::Bottom,
-        CopyScroll::PageUp => ViScrollKind::PageUp,
-        CopyScroll::PageDown => ViScrollKind::PageDown,
-        CopyScroll::HalfPageUp => ViScrollKind::HalfUp,
-        CopyScroll::HalfPageDown => ViScrollKind::HalfDown,
-        CopyScroll::ScrollUp => ViScrollKind::LineUp,
-        CopyScroll::ScrollDown => ViScrollKind::LineDown,
-    }
-}
-
 fn selection_type(selection: CopySelection) -> SelectionType {
     match selection {
         CopySelection::Simple => SelectionType::Simple,
@@ -262,7 +253,7 @@ fn prompt_kind(dir: CopyPromptDir) -> PromptKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_configs::copy_mode::CopyModeConfig;
+    use ozmux_configs::copy_mode::{CopyModeConfig, CopyScroll};
 
     fn resolved_default() -> ResolvedCopyModeKeys {
         let cfg = CopyModeConfig::default();

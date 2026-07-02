@@ -1,10 +1,8 @@
 //! Default-mode (`AppMode::Default`) processing: the single-PTY shell UI
 //! lifecycle, host-side input gates/shortcuts, and webview pointer routing.
 
-mod copy_mode;
 mod webview;
 
-pub(crate) use copy_mode::CopyModeInputPlugin;
 pub(crate) use webview::DefaultWebviewPointerPlugin;
 
 use crate::input::focus::KeyboardFocused;

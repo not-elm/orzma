@@ -169,7 +169,7 @@ scroll-up          = ["Ctrl+Y"]             # LineUp   / scroll-up
 scroll-down        = ["Ctrl+E"]             # LineDown / scroll-down
 
 # --- selection ---
-toggle-selection      = ["v"]               # Simple / begin-selection
+toggle-selection      = ["v", "Space"]      # Simple / begin-selection
 toggle-line-selection = ["V"]               # Lines  / select-line
 toggle-rect-selection = ["Ctrl+V"]          # Block  / rectangle-toggle (works in both modes)
 
@@ -371,7 +371,7 @@ validate across the two tables; check your own bindings for overlap.
 | `half-page-down` | `Ctrl+D` | both | Scroll half a page down. |
 | `scroll-up` | `Ctrl+Y` | both | Scroll one line up. |
 | `scroll-down` | `Ctrl+E` | both | Scroll one line down. |
-| `toggle-selection` | `v` | both | Toggle a character-wise selection. |
+| `toggle-selection` | `v`, `Space` | both | Toggle a character-wise selection. |
 | `toggle-line-selection` | `V` | both | Toggle a line-wise selection. |
 | `toggle-rect-selection` | `Ctrl+V` | both | Toggle a rectangular (block) selection. |
 | `yank` | `y`, `Enter` | both | Copy the selection to the clipboard and leave copy mode. |
