@@ -120,6 +120,7 @@ pub(crate) struct Shortcuts {
     prefix: Vec<OzmuxShortcut>,
     leader: Option<ResolvedLeader>,
     tap_timeout: Duration,
+    repeat_time: Duration,
 }
 
 impl Shortcuts {
@@ -354,6 +355,7 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsRes
     );
     resolved.prefix = resolve_from_chords(sc.leader_chords());
     resolved.tap_timeout = Duration::from_millis(sc.leader_tap_timeout_ms);
+    resolved.repeat_time = Duration::from_millis(sc.repeat_time_ms);
     // The leader (default Cmd tap) is only meaningful when there are
     // `<Leader>`-scoped bindings to reach; with none it stays inert, so a
     // default tap never swallows a key for users who bind no leader action.
@@ -653,6 +655,7 @@ mod tests {
             prefix: Vec::new(),
             leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert_eq!(s.tap_modifier(), Some(TapModifier::Meta));
     }
@@ -664,6 +667,7 @@ mod tests {
             prefix: Vec::new(),
             leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, true)));
         assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, false)));
@@ -676,6 +680,7 @@ mod tests {
             prefix: Vec::new(),
             leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         let b = s.input_bindings();
         assert!(
@@ -699,6 +704,7 @@ mod tests {
             prefix: Vec::new(),
             leader: None,
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         }
     }
 
@@ -712,6 +718,7 @@ mod tests {
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert!(s.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
         assert!(!s.is_leader(KeyCode::KeyA, mods(false, false, false, false)));
@@ -733,6 +740,7 @@ mod tests {
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert_eq!(
             s.match_prefix_action(KeyCode::KeyR, mods(false, false, false, false)),
@@ -777,6 +785,7 @@ mod tests {
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         let mut pending = false;
         assert!(matches!(
@@ -839,6 +848,7 @@ mod tests {
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert_eq!(
             s.match_prefix_action(KeyCode::KeyS, mods(false, false, false, false)),
@@ -1021,6 +1031,7 @@ mod tests {
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         }
     }
 
@@ -1132,6 +1143,7 @@ mod tests {
                 prefix: Vec::new(),
                 leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
                 tap_timeout: Duration::from_millis(300),
+                repeat_time: Duration::from_millis(500),
             })
             .add_systems(Update, detect_modifier_tap);
         app.world_mut().spawn((
@@ -1237,5 +1249,18 @@ mod tests {
         };
         let resolved = resolved_shortcuts(config);
         assert_eq!(resolved.tap_modifier(), Some(TapModifier::Meta));
+    }
+
+    #[test]
+    fn build_shortcuts_resolves_repeat_time() {
+        let config = OzmuxConfigs {
+            shortcuts: ConfigShortcuts {
+                repeat_time_ms: 250,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolved_shortcuts(config);
+        assert_eq!(resolved.repeat_time, Duration::from_millis(250));
     }
 }

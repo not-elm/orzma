@@ -367,6 +367,13 @@ pub struct Shortcuts {
     /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
     /// normalized to 300.
     pub leader_tap_timeout_ms: u64,
+    /// Repeat window (ms) for `<Leader:r>` bindings: after such a binding
+    /// fires, pressing a repeat-marked key again within this window re-fires
+    /// it without the leader; each fire re-arms the window. Default 500.
+    ///
+    /// 0 disables repeat entirely (tmux `repeat-time 0` parity) and is NOT
+    /// normalized away, unlike `leader_tap_timeout_ms`.
+    pub repeat_time_ms: u64,
 }
 
 impl Default for Shortcuts {
@@ -379,6 +386,7 @@ impl Default for Shortcuts {
             enter_copy_mode: Some(Binding::Direct(parse_default_chord("Cmd+S"))),
             detach_session: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+D"))),
             leader_tap_timeout_ms: 300,
+            repeat_time_ms: 500,
         }
     }
 }
@@ -1051,7 +1059,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","leader-tap-timeout-ms":300}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
@@ -1220,6 +1228,30 @@ detach-session = "<Leader>d"
             entries
                 .iter()
                 .any(|(l, _, _, r)| *l == "detach-session" && !*r)
+        );
+    }
+
+    #[test]
+    fn shortcuts_default_repeat_time_is_500() {
+        assert_eq!(Shortcuts::default().repeat_time_ms, 500);
+    }
+
+    #[test]
+    fn shortcuts_parses_repeat_time_ms() {
+        let s: Shortcuts = toml::from_str("repeat-time-ms = 250\n").unwrap();
+        assert_eq!(s.repeat_time_ms, 250);
+    }
+
+    #[test]
+    fn normalize_keeps_zero_repeat_time() {
+        let mut s = Shortcuts {
+            repeat_time_ms: 0,
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(
+            s.repeat_time_ms, 0,
+            "0 means repeat disabled; it must survive normalize()"
         );
     }
 }
