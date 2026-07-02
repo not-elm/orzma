@@ -1,6 +1,6 @@
 //! Forwards focused keyboard and mouse-wheel input to the active tmux pane.
 //! Keyboard forwarding dispatches a fixed set of ozmux GUI chords as
-//! per-command action events (`crate::mode::tmux::action`) and copy-mode
+//! per-command action events (`crate::action::tmux`) and copy-mode
 //! entry commands; unmatched keys forward straight to the pane in one
 //! `SendPaneKeys` batch per frame. Mouse-wheel forwarding handles only the
 //! cases `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it
@@ -13,15 +13,15 @@
 //! terminal path does); every other case is ceded to ozma.
 
 use super::pane_hit::tmux_pane_at_phys;
-use crate::configs::OzmuxConfigsResource;
-use crate::input::InputPhase;
-use crate::input::shortcuts::{LeaderGate, LeaderPending, LeaderStep, Shortcuts, step_leader};
-use crate::mode::AppMode;
-use crate::mode::tmux::action::{
+use crate::action::tmux::{
     EnterCopyModeRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest, NextWindowRequest,
     PreviousWindowRequest, RenameSessionRequest, RenameWindowRequest, SelectPaneRequest,
     SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
 };
+use crate::configs::OzmuxConfigsResource;
+use crate::input::InputPhase;
+use crate::input::shortcuts::{LeaderGate, LeaderPending, LeaderStep, Shortcuts, step_leader};
+use crate::mode::AppMode;
 use crate::mode::tmux::confirm_prompt::ConfirmState;
 use crate::mode::tmux::rename_prompt::RenamePrompt;
 use crate::mode::tmux::{TmuxActiveSet, request_detach};

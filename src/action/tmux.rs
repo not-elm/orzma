@@ -31,7 +31,7 @@ pub(crate) use split_pane::SplitPaneRequest;
 pub(crate) use zoom_pane::ZoomPaneRequest;
 
 /// Aggregates the per-command tmux action plugins.
-pub(crate) struct TmuxActionPlugin;
+pub(super) struct TmuxActionPlugin;
 
 impl Plugin for TmuxActionPlugin {
     fn build(&self, app: &mut App) {

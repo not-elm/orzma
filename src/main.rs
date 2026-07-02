@@ -1,5 +1,6 @@
 //! ozmux Bevy GUI entry point.
 
+mod action;
 mod bootstrap;
 mod cef_profile;
 mod configs;
@@ -13,6 +14,7 @@ mod ui;
 mod webview_pointer;
 mod window_title;
 
+use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
 use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
@@ -69,6 +71,7 @@ fn main() {
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,
+            ActionPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxBootstrapPlugin,

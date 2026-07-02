@@ -1,6 +1,5 @@
 //! tmux feature plugin: aggregates all tmux runtime sub-plugins.
 
-pub(crate) mod action;
 mod adopt;
 pub(crate) mod confirm_prompt;
 pub(crate) mod copy_mode;
@@ -20,7 +19,6 @@ use crate::input::tmux::input::InputPlugin;
 use crate::input::tmux::mouse::MousePlugin;
 use crate::input::tmux::window_bar_input::WindowBarInputPlugin;
 use crate::mode::AppMode;
-use action::TmuxActionPlugin;
 use adopt::AdoptPlugin;
 use bevy::prelude::*;
 use confirm_prompt::ConfirmPromptPlugin;
@@ -60,7 +58,6 @@ impl Plugin for OzmuxTmuxPlugin {
                 WebviewTokensPlugin,
             ))
             .add_plugins((
-                TmuxActionPlugin,
                 TmuxLocalePlugin,
                 TmuxModeUiPlugin,
                 ConfirmPromptPlugin,
