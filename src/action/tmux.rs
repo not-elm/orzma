@@ -1,6 +1,6 @@
 //! Per-command tmux action events: each ozmux shortcut that drives a tmux
 //! command has one `EntityEvent` + apply observer module under
-//! `src/mode/tmux/action/`. This root aggregates their per-file plugins.
+//! `src/action/tmux/`. This root aggregates their per-file plugins.
 
 mod enter_copy_mode;
 mod kill_pane;
