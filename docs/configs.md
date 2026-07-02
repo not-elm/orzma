@@ -82,11 +82,18 @@ leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
 # key or mouse press, counts as a tap. Default 300; 0 reverts to 300.
 leader-tap-timeout-ms = 300
+# Repeat window (ms) for "<Leader:r>..." bindings: after such a binding fires,
+# pressing a repeat-marked key again within this window re-fires the action
+# without the leader. Each fire re-arms the window. Default 500; 0 disables
+# repeat entirely.
+repeat-time-ms = 500
 
 # Each action takes ONE value: a direct chord ("Cmd+V"), a leader-scoped
-# chord ("<Leader>s" = leader then s), or "" to unbind. Rebinding to a chord
-# already used by another action is a startup validation error. A direct
-# chord and a "<Leader>"-prefixed chord with the same key never collide.
+# chord ("<Leader>s" = leader then s), a repeatable leader-scoped chord
+# ("<Leader:r>s" = same, but re-fires within repeat-time-ms), or "" to unbind.
+# Rebinding to a chord already used by another action is a startup validation
+# error. A direct chord and a "<Leader>"-prefixed chord with the same key
+# never collide.
 paste                 = "Cmd+V"
 release-webview-focus = "Ctrl+Shift+Escape"
 quit                  = "Cmd+Q"
@@ -110,6 +117,22 @@ Examples: `Cmd+Shift+Q`, `Ctrl+Alt+ArrowLeft`, `Cmd+Plus`.
 Invalid chords — an empty token (`Cmd+`), an unknown named key (`Cmd+F12`), a
 duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — fail at
 startup.
+
+## Repeatable bindings (`<Leader:r>`)
+
+Binding an action with `<Leader:r>` instead of `<Leader>` makes it repeatable,
+like tmux's `bind -r`: after the binding fires, pressing any repeat-marked key
+again within `repeat-time-ms` (default 500) re-fires its action without
+re-pressing the leader, and each fire re-arms the window. Holding the key down
+keeps firing (OS key auto-repeat participates). Any other key — including keys
+bound with plain `<Leader>` — closes the window immediately and is handled
+normally (it is never swallowed). Pressing the leader inside the window starts
+a fresh leader sequence.
+
+Caveat: with a letter key (say `<Leader:r>h`), typing that same letter into the
+shell within the window re-fires the action instead of reaching the terminal.
+If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
+`:r` marker from that binding.
 
 ## Shortcut actions
 
