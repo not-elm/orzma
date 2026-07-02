@@ -227,6 +227,17 @@ fn app_shortcut_handler(
                 }
             }
             ShortcutAction::ReleaseWebviewFocus => {}
+            ShortcutAction::SelectPane(_)
+            | ShortcutAction::SplitPane(_)
+            | ShortcutAction::KillPane
+            | ShortcutAction::ZoomPane
+            | ShortcutAction::NewWindow
+            | ShortcutAction::KillWindow
+            | ShortcutAction::NextWindow
+            | ShortcutAction::PreviousWindow
+            | ShortcutAction::SelectWindow(_)
+            | ShortcutAction::RenameWindow
+            | ShortcutAction::RenameSession => {}
         }
     }
 }

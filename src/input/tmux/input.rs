@@ -342,6 +342,18 @@ fn forward_keys_to_tmux(
                     }
                 }
                 ShortcutAction::EnterCopyMode => {}
+                // TODO: wire real dispatch in Task 7.
+                ShortcutAction::SelectPane(_)
+                | ShortcutAction::SplitPane(_)
+                | ShortcutAction::KillPane
+                | ShortcutAction::ZoomPane
+                | ShortcutAction::NewWindow
+                | ShortcutAction::KillWindow
+                | ShortcutAction::NextWindow
+                | ShortcutAction::PreviousWindow
+                | ShortcutAction::SelectWindow(_)
+                | ShortcutAction::RenameWindow
+                | ShortcutAction::RenameSession => {}
             }
             continue;
         }

@@ -855,9 +855,11 @@ mod tests {
             ..Default::default()
         };
         let resolved = resolve_from_chords(config.leader_chords());
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].keycode, KeyCode::KeyD);
-        assert_eq!(resolved[0].action, ShortcutAction::DetachSession);
+        let detach = resolved
+            .iter()
+            .find(|s| s.action == ShortcutAction::DetachSession)
+            .expect("detach-session must resolve as a leader chord");
+        assert_eq!(detach.keycode, KeyCode::KeyD);
     }
 
     #[test]
@@ -884,18 +886,14 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_resolve_to_five() {
+    fn default_bindings_resolve_to_four() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(r.direct.len(), 5);
+        assert_eq!(r.direct.len(), 4);
     }
 
     #[test]
     fn match_gui_action_resolves_defaults() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(
-            r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
-            Some(ShortcutAction::Paste)
-        );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyQ, mods(false, false, false, true)),
             Some(ShortcutAction::Quit)
@@ -903,6 +901,11 @@ mod tests {
         assert_eq!(
             r.match_gui_action(KeyCode::KeyS, mods(false, false, false, true)),
             Some(ShortcutAction::EnterCopyMode)
+        );
+        assert_eq!(
+            r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
+            None,
+            "paste is leader-scoped by default (<Leader>p), not direct"
         );
     }
 
@@ -1204,7 +1207,42 @@ mod tests {
 
     #[test]
     fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
-        let resolved = resolved_shortcuts(OzmuxConfigs::default());
+        // NOTE: `ConfigShortcuts::default()` now ships 25 leader-scoped tmux
+        // actions, so `OzmuxConfigs::default()` alone no longer exercises the
+        // inert-leader path; every default `<Leader>`-bound field is explicitly
+        // unbound here to reproduce a config with no leader bindings at all.
+        let config = OzmuxConfigs {
+            shortcuts: ConfigShortcuts {
+                paste: None,
+                select_left_pane: None,
+                select_down_pane: None,
+                select_up_pane: None,
+                select_right_pane: None,
+                split_vertical_pane: None,
+                split_horizontal_pane: None,
+                kill_pane: None,
+                zoom_pane: None,
+                new_window: None,
+                kill_window: None,
+                next_window: None,
+                previous_window: None,
+                select_window_0: None,
+                select_window_1: None,
+                select_window_2: None,
+                select_window_3: None,
+                select_window_4: None,
+                select_window_5: None,
+                select_window_6: None,
+                select_window_7: None,
+                select_window_8: None,
+                select_window_9: None,
+                rename_window: None,
+                rename_session: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolved_shortcuts(config);
         assert!(resolved.tap_modifier().is_none());
         assert!(resolved.leader.is_none());
     }
