@@ -193,8 +193,9 @@ ozmux, root-table and prefix-table bindings from your `tmux.conf` do not fire
 inside ozmux — the tmux prefix key passes straight through to the pane like
 any other keystroke. Use the `[shortcuts]` actions above instead. Keys pressed
 **inside tmux copy-mode** are unaffected by this and still follow tmux's own
-copy-mode key tables (`vi-copy-mode-keys` / `emacs-copy-mode-keys`), since
-ozmux forwards them to tmux once copy-mode is active.
+copy-mode key tables (`copy-mode` / `copy-mode-vi`, selected by the tmux
+`mode-keys` option), since ozmux forwards them to tmux once copy-mode is
+active.
 
 Note on the leader: because the stock defaults above bind two dozen actions to
 `<Leader>...`, the `Cmd` tap leader is armed by default — tapping and
@@ -203,3 +204,15 @@ and the very next keystroke either fires a bound `<Leader>` action or is
 swallowed if nothing matches. `LeaderPending` has no expiry: after an
 accidental tap, the next keystroke is consumed one way or the other, it does
 not time out on its own.
+
+Two consequences of the stock `<Leader>` defaults worth knowing:
+
+- **Rebinding a `<Leader>` chord that a stock default already uses** (e.g.
+  `enter-copy-mode = "<Leader>c"`, which collides with the default
+  `new-window = "<Leader>c"`) is a startup validation error naming both
+  actions. Unbind the stock default explicitly (`new-window = ""`) or pick a
+  free chord.
+- **`leader = ""` disables every `<Leader>`-bound action at once** — with the
+  stock defaults that includes `paste` and all 24 tmux actions, silently
+  (a warning is logged, but startup succeeds). If you disable the leader,
+  rebind the actions you need to direct chords, e.g. `paste = "Cmd+V"`.

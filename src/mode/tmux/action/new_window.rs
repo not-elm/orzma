@@ -1,12 +1,16 @@
-//! `NewWindowRequest` — opens a new tmux window in the target session.
+//! `NewWindowRequest` — opens a new tmux window in the client's current
+//! session.
 
 use bevy::prelude::*;
 use ozmux_tmux::{NewWindow, TmuxClient, TmuxSession};
 
-/// Opens a new window in the tmux session owning `entity`.
+/// Opens a new window in the client's current session. The bare `new-window`
+/// deliberately carries no `-t` (its `-t` selects an insertion position, not
+/// just a session); `entity` only gates the request on a projected session
+/// still existing.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct NewWindowRequest {
-    /// The session entity to open the window in.
+    /// The projected session entity used as an existence guard.
     #[event_target]
     pub entity: Entity,
 }
