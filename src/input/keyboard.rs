@@ -4,12 +4,13 @@
 
 use crate::input::bindings::{ReservedChord, TerminalInputBindings};
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
-use crate::input::shortcuts::{LeaderGate, LeaderPending, is_modifier_key};
+use crate::input::shortcuts::{LeaderGate, LeaderPhase, Shortcuts, is_modifier_key};
 use crate::input::{InputPhase, current_modifiers};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use bevy::time::Real;
 use ozma_terminal::{OzmaTerminal, PasteAction};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 
@@ -46,7 +47,9 @@ fn dispatch_input(
     mut events: MessageReader<KeyboardInput>,
     bindings: Res<TerminalInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
-    leader_pending: Res<LeaderPending>,
+    leader_phase: Res<LeaderPhase>,
+    shortcuts: Res<Shortcuts>,
+    time: Res<Time<Real>>,
     terminal: Query<
         Entity,
         (
@@ -65,6 +68,12 @@ fn dispatch_input(
         return;
     };
     let mods = current_terminal_modifiers(&keys);
+    let cfg_mods = current_modifiers(&keys);
+    let now = time.elapsed();
+    let mut repeat_deadline = match *leader_phase {
+        LeaderPhase::Repeat { deadline } => Some(deadline),
+        _ => None,
+    };
     // NOTE: while a leader chord is pending its second key, suppress ONLY that
     // one key (the first non-modifier Pressed this frame) from the PTY — the
     // leader machine (`app_shortcut_handler`, ordered after this via
@@ -73,14 +82,42 @@ fn dispatch_input(
     // of the main key, and consuming the slot on it would leak the real second
     // key to the PTY. Clearing the whole batch would instead drop other keys
     // typed in the same frame.
-    let mut suppress_leader_second_key = leader_pending.0;
+    let mut suppress_leader_second_key = matches!(*leader_phase, LeaderPhase::Pending);
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
         }
         if suppress_leader_second_key && !is_modifier_key(ev.key_code) {
             suppress_leader_second_key = false;
+            // NOTE: the consumed second key opens the repeat window in Advance;
+            // the local snapshot must open with it, or a duplicate press of the
+            // same repeat-marked key later in the SAME frame would be typed to
+            // the PTY here yet also fire the action again in Advance.
+            if shortcuts.opens_repeat_window(ev.key_code, cfg_mods) {
+                repeat_deadline = Some(now);
+            }
             continue;
+        }
+        // NOTE: while the repeat window is open, withhold ONLY keys that match a
+        // repeat-marked leader binding (the leader machine in
+        // LeaderGate::Advance fires them). Withholding anything else here would
+        // eat ordinary typing during the window. `step_leader` (which runs
+        // after this system, per LeaderGate::Read.before(Advance)) closes the
+        // window on the first non-matching key of the batch, so the local
+        // snapshot must close with it: otherwise a repeat-marked key later in
+        // the SAME frame would be withheld here yet evaluate as Passthrough in
+        // Advance (window already closed) — fired nowhere, silently swallowed.
+        if let Some(deadline) = repeat_deadline
+            && now <= deadline
+            && !is_modifier_key(ev.key_code)
+        {
+            if shortcuts
+                .match_repeat_prefix(ev.key_code, cfg_mods)
+                .is_some()
+            {
+                continue;
+            }
+            repeat_deadline = None;
         }
         if bindings
             .reserved
@@ -138,6 +175,9 @@ fn bevy_key_to_terminal_key(logical_key: &Key) -> Option<TerminalKey> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::shortcuts::test_shortcuts_with_repeat_prefix;
+    use ozmux_configs::shortcuts::ShortcutAction;
+    use std::time::Duration;
 
     #[derive(Resource, Default)]
     struct Captured {
@@ -151,7 +191,8 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Captured>()
-            .init_resource::<LeaderPending>()
+            .init_resource::<LeaderPhase>()
+            .init_resource::<Shortcuts>()
             .add_plugins(KeyboardInputPlugin)
             .add_observer(|ev: On<PasteAction>, mut c: ResMut<Captured>| {
                 let _ = ev;
@@ -181,6 +222,102 @@ mod tests {
             .press(KeyCode::SuperLeft);
     }
 
+    fn install_repeat_window(app: &mut App, deadline: Duration) {
+        app.world_mut()
+            .insert_resource(test_shortcuts_with_repeat_prefix(
+                KeyCode::KeyH,
+                ShortcutAction::EnterCopyMode,
+                Duration::from_millis(500),
+            ));
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Repeat { deadline };
+    }
+
+    #[test]
+    fn repeat_window_withholds_matching_key_from_pty() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        install_repeat_window(&mut app, Duration::from_secs(60));
+        press(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert!(
+            c.keys.is_empty(),
+            "a repeat-marked key inside the window is consumed by the leader machine, not typed"
+        );
+    }
+
+    #[test]
+    fn repeat_window_types_non_matching_key() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        install_repeat_window(&mut app, Duration::from_secs(60));
+        press(&mut app, KeyCode::KeyB, Key::Character("b".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert_eq!(
+            c.keys,
+            vec![TerminalKey::Text("b".into())],
+            "a non-matching key during the repeat window must reach the PTY"
+        );
+    }
+
+    #[test]
+    fn expired_repeat_window_types_matching_key() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.update();
+        std::thread::sleep(Duration::from_millis(2));
+        install_repeat_window(&mut app, Duration::ZERO);
+        press(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert_eq!(
+            c.keys,
+            vec![TerminalKey::Text("h".into())],
+            "an expired window must not withhold keys"
+        );
+    }
+
+    #[test]
+    fn window_closing_key_stops_withholding_same_frame() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        install_repeat_window(&mut app, Duration::from_secs(60));
+        press(&mut app, KeyCode::KeyB, Key::Character("b".into()));
+        press(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert_eq!(
+            c.keys,
+            vec![TerminalKey::Text("b".into()), TerminalKey::Text("h".into())],
+            "a non-matching key closes the window for the rest of the frame; the repeat key after it must be typed, not withheld"
+        );
+    }
+
+    #[test]
+    fn pending_second_key_opens_withholding_for_same_frame_duplicate() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut()
+            .insert_resource(test_shortcuts_with_repeat_prefix(
+                KeyCode::KeyH,
+                ShortcutAction::EnterCopyMode,
+                Duration::from_millis(500),
+            ));
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
+        // The second key opens the repeat window in Advance; a duplicate press
+        // in the SAME frame must be withheld here too, or it is typed to the
+        // PTY while Advance fires the action for it a second time.
+        press(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        press(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert!(
+            c.keys.is_empty(),
+            "a same-frame duplicate of the window-opening second key must be withheld, not typed"
+        );
+    }
+
     #[test]
     fn plain_key_forwards_as_terminal_key() {
         let mut app = test_app();
@@ -208,7 +345,7 @@ mod tests {
     fn leader_pending_suppresses_pty_typing() {
         let mut app = test_app();
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
-        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
         press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         let c = app.world().resource::<Captured>();
@@ -223,7 +360,7 @@ mod tests {
     fn leader_pending_types_trailing_same_frame_keys() {
         let mut app = test_app();
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
-        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
         // The leader's second key (a) is suppressed; a trailing same-frame key
         // (b) must still reach the PTY.
         press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
@@ -237,7 +374,7 @@ mod tests {
     fn leader_pending_suppression_skips_bare_modifier() {
         let mut app = test_app();
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
-        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
         // The second chord's modifier (Ctrl) emits its own Pressed event ahead
         // of the main key; it must NOT consume the suppression slot, or the real
         // second key (d) would leak to the PTY.

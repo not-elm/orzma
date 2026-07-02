@@ -25,7 +25,7 @@ pub(super) struct ShortcutsPlugin;
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Shortcuts>()
-            .init_resource::<LeaderPending>()
+            .init_resource::<LeaderPhase>()
             .init_resource::<ModifierTapState>()
             .configure_sets(
                 Update,
@@ -53,24 +53,34 @@ impl Plugin for ShortcutsPlugin {
                     // keyboard dispatchers never see the round-trip; without this reset a
                     // leader engaged before a mouse-only webview focus/blur would consume the
                     // next terminal keystroke as its second key.
-                    reset_leader_pending
+                    reset_leader_phase
                         .run_if(resource_exists_and_changed::<FocusedWebview>)
                         .before(LeaderGate::Detect),
                 ),
             )
-            .add_systems(OnExit(AppMode::Tmux), reset_leader_pending)
-            .add_systems(OnExit(AppMode::Default), reset_leader_pending);
+            .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
+            .add_systems(OnExit(AppMode::Default), reset_leader_phase);
     }
 }
 
-/// Shared leader-pending flag: `true` between a leader chord and its second key.
-/// Owned by `ShortcutsPlugin`; advanced by both the tmux and Default keyboard
-/// dispatchers and read by `dispatch_input` to suppress PTY typing mid-sequence.
-#[derive(Resource, Default)]
-pub(crate) struct LeaderPending(
-    /// `true` while a leader chord is pending its second key.
-    pub(crate) bool,
-);
+/// Shared leader phase: where the leader state machine is between keys.
+/// Owned by `ShortcutsPlugin`; advanced by the tmux and Default keyboard
+/// dispatchers and read by `dispatch_input` to withhold leader-consumed keys
+/// from PTY typing.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeaderPhase {
+    /// No leader sequence in progress.
+    #[default]
+    Idle,
+    /// A leader fired; the next key resolves against the prefix table.
+    Pending,
+    /// A `<Leader:r>` binding fired; repeat-marked keys re-fire until the
+    /// deadline (extended on each fire) or a non-matching key closes it.
+    Repeat {
+        /// Absolute `Time<Real>::elapsed()` instant the window closes at.
+        deadline: Duration,
+    },
+}
 
 /// In-progress modifier-tap state: the target's down-time while armed.
 #[derive(Resource, Default)]
@@ -78,15 +88,15 @@ struct ModifierTapState {
     armed: Option<Duration>,
 }
 
-/// Orders the three `FocusedKey` systems that touch `LeaderPending` so
-/// `detect_modifier_tap` (`Detect`) sets the flag before `dispatch_input`
+/// Orders the three `FocusedKey` systems that touch `LeaderPhase` so
+/// `detect_modifier_tap` (`Detect`) sets it before `dispatch_input`
 /// (`Read`) observes it, and `app_shortcut_handler` (`Advance`) steps the
 /// leader machine and clears it last.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LeaderGate {
-    /// `detect_modifier_tap`: sets `LeaderPending` on a modifier tap.
+    /// `detect_modifier_tap`: sets `LeaderPhase` to `Pending` on a modifier tap.
     Detect,
-    /// `dispatch_input`: reads `LeaderPending` to gate PTY typing.
+    /// `dispatch_input`: reads `LeaderPhase` to gate PTY typing.
     Read,
     /// `app_shortcut_handler` / `forward_keys_to_tmux`: advances the leader.
     Advance,
@@ -108,6 +118,7 @@ struct OzmuxShortcut {
     keycode: KeyCode,
     modifiers: Modifiers,
     action: ShortcutAction,
+    repeat: bool,
 }
 
 /// The startup-resolved ozmux shortcut tables. Built once from
@@ -119,6 +130,7 @@ pub(crate) struct Shortcuts {
     prefix: Vec<OzmuxShortcut>,
     leader: Option<ResolvedLeader>,
     tap_timeout: Duration,
+    repeat_time: Duration,
 }
 
 impl Shortcuts {
@@ -129,7 +141,7 @@ impl Shortcuts {
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<ShortcutAction> {
-        Self::match_action_in(&self.direct, keycode, mods)
+        Self::find_entry(&self.direct, keycode, mods).map(|s| s.action)
     }
 
     /// True when `(keycode, mods)` matches the configured release-webview-focus
@@ -179,6 +191,28 @@ impl Shortcuts {
         }
     }
 
+    /// Returns the leader-scoped action bound to `(keycode, mods)` when the
+    /// binding is repeat-marked (`<Leader:r>`). The single predicate shared by
+    /// `step_leader` (transition) and `dispatch_input` (PTY withholding) so the
+    /// two can never disagree about which keys the repeat window consumes.
+    pub(crate) fn match_repeat_prefix(
+        &self,
+        keycode: KeyCode,
+        mods: Modifiers,
+    ) -> Option<ShortcutAction> {
+        self.match_prefix_entry(keycode, mods)
+            .filter(|s| s.repeat)
+            .map(|s| s.action)
+    }
+
+    /// True when a leader second key `(keycode, mods)` opens the repeat window:
+    /// it matches a repeat-marked prefix binding and `repeat_time` is non-zero.
+    /// Mirrors the `step_leader` Pending arm so `dispatch_input` can start
+    /// withholding in the same frame the window opens.
+    pub(crate) fn opens_repeat_window(&self, keycode: KeyCode, mods: Modifiers) -> bool {
+        !self.repeat_time.is_zero() && self.match_repeat_prefix(keycode, mods).is_some()
+    }
+
     /// True when `(keycode, mods)` is the configured leader chord.
     fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
         matches!(self.leader, Some(ResolvedLeader::Chord(kc, m)) if kc == keycode && m == mods)
@@ -191,30 +225,28 @@ impl Shortcuts {
         }
     }
 
-    /// Returns the leader-scoped action bound to `(keycode, mods)`, if any.
-    /// Excludes `ReleaseWebviewFocus` (mirrors `match_gui_action`): leader
-    /// dispatch only runs when no webview is focused, so a leader-scoped
+    /// Returns the prefix-table entry bound to `(keycode, mods)`, excluding
+    /// `ReleaseWebviewFocus` (mirrors `match_gui_action`): leader dispatch only
+    /// runs when no webview is focused, so a leader-scoped
     /// release-webview-focus could never fire — resolving it to `Swallow`
     /// avoids a dead `RunAction`.
-    fn match_prefix_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<ShortcutAction> {
-        Self::match_action_in(&self.prefix, keycode, mods)
+    fn match_prefix_entry(&self, keycode: KeyCode, mods: Modifiers) -> Option<&OzmuxShortcut> {
+        Self::find_entry(&self.prefix, keycode, mods)
     }
 
-    /// Returns the first action in `table` bound to `(keycode, mods)`, excluding
+    /// Returns the first entry in `table` bound to `(keycode, mods)`, excluding
     /// `ReleaseWebviewFocus` (matched separately via `is_release_webview_focus`).
-    fn match_action_in(
+    /// The single exclusion predicate behind both the direct and prefix lookups.
+    fn find_entry(
         table: &[OzmuxShortcut],
         keycode: KeyCode,
         mods: Modifiers,
-    ) -> Option<ShortcutAction> {
-        table
-            .iter()
-            .find(|s| {
-                s.action != ShortcutAction::ReleaseWebviewFocus
-                    && s.keycode == keycode
-                    && s.modifiers == mods
-            })
-            .map(|s| s.action)
+    ) -> Option<&OzmuxShortcut> {
+        table.iter().find(|s| {
+            s.action != ShortcutAction::ReleaseWebviewFocus
+                && s.keycode == keycode
+                && s.modifiers == mods
+        })
     }
 }
 
@@ -232,46 +264,105 @@ pub(crate) enum LeaderStep {
 }
 
 /// Advances the ozmux leader state machine for one pressed key, threading
-/// `pending` across frames (mirrors the tmux `plan_forward` prefix dispatch).
-/// Swallows the leader itself and any unmatched second key; returns
-/// `Passthrough` for unrelated keys.
+/// `phase` across frames. `now` is the caller's `Time<Real>::elapsed()`.
+/// Swallows the leader itself and any unmatched second key; drives the
+/// `<Leader:r>` repeat window (fire-and-extend inside the window, close and
+/// re-evaluate on any other key); returns `Passthrough` for unrelated keys.
 pub(crate) fn step_leader(
-    pending: &mut bool,
+    phase: &mut LeaderPhase,
     shortcuts: &Shortcuts,
     keycode: KeyCode,
     mods: Modifiers,
+    now: Duration,
 ) -> LeaderStep {
-    // NOTE: a bare modifier press must NOT touch `pending`. The second chord's
+    // NOTE: a bare modifier press must NOT touch the phase. The second chord's
     // modifier (e.g. Ctrl) emits its own `Pressed` event ahead of the main key;
     // stepping on it would consume the pending leader by parity and abort the
-    // sequence before the real key arrives.
+    // sequence. Closing the repeat window on it would likewise break
+    // modifier-carrying repeat chords (`<Leader:r>Ctrl+H`).
     if is_modifier_key(keycode) {
         return LeaderStep::Passthrough;
     }
-    if *pending {
-        *pending = false;
-        return match shortcuts.match_prefix_action(keycode, mods) {
-            Some(action) => LeaderStep::RunAction(action),
+    if let LeaderPhase::Repeat { deadline } = *phase {
+        if now <= deadline
+            && let Some(action) = shortcuts.match_repeat_prefix(keycode, mods)
+        {
+            *phase = LeaderPhase::Repeat {
+                deadline: now + shortcuts.repeat_time,
+            };
+            return LeaderStep::RunAction(action);
+        }
+        // NOTE: an expired window or a non-repeat key must close the window and
+        // fall through to normal evaluation below — swallowing the key here
+        // would eat ordinary typing (tmux re-dispatches the same way).
+        *phase = LeaderPhase::Idle;
+    }
+    if *phase == LeaderPhase::Pending {
+        *phase = LeaderPhase::Idle;
+        return match shortcuts.match_prefix_entry(keycode, mods) {
+            Some(entry) => {
+                if entry.repeat && !shortcuts.repeat_time.is_zero() {
+                    *phase = LeaderPhase::Repeat {
+                        deadline: now + shortcuts.repeat_time,
+                    };
+                }
+                LeaderStep::RunAction(entry.action)
+            }
             None => LeaderStep::Swallow,
         };
     }
     if shortcuts.is_leader(keycode, mods) {
-        *pending = true;
+        *phase = LeaderPhase::Pending;
         return LeaderStep::Swallow;
     }
     LeaderStep::Passthrough
 }
 
-/// Clears `LeaderPending` and any in-progress modifier tap on an `AppMode`
-/// transition or a webview focus change, so a leader engaged/armed in one
-/// context never fires in another.
-fn reset_leader_pending(
-    mut leader_pending: ResMut<LeaderPending>,
-    mut tap: ResMut<ModifierTapState>,
-) {
-    if leader_pending.0 {
-        leader_pending.0 = false;
+/// Resets the shared leader phase to `Idle`, writing through the `ResMut` only
+/// on a real change so Bevy change detection fires exactly when the phase was
+/// engaged. The single reset idiom for every dispatcher drain/abort site.
+pub(crate) fn clear_leader_phase(leader_phase: &mut ResMut<LeaderPhase>) {
+    if **leader_phase != LeaderPhase::Idle {
+        **leader_phase = LeaderPhase::Idle;
     }
+}
+
+/// Test-only constructor: a `Shortcuts` with one repeat-marked, modifier-less
+/// prefix binding and a `Ctrl+A` chord leader. Used by the keyboard and
+/// dispatcher tests, which cannot name this module's private fields.
+#[cfg(test)]
+pub(crate) fn test_shortcuts_with_repeat_prefix(
+    keycode: KeyCode,
+    action: ShortcutAction,
+    repeat_time: Duration,
+) -> Shortcuts {
+    Shortcuts {
+        direct: Vec::new(),
+        prefix: vec![OzmuxShortcut {
+            keycode,
+            modifiers: Modifiers::default(),
+            action,
+            repeat: true,
+        }],
+        leader: Some(ResolvedLeader::Chord(
+            KeyCode::KeyA,
+            Modifiers {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                meta: false,
+            },
+        )),
+        tap_timeout: Duration::from_millis(300),
+        repeat_time,
+    }
+}
+
+/// Clears the leader phase (pending or repeat window) and any in-progress
+/// modifier tap on an `AppMode` transition or a webview focus change, so a
+/// leader engaged/armed in one context never fires in another.
+fn reset_leader_phase(mut leader_phase: ResMut<LeaderPhase>, mut tap: ResMut<ModifierTapState>) {
+    clear_leader_phase(&mut leader_phase);
     if tap.armed.is_some() {
         tap.armed = None;
     }
@@ -283,15 +374,16 @@ fn tap_leader_enabled(shortcuts: Res<Shortcuts>) -> bool {
 }
 
 /// Detects a bare modifier tap (press+release within the timeout, no
-/// intervening key or mouse press) and engages `LeaderPending`. Mode-agnostic;
-/// runs in `LeaderGate::Detect` before the dispatchers read/advance the leader.
+/// intervening key or mouse press) and engages `LeaderPhase::Pending`.
+/// Mode-agnostic; runs in `LeaderGate::Detect` before the dispatchers
+/// read/advance the leader.
 ///
 /// Gated with `run_if(tap_leader_enabled)`. Reads press AND release
 /// `KeyboardInput` (the dispatchers only read `Pressed`), so it owns the tap
 /// gesture; the second key is handled by the existing `step_leader` pending arm.
 fn detect_modifier_tap(
     mut state: ResMut<ModifierTapState>,
-    mut leader_pending: ResMut<LeaderPending>,
+    mut leader_phase: ResMut<LeaderPhase>,
     mut keys: MessageReader<KeyboardInput>,
     mouse: Res<ButtonInput<MouseButton>>,
     time: Res<Time<Real>>,
@@ -328,8 +420,10 @@ fn detect_modifier_tap(
             } else {
                 continue;
             };
-            if step_tap(&mut armed, event, now, timeout) == TapOutcome::Fired && !leader_pending.0 {
-                leader_pending.0 = true;
+            if step_tap(&mut armed, event, now, timeout) == TapOutcome::Fired
+                && *leader_phase != LeaderPhase::Pending
+            {
+                *leader_phase = LeaderPhase::Pending;
             }
         }
     }
@@ -347,9 +441,13 @@ fn detect_modifier_tap(
 /// the empty default.
 fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsResource>) {
     let sc = &configs.shortcuts;
-    resolved.direct = resolve_from_chords(sc.direct_chords());
+    resolved.direct = resolve_from_chords(
+        sc.direct_chords()
+            .map(|(label, chord, action)| (label, chord, action, false)),
+    );
     resolved.prefix = resolve_from_chords(sc.leader_chords());
     resolved.tap_timeout = Duration::from_millis(sc.leader_tap_timeout_ms);
+    resolved.repeat_time = Duration::from_millis(sc.repeat_time_ms);
     // The leader (default Cmd tap) is only meaningful when there are
     // `<Leader>`-scoped bindings to reach; with none it stays inert, so a
     // default tap never swallows a key for users who bind no leader action.
@@ -415,15 +513,16 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
 /// Resolves each bound chord to an `OzmuxShortcut`, skipping (with a warning)
 /// any chord whose logical key has no physical `KeyCode`.
 fn resolve_from_chords<'a>(
-    chords: impl Iterator<Item = (&'static str, &'a KeyChord, ShortcutAction)>,
+    chords: impl Iterator<Item = (&'static str, &'a KeyChord, ShortcutAction, bool)>,
 ) -> Vec<OzmuxShortcut> {
     let mut out = Vec::new();
-    for (label, chord, action) in chords {
+    for (label, chord, action, repeat) in chords {
         match key_to_keycode(&chord.key) {
             Some(keycode) => out.push(OzmuxShortcut {
                 keycode,
                 modifiers: chord.modifiers,
                 action,
+                repeat,
             }),
             None => tracing::warn!(
                 label,
@@ -586,6 +685,183 @@ mod tests {
         Duration::from_millis(n)
     }
 
+    fn repeat_fixture() -> Shortcuts {
+        Shortcuts {
+            direct: Vec::new(),
+            prefix: vec![
+                OzmuxShortcut {
+                    keycode: KeyCode::KeyS,
+                    modifiers: mods(false, false, false, false),
+                    action: ShortcutAction::EnterCopyMode,
+                    repeat: true,
+                },
+                OzmuxShortcut {
+                    keycode: KeyCode::KeyD,
+                    modifiers: mods(false, false, false, false),
+                    action: ShortcutAction::DetachSession,
+                    repeat: true,
+                },
+                OzmuxShortcut {
+                    keycode: KeyCode::KeyP,
+                    modifiers: mods(false, false, false, false),
+                    action: ShortcutAction::Paste,
+                    repeat: false,
+                },
+            ],
+            leader: Some(ResolvedLeader::Chord(
+                KeyCode::KeyA,
+                mods(true, false, false, false),
+            )),
+            tap_timeout: ms(300),
+            repeat_time: ms(500),
+        }
+    }
+
+    fn no_mods() -> Modifiers {
+        mods(false, false, false, false)
+    }
+
+    #[test]
+    fn repeat_binding_opens_window_and_refires_without_leader() {
+        let sc = repeat_fixture();
+        let mut phase = LeaderPhase::Pending;
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(0)),
+            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+        ));
+        assert_eq!(phase, LeaderPhase::Repeat { deadline: ms(500) });
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(100)),
+            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+        ));
+        assert_eq!(
+            phase,
+            LeaderPhase::Repeat { deadline: ms(600) },
+            "each fire re-arms the window"
+        );
+    }
+
+    #[test]
+    fn other_repeat_binding_fires_inside_window() {
+        let sc = repeat_fixture();
+        let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyD, no_mods(), ms(100)),
+            LeaderStep::RunAction(ShortcutAction::DetachSession)
+        ));
+        assert_eq!(phase, LeaderPhase::Repeat { deadline: ms(600) });
+    }
+
+    #[test]
+    fn non_repeat_prefix_binding_does_not_fire_inside_window() {
+        let sc = repeat_fixture();
+        let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyP, no_mods(), ms(100)),
+            LeaderStep::Passthrough
+        ));
+        assert_eq!(
+            phase,
+            LeaderPhase::Idle,
+            "a non-repeat key closes the window and re-dispatches normally (tmux parity)"
+        );
+    }
+
+    #[test]
+    fn unmatched_key_inside_window_passes_through_and_closes() {
+        let sc = repeat_fixture();
+        let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyZ, no_mods(), ms(100)),
+            LeaderStep::Passthrough
+        ));
+        assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    #[test]
+    fn leader_inside_window_starts_new_pending() {
+        let sc = repeat_fixture();
+        let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
+        assert!(matches!(
+            step_leader(
+                &mut phase,
+                &sc,
+                KeyCode::KeyA,
+                mods(true, false, false, false),
+                ms(100)
+            ),
+            LeaderStep::Swallow
+        ));
+        assert_eq!(phase, LeaderPhase::Pending);
+    }
+
+    #[test]
+    fn expired_window_reevaluates_normally() {
+        let sc = repeat_fixture();
+        let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(600)),
+            LeaderStep::Passthrough
+        ));
+        assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    #[test]
+    fn zero_repeat_time_never_opens_window() {
+        let sc = Shortcuts {
+            repeat_time: Duration::ZERO,
+            ..repeat_fixture()
+        };
+        let mut phase = LeaderPhase::Pending;
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(0)),
+            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+        ));
+        assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    #[test]
+    fn modifier_key_does_not_close_window() {
+        let sc = repeat_fixture();
+        let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
+        assert!(matches!(
+            step_leader(
+                &mut phase,
+                &sc,
+                KeyCode::ControlLeft,
+                mods(true, false, false, false),
+                ms(100)
+            ),
+            LeaderStep::Passthrough
+        ));
+        assert_eq!(phase, LeaderPhase::Repeat { deadline: ms(500) });
+    }
+
+    #[test]
+    fn non_repeat_binding_from_pending_stays_idle() {
+        let sc = repeat_fixture();
+        let mut phase = LeaderPhase::Pending;
+        assert!(matches!(
+            step_leader(&mut phase, &sc, KeyCode::KeyP, no_mods(), ms(0)),
+            LeaderStep::RunAction(ShortcutAction::Paste)
+        ));
+        assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    #[test]
+    fn test_constructor_builds_repeat_prefix() {
+        let sc = test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyH,
+            ShortcutAction::EnterCopyMode,
+            ms(500),
+        );
+        assert_eq!(
+            sc.match_repeat_prefix(KeyCode::KeyH, mods(false, false, false, false)),
+            Some(ShortcutAction::EnterCopyMode)
+        );
+        assert!(sc.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
+    }
+
     #[test]
     fn step_tap_fires_on_quick_press_release() {
         let mut armed = None;
@@ -648,6 +924,7 @@ mod tests {
             prefix: Vec::new(),
             leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert_eq!(s.tap_modifier(), Some(TapModifier::Meta));
     }
@@ -659,6 +936,7 @@ mod tests {
             prefix: Vec::new(),
             leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, true)));
         assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, false)));
@@ -671,6 +949,7 @@ mod tests {
             prefix: Vec::new(),
             leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         let b = s.input_bindings();
         assert!(
@@ -690,10 +969,11 @@ mod tests {
 
     fn direct_only(config: &ConfigShortcuts) -> Shortcuts {
         Shortcuts {
-            direct: resolve_from_chords(config.direct_chords()),
+            direct: resolve_from_chords(config.direct_chords().map(|(l, c, a)| (l, c, a, false))),
             prefix: Vec::new(),
             leader: None,
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         }
     }
 
@@ -707,6 +987,7 @@ mod tests {
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert!(s.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
         assert!(!s.is_leader(KeyCode::KeyA, mods(false, false, false, false)));
@@ -714,22 +995,25 @@ mod tests {
     }
 
     #[test]
-    fn match_prefix_action_excludes_release_webview_focus() {
+    fn match_prefix_entry_excludes_release_webview_focus() {
         let s = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OzmuxShortcut {
                 keycode: KeyCode::KeyR,
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::ReleaseWebviewFocus,
+                repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
                 KeyCode::KeyA,
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert_eq!(
-            s.match_prefix_action(KeyCode::KeyR, mods(false, false, false, false)),
+            s.match_prefix_entry(KeyCode::KeyR, mods(false, false, false, false))
+                .map(|s| s.action),
             None,
             "a leader-scoped release-webview-focus resolves to Swallow, not a dead RunAction",
         );
@@ -756,92 +1040,112 @@ mod tests {
     #[test]
     fn step_leader_ignores_bare_modifier_and_survives_to_second_chord() {
         // Reproduces [0]: the second chord's Ctrl modifier emits its own Pressed
-        // event before KeyD; it must not consume `pending`. Leader Ctrl+B,
-        // prefix detach-session = Ctrl+D.
+        // event before KeyD; it must not consume the pending phase. Leader
+        // Ctrl+B, prefix detach-session = Ctrl+D.
         let sc = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OzmuxShortcut {
                 keycode: KeyCode::KeyD,
                 modifiers: mods(true, false, false, false),
                 action: ShortcutAction::DetachSession,
+                repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
                 KeyCode::KeyB,
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
-        let mut pending = false;
+        let mut phase = LeaderPhase::Idle;
         assert!(matches!(
             step_leader(
-                &mut pending,
+                &mut phase,
                 &sc,
                 KeyCode::ControlLeft,
-                mods(true, false, false, false)
+                mods(true, false, false, false),
+                ms(0)
             ),
             LeaderStep::Passthrough
         ));
-        assert!(!pending, "a bare modifier must not engage the leader");
+        assert_eq!(
+            phase,
+            LeaderPhase::Idle,
+            "a bare modifier must not engage the leader"
+        );
         assert!(matches!(
             step_leader(
-                &mut pending,
+                &mut phase,
                 &sc,
                 KeyCode::KeyB,
-                mods(true, false, false, false)
+                mods(true, false, false, false),
+                ms(0)
             ),
             LeaderStep::Swallow
         ));
-        assert!(pending, "the leader chord engages pending");
+        assert_eq!(
+            phase,
+            LeaderPhase::Pending,
+            "the leader chord engages pending"
+        );
         assert!(matches!(
             step_leader(
-                &mut pending,
+                &mut phase,
                 &sc,
                 KeyCode::ControlLeft,
-                mods(true, false, false, false)
+                mods(true, false, false, false),
+                ms(0)
             ),
             LeaderStep::Passthrough
         ));
-        assert!(
-            pending,
+        assert_eq!(
+            phase,
+            LeaderPhase::Pending,
             "a bare modifier must NOT clear pending mid-sequence"
         );
         assert!(matches!(
             step_leader(
-                &mut pending,
+                &mut phase,
                 &sc,
                 KeyCode::KeyD,
-                mods(true, false, false, false)
+                mods(true, false, false, false),
+                ms(0)
             ),
             LeaderStep::RunAction(ShortcutAction::DetachSession)
         ));
-        assert!(!pending);
+        assert_eq!(phase, LeaderPhase::Idle);
     }
 
     #[test]
-    fn match_prefix_action_resolves_and_requires_exact_mods() {
+    fn match_prefix_entry_resolves_and_requires_exact_mods() {
         let s = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OzmuxShortcut {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::EnterCopyMode,
+                repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
                 KeyCode::KeyA,
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         };
         assert_eq!(
-            s.match_prefix_action(KeyCode::KeyS, mods(false, false, false, false)),
+            s.match_prefix_entry(KeyCode::KeyS, mods(false, false, false, false))
+                .map(|s| s.action),
             Some(ShortcutAction::EnterCopyMode)
         );
         assert_eq!(
-            s.match_prefix_action(KeyCode::KeyS, mods(false, true, false, false)),
+            s.match_prefix_entry(KeyCode::KeyS, mods(false, true, false, false))
+                .map(|s| s.action),
             None
         );
         assert_eq!(
-            s.match_prefix_action(KeyCode::KeyD, mods(false, false, false, false)),
+            s.match_prefix_entry(KeyCode::KeyD, mods(false, false, false, false))
+                .map(|s| s.action),
             None
         );
     }
@@ -849,15 +1153,20 @@ mod tests {
     #[test]
     fn resolve_from_chords_accepts_leader_chords() {
         let config = ConfigShortcuts {
-            detach_session: Some(Binding::Leader(
-                ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
-            )),
+            detach_session: Some(Binding::Leader {
+                chord: ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
+                repeat: true,
+            }),
             ..Default::default()
         };
         let resolved = resolve_from_chords(config.leader_chords());
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].keycode, KeyCode::KeyD);
         assert_eq!(resolved[0].action, ShortcutAction::DetachSession);
+        assert!(
+            resolved[0].repeat,
+            "the <Leader:r> flag must reach the resolved table"
+        );
     }
 
     #[test]
@@ -1001,99 +1310,107 @@ mod tests {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::EnterCopyMode,
+                repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
                 KeyCode::KeyA,
                 mods(true, false, false, false),
             )),
             tap_timeout: Duration::from_millis(300),
+            repeat_time: Duration::from_millis(500),
         }
     }
 
     #[test]
     fn leader_press_sets_pending_and_swallows() {
         let sc = leader_fixture();
-        let mut pending = false;
+        let mut phase = LeaderPhase::Idle;
         let step = step_leader(
-            &mut pending,
+            &mut phase,
             &sc,
             KeyCode::KeyA,
             mods(true, false, false, false),
+            ms(0),
         );
         assert!(matches!(step, LeaderStep::Swallow));
-        assert!(pending);
+        assert_eq!(phase, LeaderPhase::Pending);
     }
 
     #[test]
     fn pending_plus_bound_key_runs_action_and_clears_pending() {
         let sc = leader_fixture();
-        let mut pending = true;
+        let mut phase = LeaderPhase::Pending;
         let step = step_leader(
-            &mut pending,
+            &mut phase,
             &sc,
             KeyCode::KeyS,
             mods(false, false, false, false),
+            ms(0),
         );
         assert!(matches!(
             step,
             LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
         ));
-        assert!(!pending);
+        assert_eq!(phase, LeaderPhase::Idle);
     }
 
     #[test]
     fn pending_plus_unbound_key_swallows_and_clears_pending() {
         let sc = leader_fixture();
-        let mut pending = true;
+        let mut phase = LeaderPhase::Pending;
         let step = step_leader(
-            &mut pending,
+            &mut phase,
             &sc,
             KeyCode::KeyZ,
             mods(false, false, false, false),
+            ms(0),
         );
         assert!(matches!(step, LeaderStep::Swallow));
-        assert!(!pending);
+        assert_eq!(phase, LeaderPhase::Idle);
     }
 
     #[test]
     fn unrelated_key_passes_through() {
         let sc = leader_fixture();
-        let mut pending = false;
+        let mut phase = LeaderPhase::Idle;
         let step = step_leader(
-            &mut pending,
+            &mut phase,
             &sc,
             KeyCode::KeyB,
             mods(false, false, false, false),
+            ms(0),
         );
         assert!(matches!(step, LeaderStep::Passthrough));
-        assert!(!pending);
+        assert_eq!(phase, LeaderPhase::Idle);
     }
 
     #[test]
     fn sequential_leader_then_bound_key_threads_pending() {
         // NOTE: the dispatch loop calls step_leader per event with one shared
-        // `pending` local; this verifies the leader press then the bound key
+        // `phase` local; this verifies the leader press then the bound key
         // thread that state correctly across two calls.
         let sc = leader_fixture();
-        let mut pending = false;
+        let mut phase = LeaderPhase::Idle;
         let first = step_leader(
-            &mut pending,
+            &mut phase,
             &sc,
             KeyCode::KeyA,
             mods(true, false, false, false),
+            ms(0),
         );
         assert!(matches!(first, LeaderStep::Swallow));
         let second = step_leader(
-            &mut pending,
+            &mut phase,
             &sc,
             KeyCode::KeyS,
             mods(false, false, false, false),
+            ms(0),
         );
         assert!(matches!(
             second,
             LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
         ));
-        assert!(!pending);
+        assert_eq!(phase, LeaderPhase::Idle);
     }
 
     #[test]
@@ -1112,12 +1429,13 @@ mod tests {
             .add_message::<KeyboardInput>()
             .init_resource::<ButtonInput<MouseButton>>()
             .insert_resource(ModifierTapState::default())
-            .insert_resource(LeaderPending(false))
+            .init_resource::<LeaderPhase>()
             .insert_resource(Shortcuts {
                 direct: Vec::new(),
                 prefix: Vec::new(),
                 leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
                 tap_timeout: Duration::from_millis(300),
+                repeat_time: Duration::from_millis(500),
             })
             .add_systems(Update, detect_modifier_tap);
         app.world_mut().spawn((
@@ -1148,9 +1466,10 @@ mod tests {
         app.update();
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
         app.update();
-        assert!(
-            app.world().resource::<LeaderPending>().0,
-            "a quick modifier tap must engage LeaderPending"
+        assert_eq!(
+            *app.world().resource::<LeaderPhase>(),
+            LeaderPhase::Pending,
+            "a quick modifier tap must engage LeaderPhase::Pending"
         );
     }
 
@@ -1165,8 +1484,9 @@ mod tests {
         app.update();
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
         app.update();
-        assert!(
-            !app.world().resource::<LeaderPending>().0,
+        assert_eq!(
+            *app.world().resource::<LeaderPhase>(),
+            LeaderPhase::Idle,
             "mouse press in a keyboard-less frame must disarm the tap and suppress the leader"
         );
     }
@@ -1186,8 +1506,9 @@ mod tests {
             .clear();
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
         app.update();
-        assert!(
-            !app.world().resource::<LeaderPending>().0,
+        assert_eq!(
+            *app.world().resource::<LeaderPhase>(),
+            LeaderPhase::Idle,
             "a mouse press in the same frame as the modifier press must suppress the tap"
         );
     }
@@ -1213,14 +1534,28 @@ mod tests {
     fn build_shortcuts_activates_default_cmd_leader_with_a_leader_binding() {
         let config = OzmuxConfigs {
             shortcuts: ConfigShortcuts {
-                detach_session: Some(Binding::Leader(
-                    ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
-                )),
+                detach_session: Some(Binding::Leader {
+                    chord: ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
+                    repeat: false,
+                }),
                 ..Default::default()
             },
             ..Default::default()
         };
         let resolved = resolved_shortcuts(config);
         assert_eq!(resolved.tap_modifier(), Some(TapModifier::Meta));
+    }
+
+    #[test]
+    fn build_shortcuts_resolves_repeat_time() {
+        let config = OzmuxConfigs {
+            shortcuts: ConfigShortcuts {
+                repeat_time_ms: 250,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolved_shortcuts(config);
+        assert_eq!(resolved.repeat_time, Duration::from_millis(250));
     }
 }
