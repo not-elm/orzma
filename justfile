@@ -82,6 +82,8 @@ icon *args:
 # build and package the ozmux .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
 bundle-macos *args: ozmd-web
+    pnpm i
+    pnpm build
     python3 scripts/bundle_macos.py {{ args }}
 
 # setup-cef-release then bundle with notarization
