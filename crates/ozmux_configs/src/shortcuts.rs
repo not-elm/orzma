@@ -342,8 +342,8 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub quit: Option<Binding>,
-    /// Enter copy mode (Alacritty vi mode) on the focused terminal in
-    /// `AppMode::Default`.
+    /// Enter copy mode: Alacritty vi mode in `AppMode::Default`, tmux
+    /// copy-mode in `AppMode::Tmux`.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
