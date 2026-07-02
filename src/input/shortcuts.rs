@@ -146,7 +146,8 @@ impl Shortcuts {
     /// Paste chord becomes `paste`; every other direct chord — plus the leader
     /// chord — becomes a `reserved` entry the crate dispatcher skips for the
     /// host to handle. Reserving the leader keeps `dispatch_input` from typing
-    /// it into the PTY while the leader engages.
+    /// it into the PTY while the leader engages. Leader-scoped or unbound
+    /// paste yields `None` — no direct-chord fallback.
     pub(crate) fn input_bindings(&self) -> TerminalInputBindings {
         let mut paste = None;
         let mut reserved = Vec::new();
@@ -173,10 +174,7 @@ impl Shortcuts {
                 meta: modifiers.meta,
             });
         }
-        TerminalInputBindings {
-            paste: paste.unwrap_or_else(|| TerminalInputBindings::default().paste),
-            reserved,
-        }
+        TerminalInputBindings { paste, reserved }
     }
 
     /// True when `(keycode, mods)` is the configured leader chord.
@@ -980,21 +978,30 @@ mod tests {
 
     #[test]
     fn input_bindings_excludes_paste_from_reserved() {
-        let r = direct_only(&ConfigShortcuts::default());
+        use ozmux_configs::shortcuts::parse_key_chord;
+
+        let mut config = OzmuxConfigs::default();
+        config.shortcuts.paste = Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()));
+        let r = resolved_shortcuts(config);
         let b = r.input_bindings();
-        assert_eq!(b.paste.key_code, KeyCode::KeyV);
-        assert!(b.paste.meta && !b.paste.ctrl && !b.paste.shift && !b.paste.alt);
-        assert_eq!(
-            b.reserved.len(),
-            4,
-            "Quit, ReleaseWebviewFocus, DetachSession, EnterCopyMode"
-        );
+        let paste = b.paste.expect("direct-bound paste must resolve to a chord");
+        assert_eq!(paste.key_code, KeyCode::KeyV);
+        assert!(paste.meta && !paste.ctrl && !paste.shift && !paste.alt);
         assert!(
             !b.reserved
                 .iter()
                 .any(|c| c.key_code == KeyCode::KeyV && c.meta),
             "the paste chord must not appear in reserved",
         );
+    }
+
+    #[test]
+    fn input_bindings_leader_paste_has_no_direct_chord() {
+        // Default config now binds paste to <Leader>p: the crate dispatcher
+        // must NOT keep a stale Cmd+V direct-paste fallback.
+        let resolved = resolved_shortcuts(OzmuxConfigs::default());
+        let b = resolved.input_bindings();
+        assert!(b.paste.is_none());
     }
 
     fn leader_fixture() -> Shortcuts {

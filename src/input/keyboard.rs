@@ -89,7 +89,9 @@ fn dispatch_input(
         {
             continue;
         }
-        if chord_matches(&bindings.paste, ev.key_code, &mods) {
+        if let Some(paste) = bindings.paste.as_ref()
+            && chord_matches(paste, ev.key_code, &mods)
+        {
             commands.trigger(PasteAction { entity });
             continue;
         }

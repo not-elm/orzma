@@ -33,8 +33,10 @@ pub(crate) struct ReservedChord {
 /// still gets working paste and forwards everything else.
 #[derive(Resource)]
 pub(crate) struct TerminalInputBindings {
-    /// The chord that triggers `PasteAction`.
-    pub paste: ReservedChord,
+    /// The chord that triggers `PasteAction`, when paste is direct-bound.
+    /// `None` when paste is leader-scoped or unbound (the leader path in
+    /// `app_shortcut_handler` owns paste then).
+    pub paste: Option<ReservedChord>,
     /// Chords the dispatcher skips for the host to handle.
     pub reserved: Vec<ReservedChord>,
 }
@@ -42,13 +44,13 @@ pub(crate) struct TerminalInputBindings {
 impl Default for TerminalInputBindings {
     fn default() -> Self {
         Self {
-            paste: ReservedChord {
+            paste: Some(ReservedChord {
                 key_code: KeyCode::KeyV,
                 ctrl: false,
                 shift: false,
                 alt: false,
                 meta: true,
-            },
+            }),
             reserved: Vec::new(),
         }
     }
