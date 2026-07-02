@@ -29,17 +29,6 @@ impl Plugin for CopyModeKeymapPlugin {
     }
 }
 
-/// A configured key normalized for runtime lookup.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum ResolvedKey {
-    /// Exact logical character (case-sensitive).
-    Plain(String),
-    /// A named logical key.
-    Named(CopyModeNamedKey),
-    /// `Ctrl+` entry, matched on the physical key.
-    Ctrl(KeyCode),
-}
-
 /// The `[copy-mode]` table resolved to a lookup map. Built once at startup.
 #[derive(Resource, Default, Debug)]
 pub(crate) struct ResolvedCopyModeKeys(HashMap<ResolvedKey, CopyModeAction>);
@@ -74,6 +63,50 @@ impl ResolvedCopyModeKeys {
         };
         self.0.get(&key).copied()
     }
+}
+
+/// Fires the VI event for a matched action on `entity`, converting the
+/// config-crate vocabulary to engine types. Shared by both modes' gathers.
+pub(crate) fn trigger_copy_mode_action(
+    commands: &mut Commands,
+    entity: Entity,
+    action: CopyModeAction,
+) {
+    match action {
+        CopyModeAction::Motion(m) => commands.trigger(ViMotionRequest {
+            entity,
+            motion: vi_motion(m),
+        }),
+        CopyModeAction::Scroll(s) => commands.trigger(ViScrollRequest {
+            entity,
+            kind: scroll_kind(s),
+        }),
+        CopyModeAction::Selection(s) => commands.trigger(ViSelectionToggleRequest {
+            entity,
+            ty: selection_type(s),
+        }),
+        CopyModeAction::Yank => commands.trigger(ViYankRequest { entity }),
+        CopyModeAction::Exit => commands.trigger(ViExitRequest { entity }),
+        CopyModeAction::Prompt(p) => commands.trigger(ViPromptRequest {
+            entity,
+            kind: prompt_kind(p),
+        }),
+        CopyModeAction::SearchStep(step) => commands.trigger(ViSearchStepRequest {
+            entity,
+            forward: step == CopySearchStep::Next,
+        }),
+    }
+}
+
+/// A configured key normalized for runtime lookup.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ResolvedKey {
+    /// Exact logical character (case-sensitive).
+    Plain(String),
+    /// A named logical key.
+    Named(CopyModeNamedKey),
+    /// `Ctrl+` entry, matched on the physical key.
+    Ctrl(KeyCode),
 }
 
 /// `Startup` system: resolves `[copy-mode]` into the lookup map. Config
@@ -168,39 +201,6 @@ fn ctrl_char_keycode(c: char) -> Option<KeyCode> {
         '9' => KeyCode::Digit9,
         _ => return None,
     })
-}
-
-/// Fires the VI event for a matched action on `entity`, converting the
-/// config-crate vocabulary to engine types. Shared by both modes' gathers.
-pub(crate) fn trigger_copy_mode_action(
-    commands: &mut Commands,
-    entity: Entity,
-    action: CopyModeAction,
-) {
-    match action {
-        CopyModeAction::Motion(m) => commands.trigger(ViMotionRequest {
-            entity,
-            motion: vi_motion(m),
-        }),
-        CopyModeAction::Scroll(s) => commands.trigger(ViScrollRequest {
-            entity,
-            kind: scroll_kind(s),
-        }),
-        CopyModeAction::Selection(s) => commands.trigger(ViSelectionToggleRequest {
-            entity,
-            ty: selection_type(s),
-        }),
-        CopyModeAction::Yank => commands.trigger(ViYankRequest { entity }),
-        CopyModeAction::Exit => commands.trigger(ViExitRequest { entity }),
-        CopyModeAction::Prompt(p) => commands.trigger(ViPromptRequest {
-            entity,
-            kind: prompt_kind(p),
-        }),
-        CopyModeAction::SearchStep(step) => commands.trigger(ViSearchStepRequest {
-            entity,
-            forward: step == CopySearchStep::Next,
-        }),
-    }
 }
 
 fn vi_motion(motion: CopyMotion) -> ViMotion {
