@@ -22,6 +22,7 @@ use crate::action::tmux::{
     SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
 };
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
+use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::{
@@ -44,7 +45,6 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_terminal::{Clipboard, build_paste_bytes};
 use ozma_tty_engine::{TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;

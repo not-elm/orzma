@@ -3,6 +3,7 @@
 mod action;
 mod bootstrap;
 mod cef_profile;
+mod clipboard;
 mod configs;
 mod font;
 mod input;
@@ -16,6 +17,7 @@ mod window_title;
 
 use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
+use crate::clipboard::ClipboardPlugin;
 use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::mode::AppMode;
@@ -67,6 +69,7 @@ fn main() {
                 config_shell: pre_configs.ozma.shell.clone(),
             },
             DefaultModePlugin,
+            ClipboardPlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,

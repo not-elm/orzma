@@ -1,6 +1,5 @@
 //! Ozma standalone VT terminal component: Bevy plugin and shared types.
 
-mod clipboard;
 mod exit;
 mod layout;
 mod spawn;
@@ -8,7 +7,6 @@ mod spawn;
 use crate::spawn::on_add_inject_render;
 use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 use bevy::prelude::*;
-pub use clipboard::{Clipboard, build_paste_bytes};
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
     resolve_shell,

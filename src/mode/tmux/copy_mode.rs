@@ -13,11 +13,11 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
+use crate::clipboard::Clipboard;
 use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use ozma_terminal::Clipboard;
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::schema::{
     SelectionKind, SelectionRange, TerminalGrid, ViCursor, ViewportPoint,

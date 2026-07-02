@@ -1,8 +1,9 @@
 //! Paste action: reads the system clipboard and writes it to the target
 //! terminal entity's PTY as (optionally bracketed) paste bytes.
 
+use crate::clipboard::{Clipboard, build_paste_bytes};
 use bevy::prelude::*;
-use ozma_terminal::{Clipboard, OzmaTerminal, build_paste_bytes};
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 /// Pastes the system clipboard into the target terminal entity's PTY.
@@ -13,12 +14,12 @@ pub(crate) struct PasteAction {
     pub entity: Entity,
 }
 
-/// Registers the paste apply observer and the `Clipboard` resource.
+/// Registers the paste apply observer.
 pub(super) struct PastePlugin;
 
 impl Plugin for PastePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Clipboard>().add_observer(on_paste);
+        app.add_observer(on_paste);
     }
 }
 
@@ -53,7 +54,9 @@ mod tests {
     #[test]
     fn paste_action_on_entity_without_terminal_does_not_panic() {
         let mut app = App::new();
-        app.add_plugins(MinimalPlugins).add_plugins(PastePlugin);
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(PastePlugin)
+            .init_resource::<Clipboard>();
         let entity = app.world_mut().spawn_empty().id();
         app.world_mut().trigger(PasteAction { entity });
         app.update();

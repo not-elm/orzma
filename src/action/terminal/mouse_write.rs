@@ -67,7 +67,7 @@ fn on_terminal_mouse_write(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozma_terminal::Clipboard;
+    use crate::clipboard::Clipboard;
 
     #[test]
     fn detached_write_event_forwards_bytes() {

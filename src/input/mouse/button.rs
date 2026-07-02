@@ -483,12 +483,12 @@ fn button_kind(state: ButtonState) -> ButtonEventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clipboard::Clipboard;
     use crate::input::focus::MouseDisabled;
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use ozma_terminal::Clipboard;
     use ozma_terminal::OzmaTerminal;
     use ozma_tty_engine::SelectionType;
     use ozma_tty_engine::TerminalHandle;

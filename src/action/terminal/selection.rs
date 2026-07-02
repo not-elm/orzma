@@ -2,8 +2,9 @@
 //! surface, and copy the current selection to the clipboard.
 
 use crate::action::terminal::apply_to_terminal;
+use crate::clipboard::Clipboard;
 use bevy::prelude::*;
-use ozma_terminal::{Clipboard, OzmaTerminal};
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{Coalescer, Point, PtyHandle, SelectionType, Side, TerminalHandle};
 
 /// Starts a new local selection on `entity` at `point`.

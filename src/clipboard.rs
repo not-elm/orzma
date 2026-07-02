@@ -1,7 +1,7 @@
 //! Clipboard Bevy Resource wrapping `arboard::Clipboard`, plus `build_paste_bytes`,
 //! the pure helper that turns clipboard text into the PTY byte stream.
 
-use bevy::ecs::resource::Resource;
+use bevy::prelude::*;
 
 /// Resource wrapping a clipboard backend.
 ///
@@ -13,11 +13,12 @@ use bevy::ecs::resource::Resource;
 /// but `y` does not modify the host clipboard. [`Clipboard::in_memory`]
 /// swaps in a process-local backend for deterministic, headless-safe tests.
 #[derive(Resource)]
-pub struct Clipboard(ClipboardBackend);
+pub(crate) struct Clipboard(ClipboardBackend);
 
 /// The concrete clipboard backend behind a [`Clipboard`] resource.
 enum ClipboardBackend {
     System(arboard::Clipboard),
+    #[cfg(test)]
     Memory(Option<String>),
     Unavailable,
 }
@@ -29,7 +30,7 @@ impl Default for Clipboard {
 }
 
 impl Clipboard {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         match arboard::Clipboard::new() {
             Ok(cb) => Self(ClipboardBackend::System(cb)),
             Err(e) => {
@@ -49,14 +50,15 @@ impl Clipboard {
     /// display server — used by tests to exercise copy/paste wiring on
     /// headless hosts where `arboard` is unavailable, without clobbering the
     /// developer's real clipboard.
-    pub fn in_memory() -> Self {
+    #[cfg(test)]
+    pub(crate) fn in_memory() -> Self {
         Self(ClipboardBackend::Memory(None))
     }
 
     /// Writes `text` to the clipboard. No-op when the backend is unavailable.
     /// Failures are logged at warn but never propagated — copy mode must not
     /// panic on a clipboard failure.
-    pub fn write(&mut self, text: String) {
+    pub(crate) fn write(&mut self, text: String) {
         match &mut self.0 {
             ClipboardBackend::System(cb) => {
                 if let Err(e) = cb.set_text(text) {
@@ -67,6 +69,7 @@ impl Clipboard {
                     );
                 }
             }
+            #[cfg(test)]
             ClipboardBackend::Memory(slot) => *slot = Some(text),
             ClipboardBackend::Unavailable => {
                 tracing::debug!(
@@ -88,7 +91,7 @@ impl Clipboard {
     /// `None`, the `Ok("")` path returns `Some("")`); either way the
     /// caller's `text.is_empty()` check at the dispatcher swallows it
     /// without reaching the PTY.
-    pub fn read(&mut self) -> Option<String> {
+    pub(crate) fn read(&mut self) -> Option<String> {
         match &mut self.0 {
             ClipboardBackend::System(cb) => match cb.get_text() {
                 Ok(text) => Some(text),
@@ -108,6 +111,7 @@ impl Clipboard {
                     None
                 }
             },
+            #[cfg(test)]
             ClipboardBackend::Memory(slot) => slot.clone(),
             ClipboardBackend::Unavailable => {
                 tracing::debug!(
@@ -117,6 +121,16 @@ impl Clipboard {
                 None
             }
         }
+    }
+}
+
+/// Registers the shared `Clipboard` resource consumed by the action layer,
+/// copy-mode UIs, and tmux paste.
+pub(crate) struct ClipboardPlugin;
+
+impl Plugin for ClipboardPlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Clipboard>();
     }
 }
 
@@ -135,7 +149,7 @@ impl Clipboard {
 ///   endings so shells receive a `\r` for each line. `\r\n` collapses
 ///   to `\r`, lone `\n` becomes `\r`, and existing `\r` bytes pass
 ///   through unchanged. Matches the xterm / iTerm2 paste convention.
-pub fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
         let mut body = text.to_owned();
         loop {
