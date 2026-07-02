@@ -1,6 +1,5 @@
 //! Ozma standalone VT terminal component: Bevy plugin and shared types.
 
-mod action;
 mod clipboard;
 mod exit;
 mod hyperlink;
@@ -8,11 +7,9 @@ mod layout;
 mod mouse;
 mod spawn;
 
-use crate::action::OzmaActionPlugin;
 use crate::mouse::OzmaMousePlugin;
 use crate::spawn::on_add_inject_render;
 use crate::{exit::ExitPlugin, layout::LayoutPlugin};
-pub use action::PasteAction;
 use bevy::prelude::*;
 pub use clipboard::{Clipboard, build_paste_bytes};
 pub use mouse::{
@@ -39,7 +36,7 @@ impl Plugin for OzmaTerminalPlugin {
         app.insert_resource(OzmaTerminalConfig {
             shell: self.config_shell.clone(),
         })
-        .add_plugins((ExitPlugin, LayoutPlugin, OzmaActionPlugin, OzmaMousePlugin))
+        .add_plugins((ExitPlugin, LayoutPlugin, OzmaMousePlugin))
         .add_observer(on_add_inject_render);
     }
 }

@@ -6,6 +6,7 @@
 //! in one ordered pass (tmux-mode parity). Raw-key forwarding and direct-chord
 //! paste are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
+use crate::action::terminal::PasteAction;
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
@@ -26,7 +27,7 @@ use bevy::time::Real;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{OzmaTerminal, PasteAction};
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
