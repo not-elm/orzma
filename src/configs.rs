@@ -1,10 +1,11 @@
 //! Loads `OzmuxConfigs` synchronously at app build time and exposes it as
 //! a Bevy Resource. Config validation errors (duplicate direct or prefix
-//! chords, a leader that shadows a direct binding, prefix bindings with no
-//! leader, an unmappable leader key, an out-of-range font size) are fatal
-//! (exit 2) so a mistake in one field never silently discards the whole config.
-//! Parse / IO errors warn and fall back to defaults so the GUI remains
-//! startable for users with stale or invalid config files.
+//! chords, duplicate `[copy-mode]` keys, a leader that shadows a direct
+//! binding, prefix bindings with no leader, an unmappable leader key, an
+//! out-of-range font size) are fatal (exit 2) so a mistake in one field
+//! never silently discards the whole config. Parse / IO errors warn and
+//! fall back to defaults so the GUI remains startable for users with stale
+//! or invalid config files.
 
 use bevy::prelude::*;
 use ozmux_configs::OzmuxConfigs;
@@ -33,6 +34,7 @@ impl Plugin for OzmuxConfigsPlugin {
             // just the offending field. Only parse / IO errors warn+default.
             ozmux_configs::OzmuxConfigsError::DuplicateChords(_)
             | ozmux_configs::OzmuxConfigsError::DuplicatePrefixChords(_)
+            | ozmux_configs::OzmuxConfigsError::DuplicateCopyModeKeys(_)
             | ozmux_configs::OzmuxConfigsError::LeaderShadowsDirectBinding { .. }
             | ozmux_configs::OzmuxConfigsError::UnmappableLeader { .. }
             | ozmux_configs::OzmuxConfigsError::InvalidFontSize { .. } => {

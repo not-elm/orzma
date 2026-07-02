@@ -349,8 +349,8 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub quit: Option<Binding>,
-    /// Enter copy mode (Alacritty vi mode) on the focused terminal in
-    /// `AppMode::Default`.
+    /// Enter copy mode: Alacritty vi mode in `AppMode::Default`, tmux
+    /// copy-mode in `AppMode::Tmux`.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
@@ -362,6 +362,150 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub detach_session: Option<Binding>,
+    /// Focus the pane to the left (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_left_pane: Option<Binding>,
+    /// Focus the pane below (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_down_pane: Option<Binding>,
+    /// Focus the pane above (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_up_pane: Option<Binding>,
+    /// Focus the pane to the right (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_right_pane: Option<Binding>,
+    /// Split the active pane side-by-side — vertical divider, tmux `-h` (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub split_vertical_pane: Option<Binding>,
+    /// Split the active pane stacked — horizontal divider, tmux `-v` (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub split_horizontal_pane: Option<Binding>,
+    /// Kill the active pane, after a confirm prompt (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub kill_pane: Option<Binding>,
+    /// Toggle zoom on the active pane (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub zoom_pane: Option<Binding>,
+    /// Open a new window (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub new_window: Option<Binding>,
+    /// Kill the active window, after a confirm prompt (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub kill_window: Option<Binding>,
+    /// Switch to the next window (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub next_window: Option<Binding>,
+    /// Switch to the previous window (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub previous_window: Option<Binding>,
+    /// Switch to the window at tmux index 0 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_0: Option<Binding>,
+    /// Switch to the window at tmux index 1 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_1: Option<Binding>,
+    /// Switch to the window at tmux index 2 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_2: Option<Binding>,
+    /// Switch to the window at tmux index 3 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_3: Option<Binding>,
+    /// Switch to the window at tmux index 4 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_4: Option<Binding>,
+    /// Switch to the window at tmux index 5 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_5: Option<Binding>,
+    /// Switch to the window at tmux index 6 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_6: Option<Binding>,
+    /// Switch to the window at tmux index 7 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_7: Option<Binding>,
+    /// Switch to the window at tmux index 8 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_8: Option<Binding>,
+    /// Switch to the window at tmux index 9 (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub select_window_9: Option<Binding>,
+    /// Open the rename prompt for the active window (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub rename_window: Option<Binding>,
+    /// Open the rename prompt for the session (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub rename_session: Option<Binding>,
     /// Timeout (ms) for a modifier-tap leader: press+release within this window
     /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
     /// normalized to 300.
@@ -379,11 +523,35 @@ impl Default for Shortcuts {
     fn default() -> Self {
         Shortcuts {
             leader: Some(Leader::ModifierTap(TapModifier::Meta)),
-            paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
+            paste: Some(parse_default_binding("<Leader>p")),
             release_webview_focus: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+Escape"))),
             quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
             enter_copy_mode: Some(Binding::Direct(parse_default_chord("Cmd+S"))),
             detach_session: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+D"))),
+            select_left_pane: Some(parse_default_binding("<Leader>h")),
+            select_down_pane: Some(parse_default_binding("<Leader>j")),
+            select_up_pane: Some(parse_default_binding("<Leader>k")),
+            select_right_pane: Some(parse_default_binding("<Leader>l")),
+            split_vertical_pane: Some(parse_default_binding("<Leader>i")),
+            split_horizontal_pane: Some(parse_default_binding("<Leader>o")),
+            kill_pane: Some(parse_default_binding("<Leader>x")),
+            zoom_pane: Some(parse_default_binding("<Leader>z")),
+            new_window: Some(parse_default_binding("<Leader>c")),
+            kill_window: Some(parse_default_binding("<Leader>Shift+X")),
+            next_window: Some(parse_default_binding("<Leader>n")),
+            previous_window: Some(parse_default_binding("<Leader>Shift+N")),
+            select_window_0: Some(parse_default_binding("<Leader>0")),
+            select_window_1: Some(parse_default_binding("<Leader>1")),
+            select_window_2: Some(parse_default_binding("<Leader>2")),
+            select_window_3: Some(parse_default_binding("<Leader>3")),
+            select_window_4: Some(parse_default_binding("<Leader>4")),
+            select_window_5: Some(parse_default_binding("<Leader>5")),
+            select_window_6: Some(parse_default_binding("<Leader>6")),
+            select_window_7: Some(parse_default_binding("<Leader>7")),
+            select_window_8: Some(parse_default_binding("<Leader>8")),
+            select_window_9: Some(parse_default_binding("<Leader>9")),
+            rename_window: Some(parse_default_binding("<Leader>r")),
+            rename_session: Some(parse_default_binding("<Leader>Shift+R")),
             leader_tap_timeout_ms: 300,
             repeat_time_ms: 500,
         }
@@ -413,6 +581,106 @@ impl Shortcuts {
                 "detach-session",
                 &self.detach_session,
                 ShortcutAction::DetachSession,
+            ),
+            (
+                "select-left-pane",
+                &self.select_left_pane,
+                ShortcutAction::SelectPane(PaneDirection::Left),
+            ),
+            (
+                "select-down-pane",
+                &self.select_down_pane,
+                ShortcutAction::SelectPane(PaneDirection::Down),
+            ),
+            (
+                "select-up-pane",
+                &self.select_up_pane,
+                ShortcutAction::SelectPane(PaneDirection::Up),
+            ),
+            (
+                "select-right-pane",
+                &self.select_right_pane,
+                ShortcutAction::SelectPane(PaneDirection::Right),
+            ),
+            (
+                "split-vertical-pane",
+                &self.split_vertical_pane,
+                ShortcutAction::SplitPane(SplitOrientation::Vertical),
+            ),
+            (
+                "split-horizontal-pane",
+                &self.split_horizontal_pane,
+                ShortcutAction::SplitPane(SplitOrientation::Horizontal),
+            ),
+            ("kill-pane", &self.kill_pane, ShortcutAction::KillPane),
+            ("zoom-pane", &self.zoom_pane, ShortcutAction::ZoomPane),
+            ("new-window", &self.new_window, ShortcutAction::NewWindow),
+            ("kill-window", &self.kill_window, ShortcutAction::KillWindow),
+            ("next-window", &self.next_window, ShortcutAction::NextWindow),
+            (
+                "previous-window",
+                &self.previous_window,
+                ShortcutAction::PreviousWindow,
+            ),
+            (
+                "select-window-0",
+                &self.select_window_0,
+                ShortcutAction::SelectWindow(0),
+            ),
+            (
+                "select-window-1",
+                &self.select_window_1,
+                ShortcutAction::SelectWindow(1),
+            ),
+            (
+                "select-window-2",
+                &self.select_window_2,
+                ShortcutAction::SelectWindow(2),
+            ),
+            (
+                "select-window-3",
+                &self.select_window_3,
+                ShortcutAction::SelectWindow(3),
+            ),
+            (
+                "select-window-4",
+                &self.select_window_4,
+                ShortcutAction::SelectWindow(4),
+            ),
+            (
+                "select-window-5",
+                &self.select_window_5,
+                ShortcutAction::SelectWindow(5),
+            ),
+            (
+                "select-window-6",
+                &self.select_window_6,
+                ShortcutAction::SelectWindow(6),
+            ),
+            (
+                "select-window-7",
+                &self.select_window_7,
+                ShortcutAction::SelectWindow(7),
+            ),
+            (
+                "select-window-8",
+                &self.select_window_8,
+                ShortcutAction::SelectWindow(8),
+            ),
+            (
+                "select-window-9",
+                &self.select_window_9,
+                ShortcutAction::SelectWindow(9),
+            ),
+            (
+                "rename-window",
+                &self.rename_window,
+                ShortcutAction::RenameWindow,
+            ),
+            (
+                "rename-session",
+                &self.rename_session,
+                ShortcutAction::RenameSession,
             ),
         ]
         .into_iter()
@@ -462,10 +730,31 @@ impl Shortcuts {
     }
 }
 
-/// Shortcut actions reachable under forward-only key routing. tmux owns the
-/// pane/window operations now; these are the ozmux-local GUI actions.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+/// A neighbor direction for the `select-pane` shortcut actions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PaneDirection {
+    /// Focus the pane to the left.
+    Left,
+    /// Focus the pane below.
+    Down,
+    /// Focus the pane above.
+    Up,
+    /// Focus the pane to the right.
+    Right,
+}
+
+/// Which way a split divides the pane, named after the DIVIDER the user sees.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitOrientation {
+    /// A vertical divider: panes end up side by side (tmux `split-window -h`).
+    Vertical,
+    /// A horizontal divider: panes end up stacked (tmux `split-window -v`).
+    Horizontal,
+}
+
+/// Shortcut actions. GUI-local actions plus the tmux pane/window operations
+/// (the latter are inert outside `AppMode::Tmux`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ShortcutAction {
     /// Paste the system clipboard into the active terminal.
     Paste,
@@ -475,9 +764,31 @@ pub enum ShortcutAction {
     Quit,
     /// Detaches from the tmux session and returns to Default single-terminal mode.
     DetachSession,
-    /// Enters copy mode (Alacritty vi mode) on the focused terminal in
-    /// `AppMode::Default`.
+    /// Enters copy mode: Alacritty vi mode in `AppMode::Default`, tmux
+    /// copy-mode in `AppMode::Tmux`.
     EnterCopyMode,
+    /// Focuses the neighbor pane in the given direction (tmux mode only).
+    SelectPane(PaneDirection),
+    /// Splits the active pane (tmux mode only).
+    SplitPane(SplitOrientation),
+    /// Kills the active pane after a confirm prompt (tmux mode only).
+    KillPane,
+    /// Toggles zoom on the active pane (tmux mode only).
+    ZoomPane,
+    /// Opens a new window in the current session (tmux mode only).
+    NewWindow,
+    /// Kills the active window after a confirm prompt (tmux mode only).
+    KillWindow,
+    /// Switches to the next window (tmux mode only).
+    NextWindow,
+    /// Switches to the previous window (tmux mode only).
+    PreviousWindow,
+    /// Switches to the window with this tmux display index (tmux mode only).
+    SelectWindow(u8),
+    /// Opens the rename prompt for the active window (tmux mode only).
+    RenameWindow,
+    /// Opens the rename prompt for the session (tmux mode only).
+    RenameSession,
 }
 
 /// The literal token marking a leader-scoped binding value (`<Leader>x`).
@@ -650,6 +961,10 @@ fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
 
 fn parse_default_chord(s: &str) -> KeyChord {
     parse_key_chord(s).unwrap_or_else(|e| panic!("invalid default chord {s:?}: {e}"))
+}
+
+fn parse_default_binding(s: &str) -> Binding {
+    parse_binding(s).unwrap_or_else(|e| panic!("invalid default binding {s:?}: {e}"))
 }
 
 /// Detects chord collisions across a table's bound entries. Returns a `Vec`
@@ -969,15 +1284,94 @@ mod tests {
         assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
         assert_eq!(
             s.paste,
-            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("p").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.quit,
             Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap()))
         );
-        assert_eq!(s.bindings_iter().count(), 5);
-        assert_eq!(s.direct_chords().count(), 5);
-        assert_eq!(s.leader_chords().count(), 0);
+        assert_eq!(s.bindings_iter().count(), 29);
+        assert_eq!(s.direct_chords().count(), 4);
+        assert_eq!(s.leader_chords().count(), 25);
+    }
+
+    #[test]
+    fn bindings_iter_count_is_pinned_to_field_count() {
+        // NOTE: drift guard — adding a Shortcuts field without its
+        // bindings_iter() entry silently unbinds the action.
+        assert_eq!(Shortcuts::default().bindings_iter().count(), 29);
+    }
+
+    #[test]
+    fn default_tmux_actions_are_leader_bound() {
+        let s = Shortcuts::default();
+        assert_eq!(
+            s.select_left_pane,
+            Some(Binding::Leader {
+                chord: parse_key_chord("h").unwrap(),
+                repeat: false,
+            })
+        );
+        assert_eq!(
+            s.split_vertical_pane,
+            Some(Binding::Leader {
+                chord: parse_key_chord("i").unwrap(),
+                repeat: false,
+            })
+        );
+        assert_eq!(
+            s.kill_window,
+            Some(Binding::Leader {
+                chord: parse_key_chord("Shift+X").unwrap(),
+                repeat: false,
+            })
+        );
+        assert_eq!(
+            s.select_window_0,
+            Some(Binding::Leader {
+                chord: parse_key_chord("0").unwrap(),
+                repeat: false,
+            })
+        );
+        assert_eq!(
+            s.rename_session,
+            Some(Binding::Leader {
+                chord: parse_key_chord("Shift+R").unwrap(),
+                repeat: false,
+            })
+        );
+        assert_eq!(
+            s.paste,
+            Some(Binding::Leader {
+                chord: parse_key_chord("p").unwrap(),
+                repeat: false,
+            })
+        );
+    }
+
+    #[test]
+    fn tmux_actions_parse_from_flat_toml() {
+        let toml = r#"
+split-vertical-pane = "<Leader>g"
+select-window-3 = ""
+new-window = "Cmd+T"
+"#;
+        let s: Shortcuts = toml::from_str(toml).unwrap();
+        assert_eq!(
+            s.split_vertical_pane,
+            Some(Binding::Leader {
+                chord: parse_key_chord("g").unwrap(),
+                repeat: false,
+            })
+        );
+        assert_eq!(s.select_window_3, None);
+        assert_eq!(
+            s.new_window,
+            Some(Binding::Direct(parse_key_chord("Cmd+T").unwrap()))
+        );
     }
 
     #[test]
@@ -1015,9 +1409,12 @@ detach-session = "<Leader>d"
         );
         assert_eq!(
             s.paste,
-            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("p").unwrap(),
+                repeat: false,
+            })
         );
-        assert_eq!(s.leader_chords().count(), 2);
+        assert_eq!(s.leader_chords().count(), 27);
     }
 
     #[test]
@@ -1080,7 +1477,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"<Leader>P","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>X","zoom-pane":"<Leader>Z","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
@@ -1239,7 +1636,6 @@ detach-session = "<Leader>d"
             ..Default::default()
         };
         let entries: Vec<_> = s.leader_chords().collect();
-        assert_eq!(entries.len(), 2);
         assert!(
             entries
                 .iter()

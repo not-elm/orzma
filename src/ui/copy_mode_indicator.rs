@@ -58,10 +58,6 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 /// `Added<TerminalHandle>` filter fires exactly once per host because
 /// `crate::mode::tmux::render::attach_tmux_pane_terminal` is the only `TerminalHandle`
 /// inserter on `TmuxPane` hosts.
-// NOTE: A second reader of `Added<TerminalHandle>` would not violate
-// the "exactly one chip per host" property (Added fires per-system),
-// but introducing one is a smell — the constraint is documented as
-// this comment rather than enforced.
 fn attach_indicator_to_surface_host(
     mut commands: Commands,
     hosts: Query<Entity, Added<ozma_tty_engine::TerminalHandle>>,
@@ -100,9 +96,6 @@ fn attach_indicator_to_surface_host(
 /// host's `TerminalHandle::vi_indicator_snapshot()`. Gated by
 /// `any_with_component::<CopyModeState>` so the schedule short-circuits
 /// when nothing is in copy mode.
-// NOTE: the chip's Display::Flex is set lazily here on first sight of
-// CopyModeState. Hiding on exit is the `On<Remove, CopyModeState>`
-// observer's job (Task 7), not this poll.
 fn refresh_indicator(
     hosts: Query<(&ozma_tty_engine::TerminalHandle, &Children), With<CopyModeState>>,
     mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<CopyModeIndicator>>,

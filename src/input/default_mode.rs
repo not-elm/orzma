@@ -1,9 +1,12 @@
 //! Host-side input for `AppMode::Default`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
-//! markers from the coarse guards (IME, focus, webview), and handles the
+//! markers from the coarse guards (IME, focus, webview), and dispatches the
 //! application-level GUI shortcuts the terminal crate does not own (Quit,
-//! DetachSession, ReleaseWebviewFocus). Raw-key forwarding and paste
-//! are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
+//! copy-mode entry, leader sequences) plus — while copy mode is active — the
+//! shared `[copy-mode]` key table, so leader/GUI chords shadow copy-mode keys
+//! in one ordered pass (tmux-mode parity). Raw-key forwarding and direct-chord
+//! paste are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
 
+use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
@@ -162,8 +165,10 @@ fn app_shortcut_handler(
     shortcuts: Res<Shortcuts>,
     ime: Res<ImeState>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
+    resolved_copy: Res<ResolvedCopyModeKeys>,
     windows: Query<&Window, With<PrimaryWindow>>,
     terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
+    copy_modes: Query<(), With<CopyModeState>>,
     time: Res<Time<Real>>,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
@@ -175,6 +180,17 @@ fn app_shortcut_handler(
     let mods = current_modifiers(&bevy_keys);
     let webview_focused = focused_webview.0.is_some();
     let now = time.elapsed();
+    let in_copy_mode = terminal
+        .single()
+        .is_ok_and(|entity| copy_modes.get(entity).is_ok());
+    // NOTE: an open repeat window must not intercept copy-mode keys — a
+    // repeat-marked key doubling as a copy-mode key (e.g. a <Leader:r>p paste
+    // after a <Leader:r>s copy-mode entry) would re-fire the bound action into
+    // the hidden live terminal instead of being handled by copy mode. Close
+    // the window before stepping (tmux-mode parity).
+    if in_copy_mode && matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
+        *leader_phase = LeaderPhase::Idle;
+    }
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
@@ -192,22 +208,40 @@ fn app_shortcut_handler(
             clear_leader_phase(&mut leader_phase);
             (shortcuts.match_gui_action(ev.key_code, mods), false)
         } else {
-            // NOTE: OS key auto-repeat delivers extra Pressed events; feeding
-            // them to step_leader outside the repeat window would toggle the
-            // pending phase by parity. Inside the window they must step the
-            // machine so held keys keep firing (tmux parity).
-            let step = if ev.repeat && !matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
-                LeaderStep::Passthrough
+            // NOTE: OS key auto-repeat delivers extra Pressed events. Outside
+            // the repeat window they must not step the machine (pending would
+            // toggle by parity; while Pending they are skipped outright so a
+            // direct chord's repeats cannot re-fire mid-sequence — tmux
+            // parity). Inside the window they must step it so held keys keep
+            // firing.
+            let step = if ev.repeat {
+                match *leader_phase {
+                    LeaderPhase::Pending => continue,
+                    LeaderPhase::Repeat { .. } => {
+                        step_leader(&mut leader_phase, &shortcuts, ev.key_code, mods, now)
+                    }
+                    LeaderPhase::Idle => LeaderStep::Passthrough,
+                }
             } else {
                 step_leader(&mut leader_phase, &shortcuts, ev.key_code, mods, now)
             };
             match step {
                 LeaderStep::RunAction(a) => (Some(a), true),
-                LeaderStep::Swallow => (None, false),
+                LeaderStep::Swallow => continue,
                 LeaderStep::Passthrough => (shortcuts.match_gui_action(ev.key_code, mods), false),
             }
         };
         let Some(action) = action else {
+            // NOTE: copy-mode keys resolve only AFTER leader and GUI-shortcut
+            // dispatch declined the key, so `[shortcuts]` chords shadow
+            // `[copy-mode]` keys here exactly as documented (tmux-mode parity).
+            if in_copy_mode
+                && !webview_focused
+                && let Ok(entity) = terminal.single()
+                && let Some(copy_action) = resolved_copy.resolve(&ev.logical_key, ev.key_code, mods)
+            {
+                trigger_copy_mode_action(&mut commands, entity, copy_action);
+            }
             continue;
         };
         if gui_action_suppressed_by_webview(webview_focused, action) {
@@ -233,6 +267,17 @@ fn app_shortcut_handler(
                 }
             }
             ShortcutAction::ReleaseWebviewFocus => {}
+            ShortcutAction::SelectPane(_)
+            | ShortcutAction::SplitPane(_)
+            | ShortcutAction::KillPane
+            | ShortcutAction::ZoomPane
+            | ShortcutAction::NewWindow
+            | ShortcutAction::KillWindow
+            | ShortcutAction::NextWindow
+            | ShortcutAction::PreviousWindow
+            | ShortcutAction::SelectWindow(_)
+            | ShortcutAction::RenameWindow
+            | ShortcutAction::RenameSession => {}
         }
     }
 }
@@ -491,6 +536,7 @@ mod tests {
             .init_resource::<ImeState>()
             .init_resource::<FocusedWebview>()
             .init_resource::<LeaderPhase>()
+            .init_resource::<ResolvedCopyModeKeys>()
             .init_resource::<CopyModeHits>()
             .insert_resource(test_shortcuts_with_repeat_prefix(
                 KeyCode::KeyH,

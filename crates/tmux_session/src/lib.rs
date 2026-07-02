@@ -13,16 +13,16 @@ mod enumerate;
 mod event_pump;
 mod events;
 mod input;
-mod keybindings;
 mod observers;
 mod output;
 mod plugin;
 
 pub use command::{
-    CopyModeCapture, CopyStateQuery, Prompt, RefreshClient, RenameSession, RenameWindow,
-    ResizePaneX, ResizePaneY, ResizeWindow, SelectPane, SelectWindow, SendBytes, SendPaneKeys,
-    SetEnvironmentGlobal, SetEnvironmentInSession, ShowBuffer, UnsetEnvironmentGlobal,
-    WindowRefreshClient,
+    CopyModeCapture, CopyStateQuery, EnterCopyMode, KillPane, KillWindow, NewWindow, NextWindow,
+    PaneDirection, PreviousWindow, Prompt, PromptKind, RefreshClient, RenameSession, RenameWindow,
+    ResizePaneX, ResizePaneY, ResizeWindow, SelectPane, SelectPaneTowards, SelectWindow, SendBytes,
+    SendPaneKeys, SetEnvironmentGlobal, SetEnvironmentInSession, ShowBuffer, SplitDirection,
+    SplitWindow, UnsetEnvironmentGlobal, WindowRefreshClient, ZoomPane,
 };
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
@@ -35,9 +35,6 @@ pub use enumerate::{
 };
 pub use events::{TmuxConnectionClosed, TmuxConnectionReset};
 pub use input::{KeyMods, bevy_key_to_tmux_name};
-pub use keybindings::{
-    CopyAction, Forwarded, KeyBindings, PromptKind, copy_mode_dispatch, plan_forward,
-};
 pub use output::{PaneOutput, RequestPaneReseed};
 pub use plugin::{TmuxEventBatch, TmuxProjectionSet, TmuxSessionPlugin};
 pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};

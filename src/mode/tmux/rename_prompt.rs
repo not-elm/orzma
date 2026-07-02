@@ -1,9 +1,6 @@
-//! ozmux-owned rename prompt for tmux's `command-prompt`-wrapped `rename-window`
-//! / `rename-session` bindings, which a `-CC` control client cannot render.
-//! `forward_keys_to_tmux` detects such a binding and inserts `RenamePrompt`
-//! instead of forwarding it; this prompt owns the keyboard, pre-fills the
-//! current name, and on submit sends a freshly-rebuilt, safely-quoted rename
-//! command. The recognizer is `RenameKind::parse`.
+//! ozmux-owned rename prompt: the rename-window / rename-session shortcut
+//! actions open this prompt. It owns the keyboard, pre-fills the current
+//! name, and on submit sends a freshly-rebuilt, safely-quoted rename command.
 
 use crate::font::TerminalUiFont;
 use crate::input::InputPhase;
@@ -131,42 +128,6 @@ impl RenamePrompt {
     }
 }
 
-/// The kind of rename a recognized binding performs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RenameKind {
-    /// `rename-window` / `renamew`.
-    Window,
-    /// `rename-session` / `rename`.
-    Session,
-}
-
-impl RenameKind {
-    /// Recognizes a default-compatible single-input `command-prompt` rename
-    /// binding, returning its [`RenameKind`], or `None` for anything ozmux
-    /// should forward verbatim (other command-prompts, multi-input prompts,
-    /// decorated templates, and non-`command-prompt` commands).
-    ///
-    /// Recognition is by command shape, not substring: the first token must be
-    /// `command-prompt`; the inner template (a `{ ... }` brace body or a quoted
-    /// template argument) must be exactly `<rename-verb> [--] <placeholder>`
-    /// where the verb is `rename-window`/`renamew`/`rename-session`/`rename`
-    /// and the placeholder is `%%` or `%1`. Multi-input prompts are rejected by
-    /// arity (any `%2`..`%9` reference), which is robust against the `-l`
-    /// literal flag and commas embedded in a single quoted prompt.
-    pub(crate) fn parse(command: &str) -> Option<Self> {
-        let tokens = tokenize(command);
-        if tokens.first().map(String::as_str) != Some("command-prompt") {
-            return None;
-        }
-        let inner = command_prompt_inner(&tokens)?;
-        let inner_tokens = tokenize(&inner);
-        if inner_tokens.iter().any(|t| has_high_arity_placeholder(t)) {
-            return None;
-        }
-        rename_kind_of(&inner_tokens)
-    }
-}
-
 /// The effect of one key on an open rename prompt.
 #[derive(Debug, PartialEq, Eq)]
 enum RenameStep {
@@ -275,105 +236,6 @@ fn handle_rename_input(
     }
 }
 
-/// Extracts the inner command template from a `command-prompt` invocation: the
-/// content of the trailing `{ ... }` brace group, else the last quoted/bare
-/// token after the flags. Returns `None` if no template is present.
-fn command_prompt_inner(tokens: &[String]) -> Option<String> {
-    if let Some(open) = tokens.iter().position(|t| t == "{") {
-        let close = tokens.iter().rposition(|t| t == "}")?;
-        if close <= open + 1 {
-            return None;
-        }
-        return Some(tokens[open + 1..close].join(" "));
-    }
-    let last = tokens.last()?;
-    if last.starts_with('-') {
-        return None;
-    }
-    Some(last.clone())
-}
-
-/// True when a token references `%2`..`%9` (a multi-prompt response slot).
-fn has_high_arity_placeholder(token: &str) -> bool {
-    let bytes = token.as_bytes();
-    for i in 0..bytes.len() {
-        if bytes[i] == b'%'
-            && let Some(&next) = bytes.get(i + 1)
-            && (b'2'..=b'9').contains(&next)
-        {
-            return true;
-        }
-    }
-    false
-}
-
-/// Classifies an inner template's argv as a canonical rename, or `None`.
-/// Accepts `<verb> [--] <placeholder>` where placeholder is exactly `%%` or
-/// `%1` (after stripping surrounding quotes the tokenizer already removed).
-fn rename_kind_of(inner: &[String]) -> Option<RenameKind> {
-    let mut it = inner.iter();
-    let kind = match it.next().map(String::as_str)? {
-        "rename-window" | "renamew" => RenameKind::Window,
-        "rename-session" | "rename" => RenameKind::Session,
-        _ => return None,
-    };
-    let mut next = it.next().map(String::as_str)?;
-    if next == "--" {
-        next = it.next().map(String::as_str)?;
-    }
-    if next != "%%" && next != "%1" {
-        return None;
-    }
-    if it.next().is_some() {
-        return None;
-    }
-    Some(kind)
-}
-
-/// Splits a tmux command line into tokens, honoring single/double quotes (quotes
-/// stripped, whitespace inside preserved) and treating `{` / `}` as standalone
-/// tokens. Empty quoted tokens (`''`) yield an empty token.
-fn tokenize(line: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut cur = String::new();
-    let mut started = false;
-    let mut in_single = false;
-    let mut in_double = false;
-    for c in line.chars() {
-        match c {
-            '\'' if !in_double => {
-                in_single = !in_single;
-                started = true;
-            }
-            '"' if !in_single => {
-                in_double = !in_double;
-                started = true;
-            }
-            '{' | '}' if !in_single && !in_double => {
-                if started {
-                    tokens.push(std::mem::take(&mut cur));
-                    started = false;
-                }
-                tokens.push(c.to_string());
-            }
-            c if c.is_whitespace() && !in_single && !in_double => {
-                if started {
-                    tokens.push(std::mem::take(&mut cur));
-                    started = false;
-                }
-            }
-            c => {
-                cur.push(c);
-                started = true;
-            }
-        }
-    }
-    if started {
-        tokens.push(cur);
-    }
-    tokens
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -467,102 +329,6 @@ mod tests {
             .label(),
             "Rename session: "
         );
-    }
-
-    #[test]
-    fn recognizes_default_window_binding() {
-        assert_eq!(
-            RenameKind::parse(r##"command-prompt -I "#W" { rename-window -- "%%" }"##),
-            Some(RenameKind::Window)
-        );
-    }
-
-    #[test]
-    fn recognizes_default_session_binding() {
-        assert_eq!(
-            RenameKind::parse(r##"command-prompt -I "#S" { rename-session -- "%%" }"##),
-            Some(RenameKind::Session)
-        );
-    }
-
-    #[test]
-    fn recognizes_aliases() {
-        assert_eq!(
-            RenameKind::parse(r##"command-prompt -I "#W" { renamew -- "%%" }"##),
-            Some(RenameKind::Window)
-        );
-        assert_eq!(
-            RenameKind::parse(r##"command-prompt -I "#S" { rename -- "%%" }"##),
-            Some(RenameKind::Session)
-        );
-    }
-
-    #[test]
-    fn recognizes_quoted_template_form() {
-        assert_eq!(
-            RenameKind::parse(r##"command-prompt -I "#W" "rename-window -- '%%'""##),
-            Some(RenameKind::Window)
-        );
-    }
-
-    #[test]
-    fn recognizes_percent_one_placeholder() {
-        assert_eq!(
-            RenameKind::parse(r#"command-prompt { rename-window -- "%1" }"#),
-            Some(RenameKind::Window)
-        );
-    }
-
-    #[test]
-    fn rejects_multi_input_by_arity() {
-        assert_eq!(
-            RenameKind::parse(r#"command-prompt -p a,b { rename-window -- "%1-%2" }"#),
-            None
-        );
-    }
-
-    #[test]
-    fn accepts_literal_flag_with_comma_prompt() {
-        assert_eq!(
-            RenameKind::parse(r#"command-prompt -l -p "a,b" { rename-window -- "%%" }"#),
-            Some(RenameKind::Window)
-        );
-    }
-
-    #[test]
-    fn accepts_comma_inside_single_quoted_prompt() {
-        assert_eq!(
-            RenameKind::parse(r#"command-prompt -p "new (was a, b)" { rename-window -- "%%" }"#),
-            Some(RenameKind::Window)
-        );
-    }
-
-    #[test]
-    fn rejects_decorated_template() {
-        assert_eq!(
-            RenameKind::parse(r#"command-prompt { rename-window -- "[%%]" }"#),
-            None
-        );
-    }
-
-    #[test]
-    fn rejects_copy_mode_search_prompt() {
-        assert_eq!(
-            RenameKind::parse(
-                r#"command-prompt -T search -p "(search down)" { send-keys -X search-forward "%%%" }"#
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn rejects_confirm_before() {
-        assert_eq!(RenameKind::parse("confirm-before kill-window"), None);
-    }
-
-    #[test]
-    fn rejects_run_shell_containing_rename_window() {
-        assert_eq!(RenameKind::parse(r#"run-shell "rename-window x""#), None);
     }
 
     fn key_event(logical: Key, code: KeyCode) -> KeyboardInput {

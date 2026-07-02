@@ -10,7 +10,6 @@ use crate::events::{
     TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed,
     TmuxWindowFlagsChanged, TmuxWindowRenamed, TmuxWindowsRetained, pane_geoms,
 };
-use crate::keybindings::KeyBindings;
 use crate::plugin::TmuxEventBatch;
 use bevy::prelude::*;
 use std::collections::{HashMap, HashSet};
@@ -223,7 +222,6 @@ fn on_connection_reset(
     _ev: On<TmuxConnectionReset>,
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
-    mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut batch: ResMut<TmuxEventBatch>,
 ) {
@@ -240,7 +238,6 @@ fn on_connection_reset(
         commands.entity(e).despawn();
     }
     index.pending_active_pane = None;
-    keybindings.clear();
     copy_queries.clear();
     // Drop the closing connection's drained events (notably its `%exit`) so they
     // cannot leak into the next adopted connection. The drain is gated off in
@@ -332,7 +329,6 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.init_resource::<TmuxProjection>()
-            .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>();
         register_observers(&mut app);

@@ -1,26 +1,38 @@
 //! Forwards focused keyboard and mouse-wheel input to the active tmux pane.
-//! Keyboard forwarding intercepts a fixed set of ozmux GUI chords and copy-mode
-//! entry commands. Mouse-wheel forwarding handles only the cases
-//! `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it now runs on every tmux
-//! pane, gated off solely by `MouseDisabled`): an inline webview under the
-//! pointer (forwarded to CEF), a copy-mode pane (a targeted `send-keys -X
-//! scroll-up|scroll-down`), and the alt-screen residual where ozma's viewport
-//! scroll would no-op (cursor-key `send-keys`). Events accumulate into
-//! cell-deltas (so trackpad / high-resolution `Pixel` scrolling quantizes the
-//! same way the native terminal path does); every other case is ceded to ozma.
+//! Keyboard forwarding dispatches a fixed set of ozmux GUI chords as
+//! per-command action events (`crate::action::tmux`) and copy-mode
+//! entry commands; while a pane is in copy mode, keys resolve against the
+//! shared config-driven key table (`crate::action::vi::ResolvedCopyModeKeys`)
+//! and fire the shared VI events for `crate::action::vi::tmux_mode` to apply;
+//! unmatched keys forward straight to the pane in one `SendPaneKeys` batch
+//! per frame. Mouse-wheel forwarding handles only the
+//! cases `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it
+//! now runs on every tmux pane, gated off solely by `MouseDisabled`): an
+//! inline webview under the pointer (forwarded to CEF), a copy-mode pane (a
+//! targeted `send-keys -X scroll-up|scroll-down`), and the alt-screen
+//! residual where ozma's viewport scroll would no-op (cursor-key
+//! `send-keys`). Events accumulate into cell-deltas (so trackpad /
+//! high-resolution `Pixel` scrolling quantizes the same way the native
+//! terminal path does); every other case is ceded to ozma.
 
 use super::pane_hit::tmux_pane_at_phys;
+use crate::action::tmux::{
+    EnterCopyModeRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest, NextWindowRequest,
+    PreviousWindowRequest, RenameSessionRequest, RenameWindowRequest, SelectPaneRequest,
+    SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
+};
+use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
 use crate::mode::AppMode;
-use crate::mode::tmux::confirm_prompt::{ConfirmState, parse_confirm_before};
-use crate::mode::tmux::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
+use crate::mode::tmux::confirm_prompt::ConfirmState;
+use crate::mode::tmux::rename_prompt::RenamePrompt;
 use crate::mode::tmux::{TmuxActiveSet, request_detach};
 use crate::ui::copy_mode::CopyModeState;
-use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
+use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -37,11 +49,13 @@ use ozma_tty_engine::{TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{ForwardKeys, NonInteractive, Webview};
-use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
+use ozmux_configs::shortcuts::{
+    Modifiers, PaneDirection as CfgPaneDirection, ShortcutAction,
+    SplitOrientation as CfgSplitOrientation,
+};
 use ozmux_tmux::{
-    ActivePane, ActiveWindow, CopyAction, CopyModeQueries, CopyQueryKind, Forwarded, KeyBindings,
-    KeyMods, PromptKind, SendBytes, SendPaneKeys, ShowBuffer, TmuxClient, TmuxCommand, TmuxPane,
-    TmuxSession, TmuxWindow, bevy_key_to_tmux_name, copy_mode_dispatch, plan_forward,
+    ActivePane, ActiveWindow, KeyMods, PaneDirection, SendBytes, SendPaneKeys, SplitDirection,
+    TmuxClient, TmuxCommand, TmuxPane, TmuxSession, TmuxWindow, bevy_key_to_tmux_name,
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
@@ -68,68 +82,22 @@ impl Plugin for InputPlugin {
 
 const PASTE_CHUNK_BYTES: usize = 256;
 
-/// One key's effect while in copy mode: a verbatim command to relay (if any),
-/// whether to exit copy mode afterward, whether to bridge the tmux paste buffer
-/// to the system clipboard, and a prompt to open (search/jump).
-#[derive(Debug, Default, PartialEq)]
-struct CopyOutcome {
-    command: Option<String>,
-    exit: bool,
-    bridge: bool,
-    prompt: Option<PromptKind>,
-}
-
-/// Maps a dispatched `CopyAction` to its `CopyOutcome`. The bound command runs
-/// verbatim; ozmux adds the marker toggle / prompt. `bridge` is `true` for
-/// non-pipe copy commands so the tmux paste buffer is mirrored to the system
-/// clipboard via `show-buffer`; `false` for pipe commands (they already exfiltrate
-/// externally, e.g. `pbcopy`, so bridging would read stale/foreign content).
-fn outcome_of(action: CopyAction) -> CopyOutcome {
-    match action {
-        CopyAction::Relay(command) => CopyOutcome {
-            command: Some(command),
-            ..Default::default()
-        },
-        CopyAction::Copy {
-            command,
-            pipes,
-            and_cancel,
-        } => CopyOutcome {
-            command: Some(command),
-            exit: and_cancel,
-            bridge: !pipes,
-            ..Default::default()
-        },
-        CopyAction::Exit(command) => CopyOutcome {
-            command: Some(command),
-            exit: true,
-            ..Default::default()
-        },
-        CopyAction::Prompt { kind } => CopyOutcome {
-            prompt: Some(kind),
-            ..Default::default()
-        },
-        CopyAction::Ignore => CopyOutcome::default(),
-    }
-}
-
 fn forward_keys_to_tmux(
     mut commands: Commands,
-    (mut copy_prompt, mut exit): (ResMut<CopyPrompt>, MessageWriter<AppExit>),
-    (confirm_state, rename): (Option<Res<ConfirmState>>, RenameParams),
+    (copy_prompt, mut exit): (Res<CopyPrompt>, MessageWriter<AppExit>),
+    (confirm_state, rename_prompt): (Option<Res<ConfirmState>>, Option<Res<RenamePrompt>>),
     mut events: MessageReader<KeyboardInput>,
     mut clipboard: ResMut<Clipboard>,
     mut focused_webview: ResMut<FocusedWebview>,
-    mut copy_queries: ResMut<CopyModeQueries>,
-    mut prefix_pending: Local<bool>,
     mut leader_phase: ResMut<LeaderPhase>,
     mut handles: Query<&mut TerminalHandle>,
     mut client: Option<Single<&mut TmuxClient>>,
-    (keys, ime, bindings, resolved, time): (
+    (keys, ime, resolved, resolved_copy, targets, time): (
         Res<ButtonInput<KeyCode>>,
         Res<crate::input::ime::ImeState>,
-        Res<KeyBindings>,
         Res<Shortcuts>,
+        Res<ResolvedCopyModeKeys>,
+        ActionTargets,
         Res<Time<Real>>,
     ),
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
@@ -141,7 +109,6 @@ fn forward_keys_to_tmux(
     // own system handles raw keys. Drain here so no key leaks to tmux or the
     // prefix state machine.
     if copy_prompt.open.is_some() {
-        *prefix_pending = false;
         clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
@@ -149,15 +116,13 @@ fn forward_keys_to_tmux(
     // NOTE: while the confirm-before prompt is open it owns the keyboard; its own
     // system reads the y/n answer. Drain here so no key leaks to tmux or the pane.
     if confirm_state.is_some() {
-        *prefix_pending = false;
         clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
     // NOTE: while the rename prompt is open it owns the keyboard; its own system
     // reads the typed text. Drain here so no key leaks to tmux or the pane.
-    if rename.prompt.is_some() {
-        *prefix_pending = false;
+    if rename_prompt.is_some() {
         clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
@@ -165,14 +130,12 @@ fn forward_keys_to_tmux(
     // NOTE: drain (don't replay) while composing — forwarding preedit
     // navigation keys would both garble IME composition and double-send.
     if ime.is_composing() {
-        *prefix_pending = false;
         clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if !focused {
-        *prefix_pending = false;
         clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
@@ -195,13 +158,19 @@ fn forward_keys_to_tmux(
     // The active pane (if any) is the forward/paste target. GUI chords below do
     // not need it (so quit and similar chords work before a pane is projected);
     // tmux key dispatch does.
-    let (active_entity, active_pane_id, target) = match active_pane {
+    let (active_entity, target) = match active_pane {
         Some(single) => {
             let (entity, pane) = *single;
-            (Some(entity), Some(pane.id), Some(format!("%{}", pane.id.0)))
+            (Some(entity), Some(format!("%{}", pane.id.0)))
         }
-        None => (None, None, None),
+        None => (None, None),
     };
+
+    // NOTE: read once before the main loop — the repeat-window close and the
+    // in-loop copy-mode arm must agree on one snapshot of the state; the
+    // EnterCopyMode arm separately re-checks `copy_modes` live for its
+    // re-entry guard.
+    let in_copy_mode = active_entity.is_some_and(|e| copy_modes.get(e).is_ok());
 
     // When a webview holds focus it owns the keyboard (bevy_cef routes
     // keystrokes to it); forwarding to tmux too would double-send. The configured
@@ -240,23 +209,13 @@ fn forward_keys_to_tmux(
         }
 
         if !forward_names.is_empty() {
-            let actions = plan_forward(&mut prefix_pending, &bindings, forward_names);
-            if let (Some(target), Some(client)) = (target.as_deref(), client.as_deref_mut()) {
-                for action in actions {
-                    let result = match action {
-                        Forwarded::Run(cmd) => client.send_effect(&cmd),
-                        Forwarded::Keys(names) => client
-                            .send(SendPaneKeys {
-                                pane: target,
-                                names: &names,
-                            })
-                            .map(|_| ()),
-                    };
-                    if let Err(e) = result {
-                        tracing::warn!(?e, "forward-key send failed");
-                        break;
-                    }
-                }
+            if let (Some(target), Some(client)) = (target.as_deref(), client.as_deref_mut())
+                && let Err(e) = client.send(SendPaneKeys {
+                    pane: target,
+                    names: &forward_names,
+                })
+            {
+                tracing::warn!(?e, "forward-key send failed");
             }
             if let Some(entity) = active_entity
                 && let Ok(mut handle) = handles.get_mut(entity)
@@ -266,7 +225,6 @@ fn forward_keys_to_tmux(
             }
         }
 
-        *prefix_pending = false;
         clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
@@ -274,12 +232,11 @@ fn forward_keys_to_tmux(
 
     // Collect forwardable tmux key names in event order. Super-modified keys are
     // matched against the configured ozmux shortcuts or swallowed; none reach tmux.
-    let in_copy_mode = active_entity.is_some_and(|e| copy_modes.get(e).is_ok());
     // NOTE: an open repeat window must not intercept copy-mode keys — a
-    // repeat-marked key doubling as a copy-mode command (vi h/j/k/l etc.) would
-    // re-fire the bound action and re-arm the window instead of reaching
-    // copy_mode_dispatch. Close the window before stepping; Pending semantics
-    // (leader + second key inside copy mode) stay unchanged.
+    // repeat-marked key doubling as a copy-mode key (vi h/j/k/l etc.) would
+    // re-fire the bound action and re-arm the window instead of reaching the
+    // `resolved_copy.resolve` arm below. Close the window before stepping;
+    // Pending semantics (leader + second key inside copy mode) stay unchanged.
     if in_copy_mode && matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
         *leader_phase = LeaderPhase::Idle;
     }
@@ -289,9 +246,9 @@ fn forward_keys_to_tmux(
             continue;
         }
         // NOTE: leader dispatch must run before direct matching and tmux
-        // forwarding so a swallowed/resolved leader key never reaches
-        // plan_forward. cfg_mods is a per-frame snapshot, so a same-frame
-        // leader+second-key batch shares one modifier read.
+        // forwarding so a swallowed/resolved leader key never reaches the
+        // plain key-forward batch below. cfg_mods is a per-frame snapshot, so
+        // a same-frame leader+second-key batch shares one modifier read.
         // NOTE: OS key auto-repeat delivers extra Pressed events. Outside the
         // repeat window they must not step the machine (pending would toggle by
         // parity; a held leader chord must stay swallowed, not forwarded).
@@ -310,15 +267,11 @@ fn forward_keys_to_tmux(
         let gui_action = match step {
             LeaderStep::RunAction(action) => Some(action),
             LeaderStep::Swallow => {
-                *prefix_pending = false;
                 continue;
             }
             LeaderStep::Passthrough => resolved.match_gui_action(ev.key_code, cfg_mods),
         };
         if let Some(action) = gui_action {
-            // A GUI action (direct or via the leader) abandons any pending tmux
-            // prefix sequence.
-            *prefix_pending = false;
             match action {
                 ShortcutAction::Quit => {
                     exit.write(AppExit::Success);
@@ -357,14 +310,96 @@ fn forward_keys_to_tmux(
                         request_detach(client);
                     }
                 }
-                ShortcutAction::EnterCopyMode => {}
+                ShortcutAction::EnterCopyMode => {
+                    // NOTE: re-entry guard — re-triggering while the pane is
+                    // already in copy mode would double-insert CopyModeState
+                    // and re-run `copy-mode` on a pane that is already in it.
+                    if let Some(entity) = active_entity
+                        && copy_modes.get(entity).is_err()
+                    {
+                        commands.trigger(EnterCopyModeRequest { entity });
+                    }
+                }
+                ShortcutAction::SelectPane(direction) => {
+                    if let Some(entity) = active_entity {
+                        commands.trigger(SelectPaneRequest {
+                            entity,
+                            direction: tmux_pane_direction(direction),
+                        });
+                    }
+                }
+                ShortcutAction::SplitPane(orientation) => {
+                    if let Some(entity) = active_entity {
+                        commands.trigger(SplitPaneRequest {
+                            entity,
+                            direction: tmux_split_direction(orientation),
+                        });
+                    }
+                }
+                ShortcutAction::KillPane => {
+                    if let Some(entity) = active_entity {
+                        commands.trigger(KillPaneRequest { entity });
+                    }
+                }
+                ShortcutAction::ZoomPane => {
+                    if let Some(entity) = active_entity {
+                        commands.trigger(ZoomPaneRequest { entity });
+                    }
+                }
+                ShortcutAction::NewWindow => {
+                    if let Ok(entity) = targets.session.single() {
+                        commands.trigger(NewWindowRequest { entity });
+                    }
+                }
+                ShortcutAction::NextWindow => {
+                    if let Ok(entity) = targets.session.single() {
+                        commands.trigger(NextWindowRequest { entity });
+                    }
+                }
+                ShortcutAction::PreviousWindow => {
+                    if let Ok(entity) = targets.session.single() {
+                        commands.trigger(PreviousWindowRequest { entity });
+                    }
+                }
+                ShortcutAction::SelectWindow(index) => {
+                    if let Some(entity) = targets
+                        .windows
+                        .iter()
+                        .find(|(_, window)| window.index == u32::from(index))
+                        .map(|(entity, _)| entity)
+                    {
+                        commands.trigger(SelectWindowRequest { entity });
+                    }
+                }
+                ShortcutAction::KillWindow => {
+                    if let Ok(entity) = targets.active_window.single() {
+                        commands.trigger(KillWindowRequest { entity });
+                    }
+                }
+                ShortcutAction::RenameWindow => {
+                    if let Ok(entity) = targets.active_window.single() {
+                        commands.trigger(RenameWindowRequest { entity });
+                    }
+                }
+                ShortcutAction::RenameSession => {
+                    if let Ok(entity) = targets.session.single() {
+                        commands.trigger(RenameSessionRequest { entity });
+                    }
+                }
             }
             continue;
         }
         // NOTE: tmux/PTY has no Super modifier, so a Cmd-modified key that
         // matched no ozmux shortcut must be swallowed here, never forwarded.
         if mods.super_ {
-            *prefix_pending = false;
+            continue;
+        }
+        if in_copy_mode {
+            if let Some(entity) = active_entity
+                && let Some(action) = resolved_copy.resolve(&ev.logical_key, ev.key_code, cfg_mods)
+            {
+                trigger_copy_mode_action(&mut commands, entity, action);
+            }
             continue;
         }
         if let Some(name) = bevy_key_to_tmux_name(&ev.logical_key, ev.key_code, mods) {
@@ -372,10 +407,6 @@ fn forward_keys_to_tmux(
         }
     }
 
-    // NOTE: the copy-mode branch below must return before plan_forward — a
-    // copy-mode entry binding pressed while already in copy mode is relayed
-    // there (not re-intercepted), which would otherwise re-insert
-    // CopyModeState each press.
     if !in_copy_mode
         && !key_names.is_empty()
         && let Some(entity) = active_entity
@@ -385,118 +416,38 @@ fn forward_keys_to_tmux(
         handle.flush_emit(&mut commands, entity);
     }
 
-    if in_copy_mode {
-        let Some(client) = client.as_deref_mut() else {
-            return;
-        };
-        for name in key_names {
-            let outcome = outcome_of(copy_mode_dispatch(&bindings, &name));
-            if let Some(cmd) = &outcome.command {
-                match client.send_effect(cmd) {
-                    Ok(_) if outcome.bridge => {
-                        if let Some(pane_id) = active_pane_id {
-                            match client.send(ShowBuffer) {
-                                Ok(buf_id) => {
-                                    copy_queries.register(buf_id, pane_id, CopyQueryKind::Buffer);
-                                }
-                                Err(e) => {
-                                    tracing::warn!(?e, "show-buffer send failed");
-                                }
-                            }
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(?e, "copy-mode relay send failed");
-                        break;
-                    }
-                }
-            }
-            if outcome.exit
-                && let Some(entity) = active_entity
-            {
-                commands.entity(entity).remove::<CopyModeState>();
-            }
-            if let Some(kind) = outcome.prompt
-                && let Some(pane_id) = active_pane_id
-            {
-                copy_prompt.open = Some(CopyPromptState {
-                    kind,
-                    pane: pane_id,
-                    text: String::new(),
-                });
-            }
-        }
-        return;
-    }
-
-    // Dispatch the keys against the tmux bindings: bound keys run their command
-    // verbatim, unbound keys forward to the active pane. NOTE: the bound command
-    // acts on tmux's current pane; ozmux keeps that synced to the focused pane
-    // via select-pane, and both travel this FIFO control connection in order.
-    let actions = plan_forward(&mut prefix_pending, &bindings, key_names);
-    if actions.is_empty() {
+    if key_names.is_empty() {
         return;
     }
     let (Some(target), Some(client)) = (target.as_deref(), client.as_deref_mut()) else {
         return;
     };
-    for action in actions {
-        if let Forwarded::Run(command) = &action
-            && let Some(kind) = RenameKind::parse(command)
-            && let Some(subject) = resolve_rename_subject(kind, &rename)
-        {
-            commands.insert_resource(RenamePrompt::new(subject));
-            // NOTE: the prompt now owns the keyboard — stop here so no further
-            // actions from this frame are sent to tmux.
-            break;
-        }
-        if let Forwarded::Run(command) = &action
-            && let Some((message, inner)) = parse_confirm_before(command)
-        {
-            commands.insert_resource(ConfirmState {
-                message,
-                command: inner,
-            });
-            // NOTE: the prompt now owns the keyboard — stop here so any further
-            // actions decoded from this same frame are NOT sent to tmux (that
-            // would bypass the confirmation the prompt is gating).
-            break;
-        }
-        let enters_copy_mode = matches!(&action, Forwarded::Run(cmd) if is_copy_mode_entry(cmd));
-        let result = match action {
-            Forwarded::Run(command) => client.send_effect(&command),
-            Forwarded::Keys(names) => client
-                .send(SendPaneKeys {
-                    pane: target,
-                    names: &names,
-                })
-                .map(|_| ()),
-        };
-        if let Err(e) = result {
-            tracing::warn!(?e, "tmux forward send failed");
-            break;
-        }
-        if enters_copy_mode && let Some(entity) = active_entity {
-            commands.entity(entity).insert(CopyModeState);
-        }
+    if let Err(e) = client.send(SendPaneKeys {
+        pane: target,
+        names: &key_names,
+    }) {
+        tracing::warn!(?e, "tmux key forward failed");
     }
 }
 
-/// True when a resolved tmux command can enter copy mode, so ozmux inserts
-/// `CopyModeState` alongside running it on tmux.
-///
-/// Matches a bare `copy-mode` token anywhere in the command, not just at the
-/// front: tmux's default mouse-wheel bindings enter copy mode through a
-/// conditional (e.g. `WheelUpPane` is
-/// `if-shell -F "…" { send-keys -M } { copy-mode -e }`), so a first-token check
-/// would miss them. A false positive — the conditional taking the non-copy-mode
-/// branch on an alt-screen / mouse-reporting pane — is harmless: the copy-mode
-/// refresh loop removes `CopyModeState` again on the first `#{pane_in_mode} == 0`
-/// state reply. The `copy-mode` token is matched whole-word, so quoted format
-/// strings and the `copy-mode-vi` table name do not trip it.
-fn is_copy_mode_entry(command: &str) -> bool {
-    command.split_whitespace().any(|token| token == "copy-mode")
+/// Maps the config-facing pane direction (named after the neighbor) to the
+/// tmux command enum.
+fn tmux_pane_direction(direction: CfgPaneDirection) -> PaneDirection {
+    match direction {
+        CfgPaneDirection::Left => PaneDirection::Left,
+        CfgPaneDirection::Down => PaneDirection::Down,
+        CfgPaneDirection::Up => PaneDirection::Up,
+        CfgPaneDirection::Right => PaneDirection::Right,
+    }
+}
+
+/// Maps the config-facing split orientation (named after the DIVIDER) to the
+/// tmux flag enum (named after the layout axis) — the two cross on purpose.
+fn tmux_split_direction(orientation: CfgSplitOrientation) -> SplitDirection {
+    match orientation {
+        CfgSplitOrientation::Vertical => SplitDirection::Horizontal,
+        CfgSplitOrientation::Horizontal => SplitDirection::Vertical,
+    }
 }
 
 /// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down` — one copy-mode wheel notch.
@@ -580,37 +531,13 @@ struct TmuxWebviewWheelParams<'w, 's> {
     browsers: Option<NonSend<'w, Browsers>>,
 }
 
-/// Rename-interception params bundled to stay within Bevy's system-parameter
-/// limit (`forward_keys_to_tmux` is already at 16 top-level params). `prompt`
-/// gates the keyboard while a rename is open; the queries resolve the target
-/// captured at prompt-open.
+/// Target-entity lookups for the tmux shortcut actions, bundled to stay
+/// within Bevy's system-parameter limit.
 #[derive(SystemParam)]
-struct RenameParams<'w, 's> {
-    prompt: Option<Res<'w, RenamePrompt>>,
-    active_window: Query<'w, 's, &'static TmuxWindow, With<ActiveWindow>>,
-    session: Query<'w, 's, &'static TmuxSession>,
-}
-
-/// Resolves the rename target (id + current name) from ECS for `kind`, or `None`
-/// when no active window / attached session exists (the binding then forwards
-/// verbatim, as before).
-fn resolve_rename_subject(kind: RenameKind, rename: &RenameParams) -> Option<RenameSubject> {
-    match kind {
-        RenameKind::Window => {
-            let w = rename.active_window.single().ok()?;
-            Some(RenameSubject::Window {
-                id: w.id,
-                current_name: w.name.clone(),
-            })
-        }
-        RenameKind::Session => {
-            let s = rename.session.single().ok()?;
-            Some(RenameSubject::Session {
-                id: s.id,
-                current_name: s.name.clone(),
-            })
-        }
-    }
+struct ActionTargets<'w, 's> {
+    active_window: Query<'w, 's, Entity, With<ActiveWindow>>,
+    session: Query<'w, 's, Entity, With<TmuxSession>>,
+    windows: Query<'w, 's, (Entity, &'static TmuxWindow)>,
 }
 
 /// Resolves the focused webview under the pointer, or `None` (the tmux
@@ -907,7 +834,6 @@ mod tests {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::mouse::MouseScrollUnit;
-    use ozmux_tmux::PromptKind;
 
     #[test]
     fn scroll_up_is_targeted_and_repeated() {
@@ -1261,100 +1187,26 @@ mod tests {
     }
 
     #[test]
-    fn relay_outcome_sends_command_only() {
-        let o = outcome_of(CopyAction::Relay("send-keys -X cursor-down".into()));
-        assert_eq!(o.command.as_deref(), Some("send-keys -X cursor-down"));
-        assert!(!o.exit);
-        assert!(!o.bridge);
-        assert!(o.prompt.is_none());
-    }
-
-    #[test]
-    fn copy_and_cancel_outcome_relays_exits_and_bridges() {
-        let o = outcome_of(CopyAction::Copy {
-            command: "send-keys -X copy-selection-and-cancel".into(),
-            pipes: false,
-            and_cancel: true,
-        });
+    fn split_orientation_crosses_to_tmux_flag() {
         assert_eq!(
-            o.command.as_deref(),
-            Some("send-keys -X copy-selection-and-cancel")
+            tmux_split_direction(CfgSplitOrientation::Vertical),
+            SplitDirection::Horizontal
         );
-        assert!(o.exit);
-        assert!(o.bridge, "non-pipe copy must set bridge=true");
-    }
-
-    #[test]
-    fn copy_without_cancel_does_not_exit_but_bridges() {
-        let o = outcome_of(CopyAction::Copy {
-            command: "send-keys -X copy-selection".into(),
-            pipes: false,
-            and_cancel: false,
-        });
-        assert!(!o.exit);
-        assert!(o.command.is_some());
-        assert!(o.bridge, "non-pipe copy must set bridge=true");
-    }
-
-    #[test]
-    fn copy_pipe_does_not_bridge() {
-        let o = outcome_of(CopyAction::Copy {
-            command: "send-keys -X copy-pipe pbcopy".into(),
-            pipes: true,
-            and_cancel: false,
-        });
-        assert!(o.command.is_some());
-        assert!(
-            !o.bridge,
-            "pipe copy must NOT bridge (pbcopy already handles it)"
+        assert_eq!(
+            tmux_split_direction(CfgSplitOrientation::Horizontal),
+            SplitDirection::Vertical
         );
     }
 
     #[test]
-    fn exit_outcome_relays_cancel_and_exits() {
-        let o = outcome_of(CopyAction::Exit("send-keys -X cancel".into()));
-        assert!(o.exit);
-        assert!(!o.bridge);
-        assert_eq!(o.command.as_deref(), Some("send-keys -X cancel"));
-    }
-
-    #[test]
-    fn prompt_outcome_carries_kind_no_command() {
-        let o = outcome_of(CopyAction::Prompt {
-            kind: PromptKind::SearchForward,
-        });
-        assert!(o.command.is_none());
-        assert!(!o.exit);
-        assert!(!o.bridge);
-        assert_eq!(o.prompt, Some(PromptKind::SearchForward));
-    }
-
-    #[test]
-    fn ignore_outcome_is_empty() {
-        let o = outcome_of(CopyAction::Ignore);
-        assert!(o.command.is_none() && !o.exit && !o.bridge && o.prompt.is_none());
-    }
-
-    #[test]
-    fn detects_copy_mode_entry_command() {
-        assert!(is_copy_mode_entry("copy-mode"));
-        assert!(is_copy_mode_entry("copy-mode -u"));
-        assert!(is_copy_mode_entry("copy-mode -eu"));
-        assert!(!is_copy_mode_entry("copy-selection"));
-        assert!(!is_copy_mode_entry("new-window"));
-    }
-
-    #[test]
-    fn detects_copy_mode_entry_inside_wheel_conditional() {
-        // tmux's default `WheelUpPane` root binding enters copy mode through an
-        // if-shell conditional, not a leading `copy-mode` token. ozmux must still
-        // recognize the entry so it inserts `CopyModeState` (the refresh loop
-        // removes it again if the conditional took the send-keys branch).
-        assert!(is_copy_mode_entry(
-            "if-shell -F \"#{||:#{alternate_on},#{pane_in_mode},#{mouse_any_flag}}\" { send-keys -M } { copy-mode -e }"
-        ));
-        // A wheel that only forwards a mouse event to the app is not an entry.
-        assert!(!is_copy_mode_entry("send-keys -M"));
-        assert!(!is_copy_mode_entry("send-keys -X scroll-up"));
+    fn pane_direction_maps_one_to_one() {
+        assert_eq!(
+            tmux_pane_direction(CfgPaneDirection::Left),
+            PaneDirection::Left
+        );
+        assert_eq!(
+            tmux_pane_direction(CfgPaneDirection::Right),
+            PaneDirection::Right
+        );
     }
 }

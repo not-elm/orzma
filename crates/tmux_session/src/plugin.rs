@@ -2,8 +2,8 @@
 //! per-frame transport-drain system that triggers the projection events.
 
 use crate::command::{
-    ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListKeys, ListWindows,
-    ModeKeys as ModeKeysCmd, PrefixOptions, SubscribeWindowFlags, Version,
+    ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListWindows,
+    SubscribeWindowFlags, Version,
 };
 use crate::components::{PaneRecaptureState, TmuxPane, TmuxSession};
 use crate::connection::{TmuxAttached, TmuxClient};
@@ -15,7 +15,6 @@ use crate::event_pump::{
     parse_cursor_pos, trigger_notification, trigger_seed,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
-use crate::keybindings::{KeyBindings, ModeKeys, parse_list_keys, parse_prefix};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, RequestPaneReseed, collect_pane_outputs};
 use bevy::prelude::*;
@@ -44,7 +43,6 @@ impl Plugin for TmuxSessionPlugin {
     fn build(&self, app: &mut App) {
         register_observers(app);
         app.init_resource::<TmuxProjection>()
-            .init_resource::<KeyBindings>()
             .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
             .add_message::<PaneOutput>()
@@ -262,33 +260,13 @@ fn mark_attached_on_first_protocol(
 }
 
 /// Sends the one-time initial query suite when the client attaches:
-/// `list-windows`, active-pane, window-flags subscription, client name, the four
-/// `list-keys` tables, prefix options, mode-keys, and version. Gated by
-/// `on_message::<TmuxClientAttached>` so it runs exactly once per attach edge.
+/// `list-windows`, active-pane, window-flags subscription, client name, and
+/// version. Gated by `on_message::<TmuxClientAttached>` so it runs exactly
+/// once per attach edge.
 fn send_attach_enumeration(mut client: Single<(&mut TmuxClient, &mut EnumerationState)>) {
     let (client, enumeration) = &mut *client;
     send_session_enumeration(client, enumeration);
     enumeration.register(client.send(ClientName), PendingReply::ClientName);
-    enumeration.register(
-        client.send(ListKeys { table: "root" }),
-        PendingReply::KeyBindings,
-    );
-    enumeration.register(
-        client.send(ListKeys { table: "prefix" }),
-        PendingReply::KeyBindings,
-    );
-    enumeration.register(client.send(PrefixOptions), PendingReply::PrefixKeys);
-    enumeration.register(
-        client.send(ListKeys { table: "copy-mode" }),
-        PendingReply::KeyBindings,
-    );
-    enumeration.register(
-        client.send(ListKeys {
-            table: "copy-mode-vi",
-        }),
-        PendingReply::KeyBindings,
-    );
-    enumeration.register(client.send(ModeKeysCmd), PendingReply::ModeKeys);
     enumeration.register(client.send(Version), PendingReply::Version);
 }
 
@@ -400,7 +378,6 @@ fn flush_tmux_outgoing(mut commands: Commands, mut client: Single<(Entity, &mut 
 fn apply_tmux_replies(
     mut commands: Commands,
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
-    mut keybindings: ResMut<KeyBindings>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut pane_output: MessageWriter<PaneOutput>,
     mut copy_replies: MessageWriter<CopyModeReply>,
@@ -422,7 +399,6 @@ fn apply_tmux_replies(
                 apply_reply(
                     &mut commands,
                     enumeration,
-                    &mut keybindings,
                     &mut pane_output,
                     client,
                     reply,
@@ -443,14 +419,9 @@ fn apply_tmux_replies(
 
 /// Routes one completed command's reply to the world state it answers,
 /// reproducing the per-kind handler logic the old `take_*` wrappers held.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "single apply seam over many reply kinds"
-)]
 fn apply_reply(
     commands: &mut Commands,
     enumeration: &mut EnumerationState,
-    keybindings: &mut KeyBindings,
     pane_output: &mut MessageWriter<PaneOutput>,
     client: &mut TmuxClient,
     reply: PendingReply,
@@ -490,26 +461,6 @@ fn apply_reply(
             }
         }
         PendingReply::ActivePane => tracing::warn!("active-pane query command failed"),
-        PendingReply::KeyBindings if ok => keybindings.install(parse_list_keys(output)),
-        PendingReply::KeyBindings => tracing::warn!("list-keys command failed"),
-        PendingReply::PrefixKeys if ok => {
-            keybindings.set_prefix_keys(
-                output
-                    .first()
-                    .map(|line| parse_prefix(line))
-                    .unwrap_or_default(),
-            );
-        }
-        PendingReply::PrefixKeys => tracing::warn!("prefix query command failed"),
-        PendingReply::ModeKeys if ok => {
-            keybindings.set_mode_keys(
-                output
-                    .first()
-                    .map(|line| ModeKeys::parse(line))
-                    .unwrap_or_default(),
-            );
-        }
-        PendingReply::ModeKeys => tracing::warn!("mode-keys query failed"),
         PendingReply::AggressiveResize => {
             // NOTE: only the successful reply marks the one-shot check done; a
             // failed query leaves aggressive_resize_checked false so the next
@@ -841,11 +792,10 @@ mod tests {
         let mut system_state: SystemState<(
             Commands,
             Query<(&mut TmuxClient, &mut EnumerationState)>,
-            ResMut<KeyBindings>,
             MessageWriter<PaneOutput>,
         )> = SystemState::new(app.world_mut());
         {
-            let (mut commands, mut client_q, mut keybindings, mut pane_output) =
+            let (mut commands, mut client_q, mut pane_output) =
                 system_state.get_mut(app.world_mut());
             let (mut client, mut enumeration) = client_q
                 .single_mut()
@@ -853,7 +803,6 @@ mod tests {
             apply_reply(
                 &mut commands,
                 &mut enumeration,
-                &mut keybindings,
                 &mut pane_output,
                 &mut client,
                 PendingReply::ClientName,
@@ -863,7 +812,6 @@ mod tests {
             apply_reply(
                 &mut commands,
                 &mut enumeration,
-                &mut keybindings,
                 &mut pane_output,
                 &mut client,
                 PendingReply::ListWindows,
@@ -923,8 +871,8 @@ mod tests {
         .to_vec();
 
         // Build the app with the full projection pipeline registered: the plugin
-        // inits TmuxProjection / KeyBindings / CopyModeQueries / TmuxEventBatch,
-        // the PaneOutput / CopyModeReply messages, the projection observers, plus
+        // inits TmuxProjection / CopyModeQueries / TmuxEventBatch, the
+        // PaneOutput / CopyModeReply messages, the projection observers, plus
         // the chained drain systems (gated on any_with_component::<TmuxClient>).
         // EnumerationState is auto-required by TmuxClient.
         let mut app = App::new();

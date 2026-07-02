@@ -1,5 +1,6 @@
 //! Error type for ozmux config loading.
 
+use crate::copy_mode::DuplicateCopyModeKey;
 use crate::shortcuts::{DuplicateChord, KeyChord};
 use std::path::PathBuf;
 
@@ -39,6 +40,10 @@ pub enum OzmuxConfigsError {
     #[error("duplicate chord(s) among <Leader> bindings: {}", format_dupes(.0))]
     DuplicatePrefixChords(Vec<DuplicateChord>),
 
+    /// The same key is bound to more than one `[copy-mode]` action.
+    #[error("duplicate key(s) among [copy-mode] bindings: {}", format_copy_mode_dupes(.0))]
+    DuplicateCopyModeKeys(Vec<DuplicateCopyModeKey>),
+
     /// The configured leader chord duplicates a direct `[shortcuts]` binding's
     /// chord. The leader is matched first, so that direct binding would be
     /// unreachable.
@@ -76,6 +81,14 @@ fn format_dupes(dupes: &[DuplicateChord]) -> String {
     dupes
         .iter()
         .map(|d| format!("{} = [{}]", d.chord, d.actions.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn format_copy_mode_dupes(dupes: &[DuplicateCopyModeKey]) -> String {
+    dupes
+        .iter()
+        .map(|d| format!("{} -> [{}]", d.key, d.actions.join(", ")))
         .collect::<Vec<_>>()
         .join("; ")
 }

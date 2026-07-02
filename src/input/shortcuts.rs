@@ -158,7 +158,8 @@ impl Shortcuts {
     /// Paste chord becomes `paste`; every other direct chord — plus the leader
     /// chord — becomes a `reserved` entry the crate dispatcher skips for the
     /// host to handle. Reserving the leader keeps `dispatch_input` from typing
-    /// it into the PTY while the leader engages.
+    /// it into the PTY while the leader engages. Leader-scoped or unbound
+    /// paste yields `None` — no direct-chord fallback.
     pub(crate) fn input_bindings(&self) -> TerminalInputBindings {
         let mut paste = None;
         let mut reserved = Vec::new();
@@ -185,10 +186,7 @@ impl Shortcuts {
                 meta: modifiers.meta,
             });
         }
-        TerminalInputBindings {
-            paste: paste.unwrap_or_else(|| TerminalInputBindings::default().paste),
-            reserved,
-        }
+        TerminalInputBindings { paste, reserved }
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
@@ -1160,11 +1158,13 @@ mod tests {
             ..Default::default()
         };
         let resolved = resolve_from_chords(config.leader_chords());
-        assert_eq!(resolved.len(), 1);
-        assert_eq!(resolved[0].keycode, KeyCode::KeyD);
-        assert_eq!(resolved[0].action, ShortcutAction::DetachSession);
+        let detach = resolved
+            .iter()
+            .find(|s| s.action == ShortcutAction::DetachSession)
+            .expect("detach-session must resolve as a leader chord");
+        assert_eq!(detach.keycode, KeyCode::KeyD);
         assert!(
-            resolved[0].repeat,
+            detach.repeat,
             "the <Leader:r> flag must reach the resolved table"
         );
     }
@@ -1193,18 +1193,14 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_resolve_to_five() {
+    fn default_bindings_resolve_to_four() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(r.direct.len(), 5);
+        assert_eq!(r.direct.len(), 4);
     }
 
     #[test]
     fn match_gui_action_resolves_defaults() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(
-            r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
-            Some(ShortcutAction::Paste)
-        );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyQ, mods(false, false, false, true)),
             Some(ShortcutAction::Quit)
@@ -1212,6 +1208,11 @@ mod tests {
         assert_eq!(
             r.match_gui_action(KeyCode::KeyS, mods(false, false, false, true)),
             Some(ShortcutAction::EnterCopyMode)
+        );
+        assert_eq!(
+            r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
+            None,
+            "paste is leader-scoped by default (<Leader>p), not direct"
         );
     }
 
@@ -1286,21 +1287,30 @@ mod tests {
 
     #[test]
     fn input_bindings_excludes_paste_from_reserved() {
-        let r = direct_only(&ConfigShortcuts::default());
+        use ozmux_configs::shortcuts::parse_key_chord;
+
+        let mut config = OzmuxConfigs::default();
+        config.shortcuts.paste = Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()));
+        let r = resolved_shortcuts(config);
         let b = r.input_bindings();
-        assert_eq!(b.paste.key_code, KeyCode::KeyV);
-        assert!(b.paste.meta && !b.paste.ctrl && !b.paste.shift && !b.paste.alt);
-        assert_eq!(
-            b.reserved.len(),
-            4,
-            "Quit, ReleaseWebviewFocus, DetachSession, EnterCopyMode"
-        );
+        let paste = b.paste.expect("direct-bound paste must resolve to a chord");
+        assert_eq!(paste.key_code, KeyCode::KeyV);
+        assert!(paste.meta && !paste.ctrl && !paste.shift && !paste.alt);
         assert!(
             !b.reserved
                 .iter()
                 .any(|c| c.key_code == KeyCode::KeyV && c.meta),
             "the paste chord must not appear in reserved",
         );
+    }
+
+    #[test]
+    fn input_bindings_leader_paste_has_no_direct_chord() {
+        // Default config now binds paste to <Leader>p: the crate dispatcher
+        // must NOT keep a stale Cmd+V direct-paste fallback.
+        let resolved = resolved_shortcuts(OzmuxConfigs::default());
+        let b = resolved.input_bindings();
+        assert!(b.paste.is_none());
     }
 
     fn leader_fixture() -> Shortcuts {
@@ -1525,7 +1535,42 @@ mod tests {
 
     #[test]
     fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
-        let resolved = resolved_shortcuts(OzmuxConfigs::default());
+        // NOTE: `ConfigShortcuts::default()` now ships 25 leader-scoped tmux
+        // actions, so `OzmuxConfigs::default()` alone no longer exercises the
+        // inert-leader path; every default `<Leader>`-bound field is explicitly
+        // unbound here to reproduce a config with no leader bindings at all.
+        let config = OzmuxConfigs {
+            shortcuts: ConfigShortcuts {
+                paste: None,
+                select_left_pane: None,
+                select_down_pane: None,
+                select_up_pane: None,
+                select_right_pane: None,
+                split_vertical_pane: None,
+                split_horizontal_pane: None,
+                kill_pane: None,
+                zoom_pane: None,
+                new_window: None,
+                kill_window: None,
+                next_window: None,
+                previous_window: None,
+                select_window_0: None,
+                select_window_1: None,
+                select_window_2: None,
+                select_window_3: None,
+                select_window_4: None,
+                select_window_5: None,
+                select_window_6: None,
+                select_window_7: None,
+                select_window_8: None,
+                select_window_9: None,
+                rename_window: None,
+                rename_session: None,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let resolved = resolved_shortcuts(config);
         assert!(resolved.tap_modifier().is_none());
         assert!(resolved.leader.is_none());
     }

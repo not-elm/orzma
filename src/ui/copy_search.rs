@@ -1,7 +1,8 @@
-//! Copy-mode search and jump-char prompt overlay. Opens when `forward_keys_to_tmux`
-//! dispatches a `CopyAction::Prompt`; owns the keyboard until the user submits
-//! (Enter / first char for jump kinds) or cancels (Escape). On submit, sends
-//! `send-keys -X -t %N <kind> -- '<text>'` to tmux via the active connection.
+//! Copy-mode search and jump-char prompt overlay. Opens when the tmux VI
+//! applier's `on_vi_prompt` observer handles a `ViPromptRequest`; owns the
+//! keyboard until the user submits (Enter / first char for jump kinds) or
+//! cancels (Escape). On submit, sends `send-keys -X -t %N <kind> -- '<text>'`
+//! to tmux via the active connection.
 
 use crate::font::TerminalUiFont;
 use crate::input::InputPhase;

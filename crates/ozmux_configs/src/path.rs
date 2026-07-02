@@ -82,17 +82,13 @@ pub fn expand_user_path(path: &Path, env: &dyn Env) -> Option<PathBuf> {
     if s == "~" {
         return Some(home);
     }
-    let rest = s
-        .strip_prefix("~/")
-        // NOTE: also accept `~\` on Windows so a TOML path like
-        // `~\fonts\Foo.ttf` (native separator) expands correctly.
-        .or_else(|| {
-            if cfg!(windows) {
-                s.strip_prefix("~\\")
-            } else {
-                None
-            }
-        })?;
+    let rest = s.strip_prefix("~/").or_else(|| {
+        if cfg!(windows) {
+            s.strip_prefix("~\\")
+        } else {
+            None
+        }
+    })?;
     Some(home.join(rest))
 }
 

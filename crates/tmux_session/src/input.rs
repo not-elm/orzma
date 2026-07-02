@@ -1,6 +1,6 @@
 //! Pure translation of Bevy keyboard input to tmux `send-keys` commands.
 //!
-//! Forwarded keys go straight to the active pane (`send-keys -t <pane> --`),
+//! Translated keys go straight to the active pane (`send-keys -t <pane> --`),
 //! which tmux's pane-input encoder translates (respecting the pane's
 //! application-cursor mode). `-K` is deliberately NOT used: under `tmux -CC` it
 //! mis-encodes named keys (e.g. `Up` arrives as a literal `n`), and routing

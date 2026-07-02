@@ -87,7 +87,11 @@ fn dispatch_input(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        if suppress_leader_second_key && !is_modifier_key(ev.key_code) {
+        // NOTE: auto-repeat events must not consume the suppression slot — the
+        // Advance-side machines skip repeats while Pending, so a held leader
+        // chord's repeats would otherwise eat the slot and let the REAL second
+        // key fall through to the PTY.
+        if suppress_leader_second_key && !is_modifier_key(ev.key_code) && !ev.repeat {
             suppress_leader_second_key = false;
             // NOTE: the consumed second key opens the repeat window in Advance;
             // the local snapshot must open with it, or a duplicate press of the
@@ -126,7 +130,9 @@ fn dispatch_input(
         {
             continue;
         }
-        if chord_matches(&bindings.paste, ev.key_code, &mods) {
+        if let Some(paste) = bindings.paste.as_ref()
+            && chord_matches(paste, ev.key_code, &mods)
+        {
             commands.trigger(PasteAction { entity });
             continue;
         }

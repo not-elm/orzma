@@ -10,6 +10,7 @@ use crate::shortcuts::Shortcuts;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 use serde::Deserialize;
 
+pub mod copy_mode;
 pub mod error;
 pub mod font;
 pub mod inactive_pane;
@@ -25,6 +26,9 @@ pub mod shortcuts;
 pub struct OzmuxConfigs {
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
+    /// `[copy-mode]` table: copy-mode key bindings shared by both modes.
+    #[serde(rename = "copy-mode")]
+    pub copy_mode: copy_mode::CopyModeConfig,
     /// Font configuration.
     pub font: FontConfig,
     /// Mouse-input configuration.
@@ -92,6 +96,9 @@ impl OzmuxConfigs {
         }
         if let Err(dupes) = sc.validate_no_leader_conflicts() {
             return Err(OzmuxConfigsError::DuplicatePrefixChords(dupes));
+        }
+        if let Err(dupes) = self.copy_mode.validate_no_duplicate_keys() {
+            return Err(OzmuxConfigsError::DuplicateCopyModeKeys(dupes));
         }
         if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
             if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
@@ -178,14 +185,14 @@ mod validate_tests {
 
     #[test]
     fn validate_detects_chord_conflict() {
-        let toml_str = "[shortcuts]\nrelease-webview-focus = \"Cmd+V\"\n";
+        let toml_str = "[shortcuts]\nrelease-webview-focus = \"Cmd+Q\"\n";
         let mut configs: OzmuxConfigs = toml::from_str(toml_str).unwrap();
         configs.normalize();
         let err = configs.validate().unwrap_err();
         match err {
             OzmuxConfigsError::DuplicateChords(dupes) => {
                 assert_eq!(dupes.len(), 1);
-                assert!(dupes[0].actions.contains(&"paste"));
+                assert!(dupes[0].actions.contains(&"quit"));
                 assert!(dupes[0].actions.contains(&"release-webview-focus"));
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
@@ -372,7 +379,7 @@ mod integration_tests {
         assert_eq!(quit.key, shortcuts::Key::Char('q'));
         assert!(quit.modifiers.meta && quit.modifiers.shift);
         assert!(
-            matches!(c.shortcuts.paste, Some(Binding::Direct(_))),
+            matches!(c.shortcuts.paste, Some(Binding::Leader { .. })),
             "unspecified active bindings keep their defaults",
         );
     }
