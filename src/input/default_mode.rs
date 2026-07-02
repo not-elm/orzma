@@ -7,7 +7,9 @@
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::input::shortcuts::{LeaderGate, LeaderPhase, LeaderStep, Shortcuts, step_leader};
+use crate::input::shortcuts::{
+    LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
+};
 use crate::input::{InputPhase, current_modifiers};
 use crate::mode::AppMode;
 use crate::surface_geom::phys_to_pane_local;
@@ -166,9 +168,7 @@ fn app_shortcut_handler(
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if ime.is_composing() || !focused {
-        if *leader_phase != LeaderPhase::Idle {
-            *leader_phase = LeaderPhase::Idle;
-        }
+        clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
@@ -180,9 +180,7 @@ fn app_shortcut_handler(
             continue;
         }
         if webview_focused && shortcuts.is_release_webview_focus(ev.key_code, mods) {
-            if *leader_phase != LeaderPhase::Idle {
-                *leader_phase = LeaderPhase::Idle;
-            }
+            clear_leader_phase(&mut leader_phase);
             focused_webview.0 = None;
             continue;
         }
@@ -191,9 +189,7 @@ fn app_shortcut_handler(
         // here instead of stepping the state machine prevents a stale leader
         // from firing once keyboard focus returns to the terminal.
         let (action, via_leader) = if webview_focused {
-            if *leader_phase != LeaderPhase::Idle {
-                *leader_phase = LeaderPhase::Idle;
-            }
+            clear_leader_phase(&mut leader_phase);
             (shortcuts.match_gui_action(ev.key_code, mods), false)
         } else {
             // NOTE: OS key auto-repeat delivers extra Pressed events; feeding

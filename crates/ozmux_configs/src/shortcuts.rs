@@ -312,8 +312,7 @@ impl Binding {
     /// leader-scoped binding.
     pub fn chord(&self) -> &KeyChord {
         match self {
-            Binding::Direct(chord) => chord,
-            Binding::Leader { chord, .. } => chord,
+            Binding::Direct(chord) | Binding::Leader { chord, .. } => chord,
         }
     }
 }
@@ -540,14 +539,14 @@ where
     let text = match value {
         None => String::new(),
         Some(Binding::Direct(chord)) => chord.to_string(),
-        Some(Binding::Leader {
-            chord,
-            repeat: false,
-        }) => format!("{LEADER_TOKEN}{chord}"),
-        Some(Binding::Leader {
-            chord,
-            repeat: true,
-        }) => format!("{LEADER_REPEAT_TOKEN}{chord}"),
+        Some(Binding::Leader { chord, repeat }) => {
+            let token = if *repeat {
+                LEADER_REPEAT_TOKEN
+            } else {
+                LEADER_TOKEN
+            };
+            format!("{token}{chord}")
+        }
     };
     ser.serialize_str(&text)
 }

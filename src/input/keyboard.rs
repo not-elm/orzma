@@ -13,7 +13,6 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use ozma_terminal::{OzmaTerminal, PasteAction};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
-use ozmux_configs::shortcuts::Modifiers;
 
 /// Registers `TerminalInputBindings` and the default keyboard dispatcher.
 pub(super) struct KeyboardInputPlugin;
@@ -69,12 +68,7 @@ fn dispatch_input(
         return;
     };
     let mods = current_terminal_modifiers(&keys);
-    let cfg_mods = Modifiers {
-        ctrl: mods.ctrl,
-        shift: mods.shift,
-        alt: mods.alt,
-        meta: mods.meta,
-    };
+    let cfg_mods = current_modifiers(&keys);
     let now = time.elapsed();
     let mut repeat_deadline = match *leader_phase {
         LeaderPhase::Repeat { deadline } => Some(deadline),
@@ -95,6 +89,13 @@ fn dispatch_input(
         }
         if suppress_leader_second_key && !is_modifier_key(ev.key_code) {
             suppress_leader_second_key = false;
+            // NOTE: the consumed second key opens the repeat window in Advance;
+            // the local snapshot must open with it, or a duplicate press of the
+            // same repeat-marked key later in the SAME frame would be typed to
+            // the PTY here yet also fire the action again in Advance.
+            if shortcuts.opens_repeat_window(ev.key_code, cfg_mods) {
+                repeat_deadline = Some(now);
+            }
             continue;
         }
         // NOTE: while the repeat window is open, withhold ONLY keys that match a
@@ -290,6 +291,30 @@ mod tests {
             c.keys,
             vec![TerminalKey::Text("b".into()), TerminalKey::Text("h".into())],
             "a non-matching key closes the window for the rest of the frame; the repeat key after it must be typed, not withheld"
+        );
+    }
+
+    #[test]
+    fn pending_second_key_opens_withholding_for_same_frame_duplicate() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut()
+            .insert_resource(test_shortcuts_with_repeat_prefix(
+                KeyCode::KeyH,
+                ShortcutAction::EnterCopyMode,
+                Duration::from_millis(500),
+            ));
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
+        // The second key opens the repeat window in Advance; a duplicate press
+        // in the SAME frame must be withheld here too, or it is typed to the
+        // PTY while Advance fires the action for it a second time.
+        press(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        press(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert!(
+            c.keys.is_empty(),
+            "a same-frame duplicate of the window-opening second key must be withheld, not typed"
         );
     }
 

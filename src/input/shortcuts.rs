@@ -141,7 +141,7 @@ impl Shortcuts {
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<ShortcutAction> {
-        Self::match_action_in(&self.direct, keycode, mods)
+        Self::find_entry(&self.direct, keycode, mods).map(|s| s.action)
     }
 
     /// True when `(keycode, mods)` matches the configured release-webview-focus
@@ -205,6 +205,14 @@ impl Shortcuts {
             .map(|s| s.action)
     }
 
+    /// True when a leader second key `(keycode, mods)` opens the repeat window:
+    /// it matches a repeat-marked prefix binding and `repeat_time` is non-zero.
+    /// Mirrors the `step_leader` Pending arm so `dispatch_input` can start
+    /// withholding in the same frame the window opens.
+    pub(crate) fn opens_repeat_window(&self, keycode: KeyCode, mods: Modifiers) -> bool {
+        !self.repeat_time.is_zero() && self.match_repeat_prefix(keycode, mods).is_some()
+    }
+
     /// True when `(keycode, mods)` is the configured leader chord.
     fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
         matches!(self.leader, Some(ResolvedLeader::Chord(kc, m)) if kc == keycode && m == mods)
@@ -223,28 +231,22 @@ impl Shortcuts {
     /// release-webview-focus could never fire — resolving it to `Swallow`
     /// avoids a dead `RunAction`.
     fn match_prefix_entry(&self, keycode: KeyCode, mods: Modifiers) -> Option<&OzmuxShortcut> {
-        self.prefix.iter().find(|s| {
+        Self::find_entry(&self.prefix, keycode, mods)
+    }
+
+    /// Returns the first entry in `table` bound to `(keycode, mods)`, excluding
+    /// `ReleaseWebviewFocus` (matched separately via `is_release_webview_focus`).
+    /// The single exclusion predicate behind both the direct and prefix lookups.
+    fn find_entry(
+        table: &[OzmuxShortcut],
+        keycode: KeyCode,
+        mods: Modifiers,
+    ) -> Option<&OzmuxShortcut> {
+        table.iter().find(|s| {
             s.action != ShortcutAction::ReleaseWebviewFocus
                 && s.keycode == keycode
                 && s.modifiers == mods
         })
-    }
-
-    /// Returns the first action in `table` bound to `(keycode, mods)`, excluding
-    /// `ReleaseWebviewFocus` (matched separately via `is_release_webview_focus`).
-    fn match_action_in(
-        table: &[OzmuxShortcut],
-        keycode: KeyCode,
-        mods: Modifiers,
-    ) -> Option<ShortcutAction> {
-        table
-            .iter()
-            .find(|s| {
-                s.action != ShortcutAction::ReleaseWebviewFocus
-                    && s.keycode == keycode
-                    && s.modifiers == mods
-            })
-            .map(|s| s.action)
     }
 }
 
@@ -316,13 +318,51 @@ pub(crate) fn step_leader(
     LeaderStep::Passthrough
 }
 
+/// Resets the shared leader phase to `Idle`, writing through the `ResMut` only
+/// on a real change so Bevy change detection fires exactly when the phase was
+/// engaged. The single reset idiom for every dispatcher drain/abort site.
+pub(crate) fn clear_leader_phase(leader_phase: &mut ResMut<LeaderPhase>) {
+    if **leader_phase != LeaderPhase::Idle {
+        **leader_phase = LeaderPhase::Idle;
+    }
+}
+
+/// Test-only constructor: a `Shortcuts` with one repeat-marked, modifier-less
+/// prefix binding and a `Ctrl+A` chord leader. Used by the keyboard and
+/// dispatcher tests, which cannot name this module's private fields.
+#[cfg(test)]
+pub(crate) fn test_shortcuts_with_repeat_prefix(
+    keycode: KeyCode,
+    action: ShortcutAction,
+    repeat_time: Duration,
+) -> Shortcuts {
+    Shortcuts {
+        direct: Vec::new(),
+        prefix: vec![OzmuxShortcut {
+            keycode,
+            modifiers: Modifiers::default(),
+            action,
+            repeat: true,
+        }],
+        leader: Some(ResolvedLeader::Chord(
+            KeyCode::KeyA,
+            Modifiers {
+                ctrl: true,
+                shift: false,
+                alt: false,
+                meta: false,
+            },
+        )),
+        tap_timeout: Duration::from_millis(300),
+        repeat_time,
+    }
+}
+
 /// Clears the leader phase (pending or repeat window) and any in-progress
 /// modifier tap on an `AppMode` transition or a webview focus change, so a
 /// leader engaged/armed in one context never fires in another.
 fn reset_leader_phase(mut leader_phase: ResMut<LeaderPhase>, mut tap: ResMut<ModifierTapState>) {
-    if *leader_phase != LeaderPhase::Idle {
-        *leader_phase = LeaderPhase::Idle;
-    }
+    clear_leader_phase(&mut leader_phase);
     if tap.armed.is_some() {
         tap.armed = None;
     }
@@ -632,37 +672,6 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
         ConfigKey::Plus => return None,
         ConfigKey::Other(_) => return None,
     })
-}
-
-/// Test-only constructor: a `Shortcuts` with one repeat-marked, modifier-less
-/// prefix binding and a `Ctrl+A` chord leader. Used by the keyboard and
-/// dispatcher tests, which cannot name this module's private fields.
-#[cfg(test)]
-pub(crate) fn test_shortcuts_with_repeat_prefix(
-    keycode: KeyCode,
-    action: ShortcutAction,
-    repeat_time: Duration,
-) -> Shortcuts {
-    Shortcuts {
-        direct: Vec::new(),
-        prefix: vec![OzmuxShortcut {
-            keycode,
-            modifiers: Modifiers::default(),
-            action,
-            repeat: true,
-        }],
-        leader: Some(ResolvedLeader::Chord(
-            KeyCode::KeyA,
-            Modifiers {
-                ctrl: true,
-                shift: false,
-                alt: false,
-                meta: false,
-            },
-        )),
-        tap_timeout: Duration::from_millis(300),
-        repeat_time,
-    }
 }
 
 #[cfg(test)]
@@ -1475,9 +1484,9 @@ mod tests {
         app.update();
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
         app.update();
-        assert_ne!(
+        assert_eq!(
             *app.world().resource::<LeaderPhase>(),
-            LeaderPhase::Pending,
+            LeaderPhase::Idle,
             "mouse press in a keyboard-less frame must disarm the tap and suppress the leader"
         );
     }
@@ -1497,9 +1506,9 @@ mod tests {
             .clear();
         tap_key(&mut app, KeyCode::SuperLeft, ButtonState::Released);
         app.update();
-        assert_ne!(
+        assert_eq!(
             *app.world().resource::<LeaderPhase>(),
-            LeaderPhase::Pending,
+            LeaderPhase::Idle,
             "a mouse press in the same frame as the modifier press must suppress the tap"
         );
     }

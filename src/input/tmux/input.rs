@@ -12,7 +12,9 @@
 use super::pane_hit::tmux_pane_at_phys;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::shortcuts::{LeaderGate, LeaderPhase, LeaderStep, Shortcuts, step_leader};
+use crate::input::shortcuts::{
+    LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
+};
 use crate::mode::AppMode;
 use crate::mode::tmux::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::mode::tmux::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
@@ -140,9 +142,7 @@ fn forward_keys_to_tmux(
     // prefix state machine.
     if copy_prompt.open.is_some() {
         *prefix_pending = false;
-        if *leader_phase != LeaderPhase::Idle {
-            *leader_phase = LeaderPhase::Idle;
-        }
+        clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
@@ -150,9 +150,7 @@ fn forward_keys_to_tmux(
     // system reads the y/n answer. Drain here so no key leaks to tmux or the pane.
     if confirm_state.is_some() {
         *prefix_pending = false;
-        if *leader_phase != LeaderPhase::Idle {
-            *leader_phase = LeaderPhase::Idle;
-        }
+        clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
@@ -160,9 +158,7 @@ fn forward_keys_to_tmux(
     // reads the typed text. Drain here so no key leaks to tmux or the pane.
     if rename.prompt.is_some() {
         *prefix_pending = false;
-        if *leader_phase != LeaderPhase::Idle {
-            *leader_phase = LeaderPhase::Idle;
-        }
+        clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
@@ -170,18 +166,14 @@ fn forward_keys_to_tmux(
     // navigation keys would both garble IME composition and double-send.
     if ime.is_composing() {
         *prefix_pending = false;
-        if *leader_phase != LeaderPhase::Idle {
-            *leader_phase = LeaderPhase::Idle;
-        }
+        clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if !focused {
         *prefix_pending = false;
-        if *leader_phase != LeaderPhase::Idle {
-            *leader_phase = LeaderPhase::Idle;
-        }
+        clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
@@ -275,15 +267,22 @@ fn forward_keys_to_tmux(
         }
 
         *prefix_pending = false;
-        if *leader_phase != LeaderPhase::Idle {
-            *leader_phase = LeaderPhase::Idle;
-        }
+        clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
     }
 
     // Collect forwardable tmux key names in event order. Super-modified keys are
     // matched against the configured ozmux shortcuts or swallowed; none reach tmux.
+    let in_copy_mode = active_entity.is_some_and(|e| copy_modes.get(e).is_ok());
+    // NOTE: an open repeat window must not intercept copy-mode keys — a
+    // repeat-marked key doubling as a copy-mode command (vi h/j/k/l etc.) would
+    // re-fire the bound action and re-arm the window instead of reaching
+    // copy_mode_dispatch. Close the window before stepping; Pending semantics
+    // (leader + second key inside copy mode) stay unchanged.
+    if in_copy_mode && matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
+        *leader_phase = LeaderPhase::Idle;
+    }
     let mut key_names: Vec<String> = Vec::new();
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
@@ -373,11 +372,10 @@ fn forward_keys_to_tmux(
         }
     }
 
-    // NOTE: this branch must return before plan_forward — a copy-mode entry
-    // binding pressed while already in copy mode is relayed here (not
-    // re-intercepted), which would otherwise re-insert CopyModeState each press.
-    let in_copy_mode = active_entity.is_some_and(|e| copy_modes.get(e).is_ok());
-
+    // NOTE: the copy-mode branch below must return before plan_forward — a
+    // copy-mode entry binding pressed while already in copy mode is relayed
+    // there (not re-intercepted), which would otherwise re-insert
+    // CopyModeState each press.
     if !in_copy_mode
         && !key_names.is_empty()
         && let Some(entity) = active_entity
