@@ -230,8 +230,6 @@ pub(crate) enum PendingReply {
     ActivePane,
     /// Any `list-keys -T <table>` reply → `KeyBindings::install`.
     KeyBindings,
-    /// Prefix-options query → `set_prefix_keys`.
-    PrefixKeys,
     /// `#{mode-keys}` → `set_mode_keys`.
     ModeKeys,
     /// `aggressive-resize` option query → warn if `on`.
@@ -262,7 +260,7 @@ impl EnumerationState {
                 // same kind, or BOTH ids stay in `pending` and dispatch twice (a
                 // re-sent list-windows on %window-add while the attach enumeration
                 // is still in flight would fire trigger_seed twice, and a re-queried
-                // active-pane would fire TmuxActivePaneChanged twice). The four
+                // active-pane would fire TmuxActivePaneChanged twice). The two
                 // concurrent KeyBindings tables and the per-pane Capture/Cursor kinds
                 // are legitimately multi and exempt.
                 if !matches!(
@@ -553,7 +551,7 @@ mod tests {
         assert_eq!(
             state.pending.get(&CommandId(5)),
             Some(&PendingReply::KeyBindings),
-            "the four list-keys tables are concurrent — earlier KeyBindings entries are kept"
+            "the two list-keys tables are concurrent — earlier KeyBindings entries are kept"
         );
         assert_eq!(
             state.pending.get(&CommandId(6)),

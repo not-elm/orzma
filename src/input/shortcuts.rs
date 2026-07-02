@@ -230,9 +230,8 @@ pub(crate) enum LeaderStep {
 }
 
 /// Advances the ozmux leader state machine for one pressed key, threading
-/// `pending` across frames (mirrors the tmux `plan_forward` prefix dispatch).
-/// Swallows the leader itself and any unmatched second key; returns
-/// `Passthrough` for unrelated keys.
+/// `pending` across frames. Swallows the leader itself and any unmatched
+/// second key; returns `Passthrough` for unrelated keys.
 pub(crate) fn step_leader(
     pending: &mut bool,
     shortcuts: &Shortcuts,

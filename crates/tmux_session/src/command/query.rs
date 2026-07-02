@@ -1,6 +1,6 @@
 //! Enumeration / introspection queries sent on attach and during projection:
 //! list windows, client name, active pane, version, subscriptions, captures,
-//! cursor, mode-keys, aggressive-resize, key tables, prefix options.
+//! cursor, mode-keys, aggressive-resize, key tables.
 
 use crate::enumerate::{LIST_WINDOWS_FORMAT, WINDOW_FLAGS_SUBSCRIPTION};
 use tmux_control::TmuxCommand;
@@ -97,14 +97,6 @@ impl TmuxCommand for ListKeys<'_> {
     }
 }
 
-/// `display-message -p '#{prefix} #{prefix2}'` — the session prefix options.
-pub(crate) struct PrefixOptions;
-impl TmuxCommand for PrefixOptions {
-    fn into_raw_command(self) -> String {
-        "display-message -p '#{prefix} #{prefix2}'".to_string()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -186,14 +178,6 @@ mod tests {
         assert_eq!(
             ListKeys { table: "root" }.into_raw_command(),
             "list-keys -T root"
-        );
-    }
-
-    #[test]
-    fn prefix_options_reads_both_prefixes() {
-        assert_eq!(
-            PrefixOptions.into_raw_command(),
-            "display-message -p '#{prefix} #{prefix2}'"
         );
     }
 }

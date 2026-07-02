@@ -3,7 +3,7 @@
 
 use crate::command::{
     ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListKeys, ListWindows,
-    ModeKeys as ModeKeysCmd, PrefixOptions, SubscribeWindowFlags, Version,
+    ModeKeys as ModeKeysCmd, SubscribeWindowFlags, Version,
 };
 use crate::components::{PaneRecaptureState, TmuxPane, TmuxSession};
 use crate::connection::{TmuxAttached, TmuxClient};
@@ -15,7 +15,7 @@ use crate::event_pump::{
     parse_cursor_pos, trigger_notification, trigger_seed,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
-use crate::keybindings::{KeyBindings, ModeKeys, parse_list_keys, parse_prefix};
+use crate::keybindings::{KeyBindings, ModeKeys, parse_list_keys};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, RequestPaneReseed, collect_pane_outputs};
 use bevy::prelude::*;
@@ -262,22 +262,13 @@ fn mark_attached_on_first_protocol(
 }
 
 /// Sends the one-time initial query suite when the client attaches:
-/// `list-windows`, active-pane, window-flags subscription, client name, the four
-/// `list-keys` tables, prefix options, mode-keys, and version. Gated by
+/// `list-windows`, active-pane, window-flags subscription, client name, the two
+/// copy-mode `list-keys` tables, mode-keys, and version. Gated by
 /// `on_message::<TmuxClientAttached>` so it runs exactly once per attach edge.
 fn send_attach_enumeration(mut client: Single<(&mut TmuxClient, &mut EnumerationState)>) {
     let (client, enumeration) = &mut *client;
     send_session_enumeration(client, enumeration);
     enumeration.register(client.send(ClientName), PendingReply::ClientName);
-    enumeration.register(
-        client.send(ListKeys { table: "root" }),
-        PendingReply::KeyBindings,
-    );
-    enumeration.register(
-        client.send(ListKeys { table: "prefix" }),
-        PendingReply::KeyBindings,
-    );
-    enumeration.register(client.send(PrefixOptions), PendingReply::PrefixKeys);
     enumeration.register(
         client.send(ListKeys { table: "copy-mode" }),
         PendingReply::KeyBindings,
@@ -492,15 +483,6 @@ fn apply_reply(
         PendingReply::ActivePane => tracing::warn!("active-pane query command failed"),
         PendingReply::KeyBindings if ok => keybindings.install(parse_list_keys(output)),
         PendingReply::KeyBindings => tracing::warn!("list-keys command failed"),
-        PendingReply::PrefixKeys if ok => {
-            keybindings.set_prefix_keys(
-                output
-                    .first()
-                    .map(|line| parse_prefix(line))
-                    .unwrap_or_default(),
-            );
-        }
-        PendingReply::PrefixKeys => tracing::warn!("prefix query command failed"),
         PendingReply::ModeKeys if ok => {
             keybindings.set_mode_keys(
                 output
