@@ -2,8 +2,8 @@
 //! terminal entity's PTY as (optionally bracketed) paste bytes.
 
 use crate::clipboard::{Clipboard, build_paste_bytes};
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 /// Pastes the system clipboard into the target terminal entity's PTY.

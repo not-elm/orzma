@@ -488,8 +488,8 @@ mod tests {
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
+    use crate::surface::OzmaTerminal;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use ozma_terminal::OzmaTerminal;
     use ozma_tty_engine::SelectionType;
     use ozma_tty_engine::TerminalHandle;
     use ozma_tty_renderer::schema::TerminalGrid;

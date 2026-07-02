@@ -375,13 +375,13 @@ fn webview_ime_position(
 mod tests {
     use super::*;
     use crate::mode::AppMode;
+    use crate::surface::OzmaTerminal;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::{AppExtStates, MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
-    use ozma_terminal::OzmaTerminal;
     use ozma_tty_renderer::CellMetrics;
     use ozma_tty_renderer::prelude::{Cursor, TerminalGrid};
     use ozmux_tmux::{ActivePane, PaneId, TmuxPane};

@@ -2,8 +2,8 @@
 //! scrollback.
 
 use crate::action::terminal::apply_to_terminal;
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 /// Scrolls `entity`'s viewport by `lines` (negative = up / into history).

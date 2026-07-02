@@ -2,8 +2,8 @@
 //! backend (PTY when attached, `TerminalForwardInput` when detached).
 
 use crate::action::terminal::{TerminalForwardInput, apply_to_terminal};
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 /// Writes mouse-protocol report bytes to `entity`'s backend (PTY when

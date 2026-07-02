@@ -9,11 +9,12 @@
 //! window) are skipped, so hover never advertises a link the mouse dispatcher
 //! would refuse to open. Hyperlink activation (Cmd/Ctrl-click → `OpenUri`) now lives in
 //! `crate::input::mouse` (deciders `decide_button`/`resolve_button_event`);
-//! `ozma_terminal` keeps only the apply observer (`on_terminal_open_uri` →
-//! `try_open_uri`).
+//! `crate::action::terminal` keeps only the apply observer
+//! (`on_terminal_open_uri` → `try_open_uri`).
 
 use crate::input::focus::MouseDisabled;
 use crate::input::{InputPhase, current_modifiers};
+use crate::surface::OzmaTerminal;
 use crate::surface_geom::{cell_at_local, phys_to_pane_local};
 use crate::webview_pointer::topmost_surface_at;
 use bevy::ecs::entity::Entity;
@@ -24,7 +25,6 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 use ozmux_configs::shortcuts::Modifiers;

@@ -15,6 +15,7 @@
 
 use crate::input::InputPhase;
 use crate::mode::AppMode;
+use crate::surface::OzmaTerminal;
 use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{
@@ -27,7 +28,6 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview};

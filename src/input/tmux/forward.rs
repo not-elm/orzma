@@ -1,4 +1,4 @@
-//! Routes `ozma_terminal`'s `TerminalForwardInput` (backend-bound bytes from the
+//! Routes `crate::action::terminal`'s `TerminalForwardInput` (backend-bound bytes from the
 //! shared mouse apply observer) to the owning tmux pane via `send-keys -H`.
 
 use crate::action::terminal::TerminalForwardInput;

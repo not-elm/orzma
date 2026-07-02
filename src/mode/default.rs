@@ -3,15 +3,16 @@
 
 mod exit;
 mod layout;
+pub(crate) mod spawn;
 mod webview;
 
 pub(crate) use webview::DefaultWebviewPointerPlugin;
 
 use crate::input::focus::KeyboardFocused;
 use crate::mode::AppMode;
+use crate::mode::default::spawn::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use ozma_terminal::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use ozma_tty_engine::ControlModeWatch;
 use ozma_webview::ControlPlaneHandle;
 
@@ -29,19 +30,27 @@ pub(crate) struct DefaultModeUi;
 /// `ensure_default_mode_ui` runs once while in `AppMode::Default` to build the
 /// subtree. Adoption despawns `DefaultModeUi` when it promotes the Default shell
 /// to the tmux gateway; `ensure_default_mode_ui` spawns a fresh one on the next
-/// return to `AppMode::Default`. `OzmaTerminalPlugin` must be added first (it
-/// inserts the `OzmaTerminalConfig` this reads).
-pub(crate) struct DefaultModePlugin;
+/// return to `AppMode::Default`. `DefaultSpawnPlugin` (registered below) inserts
+/// the `OzmaTerminalConfig` this reads.
+pub(crate) struct DefaultModePlugin {
+    /// Shell override forwarded to `spawn::DefaultSpawnPlugin`.
+    pub config_shell: Option<String>,
+}
 
 impl Plugin for DefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((exit::DefaultExitPlugin, layout::DefaultLayoutPlugin))
-            .add_systems(
-                Update,
-                ensure_default_mode_ui.run_if(
-                    in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>)),
-                ),
-            );
+        app.add_plugins((
+            spawn::DefaultSpawnPlugin {
+                shell: self.config_shell.clone(),
+            },
+            exit::DefaultExitPlugin,
+            layout::DefaultLayoutPlugin,
+        ))
+        .add_systems(
+            Update,
+            ensure_default_mode_ui
+                .run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>))),
+        );
     }
 }
 
@@ -123,9 +132,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(initial_mode);
-        app.insert_resource(OzmaTerminalConfig { shell: None });
         app.world_mut().spawn((Node::default(), UiRoot));
-        app.add_plugins(DefaultModePlugin);
+        app.add_plugins(DefaultModePlugin { config_shell: None });
         app
     }
 

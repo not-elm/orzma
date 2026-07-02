@@ -3,8 +3,8 @@
 
 use crate::action::terminal::apply_to_terminal;
 use crate::clipboard::Clipboard;
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{Coalescer, Point, PtyHandle, SelectionType, Side, TerminalHandle};
 
 /// Starts a new local selection on `entity` at `point`.

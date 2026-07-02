@@ -1,10 +1,11 @@
 //! Window-fill resize system for the Ozma terminal.
 
+use crate::surface::OzmaTerminal;
+use crate::surface_geom::cells_for;
 use bevy::ecs::lifecycle::Add;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
-use ozma_terminal::{OzmaTerminal, cells_for};
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 
@@ -91,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    fn ozma_terminal_spawn_resets_last_size() {
+    fn spawn_of_ozma_terminal_resets_last_size() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<WindowResized>();

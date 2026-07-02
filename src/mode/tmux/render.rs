@@ -3,12 +3,13 @@
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
 use crate::mode::tmux::mode_ui::WorkspaceUiRoot;
+use crate::surface::OzmaTerminal;
+use crate::surface_geom::cells_for;
 use crate::theme;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_terminal::{OzmaTerminal, cells_for};
 use ozma_tty_engine::{TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalPaddingFallback;
@@ -174,7 +175,7 @@ fn attach_tmux_window_container(
 
 /// Attaches a detached `TerminalHandle`, the `OzmaTerminal` marker, and a
 /// placeholder absolute `Node` to each `TmuxPane` that lacks a `TerminalHandle`.
-/// The `On<Add, OzmaTerminal>` observer in `ozma_terminal` injects the
+/// The `On<Add, OzmaTerminal>` observer in `crate::surface` injects the
 /// `TerminalRenderBundle` (one per entity, no duplicate material creation here).
 /// The `TerminalGrid` lives on the pane entity itself, so `flush_emit` /
 /// `emit_pending` and the webview overlay projection all target it
@@ -719,8 +720,8 @@ fn sync_active_window(mut windows: Query<(&mut Node, Has<ActiveWindow>), With<Tm
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface::SurfacePlugin;
     use bevy::math::{Rect, Vec2};
-    use ozma_terminal::OzmaTerminalPlugin;
     use ozma_tty_renderer::material::TerminalUiMaterial;
     use ozma_tty_renderer::prelude::TerminalGridPlugin;
     use ozmux_tmux::PaneOutput;
@@ -853,7 +854,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
-        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
+        app.add_plugins(SurfacePlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
         app.init_resource::<PendingPaneOutput>();
@@ -910,7 +911,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
-        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
+        app.add_plugins(SurfacePlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.add_message::<PaneOutput>();
         app.init_resource::<PendingPaneOutput>();
@@ -1645,7 +1646,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
-        app.add_plugins(OzmaTerminalPlugin { config_shell: None });
+        app.add_plugins(SurfacePlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
 
         let pane_entity = app

@@ -4,9 +4,9 @@
 //! to route keyboard and mouse input.
 
 use crate::input::InputPhase;
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
-use ozma_terminal::OzmaTerminal;
 use ozma_webview::{NonInteractive, Webview};
 
 /// When present on an `OzmaTerminal` entity, the crate's default keyboard

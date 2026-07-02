@@ -1,7 +1,7 @@
 //! Child-process exit observer: sends `AppExit` when the shell quits.
 
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::TerminalChildExit;
 
 /// Registers the shell-exit observer.
@@ -30,8 +30,8 @@ fn on_child_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::surface::OzmaTerminal;
     use bevy::ecs::message::MessageReader;
-    use ozma_terminal::OzmaTerminal;
     use ozma_tty_engine::TerminalChildExit;
 
     #[test]

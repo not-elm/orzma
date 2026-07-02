@@ -1,8 +1,8 @@
 //! Hyperlink open action: opens an allowlist-validated URI via the OS default
 //! handler, gated on the target terminal still existing.
 
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_renderer::schema::is_allowed;
 
 /// Opens `uri` in the host browser / handler, gated on the target terminal
