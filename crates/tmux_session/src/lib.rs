@@ -13,7 +13,6 @@ mod enumerate;
 mod event_pump;
 mod events;
 mod input;
-mod keybindings;
 mod observers;
 mod output;
 mod plugin;
@@ -36,7 +35,6 @@ pub use enumerate::{
 };
 pub use events::{TmuxConnectionClosed, TmuxConnectionReset};
 pub use input::{KeyMods, bevy_key_to_tmux_name};
-pub use keybindings::{CopyAction, KeyBindings, copy_mode_dispatch};
 pub use output::{PaneOutput, RequestPaneReseed};
 pub use plugin::{TmuxEventBatch, TmuxProjectionSet, TmuxSessionPlugin};
 pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};

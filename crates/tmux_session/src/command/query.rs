@@ -1,6 +1,6 @@
 //! Enumeration / introspection queries sent on attach and during projection:
 //! list windows, client name, active pane, version, subscriptions, captures,
-//! cursor, mode-keys, aggressive-resize, key tables.
+//! cursor, aggressive-resize.
 
 use crate::enumerate::{LIST_WINDOWS_FORMAT, WINDOW_FLAGS_SUBSCRIPTION};
 use tmux_control::TmuxCommand;
@@ -69,14 +69,6 @@ impl TmuxCommand for CursorQuery {
     }
 }
 
-/// `display-message -p '#{mode-keys}'` — the active copy key table name.
-pub(crate) struct ModeKeys;
-impl TmuxCommand for ModeKeys {
-    fn into_raw_command(self) -> String {
-        "display-message -p '#{mode-keys}'".to_string()
-    }
-}
-
 /// `show-options -wqv -t @<win> aggressive-resize` — the per-window option value.
 pub(crate) struct AggressiveResize {
     pub win: WindowId,
@@ -84,16 +76,6 @@ pub(crate) struct AggressiveResize {
 impl TmuxCommand for AggressiveResize {
     fn into_raw_command(self) -> String {
         format!("show-options -wqv -t @{} aggressive-resize", self.win.0)
-    }
-}
-
-/// `list-keys -T <table>` — lists one key table's bindings.
-pub(crate) struct ListKeys<'a> {
-    pub table: &'a str,
-}
-impl TmuxCommand for ListKeys<'_> {
-    fn into_raw_command(self) -> String {
-        format!("list-keys -T {}", self.table)
     }
 }
 
@@ -158,26 +140,10 @@ mod tests {
     }
 
     #[test]
-    fn mode_keys_reads_format() {
-        assert_eq!(
-            ModeKeys.into_raw_command(),
-            "display-message -p '#{mode-keys}'"
-        );
-    }
-
-    #[test]
     fn aggressive_resize_targets_window() {
         assert_eq!(
             AggressiveResize { win: WindowId(1) }.into_raw_command(),
             "show-options -wqv -t @1 aggressive-resize"
-        );
-    }
-
-    #[test]
-    fn list_keys_targets_table() {
-        assert_eq!(
-            ListKeys { table: "root" }.into_raw_command(),
-            "list-keys -T root"
         );
     }
 }

@@ -228,10 +228,6 @@ pub(crate) enum PendingReply {
     Version,
     /// `display-message #{window_id} #{pane_id}` active-pane query.
     ActivePane,
-    /// Any `list-keys -T <table>` reply → `KeyBindings::install`.
-    KeyBindings,
-    /// `#{mode-keys}` → `set_mode_keys`.
-    ModeKeys,
     /// `aggressive-resize` option query → warn if `on`.
     AggressiveResize,
     /// `capture-pane` of a pane's screen.
@@ -260,14 +256,11 @@ impl EnumerationState {
                 // same kind, or BOTH ids stay in `pending` and dispatch twice (a
                 // re-sent list-windows on %window-add while the attach enumeration
                 // is still in flight would fire trigger_seed twice, and a re-queried
-                // active-pane would fire TmuxActivePaneChanged twice). The two
-                // concurrent KeyBindings tables and the per-pane Capture/Cursor kinds
-                // are legitimately multi and exempt.
+                // active-pane would fire TmuxActivePaneChanged twice). The per-pane
+                // Capture/Cursor kinds are legitimately multi and exempt.
                 if !matches!(
                     reply,
-                    PendingReply::KeyBindings
-                        | PendingReply::Capture { .. }
-                        | PendingReply::Cursor { .. }
+                    PendingReply::Capture { .. } | PendingReply::Cursor { .. }
                 ) {
                     self.pending.retain(|_, r| *r != reply);
                 }
@@ -479,15 +472,13 @@ mod tests {
     }
 
     #[test]
-    fn clear_for_session_switch_drops_enumeration_but_keeps_keybindings() {
+    fn clear_for_session_switch_drops_enumeration_but_keeps_client_name() {
         let mut state = EnumerationState::default();
         state
             .pending
             .insert(CommandId(1), PendingReply::ListWindows);
         state.pending.insert(CommandId(2), PendingReply::ActivePane);
-        state
-            .pending
-            .insert(CommandId(3), PendingReply::KeyBindings);
+        state.pending.insert(CommandId(3), PendingReply::ClientName);
         state
             .pending
             .insert(CommandId(4), PendingReply::Capture { pane: PaneId(7) });
@@ -498,8 +489,8 @@ mod tests {
         state.clear_for_session_switch();
         assert_eq!(
             state.pending.get(&CommandId(3)),
-            Some(&PendingReply::KeyBindings),
-            "keybindings entry must survive"
+            Some(&PendingReply::ClientName),
+            "client-name entry must survive"
         );
         assert!(
             !state.pending.contains_key(&CommandId(1)),
@@ -546,16 +537,16 @@ mod tests {
             Some(&PendingReply::ActivePane)
         );
 
-        state.register(Ok(CommandId(5)), PendingReply::KeyBindings);
-        state.register(Ok(CommandId(6)), PendingReply::KeyBindings);
+        state.register(Ok(CommandId(5)), PendingReply::Capture { pane: PaneId(3) });
+        state.register(Ok(CommandId(6)), PendingReply::Capture { pane: PaneId(3) });
         assert_eq!(
             state.pending.get(&CommandId(5)),
-            Some(&PendingReply::KeyBindings),
-            "the two list-keys tables are concurrent — earlier KeyBindings entries are kept"
+            Some(&PendingReply::Capture { pane: PaneId(3) }),
+            "two concurrent identical-value captures for the same pane are both kept, not superseded"
         );
         assert_eq!(
             state.pending.get(&CommandId(6)),
-            Some(&PendingReply::KeyBindings)
+            Some(&PendingReply::Capture { pane: PaneId(3) })
         );
 
         state.register(Ok(CommandId(7)), PendingReply::Capture { pane: PaneId(1) });
