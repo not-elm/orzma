@@ -451,9 +451,10 @@ Split such systems along the gather → decide → apply seam.
 - **Apply via an `EntityEvent` + observer** (the repo idiom). The gather system
   queries the target **immutably**, computes effects, and `commands.trigger(...)`s
   them; the observer holds the `&mut` access and writes the world. See
-  `dispatch_input` → `TerminalKeyInput` → `on_terminal_key_input`
-  (`crates/ozma_tty_engine/src/plugin.rs`) and `PasteAction` / `on_paste`
-  (`crates/ozma_terminal/src/action.rs`).
+  `dispatch_input` (`src/input/keyboard.rs`) → `TerminalKeyInput`
+  (`crates/ozma_tty_engine/src/events.rs`) → `on_terminal_key_input`
+  (`crates/ozma_tty_engine/src/lib.rs`) and `PasteAction` / `on_paste`
+  (`src/action/terminal/paste.rs`).
 - **Extract bulky inline blocks** into named helper `fn`s so the body reads as
   gate → collect → trigger. Gate preconditions with `run_if` (see "System
   optimization — gate with `run_if`").
