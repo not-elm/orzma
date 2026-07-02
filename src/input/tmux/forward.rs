@@ -1,9 +1,9 @@
 //! Routes `ozma_terminal`'s `TerminalForwardInput` (backend-bound bytes from the
 //! shared mouse apply observer) to the owning tmux pane via `send-keys -H`.
 
+use crate::action::terminal::TerminalForwardInput;
 use crate::input::ime::ImeCommit;
 use bevy::prelude::*;
-use ozma_terminal::TerminalForwardInput;
 use ozma_tty_engine::TerminalHandle;
 use ozmux_tmux::{PaneId, SendBytes, TmuxClient, TmuxPane};
 

@@ -2,20 +2,13 @@
 
 mod clipboard;
 mod exit;
-mod hyperlink;
 mod layout;
-mod mouse;
 mod spawn;
 
-use crate::mouse::OzmaMousePlugin;
 use crate::spawn::on_add_inject_render;
 use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 use bevy::prelude::*;
 pub use clipboard::{Clipboard, build_paste_bytes};
-pub use mouse::{
-    TerminalForwardInput, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
-    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate, TerminalViewportScroll,
-};
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
     resolve_shell,
@@ -36,7 +29,7 @@ impl Plugin for OzmaTerminalPlugin {
         app.insert_resource(OzmaTerminalConfig {
             shell: self.config_shell.clone(),
         })
-        .add_plugins((ExitPlugin, LayoutPlugin, OzmaMousePlugin))
+        .add_plugins((ExitPlugin, LayoutPlugin))
         .add_observer(on_add_inject_render);
     }
 }

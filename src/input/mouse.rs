@@ -6,6 +6,10 @@
 //! triggers its `EntityEvent`s directly). Gated per entity by `MouseDisabled`,
 //! so dispatch runs in both `AppMode`s for surfaces that still own the mouse.
 
+use crate::action::terminal::{
+    TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy,
+    TerminalSelectionStart, TerminalSelectionUpdate,
+};
 use crate::input::bindings::OzmaMouseConfig;
 use crate::input::focus::MouseDisabled;
 use crate::input::mouse::button::MouseButtonInputPlugin;
@@ -14,10 +18,7 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::CursorMoved;
-use ozma_terminal::{
-    OzmaTerminal, TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear,
-    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
-};
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;

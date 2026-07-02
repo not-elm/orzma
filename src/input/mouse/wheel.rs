@@ -6,6 +6,7 @@
 //! `MouseDisabled` surfaces.
 
 use super::{TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates, on_any_mouse_message};
+use crate::action::terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::gesture::{
@@ -16,7 +17,6 @@ use crate::webview_pointer::topmost_surface_at;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use ozma_tty_engine::{CellCoord, TermMode, TerminalModifiers, WheelAction, WheelModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 

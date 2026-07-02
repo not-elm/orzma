@@ -4939,7 +4939,6 @@ dependencies = [
  "data-encoding",
  "getrandom 0.2.17",
  "libc",
- "ozma_terminal",
  "ozma_tty_engine",
  "ozma_tty_renderer",
  "ozmux_webview_host",
