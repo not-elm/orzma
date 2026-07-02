@@ -12,7 +12,7 @@
 use super::pane_hit::tmux_pane_at_phys;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::shortcuts::{LeaderGate, LeaderPending, LeaderStep, Shortcuts, step_leader};
+use crate::input::shortcuts::{LeaderGate, LeaderPhase, LeaderStep, Shortcuts, step_leader};
 use crate::mode::AppMode;
 use crate::mode::tmux::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::mode::tmux::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
@@ -25,6 +25,7 @@ use bevy::input::ButtonState;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy::time::Real;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
@@ -119,14 +120,15 @@ fn forward_keys_to_tmux(
     mut focused_webview: ResMut<FocusedWebview>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
-    mut leader_pending: ResMut<LeaderPending>,
+    mut leader_phase: ResMut<LeaderPhase>,
     mut handles: Query<&mut TerminalHandle>,
     mut client: Option<Single<&mut TmuxClient>>,
-    (keys, ime, bindings, resolved): (
+    (keys, ime, bindings, resolved, time): (
         Res<ButtonInput<KeyCode>>,
         Res<crate::input::ime::ImeState>,
         Res<KeyBindings>,
         Res<Shortcuts>,
+        Res<Time<Real>>,
     ),
     active_pane: Option<Single<(Entity, &TmuxPane), With<ActivePane>>>,
     copy_modes: Query<(), With<CopyModeState>>,
@@ -138,7 +140,9 @@ fn forward_keys_to_tmux(
     // prefix state machine.
     if copy_prompt.open.is_some() {
         *prefix_pending = false;
-        leader_pending.0 = false;
+        if *leader_phase != LeaderPhase::Idle {
+            *leader_phase = LeaderPhase::Idle;
+        }
         events.clear();
         return;
     }
@@ -146,7 +150,9 @@ fn forward_keys_to_tmux(
     // system reads the y/n answer. Drain here so no key leaks to tmux or the pane.
     if confirm_state.is_some() {
         *prefix_pending = false;
-        leader_pending.0 = false;
+        if *leader_phase != LeaderPhase::Idle {
+            *leader_phase = LeaderPhase::Idle;
+        }
         events.clear();
         return;
     }
@@ -154,7 +160,9 @@ fn forward_keys_to_tmux(
     // reads the typed text. Drain here so no key leaks to tmux or the pane.
     if rename.prompt.is_some() {
         *prefix_pending = false;
-        leader_pending.0 = false;
+        if *leader_phase != LeaderPhase::Idle {
+            *leader_phase = LeaderPhase::Idle;
+        }
         events.clear();
         return;
     }
@@ -162,14 +170,18 @@ fn forward_keys_to_tmux(
     // navigation keys would both garble IME composition and double-send.
     if ime.is_composing() {
         *prefix_pending = false;
-        leader_pending.0 = false;
+        if *leader_phase != LeaderPhase::Idle {
+            *leader_phase = LeaderPhase::Idle;
+        }
         events.clear();
         return;
     }
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if !focused {
         *prefix_pending = false;
-        leader_pending.0 = false;
+        if *leader_phase != LeaderPhase::Idle {
+            *leader_phase = LeaderPhase::Idle;
+        }
         events.clear();
         return;
     }
@@ -186,6 +198,7 @@ fn forward_keys_to_tmux(
         alt: mods.alt,
         meta: mods.super_,
     };
+    let now = time.elapsed();
 
     // The active pane (if any) is the forward/paste target. GUI chords below do
     // not need it (so quit and similar chords work before a pane is projected);
@@ -262,7 +275,9 @@ fn forward_keys_to_tmux(
         }
 
         *prefix_pending = false;
-        leader_pending.0 = false;
+        if *leader_phase != LeaderPhase::Idle {
+            *leader_phase = LeaderPhase::Idle;
+        }
         events.clear();
         return;
     }
@@ -279,17 +294,17 @@ fn forward_keys_to_tmux(
         // plan_forward. cfg_mods is a per-frame snapshot, so a same-frame
         // leader+second-key batch shares one modifier read.
         // NOTE: OS key auto-repeat delivers extra Pressed events; feeding them
-        // to step_leader would toggle `pending` by parity. Treat a repeat as
+        // to step_leader would toggle the phase by parity. Treat a repeat as
         // Passthrough without stepping the machine — EXCEPT while a leader is
         // pending, where a repeat (e.g. a held leader chord) must be swallowed,
         // not forwarded, or the held chord leaks to the pane on every repeat.
         let step = if ev.repeat {
-            if leader_pending.0 {
+            if matches!(*leader_phase, LeaderPhase::Pending) {
                 continue;
             }
             LeaderStep::Passthrough
         } else {
-            step_leader(&mut leader_pending.0, &resolved, ev.key_code, cfg_mods)
+            step_leader(&mut leader_phase, &resolved, ev.key_code, cfg_mods, now)
         };
         let gui_action = match step {
             LeaderStep::RunAction(action) => Some(action),

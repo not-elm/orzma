@@ -7,7 +7,7 @@
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::input::shortcuts::{LeaderGate, LeaderPending, LeaderStep, Shortcuts, step_leader};
+use crate::input::shortcuts::{LeaderGate, LeaderPhase, LeaderStep, Shortcuts, step_leader};
 use crate::input::{InputPhase, current_modifiers};
 use crate::mode::AppMode;
 use crate::surface_geom::phys_to_pane_local;
@@ -17,6 +17,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
+use bevy::time::Real;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
@@ -155,45 +156,53 @@ fn app_shortcut_handler(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
-    mut leader_pending: ResMut<LeaderPending>,
+    mut leader_phase: ResMut<LeaderPhase>,
     shortcuts: Res<Shortcuts>,
     ime: Res<ImeState>,
     bevy_keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
+    time: Res<Time<Real>>,
 ) {
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if ime.is_composing() || !focused {
-        leader_pending.0 = false;
+        if *leader_phase != LeaderPhase::Idle {
+            *leader_phase = LeaderPhase::Idle;
+        }
         events.clear();
         return;
     }
     let mods = current_modifiers(&bevy_keys);
     let webview_focused = focused_webview.0.is_some();
+    let now = time.elapsed();
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
         }
         if webview_focused && shortcuts.is_release_webview_focus(ev.key_code, mods) {
-            leader_pending.0 = false;
+            if *leader_phase != LeaderPhase::Idle {
+                *leader_phase = LeaderPhase::Idle;
+            }
             focused_webview.0 = None;
             continue;
         }
         // NOTE: the leader is honored only when a webview does not own the
-        // keyboard (v0 scope, mirrors tmux mode); resetting `leader_pending`
+        // keyboard (v0 scope, mirrors tmux mode); resetting the leader phase
         // here instead of stepping the state machine prevents a stale leader
         // from firing once keyboard focus returns to the terminal.
         let (action, via_leader) = if webview_focused {
-            leader_pending.0 = false;
+            if *leader_phase != LeaderPhase::Idle {
+                *leader_phase = LeaderPhase::Idle;
+            }
             (shortcuts.match_gui_action(ev.key_code, mods), false)
         } else {
             // NOTE: OS key auto-repeat delivers extra Pressed events; feeding
-            // them to step_leader would toggle `pending` by parity. Treat a
+            // them to step_leader would toggle the phase by parity. Treat a
             // repeat as Passthrough without stepping the machine.
             let step = if ev.repeat {
                 LeaderStep::Passthrough
             } else {
-                step_leader(&mut leader_pending.0, &shortcuts, ev.key_code, mods)
+                step_leader(&mut leader_phase, &shortcuts, ev.key_code, mods, now)
             };
             match step {
                 LeaderStep::RunAction(a) => (Some(a), true),

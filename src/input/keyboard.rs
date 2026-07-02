@@ -4,7 +4,7 @@
 
 use crate::input::bindings::{ReservedChord, TerminalInputBindings};
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
-use crate::input::shortcuts::{LeaderGate, LeaderPending, is_modifier_key};
+use crate::input::shortcuts::{LeaderGate, LeaderPhase, is_modifier_key};
 use crate::input::{InputPhase, current_modifiers};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
@@ -46,7 +46,7 @@ fn dispatch_input(
     mut events: MessageReader<KeyboardInput>,
     bindings: Res<TerminalInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
-    leader_pending: Res<LeaderPending>,
+    leader_phase: Res<LeaderPhase>,
     terminal: Query<
         Entity,
         (
@@ -73,7 +73,7 @@ fn dispatch_input(
     // of the main key, and consuming the slot on it would leak the real second
     // key to the PTY. Clearing the whole batch would instead drop other keys
     // typed in the same frame.
-    let mut suppress_leader_second_key = leader_pending.0;
+    let mut suppress_leader_second_key = matches!(*leader_phase, LeaderPhase::Pending);
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
             continue;
@@ -151,7 +151,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Captured>()
-            .init_resource::<LeaderPending>()
+            .init_resource::<LeaderPhase>()
             .add_plugins(KeyboardInputPlugin)
             .add_observer(|ev: On<PasteAction>, mut c: ResMut<Captured>| {
                 let _ = ev;
@@ -208,7 +208,7 @@ mod tests {
     fn leader_pending_suppresses_pty_typing() {
         let mut app = test_app();
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
-        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
         press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         let c = app.world().resource::<Captured>();
@@ -223,7 +223,7 @@ mod tests {
     fn leader_pending_types_trailing_same_frame_keys() {
         let mut app = test_app();
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
-        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
         // The leader's second key (a) is suppressed; a trailing same-frame key
         // (b) must still reach the PTY.
         press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
@@ -237,7 +237,7 @@ mod tests {
     fn leader_pending_suppression_skips_bare_modifier() {
         let mut app = test_app();
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
-        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
         // The second chord's modifier (Ctrl) emits its own Pressed event ahead
         // of the main key; it must NOT consume the suppression slot, or the real
         // second key (d) would leak to the PTY.
