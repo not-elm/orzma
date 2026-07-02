@@ -19,6 +19,14 @@ ignore = [
     "RUSTSEC-2026-0190",
     # `ttf-parser` is unmaintained; pulled in transitively via the font/text stack.
     "RUSTSEC-2026-0192",
+    # `quick-xml` 0.39 DoS advisories (quadratic duplicate-attribute check /
+    # unbounded NsReader namespace allocation). Pulled in transitively via
+    # plist <- cef, where it only parses LOCAL trusted plist metadata (CEF
+    # framework / bundle files), never attacker-controlled XML. The fixed
+    # quick-xml 0.41 is semver-incompatible with plist's `^0.39` requirement.
+    # TODO: drop both once plist releases with quick-xml >= 0.41.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
 ]
 
 [licenses]
