@@ -522,7 +522,7 @@ mod tests {
 
 - [ ] **Step 4: Create `src/action/terminal/selection.rs`**
 
-Move the four selection events, their observers, and the `detached_selection_start_event_sets_selection_and_emits_frame` test. The file follows the exact same pattern as Step 3 — the moved items are, verbatim from `crates/ozma_terminal/src/mouse.rs`: `TerminalSelectionStart` (:41-52), `TerminalSelectionUpdate` (:55-64), `TerminalSelectionClear` (:67-72), `TerminalSelectionCopy` (:75-80), observers `on_terminal_selection_start` (:178-205), `on_terminal_selection_update` (:208-235), `on_terminal_selection_clear` (:238-265), `on_terminal_selection_copy` (:299-310), and the test (:359-400).
+Move the four selection events, their observers, and the `detached_selection_start_event_sets_selection_and_emits_frame` test. The file follows the exact same pattern as Step 3 — the moved items are, verbatim from `crates/ozma_terminal/src/mouse.rs`: `TerminalSelectionStart` (:41-52), `TerminalSelectionUpdate` (:55-64), `TerminalSelectionClear` (:67-72), `TerminalSelectionCopy` (:75-80), observers `on_terminal_selection_start` (:178-205), `on_terminal_selection_update` (:208-235), `on_terminal_selection_clear` (:238-265), `on_terminal_selection_copy` (:299-310), and the test (:359-400). Copy those exact ranges first, then change ONLY: the imports (to match the skeleton below), struct visibility (`pub` → `pub(crate)`), observer visibility (already private), the helper path (`apply_to_terminal` resolves via the skeleton's `use`), and the plugin registration. No other edits — the source file stays in-tree until Step 8 of this task, so diff against it if unsure.
 
 File skeleton (bodies verbatim from the source lines above; structs demoted to `pub(crate)`, observers private):
 
@@ -696,7 +696,7 @@ git commit -m "refactor(action): move mouse apply events into src/action/termina
 - Create: `src/clipboard.rs`
 - Modify: `src/main.rs` (declare `mod clipboard;`, register `ClipboardPlugin`)
 - Modify: `src/action/terminal/paste.rs` (drop `init_resource`, rewrite import)
-- Modify: import rewrites in `src/ui/copy_mode.rs:15`, `src/mode/tmux/copy_mode.rs:20`, `src/input/tmux/input.rs:47`, `src/action/vi/default_mode.rs:10`, `src/action/terminal/selection.rs`, `src/action/terminal/mouse_write.rs` (test), `src/input/mouse/button.rs:491` (test), `src/input/mouse/wheel.rs:273` (test)
+- Modify: `src/ui/copy_mode.rs` (import rewrite + drop the duplicate `Clipboard` init from `CopyModePlugin`); import rewrites in `src/mode/tmux/copy_mode.rs:20`, `src/input/tmux/input.rs:47`, `src/action/vi/default_mode.rs:10`, `src/action/terminal/selection.rs`, `src/action/terminal/mouse_write.rs` (test), `src/input/mouse/button.rs:491` (test), `src/input/mouse/wheel.rs:273` (test)
 - Modify: `crates/ozma_terminal/src/lib.rs` (drop the `clipboard` module)
 - Delete: `crates/ozma_terminal/src/clipboard.rs`
 - Test: the clipboard unit tests move with the file
@@ -761,12 +761,51 @@ Update its doc comment to `/// Registers the paste apply observer.` and its in-f
 
 After the table, run `grep -rn "ozma_terminal::Clipboard\|ozma_terminal::{Clipboard\|Clipboard, build_paste_bytes" src/` and fix any site the table missed the same way. Expected: no `ozma_terminal` clipboard imports remain.
 
-- [ ] **Step 5: Remove the `clipboard` module from the crate**
+- [ ] **Step 5: Remove the duplicate init from `CopyModePlugin`**
+
+`src/ui/copy_mode.rs` also runs `init_resource::<Clipboard>()` (an idempotent duplicate). Remove it so `ClipboardPlugin` is the sole owner, and fix the stale doc comment. Replace:
+
+```rust
+/// Bevy Plugin: registers the two observers and ensures the global
+/// `Clipboard` resource exists (idempotent — `OzmaActionPlugin` already
+/// provides it in the full binary). `CopyModeState` is inserted/removed
+/// per-entity by the observers themselves; no global system needed.
+pub struct CopyModePlugin;
+
+impl Plugin for CopyModePlugin {
+    fn build(&self, app: &mut App) {
+        app.init_resource::<Clipboard>()
+            .add_observer(handle_enter_copy_mode_request)
+            .add_observer(handle_exit_copy_mode);
+    }
+}
+```
+
+with:
+
+```rust
+/// Bevy Plugin: registers the two observers. The global `Clipboard`
+/// resource is provided by `crate::clipboard::ClipboardPlugin`.
+/// `CopyModeState` is inserted/removed per-entity by the observers
+/// themselves; no global system needed.
+pub struct CopyModePlugin;
+
+impl Plugin for CopyModePlugin {
+    fn build(&self, app: &mut App) {
+        app.add_observer(handle_enter_copy_mode_request)
+            .add_observer(handle_exit_copy_mode);
+    }
+}
+```
+
+If any test registers `CopyModePlugin` without `ClipboardPlugin` and fails on the missing resource, add `app.init_resource::<Clipboard>()` (or `app.insert_resource(Clipboard::in_memory())`) to that test's setup.
+
+- [ ] **Step 6: Remove the `clipboard` module from the crate**
 
 In `crates/ozma_terminal/src/lib.rs`: delete `mod clipboard;` and `pub use clipboard::{Clipboard, build_paste_bytes};`.
 Then: `git rm crates/ozma_terminal/src/clipboard.rs`
 
-- [ ] **Step 6: Build, test, commit**
+- [ ] **Step 7: Build, test, commit**
 
 Run: `cargo build && cargo test`
 Expected: green; clipboard tests run in `ozmux` (`cargo test -p ozmux build_paste_bytes`).
@@ -1222,7 +1261,7 @@ Special cases:
 | `src/mode/default/exit.rs` (Task 5) | `use ozma_terminal::OzmaTerminal;` | `use crate::surface::OzmaTerminal;` |
 | `src/mode/default/layout.rs` (Task 5) | `use ozma_terminal::{OzmaTerminal, cells_for};` | `use crate::surface::OzmaTerminal;` + `use crate::surface_geom::cells_for;` |
 
-- [ ] **Step 7: Swap the render-test plugin and fix the two stale doc comments**
+- [ ] **Step 7: Swap the render-test plugin and sweep the stale `ozma_terminal` comments**
 
 In `src/mode/tmux/render.rs`:
 
@@ -1246,6 +1285,19 @@ with
 //! (`on_terminal_open_uri` → `try_open_uri`).
 ```
 
+Then sweep the remaining prose references to the crate (comments only — none of these are `use` statements):
+
+| File:line | Old line | New line |
+|---|---|---|
+| `src/input/tmux/forward.rs:1` | ``//! Routes `ozma_terminal`'s `TerminalForwardInput` (backend-bound bytes from the`` | ``//! Routes `crate::action::terminal`'s `TerminalForwardInput` (backend-bound bytes from the`` |
+| `src/input/default_mode.rs:7` | ``//! paste are owned by `ozma_terminal`'s dispatcher and `PasteAction`.`` | ``//! paste are owned by the keyboard dispatcher and `crate::action::terminal::PasteAction`.`` |
+| `src/input/tmux/gate.rs:76` | ``// both resize the pane and start an `ozma_terminal` selection — the`` | ``// both resize the pane and start a local terminal selection — the`` |
+| `src/input/tmux/input.rs:586` | ``/// `ozma_terminal`'s `WheelAction` resolves to a `ScrollViewport` that is a`` | ``/// the host's `WheelAction` resolves to a `ScrollViewport` that is a`` |
+| `src/input/tmux/input.rs:868` | `// to ozma_terminal — forward_wheel_to_tmux emits no send-keys for it.` | `// to the local terminal — forward_wheel_to_tmux emits no send-keys for it.` |
+| `src/input/tmux/mouse.rs:166` | ``/// `ozma_terminal`). Multi-click (≥2) on a pane in copy mode enters`` | ``/// the local terminal path). Multi-click (≥2) on a pane in copy mode enters`` |
+
+Test function names containing `ozma_terminal` (`src/input/ime.rs:929`, `src/mode/tmux/render.rs:1644`) are identifiers describing the marker component, not crate references — leave them.
+
 - [ ] **Step 8: Delete the crate and fix the manifests**
 
 ```bash
@@ -1261,9 +1313,9 @@ In the root `Cargo.toml` `[dependencies]`:
 - [ ] **Step 9: Full verification**
 
 ```bash
-grep -rn "ozma_terminal" src/ crates/ Cargo.toml
+grep -rn "ozma_terminal" src/ crates/ Cargo.toml | grep -v "_ozma_terminal"
 ```
-Expected: no matches (docs/ may still mention it historically).
+Expected: no matches. (The `grep -v` excludes the two test function names kept in Step 7; docs/ may still mention the crate historically.)
 
 Run: `cargo build && cargo test`
 Expected: green across the workspace.
