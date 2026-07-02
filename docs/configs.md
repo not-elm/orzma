@@ -373,6 +373,14 @@ other action works in **both** modes, including `toggle-rect-selection`
 (`Ctrl+V`), which now toggles a real rectangular selection in both Default
 and tmux copy-mode.
 
+### Escape semantics
+
+By default, `Escape` is bound to the `exit` action, which leaves copy mode
+entirely. Note that stock tmux binds `Escape` to clear-selection only
+(deselecting the current selection without exiting copy mode). To deselect a
+selection in ozmux without leaving copy mode, press `v` (toggle-selection is a
+toggle: with a selection active, it clears it).
+
 Keys not bound to any `[copy-mode]` action are swallowed while copy mode is
 active (they never reach the pane) — this includes stock `copy-mode-vi` keys
 that ozmux does not carry over by default, such as `:` (goto-line), digit

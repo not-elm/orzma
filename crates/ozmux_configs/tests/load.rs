@@ -1,4 +1,4 @@
-use ozmux_configs::copy_mode::{CopyModeBaseKey, CopyModeKey};
+use ozmux_configs::copy_mode::{CopyModeBaseKey, CopyModeConfig, CopyModeKey};
 use ozmux_configs::shortcuts::{Binding, Key, parse_key_chord};
 use ozmux_configs::test_support::load_with_overrides;
 use ozmux_configs::{OzmuxConfigs, OzmuxConfigsError};
@@ -112,7 +112,7 @@ fn copy_mode_rebind_and_unbind() {
     assert!(configs.copy_mode.search_forward.is_empty());
     assert_eq!(
         configs.copy_mode.cursor_left,
-        ozmux_configs::copy_mode::CopyModeConfig::default().cursor_left
+        CopyModeConfig::default().cursor_left
     );
 }
 
