@@ -4,6 +4,7 @@
 mod copymode;
 mod env;
 mod io;
+mod ops;
 mod query;
 mod size;
 mod target;
@@ -11,6 +12,10 @@ mod target;
 pub use copymode::{CopyModeCapture, CopyStateQuery, Prompt, ShowBuffer};
 pub use env::{SetEnvironmentGlobal, SetEnvironmentInSession, UnsetEnvironmentGlobal};
 pub use io::{SendBytes, SendPaneKeys};
+pub use ops::{
+    EnterCopyMode, KillPane, KillWindow, NewWindow, NextWindow, PaneDirection, PreviousWindow,
+    SelectPaneTowards, SplitDirection, SplitWindow, ZoomPane,
+};
 pub(crate) use query::{
     ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListKeys, ListWindows,
     ModeKeys, PrefixOptions, SubscribeWindowFlags, Version,
