@@ -8,11 +8,20 @@ mod zoom_pane;
 
 use bevy::prelude::*;
 
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "consumed by Task 7's shortcut dispatch wiring"
+)]
 pub(crate) use select_pane::SelectPaneRequest;
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "consumed by Task 7's shortcut dispatch wiring"
+)]
 pub(crate) use split_pane::SplitPaneRequest;
-#[allow(unused_imports)]
+#[expect(
+    unused_imports,
+    reason = "consumed by Task 7's shortcut dispatch wiring"
+)]
 pub(crate) use zoom_pane::ZoomPaneRequest;
 
 /// Aggregates the per-command tmux action plugins.
