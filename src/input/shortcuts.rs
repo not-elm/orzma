@@ -108,6 +108,7 @@ struct OzmuxShortcut {
     keycode: KeyCode,
     modifiers: Modifiers,
     action: ShortcutAction,
+    repeat: bool,
 }
 
 /// The startup-resolved ozmux shortcut tables. Built once from
@@ -347,7 +348,10 @@ fn detect_modifier_tap(
 /// the empty default.
 fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsResource>) {
     let sc = &configs.shortcuts;
-    resolved.direct = resolve_from_chords(sc.direct_chords());
+    resolved.direct = resolve_from_chords(
+        sc.direct_chords()
+            .map(|(label, chord, action)| (label, chord, action, false)),
+    );
     resolved.prefix = resolve_from_chords(sc.leader_chords());
     resolved.tap_timeout = Duration::from_millis(sc.leader_tap_timeout_ms);
     // The leader (default Cmd tap) is only meaningful when there are
@@ -415,15 +419,16 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
 /// Resolves each bound chord to an `OzmuxShortcut`, skipping (with a warning)
 /// any chord whose logical key has no physical `KeyCode`.
 fn resolve_from_chords<'a>(
-    chords: impl Iterator<Item = (&'static str, &'a KeyChord, ShortcutAction)>,
+    chords: impl Iterator<Item = (&'static str, &'a KeyChord, ShortcutAction, bool)>,
 ) -> Vec<OzmuxShortcut> {
     let mut out = Vec::new();
-    for (label, chord, action) in chords {
+    for (label, chord, action, repeat) in chords {
         match key_to_keycode(&chord.key) {
             Some(keycode) => out.push(OzmuxShortcut {
                 keycode,
                 modifiers: chord.modifiers,
                 action,
+                repeat,
             }),
             None => tracing::warn!(
                 label,
@@ -690,7 +695,7 @@ mod tests {
 
     fn direct_only(config: &ConfigShortcuts) -> Shortcuts {
         Shortcuts {
-            direct: resolve_from_chords(config.direct_chords()),
+            direct: resolve_from_chords(config.direct_chords().map(|(l, c, a)| (l, c, a, false))),
             prefix: Vec::new(),
             leader: None,
             tap_timeout: Duration::from_millis(300),
@@ -721,6 +726,7 @@ mod tests {
                 keycode: KeyCode::KeyR,
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::ReleaseWebviewFocus,
+                repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
                 KeyCode::KeyA,
@@ -764,6 +770,7 @@ mod tests {
                 keycode: KeyCode::KeyD,
                 modifiers: mods(true, false, false, false),
                 action: ShortcutAction::DetachSession,
+                repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
                 KeyCode::KeyB,
@@ -825,6 +832,7 @@ mod tests {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::EnterCopyMode,
+                repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
                 KeyCode::KeyA,
@@ -849,15 +857,20 @@ mod tests {
     #[test]
     fn resolve_from_chords_accepts_leader_chords() {
         let config = ConfigShortcuts {
-            detach_session: Some(Binding::Leader(
-                ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
-            )),
+            detach_session: Some(Binding::Leader {
+                chord: ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
+                repeat: true,
+            }),
             ..Default::default()
         };
         let resolved = resolve_from_chords(config.leader_chords());
         assert_eq!(resolved.len(), 1);
         assert_eq!(resolved[0].keycode, KeyCode::KeyD);
         assert_eq!(resolved[0].action, ShortcutAction::DetachSession);
+        assert!(
+            resolved[0].repeat,
+            "the <Leader:r> flag must reach the resolved table"
+        );
     }
 
     #[test]
@@ -1001,6 +1014,7 @@ mod tests {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
                 action: ShortcutAction::EnterCopyMode,
+                repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
                 KeyCode::KeyA,
@@ -1213,9 +1227,10 @@ mod tests {
     fn build_shortcuts_activates_default_cmd_leader_with_a_leader_binding() {
         let config = OzmuxConfigs {
             shortcuts: ConfigShortcuts {
-                detach_session: Some(Binding::Leader(
-                    ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
-                )),
+                detach_session: Some(Binding::Leader {
+                    chord: ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
+                    repeat: false,
+                }),
                 ..Default::default()
             },
             ..Default::default()
