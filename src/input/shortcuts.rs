@@ -191,27 +191,6 @@ impl Shortcuts {
         }
     }
 
-    /// True when `(keycode, mods)` is the configured leader chord.
-    fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        matches!(self.leader, Some(ResolvedLeader::Chord(kc, m)) if kc == keycode && m == mods)
-    }
-
-    fn tap_modifier(&self) -> Option<TapModifier> {
-        match self.leader {
-            Some(ResolvedLeader::Tap(m)) => Some(m),
-            _ => None,
-        }
-    }
-
-    /// Returns the leader-scoped action bound to `(keycode, mods)`, if any.
-    /// Excludes `ReleaseWebviewFocus` (mirrors `match_gui_action`): leader
-    /// dispatch only runs when no webview is focused, so a leader-scoped
-    /// release-webview-focus could never fire — resolving it to `Swallow`
-    /// avoids a dead `RunAction`.
-    fn match_prefix_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<ShortcutAction> {
-        self.match_prefix_entry(keycode, mods).map(|s| s.action)
-    }
-
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
     /// binding is repeat-marked (`<Leader:r>`). The single predicate shared by
     /// `step_leader` (transition) and `dispatch_input` (PTY withholding) so the
@@ -226,9 +205,23 @@ impl Shortcuts {
             .map(|s| s.action)
     }
 
+    /// True when `(keycode, mods)` is the configured leader chord.
+    fn is_leader(&self, keycode: KeyCode, mods: Modifiers) -> bool {
+        matches!(self.leader, Some(ResolvedLeader::Chord(kc, m)) if kc == keycode && m == mods)
+    }
+
+    fn tap_modifier(&self) -> Option<TapModifier> {
+        match self.leader {
+            Some(ResolvedLeader::Tap(m)) => Some(m),
+            _ => None,
+        }
+    }
+
     /// Returns the prefix-table entry bound to `(keycode, mods)`, excluding
-    /// `ReleaseWebviewFocus` (mirrors `match_gui_action`; see
-    /// `match_prefix_action`'s rationale).
+    /// `ReleaseWebviewFocus` (mirrors `match_gui_action`): leader dispatch only
+    /// runs when no webview is focused, so a leader-scoped
+    /// release-webview-focus could never fire — resolving it to `Swallow`
+    /// avoids a dead `RunAction`.
     fn match_prefix_entry(&self, keycode: KeyCode, mods: Modifiers) -> Option<&OzmuxShortcut> {
         self.prefix.iter().find(|s| {
             s.action != ShortcutAction::ReleaseWebviewFocus
@@ -847,6 +840,20 @@ mod tests {
     }
 
     #[test]
+    fn test_constructor_builds_repeat_prefix() {
+        let sc = test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyH,
+            ShortcutAction::EnterCopyMode,
+            ms(500),
+        );
+        assert_eq!(
+            sc.match_repeat_prefix(KeyCode::KeyH, mods(false, false, false, false)),
+            Some(ShortcutAction::EnterCopyMode)
+        );
+        assert!(sc.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
+    }
+
+    #[test]
     fn step_tap_fires_on_quick_press_release() {
         let mut armed = None;
         assert_eq!(
@@ -979,7 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn match_prefix_action_excludes_release_webview_focus() {
+    fn match_prefix_entry_excludes_release_webview_focus() {
         let s = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OzmuxShortcut {
@@ -996,7 +1003,8 @@ mod tests {
             repeat_time: Duration::from_millis(500),
         };
         assert_eq!(
-            s.match_prefix_action(KeyCode::KeyR, mods(false, false, false, false)),
+            s.match_prefix_entry(KeyCode::KeyR, mods(false, false, false, false))
+                .map(|s| s.action),
             None,
             "a leader-scoped release-webview-focus resolves to Swallow, not a dead RunAction",
         );
@@ -1100,7 +1108,7 @@ mod tests {
     }
 
     #[test]
-    fn match_prefix_action_resolves_and_requires_exact_mods() {
+    fn match_prefix_entry_resolves_and_requires_exact_mods() {
         let s = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OzmuxShortcut {
@@ -1117,15 +1125,18 @@ mod tests {
             repeat_time: Duration::from_millis(500),
         };
         assert_eq!(
-            s.match_prefix_action(KeyCode::KeyS, mods(false, false, false, false)),
+            s.match_prefix_entry(KeyCode::KeyS, mods(false, false, false, false))
+                .map(|s| s.action),
             Some(ShortcutAction::EnterCopyMode)
         );
         assert_eq!(
-            s.match_prefix_action(KeyCode::KeyS, mods(false, true, false, false)),
+            s.match_prefix_entry(KeyCode::KeyS, mods(false, true, false, false))
+                .map(|s| s.action),
             None
         );
         assert_eq!(
-            s.match_prefix_action(KeyCode::KeyD, mods(false, false, false, false)),
+            s.match_prefix_entry(KeyCode::KeyD, mods(false, false, false, false))
+                .map(|s| s.action),
             None
         );
     }
