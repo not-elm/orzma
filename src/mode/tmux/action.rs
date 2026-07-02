@@ -17,65 +17,17 @@ mod zoom_pane;
 
 use bevy::prelude::*;
 
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use enter_copy_mode::EnterCopyModeRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use kill_pane::KillPaneRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use kill_window::KillWindowRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use new_window::NewWindowRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use next_window::NextWindowRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use previous_window::PreviousWindowRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use rename_session::RenameSessionRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use rename_window::RenameWindowRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use select_pane::SelectPaneRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use select_window::SelectWindowRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use split_pane::SplitPaneRequest;
-#[expect(
-    unused_imports,
-    reason = "consumed by Task 7's shortcut dispatch wiring"
-)]
 pub(crate) use zoom_pane::ZoomPaneRequest;
 
 /// Aggregates the per-command tmux action plugins.
