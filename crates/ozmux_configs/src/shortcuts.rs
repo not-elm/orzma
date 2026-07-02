@@ -504,8 +504,10 @@ fn strip_leader_prefix(value: &str) -> Option<(&str, bool)> {
 }
 
 /// Parses a non-empty config value into a `Binding`: a leading `<Leader>`
-/// selects `Leader`, otherwise `Direct`. The remainder is parsed by
-/// `parse_key_chord`, so `"<Leader>"` (empty remainder) is an error.
+/// or `<Leader:r>` selects `Leader`, with the `:r` form setting
+/// `repeat: true`; otherwise the value parses as `Direct`. The remainder is
+/// parsed by `parse_key_chord`, so `"<Leader>"` (empty remainder) is an
+/// error.
 fn parse_binding(value: &str) -> Result<Binding, KeyChordParseError> {
     match strip_leader_prefix(value) {
         Some((rest, repeat)) => {
@@ -529,7 +531,8 @@ where
 }
 
 /// serde field serializer for `Option<Binding>`: `None` → `""`,
-/// `Direct(c)` → `c`, `Leader(c)` → `"<Leader>" + c`.
+/// `Direct(c)` → `c`, `Leader { chord, repeat: false }` → `"<Leader>" + c`,
+/// `Leader { chord, repeat: true }` → `"<Leader:r>" + c`.
 fn ser_binding_or_unbind<S>(value: &Option<Binding>, ser: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -1043,6 +1046,25 @@ detach-session = "<Leader>d"
             enter_copy_mode: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
+            }),
+            detach_session: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: false,
+            }),
+            ..Default::default()
+        };
+        let err = s.validate_no_leader_conflicts().unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert!(err[0].actions.contains(&"enter-copy-mode"));
+        assert!(err[0].actions.contains(&"detach-session"));
+    }
+
+    #[test]
+    fn leader_conflict_detected_across_repeat_flag() {
+        let s = Shortcuts {
+            enter_copy_mode: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: true,
             }),
             detach_session: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),

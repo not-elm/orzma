@@ -76,7 +76,7 @@ fn dispatch_input(
         meta: mods.meta,
     };
     let now = time.elapsed();
-    let repeat_deadline = match *leader_phase {
+    let mut repeat_deadline = match *leader_phase {
         LeaderPhase::Repeat { deadline } => Some(deadline),
         _ => None,
     };
@@ -100,14 +100,23 @@ fn dispatch_input(
         // NOTE: while the repeat window is open, withhold ONLY keys that match a
         // repeat-marked leader binding (the leader machine in
         // LeaderGate::Advance fires them). Withholding anything else here would
-        // eat ordinary typing during the window.
+        // eat ordinary typing during the window. `step_leader` (which runs
+        // after this system, per LeaderGate::Read.before(Advance)) closes the
+        // window on the first non-matching key of the batch, so the local
+        // snapshot must close with it: otherwise a repeat-marked key later in
+        // the SAME frame would be withheld here yet evaluate as Passthrough in
+        // Advance (window already closed) — fired nowhere, silently swallowed.
         if let Some(deadline) = repeat_deadline
             && now <= deadline
-            && shortcuts
+            && !is_modifier_key(ev.key_code)
+        {
+            if shortcuts
                 .match_repeat_prefix(ev.key_code, cfg_mods)
                 .is_some()
-        {
-            continue;
+            {
+                continue;
+            }
+            repeat_deadline = None;
         }
         if bindings
             .reserved
@@ -265,6 +274,22 @@ mod tests {
             c.keys,
             vec![TerminalKey::Text("h".into())],
             "an expired window must not withhold keys"
+        );
+    }
+
+    #[test]
+    fn window_closing_key_stops_withholding_same_frame() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        install_repeat_window(&mut app, Duration::from_secs(60));
+        press(&mut app, KeyCode::KeyB, Key::Character("b".into()));
+        press(&mut app, KeyCode::KeyH, Key::Character("h".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert_eq!(
+            c.keys,
+            vec![TerminalKey::Text("b".into()), TerminalKey::Text("h".into())],
+            "a non-matching key closes the window for the rest of the frame; the repeat key after it must be typed, not withheld"
         );
     }
 
