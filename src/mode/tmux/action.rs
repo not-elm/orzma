@@ -2,6 +2,8 @@
 //! command has one `EntityEvent` + apply observer module under
 //! `src/mode/tmux/action/`. This root aggregates their per-file plugins.
 
+mod kill_pane;
+mod kill_window;
 mod new_window;
 mod next_window;
 mod previous_window;
@@ -12,6 +14,16 @@ mod zoom_pane;
 
 use bevy::prelude::*;
 
+#[expect(
+    unused_imports,
+    reason = "consumed by Task 7's shortcut dispatch wiring"
+)]
+pub(crate) use kill_pane::KillPaneRequest;
+#[expect(
+    unused_imports,
+    reason = "consumed by Task 7's shortcut dispatch wiring"
+)]
+pub(crate) use kill_window::KillWindowRequest;
 #[expect(
     unused_imports,
     reason = "consumed by Task 7's shortcut dispatch wiring"
@@ -54,6 +66,8 @@ pub(crate) struct TmuxActionPlugin;
 impl Plugin for TmuxActionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
+            kill_pane::KillPanePlugin,
+            kill_window::KillWindowPlugin,
             new_window::NewWindowPlugin,
             next_window::NextWindowPlugin,
             previous_window::PreviousWindowPlugin,
