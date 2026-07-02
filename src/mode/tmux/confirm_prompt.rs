@@ -1,7 +1,6 @@
-//! ozmux-owned `confirm-before` prompt. tmux's `confirm-before <cmd>` opens a
-//! client-side modal y/n prompt that a `-CC` control client cannot render or
-//! answer, so `forward_keys_to_tmux` detects such a binding, opens this prompt
-//! instead of forwarding it, and runs the inner command only on confirm.
+//! ozmux-owned confirm prompt: the kill-pane / kill-window shortcut actions
+//! open this prompt. It renders a client-side modal y/n prompt and runs the
+//! inner command only on confirm.
 
 use crate::font::TerminalUiFont;
 use crate::input::InputPhase;
@@ -51,43 +50,6 @@ pub(crate) struct ConfirmState {
     pub(crate) command: String,
 }
 
-/// Parses a `confirm-before [-by] [-c key] [-p prompt] [-t client] <command>`
-/// binding into `(message, inner command)`. Returns `None` if the command is
-/// not a `confirm-before` or has no inner command. The message defaults to
-/// `"<command>? (y/n)"` when `-p` is absent.
-pub(crate) fn parse_confirm_before(command: &str) -> Option<(String, String)> {
-    let tokens = tokenize(command);
-    let mut it = tokens.into_iter();
-    if it.next().as_deref() != Some("confirm-before") {
-        return None;
-    }
-    let mut message: Option<String> = None;
-    let mut inner: Vec<String> = Vec::new();
-    while let Some(tok) = it.next() {
-        match tok.as_str() {
-            "-p" => message = it.next(),
-            "-c" | "-t" => {
-                it.next();
-            }
-            "-b" => {}
-            // NOTE: `-y` means tmux auto-confirms (no modal), so returning None
-            // lets the command forward verbatim and tmux runs the inner command
-            // without a prompt — treating `-y` as a no-op would wrongly prompt.
-            "-y" => return None,
-            _ => {
-                inner.push(tok);
-                inner.extend(it.by_ref());
-            }
-        }
-    }
-    if inner.is_empty() {
-        return None;
-    }
-    let command = inner.join(" ");
-    let message = message.unwrap_or_else(|| format!("{command}? (y/n)"));
-    Some((message, command))
-}
-
 /// The effect of one key on an open confirm prompt.
 #[derive(Debug, PartialEq, Eq)]
 enum ConfirmStep {
@@ -108,43 +70,6 @@ fn confirm_step(key: &Key) -> Option<ConfirmStep> {
         },
         _ => None,
     }
-}
-
-/// Splits a tmux command line into tokens, honoring single and double quotes
-/// (quotes are stripped; whitespace inside quotes is preserved). Empty quoted
-/// tokens (`''`) yield an empty token.
-fn tokenize(line: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-    let mut cur = String::new();
-    let mut started = false;
-    let mut in_single = false;
-    let mut in_double = false;
-    for c in line.chars() {
-        match c {
-            '\'' if !in_double => {
-                in_single = !in_single;
-                started = true;
-            }
-            '"' if !in_single => {
-                in_double = !in_double;
-                started = true;
-            }
-            c if c.is_whitespace() && !in_single && !in_double => {
-                if started {
-                    tokens.push(std::mem::take(&mut cur));
-                    started = false;
-                }
-            }
-            c => {
-                cur.push(c);
-                started = true;
-            }
-        }
-    }
-    if started {
-        tokens.push(cur);
-    }
-    tokens
 }
 
 #[derive(Component)]
@@ -250,41 +175,6 @@ fn handle_confirm_input(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_bare_inner_command_with_default_message() {
-        let (msg, cmd) = parse_confirm_before("confirm-before 'kill-window'").unwrap();
-        assert_eq!(cmd, "kill-window");
-        assert_eq!(msg, "kill-window? (y/n)");
-    }
-
-    #[test]
-    fn parses_p_message_and_inner_command() {
-        let (msg, cmd) =
-            parse_confirm_before(r#"confirm-before -p "kill-window #W? (y/n)" kill-window"#)
-                .unwrap();
-        assert_eq!(cmd, "kill-window");
-        assert_eq!(msg, "kill-window #W? (y/n)");
-    }
-
-    #[test]
-    fn skips_boolean_and_arg_flags() {
-        let (_, cmd) = parse_confirm_before(r#"confirm-before -b -c y -t main kill-pane"#).unwrap();
-        assert_eq!(cmd, "kill-pane");
-    }
-
-    #[test]
-    fn joins_multi_token_inner_command() {
-        let (_, cmd) = parse_confirm_before("confirm-before kill-window -t @1").unwrap();
-        assert_eq!(cmd, "kill-window -t @1");
-    }
-
-    #[test]
-    fn rejects_non_confirm_before() {
-        assert!(parse_confirm_before("kill-window").is_none());
-        assert!(parse_confirm_before("confirm-before").is_none());
-        assert!(parse_confirm_before("confirm-before -p \"msg\"").is_none());
-    }
 
     #[test]
     fn confirm_step_maps_keys() {
