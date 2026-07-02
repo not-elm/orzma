@@ -94,7 +94,10 @@ fn tmux_action_rebind_and_unbind() {
         load_with_overrides(Some(fixture("tmux_action_binding.toml")), None, None).unwrap();
     assert_eq!(
         configs.shortcuts.split_vertical_pane,
-        Some(Binding::Leader(parse_key_chord("g").unwrap()))
+        Some(Binding::Leader {
+            chord: parse_key_chord("g").unwrap(),
+            repeat: false,
+        })
     );
     assert_eq!(configs.shortcuts.select_window_5, None);
 }

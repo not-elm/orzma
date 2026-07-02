@@ -379,7 +379,7 @@ mod integration_tests {
         assert_eq!(quit.key, shortcuts::Key::Char('q'));
         assert!(quit.modifiers.meta && quit.modifiers.shift);
         assert!(
-            matches!(c.shortcuts.paste, Some(Binding::Leader(_))),
+            matches!(c.shortcuts.paste, Some(Binding::Leader { .. })),
             "unspecified active bindings keep their defaults",
         );
     }

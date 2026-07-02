@@ -296,8 +296,15 @@ pub enum Leader {
 pub enum Binding {
     /// Fires when the chord is pressed directly.
     Direct(KeyChord),
-    /// Fires when the chord is pressed after the leader (`<Leader>x`).
-    Leader(KeyChord),
+    /// Fires when the chord is pressed after the leader (`<Leader>x`), or —
+    /// with `repeat` — re-fires inside the repeat window (`<Leader:r>x`).
+    Leader {
+        /// The second-key chord pressed after the leader.
+        chord: KeyChord,
+        /// True when bound with the `<Leader:r>` token: after firing, the key
+        /// re-fires within `repeat-time-ms` without re-pressing the leader.
+        repeat: bool,
+    },
 }
 
 impl Binding {
@@ -305,7 +312,7 @@ impl Binding {
     /// leader-scoped binding.
     pub fn chord(&self) -> &KeyChord {
         match self {
-            Binding::Direct(chord) | Binding::Leader(chord) => chord,
+            Binding::Direct(chord) | Binding::Leader { chord, .. } => chord,
         }
     }
 }
@@ -503,6 +510,13 @@ pub struct Shortcuts {
     /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
     /// normalized to 300.
     pub leader_tap_timeout_ms: u64,
+    /// Repeat window (ms) for `<Leader:r>` bindings: after such a binding
+    /// fires, pressing a repeat-marked key again within this window re-fires
+    /// it without the leader; each fire re-arms the window. Default 500.
+    ///
+    /// 0 disables repeat entirely (tmux `repeat-time 0` parity) and is NOT
+    /// normalized away, unlike `leader_tap_timeout_ms`.
+    pub repeat_time_ms: u64,
 }
 
 impl Default for Shortcuts {
@@ -539,6 +553,7 @@ impl Default for Shortcuts {
             rename_window: Some(parse_default_binding("<Leader>r")),
             rename_session: Some(parse_default_binding("<Leader>Shift+R")),
             leader_tap_timeout_ms: 300,
+            repeat_time_ms: 500,
         }
     }
 }
@@ -682,13 +697,13 @@ impl Shortcuts {
             })
     }
 
-    /// Bound leader-scoped chords only: `(label, chord, action)`.
+    /// Bound leader-scoped chords only: `(label, chord, action, repeat)`.
     pub fn leader_chords(
         &self,
-    ) -> impl Iterator<Item = (&'static str, &KeyChord, ShortcutAction)> + '_ {
+    ) -> impl Iterator<Item = (&'static str, &KeyChord, ShortcutAction, bool)> + '_ {
         self.bindings_iter()
             .filter_map(|(label, bound, action)| match bound {
-                Some(Binding::Leader(chord)) => Some((label, chord, action)),
+                Some(Binding::Leader { chord, repeat }) => Some((label, chord, action, *repeat)),
                 _ => None,
             })
     }
@@ -700,7 +715,10 @@ impl Shortcuts {
 
     /// Detects chord collisions among leader-scoped bindings.
     pub(crate) fn validate_no_leader_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
-        conflicts(self.leader_chords())
+        conflicts(
+            self.leader_chords()
+                .map(|(label, chord, action, _)| (label, chord, action)),
+        )
     }
 
     /// Normalizes numeric fields: a `leader_tap_timeout_ms` of 0 is meaningless
@@ -777,19 +795,34 @@ pub enum ShortcutAction {
 /// Matched case-insensitively at the START of the value only.
 const LEADER_TOKEN: &str = "<Leader>";
 
-/// Strips a leading, case-insensitive `<Leader>` token, returning the remaining
-/// chord text. `None` when the value is not leader-scoped.
-fn strip_leader_prefix(value: &str) -> Option<&str> {
+/// The literal token marking a repeatable leader-scoped binding value
+/// (`<Leader:r>x`). Matched case-insensitively at the START of the value only.
+const LEADER_REPEAT_TOKEN: &str = "<Leader:r>";
+
+/// Strips a leading, case-insensitive `<Leader>` / `<Leader:r>` token,
+/// returning the remaining chord text and whether the repeat form was used.
+/// `None` when the value is not leader-scoped.
+fn strip_leader_prefix(value: &str) -> Option<(&str, bool)> {
+    if let Some((head, rest)) = value.split_at_checked(LEADER_REPEAT_TOKEN.len())
+        && head.eq_ignore_ascii_case(LEADER_REPEAT_TOKEN)
+    {
+        return Some((rest, true));
+    }
     let (head, rest) = value.split_at_checked(LEADER_TOKEN.len())?;
-    head.eq_ignore_ascii_case(LEADER_TOKEN).then_some(rest)
+    head.eq_ignore_ascii_case(LEADER_TOKEN)
+        .then_some((rest, false))
 }
 
 /// Parses a non-empty config value into a `Binding`: a leading `<Leader>`
-/// selects `Leader`, otherwise `Direct`. The remainder is parsed by
-/// `parse_key_chord`, so `"<Leader>"` (empty remainder) is an error.
+/// or `<Leader:r>` selects `Leader`, with the `:r` form setting
+/// `repeat: true`; otherwise the value parses as `Direct`. The remainder is
+/// parsed by `parse_key_chord`, so `"<Leader>"` (empty remainder) is an
+/// error.
 fn parse_binding(value: &str) -> Result<Binding, KeyChordParseError> {
     match strip_leader_prefix(value) {
-        Some(rest) => parse_key_chord(rest).map(Binding::Leader),
+        Some((rest, repeat)) => {
+            parse_key_chord(rest).map(|chord| Binding::Leader { chord, repeat })
+        }
         None => parse_key_chord(value).map(Binding::Direct),
     }
 }
@@ -808,7 +841,8 @@ where
 }
 
 /// serde field serializer for `Option<Binding>`: `None` → `""`,
-/// `Direct(c)` → `c`, `Leader(c)` → `"<Leader>" + c`.
+/// `Direct(c)` → `c`, `Leader { chord, repeat: false }` → `"<Leader>" + c`,
+/// `Leader { chord, repeat: true }` → `"<Leader:r>" + c`.
 fn ser_binding_or_unbind<S>(value: &Option<Binding>, ser: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
@@ -816,7 +850,14 @@ where
     let text = match value {
         None => String::new(),
         Some(Binding::Direct(chord)) => chord.to_string(),
-        Some(Binding::Leader(chord)) => format!("{LEADER_TOKEN}{chord}"),
+        Some(Binding::Leader { chord, repeat }) => {
+            let token = if *repeat {
+                LEADER_REPEAT_TOKEN
+            } else {
+                LEADER_TOKEN
+            };
+            format!("{token}{chord}")
+        }
     };
     ser.serialize_str(&text)
 }
@@ -1154,8 +1195,11 @@ mod tests {
 
     #[test]
     fn strip_leader_prefix_only_at_start() {
-        assert_eq!(strip_leader_prefix("<Leader>s"), Some("s"));
-        assert_eq!(strip_leader_prefix("<Leader>Ctrl+d"), Some("Ctrl+d"));
+        assert_eq!(strip_leader_prefix("<Leader>s"), Some(("s", false)));
+        assert_eq!(
+            strip_leader_prefix("<Leader>Ctrl+d"),
+            Some(("Ctrl+d", false))
+        );
         assert_eq!(strip_leader_prefix("Cmd+<Leader>"), None);
         assert_eq!(strip_leader_prefix("s"), None);
         assert_eq!(strip_leader_prefix(""), None);
@@ -1169,17 +1213,26 @@ mod tests {
         );
         assert_eq!(
             parse_binding("<Leader>s").unwrap(),
-            Binding::Leader(parse_key_chord("s").unwrap())
+            Binding::Leader {
+                chord: parse_key_chord("s").unwrap(),
+                repeat: false,
+            }
         );
         assert_eq!(
             parse_binding("<Leader>Ctrl+d").unwrap(),
-            Binding::Leader(parse_key_chord("Ctrl+d").unwrap())
+            Binding::Leader {
+                chord: parse_key_chord("Ctrl+d").unwrap(),
+                repeat: false,
+            }
         );
     }
 
     #[test]
     fn parse_binding_leader_token_case_insensitive() {
-        let want = Binding::Leader(parse_key_chord("s").unwrap());
+        let want = Binding::Leader {
+            chord: parse_key_chord("s").unwrap(),
+            repeat: false,
+        };
         assert_eq!(parse_binding("<leader>s").unwrap(), want);
         assert_eq!(parse_binding("<LEADER>s").unwrap(), want);
     }
@@ -1218,7 +1271,10 @@ mod tests {
         let parsed: BindingWrapper = serde_json::from_str(r#"{"v":"<Leader>s"}"#).unwrap();
         assert_eq!(
             parsed.v,
-            Some(Binding::Leader(parse_key_chord("s").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("s").unwrap(),
+                repeat: false,
+            })
         );
     }
 
@@ -1228,7 +1284,10 @@ mod tests {
         assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
         assert_eq!(
             s.paste,
-            Some(Binding::Leader(parse_key_chord("p").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("p").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.quit,
@@ -1251,27 +1310,45 @@ mod tests {
         let s = Shortcuts::default();
         assert_eq!(
             s.select_left_pane,
-            Some(Binding::Leader(parse_key_chord("h").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("h").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.split_vertical_pane,
-            Some(Binding::Leader(parse_key_chord("i").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("i").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.kill_window,
-            Some(Binding::Leader(parse_key_chord("Shift+X").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("Shift+X").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.select_window_0,
-            Some(Binding::Leader(parse_key_chord("0").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("0").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.rename_session,
-            Some(Binding::Leader(parse_key_chord("Shift+R").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("Shift+R").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.paste,
-            Some(Binding::Leader(parse_key_chord("p").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("p").unwrap(),
+                repeat: false,
+            })
         );
     }
 
@@ -1285,7 +1362,10 @@ new-window = "Cmd+T"
         let s: Shortcuts = toml::from_str(toml).unwrap();
         assert_eq!(
             s.split_vertical_pane,
-            Some(Binding::Leader(parse_key_chord("g").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("g").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(s.select_window_3, None);
         assert_eq!(
@@ -1315,15 +1395,24 @@ detach-session = "<Leader>d"
         );
         assert_eq!(
             s.enter_copy_mode,
-            Some(Binding::Leader(parse_key_chord("s").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("s").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.detach_session,
-            Some(Binding::Leader(parse_key_chord("d").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(
             s.paste,
-            Some(Binding::Leader(parse_key_chord("p").unwrap()))
+            Some(Binding::Leader {
+                chord: parse_key_chord("p").unwrap(),
+                repeat: false,
+            })
         );
         assert_eq!(s.leader_chords().count(), 27);
     }
@@ -1350,8 +1439,33 @@ detach-session = "<Leader>d"
     #[test]
     fn leader_conflict_detected() {
         let s = Shortcuts {
-            enter_copy_mode: Some(Binding::Leader(parse_key_chord("d").unwrap())),
-            detach_session: Some(Binding::Leader(parse_key_chord("d").unwrap())),
+            enter_copy_mode: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: false,
+            }),
+            detach_session: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: false,
+            }),
+            ..Default::default()
+        };
+        let err = s.validate_no_leader_conflicts().unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert!(err[0].actions.contains(&"enter-copy-mode"));
+        assert!(err[0].actions.contains(&"detach-session"));
+    }
+
+    #[test]
+    fn leader_conflict_detected_across_repeat_flag() {
+        let s = Shortcuts {
+            enter_copy_mode: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: true,
+            }),
+            detach_session: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: false,
+            }),
             ..Default::default()
         };
         let err = s.validate_no_leader_conflicts().unwrap_err();
@@ -1363,7 +1477,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"<Leader>P","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>X","zoom-pane":"<Leader>Z","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300}"#;
+        let expected = r#"{"leader":"Cmd","paste":"<Leader>P","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>X","zoom-pane":"<Leader>Z","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
@@ -1371,7 +1485,10 @@ detach-session = "<Leader>d"
     fn serialize_leader_binding_emits_leader_token() {
         let s = Shortcuts {
             leader: Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap())),
-            detach_session: Some(Binding::Leader(parse_key_chord("d").unwrap())),
+            detach_session: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: false,
+            }),
             ..Default::default()
         };
         let json = serde_json::to_string(&s).unwrap();
@@ -1459,5 +1576,99 @@ detach-session = "<Leader>d"
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(json.contains(r#""leader":"Cmd""#), "got {json}");
+    }
+
+    #[test]
+    fn strip_leader_prefix_detects_repeat_token() {
+        assert_eq!(strip_leader_prefix("<Leader>s"), Some(("s", false)));
+        assert_eq!(strip_leader_prefix("<Leader:r>s"), Some(("s", true)));
+        assert_eq!(
+            strip_leader_prefix("<leader:R>Ctrl+d"),
+            Some(("Ctrl+d", true))
+        );
+        assert_eq!(strip_leader_prefix("s"), None);
+        assert_eq!(strip_leader_prefix(""), None);
+    }
+
+    #[test]
+    fn parse_binding_repeat_leader() {
+        assert_eq!(
+            parse_binding("<Leader:r>h").unwrap(),
+            Binding::Leader {
+                chord: parse_key_chord("h").unwrap(),
+                repeat: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_binding_bare_repeat_token_is_err() {
+        assert!(parse_binding("<Leader:r>").is_err());
+    }
+
+    #[test]
+    fn serialize_repeat_leader_binding_emits_repeat_token() {
+        let s = Shortcuts {
+            detach_session: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: true,
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""detach-session":"<Leader:r>D""#),
+            "a repeat Leader binding serializes with the <Leader:r> token; got {json}"
+        );
+    }
+
+    #[test]
+    fn leader_chords_carries_repeat_flag() {
+        let s = Shortcuts {
+            enter_copy_mode: Some(Binding::Leader {
+                chord: parse_key_chord("s").unwrap(),
+                repeat: true,
+            }),
+            detach_session: Some(Binding::Leader {
+                chord: parse_key_chord("d").unwrap(),
+                repeat: false,
+            }),
+            ..Default::default()
+        };
+        let entries: Vec<_> = s.leader_chords().collect();
+        assert!(
+            entries
+                .iter()
+                .any(|(l, _, _, r)| *l == "enter-copy-mode" && *r)
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(l, _, _, r)| *l == "detach-session" && !*r)
+        );
+    }
+
+    #[test]
+    fn shortcuts_default_repeat_time_is_500() {
+        assert_eq!(Shortcuts::default().repeat_time_ms, 500);
+    }
+
+    #[test]
+    fn shortcuts_parses_repeat_time_ms() {
+        let s: Shortcuts = toml::from_str("repeat-time-ms = 250\n").unwrap();
+        assert_eq!(s.repeat_time_ms, 250);
+    }
+
+    #[test]
+    fn normalize_keeps_zero_repeat_time() {
+        let mut s = Shortcuts {
+            repeat_time_ms: 0,
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(
+            s.repeat_time_ms, 0,
+            "0 means repeat disabled; it must survive normalize()"
+        );
     }
 }
