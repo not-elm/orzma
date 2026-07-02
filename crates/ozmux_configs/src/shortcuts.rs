@@ -523,7 +523,7 @@ impl Default for Shortcuts {
     fn default() -> Self {
         Shortcuts {
             leader: Some(Leader::ModifierTap(TapModifier::Meta)),
-            paste: Some(parse_default_binding("<Leader>p")),
+            paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
             release_webview_focus: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+Escape"))),
             quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
             enter_copy_mode: Some(Binding::Direct(parse_default_chord("Cmd+S"))),
@@ -1284,18 +1284,15 @@ mod tests {
         assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
         assert_eq!(
             s.paste,
-            Some(Binding::Leader {
-                chord: parse_key_chord("p").unwrap(),
-                repeat: false,
-            })
+            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
         );
         assert_eq!(
             s.quit,
             Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap()))
         );
         assert_eq!(s.bindings_iter().count(), 29);
-        assert_eq!(s.direct_chords().count(), 4);
-        assert_eq!(s.leader_chords().count(), 25);
+        assert_eq!(s.direct_chords().count(), 5);
+        assert_eq!(s.leader_chords().count(), 24);
     }
 
     #[test]
@@ -1345,10 +1342,7 @@ mod tests {
         );
         assert_eq!(
             s.paste,
-            Some(Binding::Leader {
-                chord: parse_key_chord("p").unwrap(),
-                repeat: false,
-            })
+            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
         );
     }
 
@@ -1409,12 +1403,9 @@ detach-session = "<Leader>d"
         );
         assert_eq!(
             s.paste,
-            Some(Binding::Leader {
-                chord: parse_key_chord("p").unwrap(),
-                repeat: false,
-            })
+            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
         );
-        assert_eq!(s.leader_chords().count(), 27);
+        assert_eq!(s.leader_chords().count(), 26);
     }
 
     #[test]
@@ -1477,7 +1468,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"<Leader>P","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>X","zoom-pane":"<Leader>Z","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>X","zoom-pane":"<Leader>Z","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 

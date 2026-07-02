@@ -1193,9 +1193,9 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_resolve_to_four() {
+    fn default_bindings_resolve_to_five() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(r.direct.len(), 4);
+        assert_eq!(r.direct.len(), 5);
     }
 
     #[test]
@@ -1211,8 +1211,8 @@ mod tests {
         );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
-            None,
-            "paste is leader-scoped by default (<Leader>p), not direct"
+            Some(ShortcutAction::Paste),
+            "paste is a direct Cmd+V chord by default"
         );
     }
 
@@ -1306,9 +1306,16 @@ mod tests {
 
     #[test]
     fn input_bindings_leader_paste_has_no_direct_chord() {
-        // Default config now binds paste to <Leader>p: the crate dispatcher
-        // must NOT keep a stale Cmd+V direct-paste fallback.
-        let resolved = resolved_shortcuts(OzmuxConfigs::default());
+        use ozmux_configs::shortcuts::parse_key_chord;
+
+        // A leader-scoped paste must NOT leave a Cmd+V direct-paste fallback in
+        // the crate dispatcher.
+        let mut config = OzmuxConfigs::default();
+        config.shortcuts.paste = Some(Binding::Leader {
+            chord: parse_key_chord("p").unwrap(),
+            repeat: false,
+        });
+        let resolved = resolved_shortcuts(config);
         let b = resolved.input_bindings();
         assert!(b.paste.is_none());
     }

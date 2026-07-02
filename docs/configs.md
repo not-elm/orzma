@@ -96,7 +96,7 @@ repeat-time-ms = 500
 # never collide.
 
 # --- existing actions ---
-paste                 = "<Leader>p"    # Was "Cmd+V" pre-tmux-native-shortcuts; set paste = "Cmd+V" to restore.
+paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for the tmux-style leader binding.
 release-webview-focus = "Ctrl+Shift+Escape"
 quit                  = "Cmd+Q"
 enter-copy-mode       = "Cmd+S"        # Both modes: Alacritty vi mode in Default, tmux copy-mode under tmux.
@@ -116,7 +116,7 @@ zoom-pane             = "<Leader>z"    # resize-pane -Z
 new-window            = "<Leader>c"        # new-window
 kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
 next-window           = "<Leader>n"        # next-window
-previous-window       = "<Leader>Shift+N"  # previous-window (p is taken by paste)
+previous-window       = "<Leader>Shift+N"  # previous-window
 select-window-0       = "<Leader>0"        # select-window -t @<id at tmux index 0>
 select-window-1       = "<Leader>1"
 select-window-2       = "<Leader>2"
@@ -225,7 +225,7 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 
 | Action | Default | What it does |
 | --- | --- | --- |
-| `paste` | `<Leader>p` | Paste from the system clipboard. |
+| `paste` | `Cmd+V` | Paste from the system clipboard. |
 | `release-webview-focus` | `Ctrl+Shift+Escape` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit ozmux. |
 | `enter-copy-mode` | `Cmd+S` | Enter copy mode. |
@@ -292,9 +292,9 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   actions. Unbind the stock default explicitly (`new-window = ""`) or pick a
   free chord.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes `paste` and all 24 tmux actions, silently
+  stock defaults that includes all 24 tmux actions, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
-  rebind the actions you need to direct chords, e.g. `paste = "Cmd+V"`.
+  rebind the actions you need to direct chords, e.g. `next-window = "Cmd+]"`.
 
 ## Copy-mode keys
 
