@@ -4,6 +4,7 @@
 //! `send-keys -X`).
 
 mod default_mode;
+mod tmux_mode;
 
 use bevy::prelude::*;
 use ozma_tty_engine::{SelectionType, ViMotion};
@@ -81,13 +82,6 @@ pub(crate) struct ViExitRequest {
 }
 
 /// Opens a search / jump prompt for `entity` (tmux mode only for now).
-// NOTE: no gather fires this yet (Task 5 wires the tmux-mode applier and its
-// gather); silences a transient dead_code warning that clears once that
-// wiring lands.
-#[expect(
-    dead_code,
-    reason = "constructed once the Task 5 tmux-mode wiring lands"
-)]
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ViPromptRequest {
     /// The copy-mode surface entity.
@@ -98,13 +92,6 @@ pub(crate) struct ViPromptRequest {
 }
 
 /// Repeats the previous search on `entity` (tmux mode only for now).
-// NOTE: no gather fires this yet (Task 5 wires the tmux-mode applier and its
-// gather); silences a transient dead_code warning that clears once that
-// wiring lands.
-#[expect(
-    dead_code,
-    reason = "constructed once the Task 5 tmux-mode wiring lands"
-)]
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ViSearchStepRequest {
     /// The copy-mode surface entity.
@@ -119,6 +106,9 @@ pub(crate) struct ViActionPlugin;
 
 impl Plugin for ViActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(default_mode::DefaultModeViPlugin);
+        app.add_plugins((
+            default_mode::DefaultModeViPlugin,
+            tmux_mode::TmuxModeViPlugin,
+        ));
     }
 }
