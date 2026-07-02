@@ -4,17 +4,15 @@
 //! `send-keys -X`).
 
 mod default_mode;
+mod keymap;
 mod tmux_mode;
 
 use bevy::prelude::*;
+pub(crate) use keymap::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use ozma_tty_engine::{SelectionType, ViMotion};
 use ozmux_tmux::PromptKind;
 
 /// A viewport scroll kind, shared by both appliers.
-// NOTE: no gather constructs a `ViScrollKind` yet (Task 6 wires the copy-mode
-// key gathers to fire `ViScrollRequest`); until then only `apply_scroll`
-// matches on it, which trips dead_code.
-#[expect(dead_code, reason = "constructed once the Task 6 gather wiring lands")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ViScrollKind {
     /// One page toward history.
@@ -107,6 +105,7 @@ pub(crate) struct ViActionPlugin;
 impl Plugin for ViActionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
+            keymap::CopyModeKeymapPlugin,
             default_mode::DefaultModeViPlugin,
             tmux_mode::TmuxModeViPlugin,
         ));
