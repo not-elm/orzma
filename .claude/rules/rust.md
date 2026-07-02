@@ -106,6 +106,7 @@ Required — import, don't inline:
 | ----------------------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------- |
 | Inline path in signature / body           | `fn f(x: foo::bar::Baz)`                        | Add `use foo::bar::Baz;` and write `fn f(x: Baz)`                         |
 | Inline path in `run_if` or type parameter | `.add_message::<bevy::window::WindowResized>()` | `use bevy::window::WindowResized;` then `.add_message::<WindowResized>()` |
+| Inline path in `.after()` / `.before()` / `.in_set()` system-ordering | `.after(crate::input::InputPhase::FocusedKey)` | `use crate::input::InputPhase;` then `.after(InputPhase::FocusedKey)` |
 
 ## Naming — Query parameters
 

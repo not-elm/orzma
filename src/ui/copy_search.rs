@@ -4,6 +4,7 @@
 //! `send-keys -X -t %N <kind> -- '<text>'` to tmux via the active connection.
 
 use crate::font::TerminalUiFont;
+use crate::input::InputPhase;
 use crate::theme;
 use bevy::app::{App, Plugin};
 use bevy::ecs::message::MessageReader;
@@ -25,7 +26,7 @@ impl Plugin for CopyPromptPlugin {
             .add_systems(
                 Update,
                 handle_prompt_input
-                    .after(crate::input::InputPhase::FocusedKey)
+                    .after(InputPhase::FocusedKey)
                     .run_if(|p: Res<CopyPrompt>| p.open.is_some()),
             )
             .add_systems(

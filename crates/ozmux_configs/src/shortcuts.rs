@@ -35,6 +35,36 @@ pub enum Key {
 }
 
 impl Key {
+    /// True when this logical key resolves to a physical `KeyCode` at runtime,
+    /// so a leader bound to it can actually fire.
+    ///
+    /// # Invariants
+    ///
+    /// The accepted domain MUST mirror `key_to_keycode` in
+    /// `src/input/shortcuts.rs` exactly: an ASCII-alphanumeric `Char` and the
+    /// named keys below map; `Plus`, `Other`, and any non-alphanumeric `Char`
+    /// do not. A divergence would let an unmappable leader pass config
+    /// validation yet resolve to no `KeyCode`, silently disabling the whole
+    /// prefix table.
+    pub fn maps_to_physical_key(&self) -> bool {
+        // NOTE: keep this domain in lockstep with `key_to_keycode`
+        // (src/input/shortcuts.rs); a divergence silently disables the prefix
+        // table (see the invariant above).
+        match self {
+            Key::Char(c) => c.is_ascii_alphanumeric(),
+            Key::Escape
+            | Key::Space
+            | Key::Enter
+            | Key::Tab
+            | Key::Backspace
+            | Key::ArrowUp
+            | Key::ArrowDown
+            | Key::ArrowLeft
+            | Key::ArrowRight => true,
+            Key::Plus | Key::Other(_) => false,
+        }
+    }
+
     fn from_token(s: &str) -> Self {
         match s {
             "Escape" => Key::Escape,
@@ -174,7 +204,7 @@ pub enum KeyChordParseError {
 /// `Super` all set `meta`; `Alt` / `Opt` / `Option` all set `alt`. ASCII letter
 /// keys are normalized to lowercase (Shift is held in `Modifiers`, never in
 /// key case). Empty string is NOT accepted here; the field-level
-/// `deser_chord_or_unbind` handles the unbind case before calling this.
+/// `deser_binding_or_unbind` handles the unbind case before calling this.
 pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
     if s.is_empty() {
         return Err(KeyChordParseError::EmptyToken);
@@ -224,22 +254,6 @@ pub fn parse_key_chord(s: &str) -> Result<KeyChord, KeyChordParseError> {
     })
 }
 
-/// serde field-level deserializer for `Option<KeyChord>` that interprets
-/// the empty string as `None` (unbind) and any other string as a chord
-/// to parse via `parse_key_chord`. Apply with
-/// `#[serde(deserialize_with = "deser_chord_or_unbind")]` on every
-/// `Option<KeyChord>` field of `Bindings`.
-pub fn deser_chord_or_unbind<'de, D>(d: D) -> Result<Option<KeyChord>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let s = String::deserialize(d)?;
-    if s.is_empty() {
-        return Ok(None);
-    }
-    parse_key_chord(&s).map(Some).map_err(DeError::custom)
-}
-
 /// One chord-collision entry. Carried inside
 /// `OzmuxConfigsError::DuplicateChords` (defined in `error.rs`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -248,6 +262,314 @@ pub struct DuplicateChord {
     pub chord: KeyChord,
     /// Action labels (kebab-case TOML keys) that share this chord. Length >= 2.
     pub actions: Vec<&'static str>,
+}
+
+/// A bare modifier that can act as a tap leader. `Shift` is intentionally
+/// excluded (too noisy as a tap).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TapModifier {
+    /// `Cmd` / `Command` / `Meta` / `Super`.
+    Meta,
+    /// `Ctrl`.
+    Ctrl,
+    /// `Alt` / `Opt` / `Option`.
+    Alt,
+}
+
+/// The leader in either form: a key-containing chord, or a bare modifier tap.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Leader {
+    /// A chord leader (`Ctrl+A`): press+release the chord, then the next key.
+    Chord(KeyChord),
+    /// A modifier-tap leader (`Cmd`): tap the bare modifier, then the next key.
+    ModifierTap(TapModifier),
+}
+
+/// A resolved shortcut binding: a direct chord, or a leader-scoped chord
+/// reached after the configured `leader`. The `<Leader>` token in a config
+/// value selects the `Leader` variant.
+///
+/// serde derive is intentionally absent: the string grammar `"Cmd+V"` /
+/// `"<Leader>s"` is (de)serialized by the field functions above (a derived
+/// enum would emit externally-tagged output, not the string form).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Binding {
+    /// Fires when the chord is pressed directly.
+    Direct(KeyChord),
+    /// Fires when the chord is pressed after the leader (`<Leader>x`).
+    Leader(KeyChord),
+}
+
+impl Binding {
+    /// The chord to match: the direct chord, or the second-key chord for a
+    /// leader-scoped binding.
+    pub fn chord(&self) -> &KeyChord {
+        match self {
+            Binding::Direct(chord) | Binding::Leader(chord) => chord,
+        }
+    }
+}
+
+/// User-facing shortcut configuration: the leader chord plus one flat binding
+/// per action. Each value is a chord string (`"Cmd+V"`), a leader-scoped chord
+/// (`"<Leader>s"`), or `""` (unbind). The `kebab-case` rename maps each TOML
+/// key to its field; struct-level `#[serde(default)]` + `impl Default` seed
+/// omitted actions from their active defaults; `deny_unknown_fields` rejects
+/// typos (and the retired `[shortcuts.bindings]` / `[shortcuts.prefix_bindings]`
+/// tables and the old `prefix` key) at load time.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
+pub struct Shortcuts {
+    /// The leader for `<Leader>`-scoped bindings: a chord (`Ctrl+A`) or a bare
+    /// modifier tap (`Cmd`). Empty/absent = disabled.
+    #[serde(deserialize_with = "deser_leader", serialize_with = "ser_leader")]
+    pub leader: Option<Leader>,
+    /// Paste the system clipboard into the active terminal.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub paste: Option<Binding>,
+    /// Release keyboard focus from a focused webview back to the terminal.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub release_webview_focus: Option<Binding>,
+    /// Quit the ozmux application.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub quit: Option<Binding>,
+    /// Enter copy mode (Alacritty vi mode) on the focused terminal in
+    /// `AppMode::Default`.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub enter_copy_mode: Option<Binding>,
+    /// Detach the current tmux session and switch to Default mode.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub detach_session: Option<Binding>,
+    /// Timeout (ms) for a modifier-tap leader: press+release within this window
+    /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
+    /// normalized to 300.
+    pub leader_tap_timeout_ms: u64,
+}
+
+impl Default for Shortcuts {
+    fn default() -> Self {
+        Shortcuts {
+            leader: Some(Leader::ModifierTap(TapModifier::Meta)),
+            paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
+            release_webview_focus: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+Escape"))),
+            quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
+            enter_copy_mode: Some(Binding::Direct(parse_default_chord("Cmd+S"))),
+            detach_session: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+D"))),
+            leader_tap_timeout_ms: 300,
+        }
+    }
+}
+
+impl Shortcuts {
+    /// `(label, &Option<Binding>, action)` for every action, in stable order.
+    /// The single source of truth for the action schema.
+    pub fn bindings_iter(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &Option<Binding>, ShortcutAction)> + '_ {
+        [
+            ("paste", &self.paste, ShortcutAction::Paste),
+            (
+                "release-webview-focus",
+                &self.release_webview_focus,
+                ShortcutAction::ReleaseWebviewFocus,
+            ),
+            ("quit", &self.quit, ShortcutAction::Quit),
+            (
+                "enter-copy-mode",
+                &self.enter_copy_mode,
+                ShortcutAction::EnterCopyMode,
+            ),
+            (
+                "detach-session",
+                &self.detach_session,
+                ShortcutAction::DetachSession,
+            ),
+        ]
+        .into_iter()
+    }
+
+    /// Bound direct chords only: `(label, chord, action)`.
+    pub fn direct_chords(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &KeyChord, ShortcutAction)> + '_ {
+        self.bindings_iter()
+            .filter_map(|(label, bound, action)| match bound {
+                Some(Binding::Direct(chord)) => Some((label, chord, action)),
+                _ => None,
+            })
+    }
+
+    /// Bound leader-scoped chords only: `(label, chord, action)`.
+    pub fn leader_chords(
+        &self,
+    ) -> impl Iterator<Item = (&'static str, &KeyChord, ShortcutAction)> + '_ {
+        self.bindings_iter()
+            .filter_map(|(label, bound, action)| match bound {
+                Some(Binding::Leader(chord)) => Some((label, chord, action)),
+                _ => None,
+            })
+    }
+
+    /// Detects chord collisions among direct bindings.
+    pub(crate) fn validate_no_direct_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
+        conflicts(self.direct_chords())
+    }
+
+    /// Detects chord collisions among leader-scoped bindings.
+    pub(crate) fn validate_no_leader_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
+        conflicts(self.leader_chords())
+    }
+
+    /// Normalizes numeric fields: a `leader_tap_timeout_ms` of 0 is meaningless
+    /// (a tap would never fit), so it reverts to the 300 default.
+    pub(crate) fn normalize(&mut self) {
+        if self.leader_tap_timeout_ms == 0 {
+            self.leader_tap_timeout_ms = 300;
+        }
+    }
+}
+
+/// Shortcut actions reachable under forward-only key routing. tmux owns the
+/// pane/window operations now; these are the ozmux-local GUI actions.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub enum ShortcutAction {
+    /// Paste the system clipboard into the active terminal.
+    Paste,
+    /// Releases keyboard focus from a focused webview back to the terminal.
+    ReleaseWebviewFocus,
+    /// Quits the ozmux application.
+    Quit,
+    /// Detaches from the tmux session and returns to Default single-terminal mode.
+    DetachSession,
+    /// Enters copy mode (Alacritty vi mode) on the focused terminal in
+    /// `AppMode::Default`.
+    EnterCopyMode,
+}
+
+/// The literal token marking a leader-scoped binding value (`<Leader>x`).
+/// Matched case-insensitively at the START of the value only.
+const LEADER_TOKEN: &str = "<Leader>";
+
+/// Strips a leading, case-insensitive `<Leader>` token, returning the remaining
+/// chord text. `None` when the value is not leader-scoped.
+fn strip_leader_prefix(value: &str) -> Option<&str> {
+    let (head, rest) = value.split_at_checked(LEADER_TOKEN.len())?;
+    head.eq_ignore_ascii_case(LEADER_TOKEN).then_some(rest)
+}
+
+/// Parses a non-empty config value into a `Binding`: a leading `<Leader>`
+/// selects `Leader`, otherwise `Direct`. The remainder is parsed by
+/// `parse_key_chord`, so `"<Leader>"` (empty remainder) is an error.
+fn parse_binding(value: &str) -> Result<Binding, KeyChordParseError> {
+    match strip_leader_prefix(value) {
+        Some(rest) => parse_key_chord(rest).map(Binding::Leader),
+        None => parse_key_chord(value).map(Binding::Direct),
+    }
+}
+
+/// serde field deserializer for `Option<Binding>`: empty string is unbind
+/// (`None`); any other string parses via `parse_binding`.
+fn deser_binding_or_unbind<'de, D>(d: D) -> Result<Option<Binding>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    if s.is_empty() {
+        return Ok(None);
+    }
+    parse_binding(&s).map(Some).map_err(DeError::custom)
+}
+
+/// serde field serializer for `Option<Binding>`: `None` → `""`,
+/// `Direct(c)` → `c`, `Leader(c)` → `"<Leader>" + c`.
+fn ser_binding_or_unbind<S>(value: &Option<Binding>, ser: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let text = match value {
+        None => String::new(),
+        Some(Binding::Direct(chord)) => chord.to_string(),
+        Some(Binding::Leader(chord)) => format!("{LEADER_TOKEN}{chord}"),
+    };
+    ser.serialize_str(&text)
+}
+
+/// If `value` is exactly one allowed tap-modifier token (case-insensitive),
+/// returns it. Returns `None` for `Shift`, any `+`-joined chord, or a
+/// non-modifier token, so those fall through to chord parsing.
+fn single_tap_modifier(value: &str) -> Option<TapModifier> {
+    let (mods, _) = parse_modifier_to_bit(value)?;
+    if mods.meta {
+        Some(TapModifier::Meta)
+    } else if mods.ctrl {
+        Some(TapModifier::Ctrl)
+    } else if mods.alt {
+        Some(TapModifier::Alt)
+    } else {
+        None
+    }
+}
+
+/// The canonical token a `TapModifier` serializes to.
+fn tap_modifier_token(m: TapModifier) -> &'static str {
+    match m {
+        TapModifier::Meta => "Cmd",
+        TapModifier::Ctrl => "Ctrl",
+        TapModifier::Alt => "Alt",
+    }
+}
+
+/// Parses a non-empty `leader` value: a single allowed tap-modifier token →
+/// `ModifierTap`; anything else → `parse_key_chord` → `Chord`. A bare `Shift`
+/// (and any other bare modifier) errors via `parse_key_chord` (no key).
+fn parse_leader(value: &str) -> Result<Leader, KeyChordParseError> {
+    if let Some(m) = single_tap_modifier(value) {
+        return Ok(Leader::ModifierTap(m));
+    }
+    parse_key_chord(value).map(Leader::Chord)
+}
+
+/// serde field deserializer for the leader: empty string → `None`; a bare
+/// tap-modifier → `ModifierTap`; otherwise a chord.
+fn deser_leader<'de, D>(d: D) -> Result<Option<Leader>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = String::deserialize(d)?;
+    if s.is_empty() {
+        return Ok(None);
+    }
+    parse_leader(&s).map(Some).map_err(DeError::custom)
+}
+
+/// serde field serializer for the leader: `None` → `""`, `Chord(c)` → `c`,
+/// `ModifierTap(m)` → its canonical token.
+fn ser_leader<S>(value: &Option<Leader>, ser: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let text = match value {
+        None => String::new(),
+        Some(Leader::Chord(chord)) => chord.to_string(),
+        Some(Leader::ModifierTap(m)) => tap_modifier_token(*m).to_string(),
+    };
+    ser.serialize_str(&text)
 }
 
 fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
@@ -285,132 +607,54 @@ fn parse_modifier_to_bit(token: &str) -> Option<(Modifiers, &'static str)> {
     }
 }
 
-/// User-facing shortcut configuration. Wraps the named-field `Bindings`
-/// table. Single field — kept as a struct rather than aliased so the
-/// existing `/configs/shortcuts` HTTP wire shape stays stable.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
-#[serde(default, deny_unknown_fields)]
-pub struct Shortcuts {
-    /// The named-field binding table. See `Bindings` for the field list and merge semantics.
-    pub bindings: Bindings,
-}
-
-/// User-facing shortcut configuration. Each Action gets its own named
-/// `Option<KeyChord>` field:
-///   - `Some(chord)` = bound to that chord
-///   - `None`        = explicitly unbound (via TOML `""`)
-///
-/// TOML reads the `[shortcuts.bindings]` table; the `kebab-case` serde
-/// rename maps each `paste = "Cmd+V"` line to the matching field.
-/// `#[serde(default)]` at struct level seeds missing fields from
-/// `Bindings::default()`. `deny_unknown_fields` rejects typos at load time.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case", default, deny_unknown_fields)]
-pub struct Bindings {
-    /// Paste the system clipboard into the active terminal.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub paste: Option<KeyChord>,
-    /// Releases keyboard focus from a focused webview back to the terminal.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub release_webview_focus: Option<KeyChord>,
-    /// Quits the ozmux application.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub quit: Option<KeyChord>,
-    /// Enters copy mode (Alacritty vi mode) on the focused terminal in
-    /// `AppMode::Default`.
-    #[serde(deserialize_with = "deser_chord_or_unbind")]
-    pub enter_copy_mode: Option<KeyChord>,
-    /// Detach the current tmux session and switch to Default mode.
-    #[serde(deserialize_with = "deser_chord_or_unbind", default)]
-    pub detach_session: Option<KeyChord>,
-}
-
 fn parse_default_chord(s: &str) -> KeyChord {
     parse_key_chord(s).unwrap_or_else(|e| panic!("invalid default chord {s:?}: {e}"))
 }
 
-impl Default for Bindings {
-    fn default() -> Self {
-        Bindings {
-            paste: Some(parse_default_chord("Cmd+V")),
-            release_webview_focus: Some(parse_default_chord("Ctrl+Shift+Escape")),
-            quit: Some(parse_default_chord("Cmd+Q")),
-            enter_copy_mode: Some(parse_default_chord("Cmd+S")),
-            detach_session: Some(parse_default_chord("Ctrl+Shift+D")),
-        }
+/// Detects chord collisions across a table's bound entries. Returns a `Vec`
+/// sorted by chord (BTreeMap key order) for deterministic error output.
+fn conflicts<'a>(
+    entries: impl Iterator<Item = (&'static str, &'a KeyChord, ShortcutAction)>,
+) -> Result<(), Vec<DuplicateChord>> {
+    let mut by_chord: BTreeMap<KeyChord, Vec<&'static str>> = BTreeMap::new();
+    for (label, chord, _action) in entries {
+        by_chord.entry(chord.clone()).or_default().push(label);
     }
-}
-
-impl Bindings {
-    /// Yields `(action_label, &Option<KeyChord>, Action)` for every
-    /// implemented Action. Single source of truth for
-    /// `validate_no_conflicts()` and external counters
-    /// (e.g., daemon bootstrap binding count).
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<Item = (&'static str, &Option<KeyChord>, ShortcutAction)> + '_ {
-        [
-            ("paste", &self.paste, ShortcutAction::Paste),
-            (
-                "release-webview-focus",
-                &self.release_webview_focus,
-                ShortcutAction::ReleaseWebviewFocus,
-            ),
-            ("quit", &self.quit, ShortcutAction::Quit),
-            (
-                "enter-copy-mode",
-                &self.enter_copy_mode,
-                ShortcutAction::EnterCopyMode,
-            ),
-            (
-                "detach-session",
-                &self.detach_session,
-                ShortcutAction::DetachSession,
-            ),
-        ]
+    let dupes: Vec<DuplicateChord> = by_chord
         .into_iter()
-    }
-
-    /// Detects chord collisions across fields. Returns a `Vec` sorted by chord
-    /// (via BTreeMap key order) for deterministic error output. Caller maps
-    /// the Vec into `OzmuxConfigsError::DuplicateChords`.
-    pub fn validate_no_conflicts(&self) -> Result<(), Vec<DuplicateChord>> {
-        let mut by_chord: BTreeMap<KeyChord, Vec<&'static str>> = BTreeMap::new();
-        for (label, bound, _action) in self.iter() {
-            if let Some(chord) = bound {
-                by_chord.entry(chord.clone()).or_default().push(label);
-            }
-        }
-        let dupes: Vec<DuplicateChord> = by_chord
-            .into_iter()
-            .filter(|(_, labels)| labels.len() >= 2)
-            .map(|(chord, actions)| DuplicateChord { chord, actions })
-            .collect();
-        if dupes.is_empty() { Ok(()) } else { Err(dupes) }
-    }
-}
-
-/// Shortcut actions reachable under forward-only key routing. tmux owns the
-/// pane/window operations now; these are the ozmux-local GUI actions.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "kebab-case")]
-pub enum ShortcutAction {
-    /// Paste the system clipboard into the active terminal.
-    Paste,
-    /// Releases keyboard focus from a focused webview back to the terminal.
-    ReleaseWebviewFocus,
-    /// Quits the ozmux application.
-    Quit,
-    /// Detaches from the tmux session and returns to Default single-terminal mode.
-    DetachSession,
-    /// Enters copy mode (Alacritty vi mode) on the focused terminal in
-    /// `AppMode::Default`.
-    EnterCopyMode,
+        .filter(|(_, labels)| labels.len() >= 2)
+        .map(|(chord, actions)| DuplicateChord { chord, actions })
+        .collect();
+    if dupes.is_empty() { Ok(()) } else { Err(dupes) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn maps_to_physical_key_true_for_alphanumeric_and_named() {
+        assert!(Key::Char('a').maps_to_physical_key());
+        assert!(Key::Char('Z').maps_to_physical_key());
+        assert!(Key::Char('7').maps_to_physical_key());
+        assert!(Key::Escape.maps_to_physical_key());
+        assert!(Key::Space.maps_to_physical_key());
+        assert!(Key::Enter.maps_to_physical_key());
+        assert!(Key::Tab.maps_to_physical_key());
+        assert!(Key::Backspace.maps_to_physical_key());
+        assert!(Key::ArrowUp.maps_to_physical_key());
+        assert!(Key::ArrowDown.maps_to_physical_key());
+        assert!(Key::ArrowLeft.maps_to_physical_key());
+        assert!(Key::ArrowRight.maps_to_physical_key());
+    }
+
+    #[test]
+    fn maps_to_physical_key_false_for_plus_other_and_punctuation() {
+        assert!(!Key::Plus.maps_to_physical_key());
+        assert!(!Key::Other("f12".into()).maps_to_physical_key());
+        assert!(!Key::Char('.').maps_to_physical_key());
+        assert!(!Key::Char('-').maps_to_physical_key());
+    }
 
     #[test]
     fn key_parses_single_char() {
@@ -594,95 +838,256 @@ mod tests {
     }
 
     #[test]
-    fn deser_chord_or_unbind_handles_empty_string() {
-        let json = r#"{"v":""}"#;
-        let parsed: OptionWrapper = serde_json::from_str(json).unwrap();
+    fn strip_leader_prefix_only_at_start() {
+        assert_eq!(strip_leader_prefix("<Leader>s"), Some("s"));
+        assert_eq!(strip_leader_prefix("<Leader>Ctrl+d"), Some("Ctrl+d"));
+        assert_eq!(strip_leader_prefix("Cmd+<Leader>"), None);
+        assert_eq!(strip_leader_prefix("s"), None);
+        assert_eq!(strip_leader_prefix(""), None);
+    }
+
+    #[test]
+    fn parse_binding_direct_and_leader() {
+        assert_eq!(
+            parse_binding("Cmd+V").unwrap(),
+            Binding::Direct(parse_key_chord("Cmd+V").unwrap())
+        );
+        assert_eq!(
+            parse_binding("<Leader>s").unwrap(),
+            Binding::Leader(parse_key_chord("s").unwrap())
+        );
+        assert_eq!(
+            parse_binding("<Leader>Ctrl+d").unwrap(),
+            Binding::Leader(parse_key_chord("Ctrl+d").unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_binding_leader_token_case_insensitive() {
+        let want = Binding::Leader(parse_key_chord("s").unwrap());
+        assert_eq!(parse_binding("<leader>s").unwrap(), want);
+        assert_eq!(parse_binding("<LEADER>s").unwrap(), want);
+    }
+
+    #[test]
+    fn parse_binding_empty_after_leader_is_err() {
+        assert!(parse_binding("<Leader>").is_err());
+    }
+
+    #[test]
+    fn binding_chord_extracts_inner() {
+        assert_eq!(
+            parse_binding("Cmd+V").unwrap().chord(),
+            &parse_key_chord("Cmd+V").unwrap()
+        );
+        assert_eq!(
+            parse_binding("<Leader>s").unwrap().chord(),
+            &parse_key_chord("s").unwrap()
+        );
+    }
+
+    #[derive(serde::Deserialize)]
+    struct BindingWrapper {
+        #[serde(deserialize_with = "deser_binding_or_unbind")]
+        v: Option<Binding>,
+    }
+
+    #[test]
+    fn deser_binding_empty_is_unbind() {
+        let parsed: BindingWrapper = serde_json::from_str(r#"{"v":""}"#).unwrap();
         assert!(parsed.v.is_none());
     }
 
     #[test]
-    fn deser_chord_or_unbind_handles_valid_chord() {
-        let json = r#"{"v":"Cmd+S"}"#;
-        let parsed: OptionWrapper = serde_json::from_str(json).unwrap();
-        let c = parsed.v.unwrap();
-        assert_eq!(c.key, Key::Char('s'));
-        assert!(c.modifiers.meta);
-    }
-
-    #[derive(serde::Deserialize)]
-    struct OptionWrapper {
-        #[serde(deserialize_with = "deser_chord_or_unbind")]
-        v: Option<KeyChord>,
+    fn deser_binding_leader_value() {
+        let parsed: BindingWrapper = serde_json::from_str(r#"{"v":"<Leader>s"}"#).unwrap();
+        assert_eq!(
+            parsed.v,
+            Some(Binding::Leader(parse_key_chord("s").unwrap()))
+        );
     }
 
     #[test]
-    fn bindings_default_has_active_fields_some() {
-        let b = Bindings::default();
-        assert!(b.paste.is_some());
-        assert!(b.release_webview_focus.is_some());
-        assert!(b.quit.is_some());
-        assert!(b.detach_session.is_some());
+    fn shortcuts_default_is_active_direct_bindings() {
+        let s = Shortcuts::default();
+        assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
+        assert_eq!(
+            s.paste,
+            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
+        );
+        assert_eq!(
+            s.quit,
+            Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap()))
+        );
+        assert_eq!(s.bindings_iter().count(), 5);
+        assert_eq!(s.direct_chords().count(), 5);
+        assert_eq!(s.leader_chords().count(), 0);
     }
 
     #[test]
-    fn validate_no_conflicts_default_ok() {
-        let b = Bindings::default();
-        assert!(b.validate_no_conflicts().is_ok());
+    fn default_shortcuts_has_no_conflicts() {
+        let s = Shortcuts::default();
+        assert!(s.validate_no_direct_conflicts().is_ok());
+        assert!(s.validate_no_leader_conflicts().is_ok());
     }
 
     #[test]
-    fn validate_no_conflicts_detects_user_conflict() {
-        let b = Bindings {
-            paste: Some(parse_key_chord("Ctrl+Shift+Escape").unwrap()),
+    fn shortcuts_parses_flat_leader_and_bindings() {
+        let toml = r#"
+leader = "Ctrl+A"
+enter-copy-mode = "<Leader>s"
+detach-session = "<Leader>d"
+"#;
+        let s: Shortcuts = toml::from_str(toml).unwrap();
+        assert_eq!(
+            s.leader,
+            Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap()))
+        );
+        assert_eq!(
+            s.enter_copy_mode,
+            Some(Binding::Leader(parse_key_chord("s").unwrap()))
+        );
+        assert_eq!(
+            s.detach_session,
+            Some(Binding::Leader(parse_key_chord("d").unwrap()))
+        );
+        assert_eq!(
+            s.paste,
+            Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
+        );
+        assert_eq!(s.leader_chords().count(), 2);
+    }
+
+    #[test]
+    fn shortcuts_rejects_unknown_field() {
+        assert!(toml::from_str::<Shortcuts>("resize-pane-down = \"d\"\n").is_err());
+    }
+
+    #[test]
+    fn direct_conflict_detected() {
+        let s = Shortcuts {
+            paste: Some(Binding::Direct(
+                parse_key_chord("Ctrl+Shift+Escape").unwrap(),
+            )),
             ..Default::default()
         };
-        let err = b.validate_no_conflicts().unwrap_err();
-        assert_eq!(err.len(), 1, "exactly one duplicate-chord entry");
+        let err = s.validate_no_direct_conflicts().unwrap_err();
+        assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"paste"));
         assert!(err[0].actions.contains(&"release-webview-focus"));
     }
 
     #[test]
-    fn iter_yields_5_entries() {
-        let b = Bindings::default();
-        assert_eq!(b.iter().count(), 5);
+    fn leader_conflict_detected() {
+        let s = Shortcuts {
+            enter_copy_mode: Some(Binding::Leader(parse_key_chord("d").unwrap())),
+            detach_session: Some(Binding::Leader(parse_key_chord("d").unwrap())),
+            ..Default::default()
+        };
+        let err = s.validate_no_leader_conflicts().unwrap_err();
+        assert_eq!(err.len(), 1);
+        assert!(err[0].actions.contains(&"enter-copy-mode"));
+        assert!(err[0].actions.contains(&"detach-session"));
     }
 
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        // The Bindings struct serializes its fields in declaration order.
-        // The kebab-case rename applies.
-        let expected = r#"{"bindings":{"paste":{"key":"v","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"release-webview-focus":{"key":"Escape","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}},"quit":{"key":"q","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"enter-copy-mode":{"key":"s","modifiers":{"ctrl":false,"shift":false,"alt":false,"meta":true}},"detach-session":{"key":"d","modifiers":{"ctrl":true,"shift":true,"alt":false,"meta":false}}}}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","leader-tap-timeout-ms":300}"#;
         assert_eq!(json, expected);
     }
 
     #[test]
-    fn bindings_default_paste_is_cmd_v() {
-        let b = Bindings::default();
-        let chord = b.paste.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('v'));
-        assert!(chord.modifiers.meta);
-        assert!(!chord.modifiers.ctrl && !chord.modifiers.shift && !chord.modifiers.alt);
+    fn serialize_leader_binding_emits_leader_token() {
+        let s = Shortcuts {
+            leader: Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap())),
+            detach_session: Some(Binding::Leader(parse_key_chord("d").unwrap())),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""leader":"Ctrl+A""#),
+            "leader serializes as its chord string; got {json}"
+        );
+        assert!(
+            json.contains(r#""detach-session":"<Leader>D""#),
+            "a Leader binding serializes with the <Leader> token; got {json}"
+        );
     }
 
     #[test]
-    fn bindings_default_quit_is_cmd_q() {
-        let b = Bindings::default();
-        let chord = b.quit.as_ref().unwrap();
-        assert_eq!(chord.key, Key::Char('q'));
-        assert!(chord.modifiers.meta);
-        assert!(!chord.modifiers.ctrl && !chord.modifiers.shift && !chord.modifiers.alt);
+    fn parse_leader_bare_modifiers() {
+        assert_eq!(
+            parse_leader("Cmd").unwrap(),
+            Leader::ModifierTap(TapModifier::Meta)
+        );
+        assert_eq!(
+            parse_leader("command").unwrap(),
+            Leader::ModifierTap(TapModifier::Meta)
+        );
+        assert_eq!(
+            parse_leader("Super").unwrap(),
+            Leader::ModifierTap(TapModifier::Meta)
+        );
+        assert_eq!(
+            parse_leader("Ctrl").unwrap(),
+            Leader::ModifierTap(TapModifier::Ctrl)
+        );
+        assert_eq!(
+            parse_leader("Option").unwrap(),
+            Leader::ModifierTap(TapModifier::Alt)
+        );
     }
 
     #[test]
-    fn iter_binds_cmd_v_to_paste() {
-        let b = Bindings::default();
-        let chord = parse_key_chord("Cmd+V").unwrap();
-        let action = b
-            .iter()
-            .find_map(|(_, bound, action)| (bound.as_ref() == Some(&chord)).then_some(action))
-            .expect("Cmd+V must resolve");
-        assert!(matches!(action, ShortcutAction::Paste));
+    fn parse_leader_chord_still_works() {
+        assert_eq!(
+            parse_leader("Ctrl+A").unwrap(),
+            Leader::Chord(parse_key_chord("Ctrl+A").unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_leader_rejects_bare_shift() {
+        assert!(parse_leader("Shift").is_err());
+    }
+
+    #[test]
+    fn shortcuts_parses_bare_modifier_leader_and_timeout() {
+        let toml =
+            "leader = \"Cmd\"\nleader-tap-timeout-ms = 250\ndetach-session = \"<Leader>d\"\n";
+        let s: Shortcuts = toml::from_str(toml).unwrap();
+        assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
+        assert_eq!(s.leader_tap_timeout_ms, 250);
+    }
+
+    #[test]
+    fn shortcuts_leader_shift_is_parse_error() {
+        assert!(toml::from_str::<Shortcuts>("leader = \"Shift\"\n").is_err());
+    }
+
+    #[test]
+    fn shortcuts_default_timeout_is_300() {
+        assert_eq!(Shortcuts::default().leader_tap_timeout_ms, 300);
+    }
+
+    #[test]
+    fn normalize_clamps_zero_timeout_to_300() {
+        let mut s = Shortcuts {
+            leader_tap_timeout_ms: 0,
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(s.leader_tap_timeout_ms, 300);
+    }
+
+    #[test]
+    fn serialize_bare_modifier_leader_emits_token() {
+        let s = Shortcuts {
+            leader: Some(Leader::ModifierTap(TapModifier::Meta)),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(json.contains(r#""leader":"Cmd""#), "got {json}");
     }
 }

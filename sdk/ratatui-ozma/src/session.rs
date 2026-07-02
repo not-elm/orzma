@@ -150,11 +150,11 @@ impl Ozma {
     /// spawns the background reader thread.
     ///
     /// The socket path is resolved from an ordered candidate list (see
-    /// [`resolve_ozma_sock_candidates`]): the tmux session environment first — ozmux
+    /// `resolve_ozma_sock_candidates`): the tmux session environment first — ozmux
     /// rewrites it on every attach, so it names the currently-attached ozmux — then
     /// the inherited `$OZMA_SOCK`, which can be a stale snapshot from an ozmux that
     /// has since exited (the pane forked while that value was live). `connect()`
-    /// tries each in order via [`connect_first_reachable`] and uses the first that is
+    /// tries each in order via `connect_first_reachable` and uses the first that is
     /// actually reachable, so a stale candidate cannot shadow the live one.
     pub fn connect() -> OzmaResult<Self> {
         let candidates = resolve_ozma_sock_candidates();
@@ -291,7 +291,7 @@ impl Ozma {
     /// as the widget state. Let it drop at the end of the `terminal.draw` closure
     /// so the [`crate::OzmaBackend`] can read the frame during that draw's flush.
     /// Drains any pending compositing notifications from the reader thread into
-    /// the frame so widget code can read them via [`FramePlacements::take_compositing`].
+    /// the frame so widget code can read them via `FramePlacements::take_compositing`.
     pub fn frame(&self) -> MutexGuard<'_, FramePlacements> {
         let mut frame = self.frame.lock().unwrap_or_else(|e| e.into_inner());
         frame.placements.clear();

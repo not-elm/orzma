@@ -85,7 +85,7 @@ impl Plugin for TmuxSessionPlugin {
 struct TmuxClientAttached;
 
 /// This frame's drained transport events, shared across the drain chain.
-/// Refreshed by [`drain_tmux_transport`] when the drain or the prior batch is
+/// Refreshed by `drain_tmux_transport` when the drain or the prior batch is
 /// non-empty; read-only downstream.
 #[derive(Resource, Default)]
 pub struct TmuxEventBatch(Vec<TransportEvent>);

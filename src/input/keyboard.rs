@@ -4,6 +4,7 @@
 
 use crate::input::bindings::{ReservedChord, TerminalInputBindings};
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
+use crate::input::shortcuts::{LeaderGate, LeaderPending, is_modifier_key};
 use crate::input::{InputPhase, current_modifiers};
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
@@ -23,6 +24,7 @@ impl Plugin for KeyboardInputPlugin {
                 Update,
                 dispatch_input
                     .in_set(InputPhase::FocusedKey)
+                    .in_set(LeaderGate::Read)
                     .run_if(on_message::<KeyboardInput>),
             );
     }
@@ -44,6 +46,7 @@ fn dispatch_input(
     mut events: MessageReader<KeyboardInput>,
     bindings: Res<TerminalInputBindings>,
     keys: Res<ButtonInput<KeyCode>>,
+    leader_pending: Res<LeaderPending>,
     terminal: Query<
         Entity,
         (
@@ -62,8 +65,21 @@ fn dispatch_input(
         return;
     };
     let mods = current_terminal_modifiers(&keys);
+    // NOTE: while a leader chord is pending its second key, suppress ONLY that
+    // one key (the first non-modifier Pressed this frame) from the PTY — the
+    // leader machine (`app_shortcut_handler`, ordered after this via
+    // LeaderGate::Read.before(Advance)) consumes it. Skip bare modifier events
+    // for the slot: the second chord's own modifier emits a Pressed event ahead
+    // of the main key, and consuming the slot on it would leak the real second
+    // key to the PTY. Clearing the whole batch would instead drop other keys
+    // typed in the same frame.
+    let mut suppress_leader_second_key = leader_pending.0;
     for ev in events.read() {
         if ev.state != ButtonState::Pressed {
+            continue;
+        }
+        if suppress_leader_second_key && !is_modifier_key(ev.key_code) {
+            suppress_leader_second_key = false;
             continue;
         }
         if bindings
@@ -135,6 +151,7 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Captured>()
+            .init_resource::<LeaderPending>()
             .add_plugins(KeyboardInputPlugin)
             .add_observer(|ev: On<PasteAction>, mut c: ResMut<Captured>| {
                 let _ = ev;
@@ -185,6 +202,53 @@ mod tests {
         let c = app.world().resource::<Captured>();
         assert_eq!(c.paste, 1);
         assert!(c.keys.is_empty());
+    }
+
+    #[test]
+    fn leader_pending_suppresses_pty_typing() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert!(
+            c.keys.is_empty(),
+            "a pending leader must suppress PTY typing so the second key reaches only the leader machine"
+        );
+        assert_eq!(c.paste, 0);
+    }
+
+    #[test]
+    fn leader_pending_types_trailing_same_frame_keys() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        // The leader's second key (a) is suppressed; a trailing same-frame key
+        // (b) must still reach the PTY.
+        press(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        press(&mut app, KeyCode::KeyB, Key::Character("b".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert_eq!(c.keys, vec![TerminalKey::Text("b".into())]);
+    }
+
+    #[test]
+    fn leader_pending_suppression_skips_bare_modifier() {
+        let mut app = test_app();
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().resource_mut::<LeaderPending>().0 = true;
+        // The second chord's modifier (Ctrl) emits its own Pressed event ahead
+        // of the main key; it must NOT consume the suppression slot, or the real
+        // second key (d) would leak to the PTY.
+        press(&mut app, KeyCode::ControlLeft, Key::Control);
+        press(&mut app, KeyCode::KeyD, Key::Character("d".into()));
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert!(
+            c.keys.is_empty(),
+            "the real second key must be the one suppressed, not the leading bare modifier"
+        );
     }
 
     #[test]

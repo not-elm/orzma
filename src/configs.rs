@@ -1,7 +1,10 @@
 //! Loads `OzmuxConfigs` synchronously at app build time and exposes it as
-//! a Bevy Resource. Chord-conflict errors (DuplicateChords) are fatal
-//! (exit 2). Parse / IO errors warn and fall back to defaults so the GUI
-//! remains startable for users with stale or invalid config files.
+//! a Bevy Resource. Config validation errors (duplicate direct or prefix
+//! chords, a leader that shadows a direct binding, prefix bindings with no
+//! leader, an unmappable leader key, an out-of-range font size) are fatal
+//! (exit 2) so a mistake in one field never silently discards the whole config.
+//! Parse / IO errors warn and fall back to defaults so the GUI remains
+//! startable for users with stale or invalid config files.
 
 use bevy::prelude::*;
 use ozmux_configs::OzmuxConfigs;
@@ -24,9 +27,16 @@ impl Plugin for OzmuxConfigsPlugin {
             {
                 OzmuxConfigs::default()
             }
-            // Chord conflicts are an architectural failure that must be surfaced loudly.
-            ozmux_configs::OzmuxConfigsError::DuplicateChords(_) => {
-                eprintln!("ozmux: shortcut config has duplicate chords:\n  {err}");
+            // NOTE: config VALIDATION failures must exit(2), not fall through to
+            // the warn+default arm below — defaulting would silently discard the
+            // user's ENTIRE config (font, mouse, theme, direct bindings), not
+            // just the offending field. Only parse / IO errors warn+default.
+            ozmux_configs::OzmuxConfigsError::DuplicateChords(_)
+            | ozmux_configs::OzmuxConfigsError::DuplicatePrefixChords(_)
+            | ozmux_configs::OzmuxConfigsError::LeaderShadowsDirectBinding { .. }
+            | ozmux_configs::OzmuxConfigsError::UnmappableLeader { .. }
+            | ozmux_configs::OzmuxConfigsError::InvalidFontSize { .. } => {
+                eprintln!("ozmux: config is invalid:\n  {err}");
                 std::process::exit(2);
             }
             // Any other error (TOML syntax error, stale schema, IO failure): warn + default.
@@ -70,9 +80,11 @@ mod tests {
     #[test]
     fn plugin_inserts_configs_resource_matching_defaults_when_no_config_file() {
         let _guard = env_guard();
-        // SAFETY: env mutations are serialized by ENV_GUARD for this crate's tests.
+        let nonexistent = std::env::temp_dir().join("ozmux_configs_no_file_defaults.toml");
+        let _ = std::fs::remove_file(&nonexistent);
+        // SAFETY: env mutations are serialized by env_guard() for this crate's tests.
         unsafe {
-            std::env::remove_var("OZMUX_CONFIG");
+            std::env::set_var("OZMUX_CONFIG", &nonexistent);
         }
 
         let mut app = App::new();
@@ -82,7 +94,12 @@ mod tests {
             .get_resource::<OzmuxConfigsResource>()
             .expect("plugin must insert resource");
         let defaults = OzmuxConfigs::default();
-        assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
+        assert_eq!(res.shortcuts, defaults.shortcuts);
+
+        // SAFETY: env mutation cleanup under the same env_guard.
+        unsafe {
+            std::env::remove_var("OZMUX_CONFIG");
+        }
     }
 
     #[test]
@@ -102,7 +119,7 @@ mod tests {
             .get_resource::<OzmuxConfigsResource>()
             .expect("plugin must insert resource on NotFound");
         let defaults = OzmuxConfigs::default();
-        assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
+        assert_eq!(res.shortcuts, defaults.shortcuts);
 
         // SAFETY: env mutation cleanup under the same env_guard.
         unsafe {
@@ -127,7 +144,7 @@ mod tests {
             .get_resource::<OzmuxConfigsResource>()
             .expect("plugin must still insert a resource on broken-toml fallback");
         let defaults = OzmuxConfigs::default();
-        assert_eq!(res.shortcuts.bindings, defaults.shortcuts.bindings);
+        assert_eq!(res.shortcuts, defaults.shortcuts);
 
         unsafe {
             std::env::remove_var("OZMUX_CONFIG");

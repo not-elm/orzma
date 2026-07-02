@@ -15,21 +15,17 @@ fn missing_file_yields_defaults() {
     let configs = load_with_overrides(Some(nonexistent), None, None).unwrap();
     let defaults = OzmuxConfigs::default();
     assert_eq!(
-        configs.shortcuts.bindings.iter().count(),
-        defaults.shortcuts.bindings.iter().count()
+        configs.shortcuts.bindings_iter().count(),
+        defaults.shortcuts.bindings_iter().count()
     );
 }
 
 #[test]
 fn empty_file_yields_defaults() {
     let configs = load_with_overrides(Some(fixture("empty.toml")), None, None).unwrap();
-    let defaults = OzmuxConfigs::default();
-    assert_eq!(
-        configs.shortcuts.bindings.iter().count(),
-        defaults.shortcuts.bindings.iter().count()
-    );
+    assert_eq!(configs.shortcuts, OzmuxConfigs::default().shortcuts);
     assert!(
-        configs.shortcuts.bindings.paste.is_some(),
+        configs.shortcuts.paste.is_some(),
         "paste must have a default binding"
     );
 }
@@ -39,15 +35,15 @@ fn bindings_section_overrides_one_binding_keeps_others() {
     let configs = load_with_overrides(Some(fixture("bindings_replace.toml")), None, None).unwrap();
     let quit = configs
         .shortcuts
-        .bindings
         .quit
         .as_ref()
-        .expect("bindings_replace fixture rebinds quit");
+        .expect("bindings_replace fixture rebinds quit")
+        .chord();
     assert_eq!(quit.key, Key::Char('y'));
     assert!(quit.modifiers.meta, "Cmd modifier must be set");
-    let defaults = OzmuxConfigs::default();
     assert_eq!(
-        configs.shortcuts.bindings.paste, defaults.shortcuts.bindings.paste,
+        configs.shortcuts.paste,
+        OzmuxConfigs::default().shortcuts.paste,
         "unspecified bindings must remain at defaults"
     );
 }
@@ -68,10 +64,10 @@ fn modifier_binding_accepted() {
     let configs = load_with_overrides(Some(fixture("modifier_binding.toml")), None, None).unwrap();
     let quit = configs
         .shortcuts
-        .bindings
         .quit
         .as_ref()
-        .expect("modifier_binding fixture rebinds quit");
+        .expect("modifier_binding fixture rebinds quit")
+        .chord();
     assert!(quit.modifiers.shift, "the fixture's binding carries Shift");
 }
 

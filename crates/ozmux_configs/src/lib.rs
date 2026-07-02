@@ -80,13 +80,32 @@ impl OzmuxConfigs {
     }
 
     fn normalize(&mut self) {
+        self.shortcuts.normalize();
         self.inactive_pane.normalize();
         self.mouse.normalize();
     }
 
     fn validate(&self) -> OzmuxConfigsResult<()> {
-        if let Err(dupes) = self.shortcuts.bindings.validate_no_conflicts() {
+        let sc = &self.shortcuts;
+        if let Err(dupes) = sc.validate_no_direct_conflicts() {
             return Err(OzmuxConfigsError::DuplicateChords(dupes));
+        }
+        if let Err(dupes) = sc.validate_no_leader_conflicts() {
+            return Err(OzmuxConfigsError::DuplicatePrefixChords(dupes));
+        }
+        if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
+            if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
+            {
+                return Err(OzmuxConfigsError::LeaderShadowsDirectBinding {
+                    chord: leader.clone(),
+                    action,
+                });
+            }
+            if !leader.key.maps_to_physical_key() {
+                return Err(OzmuxConfigsError::UnmappableLeader {
+                    chord: leader.clone(),
+                });
+            }
         }
         let size = self.font.size;
         if !(size > 0.0 && size <= 200.0) {
@@ -142,6 +161,12 @@ pub mod test_support {
 mod validate_tests {
     use super::*;
 
+    fn parse_validated(s: &str) -> OzmuxConfigsResult<OzmuxConfigs> {
+        let mut c: OzmuxConfigs = toml::from_str(s).unwrap();
+        c.normalize();
+        c.validate().map(|()| c)
+    }
+
     #[test]
     fn validate_rejects_font_size_out_of_range() {
         let mut configs = OzmuxConfigs::default();
@@ -153,10 +178,7 @@ mod validate_tests {
 
     #[test]
     fn validate_detects_chord_conflict() {
-        let toml_str = r#"
-[shortcuts.bindings]
-release-webview-focus = "Cmd+V"
-"#;
+        let toml_str = "[shortcuts]\nrelease-webview-focus = \"Cmd+V\"\n";
         let mut configs: OzmuxConfigs = toml::from_str(toml_str).unwrap();
         configs.normalize();
         let err = configs.validate().unwrap_err();
@@ -168,6 +190,65 @@ release-webview-focus = "Cmd+V"
             }
             _ => panic!("expected DuplicateChords, got {err:?}"),
         }
+    }
+
+    #[test]
+    fn validate_rejects_leader_shadowing_direct_binding() {
+        let toml_str = "[shortcuts]\nleader = \"Cmd+Q\"\ndetach-session = \"<Leader>d\"\n";
+        let err = parse_validated(toml_str).unwrap_err();
+        match err {
+            OzmuxConfigsError::LeaderShadowsDirectBinding { action, .. } => {
+                assert_eq!(action, "quit")
+            }
+            other => panic!("expected LeaderShadowsDirectBinding, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_rejects_leader_table_internal_dupe() {
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\ndetach-session = \"<Leader>d\"\nenter-copy-mode = \"<Leader>d\"\n";
+        let err = parse_validated(toml_str).unwrap_err();
+        assert!(matches!(err, OzmuxConfigsError::DuplicatePrefixChords(_)));
+    }
+
+    #[test]
+    fn validate_allows_cross_keyspace_same_key() {
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-copy-mode = \"s\"\ndetach-session = \"<Leader>s\"\n";
+        assert!(
+            parse_validated(toml_str).is_ok(),
+            "direct `s` and leader-scoped `s` occupy different key-spaces"
+        );
+    }
+
+    #[test]
+    fn validate_allows_leader_with_bindings() {
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\ndetach-session = \"<Leader>d\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unmappable_leader() {
+        let toml_str = "[shortcuts]\nleader = \"Cmd+Plus\"\ndetach-session = \"<Leader>d\"\n";
+        let err = parse_validated(toml_str).unwrap_err();
+        assert!(matches!(err, OzmuxConfigsError::UnmappableLeader { .. }));
+    }
+
+    #[test]
+    fn validate_accepts_mappable_leader() {
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-copy-mode = \"<Leader>s\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_bare_modifier_tap_leader() {
+        let toml_str = "[shortcuts]\nleader = \"Cmd\"\ndetach-session = \"<Leader>d\"\n";
+        assert!(parse_validated(toml_str).is_ok());
+    }
+
+    #[test]
+    fn validate_tap_leader_coexists_with_cmd_direct_bindings() {
+        let toml_str = "[shortcuts]\nleader = \"Cmd\"\n";
+        assert!(parse_validated(toml_str).is_ok());
     }
 }
 
@@ -188,12 +269,9 @@ mod integration_tests {
     }
 
     #[test]
-    fn empty_toml_returns_default_bindings() {
+    fn empty_toml_returns_default_shortcuts() {
         let c = parse("");
-        assert_eq!(
-            c.shortcuts.bindings,
-            OzmuxConfigs::default().shortcuts.bindings
-        );
+        assert_eq!(c.shortcuts, OzmuxConfigs::default().shortcuts);
     }
 
     #[test]
@@ -206,10 +284,7 @@ mod integration_tests {
 
     #[test]
     fn unknown_binding_field_is_rejected() {
-        let toml_str = r#"
-[shortcuts.bindings]
-resize-pane-down = "Cmd+Shift+J"
-"#;
+        let toml_str = "[shortcuts]\nresize-pane-down = \"Cmd+Shift+J\"\n";
         let err = toml::from_str::<OzmuxConfigs>(toml_str).unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -291,19 +366,20 @@ resize-pane-down = "Cmd+Shift+J"
 
     #[test]
     fn user_override_replaces_one_binding_keeps_others() {
-        let c = parse("[shortcuts.bindings]\nquit = \"Cmd+Shift+Q\"\n");
-        let quit = c.shortcuts.bindings.quit.as_ref().unwrap();
+        use shortcuts::Binding;
+        let c = parse("[shortcuts]\nquit = \"Cmd+Shift+Q\"\n");
+        let quit = c.shortcuts.quit.as_ref().unwrap().chord();
         assert_eq!(quit.key, shortcuts::Key::Char('q'));
         assert!(quit.modifiers.meta && quit.modifiers.shift);
         assert!(
-            c.shortcuts.bindings.paste.is_some(),
+            matches!(c.shortcuts.paste, Some(Binding::Direct(_))),
             "unspecified active bindings keep their defaults",
         );
     }
 
     #[test]
     fn user_unbind_with_empty_string_sets_field_to_none() {
-        let c = parse("[shortcuts.bindings]\nquit = \"\"\n");
-        assert!(c.shortcuts.bindings.quit.is_none());
+        let c = parse("[shortcuts]\nquit = \"\"\n");
+        assert!(c.shortcuts.quit.is_none());
     }
 }

@@ -12,7 +12,7 @@ ozmux resolves the config path in this order:
 3. `~/.config/ozmux/config.toml` — the default.
 
 Unknown sections are rejected at startup, as are unknown keys in `[ozma]`,
-`[keyboard]`, and `[shortcuts.bindings]`. Unknown keys in `[font]`, `[mouse]`,
+`[keyboard]`, and `[shortcuts]`. Unknown keys in `[font]`, `[mouse]`,
 and `[inactive_pane]` are silently ignored. Most invalid values are startup
 errors too; the few that are silently clamped or reverted are noted inline
 below.
@@ -70,9 +70,23 @@ tint = 0.85               # f32 0..=1. Tint strength (0 = off, 1 = full tint).
 webview_dim = 0.55        # f32 0..=1. Brightness multiplier for inactive webview overlays.
 webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = full color, 1 = grey).
 
-[shortcuts.bindings]
-# Rebind with a chord string, or unbind with "". Two actions may not share
-# the same chord (startup error). See "Chord syntax" below.
+[shortcuts]
+# The leader for "<Leader>..." bindings. Either a full chord ("Ctrl+A": press
+# the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
+# tap the modifier with no other key, then the next key). Defaults to "Cmd", and
+# is active only when at least one action is bound to "<Leader>..." — so you can
+# use "<Leader>p" without setting this, and a stray tap never eats a key when you
+# bind no leader action. Set "" to disable it. "Shift" is not allowed as a tap.
+# Choose a leader distinct from your tmux prefix.
+leader = "Cmd"
+# Modifier-tap window (ms): a press+release within this time, with no intervening
+# key or mouse press, counts as a tap. Default 300; 0 reverts to 300.
+leader-tap-timeout-ms = 300
+
+# Each action takes ONE value: a direct chord ("Cmd+V"), a leader-scoped
+# chord ("<Leader>s" = leader then s), or "" to unbind. Rebinding to a chord
+# already used by another action is a startup validation error. A direct
+# chord and a "<Leader>"-prefixed chord with the same key never collide.
 paste                 = "Cmd+V"
 release-webview-focus = "Ctrl+Shift+Escape"
 quit                  = "Cmd+Q"
@@ -106,3 +120,9 @@ startup.
 | `quit` | `Cmd+Q` | Quit ozmux. |
 | `enter-copy-mode` | `Cmd+S` | Enter copy mode. |
 | `detach-session` | `Ctrl+Shift+D` | Detach the current tmux session. |
+
+Note: some actions only take effect in one mode. `enter-copy-mode` is active in
+Default (single-terminal) mode only — under tmux, copy mode is entered through
+tmux's own key bindings. `detach-session` is active under tmux only. This applies
+whether the action is bound directly or as a leader-scoped key (e.g. `<Leader>s`),
+and regardless of whether the leader is a chord or a modifier tap.

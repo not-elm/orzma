@@ -1,5 +1,6 @@
 //! Error type for ozmux config loading.
 
+use crate::shortcuts::{DuplicateChord, KeyChord};
 use std::path::PathBuf;
 
 /// Result alias used throughout the `ozmux_configs` crate.
@@ -28,10 +29,36 @@ pub enum OzmuxConfigsError {
         source: toml::de::Error,
     },
 
-    /// One or more KeyChord collisions across the `[shortcuts.bindings]` table.
+    /// One or more KeyChord collisions among direct `[shortcuts]` bindings.
     /// Collected in a single pass; reported all-at-once to avoid whack-a-mole.
-    #[error("duplicate chord(s) in shortcuts.bindings: {}", format_dupes(.0))]
-    DuplicateChords(Vec<crate::shortcuts::DuplicateChord>),
+    #[error("duplicate chord(s) among direct [shortcuts] bindings: {}", format_dupes(.0))]
+    DuplicateChords(Vec<DuplicateChord>),
+
+    /// One or more KeyChord collisions among leader-scoped (`<Leader>`)
+    /// bindings. Collected in a single pass; reported all-at-once.
+    #[error("duplicate chord(s) among <Leader> bindings: {}", format_dupes(.0))]
+    DuplicatePrefixChords(Vec<DuplicateChord>),
+
+    /// The configured leader chord duplicates a direct `[shortcuts]` binding's
+    /// chord. The leader is matched first, so that direct binding would be
+    /// unreachable.
+    #[error("leader chord {chord} shadows the direct binding for {action}")]
+    LeaderShadowsDirectBinding {
+        /// The colliding chord (the leader).
+        chord: KeyChord,
+        /// The direct-binding action label it shadows.
+        action: &'static str,
+    },
+
+    /// The configured leader chord's logical key has no physical `KeyCode`
+    /// mapping, so its `<Leader>` bindings would be silently unreachable.
+    #[error(
+        "leader chord {chord} has no physical key mapping; its <Leader> bindings would be unreachable"
+    )]
+    UnmappableLeader {
+        /// The unmappable leader chord.
+        chord: KeyChord,
+    },
 
     /// The configured font size is outside the supported range.
     #[error("font size {size} is out of range (expected 0 < size <= 200)")]
@@ -45,7 +72,7 @@ pub enum OzmuxConfigsError {
     HomeDirNotFound,
 }
 
-fn format_dupes(dupes: &[crate::shortcuts::DuplicateChord]) -> String {
+fn format_dupes(dupes: &[DuplicateChord]) -> String {
     dupes
         .iter()
         .map(|d| format!("{} = [{}]", d.chord, d.actions.join(", ")))

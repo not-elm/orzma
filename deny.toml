@@ -14,6 +14,11 @@ ignore = [
     # `paste` is unmaintained but has no replacement; pulled in transitively
     # (via the bevy / cef dependency tree), not used directly by this workspace.
     "RUSTSEC-2024-0436",
+    # `anyhow` Error::downcast_mut unsoundness; pulled in transitively, and this
+    # workspace never calls downcast_mut on a context()-wrapped error.
+    "RUSTSEC-2026-0190",
+    # `ttf-parser` is unmaintained; pulled in transitively via the font/text stack.
+    "RUSTSEC-2026-0192",
 ]
 
 [licenses]

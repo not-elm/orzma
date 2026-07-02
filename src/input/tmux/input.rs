@@ -12,7 +12,7 @@
 use super::pane_hit::tmux_pane_at_phys;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::shortcuts::Shortcuts;
+use crate::input::shortcuts::{LeaderGate, LeaderPending, LeaderStep, Shortcuts, step_leader};
 use crate::mode::AppMode;
 use crate::mode::tmux::confirm_prompt::{ConfirmState, parse_confirm_before};
 use crate::mode::tmux::rename_prompt::{RenameKind, RenamePrompt, RenameSubject};
@@ -51,6 +51,7 @@ impl Plugin for InputPlugin {
             (
                 forward_keys_to_tmux
                     .in_set(InputPhase::FocusedKey)
+                    .in_set(LeaderGate::Advance)
                     .run_if(in_state(AppMode::Tmux))
                     .run_if(on_message::<KeyboardInput>),
                 forward_wheel_to_tmux
@@ -118,6 +119,7 @@ fn forward_keys_to_tmux(
     mut focused_webview: ResMut<FocusedWebview>,
     mut copy_queries: ResMut<CopyModeQueries>,
     mut prefix_pending: Local<bool>,
+    mut leader_pending: ResMut<LeaderPending>,
     mut handles: Query<&mut TerminalHandle>,
     mut client: Option<Single<&mut TmuxClient>>,
     (keys, ime, bindings, resolved): (
@@ -136,6 +138,7 @@ fn forward_keys_to_tmux(
     // prefix state machine.
     if copy_prompt.open.is_some() {
         *prefix_pending = false;
+        leader_pending.0 = false;
         events.clear();
         return;
     }
@@ -143,6 +146,7 @@ fn forward_keys_to_tmux(
     // system reads the y/n answer. Drain here so no key leaks to tmux or the pane.
     if confirm_state.is_some() {
         *prefix_pending = false;
+        leader_pending.0 = false;
         events.clear();
         return;
     }
@@ -150,6 +154,7 @@ fn forward_keys_to_tmux(
     // reads the typed text. Drain here so no key leaks to tmux or the pane.
     if rename.prompt.is_some() {
         *prefix_pending = false;
+        leader_pending.0 = false;
         events.clear();
         return;
     }
@@ -157,12 +162,14 @@ fn forward_keys_to_tmux(
     // navigation keys would both garble IME composition and double-send.
     if ime.is_composing() {
         *prefix_pending = false;
+        leader_pending.0 = false;
         events.clear();
         return;
     }
     let focused = windows.single().map(|w| w.focused).unwrap_or(false);
     if !focused {
         *prefix_pending = false;
+        leader_pending.0 = false;
         events.clear();
         return;
     }
@@ -255,6 +262,7 @@ fn forward_keys_to_tmux(
         }
 
         *prefix_pending = false;
+        leader_pending.0 = false;
         events.clear();
         return;
     }
@@ -266,8 +274,34 @@ fn forward_keys_to_tmux(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        if let Some(action) = resolved.match_gui_action(ev.key_code, cfg_mods) {
-            // A GUI action abandons any pending tmux prefix sequence.
+        // NOTE: leader dispatch must run before direct matching and tmux
+        // forwarding so a swallowed/resolved leader key never reaches
+        // plan_forward. cfg_mods is a per-frame snapshot, so a same-frame
+        // leader+second-key batch shares one modifier read.
+        // NOTE: OS key auto-repeat delivers extra Pressed events; feeding them
+        // to step_leader would toggle `pending` by parity. Treat a repeat as
+        // Passthrough without stepping the machine — EXCEPT while a leader is
+        // pending, where a repeat (e.g. a held leader chord) must be swallowed,
+        // not forwarded, or the held chord leaks to the pane on every repeat.
+        let step = if ev.repeat {
+            if leader_pending.0 {
+                continue;
+            }
+            LeaderStep::Passthrough
+        } else {
+            step_leader(&mut leader_pending.0, &resolved, ev.key_code, cfg_mods)
+        };
+        let gui_action = match step {
+            LeaderStep::RunAction(action) => Some(action),
+            LeaderStep::Swallow => {
+                *prefix_pending = false;
+                continue;
+            }
+            LeaderStep::Passthrough => resolved.match_gui_action(ev.key_code, cfg_mods),
+        };
+        if let Some(action) = gui_action {
+            // A GUI action (direct or via the leader) abandons any pending tmux
+            // prefix sequence.
             *prefix_pending = false;
             match action {
                 ShortcutAction::Quit => {

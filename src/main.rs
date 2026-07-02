@@ -181,18 +181,26 @@ fn ensure_utf8_locale_env() {
     {
         return;
     }
-    // NOTE: `en_US.UTF-8` is guaranteed present on macOS (the only platform that
-    // ships the bundled `.app` hitting launchd's stripped env); other platforms
-    // may lack it, where forcing it would fail `setlocale` and warn, so the
-    // write is macOS-only.
-    #[cfg(target_os = "macos")]
-    // SAFETY: the caller invokes this before App::new() spawns any task-pool
-    // thread, so no other thread can read the environment concurrently with
-    // this write (see # Invariants).
+    set_utf8_ctype_fallback();
+}
+
+/// Writes the `en_US.UTF-8` `LC_CTYPE` fallback. macOS is the only platform that
+/// ships the bundled `.app` hitting launchd's stripped env; elsewhere the locale
+/// may be absent and forcing it would fail `setlocale`, so this is a no-op there
+/// (see the `#[cfg(not(...))]` sibling).
+#[cfg(target_os = "macos")]
+fn set_utf8_ctype_fallback() {
+    // SAFETY: the caller (`ensure_utf8_locale_env`) runs before `App::new()`
+    // spawns any task-pool thread, so no other thread can read the environment
+    // concurrently with this write (see that fn's # Invariants).
     unsafe {
         std::env::set_var("LC_CTYPE", UTF8_CTYPE_FALLBACK);
     }
 }
+
+/// No-op: the UTF-8 `LC_CTYPE` fallback is only written on macOS.
+#[cfg(not(target_os = "macos"))]
+fn set_utf8_ctype_fallback() {}
 
 /// The UTF-8 `LC_CTYPE` ozmux substitutes when the effective locale is not
 /// UTF-8, or `None` to keep the inherited locale.
