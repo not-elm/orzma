@@ -10,6 +10,7 @@ use crate::shortcuts::Shortcuts;
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 use serde::Deserialize;
 
+pub mod copy_mode;
 pub mod error;
 pub mod font;
 pub mod inactive_pane;
@@ -25,6 +26,9 @@ pub mod shortcuts;
 pub struct OzmuxConfigs {
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
+    /// `[copy-mode]` table: copy-mode key bindings shared by both modes.
+    #[serde(rename = "copy-mode")]
+    pub copy_mode: copy_mode::CopyModeConfig,
     /// Font configuration.
     pub font: FontConfig,
     /// Mouse-input configuration.
@@ -92,6 +96,9 @@ impl OzmuxConfigs {
         }
         if let Err(dupes) = sc.validate_no_leader_conflicts() {
             return Err(OzmuxConfigsError::DuplicatePrefixChords(dupes));
+        }
+        if let Err(dupes) = self.copy_mode.validate_no_duplicate_keys() {
+            return Err(OzmuxConfigsError::DuplicateCopyModeKeys(dupes));
         }
         if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
             if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
