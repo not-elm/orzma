@@ -1,17 +1,22 @@
 //! Child-process exit observer: sends `AppExit` when the shell quits.
 
-use crate::spawn::OzmaTerminal;
 use bevy::prelude::*;
+use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::TerminalChildExit;
 
-pub(crate) struct ExitPlugin;
+/// Registers the shell-exit observer.
+pub(super) struct DefaultExitPlugin;
 
-impl Plugin for ExitPlugin {
+impl Plugin for DefaultExitPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_child_exit);
     }
 }
 
+// NOTE: not Default-only despite the module path — detached tmux panes never
+// emit TerminalChildExit, but the adopted tmux gateway keeps OzmaTerminal and
+// a real PtyHandle, so this observer also fires (alongside
+// on_gateway_child_exit) when the gateway shell dies during tmux mode.
 fn on_child_exit(
     ev: On<TerminalChildExit>,
     mut exit: MessageWriter<AppExit>,
@@ -25,8 +30,8 @@ fn on_child_exit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spawn::OzmaTerminal;
     use bevy::ecs::message::MessageReader;
+    use ozma_terminal::OzmaTerminal;
     use ozma_tty_engine::TerminalChildExit;
 
     #[test]

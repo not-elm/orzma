@@ -1,11 +1,8 @@
 //! Ozma standalone VT terminal component: Bevy plugin and shared types.
 
-mod exit;
-mod layout;
 mod spawn;
 
 use crate::spawn::on_add_inject_render;
-use crate::{exit::ExitPlugin, layout::LayoutPlugin};
 use bevy::prelude::*;
 pub use spawn::{
     OzmaSpawnOptions, OzmaTerminal, OzmaTerminalBundle, OzmaTerminalConfig, cells_for,
@@ -14,9 +11,8 @@ pub use spawn::{
 
 /// Bevy plugin that registers the Ozma VT terminal subsystems.
 ///
-/// Adds `ExitPlugin` (fires `AppExit` on shell exit) and `LayoutPlugin`
-/// (window-fill resize). Does not call `insert_state` — consumers must
-/// manage `AppMode` and spawn `OzmaTerminal` entities independently.
+/// Does not call `insert_state` — consumers must manage `AppMode` and spawn
+/// `OzmaTerminal` entities independently.
 pub struct OzmaTerminalPlugin {
     /// Shell override. `None` defers to `$SHELL` at spawn time.
     pub config_shell: Option<String>,
@@ -27,7 +23,6 @@ impl Plugin for OzmaTerminalPlugin {
         app.insert_resource(OzmaTerminalConfig {
             shell: self.config_shell.clone(),
         })
-        .add_plugins((ExitPlugin, LayoutPlugin))
         .add_observer(on_add_inject_render);
     }
 }

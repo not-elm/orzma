@@ -1,16 +1,17 @@
 //! Window-fill resize system for the Ozma terminal.
 
-use crate::spawn::{OzmaTerminal, cells_for};
 use bevy::ecs::lifecycle::Add;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowResized};
+use ozma_terminal::{OzmaTerminal, cells_for};
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 
-pub(crate) struct LayoutPlugin;
+/// Registers the window-fill resize system.
+pub(super) struct DefaultLayoutPlugin;
 
-impl Plugin for LayoutPlugin {
+impl Plugin for DefaultLayoutPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OzmaLastSize>()
             .add_message::<WindowResized>()
@@ -36,6 +37,11 @@ fn reset_last_size(_trigger: On<Add, OzmaTerminal>, mut last_size: ResMut<OzmaLa
     last_size.0 = None;
 }
 
+// NOTE: not Default-only despite the module path — the query needs
+// &mut PtyHandle + &mut Coalescer, so detached tmux panes never match, but the
+// adopted tmux gateway (OzmaTerminal + real PtyHandle) is then the single
+// match: this system keeps resizing the hidden gateway PTY during tmux mode.
+// Do not gate it on AppMode::Default without re-examining gateway behavior.
 fn resize_to_window(
     mut commands: Commands,
     mut last_size: ResMut<OzmaLastSize>,

@@ -1,6 +1,8 @@
 //! Default-mode (`AppMode::Default`) processing: the single-PTY shell UI
 //! lifecycle, host-side input gates/shortcuts, and webview pointer routing.
 
+mod exit;
+mod layout;
 mod webview;
 
 pub(crate) use webview::DefaultWebviewPointerPlugin;
@@ -33,11 +35,13 @@ pub(crate) struct DefaultModePlugin;
 
 impl Plugin for DefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            ensure_default_mode_ui
-                .run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>))),
-        );
+        app.add_plugins((exit::DefaultExitPlugin, layout::DefaultLayoutPlugin))
+            .add_systems(
+                Update,
+                ensure_default_mode_ui.run_if(
+                    in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>)),
+                ),
+            );
     }
 }
 
