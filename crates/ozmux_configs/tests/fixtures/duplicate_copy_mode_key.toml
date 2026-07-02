@@ -1,0 +1,3 @@
+[copy-mode]
+yank = "x"
+exit = ["x", "q"]

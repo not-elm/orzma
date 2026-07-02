@@ -1,3 +1,4 @@
+use ozmux_configs::copy_mode::{CopyModeBaseKey, CopyModeKey};
 use ozmux_configs::shortcuts::{Binding, Key, parse_key_chord};
 use ozmux_configs::test_support::load_with_overrides;
 use ozmux_configs::{OzmuxConfigs, OzmuxConfigsError};
@@ -96,6 +97,39 @@ fn tmux_action_rebind_and_unbind() {
         Some(Binding::Leader(parse_key_chord("g").unwrap()))
     );
     assert_eq!(configs.shortcuts.select_window_5, None);
+}
+
+#[test]
+fn copy_mode_rebind_and_unbind() {
+    let configs = load_with_overrides(Some(fixture("copy_mode_binding.toml")), None, None).unwrap();
+    assert_eq!(
+        configs.copy_mode.yank,
+        vec![CopyModeKey {
+            ctrl: false,
+            key: CopyModeBaseKey::Char("Y".to_string()),
+        }]
+    );
+    assert!(configs.copy_mode.search_forward.is_empty());
+    assert_eq!(
+        configs.copy_mode.cursor_left,
+        ozmux_configs::copy_mode::CopyModeConfig::default().cursor_left
+    );
+}
+
+#[test]
+fn duplicate_copy_mode_key_rejected() {
+    let err =
+        load_with_overrides(Some(fixture("duplicate_copy_mode_key.toml")), None, None).unwrap_err();
+    match err {
+        OzmuxConfigsError::DuplicateCopyModeKeys(dupes) => {
+            assert!(
+                dupes
+                    .iter()
+                    .any(|d| d.actions.contains(&"yank") && d.actions.contains(&"exit"))
+            );
+        }
+        other => panic!("expected DuplicateCopyModeKeys, got {other:?}"),
+    }
 }
 
 #[test]

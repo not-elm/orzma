@@ -124,8 +124,9 @@ fn any_pane_in_copy_mode(copy_modes: Query<(), With<CopyModeState>>) -> bool {
 }
 
 /// Observer for `On<Remove, CopyModeState>`. Fires for every copy-mode exit —
-/// `pane_in_mode==0`, an input-driven `CopyAction::Exit`, and despawn (e.g.
-/// `TmuxConnectionReset`). Forces a FULL repaint of the pane's live handle so
+/// `pane_in_mode==0`, an input-driven `ViExitRequest` (the `[copy-mode]`
+/// `exit` action), and despawn (e.g. `TmuxConnectionReset`). Forces a FULL
+/// repaint of the pane's live handle so
 /// the rendered grid switches back from the captured scrolled view to live
 /// content (`route_tmux_output` only emits on new `%output`, so an idle pane
 /// would otherwise stay frozen on capture content, and a later delta would
