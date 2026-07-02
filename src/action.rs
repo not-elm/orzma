@@ -2,6 +2,7 @@
 //! grouped by domain (tmux pane/window ops, shared VI copy-mode ops).
 
 pub(crate) mod tmux;
+pub(crate) mod vi;
 
 use bevy::prelude::*;
 
@@ -10,6 +11,6 @@ pub(crate) struct ActionPlugin;
 
 impl Plugin for ActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(tmux::TmuxActionPlugin);
+        app.add_plugins((tmux::TmuxActionPlugin, vi::ViActionPlugin));
     }
 }
