@@ -74,7 +74,10 @@ mod tests {
         app.update();
         let mut client = app.world_mut().get_mut::<TmuxClient>(client).unwrap();
         let out = String::from_utf8(client.take_outgoing()).unwrap();
-        assert!(out.contains("split-window -h -t %3"), "got {out:?}");
+        assert!(
+            out.contains("split-window -h -t %3 -c \"#{pane_current_path}\""),
+            "got {out:?}"
+        );
     }
 
     #[test]

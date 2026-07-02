@@ -31,7 +31,12 @@ pub enum PaneDirection {
     Right,
 }
 
-/// `split-window -h|-v -t %<id>` — splits the target pane.
+/// `split-window -h|-v -t %<id> -c "#{pane_current_path}"` — splits the target
+/// pane and starts the new pane in the target pane's current directory.
+///
+/// Without `-c`, tmux 1.9+ starts the new pane in the client/session start
+/// directory (where the control client attached), not the source pane's cwd, so
+/// a pane that has `cd`'d away would spawn its split in the wrong directory.
 pub struct SplitWindow {
     /// Target pane id.
     pub pane: PaneId,
@@ -44,7 +49,15 @@ impl TmuxCommand for SplitWindow {
             SplitDirection::Horizontal => "-h",
             SplitDirection::Vertical => "-v",
         };
-        format!("split-window {flag} -t %{}", self.pane.0)
+        // NOTE: the `#{pane_current_path}` format MUST stay double-quoted. tmux's
+        // command parser treats a bare leading `#` as a comment, so an unquoted
+        // `-c #{pane_current_path}` drops the argument and fails with
+        // "-c expects an argument". The format expands against the session's
+        // active pane, which ozmux always splits (the `ActivePane` target).
+        format!(
+            "split-window {flag} -t %{} -c \"#{{pane_current_path}}\"",
+            self.pane.0
+        )
     }
 }
 
@@ -89,13 +102,21 @@ impl TmuxCommand for KillWindow {
     }
 }
 
-/// `new-window` — opens a window in the client's current session. Bare on
-/// purpose: `-t` carries placement semantics, so the current-session default
-/// is what a shortcut wants.
+/// `new-window -c "#{pane_current_path}"` — opens a window in the client's
+/// current session, starting in the active pane's current directory.
+///
+/// No `-t`: it carries a placement position, not a session, so the
+/// current-session default is what a shortcut wants. `-c` is required because,
+/// without it, tmux 1.9+ starts the window in the session start directory, not
+/// the active pane's cwd.
 pub struct NewWindow;
 impl TmuxCommand for NewWindow {
     fn into_raw_command(self) -> String {
-        "new-window".to_string()
+        // NOTE: `#{pane_current_path}` MUST stay double-quoted — tmux's command
+        // parser treats a bare leading `#` as a comment, so an unquoted form
+        // fails with "-c expects an argument". The format expands against the
+        // current session's active pane.
+        "new-window -c \"#{pane_current_path}\"".to_string()
     }
 }
 
@@ -155,7 +176,7 @@ mod tests {
                 direction: SplitDirection::Horizontal
             }
             .into_raw_command(),
-            "split-window -h -t %3"
+            "split-window -h -t %3 -c \"#{pane_current_path}\""
         );
         assert_eq!(
             SplitWindow {
@@ -163,7 +184,7 @@ mod tests {
                 direction: SplitDirection::Vertical
             }
             .into_raw_command(),
-            "split-window -v -t %3"
+            "split-window -v -t %3 -c \"#{pane_current_path}\""
         );
     }
 
@@ -203,7 +224,10 @@ mod tests {
 
     #[test]
     fn window_cycle_commands_target_session() {
-        assert_eq!(NewWindow.into_raw_command(), "new-window");
+        assert_eq!(
+            NewWindow.into_raw_command(),
+            "new-window -c \"#{pane_current_path}\""
+        );
         assert_eq!(
             NextWindow {
                 session: SessionId(1)

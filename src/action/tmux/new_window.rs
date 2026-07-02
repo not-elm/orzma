@@ -4,10 +4,11 @@
 use bevy::prelude::*;
 use ozmux_tmux::{NewWindow, TmuxClient, TmuxSession};
 
-/// Opens a new window in the client's current session. The bare `new-window`
-/// deliberately carries no `-t` (its `-t` selects an insertion position, not
-/// just a session); `entity` only gates the request on a projected session
-/// still existing.
+/// Opens a new window in the client's current session, starting in the active
+/// pane's current directory. The `new-window` deliberately carries no `-t` (its
+/// `-t` selects an insertion position, not just a session) and inherits the cwd
+/// via `-c`; `entity` only gates the request on a projected session still
+/// existing.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct NewWindowRequest {
     /// The projected session entity used as an existence guard.
@@ -46,7 +47,7 @@ mod tests {
     use tmux_control_parser::SessionId;
 
     #[test]
-    fn new_window_sends_bare_new_window() {
+    fn new_window_sends_new_window_with_cwd() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_observer(on_new_window);
@@ -63,6 +64,9 @@ mod tests {
         app.update();
         let mut client = app.world_mut().get_mut::<TmuxClient>(client).unwrap();
         let out = String::from_utf8(client.take_outgoing()).unwrap();
-        assert!(out.contains("new-window"), "got {out:?}");
+        assert!(
+            out.contains("new-window -c \"#{pane_current_path}\""),
+            "got {out:?}"
+        );
     }
 }
