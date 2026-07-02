@@ -191,6 +191,24 @@ mod tests {
     }
 
     #[test]
+    fn config_shell_forwards_to_ozma_terminal_config() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(AppMode::Default);
+        app.add_plugins(DefaultModePlugin {
+            config_shell: Some("/bin/fish".into()),
+        });
+        assert_eq!(
+            app.world()
+                .resource::<OzmaTerminalConfig>()
+                .shell
+                .as_deref(),
+            Some("/bin/fish"),
+            "DefaultModePlugin must forward config_shell through DefaultSpawnPlugin into OzmaTerminalConfig",
+        );
+    }
+
+    #[test]
     fn default_shell_registers_a_resolvable_webview_token() {
         let mut app = build_app(AppMode::Default);
         let tokens = TokenRegistry::default();

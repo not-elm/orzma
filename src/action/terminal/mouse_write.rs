@@ -1,10 +1,8 @@
 //! Mouse-report write action: delivers mouse-protocol bytes to a terminal's
 //! backend (PTY when attached, `TerminalForwardInput` when detached).
 
-use crate::action::terminal::{TerminalForwardInput, apply_to_terminal};
-use crate::surface::OzmaTerminal;
+use crate::action::terminal::{TerminalBackendQuery, TerminalForwardInput, apply_to_terminal};
 use bevy::prelude::*;
-use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 /// Writes mouse-protocol report bytes to `entity`'s backend (PTY when
 /// attached, `TerminalForwardInput` when detached).
@@ -31,14 +29,7 @@ impl Plugin for MouseWritePlugin {
 fn on_terminal_mouse_write(
     ev: On<TerminalMouseWrite>,
     mut commands: Commands,
-    mut terminals: Query<
-        (
-            &mut TerminalHandle,
-            Option<&mut PtyHandle>,
-            Option<&mut Coalescer>,
-        ),
-        With<OzmaTerminal>,
-    >,
+    mut terminals: TerminalBackendQuery,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
         return;
@@ -67,7 +58,8 @@ fn on_terminal_mouse_write(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clipboard::Clipboard;
+    use crate::surface::OzmaTerminal;
+    use ozma_tty_engine::TerminalHandle;
 
     #[test]
     fn detached_write_event_forwards_bytes() {
@@ -75,8 +67,7 @@ mod tests {
         struct CapturedForward(Vec<Vec<u8>>);
 
         let mut app = App::new();
-        app.init_resource::<Clipboard>()
-            .init_resource::<CapturedForward>()
+        app.init_resource::<CapturedForward>()
             .add_observer(on_terminal_mouse_write)
             .add_observer(
                 |ev: On<TerminalForwardInput>, mut cap: ResMut<CapturedForward>| {

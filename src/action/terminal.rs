@@ -10,6 +10,7 @@ mod paste;
 mod selection;
 mod viewport_scroll;
 
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
@@ -36,6 +37,19 @@ impl Plugin for TerminalActionPlugin {
         ));
     }
 }
+
+/// Backend-write query shared by the mouse apply observers: the surface's
+/// handle plus its optional PTY attachment, resolved per event target.
+type TerminalBackendQuery<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut TerminalHandle,
+        Option<&'static mut PtyHandle>,
+        Option<&'static mut Coalescer>,
+    ),
+    With<OzmaTerminal>,
+>;
 
 /// Applies one handle-touching mouse op to `entity`, branching on whether
 /// the terminal is PTY-attached (apply through the coalescer) or detached

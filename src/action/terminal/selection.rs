@@ -1,11 +1,11 @@
 //! Local-selection actions: start / update / clear a selection on a terminal
 //! surface, and copy the current selection to the clipboard.
 
-use crate::action::terminal::apply_to_terminal;
+use crate::action::terminal::{TerminalBackendQuery, apply_to_terminal};
 use crate::clipboard::Clipboard;
 use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
-use ozma_tty_engine::{Coalescer, Point, PtyHandle, SelectionType, Side, TerminalHandle};
+use ozma_tty_engine::{Point, SelectionType, Side, TerminalHandle};
 
 /// Starts a new local selection on `entity` at `point`.
 #[derive(EntityEvent, Debug, Clone)]
@@ -65,14 +65,7 @@ impl Plugin for SelectionPlugin {
 fn on_terminal_selection_start(
     ev: On<TerminalSelectionStart>,
     mut commands: Commands,
-    mut terminals: Query<
-        (
-            &mut TerminalHandle,
-            Option<&mut PtyHandle>,
-            Option<&mut Coalescer>,
-        ),
-        With<OzmaTerminal>,
-    >,
+    mut terminals: TerminalBackendQuery,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
         return;
@@ -95,14 +88,7 @@ fn on_terminal_selection_start(
 fn on_terminal_selection_update(
     ev: On<TerminalSelectionUpdate>,
     mut commands: Commands,
-    mut terminals: Query<
-        (
-            &mut TerminalHandle,
-            Option<&mut PtyHandle>,
-            Option<&mut Coalescer>,
-        ),
-        With<OzmaTerminal>,
-    >,
+    mut terminals: TerminalBackendQuery,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
         return;
@@ -125,14 +111,7 @@ fn on_terminal_selection_update(
 fn on_terminal_selection_clear(
     ev: On<TerminalSelectionClear>,
     mut commands: Commands,
-    mut terminals: Query<
-        (
-            &mut TerminalHandle,
-            Option<&mut PtyHandle>,
-            Option<&mut Coalescer>,
-        ),
-        With<OzmaTerminal>,
-    >,
+    mut terminals: TerminalBackendQuery,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
         return;
@@ -180,8 +159,7 @@ mod tests {
         struct FramesEmitted(usize);
 
         let mut app = App::new();
-        app.init_resource::<Clipboard>()
-            .init_resource::<FramesEmitted>()
+        app.init_resource::<FramesEmitted>()
             .add_observer(on_terminal_selection_start)
             .add_observer(
                 |_ev: On<FrameSnapshot>, mut emitted: ResMut<FramesEmitted>| {

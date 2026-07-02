@@ -10,14 +10,14 @@ use std::path::PathBuf;
 ///
 /// `None` means fall back to `$SHELL` at spawn time.
 #[derive(Resource)]
-pub(crate) struct OzmaTerminalConfig {
+pub(super) struct OzmaTerminalConfig {
     /// Optional shell path. When set, overrides `$SHELL` and `/bin/sh`.
     pub shell: Option<String>,
 }
 
 /// Options for spawning a standalone Ozma terminal.
 #[derive(Default)]
-pub(crate) struct OzmaSpawnOptions {
+pub(super) struct OzmaSpawnOptions {
     /// Shell override; `None` falls back to `$SHELL` then `/bin/sh`.
     pub shell: Option<String>,
     /// Working directory for the PTY; `None` inherits the process cwd.
@@ -31,7 +31,7 @@ pub(crate) struct OzmaSpawnOptions {
 /// GPU render bundle is injected by `crate::surface`'s add-observer on
 /// insertion.
 #[derive(Bundle)]
-pub(crate) struct OzmaTerminalBundle {
+pub(super) struct OzmaTerminalBundle {
     terminal: TerminalBundle,
     marker: OzmaTerminal,
     node: Node,

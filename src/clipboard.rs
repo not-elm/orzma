@@ -30,20 +30,6 @@ impl Default for Clipboard {
 }
 
 impl Clipboard {
-    fn new() -> Self {
-        match arboard::Clipboard::new() {
-            Ok(cb) => Self(ClipboardBackend::System(cb)),
-            Err(e) => {
-                tracing::warn!(
-                    target: "ozmux::clipboard",
-                    error = ?e,
-                    "arboard init failed; clipboard writes will no-op",
-                );
-                Self(ClipboardBackend::Unavailable)
-            }
-        }
-    }
-
     /// Returns a clipboard backed by a process-local in-memory buffer.
     ///
     /// Reads observe exactly what was last written, with no dependency on a
@@ -119,6 +105,20 @@ impl Clipboard {
                     "clipboard read skipped: arboard unavailable",
                 );
                 None
+            }
+        }
+    }
+
+    fn new() -> Self {
+        match arboard::Clipboard::new() {
+            Ok(cb) => Self(ClipboardBackend::System(cb)),
+            Err(e) => {
+                tracing::warn!(
+                    target: "ozmux::clipboard",
+                    error = ?e,
+                    "arboard init failed; clipboard writes will no-op",
+                );
+                Self(ClipboardBackend::Unavailable)
             }
         }
     }

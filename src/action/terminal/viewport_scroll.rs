@@ -1,10 +1,8 @@
 //! Viewport scroll action: scrolls a terminal surface's viewport into / out of
 //! scrollback.
 
-use crate::action::terminal::apply_to_terminal;
-use crate::surface::OzmaTerminal;
+use crate::action::terminal::{TerminalBackendQuery, apply_to_terminal};
 use bevy::prelude::*;
-use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 /// Scrolls `entity`'s viewport by `lines` (negative = up / into history).
 #[derive(EntityEvent, Debug, Clone)]
@@ -29,14 +27,7 @@ impl Plugin for ViewportScrollPlugin {
 fn on_terminal_viewport_scroll(
     ev: On<TerminalViewportScroll>,
     mut commands: Commands,
-    mut terminals: Query<
-        (
-            &mut TerminalHandle,
-            Option<&mut PtyHandle>,
-            Option<&mut Coalescer>,
-        ),
-        With<OzmaTerminal>,
-    >,
+    mut terminals: TerminalBackendQuery,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
         return;
