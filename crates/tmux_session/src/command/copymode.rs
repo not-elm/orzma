@@ -3,9 +3,44 @@
 
 use crate::enumerate::{COPY_STATE_FORMAT, capture_offsets};
 use crate::input::quote;
-use crate::keybindings::PromptKind;
 use tmux_control::TmuxCommand;
 use tmux_control_parser::PaneId;
+
+/// The copy command an ozmux prompt feeds once the user submits text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptKind {
+    /// `/` — search down (regex prompt).
+    SearchForward,
+    /// `?` — search up (regex prompt).
+    SearchBackward,
+    /// `f` — jump to char forward (single-char prompt).
+    JumpForward,
+    /// `F` — jump to char backward (single-char prompt).
+    JumpBackward,
+    /// `t` — jump till char forward (single-char prompt).
+    JumpToForward,
+    /// `T` — jump till char backward (single-char prompt).
+    JumpToBackward,
+}
+
+impl PromptKind {
+    /// The tmux `-X` copy command name this prompt feeds.
+    pub fn copy_command(self) -> &'static str {
+        match self {
+            PromptKind::SearchForward => "search-forward",
+            PromptKind::SearchBackward => "search-backward",
+            PromptKind::JumpForward => "jump-forward",
+            PromptKind::JumpBackward => "jump-backward",
+            PromptKind::JumpToForward => "jump-to-forward",
+            PromptKind::JumpToBackward => "jump-to-backward",
+        }
+    }
+
+    /// True for jump prompts, which read exactly one character.
+    pub fn is_single_char(self) -> bool {
+        !matches!(self, PromptKind::SearchForward | PromptKind::SearchBackward)
+    }
+}
 
 /// `capture-pane -p -e -t %N -S <start> -E <end>` for the scrolled copy view.
 pub struct CopyModeCapture {

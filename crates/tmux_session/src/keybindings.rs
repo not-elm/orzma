@@ -5,6 +5,7 @@
 //! under `tmux -CC` — and tmux.conf is the single source of truth for
 //! bindings.
 
+use crate::command::PromptKind;
 use bevy::prelude::Resource;
 use std::collections::HashMap;
 
@@ -83,42 +84,6 @@ pub enum CopyAction {
     Exit(String),
     /// Key not bound in the active copy table — do nothing (tmux ignores it too).
     Ignore,
-}
-
-/// The copy command an ozmux prompt feeds once the user submits text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptKind {
-    /// `/` — search down (regex prompt).
-    SearchForward,
-    /// `?` — search up (regex prompt).
-    SearchBackward,
-    /// `f` — jump to char forward (single-char prompt).
-    JumpForward,
-    /// `F` — jump to char backward (single-char prompt).
-    JumpBackward,
-    /// `t` — jump till char forward (single-char prompt).
-    JumpToForward,
-    /// `T` — jump till char backward (single-char prompt).
-    JumpToBackward,
-}
-
-impl PromptKind {
-    /// The tmux `-X` copy command name this prompt feeds.
-    pub fn copy_command(self) -> &'static str {
-        match self {
-            PromptKind::SearchForward => "search-forward",
-            PromptKind::SearchBackward => "search-backward",
-            PromptKind::JumpForward => "jump-forward",
-            PromptKind::JumpBackward => "jump-backward",
-            PromptKind::JumpToForward => "jump-to-forward",
-            PromptKind::JumpToBackward => "jump-to-backward",
-        }
-    }
-
-    /// True for jump prompts, which read exactly one character.
-    pub fn is_single_char(self) -> bool {
-        !matches!(self, PromptKind::SearchForward | PromptKind::SearchBackward)
-    }
 }
 
 /// Classifies one key (already known to be pressed while in copy mode) against

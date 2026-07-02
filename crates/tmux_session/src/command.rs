@@ -9,7 +9,7 @@ mod query;
 mod size;
 mod target;
 
-pub use copymode::{CopyModeCapture, CopyStateQuery, Prompt, ShowBuffer};
+pub use copymode::{CopyModeCapture, CopyStateQuery, Prompt, PromptKind, ShowBuffer};
 pub use env::{SetEnvironmentGlobal, SetEnvironmentInSession, UnsetEnvironmentGlobal};
 pub use io::{SendBytes, SendPaneKeys};
 pub use ops::{
