@@ -87,7 +87,7 @@ fn ensure_default_mode_ui(
                 ChildOf(mode_ui),
             ));
             // NOTE: bind the token only after a successful spawn. gc keys on
-            // RemovedComponents<OzmaTerminal> (never added on the error path),
+            // RemovedComponents<TerminalHandle> (never added on the error path),
             // so a pre-spawn bind would leak the token if the spawn failed.
             if let Some(c) = control.as_deref() {
                 c.bind_surface(shell);
