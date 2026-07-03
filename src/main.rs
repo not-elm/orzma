@@ -38,7 +38,7 @@ use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
 use ozmux_webview_host::WebviewAssetRegistry;
-use session::default::DefaultModePlugin;
+use session::default::DefaultSessionPlugin;
 use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
@@ -66,8 +66,8 @@ fn main() {
         .add_plugins(AppModePlugin)
         .add_plugins((
             SurfacePlugin,
-            DefaultModePlugin {
-                config_shell: pre_configs.ozma.shell.clone(),
+            DefaultSessionPlugin {
+                shell: pre_configs.ozma.shell.clone(),
             },
             ClipboardPlugin,
             TerminalHandlePlugin,

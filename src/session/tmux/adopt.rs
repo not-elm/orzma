@@ -14,9 +14,9 @@
 
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::session::default::DefaultModeUi;
 use crate::surface_geom::cells_for;
 use crate::ui::UiRoot;
+use crate::ui::default_mode::DefaultModeUi;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::{ControlModeDetected, TerminalChildExit, TerminalResize};

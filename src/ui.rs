@@ -7,6 +7,7 @@ use bevy::prelude::*;
 pub mod copy_mode;
 pub mod copy_mode_indicator;
 pub(crate) mod copy_search;
+pub(crate) mod default_mode;
 pub(crate) mod ime_overlay;
 pub mod palette;
 pub mod root;
@@ -22,6 +23,6 @@ pub struct OzmuxUiPlugin;
 
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(OzmuxUiRootPlugin);
+        app.add_plugins((OzmuxUiRootPlugin, default_mode::DefaultModeUiPlugin));
     }
 }
