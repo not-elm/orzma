@@ -62,6 +62,7 @@ impl Plugin for DefaultModePlugin {
 /// `shell` into it with keyboard focus and the full-size layout — adoption
 /// overwrote the shell's `Node` with `Display::None` + defaults, so the full
 /// node is re-inserted, not just `display` flipped back.
+// NOTE: unused until Task 5 wires the caller in mode::tmux::adopt; remove when that lands.
 #[expect(dead_code, reason = "used by Task 5: mode::tmux::adopt")]
 pub(in crate::mode) fn restore_default_shell(
     commands: &mut Commands,
