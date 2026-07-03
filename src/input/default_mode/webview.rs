@@ -35,7 +35,7 @@ use ozma_webview::{NonInteractive, Webview};
 /// Registers the Default-mode webview pointer systems and the shared
 /// `WebviewPress` resource (`init_resource` is idempotent; the tmux plugin may
 /// also init it).
-pub(crate) struct DefaultWebviewPointerPlugin;
+pub(super) struct DefaultWebviewPointerPlugin;
 
 impl Plugin for DefaultWebviewPointerPlugin {
     fn build(&self, app: &mut App) {

@@ -31,7 +31,7 @@ use crate::input::shortcuts::{
 };
 use crate::mode::tmux::confirm_prompt::ConfirmState;
 use crate::mode::tmux::rename_prompt::RenamePrompt;
-use crate::mode::tmux::request_detach;
+use crate::session::tmux::request_detach;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};

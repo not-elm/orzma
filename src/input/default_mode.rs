@@ -6,6 +6,8 @@
 //! in one ordered pass (tmux-mode parity). Raw-key forwarding and direct-chord
 //! paste are owned by the keyboard dispatcher and `crate::action::terminal::PasteAction`.
 
+mod webview;
+
 use crate::action::terminal::PasteAction;
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use crate::app_mode::AppMode;
@@ -54,7 +56,8 @@ impl Plugin for DefaultHostInputPlugin {
                 .run_if(in_state(AppMode::Default))
                 .run_if(on_message::<KeyboardInput>),
         )
-        .add_observer(apply_ime_commit_to_terminal);
+        .add_observer(apply_ime_commit_to_terminal)
+        .add_plugins(webview::DefaultWebviewPointerPlugin);
     }
 }
 

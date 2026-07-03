@@ -4,13 +4,10 @@
 mod exit;
 mod layout;
 mod spawn;
-mod webview;
-
-pub(crate) use webview::DefaultWebviewPointerPlugin;
 
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::mode::default::spawn::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
+use crate::session::default::spawn::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use ozma_tty_engine::ControlModeWatch;
@@ -18,7 +15,7 @@ use ozma_webview::ControlPlaneHandle;
 
 /// Root of the Default-mode UI subtree, mounted under `UiRoot`.
 ///
-/// Adoption (`crate::mode::tmux::adopt`) despawns this container when it promotes the
+/// Adoption (`crate::session::tmux::adopt`) despawns this container when it promotes the
 /// Default shell to the tmux gateway, so `ensure_default_mode_ui` lazily spawns
 /// a fresh Default shell on the next return to `AppMode::Default`.
 #[derive(Component)]

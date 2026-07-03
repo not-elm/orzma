@@ -9,6 +9,7 @@ mod configs;
 mod font;
 mod input;
 mod mode;
+mod session;
 mod surface;
 mod surface_geom;
 mod system_set;
@@ -32,13 +33,13 @@ use font::FontBridgePlugin;
 use input::OzmuxInputPlugin;
 use input::default_mode::DefaultHostInputPlugin;
 use input::ime::ImePlugin;
-use mode::default::DefaultModePlugin;
-use mode::default::DefaultWebviewPointerPlugin;
 use mode::tmux::OzmuxTmuxPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
 use ozmux_webview_host::WebviewAssetRegistry;
+use session::default::DefaultModePlugin;
+use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
     OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
@@ -72,12 +73,15 @@ fn main() {
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,
+            TmuxLifecyclePlugin,
             ActionPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxBootstrapPlugin,
             OzmuxInputPlugin,
             OzmuxUiPlugin,
+        ))
+        .add_plugins((
             OzmaWebviewPlugin {
                 ozma_assets: ozma_registry,
             },
@@ -92,7 +96,6 @@ fn main() {
             ImePlugin,
             ImeOverlayPlugin,
             DefaultHostInputPlugin,
-            DefaultWebviewPointerPlugin,
         ))
         .run();
 }
@@ -154,7 +157,7 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
 /// The UTF-8 `LC_CTYPE` ozmux installs when the inherited locale is not UTF-8.
 /// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
 /// writes it on. Also the fallback advertised to tmux panes
-/// (`crate::mode::tmux::locale`).
+/// (`crate::session::tmux::locale`).
 pub(crate) const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment
