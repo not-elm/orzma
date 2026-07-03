@@ -11,6 +11,7 @@ pub(crate) mod default_mode;
 pub(crate) mod ime_overlay;
 pub mod palette;
 pub mod root;
+pub(crate) mod tmux;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never
 /// despawned. Hosts each mode's UI subtree (`DefaultModeUi` / `TmuxModeUi`) as a
@@ -23,6 +24,10 @@ pub struct OzmuxUiPlugin;
 
 impl Plugin for OzmuxUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((OzmuxUiRootPlugin, default_mode::DefaultModeUiPlugin));
+        app.add_plugins((
+            OzmuxUiRootPlugin,
+            default_mode::DefaultModeUiPlugin,
+            tmux::TmuxUiPlugin,
+        ));
     }
 }

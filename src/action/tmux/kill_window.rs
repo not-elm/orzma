@@ -1,7 +1,7 @@
 //! `KillWindowRequest` — opens a confirm prompt that kills the target window
 //! on `y` (mirrors tmux's default confirm-wrapped `kill-window` binding).
 
-use crate::mode::tmux::confirm_prompt::ConfirmState;
+use crate::ui::tmux::confirm_prompt::ConfirmState;
 use bevy::prelude::*;
 use ozmux_tmux::{KillWindow, TmuxClient, TmuxCommand, TmuxWindow};
 

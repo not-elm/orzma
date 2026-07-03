@@ -29,11 +29,11 @@ use crate::input::InputPhase;
 use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
-use crate::mode::tmux::confirm_prompt::ConfirmState;
-use crate::mode::tmux::rename_prompt::RenamePrompt;
 use crate::session::tmux::request_detach;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
+use crate::ui::tmux::confirm_prompt::ConfirmState;
+use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;

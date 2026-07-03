@@ -3,7 +3,7 @@
 
 use crate::app_mode::TmuxActiveSet;
 use crate::input::InputPhase;
-use crate::mode::tmux::window_bar::WindowEntry;
+use crate::ui::tmux::window_bar::WindowEntry;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_tmux::{SelectWindow, TmuxClient};
