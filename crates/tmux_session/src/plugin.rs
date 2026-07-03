@@ -1083,6 +1083,10 @@ mod tests {
         });
         app.update();
 
+        assert!(
+            app.world().get_entity(gateway).is_ok(),
+            "the gateway entity survives release (it is not despawned)"
+        );
         let entity = app.world().entity(gateway);
         assert!(entity.get::<TmuxClient>().is_none(), "TmuxClient stripped");
         assert!(
@@ -1114,7 +1118,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);
 
-        // First adoption.
         let gateway = app
             .world_mut()
             .spawn((
@@ -1134,7 +1137,6 @@ mod tests {
             "first adoption must mark the gateway TmuxAttached"
         );
 
-        // Release-teardown (the detach path — strip components, don't despawn).
         app.world_mut().trigger(ReleaseControlMode {
             entity: gateway,
             residual: Vec::new(),
@@ -1159,7 +1161,6 @@ mod tests {
             "EnumerationState stripped"
         );
 
-        // Re-adoption on the SAME entity (what on_control_mode_detected does).
         app.world_mut().entity_mut(gateway).insert((
             AdoptedControlMode::from_captured(entry_block()),
             TmuxClient::new_adopted(),
