@@ -292,8 +292,8 @@ fn apply_ime_commit_to_terminal(
     terminals: Query<(), (With<OzmaTerminal>, Without<TmuxPane>)>,
 ) {
     // NOTE: discriminate on TmuxPane absence — tmux panes are also OzmaTerminal
-    // entities (src/mode/tmux/render.rs), and their commits go out via the tmux
-    // observer in src/mode/tmux/forward.rs. Without this filter the commit would be
+    // entities (src/render/tmux.rs), and their commits go out via the tmux
+    // observer in src/input/tmux/forward.rs. Without this filter the commit would be
     // double-delivered.
     if terminals.get(ev.entity).is_err() {
         return;
