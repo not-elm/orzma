@@ -145,7 +145,8 @@ impl ProtocolClient {
     /// Returns whether the control stream has ended (the DCS terminator was
     /// consumed). Once ended, [`ProtocolClient::feed`] produces no further
     /// events and accumulates all bytes as residual.
-    pub fn is_ended(&self) -> bool {
+    #[inline]
+    pub const fn is_ended(&self) -> bool {
         self.ended
     }
 

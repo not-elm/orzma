@@ -25,8 +25,7 @@ use crate::ui::default_mode::{DefaultModeUi, restore_default_shell};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::{
-    ControlModeDetected, ControlModeReleased, ReleaseControlMode, TerminalChildExit,
-    TerminalResize,
+    ControlModeDetected, ControlModeReleased, ReleaseControlMode, TerminalChildExit, TerminalResize,
 };
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{

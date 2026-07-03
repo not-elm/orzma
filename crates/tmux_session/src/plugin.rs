@@ -1080,7 +1080,8 @@ mod tests {
             ))
             .id();
 
-        app.world_mut().trigger(ControlModeReleased { entity: gateway });
+        app.world_mut()
+            .trigger(ControlModeReleased { entity: gateway });
         app.update();
 
         assert!(
@@ -1118,7 +1119,8 @@ mod tests {
             .spawn((AdoptedControlMode::default(), TmuxClient::new_adopted()))
             .id();
 
-        app.world_mut().trigger(ControlModeDetected { entity: gateway });
+        app.world_mut()
+            .trigger(ControlModeDetected { entity: gateway });
         app.update();
 
         assert!(
@@ -1165,7 +1167,8 @@ mod tests {
             "first adoption must mark the gateway TmuxAttached"
         );
 
-        app.world_mut().trigger(ControlModeReleased { entity: gateway });
+        app.world_mut()
+            .trigger(ControlModeReleased { entity: gateway });
         app.world_mut().trigger(TmuxConnectionReset);
         app.update();
 
