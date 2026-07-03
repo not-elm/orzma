@@ -6,6 +6,7 @@ pub(crate) mod terminal;
 pub(crate) mod tmux;
 pub(crate) mod vi;
 
+use crate::action::{terminal::TerminalActionPlugin, tmux::TmuxActionPlugin, vi::ViActionPlugin};
 use bevy::prelude::*;
 
 /// Aggregates the action-layer plugins.
@@ -13,10 +14,6 @@ pub(crate) struct ActionPlugin;
 
 impl Plugin for ActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            terminal::TerminalActionPlugin,
-            tmux::TmuxActionPlugin,
-            vi::ViActionPlugin,
-        ));
+        app.add_plugins((TerminalActionPlugin, TmuxActionPlugin, ViActionPlugin));
     }
 }
