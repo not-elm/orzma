@@ -84,7 +84,8 @@ impl BlockAssembler {
 
     /// Returns whether a `%begin` block is currently open (its matching
     /// `%end` / `%error` has not yet arrived).
-    pub fn is_in_block(&self) -> bool {
+    #[inline]
+    pub const fn is_in_block(&self) -> bool {
         self.open.is_some()
     }
 }
