@@ -14,6 +14,7 @@ mod osc;
 mod palette;
 mod pty;
 mod raw_write;
+mod release;
 mod resize;
 mod title;
 mod vt;
@@ -35,6 +36,7 @@ pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use mouse_encode::ProtocolModifiers;
 pub use pty::PtyHandle;
 pub use raw_write::{RawWritePlugin, TerminalRawWrite};
+pub use release::ReleaseControlMode;
 pub use resize::{ResizePlugin, TerminalResize};
 pub use title::{TerminalTitle, sanitize_title};
 pub use vt::listener::{AnchorMode, InlineAnchor, OscWebviewVerb};
@@ -45,6 +47,7 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::observer::On;
 use bevy::prelude::*;
 use control_mode::Handover;
+use release::ControlModeReleasePlugin;
 use std::time::Instant;
 
 /// Adds the four-system terminal bridge to the Bevy app's `Update`
@@ -53,7 +56,7 @@ pub struct TerminalHandlePlugin;
 
 impl Plugin for TerminalHandlePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((RawWritePlugin, ResizePlugin))
+        app.add_plugins((RawWritePlugin, ResizePlugin, ControlModeReleasePlugin))
             .add_systems(
                 Update,
                 (
@@ -220,7 +223,7 @@ fn process_pty_chunks(
 /// No-op on empty `bytes`: the handover scanner can withhold an entire chunk
 /// as a carried partial-introducer prefix, and feeding zero bytes to the VT
 /// must not arm the coalescer or trip the first-emit bootstrap.
-fn ingest_and_flush_or_arm(
+pub(crate) fn ingest_and_flush_or_arm(
     commands: &mut Commands,
     entity: Entity,
     handle: &mut TerminalHandle,
