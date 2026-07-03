@@ -5,11 +5,11 @@
 //! `crate::input::mouse` shared systems yield to the tmux-specific gestures.
 
 use super::pane_hit::tmux_pane_at_phys;
+use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardDisabled;
 use crate::input::focus::MouseDisabled;
 use crate::input::ime::ImeState;
-use crate::mode::AppMode;
 use crate::mode::tmux::rename_prompt::RenamePrompt;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;

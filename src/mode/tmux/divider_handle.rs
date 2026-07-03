@@ -9,6 +9,7 @@
 //! primary window while the pointer is over a divider.
 
 use super::render::{DividerPixelRect, PackedTmuxLayout};
+use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::tmux::mouse::divider_at;
@@ -29,7 +30,7 @@ impl Plugin for DividerHandlePlugin {
                 reconcile_divider_handles.after(TmuxProjectionSet),
                 divider_hover_feedback.after(InputPhase::Hover),
             )
-                .in_set(super::TmuxActiveSet),
+                .in_set(TmuxActiveSet),
         );
     }
 }

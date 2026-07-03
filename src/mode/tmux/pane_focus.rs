@@ -6,6 +6,7 @@
 //! on press is owned by the tmux mouse gesture system
 //! (`mouse::MousePlugin`).
 
+use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::focus::KeyboardFocused;
 use bevy::prelude::*;
@@ -27,7 +28,7 @@ impl Plugin for PaneFocusPlugin {
                 sync_inactive_pane_style.run_if(pane_active_state_changed),
                 sync_keyboard_focus_to_active_pane.run_if(pane_active_state_changed),
             )
-                .in_set(super::TmuxActiveSet),
+                .in_set(TmuxActiveSet),
         );
     }
 }

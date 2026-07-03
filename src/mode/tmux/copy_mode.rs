@@ -13,6 +13,7 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
+use crate::app_mode::TmuxActiveSet;
 use crate::clipboard::Clipboard;
 use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_mode::CopyModeState;
@@ -48,7 +49,7 @@ impl Plugin for CopyModePlugin {
                     .after(consume_copy_reply),
             )
                 .after(TmuxProjectionSet)
-                .in_set(super::TmuxActiveSet),
+                .in_set(TmuxActiveSet),
         );
     }
 }

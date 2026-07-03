@@ -8,6 +8,7 @@
 //! persistent-blank-pane bug.
 
 use super::render::TmuxLayoutSet;
+use crate::app_mode::TmuxActiveSet;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
@@ -69,7 +70,7 @@ impl Plugin for PaintRescuePlugin {
                 .chain()
                 .after(TmuxProjectionSet)
                 .before(TmuxLayoutSet)
-                .in_set(super::TmuxActiveSet),
+                .in_set(TmuxActiveSet),
         );
     }
 }

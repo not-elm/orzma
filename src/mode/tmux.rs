@@ -13,12 +13,12 @@ pub(crate) mod render;
 mod webview_tokens;
 pub(crate) mod window_bar;
 
+use crate::app_mode::AppMode;
 use crate::input::tmux::forward::ForwardPlugin;
 use crate::input::tmux::gate::GatePlugin;
 use crate::input::tmux::input::InputPlugin;
 use crate::input::tmux::mouse::MousePlugin;
 use crate::input::tmux::window_bar_input::WindowBarInputPlugin;
-use crate::mode::AppMode;
 use adopt::AdoptPlugin;
 use bevy::prelude::*;
 use confirm_prompt::ConfirmPromptPlugin;
@@ -39,8 +39,7 @@ pub struct OzmuxTmuxPlugin;
 
 impl Plugin for OzmuxTmuxPlugin {
     fn build(&self, app: &mut App) {
-        app.configure_sets(Update, TmuxActiveSet.run_if(in_state(AppMode::Tmux)))
-            .add_observer(on_tmux_connection_closed)
+        app.add_observer(on_tmux_connection_closed)
             .add_plugins((
                 TmuxSessionPlugin,
                 AdoptPlugin,
@@ -65,10 +64,6 @@ impl Plugin for OzmuxTmuxPlugin {
             ));
     }
 }
-
-/// SystemSet applied to every tmux Update system. Runs only in `AppMode::Tmux`.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct TmuxActiveSet;
 
 /// Sends `detach-client` over the live connection, if any.
 ///

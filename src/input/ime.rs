@@ -374,7 +374,7 @@ fn webview_ime_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mode::AppMode;
+    use crate::app_mode::AppMode;
     use crate::surface::OzmaTerminal;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;

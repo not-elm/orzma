@@ -12,8 +12,8 @@
 //! survives) or the gateway child process actually exiting — despawning the
 //! gateway entity (and its `TmuxClient`) and returning to [`AppMode::Default`].
 
+use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::mode::AppMode;
 use crate::mode::default::DefaultModeUi;
 use crate::surface_geom::cells_for;
 use crate::ui::UiRoot;

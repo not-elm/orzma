@@ -10,8 +10,8 @@
 use super::super::pane_hit::tmux_pane_at_phys;
 use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
 use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture, cell_dims};
+use crate::app_mode::TmuxActiveSet;
 use crate::input::InputPhase;
-use crate::mode::tmux::TmuxActiveSet;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,

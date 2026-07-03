@@ -2,6 +2,7 @@
 //! GPU render bundle to each projected `TmuxPane`, then routes tmux `%output`
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
+use crate::app_mode::TmuxActiveSet;
 use crate::mode::tmux::mode_ui::WorkspaceUiRoot;
 use crate::surface::OzmaTerminal;
 use crate::surface_geom::cells_for;
@@ -115,13 +116,13 @@ impl Plugin for RenderPlugin {
                 )
                     .chain()
                     .after(TmuxProjectionSet)
-                    .in_set(super::TmuxActiveSet),
+                    .in_set(TmuxActiveSet),
             )
             .add_systems(
                 Update,
                 sync_client_size
                     .after(TmuxProjectionSet)
-                    .in_set(super::TmuxActiveSet),
+                    .in_set(TmuxActiveSet),
             );
     }
 }

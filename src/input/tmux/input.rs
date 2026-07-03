@@ -25,13 +25,13 @@ use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
+use crate::app_mode::{AppMode, TmuxActiveSet};
 use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
-use crate::mode::AppMode;
 use crate::mode::tmux::confirm_prompt::ConfirmState;
 use crate::mode::tmux::rename_prompt::RenamePrompt;
-use crate::mode::tmux::{TmuxActiveSet, request_detach};
+use crate::mode::tmux::request_detach;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};

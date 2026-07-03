@@ -8,8 +8,8 @@ mod webview;
 
 pub(crate) use webview::DefaultWebviewPointerPlugin;
 
+use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::mode::AppMode;
 use crate::mode::default::spawn::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
@@ -123,7 +123,7 @@ struct DefaultShell;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mode::AppMode;
+    use crate::app_mode::AppMode;
     use bevy::state::app::StatesPlugin;
     use ozma_webview::TokenRegistry;
     use std::path::PathBuf;

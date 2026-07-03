@@ -2,6 +2,7 @@
 //! window list (`<index>:<name>`), with the active window highlighted and each
 //! entry clickable to `select-window`.
 
+use crate::app_mode::TmuxActiveSet;
 use crate::font::{PowerlineFont, TerminalUiFont};
 use crate::theme;
 use crate::ui::palette;
@@ -65,7 +66,7 @@ impl Plugin for WindowBarPlugin {
             rebuild_window_bar
                 .run_if(window_bar_dirty)
                 .after(TmuxProjectionSet)
-                .in_set(super::TmuxActiveSet),
+                .in_set(TmuxActiveSet),
         );
     }
 }
