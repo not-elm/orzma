@@ -38,7 +38,7 @@ use ozmux_configs::shortcuts::ShortcutAction;
 use ozmux_tmux::TmuxPane;
 
 /// Registers the host-side input systems for `AppMode::Default`.
-pub(crate) struct DefaultHostInputPlugin;
+pub(super) struct DefaultHostInputPlugin;
 
 impl Plugin for DefaultHostInputPlugin {
     fn build(&self, app: &mut App) {

@@ -27,7 +27,7 @@ use ozmux_tmux::{
 };
 
 /// Registers the adoption observer and the teardown systems/observer.
-pub(crate) struct AdoptPlugin;
+pub(super) struct AdoptPlugin;
 
 impl Plugin for AdoptPlugin {
     fn build(&self, app: &mut App) {

@@ -59,7 +59,7 @@ use ozmux_tmux::{
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
-pub(crate) struct InputPlugin;
+pub(super) struct InputPlugin;
 
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {

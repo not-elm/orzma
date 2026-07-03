@@ -17,7 +17,7 @@ use ozmux_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
 
 /// Registers the pane augmentation (adds `Button` + `FocusPolicy::Block`) and
 /// dim systems. `select-pane` on press is handled by `tmux_gesture`.
-pub(crate) struct PaneFocusPlugin;
+pub(super) struct PaneFocusPlugin;
 
 impl Plugin for PaneFocusPlugin {
     fn build(&self, app: &mut App) {

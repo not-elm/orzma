@@ -20,7 +20,7 @@ use ozmux_tmux::{ActiveWindow, TmuxProjectionSet};
 use tmux_control_parser::DividerAxis;
 
 /// Registers the divider-handle visuals and the resize hover cursor.
-pub(crate) struct DividerHandlePlugin;
+pub(super) struct DividerHandlePlugin;
 
 impl Plugin for DividerHandlePlugin {
     fn build(&self, app: &mut App) {

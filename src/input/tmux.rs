@@ -9,3 +9,25 @@ pub(crate) mod input;
 pub(crate) mod mouse;
 mod pane_hit;
 pub(crate) mod window_bar_input;
+
+use bevy::prelude::*;
+use forward::ForwardPlugin;
+use gate::GatePlugin;
+use input::InputPlugin;
+use mouse::MousePlugin;
+use window_bar_input::WindowBarInputPlugin;
+
+/// Bevy plugin aggregating the tmux-mode input sub-plugins.
+pub(crate) struct TmuxInputPlugin;
+
+impl Plugin for TmuxInputPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_plugins((
+            InputPlugin,
+            MousePlugin,
+            ForwardPlugin,
+            WindowBarInputPlugin,
+            GatePlugin,
+        ));
+    }
+}

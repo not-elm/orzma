@@ -29,7 +29,7 @@ use ozmux_tmux::{
 };
 
 /// Registers the tmux `%N` token binder and `$OZMA_SOCK` propagation systems.
-pub(crate) struct WebviewTokensPlugin;
+pub(super) struct WebviewTokensPlugin;
 
 impl Plugin for WebviewTokensPlugin {
     fn build(&self, app: &mut App) {

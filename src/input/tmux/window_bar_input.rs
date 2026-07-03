@@ -9,7 +9,7 @@ use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_tmux::{SelectWindow, TmuxClient};
 
 /// Registers the window-bar click and hover-cursor systems.
-pub(crate) struct WindowBarInputPlugin;
+pub(super) struct WindowBarInputPlugin;
 
 impl Plugin for WindowBarInputPlugin {
     fn build(&self, app: &mut App) {

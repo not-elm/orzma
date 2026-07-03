@@ -23,7 +23,7 @@ use ozma_webview::{NonInteractive, Webview, webview_hit_at};
 use ozmux_tmux::TmuxPane;
 
 /// Registers the Tmux-mode per-pane input gate maintainer.
-pub(crate) struct GatePlugin;
+pub(super) struct GatePlugin;
 
 impl Plugin for GatePlugin {
     fn build(&self, app: &mut App) {

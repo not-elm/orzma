@@ -60,7 +60,7 @@ struct BlankRecoveryState {
 }
 
 /// Wires the structural paint-rescue system after the tmux projection chain.
-pub(crate) struct PaintRescuePlugin;
+pub(super) struct PaintRescuePlugin;
 
 impl Plugin for PaintRescuePlugin {
     fn build(&self, app: &mut App) {

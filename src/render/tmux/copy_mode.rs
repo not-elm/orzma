@@ -30,7 +30,7 @@ use ozmux_tmux::{
 use std::collections::HashMap;
 
 /// Wires the capture-driven copy-mode refresh systems after the projection chain.
-pub(crate) struct CopyModePlugin;
+pub(super) struct CopyModePlugin;
 
 impl Plugin for CopyModePlugin {
     fn build(&self, app: &mut App) {

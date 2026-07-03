@@ -20,7 +20,7 @@ struct TmuxModeUi;
 pub(crate) struct WorkspaceUiRoot;
 
 /// Bevy plugin that ensures the Tmux-mode UI subtree exists while in Tmux mode.
-pub(crate) struct TmuxModeUiPlugin;
+pub(super) struct TmuxModeUiPlugin;
 
 impl Plugin for TmuxModeUiPlugin {
     fn build(&self, app: &mut App) {

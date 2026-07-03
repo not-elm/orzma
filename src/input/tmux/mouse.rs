@@ -39,7 +39,7 @@ use tmux_control_parser::DividerAxis;
 use webview::tmux_webview_pointer;
 
 /// Bevy plugin that registers the tmux mouse gesture system.
-pub(crate) struct MousePlugin;
+pub(super) struct MousePlugin;
 
 impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {

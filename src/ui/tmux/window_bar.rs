@@ -53,7 +53,7 @@ struct SessionLabel;
 /// Wires the tmux window status bar: rebuilds its children whenever the window
 /// set, active window, or session name changes. The bar itself is spawned by
 /// `spawn_window_bar`, called from `ensure_tmux_mode_ui`.
-pub(crate) struct WindowBarPlugin;
+pub(super) struct WindowBarPlugin;
 
 impl Plugin for WindowBarPlugin {
     fn build(&self, app: &mut App) {

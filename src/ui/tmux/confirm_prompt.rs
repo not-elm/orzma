@@ -18,7 +18,7 @@ use ozmux_tmux::TmuxClient;
 const CONFIRM_Z: i32 = 330;
 
 /// Registers the confirm-prompt input system and the show/hide render systems.
-pub(crate) struct ConfirmPromptPlugin;
+pub(super) struct ConfirmPromptPlugin;
 
 impl Plugin for ConfirmPromptPlugin {
     fn build(&self, app: &mut App) {

@@ -8,7 +8,6 @@ mod clipboard;
 mod configs;
 mod font;
 mod input;
-mod mode;
 mod render;
 mod session;
 mod surface;
@@ -32,9 +31,7 @@ use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxInputPlugin;
-use input::default_mode::DefaultHostInputPlugin;
 use input::ime::ImePlugin;
-use mode::tmux::OzmuxTmuxPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
@@ -75,7 +72,6 @@ fn main() {
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             RenderPlugin,
-            OzmuxTmuxPlugin,
             TmuxLifecyclePlugin,
             ActionPlugin,
             OzmuxConfigsPlugin,
@@ -98,7 +94,6 @@ fn main() {
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
-            DefaultHostInputPlugin,
         ))
         .run();
 }
