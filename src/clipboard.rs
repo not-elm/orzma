@@ -10,7 +10,7 @@ use bevy::prelude::*;
 /// `write` call becomes a no-op (logged at debug level once at init, then
 /// silently dropped).
 /// Copy-mode UI keeps working — the user can still see the selection —
-/// but `y` does not modify the host clipboard. [`Clipboard::in_memory`]
+/// but `y` does not modify the host clipboard. `Clipboard::in_memory`
 /// swaps in a process-local backend for deterministic, headless-safe tests.
 #[derive(Resource)]
 pub(crate) struct Clipboard(ClipboardBackend);
