@@ -6,6 +6,7 @@
 //! `MouseDisabled` surfaces.
 
 use super::{TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates, on_any_mouse_message};
+use crate::action::terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::gesture::{
@@ -16,7 +17,6 @@ use crate::webview_pointer::topmost_surface_at;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use ozma_tty_engine::{CellCoord, TermMode, TerminalModifiers, WheelAction, WheelModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 
@@ -264,13 +264,14 @@ fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clipboard::Clipboard;
     use crate::input::mouse::MouseEffect;
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
+    use crate::surface::OzmaTerminal;
     use bevy::input::mouse::MouseScrollUnit;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use ozma_terminal::{Clipboard, OzmaTerminal};
     use ozma_tty_engine::TerminalHandle;
     use ozma_tty_renderer::schema::TerminalGrid;
 

@@ -3,10 +3,12 @@
 mod action;
 mod bootstrap;
 mod cef_profile;
+mod clipboard;
 mod configs;
 mod font;
 mod input;
 mod mode;
+mod surface;
 mod surface_geom;
 mod system_set;
 mod theme;
@@ -16,9 +18,11 @@ mod window_title;
 
 use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
+use crate::clipboard::ClipboardPlugin;
 use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::mode::AppMode;
+use crate::surface::SurfacePlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use bootstrap::OzmuxBootstrapPlugin;
@@ -30,7 +34,6 @@ use input::ime::ImePlugin;
 use mode::default::DefaultModePlugin;
 use mode::default::DefaultWebviewPointerPlugin;
 use mode::tmux::OzmuxTmuxPlugin;
-use ozma_terminal::OzmaTerminalPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
@@ -63,10 +66,11 @@ fn main() {
         ))
         .insert_state(initial_mode)
         .add_plugins((
-            OzmaTerminalPlugin {
+            SurfacePlugin,
+            DefaultModePlugin {
                 config_shell: pre_configs.ozma.shell.clone(),
             },
-            DefaultModePlugin,
+            ClipboardPlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             OzmuxTmuxPlugin,

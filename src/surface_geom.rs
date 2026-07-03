@@ -48,6 +48,15 @@ pub(crate) fn cell_at_local(
     (col, row, side)
 }
 
+/// Computes terminal dimensions in cells from physical pixel size.
+///
+/// Returns `(cols, rows)`, each clamped to a minimum of 1.
+pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16, u16) {
+    let cols = ((w_px as f32 / cell_w).floor() as u16).max(1);
+    let rows = ((h_px as f32 / cell_h).floor() as u16).max(1);
+    (cols, rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +86,13 @@ mod tests {
             Side::Right,
             "x=17 is 0.7 into its cell, past the midline → Right"
         );
+    }
+
+    #[test]
+    fn cells_for_divides_and_floors() {
+        assert_eq!(cells_for(800, 600, 8.0, 16.0), (100, 37));
+        assert_eq!(cells_for(1, 1, 8.0, 16.0), (1, 1));
+        assert_eq!(cells_for(0, 0, 8.0, 16.0), (1, 1));
+        assert_eq!(cells_for(807, 607, 8.0, 16.0), (100, 37));
     }
 }

@@ -13,7 +13,7 @@ use bevy_cef::prelude::HostEmitEvent;
 use bevy_cef::prelude::{RequestGoBack, RequestGoForward, RequestReload, WebviewSource};
 use crossbeam_channel::{Receiver, Sender};
 use data_encoding::BASE32_NOPAD;
-use ozma_terminal::OzmaTerminal;
+use ozma_tty_engine::TerminalHandle;
 use ozmux_webview_host::WebviewAssetRegistry;
 use ozmux_webview_host::host::RuntimeRoot;
 use std::collections::HashMap;
@@ -399,7 +399,7 @@ impl Plugin for ControlPlanePlugin {
 }
 
 /// Purges a despawned surface's dynamic registrations + assets. Keyed on
-/// `RemovedComponents<OzmaTerminal>` so it fires for every terminal surface
+/// `RemovedComponents<TerminalHandle>` so it fires for every terminal surface
 /// (tmux pane or standalone), with no multiplexer dependency.
 ///
 /// # Invariants
@@ -409,7 +409,7 @@ impl Plugin for ControlPlanePlugin {
 /// no-op) — gating it behind the handle would leak in that case.
 fn gc_despawned_surfaces(
     mut registry: ResMut<OzmaRegistry>,
-    mut closed: RemovedComponents<OzmaTerminal>,
+    mut closed: RemovedComponents<TerminalHandle>,
     handle: Option<Res<ControlPlaneHandle>>,
     ozma_assets: Res<WebviewAssetRegistryRes>,
 ) {
@@ -858,7 +858,7 @@ mod gc_tests {
         app.insert_resource(WebviewAssetRegistryRes(WebviewAssetRegistry::default()));
         app.add_systems(Update, gc_despawned_surfaces);
 
-        let surface = app.world_mut().spawn(OzmaTerminal).id();
+        let surface = app.world_mut().spawn(TerminalHandle::detached(4, 2)).id();
         app.world_mut().resource_mut::<OzmaRegistry>().insert(
             "h0".into(),
             OzmaView {

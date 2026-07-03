@@ -22,6 +22,7 @@ use crate::action::tmux::{
     SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
 };
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
+use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::{
@@ -44,7 +45,6 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_terminal::{Clipboard, build_paste_bytes};
 use ozma_tty_engine::{TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
@@ -583,7 +583,7 @@ enum WheelOwner {
     /// These panes carry `MouseDisabled`, so ozma never acts on them.
     CopyMode,
     /// Alt-screen pane with neither `ALTERNATE_SCROLL` nor any `MOUSE_MODE` bit:
-    /// `ozma_terminal`'s `WheelAction` resolves to a `ScrollViewport` that is a
+    /// the host's `WheelAction` resolves to a `ScrollViewport` that is a
     /// no-op on the alt buffer, so tmux forwards cursor keys instead.
     AltScreenResidual,
     /// Anything ozma usefully handles: normal-pane local scrollback, mouse-mode
@@ -865,7 +865,7 @@ mod tests {
     #[test]
     fn wheel_owned_by_ozma_outside_copymode_altscreen_inline() {
         // A normal pane (not copy-mode, not alt-screen, no mouse mode) is ceded
-        // to ozma_terminal — forward_wheel_to_tmux emits no send-keys for it.
+        // to the local terminal — forward_wheel_to_tmux emits no send-keys for it.
         assert_eq!(
             decide_wheel_owner(false, false, TermMode::empty()),
             WheelOwner::CededToOzma

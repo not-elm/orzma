@@ -8,6 +8,7 @@
 //! (`ozma_webview`), so `bevy_cef`'s native picking cannot reach them; this
 //! manual forwarding is the only path that delivers clicks to them.
 
+use crate::surface::OzmaTerminal;
 use crate::surface_geom::phys_to_pane_local;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -17,7 +18,6 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{
     NonInteractive, Webview, focused_webview_of, webview_hit_at, webview_local_dip,

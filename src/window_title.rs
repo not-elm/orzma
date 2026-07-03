@@ -4,9 +4,9 @@
 
 use crate::input::focus::KeyboardFocused;
 use crate::mode::AppMode;
+use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
-use ozma_terminal::OzmaTerminal;
 use ozma_tty_engine::{TerminalTitle, sanitize_title};
 use ozmux_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow};
 

@@ -163,7 +163,7 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// and the state becomes `Pressed`. While `Pressed`, a pointer that drags past
 /// `drag_threshold_px` transitions to `Selecting` when the pane is already in
 /// copy mode (drag/selection for a pane NOT in copy mode is owned by
-/// `ozma_terminal`). Multi-click (≥2) on a pane in copy mode enters
+/// the local terminal path). Multi-click (≥2) on a pane in copy mode enters
 /// `PendingMultiSelect` to wait for a copy-mode snapshot AND a connected client
 /// (it passes whether a `TmuxClient` is present to the decider so a no-client
 /// frame stays pending and retries), then selects a word/line via copy-mode

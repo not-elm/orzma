@@ -1,15 +1,18 @@
 //! Default-mode (`AppMode::Default`) processing: the single-PTY shell UI
 //! lifecycle, host-side input gates/shortcuts, and webview pointer routing.
 
+mod exit;
+mod layout;
+mod spawn;
 mod webview;
 
 pub(crate) use webview::DefaultWebviewPointerPlugin;
 
 use crate::input::focus::KeyboardFocused;
 use crate::mode::AppMode;
+use crate::mode::default::spawn::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use ozma_terminal::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
 use ozma_tty_engine::ControlModeWatch;
 use ozma_webview::ControlPlaneHandle;
 
@@ -27,13 +30,23 @@ pub(crate) struct DefaultModeUi;
 /// `ensure_default_mode_ui` runs once while in `AppMode::Default` to build the
 /// subtree. Adoption despawns `DefaultModeUi` when it promotes the Default shell
 /// to the tmux gateway; `ensure_default_mode_ui` spawns a fresh one on the next
-/// return to `AppMode::Default`. `OzmaTerminalPlugin` must be added first (it
-/// inserts the `OzmaTerminalConfig` this reads).
-pub(crate) struct DefaultModePlugin;
+/// return to `AppMode::Default`. `DefaultSpawnPlugin` (registered below) inserts
+/// the `OzmaTerminalConfig` this reads.
+pub(crate) struct DefaultModePlugin {
+    /// Shell override forwarded to `spawn::DefaultSpawnPlugin`.
+    pub config_shell: Option<String>,
+}
 
 impl Plugin for DefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_plugins((
+            spawn::DefaultSpawnPlugin {
+                shell: self.config_shell.clone(),
+            },
+            exit::DefaultExitPlugin,
+            layout::DefaultLayoutPlugin,
+        ))
+        .add_systems(
             Update,
             ensure_default_mode_ui
                 .run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>))),
@@ -87,7 +100,7 @@ fn ensure_default_mode_ui(
                 ChildOf(mode_ui),
             ));
             // NOTE: bind the token only after a successful spawn. gc keys on
-            // RemovedComponents<OzmaTerminal> (never added on the error path),
+            // RemovedComponents<TerminalHandle> (never added on the error path),
             // so a pre-spawn bind would leak the token if the spawn failed.
             if let Some(c) = control.as_deref() {
                 c.bind_surface(shell);
@@ -119,9 +132,8 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(initial_mode);
-        app.insert_resource(OzmaTerminalConfig { shell: None });
         app.world_mut().spawn((Node::default(), UiRoot));
-        app.add_plugins(DefaultModePlugin);
+        app.add_plugins(DefaultModePlugin { config_shell: None });
         app
     }
 
@@ -176,6 +188,24 @@ mod tests {
             .iter(world)
             .count();
         assert_eq!(count, 1, "exactly one DefaultShell after round-trip");
+    }
+
+    #[test]
+    fn config_shell_forwards_to_ozma_terminal_config() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(AppMode::Default);
+        app.add_plugins(DefaultModePlugin {
+            config_shell: Some("/bin/fish".into()),
+        });
+        assert_eq!(
+            app.world()
+                .resource::<OzmaTerminalConfig>()
+                .shell
+                .as_deref(),
+            Some("/bin/fish"),
+            "DefaultModePlugin must forward config_shell through DefaultSpawnPlugin into OzmaTerminalConfig",
+        );
     }
 
     #[test]

@@ -2,16 +2,17 @@
 //! `KeyboardFocused` terminal; also provides the modifier-reading helper used
 //! by the mouse dispatch.
 
+use crate::action::terminal::PasteAction;
 use crate::input::bindings::{ReservedChord, TerminalInputBindings};
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::shortcuts::{LeaderGate, LeaderPhase, Shortcuts, is_modifier_key};
 use crate::input::{InputPhase, current_modifiers};
+use crate::surface::OzmaTerminal;
 use bevy::ecs::message::MessageReader;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::Real;
-use ozma_terminal::{OzmaTerminal, PasteAction};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 
 /// Registers `TerminalInputBindings` and the default keyboard dispatcher.

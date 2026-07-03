@@ -73,7 +73,7 @@ fn maintain_tmux_input_gates(
         .and_then(|webview| webview_parents.get(webview).ok())
         .map(|childof| childof.parent());
     // TODO: a press within `divider_grab_tolerance_px` of a divider can still
-    // both resize the pane and start an `ozma_terminal` selection — the
+    // both resize the pane and start a local terminal selection — the
     // divider-band claim is not folded in here yet. Adding it requires the
     // logical-vs-physical divider coordinate space; tracked as a follow-up.
     let claimed_pane = window.and_then(|window| {

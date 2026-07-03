@@ -732,7 +732,7 @@ mod tests {
 
     #[test]
     fn suppresses_cursor_on_focused_terminal_without_tmux() {
-        use ozma_terminal::OzmaTerminal;
+        use crate::surface::OzmaTerminal;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -816,9 +816,9 @@ mod tests {
 
     #[test]
     fn overlay_background_matches_pane_default_bg_while_composing() {
+        use crate::surface::OzmaTerminal;
         use bevy::asset::Handle;
         use bevy::window::WindowResolution;
-        use ozma_terminal::OzmaTerminal;
         use ozma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();
@@ -892,9 +892,9 @@ mod tests {
     }
 
     fn run_overlay_with_composition(value: &str, caret: Option<(usize, usize)>) -> App {
+        use crate::surface::OzmaTerminal;
         use bevy::asset::Handle;
         use bevy::window::WindowResolution;
-        use ozma_terminal::OzmaTerminal;
         use ozma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();
@@ -1011,11 +1011,11 @@ mod tests {
 
     #[test]
     fn overlay_geometry_not_rechanged_on_unchanged_composition() {
+        use crate::surface::OzmaTerminal;
         use bevy::app::Update;
         use bevy::asset::Handle;
         use bevy::ecs::query::{Changed, Or};
         use bevy::window::WindowResolution;
-        use ozma_terminal::OzmaTerminal;
         use ozma_tty_renderer::prelude::Cursor;
 
         #[derive(Resource, Default)]
@@ -1159,10 +1159,10 @@ mod tests {
 
     #[test]
     fn overlay_hidden_and_idle_after_composition_ends() {
+        use crate::surface::OzmaTerminal;
         use bevy::app::PostUpdate;
         use bevy::asset::Handle;
         use bevy::window::WindowResolution;
-        use ozma_terminal::OzmaTerminal;
         use ozma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();

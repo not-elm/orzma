@@ -4,8 +4,9 @@
 //! copy-mode entry, leader sequences) plus — while copy mode is active — the
 //! shared `[copy-mode]` key table, so leader/GUI chords shadow copy-mode keys
 //! in one ordered pass (tmux-mode parity). Raw-key forwarding and direct-chord
-//! paste are owned by `ozma_terminal`'s dispatcher and `PasteAction`.
+//! paste are owned by the keyboard dispatcher and `crate::action::terminal::PasteAction`.
 
+use crate::action::terminal::PasteAction;
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
@@ -15,6 +16,7 @@ use crate::input::shortcuts::{
 };
 use crate::input::{InputPhase, current_modifiers};
 use crate::mode::AppMode;
+use crate::surface::OzmaTerminal;
 use crate::surface_geom::phys_to_pane_local;
 use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use crate::webview_pointer::topmost_surface_at;
@@ -26,7 +28,6 @@ use bevy::time::Real;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_terminal::{OzmaTerminal, PasteAction};
 use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
@@ -310,6 +311,7 @@ mod tests {
     use super::*;
     use crate::input::focus::KeyboardFocused;
     use crate::input::shortcuts::{LeaderPhase, test_shortcuts_with_repeat_prefix};
+    use crate::surface::OzmaTerminal;
     use bevy::app::App;
     use bevy::app::AppExit;
     use bevy::ecs::resource::Resource;
@@ -318,7 +320,6 @@ mod tests {
     use bevy::input::keyboard::{Key, KeyboardInput};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use bevy::window::PrimaryWindow;
-    use ozma_terminal::OzmaTerminal;
     use ozma_tty_engine::TerminalKeyInput;
     use ozmux_tmux::{PaneId, TmuxPane};
     use std::time::Duration;
@@ -327,7 +328,7 @@ mod tests {
     #[test]
     fn ime_commit_fires_terminal_key_input_for_plain_terminal() {
         use crate::input::ime::ImeCommit;
-        use ozma_terminal::OzmaTerminal;
+        use crate::surface::OzmaTerminal;
         use ozma_tty_engine::TerminalKey;
 
         #[derive(Resource, Default)]
@@ -357,7 +358,7 @@ mod tests {
     #[test]
     fn ime_commit_is_noop_for_tmux_pane_target() {
         use crate::input::ime::ImeCommit;
-        use ozma_terminal::OzmaTerminal;
+        use crate::surface::OzmaTerminal;
 
         #[derive(Resource, Default)]
         struct Hits(u32);

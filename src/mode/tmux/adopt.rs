@@ -15,10 +15,10 @@
 use crate::input::focus::KeyboardFocused;
 use crate::mode::AppMode;
 use crate::mode::default::DefaultModeUi;
+use crate::surface_geom::cells_for;
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_terminal::cells_for;
 use ozma_tty_engine::{ControlModeDetected, TerminalChildExit, TerminalResize};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{

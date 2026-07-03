@@ -5,9 +5,9 @@
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
+use crate::clipboard::Clipboard;
 use crate::ui::copy_mode::ExitCopyMode;
 use bevy::prelude::*;
-use ozma_terminal::Clipboard;
 use ozma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
 use ozmux_configs::copy_mode::CopyScroll;
 use ozmux_tmux::TmuxPane;
