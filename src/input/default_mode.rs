@@ -8,13 +8,13 @@
 
 use crate::action::terminal::PasteAction;
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
+use crate::app_mode::AppMode;
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
 use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
-use crate::app_mode::AppMode;
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface::OzmaTerminal;
 use crate::surface_geom::phys_to_pane_local;

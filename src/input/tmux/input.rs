@@ -22,10 +22,10 @@ use crate::action::tmux::{
     SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
 };
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
+use crate::app_mode::{AppMode, TmuxActiveSet};
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::app_mode::{AppMode, TmuxActiveSet};
 use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
