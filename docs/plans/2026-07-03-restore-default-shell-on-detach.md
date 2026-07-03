@@ -206,14 +206,30 @@ Add the two accessors after `send_effect` (public items stay grouped above the p
 
 - [ ] **Step 5: Update the stale terminator test**
 
-Find `feed_strips_dcs_wrapper` (around `crates/tmux_control/src/protocol.rs:486`). It feeds `...%window-add @0\r\n\x1b\\\r\n` and asserts the produced events. Keep its event assertions, and extend it to the new semantics by appending:
+Find `feed_strips_dcs_wrapper` (`crates/tmux_control/src/protocol.rs:485-501`). Its old fixture modeled the terminator as its own CRLF-delimited line (`...%window-add @0\r\n\x1b\\\r\n`), which the spec calls out as not matching the real stream shape. Rewrite the fixture and comment to the glued no-newline form — the terminator directly followed by post-detach bytes with no intervening newline — while keeping the same notification assertion and adding the new ended/residual assertions:
 
 ```rust
-        assert!(c.is_ended(), "the trailing terminator ends the stream");
-        assert_eq!(c.take_residual(), b"\r\n".to_vec());
+    #[test]
+    fn feed_strips_dcs_wrapper() {
+        // Mirrors a real `tmux -CC` startup then detach: the DCS introducer is
+        // glued to the first %begin (the launch reply, flags=0, skipped as
+        // unsolicited), and the terminator is glued directly to the following
+        // bytes with NO newline — the real stream shape, not a CRLF-delimited
+        // line.
+        let mut c = ProtocolClient::new();
+        let events = c
+            .feed(b"\x1bP1000p%begin 1 318 0\r\n%end 1 318 0\r\n%window-add @0\r\n\x1b\\$ ")
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::Notification(ControlEvent::WindowAdd {
+                window: WindowId(0)
+            })]
+        );
+        assert!(c.is_ended(), "the glued terminator ends the stream");
+        assert_eq!(c.take_residual(), b"$ ".to_vec());
+    }
 ```
-
-(The `\r\n` that followed the terminator in the old fixture is now residual — matching the real stream contract.)
 
 - [ ] **Step 6: Run the full crate's tests**
 
@@ -400,21 +416,26 @@ mod tests {
         });
         app.update();
 
-        let world = app.world();
-        let adopted = world
-            .get::<AdoptedControlMode>(entity)
-            .expect("a fresh introducer must keep the terminal adopted");
-        assert!(
-            world.get::<ControlModeWatch>(entity).is_none(),
-            "no watch while adopted"
-        );
-        assert_eq!(world.resource::<DetectedCount>().0, 1);
+        {
+            let world = app.world();
+            assert!(
+                world.get::<AdoptedControlMode>(entity).is_some(),
+                "a fresh introducer must keep the terminal adopted"
+            );
+            assert!(
+                world.get::<ControlModeWatch>(entity).is_none(),
+                "no watch while adopted"
+            );
+            assert_eq!(world.resource::<DetectedCount>().0, 1);
+        }
         // The new capture must begin at the introducer byte, mirroring the
         // adoption-path contract.
-        let mut probe = AdoptedControlMode::from_captured(Vec::new());
-        std::mem::swap(&mut probe, &mut *app.world_mut().get_mut(entity).unwrap());
-        assert_eq!(probe.take_captured(), b"\x1bP1000p%begin 2\r\n".to_vec());
-        let _ = adopted;
+        let captured = app
+            .world_mut()
+            .get_mut::<AdoptedControlMode>(entity)
+            .unwrap()
+            .take_captured();
+        assert_eq!(captured, b"\x1bP1000p%begin 2\r\n".to_vec());
     }
 
     #[test]
@@ -431,12 +452,10 @@ mod tests {
 }
 ```
 
-Note for the second test: `world.get::<AdoptedControlMode>` returns a shared ref, and `take_captured` needs `&mut` — the swap-probe shown reads the captured buffer without adding production accessors. If the borrow checker rejects holding `adopted` across the `world_mut()` call, drop the earlier binding (`assert!(world.get::<AdoptedControlMode>(entity).is_some())`) and do the swap-probe only.
-
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `cargo test -p ozma_tty_engine release`
-Expected: FAIL — module `release` not declared (compile error).
+Expected: 0 tests run — `test result: ok. 0 passed; 0 failed; ... 0 filtered out` (or similar). `release.rs` exists on disk but is not yet declared as a module, so the crate does not compile it and the name filter matches nothing. This confirms the module isn't wired in yet; Step 3 wires it in.
 
 - [ ] **Step 3: Wire the module into `lib.rs`**
 
@@ -559,21 +578,87 @@ And, next to the existing re-adoption/attach-edge test (the one that despawns `g
 ```rust
     #[test]
     fn attach_edge_refires_after_component_strip_release() {
-        // Same app/harness setup as the despawn-teardown re-adoption test.
-        // First adoption:
-        //   spawn (AdoptedControlMode::from_captured(entry_block()), TmuxClient::new_adopted())
-        //   update; assert attached_count == 1 and the gateway is TmuxAttached.
-        // Release-teardown (the detach path — strip, don't despawn):
-        //   trigger ReleaseControlMode { entity: gateway, residual: Vec::new() }
-        //   trigger TmuxConnectionReset
-        //   update; assert the gateway is alive but has no TmuxClient/TmuxAttached/EnumerationState.
-        // Re-adoption on the SAME entity (what on_control_mode_detected does):
-        //   insert (AdoptedControlMode::from_captured(entry_block()), TmuxClient::new_adopted())
-        //   update; assert attached_count == 2 and TmuxAttached is back.
+        use ozma_tty_engine::ReleaseControlMode;
+
+        fn entry_block() -> Vec<u8> {
+            b"\x1bP1000p%begin 1 1 0\r\n%end 1 1 0\r\n%session-changed $0 0\r\n".to_vec()
+        }
+
+        fn attached_count(app: &App) -> usize {
+            app.world()
+                .resource::<Messages<TmuxClientAttached>>()
+                .iter_current_update_messages()
+                .count()
+        }
+
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+
+        // First adoption.
+        let gateway = app
+            .world_mut()
+            .spawn((
+                AdoptedControlMode::from_captured(entry_block()),
+                TmuxClient::new_adopted(),
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            attached_count(&app),
+            1,
+            "first adoption must fire the attach edge once"
+        );
+        assert!(
+            app.world().get::<TmuxAttached>(gateway).is_some(),
+            "first adoption must mark the gateway TmuxAttached"
+        );
+
+        // Release-teardown (the detach path — strip components, don't despawn).
+        app.world_mut().trigger(ReleaseControlMode {
+            entity: gateway,
+            residual: Vec::new(),
+        });
+        app.world_mut().trigger(TmuxConnectionReset);
+        app.update();
+
+        assert!(
+            app.world().get_entity(gateway).is_ok(),
+            "the gateway entity survives release (it is not despawned)"
+        );
+        assert!(
+            app.world().get::<TmuxClient>(gateway).is_none(),
+            "TmuxClient stripped"
+        );
+        assert!(
+            app.world().get::<TmuxAttached>(gateway).is_none(),
+            "TmuxAttached stripped"
+        );
+        assert!(
+            app.world().get::<EnumerationState>(gateway).is_none(),
+            "EnumerationState stripped"
+        );
+
+        // Re-adoption on the SAME entity (what on_control_mode_detected does).
+        app.world_mut().entity_mut(gateway).insert((
+            AdoptedControlMode::from_captured(entry_block()),
+            TmuxClient::new_adopted(),
+        ));
+        app.update();
+
+        assert_eq!(
+            attached_count(&app),
+            1,
+            "re-adoption on the restored entity must fire the attach edge again"
+        );
+        assert!(
+            app.world().get::<TmuxAttached>(gateway).is_some(),
+            "re-adoption must mark the gateway TmuxAttached again"
+        );
     }
 ```
 
-Write the test body by following the comment skeleton with the concrete helper calls from the neighboring test — the harness functions already exist in that test module; this test only changes the teardown mechanism (event instead of despawn) and re-adopts in place. Register `on_gateway_release` on the test app (`app.add_observer(on_gateway_release)`) since that test module builds a bare `App` rather than the full plugin.
+This test uses `app.add_plugins(TmuxSessionPlugin)` (not a bare `App`) so `on_gateway_release` — registered by `TmuxSessionPlugin::build` in Step 5 below — is active without a separate manual registration.
 
 - [ ] **Step 4: Run tests to verify they fail**
 
