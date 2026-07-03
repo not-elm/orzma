@@ -27,6 +27,22 @@ pub struct ReleaseControlMode {
     pub residual: Vec<u8>,
 }
 
+/// Fired once a [`ReleaseControlMode`] genuinely completes: the terminal is
+/// back to normal VT feeding via `ControlModeWatch`.
+///
+/// NOT fired when the released bytes re-enter control mode (a fresh
+/// `tmux -CC` introducer glued into the residue) — that outcome re-fires
+/// [`ControlModeDetected`] instead and the terminal stays adopted. Callers
+/// that only care about a genuine release (e.g. tearing down connection
+/// state, restoring a host UI) must react to this event rather than
+/// [`ReleaseControlMode`] itself, which fires regardless of outcome.
+#[derive(EntityEvent)]
+pub struct ControlModeReleased {
+    /// The terminal that finished releasing control mode.
+    #[event_target]
+    pub entity: Entity,
+}
+
 /// Registers the release observer.
 pub(crate) struct ControlModeReleasePlugin;
 
@@ -64,6 +80,7 @@ fn on_release_control_mode(
                 .entity(entity)
                 .remove::<AdoptedControlMode>()
                 .insert(watch);
+            commands.trigger(ControlModeReleased { entity });
         }
         Handover::Detected { vt, captured } => {
             ingest_and_flush_or_arm(&mut commands, entity, &mut handle, &mut coalescer, &vt);
@@ -86,7 +103,14 @@ mod tests {
     #[derive(Resource, Default)]
     struct DetectedCount(usize);
 
+    #[derive(Resource, Default)]
+    struct ReleasedCount(usize);
+
     fn count_detected(_ev: On<ControlModeDetected>, mut count: ResMut<DetectedCount>) {
+        count.0 += 1;
+    }
+
+    fn count_released(_ev: On<ControlModeReleased>, mut count: ResMut<ReleasedCount>) {
         count.0 += 1;
     }
 
@@ -94,8 +118,10 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<DetectedCount>()
+            .init_resource::<ReleasedCount>()
             .add_observer(on_release_control_mode)
-            .add_observer(count_detected);
+            .add_observer(count_detected)
+            .add_observer(count_released);
         app
     }
 
@@ -135,6 +161,11 @@ mod tests {
             0,
             "no introducer in the bytes, no re-adoption"
         );
+        assert_eq!(
+            world.resource::<ReleasedCount>().0,
+            1,
+            "a genuine release fires ControlModeReleased exactly once"
+        );
     }
 
     #[test]
@@ -159,6 +190,12 @@ mod tests {
                 "no watch while adopted"
             );
             assert_eq!(world.resource::<DetectedCount>().0, 1);
+            assert_eq!(
+                world.resource::<ReleasedCount>().0,
+                0,
+                "staying adopted must NOT fire ControlModeReleased — callers gated on it \
+                 (e.g. tearing down connection state) must not run"
+            );
         }
         let captured = app
             .world_mut()

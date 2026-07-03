@@ -2,6 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Path note:** this plan's file paths reflect the module layout at the time
+> it was written. A later merge of main's #234 ("dissolve `src/mode` into
+> feature-first modules") moved them: `src/mode/tmux/adopt.rs` →
+> `src/session/tmux/adopt.rs`; `src/mode/default.rs` →
+> `src/ui/default_mode.rs`; `src/mode/default/spawn.rs` →
+> `src/session/default/spawn.rs`; `src/mode/tmux.rs` →
+> `src/session/tmux.rs`; `src/mode/default/layout.rs` →
+> `src/session/default/layout.rs`.
+
 **Goal:** When the user detaches from `tmux -CC` (`%exit`), restore the original Default-mode shell terminal — same entity, same still-alive shell process, preserved scrollback — instead of despawning it and spawning a fresh shell.
 
 **Architecture:** Un-adopt in teardown (spec: `docs/specs/2026-07-03-restore-default-shell-on-detach-design.md`). Four work areas: (1) `tmux_control`'s `ProtocolClient` gains an *ended* state with byte-prefix DCS-terminator detection and a residual-byte buffer; (2) `ozma_tty_engine` gains a `ReleaseControlMode` entity event whose observer atomically re-feeds residual + late-captured bytes through the introducer scanner and re-arms `ControlModeWatch`; (3) `tmux_session` observes the same event to strip `TmuxClient`/`TmuxAttached`/`EnumerationState`, and `TmuxClient` gains a `take_residual()` passthrough; (4) the binary's `%exit` teardown becomes a restore path (synthesized detach line, UI restore via a `mode::default` helper, `GatewaySize` reset) while the child-death path keeps today's despawn.

@@ -3,6 +3,15 @@
 Date: 2026-07-03
 Status: approved (design), pending implementation plan
 
+> **Path note:** this doc's file paths reflect the module layout at the time
+> it was written. A later merge of main's #234 ("dissolve `src/mode` into
+> feature-first modules") moved them: `src/mode/tmux/adopt.rs` →
+> `src/session/tmux/adopt.rs`; `src/mode/default.rs` →
+> `src/ui/default_mode.rs`; `src/mode/default/spawn.rs` →
+> `src/session/default/spawn.rs`; `src/mode/default/exit.rs` →
+> `src/session/default/exit.rs`; `src/mode/default/layout.rs` →
+> `src/session/default/layout.rs`.
+
 ## Problem
 
 When the user runs `tmux -CC` in the Default-mode shell, that terminal entity is

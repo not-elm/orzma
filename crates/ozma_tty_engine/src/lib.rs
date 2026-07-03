@@ -36,7 +36,7 @@ pub use handle::{TerminalHandle, ViIndicatorSnapshot};
 pub use mouse_encode::ProtocolModifiers;
 pub use pty::PtyHandle;
 pub use raw_write::{RawWritePlugin, TerminalRawWrite};
-pub use release::ReleaseControlMode;
+pub use release::{ControlModeReleased, ReleaseControlMode};
 pub use resize::{ResizePlugin, TerminalResize};
 pub use title::{TerminalTitle, sanitize_title};
 pub use vt::listener::{AnchorMode, InlineAnchor, OscWebviewVerb};

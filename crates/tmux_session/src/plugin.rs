@@ -18,7 +18,7 @@ use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, RequestPaneReseed, collect_pane_outputs};
 use bevy::prelude::*;
-use ozma_tty_engine::{AdoptedControlMode, ReleaseControlMode, TerminalRawWrite};
+use ozma_tty_engine::{AdoptedControlMode, ControlModeReleased, TerminalRawWrite};
 use tmux_control::{ClientEvent, TransportEvent};
 use tmux_control_parser::PaneId;
 
@@ -526,11 +526,14 @@ fn send_session_enumeration(client: &mut TmuxClient, enumeration: &mut Enumerati
 /// plain terminal on detach: `TmuxClient`, `TmuxAttached`, and the
 /// crate-private `EnumerationState`.
 ///
-/// The engine's own `ReleaseControlMode` observer handles the byte-level
-/// un-adoption; this observer owns the tmux-side component cleanup the old
-/// despawn-teardown got for free. The two observers touch disjoint component
-/// sets, so their relative order is irrelevant.
-fn on_gateway_release(ev: On<ReleaseControlMode>, mut commands: Commands) {
+/// Gated on [`ControlModeReleased`] — fired by the engine's own
+/// `ReleaseControlMode` observer only when release genuinely completes — NOT
+/// on `ReleaseControlMode` itself, which also fires when the released bytes
+/// re-enter control mode (a fresh `tmux -CC` introducer glued into the
+/// residue). Reacting to the raw `ReleaseControlMode` trigger would strip
+/// these components even after that re-adoption re-inserts `TmuxClient`,
+/// silently wedging the connection.
+fn on_gateway_release(ev: On<ControlModeReleased>, mut commands: Commands) {
     commands
         .entity(ev.entity)
         .remove::<(TmuxClient, TmuxAttached, EnumerationState)>();
@@ -1077,10 +1080,7 @@ mod tests {
             ))
             .id();
 
-        app.world_mut().trigger(ReleaseControlMode {
-            entity: gateway,
-            residual: Vec::new(),
-        });
+        app.world_mut().trigger(ControlModeReleased { entity: gateway });
         app.update();
 
         assert!(
@@ -1100,9 +1100,37 @@ mod tests {
     }
 
     #[test]
+    fn gateway_release_does_not_strip_on_reentrant_readoption() {
+        // Regression: a fast `tmux -CC` reattach glued into the same detach
+        // residue keeps the entity adopted — the engine fires
+        // ControlModeDetected (re-inserting TmuxClient), NOT
+        // ControlModeReleased. on_gateway_release must not react to that
+        // reentrant path at all: it is only registered on ControlModeReleased,
+        // so triggering ControlModeDetected here must leave the freshly
+        // reinserted TmuxClient untouched.
+        use ozma_tty_engine::ControlModeDetected;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(on_gateway_release);
+        let gateway = app
+            .world_mut()
+            .spawn((AdoptedControlMode::default(), TmuxClient::new_adopted()))
+            .id();
+
+        app.world_mut().trigger(ControlModeDetected { entity: gateway });
+        app.update();
+
+        assert!(
+            app.world().get::<TmuxClient>(gateway).is_some(),
+            "TmuxClient must survive: on_gateway_release only reacts to \
+             ControlModeReleased, not the reentrant ControlModeDetected path"
+        );
+    }
+
+    #[test]
     fn attach_edge_refires_after_component_strip_release() {
         use crate::events::TmuxConnectionReset;
-        use ozma_tty_engine::ReleaseControlMode;
 
         fn entry_block() -> Vec<u8> {
             b"\x1bP1000p%begin 1 1 0\r\n%end 1 1 0\r\n%session-changed $0 0\r\n".to_vec()
@@ -1137,10 +1165,7 @@ mod tests {
             "first adoption must mark the gateway TmuxAttached"
         );
 
-        app.world_mut().trigger(ReleaseControlMode {
-            entity: gateway,
-            residual: Vec::new(),
-        });
+        app.world_mut().trigger(ControlModeReleased { entity: gateway });
         app.world_mut().trigger(TmuxConnectionReset);
         app.update();
 
