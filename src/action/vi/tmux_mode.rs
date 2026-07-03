@@ -7,7 +7,7 @@ use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViPromptRequest, ViScrollRequest, ViSearchStepRequest,
     ViSelectionToggleRequest, ViYankRequest,
 };
-use crate::mode::tmux::copy_mode::CopyModeSnapshot;
+use crate::render::tmux::copy_mode::CopyModeSnapshot;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::{CopyPrompt, CopyPromptState};
 use bevy::prelude::*;
@@ -259,7 +259,7 @@ fn on_vi_search_step(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mode::tmux::copy_mode::CopyModeSnapshot;
+    use crate::render::tmux::copy_mode::CopyModeSnapshot;
     use ozmux_tmux::CopyState;
     use tmux_control_parser::CellDims;
 

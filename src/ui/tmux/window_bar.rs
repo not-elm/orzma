@@ -2,6 +2,7 @@
 //! window list (`<index>:<name>`), with the active window highlighted and each
 //! entry clickable to `select-window`.
 
+use crate::app_mode::TmuxActiveSet;
 use crate::font::{PowerlineFont, TerminalUiFont};
 use crate::theme;
 use crate::ui::palette;
@@ -34,7 +35,7 @@ pub(crate) struct WindowEntry {
 /// On a window-list entry button: whether the entry's window is the session's
 /// active window. Drives the active-vs-normal styling.
 #[derive(Component)]
-pub(crate) struct WindowEntryActive(
+struct WindowEntryActive(
     #[cfg_attr(
         not(test),
         expect(
@@ -52,7 +53,7 @@ struct SessionLabel;
 /// Wires the tmux window status bar: rebuilds its children whenever the window
 /// set, active window, or session name changes. The bar itself is spawned by
 /// `spawn_window_bar`, called from `ensure_tmux_mode_ui`.
-pub(crate) struct WindowBarPlugin;
+pub(super) struct WindowBarPlugin;
 
 impl Plugin for WindowBarPlugin {
     fn build(&self, app: &mut App) {
@@ -65,7 +66,7 @@ impl Plugin for WindowBarPlugin {
             rebuild_window_bar
                 .run_if(window_bar_dirty)
                 .after(TmuxProjectionSet)
-                .in_set(super::TmuxActiveSet),
+                .in_set(TmuxActiveSet),
         );
     }
 }

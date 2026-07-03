@@ -13,10 +13,10 @@
 //! gets the click); off-rect the press clears webview focus here and falls
 //! through to the terminal.
 
+use crate::app_mode::AppMode;
 use crate::input::InputPhase;
-use crate::mode::AppMode;
 use crate::surface::OzmaTerminal;
-use crate::surface_geom::phys_to_pane_local;
+use crate::surface::geometry::phys_to_pane_local;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
@@ -35,7 +35,7 @@ use ozma_webview::{NonInteractive, Webview};
 /// Registers the Default-mode webview pointer systems and the shared
 /// `WebviewPress` resource (`init_resource` is idempotent; the tmux plugin may
 /// also init it).
-pub(crate) struct DefaultWebviewPointerPlugin;
+pub(super) struct DefaultWebviewPointerPlugin;
 
 impl Plugin for DefaultWebviewPointerPlugin {
     fn build(&self, app: &mut App) {

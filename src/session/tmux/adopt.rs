@@ -12,11 +12,11 @@
 //! survives) or the gateway child process actually exiting — despawning the
 //! gateway entity (and its `TmuxClient`) and returning to [`AppMode::Default`].
 
+use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::mode::AppMode;
-use crate::mode::default::DefaultModeUi;
-use crate::surface_geom::cells_for;
+use crate::surface::geometry::cells_for;
 use crate::ui::UiRoot;
+use crate::ui::default_mode::DefaultModeUi;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::{ControlModeDetected, TerminalChildExit, TerminalResize};
@@ -27,7 +27,7 @@ use ozmux_tmux::{
 };
 
 /// Registers the adoption observer and the teardown systems/observer.
-pub(crate) struct AdoptPlugin;
+pub(super) struct AdoptPlugin;
 
 impl Plugin for AdoptPlugin {
     fn build(&self, app: &mut App) {
@@ -419,8 +419,8 @@ mod tests {
     #[test]
     fn re_adoption_after_teardown_re_enters_tmux() {
         let mut app = build_app();
-        // Mimic OzmuxTmuxPlugin's connection-closed -> Default handler, which
-        // lives in src/mode/tmux.rs (not AdoptPlugin) so it isn't in build_app.
+        // NOTE: mimic on_tmux_connection_closed, which lives in src/session/tmux.rs
+        // (registered by TmuxLifecyclePlugin, not AdoptPlugin) so it isn't in build_app.
         app.add_observer(
             |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
                 next.set(AppMode::Default);

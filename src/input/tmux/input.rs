@@ -22,18 +22,18 @@ use crate::action::tmux::{
     SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
 };
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
+use crate::app_mode::{AppMode, TmuxActiveSet};
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
-use crate::mode::AppMode;
-use crate::mode::tmux::confirm_prompt::ConfirmState;
-use crate::mode::tmux::rename_prompt::RenamePrompt;
-use crate::mode::tmux::{TmuxActiveSet, request_detach};
+use crate::session::tmux::request_detach;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
+use crate::ui::tmux::confirm_prompt::ConfirmState;
+use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -59,7 +59,7 @@ use ozmux_tmux::{
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
-pub(crate) struct InputPlugin;
+pub(super) struct InputPlugin;
 
 impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {

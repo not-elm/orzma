@@ -2,8 +2,8 @@
 //! into the primary window's title bar — `session:window — ozmux` in Tmux
 //! mode, the focused terminal's OSC title + ` — ozmux` in Default mode.
 
+use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::mode::AppMode;
 use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};

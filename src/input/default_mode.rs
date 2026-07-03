@@ -6,8 +6,11 @@
 //! in one ordered pass (tmux-mode parity). Raw-key forwarding and direct-chord
 //! paste are owned by the keyboard dispatcher and `crate::action::terminal::PasteAction`.
 
+mod webview;
+
 use crate::action::terminal::PasteAction;
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
+use crate::app_mode::AppMode;
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
@@ -15,9 +18,8 @@ use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
 use crate::input::{InputPhase, current_modifiers};
-use crate::mode::AppMode;
 use crate::surface::OzmaTerminal;
-use crate::surface_geom::phys_to_pane_local;
+use crate::surface::geometry::phys_to_pane_local;
 use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use crate::webview_pointer::topmost_surface_at;
 use bevy::ecs::system::SystemParam;
@@ -36,7 +38,7 @@ use ozmux_configs::shortcuts::ShortcutAction;
 use ozmux_tmux::TmuxPane;
 
 /// Registers the host-side input systems for `AppMode::Default`.
-pub(crate) struct DefaultHostInputPlugin;
+pub(super) struct DefaultHostInputPlugin;
 
 impl Plugin for DefaultHostInputPlugin {
     fn build(&self, app: &mut App) {
@@ -54,7 +56,8 @@ impl Plugin for DefaultHostInputPlugin {
                 .run_if(in_state(AppMode::Default))
                 .run_if(on_message::<KeyboardInput>),
         )
-        .add_observer(apply_ime_commit_to_terminal);
+        .add_observer(apply_ime_commit_to_terminal)
+        .add_plugins(webview::DefaultWebviewPointerPlugin);
     }
 }
 
@@ -289,8 +292,8 @@ fn apply_ime_commit_to_terminal(
     terminals: Query<(), (With<OzmaTerminal>, Without<TmuxPane>)>,
 ) {
     // NOTE: discriminate on TmuxPane absence — tmux panes are also OzmaTerminal
-    // entities (src/mode/tmux/render.rs), and their commits go out via the tmux
-    // observer in src/mode/tmux/forward.rs. Without this filter the commit would be
+    // entities (src/render/tmux.rs), and their commits go out via the tmux
+    // observer in src/input/tmux/forward.rs. Without this filter the commit would be
     // double-delivered.
     if terminals.get(ev.entity).is_err() {
         return;

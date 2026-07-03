@@ -1,7 +1,7 @@
 //! `KillPaneRequest` — opens a confirm prompt that kills the target pane on
 //! `y` (mirrors tmux's default confirm-wrapped `kill-pane` binding).
 
-use crate::mode::tmux::confirm_prompt::ConfirmState;
+use crate::ui::tmux::confirm_prompt::ConfirmState;
 use bevy::prelude::*;
 use ozmux_tmux::{KillPane, TmuxClient, TmuxCommand, TmuxPane};
 

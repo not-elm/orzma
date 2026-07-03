@@ -13,12 +13,12 @@ mod effect;
 mod webview;
 
 use super::pane_hit::tmux_pane_at_phys;
+use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::gesture::ClickTracker;
-use crate::mode::tmux::TmuxActiveSet;
-use crate::mode::tmux::copy_mode::{CopyModeSnapshot, cell_at_pane};
-use crate::mode::tmux::render::{DividerPixelRect, PackedTmuxLayout};
+use crate::render::tmux::copy_mode::{CopyModeSnapshot, cell_at_pane};
+use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
@@ -39,7 +39,7 @@ use tmux_control_parser::DividerAxis;
 use webview::tmux_webview_pointer;
 
 /// Bevy plugin that registers the tmux mouse gesture system.
-pub(crate) struct MousePlugin;
+pub(super) struct MousePlugin;
 
 impl Plugin for MousePlugin {
     fn build(&self, app: &mut App) {
