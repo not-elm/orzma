@@ -18,7 +18,7 @@ use mouse::MousePlugin;
 use window_bar_input::WindowBarInputPlugin;
 
 /// Bevy plugin aggregating the tmux-mode input sub-plugins.
-pub(crate) struct TmuxInputPlugin;
+pub(super) struct TmuxInputPlugin;
 
 impl Plugin for TmuxInputPlugin {
     fn build(&self, app: &mut App) {
