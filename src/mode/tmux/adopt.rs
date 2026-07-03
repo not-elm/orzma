@@ -29,6 +29,14 @@ use ozmux_tmux::{
 /// Registers the adoption observer and the teardown systems/observer.
 pub(crate) struct AdoptPlugin;
 
+/// Ordering label for [`teardown_on_exit_notification`]'s `AdoptPlugin`
+/// registration, so [`sync_gateway_size`] can order against it by set rather
+/// than by system-function identity (tests register a second, gate-free
+/// instance of the bare system, which would make ordering-by-function
+/// ambiguous).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct TeardownOnExitSet;
+
 impl Plugin for AdoptPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GatewaySize>()
@@ -37,12 +45,13 @@ impl Plugin for AdoptPlugin {
             .add_systems(
                 Update,
                 teardown_on_exit_notification
+                    .in_set(TeardownOnExitSet)
                     .after(TmuxProjectionSet)
                     .run_if(any_with_component::<TmuxClient>),
             )
             .add_systems(
                 Update,
-                sync_gateway_size.run_if(
+                sync_gateway_size.before(TeardownOnExitSet).run_if(
                     any_with_component::<TmuxClient>
                         .and(resource_exists::<TerminalCellMetricsResource>),
                 ),
@@ -68,6 +77,14 @@ struct GatewaySize(Option<(Entity, u16, u16)>);
 ///
 /// Emits [`TerminalResize`] only when the gateway or size changed, so it never
 /// spams the PTY each frame.
+///
+// NOTE: must run before `teardown_on_exit_notification` in the same frame.
+// The gateway's `TmuxClient` removal (via `ReleaseControlMode`'s deferred
+// observers) doesn't take effect until end-of-frame, so this system's
+// `any_with_component::<TmuxClient>` gate still passes right after a detach
+// fires — if this ran after the detach path's `GatewaySize` reset, it would
+// immediately repopulate `last.0`, defeating the reset and wrongly skipping
+// the resize on a later re-adoption of the same (surviving) gateway entity.
 fn sync_gateway_size(
     mut commands: Commands,
     mut last: ResMut<GatewaySize>,
@@ -432,12 +449,9 @@ mod tests {
         use ozma_tty_engine::ReleaseControlMode;
 
         let mut app = build_app();
-        // Stand-in for tmux_session's on_gateway_release (that observer lives
-        // in the ozmux_tmux crate and is not registered by AdoptPlugin).
         app.add_observer(|ev: On<ReleaseControlMode>, mut commands: Commands| {
             commands.entity(ev.entity).remove::<TmuxClient>();
         });
-        // Stand-in for src/mode/tmux.rs::on_tmux_connection_closed.
         app.add_observer(
             |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
                 next.set(AppMode::Default);
@@ -539,7 +553,6 @@ mod tests {
             }
         };
 
-        // Adopt, restore (as in the previous test, minus assertions)…
         let (_c1, gateway) = spawn_gateway_under_container(&mut app);
         app.world_mut()
             .trigger(ControlModeDetected { entity: gateway });
@@ -571,8 +584,6 @@ mod tests {
             AppMode::Default
         );
 
-        // …then the restored shell runs `tmux -CC` again: the SAME entity
-        // re-adopts.
         app.world_mut()
             .trigger(ControlModeDetected { entity: gateway });
         pump(&mut app);
