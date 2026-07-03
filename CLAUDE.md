@@ -40,7 +40,7 @@ In-process webview rendering is provided by the external `bevy_cef` crate (a git
 
 ### `src/` module map
 
-`src/main.rs` plus: `action`, `app_mode`, `bootstrap`, `cef_profile`, `clipboard`, `configs`, `font`, `input`, `render`, `session`, `surface`, `surface_geom`, `system_set`, `theme`, `ui`, `webview_pointer`, `window_title`.
+`src/main.rs` plus: `action`, `app_mode`, `bootstrap`, `cef_profile`, `clipboard`, `configs`, `font`, `input`, `render`, `session`, `surface`, `system_set`, `theme`, `ui`, `webview_pointer`, `window_title`.
 
 ## Commands
 

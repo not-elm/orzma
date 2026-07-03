@@ -15,7 +15,7 @@
 use crate::input::focus::MouseDisabled;
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface::OzmaTerminal;
-use crate::surface_geom::{cell_at_local, phys_to_pane_local};
+use crate::surface::geom::{cell_at_local, phys_to_pane_local};
 use crate::webview_pointer::topmost_surface_at;
 use bevy::ecs::entity::Entity;
 use bevy::input::ButtonInput;

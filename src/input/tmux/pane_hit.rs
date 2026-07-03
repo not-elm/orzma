@@ -1,6 +1,6 @@
-//! `TmuxPane` pointer hit-testing. Cell geometry lives in `crate::surface_geom`.
+//! `TmuxPane` pointer hit-testing. Cell geometry lives in `crate::surface::geom`.
 
-use crate::surface_geom::phys_to_pane_local;
+use crate::surface::geom::phys_to_pane_local;
 use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Query;
 use bevy::math::Vec2;

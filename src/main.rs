@@ -11,7 +11,6 @@ mod input;
 mod render;
 mod session;
 mod surface;
-mod surface_geom;
 mod system_set;
 mod theme;
 mod ui;

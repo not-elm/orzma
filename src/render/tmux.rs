@@ -8,7 +8,7 @@ mod paint_rescue;
 
 use crate::app_mode::TmuxActiveSet;
 use crate::surface::OzmaTerminal;
-use crate::surface_geom::cells_for;
+use crate::surface::geom::cells_for;
 use crate::theme;
 use crate::ui::tmux::mode_ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
