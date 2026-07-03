@@ -223,7 +223,7 @@ fn process_pty_chunks(
 /// No-op on empty `bytes`: the handover scanner can withhold an entire chunk
 /// as a carried partial-introducer prefix, and feeding zero bytes to the VT
 /// must not arm the coalescer or trip the first-emit bootstrap.
-pub(crate) fn ingest_and_flush_or_arm(
+fn ingest_and_flush_or_arm(
     commands: &mut Commands,
     entity: Entity,
     handle: &mut TerminalHandle,

@@ -160,8 +160,6 @@ mod tests {
             );
             assert_eq!(world.resource::<DetectedCount>().0, 1);
         }
-        // The new capture must begin at the introducer byte, mirroring the
-        // adoption-path contract.
         let captured = app
             .world_mut()
             .get_mut::<AdoptedControlMode>(entity)
