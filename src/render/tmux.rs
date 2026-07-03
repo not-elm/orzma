@@ -87,7 +87,7 @@ fn prune_pending_on_pane_removed(
 /// before this frame's grid-dims write (avoids the ≤1-frame resize transient
 /// where `cells.len() != rows`).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct TmuxLayoutSet;
+struct TmuxLayoutSet;
 
 #[derive(Resource, Default)]
 struct LastClientSize {

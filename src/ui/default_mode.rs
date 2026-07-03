@@ -19,7 +19,7 @@ pub(crate) struct DefaultModeUi;
 
 /// Bevy plugin that ensures the Default-mode UI subtree exists while in
 /// `AppMode::Default`. Gated by the absence of `DefaultModeUi`.
-pub(crate) struct DefaultModeUiPlugin;
+pub(super) struct DefaultModeUiPlugin;
 
 impl Plugin for DefaultModeUiPlugin {
     fn build(&self, app: &mut App) {

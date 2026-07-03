@@ -35,7 +35,7 @@ pub(crate) struct WindowEntry {
 /// On a window-list entry button: whether the entry's window is the session's
 /// active window. Drives the active-vs-normal styling.
 #[derive(Component)]
-pub(crate) struct WindowEntryActive(
+struct WindowEntryActive(
     #[cfg_attr(
         not(test),
         expect(

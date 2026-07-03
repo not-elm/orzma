@@ -3,12 +3,12 @@
 //! input. The complementary tmux state and rendering live in
 //! `crate::ui::tmux` / `crate::render::tmux` / `crate::session::tmux`.
 
-pub(crate) mod forward;
-pub(crate) mod gate;
-pub(crate) mod input;
+mod forward;
+mod gate;
+mod input;
 pub(crate) mod mouse;
 mod pane_hit;
-pub(crate) mod window_bar_input;
+mod window_bar_input;
 
 use bevy::prelude::*;
 use forward::ForwardPlugin;

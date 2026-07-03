@@ -18,7 +18,7 @@ use rename_prompt::RenamePromptPlugin;
 use window_bar::WindowBarPlugin;
 
 /// Bevy plugin aggregating the tmux-mode UI sub-plugins.
-pub(crate) struct TmuxUiPlugin;
+pub(super) struct TmuxUiPlugin;
 
 impl Plugin for TmuxUiPlugin {
     fn build(&self, app: &mut App) {
