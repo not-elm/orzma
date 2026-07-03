@@ -89,6 +89,8 @@ pub struct ProtocolClient {
     next_id: u64,
     next_fence: u64,
     outgoing: Vec<u8>,
+    ended: bool,
+    residual: Vec<u8>,
 }
 
 impl ProtocolClient {
@@ -140,26 +142,56 @@ impl ProtocolClient {
         Ok(())
     }
 
+    /// Returns whether the control stream has ended (the DCS terminator was
+    /// consumed). Once ended, [`ProtocolClient::feed`] produces no further
+    /// events and accumulates all bytes as residual.
+    pub fn is_ended(&self) -> bool {
+        self.ended
+    }
+
+    /// Removes and returns the bytes received after the DCS terminator — the
+    /// post-detach stream (the shell prompt) that belongs to the terminal,
+    /// not the protocol. Empty if the stream has not ended.
+    pub fn take_residual(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.residual)
+    }
+
     /// Feeds a raw byte chunk; returns the events it produced (possibly empty).
     ///
     /// Splits on `\n` (stripping a trailing `\r`), buffers any incomplete tail,
     /// treats a blank/whitespace-only line outside a block as a no-op (a blank
     /// line inside a block is kept as body), and drives the assembler with each
-    /// complete line. Strips the `tmux -CC` DCS introducer from the first line
-    /// and ignores a bare DCS terminator line.
+    /// complete line. Strips the `tmux -CC` DCS introducer from the first line.
+    ///
+    /// The DCS terminator (`ESC \`) ends the control stream: it is detected as
+    /// a byte prefix at a line boundary (tmux writes it with no trailing
+    /// newline, directly glued to the post-detach shell bytes), never inside a
+    /// reply block. Once ended, `feed` produces no further events and every
+    /// byte accumulates as residual (see [`ProtocolClient::take_residual`]).
     pub fn feed(&mut self, bytes: &[u8]) -> TmuxResult<Vec<ClientEvent>> {
+        if self.ended {
+            self.residual.extend_from_slice(bytes);
+            return Ok(Vec::new());
+        }
         self.line_buf.extend_from_slice(bytes);
         let mut events = Vec::new();
-        while let Some(nl) = self.line_buf.iter().position(|&b| b == b'\n') {
+        loop {
+            if !self.assembler.is_in_block() && self.line_buf.starts_with(DCS_TERMINATOR) {
+                self.ended = true;
+                self.residual
+                    .extend_from_slice(&self.line_buf[DCS_TERMINATOR.len()..]);
+                self.line_buf.clear();
+                break;
+            }
+            let Some(nl) = self.line_buf.iter().position(|&b| b == b'\n') else {
+                break;
+            };
             let mut line: Vec<u8> = self.line_buf.drain(..=nl).collect();
             line.pop();
             if line.last() == Some(&b'\r') {
                 line.pop();
             }
             let content = line.strip_prefix(DCS_INTRODUCER).unwrap_or(line.as_slice());
-            if content == DCS_TERMINATOR {
-                continue;
-            }
             if let Some(event) = self.feed_line(content)? {
                 events.push(event);
             }
@@ -484,13 +516,14 @@ mod tests {
 
     #[test]
     fn feed_strips_dcs_wrapper() {
-        // Mirrors a real `tmux -CC` startup: the DCS introducer is glued to the
-        // first %begin (the launch reply, flags=0), the terminator arrives as a
-        // bare line, CRLF endings. The launch block is unsolicited (flags=0) and
-        // skipped; only the notification passes through.
+        // Mirrors a real `tmux -CC` startup then detach: the DCS introducer is
+        // glued to the first %begin (the launch reply, flags=0, skipped as
+        // unsolicited), and the terminator is glued directly to the following
+        // bytes with NO newline — the real stream shape, not a CRLF-delimited
+        // line.
         let mut c = ProtocolClient::new();
         let events = c
-            .feed(b"\x1bP1000p%begin 1 318 0\r\n%end 1 318 0\r\n%window-add @0\r\n\x1b\\\r\n")
+            .feed(b"\x1bP1000p%begin 1 318 0\r\n%end 1 318 0\r\n%window-add @0\r\n\x1b\\$ ")
             .unwrap();
         assert_eq!(
             events,
@@ -498,6 +531,8 @@ mod tests {
                 window: WindowId(0)
             })]
         );
+        assert!(c.is_ended(), "the glued terminator ends the stream");
+        assert_eq!(c.take_residual(), b"$ ".to_vec());
     }
 
     #[test]
@@ -1002,5 +1037,63 @@ mod tests {
         assert_eq!(body(cur_p1), vec!["54 39".to_string()]);
         assert_eq!(body(cap_p2), vec!["P2".to_string()]);
         assert_eq!(body(cur_p2), vec!["7 12".to_string()]);
+    }
+
+    #[test]
+    fn ended_at_terminator_with_glued_residual() {
+        let mut c = ProtocolClient::new();
+        let events = c
+            .feed(b"%exit detached (from session main)\r\n\x1b\\[prompt]$ ")
+            .unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::Notification(ControlEvent::Exit {
+                reason: Some("detached (from session main)".into()),
+            })]
+        );
+        assert!(c.is_ended());
+        assert_eq!(c.take_residual(), b"[prompt]$ ".to_vec());
+    }
+
+    #[test]
+    fn terminator_split_across_chunks() {
+        let mut c = ProtocolClient::new();
+        let events = c.feed(b"%exit\r\n\x1b").unwrap();
+        assert_eq!(
+            events,
+            vec![ClientEvent::Notification(ControlEvent::Exit {
+                reason: None
+            })]
+        );
+        assert!(!c.is_ended(), "a lone ESC must not end the stream yet");
+        assert!(c.feed(b"\\$ ").unwrap().is_empty());
+        assert!(c.is_ended());
+        assert_eq!(c.take_residual(), b"$ ".to_vec());
+    }
+
+    #[test]
+    fn feed_after_end_accumulates_residual_without_events() {
+        let mut c = ProtocolClient::new();
+        c.feed(b"%exit\r\n\x1b\\").unwrap();
+        assert!(c.is_ended());
+        assert!(c.feed(b"%window-add @9\r\n").unwrap().is_empty());
+        assert_eq!(c.take_residual(), b"%window-add @9\r\n".to_vec());
+        assert!(c.take_residual().is_empty(), "take_residual drains once");
+    }
+
+    #[test]
+    fn terminator_prefixed_block_body_line_does_not_end_stream() {
+        let mut c = ProtocolClient::new();
+        let events = c
+            .feed(b"%begin 1 7 0\n\x1b\\ body line\n%end 1 7 0\n%window-add @1\n")
+            .unwrap();
+        assert!(
+            !c.is_ended(),
+            "ESC-backslash inside a block is body, not a terminator"
+        );
+        assert!(matches!(
+            events.last(),
+            Some(ClientEvent::Notification(ControlEvent::WindowAdd { .. }))
+        ));
     }
 }
