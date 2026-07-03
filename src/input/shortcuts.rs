@@ -3,9 +3,9 @@
 //! The translation lives here (not in `ozmux_configs`) so the config crate
 //! stays free of any `bevy` dependency.
 
+use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
-use crate::mode::AppMode;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::MouseButton;

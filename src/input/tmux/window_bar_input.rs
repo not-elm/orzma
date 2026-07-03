@@ -1,15 +1,15 @@
 //! tmux window-bar interaction: click a window entry to `select-window`, and a
 //! pointer cursor while hovering an entry.
 
+use crate::app_mode::TmuxActiveSet;
 use crate::input::InputPhase;
-use crate::mode::tmux::TmuxActiveSet;
-use crate::mode::tmux::window_bar::WindowEntry;
+use crate::ui::tmux::window_bar::WindowEntry;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 use ozmux_tmux::{SelectWindow, TmuxClient};
 
 /// Registers the window-bar click and hover-cursor systems.
-pub(crate) struct WindowBarInputPlugin;
+pub(super) struct WindowBarInputPlugin;
 
 impl Plugin for WindowBarInputPlugin {
     fn build(&self, app: &mut App) {

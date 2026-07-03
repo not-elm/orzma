@@ -2,7 +2,7 @@
 //!
 //! While a pane is in tmux copy mode its live `TerminalHandle` keeps advancing
 //! (`route_tmux_output` never drops `%output`), but its emit to the rendered
-//! grid is gated (see `crate::mode::tmux::render::route_tmux_output`). This plugin paints the
+//! grid is gated (see `crate::render::tmux::route_tmux_output`). This plugin paints the
 //! scrolled view instead: it polls `#{...}` copy-mode state, captures the
 //! scrolled viewport with `capture-pane`, and feeds the captured bytes into a
 //! per-pane scratch handle whose `flush_emit` rebuilds the pane's `TerminalGrid`.
@@ -13,8 +13,9 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
+use crate::app_mode::TmuxActiveSet;
 use crate::clipboard::Clipboard;
-use crate::surface_geom::phys_to_pane_local;
+use crate::surface::geometry::phys_to_pane_local;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -29,7 +30,7 @@ use ozmux_tmux::{
 use std::collections::HashMap;
 
 /// Wires the capture-driven copy-mode refresh systems after the projection chain.
-pub(crate) struct CopyModePlugin;
+pub(super) struct CopyModePlugin;
 
 impl Plugin for CopyModePlugin {
     fn build(&self, app: &mut App) {
@@ -48,7 +49,7 @@ impl Plugin for CopyModePlugin {
                     .after(consume_copy_reply),
             )
                 .after(TmuxProjectionSet)
-                .in_set(super::TmuxActiveSet),
+                .in_set(TmuxActiveSet),
         );
     }
 }

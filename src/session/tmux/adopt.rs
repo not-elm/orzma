@@ -12,11 +12,11 @@
 //! shell via [`ReleaseControlMode`]; the gateway's child process actually
 //! exiting despawns it instead. Both return to [`AppMode::Default`].
 
+use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::mode::AppMode;
-use crate::mode::default::{DefaultModeUi, restore_default_shell};
-use crate::surface_geom::cells_for;
+use crate::surface::geometry::cells_for;
 use crate::ui::UiRoot;
+use crate::ui::default_mode::{DefaultModeUi, restore_default_shell};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::{ControlModeDetected, ReleaseControlMode, TerminalChildExit, TerminalResize};
@@ -27,7 +27,7 @@ use ozmux_tmux::{
 };
 
 /// Registers the adoption observer and the teardown systems/observer.
-pub(crate) struct AdoptPlugin;
+pub(super) struct AdoptPlugin;
 
 /// Ordering label for [`teardown_on_exit_notification`]'s `AdoptPlugin`
 /// registration, so [`sync_gateway_size`] can order against it by set rather
@@ -444,7 +444,6 @@ mod tests {
 
     #[test]
     fn exit_notification_restores_gateway_into_default_container() {
-        use crate::mode::default::DefaultModeUi;
         use bevy::ecs::system::RunSystemOnce;
         use ozma_tty_engine::ReleaseControlMode;
 
@@ -535,7 +534,6 @@ mod tests {
 
     #[test]
     fn readoption_after_restore_reenters_tmux_on_the_same_entity() {
-        use crate::mode::default::DefaultModeUi;
         use ozma_tty_engine::ReleaseControlMode;
 
         let mut app = build_app();
@@ -624,8 +622,8 @@ mod tests {
     #[test]
     fn re_adoption_after_teardown_re_enters_tmux() {
         let mut app = build_app();
-        // Mimic OzmuxTmuxPlugin's connection-closed -> Default handler, which
-        // lives in src/mode/tmux.rs (not AdoptPlugin) so it isn't in build_app.
+        // NOTE: mimic on_tmux_connection_closed, which lives in src/session/tmux.rs
+        // (registered by TmuxLifecyclePlugin, not AdoptPlugin) so it isn't in build_app.
         app.add_observer(
             |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
                 next.set(AppMode::Default);

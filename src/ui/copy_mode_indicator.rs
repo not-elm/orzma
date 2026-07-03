@@ -56,7 +56,7 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 /// Spawns a `CopyModeIndicator` chip as a child of every pane host
 /// the first frame `TerminalHandle` is observed there. The
 /// `Added<TerminalHandle>` filter fires exactly once per host because
-/// `crate::mode::tmux::render::attach_tmux_pane_terminal` is the only `TerminalHandle`
+/// `crate::render::tmux::attach_tmux_pane_terminal` is the only `TerminalHandle`
 /// inserter on `TmuxPane` hosts.
 fn attach_indicator_to_surface_host(
     mut commands: Commands,

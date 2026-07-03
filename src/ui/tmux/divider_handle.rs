@@ -8,10 +8,11 @@
 //! cursor all coincide, and sets a `ColResize` / `RowResize` cursor on the
 //! primary window while the pointer is over a divider.
 
-use super::render::{DividerPixelRect, PackedTmuxLayout};
+use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::tmux::mouse::divider_at;
+use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::theme;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
@@ -19,7 +20,7 @@ use ozmux_tmux::{ActiveWindow, TmuxProjectionSet};
 use tmux_control_parser::DividerAxis;
 
 /// Registers the divider-handle visuals and the resize hover cursor.
-pub(crate) struct DividerHandlePlugin;
+pub(super) struct DividerHandlePlugin;
 
 impl Plugin for DividerHandlePlugin {
     fn build(&self, app: &mut App) {
@@ -29,7 +30,7 @@ impl Plugin for DividerHandlePlugin {
                 reconcile_divider_handles.after(TmuxProjectionSet),
                 divider_hover_feedback.after(InputPhase::Hover),
             )
-                .in_set(super::TmuxActiveSet),
+                .in_set(TmuxActiveSet),
         );
     }
 }
@@ -155,8 +156,8 @@ fn divider_hover_feedback(
 
 #[cfg(test)]
 mod tests {
-    use super::super::render::{DividerPixelRect, PackedTmuxLayout};
     use super::*;
+    use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
     use bevy::math::Vec2;
     use std::collections::HashMap;
     use tmux_control_parser::{DividerAxis, PaneId};

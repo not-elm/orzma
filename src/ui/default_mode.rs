@@ -1,16 +1,9 @@
-//! Default-mode (`AppMode::Default`) processing: the single-PTY shell UI
-//! lifecycle, host-side input gates/shortcuts, and webview pointer routing.
+//! Default-mode UI subtree: lazily (re)spawns the single `OzmaTerminal` shell
+//! under `UiRoot` while in `AppMode::Default`.
 
-mod exit;
-mod layout;
-mod spawn;
-mod webview;
-
-pub(crate) use webview::DefaultWebviewPointerPlugin;
-
+use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::mode::AppMode;
-use crate::mode::default::spawn::{
+use crate::session::default::spawn::{
     OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig, full_size_node,
 };
 use crate::ui::UiRoot;
@@ -20,35 +13,19 @@ use ozma_webview::ControlPlaneHandle;
 
 /// Root of the Default-mode UI subtree, mounted under `UiRoot`.
 ///
-/// Adoption (`crate::mode::tmux::adopt`) despawns this container when it promotes the
+/// Adoption (`crate::session::tmux::adopt`) despawns this container when it promotes the
 /// Default shell to the tmux gateway, so `ensure_default_mode_ui` lazily spawns
 /// a fresh Default shell on the next return to `AppMode::Default`.
 #[derive(Component)]
 pub(crate) struct DefaultModeUi;
 
-/// Bevy plugin that ensures the Default-mode UI subtree (a single
-/// `OzmaTerminal` under `DefaultModeUi`) exists while in `AppMode::Default`.
-///
-/// `ensure_default_mode_ui` runs once while in `AppMode::Default` to build the
-/// subtree. Adoption despawns `DefaultModeUi` when it promotes the Default shell
-/// to the tmux gateway; `ensure_default_mode_ui` spawns a fresh one on the next
-/// return to `AppMode::Default`. `DefaultSpawnPlugin` (registered below) inserts
-/// the `OzmaTerminalConfig` this reads.
-pub(crate) struct DefaultModePlugin {
-    /// Shell override forwarded to `spawn::DefaultSpawnPlugin`.
-    pub config_shell: Option<String>,
-}
+/// Bevy plugin that ensures the Default-mode UI subtree exists while in
+/// `AppMode::Default`. Gated by the absence of `DefaultModeUi`.
+pub(super) struct DefaultModeUiPlugin;
 
-impl Plugin for DefaultModePlugin {
+impl Plugin for DefaultModeUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            spawn::DefaultSpawnPlugin {
-                shell: self.config_shell.clone(),
-            },
-            exit::DefaultExitPlugin,
-            layout::DefaultLayoutPlugin,
-        ))
-        .add_systems(
+        app.add_systems(
             Update,
             ensure_default_mode_ui
                 .run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>))),
@@ -62,11 +39,7 @@ impl Plugin for DefaultModePlugin {
 /// `shell` into it with keyboard focus and the full-size layout — adoption
 /// overwrote the shell's `Node` with `Display::None` + defaults, so the full
 /// node is re-inserted, not just `display` flipped back.
-pub(in crate::mode) fn restore_default_shell(
-    commands: &mut Commands,
-    shell: Entity,
-    ui_root: Entity,
-) {
+pub(crate) fn restore_default_shell(commands: &mut Commands, shell: Entity, ui_root: Entity) {
     let mode_ui = spawn_default_mode_container(commands, ui_root);
     commands.entity(shell).insert((
         full_size_node(),
@@ -150,7 +123,7 @@ fn spawn_default_mode_container(commands: &mut Commands, ui_root: Entity) -> Ent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mode::AppMode;
+    use crate::app_mode::AppMode;
     use bevy::state::app::StatesPlugin;
     use ozma_webview::TokenRegistry;
     use std::path::PathBuf;
@@ -160,7 +133,10 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(initial_mode);
         app.world_mut().spawn((Node::default(), UiRoot));
-        app.add_plugins(DefaultModePlugin { config_shell: None });
+        app.add_plugins((
+            crate::session::default::DefaultSessionPlugin { shell: None },
+            DefaultModeUiPlugin,
+        ));
         app
     }
 
@@ -215,24 +191,6 @@ mod tests {
             .iter(world)
             .count();
         assert_eq!(count, 1, "exactly one DefaultShell after round-trip");
-    }
-
-    #[test]
-    fn config_shell_forwards_to_ozma_terminal_config() {
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Default);
-        app.add_plugins(DefaultModePlugin {
-            config_shell: Some("/bin/fish".into()),
-        });
-        assert_eq!(
-            app.world()
-                .resource::<OzmaTerminalConfig>()
-                .shell
-                .as_deref(),
-            Some("/bin/fish"),
-            "DefaultModePlugin must forward config_shell through DefaultSpawnPlugin into OzmaTerminalConfig",
-        );
     }
 
     #[test]

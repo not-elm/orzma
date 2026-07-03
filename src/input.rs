@@ -16,8 +16,9 @@ pub(crate) mod tmux;
 
 use crate::{
     input::{
-        keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
-        shortcuts::ShortcutsPlugin,
+        default_mode::DefaultHostInputPlugin, keyboard::KeyboardInputPlugin,
+        mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
+        tmux::TmuxInputPlugin,
     },
     system_set::OzmuxSystems,
 };
@@ -48,6 +49,8 @@ impl Plugin for OzmuxInputPlugin {
             OptionAsAltPlugin,
             KeyboardInputPlugin,
             MouseInputPlugin,
+            TmuxInputPlugin,
+            DefaultHostInputPlugin,
         ))
         .configure_sets(
             Update,

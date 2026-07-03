@@ -10,14 +10,14 @@ use std::path::PathBuf;
 ///
 /// `None` means fall back to `$SHELL` at spawn time.
 #[derive(Resource)]
-pub(super) struct OzmaTerminalConfig {
+pub(crate) struct OzmaTerminalConfig {
     /// Optional shell path. When set, overrides `$SHELL` and `/bin/sh`.
     pub shell: Option<String>,
 }
 
 /// Options for spawning a standalone Ozma terminal.
 #[derive(Default)]
-pub(super) struct OzmaSpawnOptions {
+pub(crate) struct OzmaSpawnOptions {
     /// Shell override; `None` falls back to `$SHELL` then `/bin/sh`.
     pub shell: Option<String>,
     /// Working directory for the PTY; `None` inherits the process cwd.
@@ -31,7 +31,7 @@ pub(super) struct OzmaSpawnOptions {
 /// GPU render bundle is injected by `crate::surface`'s add-observer on
 /// insertion.
 #[derive(Bundle)]
-pub(super) struct OzmaTerminalBundle {
+pub(crate) struct OzmaTerminalBundle {
     terminal: TerminalBundle,
     marker: OzmaTerminal,
     node: Node,
@@ -64,7 +64,7 @@ impl OzmaTerminalBundle {
 /// Full-window absolute layout for the standalone Default-mode terminal.
 /// Shared by the spawn bundle and the detach-restore path, which must undo
 /// adoption's `Display::None` overwrite with the identical node shape.
-pub(super) fn full_size_node() -> Node {
+pub(crate) fn full_size_node() -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: Val::Px(0.0),

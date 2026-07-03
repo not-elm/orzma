@@ -1,7 +1,7 @@
 //! `RenameWindowRequest` — opens the ozmux rename prompt pre-filled with the
 //! target window's current name.
 
-use crate::mode::tmux::rename_prompt::{RenamePrompt, RenameSubject};
+use crate::ui::tmux::rename_prompt::{RenamePrompt, RenameSubject};
 use bevy::prelude::*;
 use ozmux_tmux::TmuxWindow;
 

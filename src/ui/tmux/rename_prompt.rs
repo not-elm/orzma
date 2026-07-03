@@ -18,7 +18,7 @@ use ozmux_tmux::{RenameSession, RenameWindow, SessionId, TmuxClient, TmuxCommand
 const RENAME_Z: i32 = 340;
 
 /// Registers the rename-prompt input system and the show/hide render systems.
-pub(crate) struct RenamePromptPlugin;
+pub(super) struct RenamePromptPlugin;
 
 impl Plugin for RenamePromptPlugin {
     fn build(&self, app: &mut App) {

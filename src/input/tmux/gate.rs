@@ -5,14 +5,14 @@
 //! `crate::input::mouse` shared systems yield to the tmux-specific gestures.
 
 use super::pane_hit::tmux_pane_at_phys;
+use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardDisabled;
 use crate::input::focus::MouseDisabled;
 use crate::input::ime::ImeState;
-use crate::mode::AppMode;
-use crate::mode::tmux::rename_prompt::RenamePrompt;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
+use crate::ui::tmux::rename_prompt::RenamePrompt;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
@@ -23,7 +23,7 @@ use ozma_webview::{NonInteractive, Webview, webview_hit_at};
 use ozmux_tmux::TmuxPane;
 
 /// Registers the Tmux-mode per-pane input gate maintainer.
-pub(crate) struct GatePlugin;
+pub(super) struct GatePlugin;
 
 impl Plugin for GatePlugin {
     fn build(&self, app: &mut App) {

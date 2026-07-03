@@ -8,7 +8,7 @@ use ozma_tty_engine::TerminalHandle;
 use ozmux_tmux::{PaneId, SendBytes, TmuxClient, TmuxPane};
 
 /// Registers the `TerminalForwardInput` → tmux `send-keys -H` observer.
-pub(crate) struct ForwardPlugin;
+pub(super) struct ForwardPlugin;
 
 impl Plugin for ForwardPlugin {
     fn build(&self, app: &mut App) {

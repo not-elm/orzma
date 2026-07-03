@@ -28,9 +28,9 @@ use ozma_webview::{Webview, focused_webview_of};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
-/// Per-backend observers apply it: the tmux observer in `src/mode/tmux/forward.rs`
+/// Per-backend observers apply it: the tmux observer in `src/input/tmux/forward.rs`
 /// sends it over the control socket (targeting tmux panes); the Default observer
-/// in `src/mode/default/input.rs` writes the local PTY via `TerminalKeyInput`.
+/// in `src/input/default_mode.rs` writes the local PTY via `TerminalKeyInput`.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ImeCommit {
     #[event_target]
@@ -299,7 +299,7 @@ fn ime_policy_system(
 /// state machine still runs, so `ImeState` stays consistent) when EITHER any
 /// webview owns keyboard focus OR the focused surface is in copy mode. The
 /// commit transport is applied by per-backend observers
-/// (`src/mode/tmux/forward.rs`, `src/mode/default/input.rs`).
+/// (`src/input/tmux/forward.rs`, `src/input/default_mode.rs`).
 fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,
@@ -374,7 +374,7 @@ fn webview_ime_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::mode::AppMode;
+    use crate::app_mode::AppMode;
     use crate::surface::OzmaTerminal;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;

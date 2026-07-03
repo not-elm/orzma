@@ -2,10 +2,15 @@
 //! GPU render bundle to each projected `TmuxPane`, then routes tmux `%output`
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
-use crate::mode::tmux::mode_ui::WorkspaceUiRoot;
+pub(crate) mod copy_mode;
+
+mod paint_rescue;
+
+use crate::app_mode::TmuxActiveSet;
 use crate::surface::OzmaTerminal;
-use crate::surface_geom::cells_for;
+use crate::surface::geometry::cells_for;
 use crate::theme;
+use crate::ui::tmux::mode_ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
@@ -82,7 +87,7 @@ fn prune_pending_on_pane_removed(
 /// before this frame's grid-dims write (avoids the ≤1-frame resize transient
 /// where `cells.len() != rows`).
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(crate) struct TmuxLayoutSet;
+struct TmuxLayoutSet;
 
 #[derive(Resource, Default)]
 struct LastClientSize {
@@ -115,14 +120,15 @@ impl Plugin for RenderPlugin {
                 )
                     .chain()
                     .after(TmuxProjectionSet)
-                    .in_set(super::TmuxActiveSet),
+                    .in_set(TmuxActiveSet),
             )
             .add_systems(
                 Update,
                 sync_client_size
                     .after(TmuxProjectionSet)
-                    .in_set(super::TmuxActiveSet),
-            );
+                    .in_set(TmuxActiveSet),
+            )
+            .add_plugins((paint_rescue::PaintRescuePlugin, copy_mode::CopyModePlugin));
     }
 }
 

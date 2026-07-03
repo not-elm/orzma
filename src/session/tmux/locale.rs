@@ -29,7 +29,7 @@ use bevy::prelude::*;
 use ozmux_tmux::{SetEnvironmentGlobal, TmuxClient, TmuxClientMut};
 
 /// Registers the attach-edge `LC_CTYPE` propagation system.
-pub(crate) struct TmuxLocalePlugin;
+pub(super) struct TmuxLocalePlugin;
 
 impl Plugin for TmuxLocalePlugin {
     fn build(&self, app: &mut App) {

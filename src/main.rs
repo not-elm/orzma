@@ -1,15 +1,16 @@
 //! ozmux Bevy GUI entry point.
 
 mod action;
+mod app_mode;
 mod bootstrap;
 mod cef_profile;
 mod clipboard;
 mod configs;
 mod font;
 mod input;
-mod mode;
+mod render;
+mod session;
 mod surface;
-mod surface_geom;
 mod system_set;
 mod theme;
 mod ui;
@@ -17,11 +18,11 @@ mod webview_pointer;
 mod window_title;
 
 use crate::action::ActionPlugin;
+use crate::app_mode::AppModePlugin;
 use crate::cef_profile::CefProfileDir;
 use crate::clipboard::ClipboardPlugin;
 use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
-use crate::mode::AppMode;
 use crate::surface::SurfacePlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
@@ -29,15 +30,14 @@ use bootstrap::OzmuxBootstrapPlugin;
 use configs::OzmuxConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OzmuxInputPlugin;
-use input::default_mode::DefaultHostInputPlugin;
 use input::ime::ImePlugin;
-use mode::default::DefaultModePlugin;
-use mode::default::DefaultWebviewPointerPlugin;
-use mode::tmux::OzmuxTmuxPlugin;
 use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
 use ozmux_webview_host::WebviewAssetRegistry;
+use render::tmux::RenderPlugin;
+use session::default::DefaultSessionPlugin;
+use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
     OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
@@ -51,9 +51,6 @@ fn main() {
     ensure_utf8_locale_env();
 
     let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
-    // The app boots into a single PTY shell; tmux is entered only by adopting the
-    // user's own `tmux -CC` (ControlModeDetected -> NextState(Tmux)), never at boot.
-    let initial_mode = AppMode::Default;
     let ozma_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
     App::new()
@@ -64,22 +61,25 @@ fn main() {
             }),
             cef_plugin(ozma_registry.clone(), cef_profile.path()),
         ))
-        .insert_state(initial_mode)
+        .add_plugins(AppModePlugin)
         .add_plugins((
             SurfacePlugin,
-            DefaultModePlugin {
-                config_shell: pre_configs.ozma.shell.clone(),
+            DefaultSessionPlugin {
+                shell: pre_configs.ozma.shell.clone(),
             },
             ClipboardPlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
-            OzmuxTmuxPlugin,
+            RenderPlugin,
+            TmuxLifecyclePlugin,
             ActionPlugin,
             OzmuxConfigsPlugin,
             FontBridgePlugin,
             OzmuxBootstrapPlugin,
             OzmuxInputPlugin,
             OzmuxUiPlugin,
+        ))
+        .add_plugins((
             OzmaWebviewPlugin {
                 ozma_assets: ozma_registry,
             },
@@ -93,8 +93,6 @@ fn main() {
             HyperlinkInputPlugin,
             ImePlugin,
             ImeOverlayPlugin,
-            DefaultHostInputPlugin,
-            DefaultWebviewPointerPlugin,
         ))
         .run();
 }
@@ -156,7 +154,7 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
 /// The UTF-8 `LC_CTYPE` ozmux installs when the inherited locale is not UTF-8.
 /// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
 /// writes it on. Also the fallback advertised to tmux panes
-/// (`crate::mode::tmux::locale`).
+/// (`crate::session::tmux::locale`).
 pub(crate) const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment

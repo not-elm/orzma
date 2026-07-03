@@ -1,6 +1,9 @@
 //! Shared terminal-surface identity: the `OzmaTerminal` marker and the
 //! render-bundle injection observer, which fire for every surface — tmux
-//! panes and the Default-mode shell alike.
+//! panes and the Default-mode shell alike. Surface geometry helpers live in
+//! `geometry`.
+
+pub(crate) mod geometry;
 
 use bevy::prelude::*;
 use ozma_tty_renderer::material::TerminalUiMaterial;
