@@ -65,6 +65,13 @@ impl TmuxClient {
         self.protocol.send_effect(cmd)
     }
 
+    /// Removes and returns the post-detach bytes the protocol received after
+    /// the control stream's DCS terminator — the shell-bound residue to
+    /// re-feed into the restored terminal's VT.
+    pub fn take_residual(&mut self) -> Vec<u8> {
+        self.protocol.take_residual()
+    }
+
     /// Returns the control client's name as reported by tmux, or `None` if the
     /// name query has not yet completed.
     pub fn client_name(&self) -> Option<&str> {
@@ -144,5 +151,13 @@ mod tests {
             client.take_outgoing(),
             b"if-shell -F 1 { a } { b }\ndisplay-message -p OZMUXFENCE_0\n".to_vec()
         );
+    }
+
+    #[test]
+    fn take_residual_passes_through_post_exit_bytes() {
+        let mut client = TmuxClient::new_adopted();
+        client.feed(b"%exit\r\n\x1b\\$ ").expect("feed");
+        assert_eq!(client.take_residual(), b"$ ".to_vec());
+        assert!(client.take_residual().is_empty(), "drains once");
     }
 }

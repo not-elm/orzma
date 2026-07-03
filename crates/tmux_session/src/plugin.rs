@@ -18,7 +18,7 @@ use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, RequestPaneReseed, collect_pane_outputs};
 use bevy::prelude::*;
-use ozma_tty_engine::{AdoptedControlMode, TerminalRawWrite};
+use ozma_tty_engine::{AdoptedControlMode, ReleaseControlMode, TerminalRawWrite};
 use tmux_control::{ClientEvent, TransportEvent};
 use tmux_control_parser::PaneId;
 
@@ -45,6 +45,7 @@ impl Plugin for TmuxSessionPlugin {
         app.init_resource::<TmuxProjection>()
             .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
+            .add_observer(on_gateway_release)
             .add_message::<PaneOutput>()
             .add_message::<RequestPaneReseed>()
             .add_message::<CopyModeReply>()
@@ -519,6 +520,20 @@ fn send_session_enumeration(client: &mut TmuxClient, enumeration: &mut Enumerati
     if let Err(error) = client.send(SubscribeWindowFlags) {
         tracing::warn!(?error, "failed to subscribe to window flags");
     }
+}
+
+/// Strips the connection components from a gateway being released back to a
+/// plain terminal on detach: `TmuxClient`, `TmuxAttached`, and the
+/// crate-private `EnumerationState`.
+///
+/// The engine's own `ReleaseControlMode` observer handles the byte-level
+/// un-adoption; this observer owns the tmux-side component cleanup the old
+/// despawn-teardown got for free. The two observers touch disjoint component
+/// sets, so their relative order is irrelevant.
+fn on_gateway_release(ev: On<ReleaseControlMode>, mut commands: Commands) {
+    commands
+        .entity(ev.entity)
+        .remove::<(TmuxClient, TmuxAttached, EnumerationState)>();
 }
 
 #[cfg(test)]
@@ -1045,6 +1060,120 @@ mod tests {
         assert!(
             enumeration_pending_nonempty(&mut app),
             "second adoption must re-send the on-attach enumeration"
+        );
+    }
+
+    #[test]
+    fn gateway_release_strips_connection_components_without_despawning() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(on_gateway_release);
+        let gateway = app
+            .world_mut()
+            .spawn((
+                AdoptedControlMode::default(),
+                TmuxClient::new_adopted(),
+                TmuxAttached,
+            ))
+            .id();
+
+        app.world_mut().trigger(ReleaseControlMode {
+            entity: gateway,
+            residual: Vec::new(),
+        });
+        app.update();
+
+        let entity = app.world().entity(gateway);
+        assert!(entity.get::<TmuxClient>().is_none(), "TmuxClient stripped");
+        assert!(
+            entity.get::<TmuxAttached>().is_none(),
+            "TmuxAttached stripped"
+        );
+        assert!(
+            entity.get::<EnumerationState>().is_none(),
+            "EnumerationState stripped"
+        );
+    }
+
+    #[test]
+    fn attach_edge_refires_after_component_strip_release() {
+        use crate::events::TmuxConnectionReset;
+        use ozma_tty_engine::ReleaseControlMode;
+
+        fn entry_block() -> Vec<u8> {
+            b"\x1bP1000p%begin 1 1 0\r\n%end 1 1 0\r\n%session-changed $0 0\r\n".to_vec()
+        }
+
+        fn attached_count(app: &App) -> usize {
+            app.world()
+                .resource::<Messages<TmuxClientAttached>>()
+                .iter_current_update_messages()
+                .count()
+        }
+
+        let mut app = App::new();
+        app.add_plugins(TmuxSessionPlugin);
+
+        // First adoption.
+        let gateway = app
+            .world_mut()
+            .spawn((
+                AdoptedControlMode::from_captured(entry_block()),
+                TmuxClient::new_adopted(),
+            ))
+            .id();
+        app.update();
+
+        assert_eq!(
+            attached_count(&app),
+            1,
+            "first adoption must fire the attach edge once"
+        );
+        assert!(
+            app.world().get::<TmuxAttached>(gateway).is_some(),
+            "first adoption must mark the gateway TmuxAttached"
+        );
+
+        // Release-teardown (the detach path — strip components, don't despawn).
+        app.world_mut().trigger(ReleaseControlMode {
+            entity: gateway,
+            residual: Vec::new(),
+        });
+        app.world_mut().trigger(TmuxConnectionReset);
+        app.update();
+
+        assert!(
+            app.world().get_entity(gateway).is_ok(),
+            "the gateway entity survives release (it is not despawned)"
+        );
+        assert!(
+            app.world().get::<TmuxClient>(gateway).is_none(),
+            "TmuxClient stripped"
+        );
+        assert!(
+            app.world().get::<TmuxAttached>(gateway).is_none(),
+            "TmuxAttached stripped"
+        );
+        assert!(
+            app.world().get::<EnumerationState>(gateway).is_none(),
+            "EnumerationState stripped"
+        );
+
+        // Re-adoption on the SAME entity (what on_control_mode_detected does).
+        app.world_mut().entity_mut(gateway).insert((
+            AdoptedControlMode::from_captured(entry_block()),
+            TmuxClient::new_adopted(),
+        ));
+        app.update();
+
+        assert_eq!(
+            attached_count(&app),
+            1,
+            "re-adoption on the restored entity must fire the attach edge again"
+        );
+        assert!(
+            app.world().get::<TmuxAttached>(gateway).is_some(),
+            "re-adoption must mark the gateway TmuxAttached again"
         );
     }
 
