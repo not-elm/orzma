@@ -516,11 +516,6 @@ mod tests {
 
     #[test]
     fn feed_strips_dcs_wrapper() {
-        // Mirrors a real `tmux -CC` startup then detach: the DCS introducer is
-        // glued to the first %begin (the launch reply, flags=0, skipped as
-        // unsolicited), and the terminator is glued directly to the following
-        // bytes with NO newline — the real stream shape, not a CRLF-delimited
-        // line.
         let mut c = ProtocolClient::new();
         let events = c
             .feed(b"\x1bP1000p%begin 1 318 0\r\n%end 1 318 0\r\n%window-add @0\r\n\x1b\\$ ")
