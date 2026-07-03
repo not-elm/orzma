@@ -7,7 +7,7 @@
 //! repainting from the mirror — automating the manual-scroll workaround for the
 //! persistent-blank-pane bug.
 
-use super::render::TmuxLayoutSet;
+use super::TmuxLayoutSet;
 use crate::app_mode::TmuxActiveSet;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;

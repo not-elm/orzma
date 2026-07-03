@@ -17,7 +17,7 @@ struct TmuxModeUi;
 /// each window container. Spawned with the Tmux subtree; removed with it via
 /// `DespawnOnExit`.
 #[derive(Component)]
-pub(super) struct WorkspaceUiRoot;
+pub(crate) struct WorkspaceUiRoot;
 
 /// Bevy plugin that ensures the Tmux-mode UI subtree exists while in Tmux mode.
 pub(crate) struct TmuxModeUiPlugin;

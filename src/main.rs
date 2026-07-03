@@ -9,6 +9,7 @@ mod configs;
 mod font;
 mod input;
 mod mode;
+mod render;
 mod session;
 mod surface;
 mod surface_geom;
@@ -38,6 +39,7 @@ use ozma_tty_engine::TerminalHandlePlugin;
 use ozma_tty_renderer::TerminalRendererPlugin;
 use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
 use ozmux_webview_host::WebviewAssetRegistry;
+use render::tmux::RenderPlugin;
 use session::default::DefaultSessionPlugin;
 use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
@@ -72,6 +74,7 @@ fn main() {
             ClipboardPlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
+            RenderPlugin,
             OzmuxTmuxPlugin,
             TmuxLifecyclePlugin,
             ActionPlugin,

@@ -10,7 +10,7 @@
 use super::GestureState;
 use super::effect::{MultiSelectKind, TmuxMouseEffect};
 use crate::input::gesture::ClickTracker;
-use crate::mode::tmux::render::DividerPixelRect;
+use crate::render::tmux::DividerPixelRect;
 use bevy::prelude::*;
 use ozmux_tmux::PaneId;
 use std::time::Duration;

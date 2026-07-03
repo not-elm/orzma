@@ -2,7 +2,7 @@
 //!
 //! While a pane is in tmux copy mode its live `TerminalHandle` keeps advancing
 //! (`route_tmux_output` never drops `%output`), but its emit to the rendered
-//! grid is gated (see `crate::mode::tmux::render::route_tmux_output`). This plugin paints the
+//! grid is gated (see `crate::render::tmux::route_tmux_output`). This plugin paints the
 //! scrolled view instead: it polls `#{...}` copy-mode state, captures the
 //! scrolled viewport with `capture-pane`, and feeds the captured bytes into a
 //! per-pane scratch handle whose `flush_emit` rebuilds the pane's `TerminalGrid`.
