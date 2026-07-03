@@ -16,7 +16,7 @@
 use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::surface::OzmaTerminal;
-use crate::surface::geom::phys_to_pane_local;
+use crate::surface::geometry::phys_to_pane_local;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,

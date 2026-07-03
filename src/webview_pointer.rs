@@ -9,7 +9,7 @@
 //! manual forwarding is the only path that delivers clicks to them.
 
 use crate::surface::OzmaTerminal;
-use crate::surface::geom::phys_to_pane_local;
+use crate::surface::geometry::phys_to_pane_local;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseScrollUnit};

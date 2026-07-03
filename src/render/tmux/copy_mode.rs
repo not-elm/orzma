@@ -15,7 +15,7 @@
 
 use crate::app_mode::TmuxActiveSet;
 use crate::clipboard::Clipboard;
-use crate::surface::geom::phys_to_pane_local;
+use crate::surface::geometry::phys_to_pane_local;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};

@@ -14,7 +14,7 @@
 
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::surface::geom::cells_for;
+use crate::surface::geometry::cells_for;
 use crate::ui::UiRoot;
 use crate::ui::default_mode::DefaultModeUi;
 use bevy::prelude::*;

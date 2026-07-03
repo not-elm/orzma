@@ -1,7 +1,7 @@
 //! Window-fill resize system for the Ozma terminal.
 
 use crate::surface::OzmaTerminal;
-use crate::surface::geom::cells_for;
+use crate::surface::geometry::cells_for;
 use bevy::ecs::lifecycle::Add;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;

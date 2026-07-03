@@ -19,7 +19,7 @@ use crate::input::shortcuts::{
 };
 use crate::input::{InputPhase, current_modifiers};
 use crate::surface::OzmaTerminal;
-use crate::surface::geom::phys_to_pane_local;
+use crate::surface::geometry::phys_to_pane_local;
 use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use crate::webview_pointer::topmost_surface_at;
 use bevy::ecs::system::SystemParam;
