@@ -465,8 +465,8 @@ mod tests {
                     let mut client = clients.get_mut(gateway).expect("gateway has a client");
                     restore_gateway(
                         &mut commands,
-                        &mut *last,
-                        &mut *client,
+                        &mut last,
+                        &mut client,
                         gateway,
                         ui_root.single().ok(),
                         Some("detached (from session main)".into()),
@@ -555,8 +555,8 @@ mod tests {
                         let mut client = clients.get_mut(gateway).expect("client");
                         restore_gateway(
                             &mut commands,
-                            &mut *last,
-                            &mut *client,
+                            &mut last,
+                            &mut client,
                             gateway,
                             ui_root.single().ok(),
                             None,
