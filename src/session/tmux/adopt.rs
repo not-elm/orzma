@@ -7,19 +7,26 @@
 //! component on it, promotes it out of the Default view (despawning the
 //! now-empty Default container so a fresh shell is lazily re-spawned on return),
 //! and enters [`AppMode::Tmux`]. The drive chain activates on the presence of a
-//! [`TmuxClient`] component. The matching teardown fires when tmux ends the
-//! control client — either via `%exit` (a detach, where the shell process
-//! survives) or the gateway child process actually exiting — despawning the
-//! gateway entity (and its `TmuxClient`) and returning to [`AppMode::Default`].
+//! [`TmuxClient`] component. Teardown has two paths: `%exit` (a detach, where
+//! the gateway shell process survives) triggers [`ReleaseControlMode`], whose
+//! outcome is not assumed here — [`on_control_mode_released`] restores the
+//! gateway as the Default shell only if release genuinely completes
+//! ([`ControlModeReleased`]); a fresh `tmux -CC` introducer glued into the
+//! same residual bytes instead re-fires [`ControlModeDetected`], re-adopting
+//! the same entity via [`on_control_mode_detected`] with no restore in
+//! between. The gateway's child process actually exiting despawns it
+//! instead. Both teardown paths return to [`AppMode::Default`].
 
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
 use crate::surface::geometry::cells_for;
 use crate::ui::UiRoot;
-use crate::ui::default_mode::DefaultModeUi;
+use crate::ui::default_mode::{DefaultModeUi, restore_default_shell};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_tty_engine::{ControlModeDetected, TerminalChildExit, TerminalResize};
+use ozma_tty_engine::{
+    ControlModeDetected, ControlModeReleased, ReleaseControlMode, TerminalChildExit, TerminalResize,
+};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{
     ClientEvent, ControlEvent, TmuxClient, TmuxConnectionClosed, TmuxConnectionReset,
@@ -29,20 +36,30 @@ use ozmux_tmux::{
 /// Registers the adoption observer and the teardown systems/observer.
 pub(super) struct AdoptPlugin;
 
+/// Ordering label for [`teardown_on_exit_notification`]'s `AdoptPlugin`
+/// registration, so [`sync_gateway_size`] can order against it by set rather
+/// than by system-function identity (tests register a second, gate-free
+/// instance of the bare system, which would make ordering-by-function
+/// ambiguous).
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct TeardownOnExitSet;
+
 impl Plugin for AdoptPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<GatewaySize>()
             .add_observer(on_control_mode_detected)
+            .add_observer(on_control_mode_released)
             .add_observer(on_gateway_child_exit)
             .add_systems(
                 Update,
                 teardown_on_exit_notification
+                    .in_set(TeardownOnExitSet)
                     .after(TmuxProjectionSet)
                     .run_if(any_with_component::<TmuxClient>),
             )
             .add_systems(
                 Update,
-                sync_gateway_size.run_if(
+                sync_gateway_size.before(TeardownOnExitSet).run_if(
                     any_with_component::<TmuxClient>
                         .and(resource_exists::<TerminalCellMetricsResource>),
                 ),
@@ -68,6 +85,14 @@ struct GatewaySize(Option<(Entity, u16, u16)>);
 ///
 /// Emits [`TerminalResize`] only when the gateway or size changed, so it never
 /// spams the PTY each frame.
+///
+// NOTE: must run before `teardown_on_exit_notification` in the same frame.
+// The gateway's `TmuxClient` removal (via `ReleaseControlMode`'s deferred
+// observers) doesn't take effect until end-of-frame, so this system's
+// `any_with_component::<TmuxClient>` gate still passes right after a detach
+// fires — if this ran after the detach path's `GatewaySize` reset, it would
+// immediately repopulate `last.0`, defeating the reset and wrongly skipping
+// the resize on a later re-adoption of the same (surviving) gateway entity.
 fn sync_gateway_size(
     mut commands: Commands,
     mut last: ResMut<GatewaySize>,
@@ -166,48 +191,112 @@ fn on_gateway_child_exit(
     clients: Query<(), With<TmuxClient>>,
 ) {
     if clients.get(ev.entity).is_ok() {
-        teardown(&mut commands, ev.entity);
+        teardown_despawn(&mut commands, ev.entity);
     }
 }
 
-/// Tears down the adopted connection when tmux emits `%exit` (a detach).
+/// Returns the `%exit` notification's reason if `events` contains one
+/// (`Some(None)` for a bare `%exit` with no reason text).
+fn batch_exit_reason(events: &[TransportEvent]) -> Option<Option<String>> {
+    events.iter().find_map(|event| match event {
+        TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::Exit { reason })) => {
+            Some(reason.clone())
+        }
+        _ => None,
+    })
+}
+
+/// Renders the iTerm2-style detach line fed into the restored shell's VT.
+///
+/// tmux never writes `[detached …]` to the PTY in control mode (that message
+/// is the non-control-mode branch of its client), so it is fabricated here
+/// from the `%exit` reason.
+fn synthesized_detach_line(reason: Option<String>) -> String {
+    format!("[{}]\r\n", reason.as_deref().unwrap_or("detached"))
+}
+
+/// Triggers control-mode release on the gateway when tmux emits `%exit` (a
+/// detach — the gateway shell process survives).
 ///
 /// Gated on the presence of a [`TmuxClient`] and ordered after the drive chain
 /// so the batch holds this frame's freshly-drained transport events. NOTE: on a
 /// detach the gateway shell process SURVIVES, so `TerminalChildExit` never fires
 /// for it — this `%exit` scan is the only teardown signal in that path.
+///
+/// Does NOT assume the release's outcome: [`on_control_mode_released`] (not
+/// this function) restores the Default shell, and only when release
+/// genuinely completes — see the module doc for the full split.
 fn teardown_on_exit_notification(
     mut commands: Commands,
-    clients: Query<Entity, With<TmuxClient>>,
+    mut clients: Query<(Entity, &mut TmuxClient)>,
     batch: Res<TmuxEventBatch>,
 ) {
-    if batch_has_exit(batch.events())
-        && let Ok(gateway) = clients.single()
-    {
-        teardown(&mut commands, gateway);
-    }
+    let Some(reason) = batch_exit_reason(batch.events()) else {
+        return;
+    };
+    let Ok((gateway, mut client)) = clients.single_mut() else {
+        return;
+    };
+    restore_gateway(&mut commands, &mut client, gateway, reason);
 }
 
-/// Returns whether `events` contains a tmux `%exit` notification.
-fn batch_has_exit(events: &[TransportEvent]) -> bool {
-    events.iter().any(|event| {
-        matches!(
-            event,
-            TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::Exit { .. }))
-        )
-    })
-}
-
-/// Despawns the gateway entity (ending the connection by removing its
-/// [`TmuxClient`]), clears the projection, and triggers [`TmuxConnectionClosed`]
-/// (which returns the app to `AppMode::Default`).
+/// Releases control mode on `gateway`: feeds the synthesized detach line +
+/// post-exit residual back into the VT and re-arms the introducer watch.
 ///
-/// Idempotency is guaranteed by the callers' `With<TmuxClient>` checks: once the
-/// gateway is despawned the `%exit` scan and the child-exit observer no longer
-/// find a `TmuxClient`, so neither fires again. Despawning the gateway ends its
-/// PTY (its `Drop` kills the child); the fresh Default shell appears via
-/// `ensure_default_mode_ui` on the return to `AppMode::Default`.
-fn teardown(commands: &mut Commands, gateway: Entity) {
+/// Does not assume the outcome — the engine decides whether this genuinely
+/// releases the terminal ([`ControlModeReleased`], handled by
+/// [`on_control_mode_released`]) or re-adopts it (a fresh `tmux -CC`
+/// introducer glued into the residual bytes, re-firing [`ControlModeDetected`]
+/// instead, handled by [`on_control_mode_detected`]).
+fn restore_gateway(
+    commands: &mut Commands,
+    client: &mut TmuxClient,
+    gateway: Entity,
+    reason: Option<String>,
+) {
+    let mut residual = synthesized_detach_line(reason).into_bytes();
+    residual.extend_from_slice(&client.take_residual());
+    commands.trigger(ReleaseControlMode {
+        entity: gateway,
+        residual,
+    });
+}
+
+/// Restores the Default shell once control mode has genuinely released.
+///
+/// Gated on [`ControlModeReleased`] — fired only when the released bytes did
+/// NOT re-enter control mode — so a fast `tmux -CC` reattach glued into the
+/// same residual chunk (caught instead by [`on_control_mode_detected`]
+/// re-firing) never gets its re-adoption clobbered by this restore: rebuilding
+/// the Default view and closing the connection here would force `AppMode`
+/// back to `Default` and reparent the still-adopted gateway into the Default
+/// container, even though the gateway's PTY bytes are still being diverted to
+/// the tmux protocol parser underneath.
+fn on_control_mode_released(
+    ev: On<ControlModeReleased>,
+    mut commands: Commands,
+    mut last: ResMut<GatewaySize>,
+    ui_root: Query<Entity, With<UiRoot>>,
+) {
+    let gateway = ev.entity;
+    if let Ok(ui_root) = ui_root.single() {
+        restore_default_shell(&mut commands, gateway, ui_root);
+    }
+    last.0 = None;
+    commands.trigger(TmuxConnectionReset);
+    commands.trigger(TmuxConnectionClosed);
+}
+
+/// Tears the connection down by despawning the gateway (the death path: the
+/// gateway's child process exited, so there is no shell left to restore).
+/// Despawning ends its PTY (its `Drop` kills the child); the fresh Default
+/// shell appears via `ensure_default_mode_ui` on the return to
+/// `AppMode::Default`.
+///
+/// Idempotency is guaranteed by the callers' `With<TmuxClient>` checks: once
+/// the gateway is despawned (or released) neither teardown path finds a
+/// `TmuxClient`, so neither fires again.
+fn teardown_despawn(commands: &mut Commands, gateway: Entity) {
     commands.entity(gateway).despawn();
     commands.trigger(TmuxConnectionReset);
     commands.trigger(TmuxConnectionClosed);
@@ -218,7 +307,6 @@ mod tests {
     use super::*;
     use bevy::state::app::StatesPlugin;
     use ozma_tty_engine::AdoptedControlMode;
-    use tmux_control_parser::WindowId;
 
     fn build_app() -> App {
         let mut app = App::new();
@@ -353,52 +441,259 @@ mod tests {
     }
 
     #[test]
-    fn batch_has_exit_detects_percent_exit() {
-        let exit = TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::Exit {
-            reason: None,
-        }));
-        assert!(batch_has_exit(std::slice::from_ref(&exit)));
-
-        let non_exit =
-            TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::WindowAdd {
-                window: WindowId(1),
-            }));
-        assert!(!batch_has_exit(std::slice::from_ref(&non_exit)));
-        assert!(!batch_has_exit(&[]));
+    fn synthesized_detach_line_formats_reason() {
+        assert_eq!(
+            synthesized_detach_line(Some("detached (from session main)".into())),
+            "[detached (from session main)]\r\n"
+        );
+        assert_eq!(synthesized_detach_line(None), "[detached]\r\n");
     }
 
     #[test]
-    fn exit_notification_runs_teardown() {
+    fn batch_exit_reason_extracts_the_reason() {
+        let exit = TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::Exit {
+            reason: Some("detached (from session main)".into()),
+        }));
+        assert_eq!(
+            batch_exit_reason(std::slice::from_ref(&exit)),
+            Some(Some("detached (from session main)".into()))
+        );
+        let bare = TransportEvent::Protocol(ClientEvent::Notification(ControlEvent::Exit {
+            reason: None,
+        }));
+        assert_eq!(batch_exit_reason(std::slice::from_ref(&bare)), Some(None));
+        assert_eq!(batch_exit_reason(&[]), None);
+    }
+
+    #[test]
+    fn exit_notification_restores_gateway_into_default_container() {
         use bevy::ecs::system::RunSystemOnce;
+        use ozma_tty_engine::ReleaseControlMode;
 
         let mut app = build_app();
-        let gateway = app
-            .world_mut()
-            .spawn((AdoptedControlMode::default(), TmuxClient::new_adopted()))
-            .id();
+        // Stand-in for the engine's ReleaseControlMode observer (release.rs)
+        // plus tmux_session's ControlModeReleased-gated component strip — the
+        // real crates aren't wired into this minimal AdoptPlugin-only app.
+        // This models the "genuine release" outcome: strip TmuxClient and fire
+        // ControlModeReleased so the real on_control_mode_released (registered
+        // by AdoptPlugin) runs the restore under test.
+        app.add_observer(|ev: On<ReleaseControlMode>, mut commands: Commands| {
+            commands.entity(ev.entity).remove::<TmuxClient>();
+            commands.trigger(ControlModeReleased { entity: ev.entity });
+        });
+        app.add_observer(
+            |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
+                next.set(AppMode::Default);
+            },
+        );
+
+        let (container, gateway) = spawn_gateway_under_container(&mut app);
+        app.world_mut()
+            .trigger(ControlModeDetected { entity: gateway });
+        for _ in 0..3 {
+            app.update();
+        }
+        assert!(
+            app.world().get_entity(container).is_err(),
+            "adoption despawned the original container"
+        );
+        app.world_mut().resource_mut::<GatewaySize>().0 = Some((gateway, 100, 37));
 
         app.world_mut()
             .run_system_once(
-                move |mut commands: Commands, clients: Query<Entity, With<TmuxClient>>| {
-                    let events = [TransportEvent::Protocol(ClientEvent::Notification(
-                        ControlEvent::Exit { reason: None },
-                    ))];
-                    if batch_has_exit(&events)
-                        && let Ok(gateway) = clients.single()
-                    {
-                        teardown(&mut commands, gateway);
-                    }
+                move |mut commands: Commands, mut clients: Query<&mut TmuxClient>| {
+                    let mut client = clients.get_mut(gateway).expect("gateway has a client");
+                    restore_gateway(
+                        &mut commands,
+                        &mut client,
+                        gateway,
+                        Some("detached (from session main)".into()),
+                    );
                 },
             )
             .unwrap();
+        for _ in 0..3 {
+            app.update();
+        }
 
         assert!(
-            client_gateway(&mut app).is_none(),
-            "connection torn down on %exit"
+            app.world().get_entity(gateway).is_ok(),
+            "detach must NOT despawn the gateway"
         );
         assert!(
-            app.world().get_entity(gateway).is_err(),
-            "gateway despawned on %exit"
+            app.world().get::<TmuxClient>(gateway).is_none(),
+            "connection component stripped via ReleaseControlMode"
+        );
+        assert!(
+            app.world().get::<KeyboardFocused>(gateway).is_some(),
+            "keyboard focus restored"
+        );
+        assert_eq!(
+            app.world().resource::<GatewaySize>().0,
+            None,
+            "GatewaySize reset so a re-adoption at the same size re-emits"
+        );
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Default,
+            "detach returns to Default mode"
+        );
+        let world = app.world_mut();
+        let containers: Vec<Entity> = world
+            .query_filtered::<Entity, With<DefaultModeUi>>()
+            .iter(world)
+            .collect();
+        assert_eq!(containers.len(), 1, "exactly one fresh DefaultModeUi");
+        let gateway_ref = world.entity(gateway);
+        assert_eq!(
+            gateway_ref.get::<ChildOf>().map(|c| c.parent()),
+            Some(containers[0]),
+            "gateway reparented under the fresh container"
+        );
+        assert_ne!(
+            gateway_ref.get::<Node>().map(|n| n.display),
+            Some(Display::None),
+            "gateway visible again"
+        );
+    }
+
+    #[test]
+    fn readoption_after_restore_reenters_tmux_on_the_same_entity() {
+        use ozma_tty_engine::ReleaseControlMode;
+
+        let mut app = build_app();
+        // Stand-in for the engine's ReleaseControlMode observer plus
+        // tmux_session's ControlModeReleased-gated component strip — see the
+        // comment on the same pattern in
+        // exit_notification_restores_gateway_into_default_container.
+        app.add_observer(|ev: On<ReleaseControlMode>, mut commands: Commands| {
+            commands.entity(ev.entity).remove::<TmuxClient>();
+            commands.trigger(ControlModeReleased { entity: ev.entity });
+        });
+        app.add_observer(
+            |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
+                next.set(AppMode::Default);
+            },
+        );
+        let pump = |app: &mut App| {
+            for _ in 0..5 {
+                app.update();
+            }
+        };
+
+        let (_c1, gateway) = spawn_gateway_under_container(&mut app);
+        app.world_mut()
+            .trigger(ControlModeDetected { entity: gateway });
+        pump(&mut app);
+        {
+            use bevy::ecs::system::RunSystemOnce;
+            app.world_mut()
+                .run_system_once(
+                    move |mut commands: Commands, mut clients: Query<&mut TmuxClient>| {
+                        let mut client = clients.get_mut(gateway).expect("client");
+                        restore_gateway(&mut commands, &mut client, gateway, None);
+                    },
+                )
+                .unwrap();
+        }
+        pump(&mut app);
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Default
+        );
+
+        app.world_mut()
+            .trigger(ControlModeDetected { entity: gateway });
+        pump(&mut app);
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Tmux,
+            "re-running tmux -CC from the restored shell re-enters Tmux"
+        );
+        assert!(
+            app.world().get::<TmuxClient>(gateway).is_some(),
+            "the same entity is the gateway again"
+        );
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<DefaultModeUi>>()
+                .iter(world)
+                .count(),
+            0,
+            "re-adoption despawned the restored container again"
+        );
+    }
+
+    #[test]
+    fn release_that_stays_adopted_does_not_restore_default_shell() {
+        // Regression: a `tmux -CC` reattach glued fast enough into the same
+        // detach residue keeps the entity adopted — the engine re-fires
+        // ControlModeDetected instead of completing the release, and must NOT
+        // trigger ControlModeReleased. Before this fix, restore_gateway ran
+        // its UI-restore/TmuxConnectionClosed steps unconditionally right
+        // after triggering ReleaseControlMode, clobbering the re-adoption:
+        // AppMode was forced back to Default while the gateway stayed a live
+        // (but now hidden-in-the-wrong-place) tmux connection underneath.
+        use ozma_tty_engine::ReleaseControlMode;
+
+        let mut app = build_app();
+        // Stand-in for the "stays adopted" outcome: re-fire ControlModeDetected
+        // (as the real engine does on a fresh introducer in the residue) and do
+        // NOT trigger ControlModeReleased.
+        app.add_observer(|ev: On<ReleaseControlMode>, mut commands: Commands| {
+            commands.trigger(ControlModeDetected { entity: ev.entity });
+        });
+        app.add_observer(
+            |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
+                next.set(AppMode::Default);
+            },
+        );
+
+        let (_container, gateway) = spawn_gateway_under_container(&mut app);
+        app.world_mut()
+            .trigger(ControlModeDetected { entity: gateway });
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Tmux,
+            "first adoption enters Tmux"
+        );
+
+        {
+            use bevy::ecs::system::RunSystemOnce;
+            app.world_mut()
+                .run_system_once(
+                    move |mut commands: Commands, mut clients: Query<&mut TmuxClient>| {
+                        let mut client = clients.get_mut(gateway).expect("gateway has a client");
+                        restore_gateway(&mut commands, &mut client, gateway, None);
+                    },
+                )
+                .unwrap();
+        }
+        for _ in 0..3 {
+            app.update();
+        }
+
+        assert_eq!(
+            *app.world().resource::<State<AppMode>>().get(),
+            AppMode::Tmux,
+            "staying adopted must NOT fall back to Default mode"
+        );
+        assert!(
+            app.world().get::<TmuxClient>(gateway).is_some(),
+            "TmuxClient must survive when the release stays adopted"
+        );
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<DefaultModeUi>>()
+                .iter(world)
+                .count(),
+            0,
+            "restore_default_shell must NOT run when the release stays adopted"
         );
     }
 
@@ -614,6 +909,66 @@ mod tests {
         assert!(
             app.world().resource::<ResizeLog>().0.is_empty(),
             "no TmuxClient (run_if gate) means no gateway resize",
+        );
+    }
+
+    #[test]
+    fn gateway_size_reset_survives_the_same_frame_as_sync_gateway_size() {
+        // Regression: sync_gateway_size and teardown_on_exit_notification both
+        // mutate GatewaySize with no ordering constraint between them would
+        // let sync_gateway_size immediately repopulate the dedup entry in the
+        // SAME frame a detach resets it (see the `// NOTE:` on
+        // sync_gateway_size) — silently skipping the resize on a later
+        // re-adoption of the same (surviving) gateway entity. Drives a real
+        // `%exit` through TmuxSessionPlugin's drain so both systems run as
+        // genuinely scheduled Update systems in one frame, not via a
+        // bypassing direct call.
+        use ozma_tty_engine::ReleaseControlMode;
+        use ozmux_tmux::TmuxSessionPlugin;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(AppMode::Default);
+        app.world_mut().spawn((Node::default(), UiRoot));
+        app.add_plugins((TmuxSessionPlugin, AdoptPlugin));
+        // Stand-in for the engine's release + tmux_session's own component
+        // strip (TerminalHandlePlugin isn't wired into this test).
+        app.add_observer(|ev: On<ReleaseControlMode>, mut commands: Commands| {
+            commands.entity(ev.entity).remove::<TmuxClient>();
+            commands.trigger(ControlModeReleased { entity: ev.entity });
+        });
+        app.add_observer(
+            |_: On<TmuxConnectionClosed>, mut next: ResMut<NextState<AppMode>>| {
+                next.set(AppMode::Default);
+            },
+        );
+        install_metrics_and_window(&mut app, 800, 600);
+
+        let gateway = app
+            .world_mut()
+            .spawn((AdoptedControlMode::default(), TmuxClient::new_adopted()))
+            .id();
+
+        app.update();
+        assert_eq!(
+            app.world().resource::<GatewaySize>().0,
+            Some((gateway, 100, 37)),
+            "gateway sized on the first frame"
+        );
+
+        // Detach: replace the captured buffer with a real %exit line so
+        // drain_tmux_transport (TmuxSessionPlugin) parses a genuine Exit
+        // event into TmuxEventBatch this same frame.
+        app.world_mut()
+            .entity_mut(gateway)
+            .insert(AdoptedControlMode::from_captured(b"%exit\r\n".to_vec()));
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<GatewaySize>().0,
+            None,
+            "GatewaySize must stay reset even though sync_gateway_size and \
+             teardown_on_exit_notification run in the same Update pass"
         );
     }
 }

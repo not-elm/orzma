@@ -3,7 +3,9 @@
 
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::session::default::spawn::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig};
+use crate::session::default::spawn::{
+    OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig, full_size_node,
+};
 use crate::ui::UiRoot;
 use bevy::prelude::*;
 use ozma_tty_engine::ControlModeWatch;
@@ -31,6 +33,22 @@ impl Plugin for DefaultModeUiPlugin {
     }
 }
 
+/// Restores a released tmux gateway as the Default-mode shell.
+///
+/// Spawns a fresh `DefaultModeUi` container under `ui_root` and reparents
+/// `shell` into it with keyboard focus and the full-size layout — adoption
+/// overwrote the shell's `Node` with `Display::None` + defaults, so the full
+/// node is re-inserted, not just `display` flipped back.
+pub(crate) fn restore_default_shell(commands: &mut Commands, shell: Entity, ui_root: Entity) {
+    let mode_ui = spawn_default_mode_container(commands, ui_root);
+    commands.entity(shell).insert((
+        full_size_node(),
+        KeyboardFocused,
+        DefaultShell,
+        ChildOf(mode_ui),
+    ));
+}
+
 fn ensure_default_mode_ui(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
@@ -46,18 +64,7 @@ fn ensure_default_mode_ui(
     // failed and we returned without the container, this Update system would
     // re-fire every frame — re-attempting the PTY and re-writing AppExit.
     // Spawning the container first makes a failure a single attempt.
-    let mode_ui = commands
-        .spawn((
-            Name::new("Default Mode UI"),
-            Node {
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                ..default()
-            },
-            DefaultModeUi,
-            ChildOf(ui_root),
-        ))
-        .id();
+    let mode_ui = spawn_default_mode_container(&mut commands, ui_root);
     let shell = commands.spawn_empty().id();
     let env = control
         .as_deref()
@@ -96,6 +103,22 @@ fn ensure_default_mode_ui(
 /// is not adopted as the tmux gateway.
 #[derive(Component)]
 struct DefaultShell;
+
+/// Spawns the `DefaultModeUi` container node under `ui_root` and returns it.
+fn spawn_default_mode_container(commands: &mut Commands, ui_root: Entity) -> Entity {
+    commands
+        .spawn((
+            Name::new("Default Mode UI"),
+            Node {
+                width: Val::Percent(100.0),
+                height: Val::Percent(100.0),
+                ..default()
+            },
+            DefaultModeUi,
+            ChildOf(ui_root),
+        ))
+        .id()
+}
 
 #[cfg(test)]
 mod tests {
@@ -193,5 +216,48 @@ mod tests {
             Some(shell),
             "the default shell's $OZMA_TOKEN must resolve to its own surface entity"
         );
+    }
+
+    #[test]
+    fn restore_default_shell_rebuilds_container_focus_and_layout() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let ui_root = app.world_mut().spawn((Node::default(), UiRoot)).id();
+        let shell = app
+            .world_mut()
+            .spawn(Node {
+                display: Display::None,
+                ..default()
+            })
+            .id();
+
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                restore_default_shell(&mut commands, shell, ui_root);
+            })
+            .unwrap();
+
+        let world = app.world_mut();
+        let container = world
+            .query_filtered::<Entity, With<DefaultModeUi>>()
+            .single(world)
+            .expect("restore spawns exactly one DefaultModeUi container");
+        let shell_ref = world.entity(shell);
+        assert_eq!(
+            shell_ref.get::<ChildOf>().map(|c| c.parent()),
+            Some(container),
+            "shell reparented under the fresh container"
+        );
+        assert!(
+            shell_ref.get::<KeyboardFocused>().is_some(),
+            "focus restored"
+        );
+        assert!(shell_ref.get::<DefaultShell>().is_some(), "marker present");
+        let node = shell_ref.get::<Node>().expect("node restored");
+        assert_eq!(node.position_type, PositionType::Absolute);
+        assert_eq!(node.width, Val::Percent(100.0));
+        assert_ne!(node.display, Display::None, "no longer hidden");
     }
 }
