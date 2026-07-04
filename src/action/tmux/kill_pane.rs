@@ -1,9 +1,9 @@
 //! `KillPaneRequest` — opens a confirm prompt that kills the target pane on
 //! `y` (mirrors tmux's default confirm-wrapped `kill-pane` binding).
 
-use crate::ui::tmux::confirm_prompt::ConfirmState;
+use crate::error::OutputLogIfFalse;
 use bevy::prelude::*;
-use ozmux_tmux::{KillPane, TmuxClient, TmuxCommand, TmuxPane};
+use ozmux_tmux::{KillPane, TmuxClient, TmuxPane};
 
 /// Asks for confirmation, then kills the tmux pane owning `entity`.
 #[derive(EntityEvent, Debug, Clone)]
@@ -24,23 +24,15 @@ impl Plugin for KillPanePlugin {
 
 fn on_kill_pane(
     ev: On<KillPaneRequest>,
-    mut commands: Commands,
+    mut clients: Query<&mut TmuxClient>,
     panes: Query<&TmuxPane>,
-    clients: Query<(), With<TmuxClient>>,
 ) {
     let Ok(pane) = panes.get(ev.entity) else {
         return;
     };
-    // NOTE: without a live client the confirmed kill would be silently
-    // dropped by the prompt's send path — opening the modal would capture
-    // the keyboard for a no-op, so bail before prompting.
-    if clients.is_empty() {
-        return;
+    for mut client in clients.iter_mut() {
+        client.send(KillPane { pane: pane.id }).log_err_if_failed();
     }
-    commands.insert_resource(ConfirmState {
-        message: format!("kill-pane %{}? (y/n)", pane.id.0),
-        command: KillPane { pane: pane.id }.into_raw_command(),
-    });
 }
 
 #[cfg(test)]
