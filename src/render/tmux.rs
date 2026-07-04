@@ -19,7 +19,7 @@ use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_tty_engine::{TerminalHandle, TerminalTitle};
+use ozma_tty_engine::{Coalescer, TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalPaddingFallback;
 use ozma_tty_renderer::schema::TerminalGrid;
@@ -207,6 +207,7 @@ fn attach_tmux_pane_terminal(
 
         commands.entity(entity).insert((
             handle,
+            Coalescer::default(),
             TerminalTitle::default(),
             OzmaTerminal,
             Node {
@@ -1675,5 +1676,28 @@ mod tests {
             app.world().entity(pane_entity).contains::<TerminalGrid>(),
             "On<Add, OzmaTerminal> must inject TerminalRenderBundle (TerminalGrid proves exactly one render bundle)",
         );
+    }
+
+    #[test]
+    fn attach_inserts_coalescer_on_tmux_pane() {
+        use tmux_control_parser::{CellDims, PaneId};
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 20,
+                    height: 5,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+        app.add_systems(Update, attach_tmux_pane_terminal);
+        app.update();
+        assert!(app.world().get::<Coalescer>(entity).is_some());
+        assert!(app.world().get::<TerminalHandle>(entity).is_some());
     }
 }
