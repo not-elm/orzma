@@ -1,6 +1,6 @@
-//! Default-mode VI applier: applies the shared VI action events to the local
-//! terminal engine (`TerminalHandle` vi/selection/scroll APIs). Guarded on
-//! `Without<TmuxPane>` — tmux panes are handled by `vi/tmux_mode.rs`.
+//! Local VI applier: applies the shared VI action events to the local
+//! terminal engine (`TerminalHandle` vi/selection/scroll APIs) for every
+//! pane, tmux and non-tmux alike.
 
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
@@ -10,7 +10,6 @@ use crate::ui::copy_mode::ExitCopyMode;
 use bevy::prelude::*;
 use ozma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
 use ozmux_configs::copy_mode::CopyScroll;
-use ozmux_tmux::TmuxPane;
 
 /// Registers the Default-mode VI apply observers. `ViPromptRequest` /
 /// `ViSearchStepRequest` have no local applier yet (ignored by design).
@@ -47,8 +46,7 @@ fn resolve_selection_toggle(
     }
 }
 
-type LocalTerminal<'w, 's> =
-    Query<'w, 's, (&'static mut TerminalHandle, &'static mut Coalescer), Without<TmuxPane>>;
+type LocalTerminal<'w, 's> = Query<'w, 's, (&'static mut TerminalHandle, &'static mut Coalescer)>;
 
 fn on_vi_motion(ev: On<ViMotionRequest>, mut terminals: LocalTerminal) {
     let Ok((mut handle, mut coalescer)) = terminals.get_mut(ev.entity) else {
@@ -149,7 +147,8 @@ mod tests {
     }
 
     #[test]
-    fn appliers_ignore_tmux_panes_and_missing_entities() {
+    fn appliers_ignore_entities_missing_coalescer() {
+        use ozmux_tmux::TmuxPane;
         use tmux_control_parser::{CellDims, PaneId};
 
         let mut app = App::new();
@@ -172,10 +171,56 @@ mod tests {
                 TerminalHandle::detached(10, 5),
             ))
             .id();
-        // A tmux pane must NOT be handled by the Default applier (Without<TmuxPane>).
+        // No Coalescer on this entity, so the query does not match — no panic.
         app.world_mut().trigger(ViExitRequest { entity: pane });
         app.world_mut().trigger(ViYankRequest { entity: pane });
         app.update();
+    }
+
+    #[test]
+    fn vi_scroll_applies_to_a_tmux_pane_entity() {
+        use ozma_tty_engine::{Coalescer, TerminalHandle};
+        use ozmux_configs::copy_mode::CopyScroll;
+        use ozmux_tmux::TmuxPane;
+        use tmux_control_parser::{CellDims, PaneId};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(on_vi_scroll);
+        let mut handle = TerminalHandle::detached(20, 5);
+        handle.advance(b"l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\nl9\r\nl10\r\n");
+        let entity = app
+            .world_mut()
+            .spawn((
+                handle,
+                Coalescer::default(),
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 20,
+                        height: 5,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+            ))
+            .id();
+        app.world_mut().trigger(ViScrollRequest {
+            entity,
+            kind: CopyScroll::ScrollUp,
+        });
+        let snapshot = app
+            .world()
+            .get::<TerminalHandle>(entity)
+            .unwrap()
+            .vi_indicator_snapshot();
+        // Before this task the LocalTerminal query is Without<TmuxPane>, so the
+        // observer no-ops and scroll_offset stays 0 — this assertion only holds
+        // once the guard is removed and `handle.scroll(...)` actually runs.
+        assert!(
+            snapshot.scroll_offset > 0,
+            "applier did not run on a TmuxPane entity"
+        );
     }
 
     #[test]

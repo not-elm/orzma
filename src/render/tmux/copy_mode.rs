@@ -1,17 +1,31 @@
 //! Capture-driven copy-mode rendering for tmux panes.
 //!
-//! While a pane is in tmux copy mode its live `TerminalHandle` keeps advancing
-//! (`route_tmux_output` never drops `%output`), but its emit to the rendered
-//! grid is gated (see `crate::render::tmux::route_tmux_output`). This plugin paints the
-//! scrolled view instead: it polls `#{...}` copy-mode state, captures the
-//! scrolled viewport with `capture-pane`, and feeds the captured bytes into a
-//! per-pane scratch handle whose `flush_emit` rebuilds the pane's `TerminalGrid`.
+//! `CopyModePlugin` below is no longer registered by `RenderPlugin`: the local
+//! vi applier (`crate::action::vi::default_mode`) now scrolls the pane's own
+//! `TerminalHandle` directly, and `route_tmux_output` always flushes that
+//! handle's live view — there is no separate scrolled-viewport render path to
+//! feed anymore. The module stays only because the tmux mouse-forwarding code
+//! (`crate::input::tmux::mouse`) still imports `CopyModeSnapshot`,
+//! `cursor_deltas`, and `cell_at_pane` from it; a later change retires the
+//! rest.
 //!
 //! Reply correlation rides the crate-side [`CopyModeQueries`] / [`CopyModeReply`]
 //! channel: the binary registers each command by `CommandId`, and `ozmux_tmux`
 //! (the single transport drainer) surfaces the matched reply as a message here.
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
+
+// NOTE: `#[expect(dead_code)]` cannot be used here — its fulfillment tracking
+// does not roll up from the many individual nested items below (functions,
+// structs, an enum, a const) to this one module-level attribute, so it
+// reports itself as unfulfilled even though the dead-code diagnostics it
+// suppresses are real. Fall back to `#[allow]` per the escape-hatch rule.
+#![allow(
+    dead_code,
+    reason = "CopyModePlugin and its refresh systems are unregistered as of the \
+              local-copy-mode flip; kept for the mouse-forwarding imports below \
+              until a later change removes the rest of this module"
+)]
 
 use crate::app_mode::TmuxActiveSet;
 use crate::clipboard::Clipboard;

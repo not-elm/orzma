@@ -1,11 +1,9 @@
 //! Shared VI (copy-mode) action events: one `EntityEvent` per operation kind,
-//! fired by both modes' copy-mode key gathers and applied by mode-specific
-//! observers (`vi/default_mode.rs` locally, `vi/tmux_mode.rs` via tmux
-//! `send-keys -X`).
+//! fired by the copy-mode key gather and applied by `vi/default_mode.rs`'s
+//! local terminal-engine observers, for every pane, tmux and non-tmux alike.
 
 mod default_mode;
 mod keymap;
-mod tmux_mode;
 
 use bevy::prelude::*;
 pub(crate) use keymap::{ResolvedCopyModeKeys, trigger_copy_mode_action};
@@ -59,23 +57,35 @@ pub(crate) struct ViExitRequest {
     pub entity: Entity,
 }
 
-/// Opens a search / jump prompt for `entity` (tmux mode only for now).
+/// Opens a search / jump prompt for `entity`. No applier reads this yet — the
+/// tmux `send-keys -X` applier that used to handle it was removed and the
+/// local applier has no prompt/search-step support (ignored by design, see
+/// `default_mode`'s doc comment).
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ViPromptRequest {
     /// The copy-mode surface entity.
     #[event_target]
     pub entity: Entity,
     /// Which prompt to open.
+    #[expect(
+        dead_code,
+        reason = "no applier reads this until prompt/search-step support lands"
+    )]
     pub kind: PromptKind,
 }
 
-/// Repeats the previous search on `entity` (tmux mode only for now).
+/// Repeats the previous search on `entity`. No applier reads this yet — see
+/// `ViPromptRequest`'s doc comment.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ViSearchStepRequest {
     /// The copy-mode surface entity.
     #[event_target]
     pub entity: Entity,
     /// `true` repeats in the original direction (`n`), `false` reversed (`N`).
+    #[expect(
+        dead_code,
+        reason = "no applier reads this until prompt/search-step support lands"
+    )]
     pub forward: bool,
 }
 
@@ -87,7 +97,6 @@ impl Plugin for ViActionPlugin {
         app.add_plugins((
             keymap::CopyModeKeymapPlugin,
             default_mode::DefaultModeViPlugin,
-            tmux_mode::TmuxModeViPlugin,
         ));
     }
 }

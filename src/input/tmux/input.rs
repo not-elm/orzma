@@ -17,9 +17,9 @@
 
 use super::pane_hit::tmux_pane_at_phys;
 use crate::action::tmux::{
-    EnterCopyModeRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest, NextWindowRequest,
-    PreviousWindowRequest, RenameSessionRequest, RenameWindowRequest, SelectPaneRequest,
-    SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
+    KillPaneRequest, KillWindowRequest, NewWindowRequest, NextWindowRequest, PreviousWindowRequest,
+    RenameSessionRequest, RenameWindowRequest, SelectPaneRequest, SelectWindowRequest,
+    SplitPaneRequest, ZoomPaneRequest,
 };
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use crate::app_mode::{AppMode, TmuxActiveSet};
@@ -30,7 +30,7 @@ use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
 use crate::session::tmux::request_detach;
-use crate::ui::copy_mode::CopyModeState;
+use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
@@ -311,13 +311,12 @@ fn forward_keys_to_tmux(
                     }
                 }
                 ShortcutAction::EnterCopyMode => {
-                    // NOTE: re-entry guard — re-triggering while the pane is
-                    // already in copy mode would double-insert CopyModeState
-                    // and re-run `copy-mode` on a pane that is already in it.
+                    // NOTE: re-entry guard — re-triggering while already in copy
+                    // mode would double-insert CopyModeState and re-enter vi mode.
                     if let Some(entity) = active_entity
                         && copy_modes.get(entity).is_err()
                     {
-                        commands.trigger(EnterCopyModeRequest { entity });
+                        commands.trigger(EnterCopyModeActionEvent { entity });
                     }
                 }
                 ShortcutAction::SelectPane(direction) => {

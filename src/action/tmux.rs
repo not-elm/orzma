@@ -2,7 +2,6 @@
 //! command has one `EntityEvent` + apply observer module under
 //! `src/action/tmux/`. This root aggregates their per-file plugins.
 
-mod enter_copy_mode;
 mod kill_pane;
 mod kill_window;
 mod new_window;
@@ -17,7 +16,6 @@ mod zoom_pane;
 
 use bevy::prelude::*;
 
-pub(crate) use enter_copy_mode::EnterCopyModeRequest;
 pub(crate) use kill_pane::KillPaneRequest;
 pub(crate) use kill_window::KillWindowRequest;
 pub(crate) use new_window::NewWindowRequest;
@@ -36,7 +34,6 @@ pub(super) struct TmuxActionPlugin;
 impl Plugin for TmuxActionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            enter_copy_mode::EnterCopyModePlugin,
             kill_pane::KillPanePlugin,
             kill_window::KillWindowPlugin,
             new_window::NewWindowPlugin,
