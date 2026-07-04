@@ -1822,4 +1822,204 @@ mod tests {
             );
         }
     }
+
+    /// End-to-end proof that local tmux copy mode is fully wired, on a real
+    /// tmux-pane entity carrying the exact bundle `attach_tmux_pane_terminal`
+    /// gives every projected pane: enter copy mode, scroll into pre-seeded
+    /// history, toggle + extend a selection, yank to the clipboard, and land
+    /// back on the live tail. Drives the shared `crate::action::vi` events
+    /// directly (the applier pipeline), not the keymap/key-gather layer.
+    #[test]
+    fn tmux_copy_mode_is_fully_local() {
+        use crate::action::vi::{
+            ViActionPlugin, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest,
+            ViYankRequest,
+        };
+        use crate::clipboard::Clipboard;
+        use crate::configs::OzmuxConfigsResource;
+        use crate::ui::copy_mode::{CopyModePlugin, CopyModeState, EnterCopyModeActionEvent};
+        use bevy::ecs::message::Messages;
+        use ozma_tty_engine::{SelectionType, TermMode, TerminalHandlePlugin, ViMotion};
+        use ozmux_configs::OzmuxConfigs;
+        use ozmux_configs::copy_mode::CopyScroll;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(SurfacePlugin);
+        app.add_plugins(TerminalHandlePlugin);
+        app.add_plugins(CopyModePlugin);
+        app.add_plugins(ViActionPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.init_resource::<PendingPaneOutput>();
+        app.add_message::<PaneOutput>();
+        app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
+        app.insert_resource(Clipboard::in_memory());
+
+        let pane_id = PaneId(99);
+        let entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: pane_id,
+                dims: CellDims {
+                    width: 20,
+                    height: 6,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
+        );
+
+        // Frame 1: `[copy-mode]` key table resolution (Startup) plus the real
+        // tmux-pane attach bundle (TerminalHandle, Coalescer, TerminalTitle,
+        // OzmaTerminal, Node) — the same bundle a projected tmux pane gets.
+        // No output has arrived yet.
+        app.update();
+        assert!(
+            app.world().get::<TerminalHandle>(entity).is_some(),
+            "tmux-pane bundle must be attached before seeding history"
+        );
+
+        // Frame 2: seed several screens of distinct, recognizable history via
+        // a `PaneOutput` message, exactly how tmux's capture-pane seed and
+        // subsequent `%output` reach a real pane's handle.
+        let mut seed = String::new();
+        for i in 0..40 {
+            seed.push_str(&format!("SEEDLINE-{i:03}\r\n"));
+        }
+        app.world_mut()
+            .resource_mut::<Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: seed.into_bytes(),
+            });
+        app.update();
+        let tail_row0: String = app.world().get::<TerminalGrid>(entity).unwrap().cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            tail_row0.contains("SEEDLINE-"),
+            "pre-copy-mode grid must show the seeded live tail, got {tail_row0:?}"
+        );
+
+        // 1. Enter copy mode.
+        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.update();
+        assert!(
+            app.world().get::<CopyModeState>(entity).is_some(),
+            "entering copy mode must insert CopyModeState"
+        );
+        let entered_vi = app
+            .world()
+            .get::<TerminalHandle>(entity)
+            .unwrap()
+            .current_modes()
+            .contains(TermMode::VI);
+        assert!(
+            entered_vi,
+            "entering copy mode must flip the handle into vi mode"
+        );
+
+        // 2. Scroll into the pre-seeded history via the shared vi applier.
+        app.world_mut().trigger(ViScrollRequest {
+            entity,
+            kind: CopyScroll::PageUp,
+        });
+        app.update();
+        let scroll_offset = app
+            .world()
+            .get::<TerminalHandle>(entity)
+            .unwrap()
+            .vi_indicator_snapshot()
+            .scroll_offset;
+        assert!(
+            scroll_offset > 0,
+            "PageUp must scroll the handle back into scrollback history"
+        );
+
+        // `vi_motion`/`scroll` arm the Coalescer instead of emitting
+        // immediately (`stage_full_damage_and_arm`); sleep past its 3ms IDLE
+        // debounce so `flush_due_terminals` actually flushes the scrolled
+        // frame to the render-facing TerminalGrid — proving the render leg of
+        // the pipeline (not just the handle's own internal state) reflects
+        // the scroll.
+        std::thread::sleep(Duration::from_millis(15));
+        app.update();
+        let scrolled_row0: String = app.world().get::<TerminalGrid>(entity).unwrap().cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            scrolled_row0.contains("SEEDLINE-"),
+            "scrolled grid row must still show seeded history text, got {scrolled_row0:?}"
+        );
+        assert_ne!(
+            scrolled_row0, tail_row0,
+            "scrolling into history must change what the grid renders"
+        );
+
+        // 3. Toggle a selection, extend it, then yank.
+        app.world_mut().trigger(ViSelectionToggleRequest {
+            entity,
+            ty: SelectionType::Simple,
+        });
+        app.update();
+        app.world_mut().trigger(ViMotionRequest {
+            entity,
+            motion: ViMotion::Right,
+        });
+        app.update();
+        app.world_mut().trigger(ViMotionRequest {
+            entity,
+            motion: ViMotion::Down,
+        });
+        app.update();
+
+        let expected_yank = app
+            .world()
+            .get::<TerminalHandle>(entity)
+            .unwrap()
+            .selection_to_string();
+        assert!(
+            expected_yank
+                .as_deref()
+                .is_some_and(|t| t.contains("SEEDLINE")),
+            "selection must cover seeded history text before yanking, got {expected_yank:?}"
+        );
+
+        app.world_mut().trigger(ViYankRequest { entity });
+        app.update();
+
+        assert!(
+            app.world().get::<CopyModeState>(entity).is_none(),
+            "yank must exit copy mode"
+        );
+        let clipboard_text = app.world_mut().resource_mut::<Clipboard>().read();
+        assert_eq!(
+            clipboard_text, expected_yank,
+            "yank must write exactly the selected text to the clipboard"
+        );
+
+        // 4. Exiting copy mode (via yank) snaps the handle back to the live
+        // tail and leaves vi mode.
+        let handle = app.world().get::<TerminalHandle>(entity).unwrap();
+        assert!(
+            handle.is_at_bottom(),
+            "exiting copy mode via yank must snap the viewport back to the live tail"
+        );
+        assert!(
+            !handle.current_modes().contains(TermMode::VI),
+            "exiting copy mode must leave vi mode"
+        );
+    }
 }
