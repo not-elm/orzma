@@ -17,7 +17,8 @@ pub use ops::{
     SelectPaneTowards, SplitDirection, SplitWindow, ZoomPane,
 };
 pub(crate) use query::{
-    ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListWindows,
+    ActivePane, AggressiveResize, CapturePane, CapturePanePending, CapturePaneSavedPrimary,
+    CapturePaneWithHistory, ClientName, CursorQuery, ListWindows, PaneStateQuery,
     SubscribeWindowFlags, Version,
 };
 pub use size::{RefreshClient, ResizeWindow, WindowRefreshClient};
