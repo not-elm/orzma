@@ -10,7 +10,13 @@ mod paste;
 mod selection;
 mod viewport_scroll;
 
-use crate::surface::OzmaTerminal;
+use crate::{
+    action::terminal::{
+        mouse_write::MouseWritePlugin, open_uri::OpenUriPlugin, paste::PastePlugin,
+        selection::SelectionPlugin, viewport_scroll::ViewportScrollPlugin,
+    },
+    surface::OzmaTerminal,
+};
 use bevy::prelude::*;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
@@ -29,11 +35,11 @@ pub(super) struct TerminalActionPlugin;
 impl Plugin for TerminalActionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            mouse_write::MouseWritePlugin,
-            open_uri::OpenUriPlugin,
-            paste::PastePlugin,
-            selection::SelectionPlugin,
-            viewport_scroll::ViewportScrollPlugin,
+            MouseWritePlugin,
+            OpenUriPlugin,
+            PastePlugin,
+            SelectionPlugin,
+            ViewportScrollPlugin,
         ));
     }
 }

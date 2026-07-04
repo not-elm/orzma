@@ -42,22 +42,22 @@ pub(super) struct DefaultHostInputPlugin;
 
 impl Plugin for DefaultHostInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            maintain_input_gates
-                .before(InputPhase::Hover)
-                .run_if(in_state(AppMode::Default)),
-        )
-        .add_systems(
-            Update,
-            app_shortcut_handler
-                .in_set(InputPhase::FocusedKey)
-                .in_set(LeaderGate::Advance)
-                .run_if(in_state(AppMode::Default))
-                .run_if(on_message::<KeyboardInput>),
-        )
-        .add_observer(apply_ime_commit_to_terminal)
-        .add_plugins(webview::DefaultWebviewPointerPlugin);
+        app.add_plugins(webview::DefaultWebviewPointerPlugin)
+            .add_systems(
+                Update,
+                maintain_input_gates
+                    .before(InputPhase::Hover)
+                    .run_if(in_state(AppMode::Default)),
+            )
+            .add_systems(
+                Update,
+                app_shortcut_handler
+                    .in_set(InputPhase::FocusedKey)
+                    .in_set(LeaderGate::Advance)
+                    .run_if(in_state(AppMode::Default))
+                    .run_if(on_message::<KeyboardInput>),
+            )
+            .add_observer(apply_ime_commit_to_terminal);
     }
 }
 

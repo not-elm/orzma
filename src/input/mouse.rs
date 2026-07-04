@@ -42,7 +42,7 @@ impl Plugin for MouseInputPlugin {
 /// carrying a mouse message (button, cursor move, or wheel). A cursor-only frame
 /// must still run so the dispatchers retarget / reset; defining it once keeps the
 /// two per-file plugins' gating in lockstep.
-pub(super) fn on_any_mouse_message() -> impl SystemCondition<()> {
+fn on_any_mouse_message() -> impl SystemCondition<()> {
     on_message::<MouseButtonInput>
         .or(on_message::<CursorMoved>)
         .or(on_message::<MouseWheel>)
@@ -98,21 +98,6 @@ fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<M
     }
 }
 
-/// 1-indexed `(CellCoord, Side)` of the cell at pane-local physical `local`,
-/// clamped to `1..=cols` × `1..=rows`. `Side` is `Left` in the left half.
-fn cell_at_local(local: Vec2, cell_w: f32, cell_h: f32, cols: u16, rows: u16) -> (CellCoord, Side) {
-    let col_f = (local.x / cell_w).max(0.0);
-    let row_f = (local.y / cell_h).max(0.0);
-    let col = (col_f.floor() as u32 + 1).min(cols as u32).max(1);
-    let row = (row_f.floor() as u32 + 1).min(rows as u32).max(1);
-    let side = if col_f - col_f.floor() < 0.5 {
-        Side::Left
-    } else {
-        Side::Right
-    };
-    (CellCoord { col, row }, side)
-}
-
 /// Resolves the window-space physical cursor to a cell on the terminal node.
 ///
 /// Any position is projected and the resulting column/row is clamped to
@@ -132,6 +117,21 @@ fn cell_at_cursor(
         .normalize_point(*transform, cursor_phys)
         .map(|n| (n + Vec2::splat(0.5)) * node.size)?;
     Some(cell_at_local(local, cell_w, cell_h, cols, rows))
+}
+
+/// 1-indexed `(CellCoord, Side)` of the cell at pane-local physical `local`,
+/// clamped to `1..=cols` × `1..=rows`. `Side` is `Left` in the left half.
+fn cell_at_local(local: Vec2, cell_w: f32, cell_h: f32, cols: u16, rows: u16) -> (CellCoord, Side) {
+    let col_f = (local.x / cell_w).max(0.0);
+    let row_f = (local.y / cell_h).max(0.0);
+    let col = (col_f.floor() as u32 + 1).min(cols as u32).max(1);
+    let row = (row_f.floor() as u32 + 1).min(rows as u32).max(1);
+    let side = if col_f - col_f.floor() < 0.5 {
+        Side::Left
+    } else {
+        Side::Right
+    };
+    (CellCoord { col, row }, side)
 }
 
 /// The terminal-surface query shared by the button and wheel dispatchers,

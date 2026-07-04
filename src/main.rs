@@ -61,8 +61,8 @@ fn main() {
             }),
             cef_plugin(ozma_registry.clone(), cef_profile.path()),
         ))
-        .add_plugins(AppModePlugin)
         .add_plugins((
+            AppModePlugin,
             SurfacePlugin,
             DefaultSessionPlugin {
                 shell: pre_configs.ozma.shell.clone(),
@@ -85,10 +85,8 @@ fn main() {
             },
             CopyModePlugin,
             CopyModeIndicatorPlugin,
-        ))
-        .add_plugins(CopyPromptPlugin)
-        .add_plugins(WindowTitlePlugin)
-        .add_plugins((
+            CopyPromptPlugin,
+            WindowTitlePlugin,
             FocusSyncPlugin,
             HyperlinkInputPlugin,
             ImePlugin,
