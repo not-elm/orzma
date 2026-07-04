@@ -8,10 +8,6 @@ use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
 use ozmux_tmux::{SendBytes, TmuxClient, TmuxPane};
 
-/// tmux `send-keys -H` caps its argument count; paste bytes are sent in
-/// fixed-size chunks so a large clipboard doesn't overflow one command.
-const PASTE_CHUNK_BYTES: usize = 256;
-
 /// Registers the tmux `PasteAction` apply observer.
 pub(super) struct TmuxPastePlugin;
 
@@ -20,6 +16,10 @@ impl Plugin for TmuxPastePlugin {
         app.add_observer(on_paste_tmux);
     }
 }
+
+/// tmux `send-keys -H` caps its argument count; paste bytes are sent in
+/// fixed-size chunks so a large clipboard doesn't overflow one command.
+const PASTE_CHUNK_BYTES: usize = 256;
 
 fn on_paste_tmux(
     ev: On<PasteAction>,
@@ -38,6 +38,12 @@ fn on_paste_tmux(
     if text.is_empty() {
         return;
     }
+    // NOTE: gate on a live client BEFORE snap/flush, mirroring the source-of-
+    // truth ordering in src/input/tmux/input.rs — a scrolled-back pane with no
+    // client must not snap-to-bottom + repaint while pasting nothing.
+    let Some(client) = client.as_deref_mut() else {
+        return;
+    };
     let target = format!("%{}", pane.id.0);
     if let Ok(mut handle) = handles.get_mut(ev.entity)
         && handle.snap_to_bottom_vt_only()
@@ -45,9 +51,6 @@ fn on_paste_tmux(
         handle.flush_emit(&mut commands, ev.entity);
     }
     let bytes = build_paste_bytes(&text, false);
-    let Some(client) = client.as_deref_mut() else {
-        return;
-    };
     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
         if let Err(e) = client.send(SendBytes {
             pane: &target,
@@ -83,7 +86,7 @@ mod tests {
     }
 
     #[test]
-    fn on_paste_tmux_is_noop_without_client() {
+    fn on_paste_tmux_without_client_does_not_snap_scrolled_back_pane() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(TmuxPastePlugin)
@@ -91,11 +94,45 @@ mod tests {
         app.world_mut()
             .resource_mut::<Clipboard>()
             .write("hello".to_string());
-        let pane = spawn_pane(&mut app, 3);
 
-        // No live tmux client: the send is skipped; assert no panic.
+        // Build a pane scrolled back into history: feed more lines than the
+        // viewport holds, then scroll one line up so display_offset > 0.
+        let mut handle = TerminalHandle::detached(10, 5);
+        for _ in 0..20 {
+            handle.advance(b"line\r\n");
+        }
+        handle.scroll_vt_only(1);
+        assert!(
+            !handle.is_at_bottom(),
+            "fixture precondition: pane must start scrolled back",
+        );
+        let pane = app
+            .world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(3),
+                    dims: CellDims {
+                        width: 10,
+                        height: 5,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                handle,
+            ))
+            .id();
+
+        // No live tmux client: the early `else { return }` runs BEFORE
+        // snap/flush, so the scrolled-back viewport is left untouched (no
+        // repaint of a paste that never happened) — and no panic.
         app.world_mut().trigger(PasteAction { entity: pane });
         app.update();
+
+        let handle = app.world().get::<TerminalHandle>(pane).unwrap();
+        assert!(
+            !handle.is_at_bottom(),
+            "no-client paste must not snap a scrolled-back pane to the bottom",
+        );
     }
 
     #[test]
