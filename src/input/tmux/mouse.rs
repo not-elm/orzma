@@ -447,7 +447,6 @@ mod tests {
     use ozma_tty_renderer::CellMetrics;
     use ozma_tty_renderer::prelude::TerminalOverlays;
     use ozma_webview::{NonInteractive, Webview, webview_hit_at};
-    use ozmux_tmux::CopyModeQueries;
 
     #[test]
     fn gesture_state_default_is_idle() {
@@ -488,7 +487,6 @@ mod tests {
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<CopyModeQueries>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
@@ -531,7 +529,6 @@ mod tests {
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<CopyModeQueries>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());

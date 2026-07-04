@@ -7,7 +7,6 @@ use crate::command::{
 };
 use crate::components::{PaneRecaptureState, TmuxPane, TmuxSession};
 use crate::connection::{TmuxAttached, TmuxClient};
-use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, PaneRestore, PendingReply, Slot, version_supports_per_window_refresh,
 };
@@ -45,13 +44,11 @@ impl Plugin for TmuxSessionPlugin {
     fn build(&self, app: &mut App) {
         register_observers(app);
         app.init_resource::<TmuxProjection>()
-            .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
             .init_resource::<HistorySeedLines>()
             .add_observer(on_gateway_release)
             .add_message::<PaneOutput>()
             .add_message::<RequestPaneReseed>()
-            .add_message::<CopyModeReply>()
             .add_message::<TmuxClientAttached>()
             .add_systems(
                 Update,
@@ -490,14 +487,11 @@ fn flush_tmux_outgoing(mut commands: Commands, mut client: Single<(Entity, &mut 
 
 /// Applies this frame's command replies and notifications to the world: drains
 /// each reply to what it answers, runs the active-pane→aggressive-resize
-/// follow-up, surfaces copy-mode replies, and triggers the projection events the
-/// observers consume.
+/// follow-up, and triggers the projection events the observers consume.
 fn apply_tmux_replies(
     mut commands: Commands,
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
-    mut copy_queries: ResMut<CopyModeQueries>,
     mut pane_output: MessageWriter<PaneOutput>,
-    mut copy_replies: MessageWriter<CopyModeReply>,
     batch: Res<TmuxEventBatch>,
 ) {
     let (client, enumeration) = &mut *client;
@@ -523,9 +517,6 @@ fn apply_tmux_replies(
             }
             TransportEvent::Closed { .. } => {}
         }
-    }
-    for reply in drain_copy_replies(&mut copy_queries, events) {
-        copy_replies.write(reply);
     }
 }
 
@@ -1131,9 +1122,9 @@ mod tests {
         .to_vec();
 
         // Build the app with the full projection pipeline registered: the plugin
-        // inits TmuxProjection / CopyModeQueries / TmuxEventBatch, the
-        // PaneOutput / CopyModeReply messages, the projection observers, plus
-        // the chained drain systems (gated on any_with_component::<TmuxClient>).
+        // inits TmuxProjection / TmuxEventBatch, the PaneOutput message, the
+        // projection observers, plus the chained drain systems (gated on
+        // any_with_component::<TmuxClient>).
         // EnumerationState is auto-required by TmuxClient.
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);

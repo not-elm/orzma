@@ -160,13 +160,12 @@ pub(crate) const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 ///
 /// tmux replaces every TAB (and other non-printable byte) in `display-message`
 /// / `list-windows` format output with `_` when its effective `LC_CTYPE` is not
-/// UTF-8 (the C/POSIX locale). ozmux's tab-separated format queries
-/// (`LIST_WINDOWS_FORMAT`, `COPY_STATE_FORMAT`) then collapse into a single
-/// unsplittable field — which silently freezes copy-mode cursor/scroll updates,
-/// since `parse_copy_state` returns `None` and never refreshes the overlay. A
-/// bundled `.app` launched from Finder inherits launchd's environment with no
-/// `LANG`/`LC_*`, so it falls into the C locale; this restores a UTF-8
-/// `LC_CTYPE`. A usable inherited UTF-8 locale is left untouched.
+/// UTF-8 (the C/POSIX locale). ozmux's tab-separated `LIST_WINDOWS_FORMAT`
+/// query then collapses into a single unsplittable field, breaking window
+/// enumeration. A bundled `.app` launched from Finder inherits launchd's
+/// environment with no `LANG`/`LC_*`, so it falls into the C locale; this
+/// restores a UTF-8 `LC_CTYPE`. A usable inherited UTF-8 locale is left
+/// untouched.
 ///
 /// # Invariants
 ///
