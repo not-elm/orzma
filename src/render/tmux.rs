@@ -186,8 +186,9 @@ fn attach_tmux_window_container(
     }
 }
 
-/// Attaches a detached `TerminalHandle`, the `OzmaTerminal` marker, and a
-/// placeholder absolute `Node` to each `TmuxPane` that lacks a `TerminalHandle`.
+/// Attaches a detached `TerminalHandle`, a `Coalescer`, a `TerminalTitle`, the
+/// `OzmaTerminal` marker, and a placeholder absolute `Node` to each `TmuxPane`
+/// that lacks a `TerminalHandle`.
 /// The `On<Add, OzmaTerminal>` observer in `crate::surface` injects the
 /// `TerminalRenderBundle` (one per entity, no duplicate material creation here).
 /// The `TerminalGrid` lives on the pane entity itself, so `flush_emit` /
@@ -1680,7 +1681,6 @@ mod tests {
 
     #[test]
     fn attach_inserts_coalescer_on_tmux_pane() {
-        use tmux_control_parser::{CellDims, PaneId};
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         let entity = app
@@ -1699,5 +1699,155 @@ mod tests {
         app.update();
         assert!(app.world().get::<Coalescer>(entity).is_some());
         assert!(app.world().get::<TerminalHandle>(entity).is_some());
+    }
+
+    /// Composed regression test for the bootstrap-rescue exposure the Task 1
+    /// code review flagged: once a tmux pane carries `Coalescer` (needed for
+    /// shared local copy mode), it also matches
+    /// `ozma_tty_engine::flush_due_terminals`'s bootstrap rescue, which has no
+    /// `PtyHandle` filter. That rescue can now fire on a tmux pane before
+    /// tmux's `capture-pane` seed lands, flipping `first_emit` to `false` on a
+    /// still-blank `Term`. Proves what actually happens end to end: the
+    /// bootstrap rescue fires exactly once (a blank `Snapshot{Initial}`), the
+    /// real seed then arrives classified as a `Delta` (not a
+    /// `Snapshot{Initial}`), and the FINAL rendered `TerminalGrid` still ends
+    /// up correct — because the bootstrap snapshot already sized `grid.cells`
+    /// to `rows`, so the later Delta's per-row bounds-checked write lands
+    /// exactly right.
+    #[test]
+    fn tmux_pane_bootstrap_rescue_before_seed_yields_correct_final_grid() {
+        use ozma_tty_engine::TerminalHandlePlugin;
+        use ozma_tty_renderer::schema::{
+            Cell as GridCell, FrameDelta, FrameSnapshot, SnapshotReason,
+        };
+
+        #[derive(Debug, Clone, PartialEq)]
+        enum LoggedFrame {
+            Snapshot(SnapshotReason),
+            Delta { dirty_rows: usize },
+        }
+
+        #[derive(Resource, Default)]
+        struct FrameLog(Vec<LoggedFrame>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(SurfacePlugin);
+        app.add_plugins(TerminalHandlePlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_message::<PaneOutput>();
+        app.init_resource::<PendingPaneOutput>();
+        app.init_resource::<FrameLog>();
+        app.add_observer(|ev: On<FrameSnapshot>, mut log: ResMut<FrameLog>| {
+            log.0.push(LoggedFrame::Snapshot(ev.reason));
+        });
+        app.add_observer(|ev: On<FrameDelta>, mut log: ResMut<FrameLog>| {
+            log.0.push(LoggedFrame::Delta {
+                dirty_rows: ev.dirty_rows.len(),
+            });
+        });
+
+        let pane_id = PaneId(1);
+        let pane_entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: pane_id,
+                dims: dims(),
+            })
+            .id();
+
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
+        );
+
+        // Simulate several frames ticking BEFORE tmux's capture-pane seed reply
+        // lands: no PaneOutput is ever sent, exactly the window the review
+        // flagged.
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let pre_seed_log = app.world().resource::<FrameLog>().0.clone();
+        println!("pre-seed frame log: {pre_seed_log:?}");
+        assert_eq!(
+            pre_seed_log,
+            vec![LoggedFrame::Snapshot(SnapshotReason::Initial)],
+            "flush_due_terminals' bootstrap rescue fires exactly once on a tmux \
+             pane before any PaneOutput arrives, confirming the review's premise \
+             — got {pre_seed_log:?}",
+        );
+
+        let grid_before = app
+            .world()
+            .get::<TerminalGrid>(pane_entity)
+            .expect("bootstrap snapshot must have created a correctly-sized grid");
+        assert_eq!(
+            grid_before.rows as usize,
+            grid_before.cells.len(),
+            "bootstrap snapshot must size grid.cells to the real row count",
+        );
+        assert!(
+            grid_before.cells.iter().flatten().all(GridCell::is_blank),
+            "the bootstrap-rescue snapshot must be blank — nothing real has arrived yet",
+        );
+
+        // The capture-pane seed lands: two lines of real content on a 5-row
+        // pane (2/5 = 40%, under the 85% snapshot-promotion threshold), so
+        // decide_frame_kind classifies it as a Delta once first_emit is false.
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"hello world\r\nsecond line".to_vec(),
+            });
+        app.update();
+
+        let post_seed_log = app.world().resource::<FrameLog>().0.clone();
+        println!("post-seed frame log: {post_seed_log:?}");
+        assert_eq!(
+            post_seed_log.len(),
+            2,
+            "expected exactly one more frame after the seed lands, got {post_seed_log:?}",
+        );
+        assert!(
+            matches!(post_seed_log[1], LoggedFrame::Delta { .. }),
+            "confirms the review's exact concern: the pane's first REAL content \
+             arrives as a FrameDelta, not a FrameSnapshot{{reason: Initial}} — got {post_seed_log:?}",
+        );
+
+        // The real question: does the renderer end up with the right content
+        // regardless of the Delta/Snapshot classification? Check the FINAL grid.
+        let grid = app
+            .world()
+            .get::<TerminalGrid>(pane_entity)
+            .expect("pane still has TerminalGrid");
+        assert_eq!(
+            grid.rows as usize,
+            grid.cells.len(),
+            "grid must stay structurally sized (rows == cells.len()) after a Delta-classified seed",
+        );
+        let row0: String = grid.cells[0].iter().map(|c| c.text.as_str()).collect();
+        let row1: String = grid.cells[1].iter().map(|c| c.text.as_str()).collect();
+        println!("row0={row0:?} row1={row1:?}");
+        assert!(
+            row0.starts_with("hello world"),
+            "row 0 must carry the seed content despite the Delta classification, got {row0:?}",
+        );
+        assert!(
+            row1.starts_with("second line"),
+            "row 1 must carry the seed content despite the Delta classification, got {row1:?}",
+        );
+        for (i, row) in grid.cells.iter().enumerate().skip(2) {
+            assert!(
+                row.iter().all(GridCell::is_blank),
+                "row {i} must remain blank — a Delta must not corrupt untouched rows, got {row:?}",
+            );
+        }
     }
 }
