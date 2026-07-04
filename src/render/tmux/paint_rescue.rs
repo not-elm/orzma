@@ -104,7 +104,7 @@ fn attach_rescue_state(
 /// read-only on the handle; the `&mut TerminalHandle` write lives in the observer.
 fn rescue_unpainted_panes(
     mut commands: Commands,
-    mut reseed: MessageWriter<RequestPaneReseed>,
+    mut reseed_er: MessageWriter<RequestPaneReseed>,
     mut panes: Query<
         (
             Entity,
@@ -128,7 +128,7 @@ fn rescue_unpainted_panes(
         // (no change tick); the guarded assignment is the only `DerefMut`.
         let mut next_reseed = *reseed_state;
         if reseed_decision(&mut next_reseed, needs) {
-            reseed.write(RequestPaneReseed { pane: pane.id });
+            reseed_er.write(RequestPaneReseed { pane: pane.id });
         }
         if *reseed_state != next_reseed {
             *reseed_state = next_reseed;
