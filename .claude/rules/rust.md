@@ -448,16 +448,33 @@ immutable reads with broad `&mut` access, and traps the decision logic behind
 ECS params (and resources with no public constructor), making it untestable.
 Split such systems along the gather → decide → apply seam.
 
-- **Apply via an `EntityEvent` + observer** (the repo idiom). The gather system
-  queries the target **immutably**, computes effects, and `commands.trigger(...)`s
-  them; the observer holds the `&mut` access and writes the world. See
-  `dispatch_input` (`src/input/keyboard.rs`) → `TerminalKeyInput`
+- **Split by responsibility — one system, one job.** A system either gathers,
+  decides, or applies — not all three. When two responsibilities share a body,
+  cut them into separate systems (or a system + observer), and hand off across
+  the seam with an `EntityEvent` or a `Message` — never by sequencing the phases
+  inline in one `fn`.
+- **Hand off with an `EntityEvent` + observer** (the primary repo idiom) when
+  the effect targets a specific entity and should apply at command flush. The
+  gather system queries the target **immutably**, computes effects, and
+  `commands.trigger(...)`s them; the observer holds the `&mut` access and writes
+  the world. See `dispatch_input` (`src/input/keyboard.rs`) → `TerminalKeyInput`
   (`crates/ozma_tty_engine/src/events.rs`) → `on_terminal_key_input`
   (`crates/ozma_tty_engine/src/lib.rs`) and `PasteAction` / `on_paste`
   (`src/action/terminal/paste.rs`).
+- **Hand off with a `Message`** (`MessageWriter` → `MessageReader`, the consumer
+  gated with `on_message::<T>`) when a producer system decouples work to one or
+  more consumer systems in a later phase or frame — a buffered broadcast rather
+  than an entity-targeted apply. The `InputPhase` pipeline already flows this way
+  (e.g. `KeyboardInput`, `MouseWheel`).
 - **Extract bulky inline blocks** into named helper `fn`s so the body reads as
   gate → collect → trigger. Gate preconditions with `run_if` (see "System
   optimization — gate with `run_if`").
+- **Keep each system body within ~150 lines.** Exceeding the cap is almost
+  always the signal that a system took on more than one responsibility; split it
+  by the rules above (a pure decide helper, an `EntityEvent` / `Message` handoff,
+  or an extracted helper `fn`) until each system does one job. The cap counts the
+  `fn` body only — signature and any `#[cfg(test)]` block are excluded — and is a
+  review-time smell test, not a compile error.
 
 Required:
 
@@ -466,6 +483,7 @@ Required:
 | Read input, decide, and write the world inline in one system | A pure decide helper returning effect values + an `EntityEvent`/observer that applies them |
 | Decision logic interleaved with `&mut` world access          | Decision over borrowed data returning intents; mutation isolated to the apply observer     |
 | A 40-plus-line inline block in a system body                 | A named helper `fn` the system calls                                                       |
+| A system body over ~150 lines                                | Split by responsibility: a decide helper plus an `EntityEvent` / `Message` handoff until each system is one job under the cap |
 
 Forbidden:
 
@@ -474,11 +492,14 @@ Forbidden:
 | `.pipe()` to chain a gather system into an apply system                                                             | Not this repo's idiom — it sequences with `EntityEvent` + observer and `.chain()` / system-sets, and uses `.pipe()` nowhere |
 | A long system whose only structure is sequential gather/decide/apply phases that could each be a helper or observer | Defeats single-responsibility; hides the apply surface                                                                      |
 
-Rationale: a gather system that ends in `commands.trigger(Effects { .. })` makes
-its effect on the world legible at the signature, and the observer is the one
-place to look for mutation. The pure decider is testable without a PTY / GPU /
-`App`, and an immutable gather query plus a `&mut` apply observer never contend
-for the same data (separate systems; the observer runs at command flush).
+Rationale: a gather system that ends in `commands.trigger(Effects { .. })` (or a
+`MessageWriter::write`) makes its effect on the world legible at the signature,
+and the observer / consumer system is the one place to look for mutation. The
+pure decider is testable without a PTY / GPU / `App`, and an immutable gather
+query plus a `&mut` apply observer never contend for the same data (separate
+systems; the observer runs at command flush). Bounding each body to ~150 lines
+keeps that seam visible: a system that outgrows the cap has usually re-merged two
+of the three jobs.
 
 Exceptions:
 
@@ -530,7 +551,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Change detection — no manual `set_changed()` / `bypass_change_detection()`-then-`set_changed()` notification; mutate conditionally so normal `DerefMut` drives change detection (see "Change detection — let mutation drive it, don't force it manually")
 - Imports — no inline fully-qualified paths in signatures, bodies, or type parameters; add a `use` at the top instead (see "Imports — import, don't inline")
 - Naming — `Query` parameters must not use a `_q` suffix; use a descriptive singular or plural noun (see "Naming — Query parameters")
-- System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, apply via an `EntityEvent`+observer (or a focused apply system), bulky inline blocks extracted to helpers (see "System composition — keep systems focused; split by responsibility")
+- System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, hand off across the seam via an `EntityEvent`+observer or a `Message` (`MessageWriter`/`MessageReader`) — never inline sequencing — bulky inline blocks extracted to helpers, and each system body kept within ~150 lines (see "System composition — keep systems focused; split by responsibility")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.
 
