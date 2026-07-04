@@ -18,6 +18,7 @@ pub mod keyboard;
 pub mod mouse;
 pub mod ozma;
 pub mod path;
+pub mod scrollback;
 pub mod shortcuts;
 
 /// Fully-resolved ozmux configuration.
@@ -39,6 +40,9 @@ pub struct OzmuxConfigs {
     pub inactive_pane: InactivePaneConfig,
     /// Ozma single-terminal mode configuration.
     pub ozma: ozma::OzmaConfig,
+    /// Scrollback configuration.
+    #[serde(default)]
+    pub scrollback: scrollback::ScrollbackConfig,
 }
 
 impl OzmuxConfigs {
