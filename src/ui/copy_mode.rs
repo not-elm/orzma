@@ -56,6 +56,13 @@ fn handle_enter_copy_mode_request(
     let Ok((mut handle, mut coalescer)) = q.get_mut(ev.entity) else {
         return;
     };
+    // NOTE: must clear before entering vi mode — the v/V toggle predicate
+    // (`resolve_selection_toggle`) reads `TerminalHandle::selection_type()` to
+    // decide "start new selection" vs. "clear existing"; a leftover mouse-drag
+    // selection would otherwise be misread as an already-started vi
+    // selection, so the first post-entry `v` press would clear it instead of
+    // starting a fresh one.
+    handle.selection_clear(&mut coalescer);
     handle.enter_vi_mode(&mut coalescer);
     commands
         .entity(ev.entity)
@@ -117,6 +124,36 @@ mod tests {
         assert!(
             h.selection_type().is_none(),
             "enter must not auto-create a selection",
+        );
+    }
+
+    #[test]
+    fn enter_observer_clears_a_pre_existing_selection() {
+        // Regression: a leftover mouse-drag selection from before copy mode
+        // was entered must not be misread by the v/V toggle predicate as an
+        // already-started vi selection.
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(handle_enter_copy_mode_request);
+
+        let entity = spawn_terminal_entity(&mut app);
+        {
+            let mut e = app.world_mut().entity_mut(entity);
+            let (mut h, mut coalescer) = (
+                e.take::<TerminalHandle>().unwrap(),
+                e.take::<Coalescer>().unwrap(),
+            );
+            h.selection_start(&mut coalescer, SelectionType::Simple);
+            e.insert((h, coalescer));
+        }
+
+        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.update();
+
+        let h = app.world().get::<TerminalHandle>(entity).unwrap();
+        assert!(
+            h.selection_type().is_none(),
+            "entering copy mode must clear a pre-existing selection",
         );
     }
 

@@ -3,13 +3,15 @@
 //! per-command action events (`crate::action::tmux`) and copy-mode
 //! entry commands; while a pane is in copy mode, keys resolve against the
 //! shared config-driven key table (`crate::action::vi::ResolvedCopyModeKeys`)
-//! and fire the shared VI events for `crate::action::vi::tmux_mode` to apply;
-//! unmatched keys forward straight to the pane in one `SendPaneKeys` batch
+//! and fire the shared VI events, which `crate::action::vi::applier`
+//! applies for every pane (tmux and non-tmux alike) rather than a
+//! tmux-specific applier module; unmatched keys forward straight to the pane
+//! in one `SendPaneKeys` batch
 //! per frame. Mouse-wheel forwarding handles only the
 //! cases `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it
 //! now runs on every tmux pane, gated off solely by `MouseDisabled`): an
-//! inline webview under the pointer (forwarded to CEF), a copy-mode pane (a
-//! targeted `send-keys -X scroll-up|scroll-down`), and the alt-screen
+//! inline webview under the pointer (forwarded to CEF), a copy-mode pane
+//! (scrolled directly via `TerminalHandle::scroll`), and the alt-screen
 //! residual where ozma's viewport scroll would no-op (cursor-key
 //! `send-keys`). Events accumulate into cell-deltas (so trackpad /
 //! high-resolution `Pixel` scrolling quantizes the same way the native
@@ -17,9 +19,9 @@
 
 use super::pane_hit::tmux_pane_at_phys;
 use crate::action::tmux::{
-    EnterCopyModeRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest, NextWindowRequest,
-    PreviousWindowRequest, RenameSessionRequest, RenameWindowRequest, SelectPaneRequest,
-    SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
+    KillPaneRequest, KillWindowRequest, NewWindowRequest, NextWindowRequest, PreviousWindowRequest,
+    RenameSessionRequest, RenameWindowRequest, SelectPaneRequest, SelectWindowRequest,
+    SplitPaneRequest, ZoomPaneRequest,
 };
 use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
 use crate::app_mode::{AppMode, TmuxActiveSet};
@@ -30,7 +32,7 @@ use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
 };
 use crate::session::tmux::request_detach;
-use crate::ui::copy_mode::CopyModeState;
+use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
@@ -45,7 +47,7 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_tty_engine::{TermMode, TerminalHandle};
+use ozma_tty_engine::{Coalescer, TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{ForwardKeys, NonInteractive, Webview};
@@ -311,13 +313,12 @@ fn forward_keys_to_tmux(
                     }
                 }
                 ShortcutAction::EnterCopyMode => {
-                    // NOTE: re-entry guard — re-triggering while the pane is
-                    // already in copy mode would double-insert CopyModeState
-                    // and re-run `copy-mode` on a pane that is already in it.
+                    // NOTE: re-entry guard — re-triggering while already in copy
+                    // mode would double-insert CopyModeState and re-enter vi mode.
                     if let Some(entity) = active_entity
                         && copy_modes.get(entity).is_err()
                     {
-                        commands.trigger(EnterCopyModeRequest { entity });
+                        commands.trigger(EnterCopyModeActionEvent { entity });
                     }
                 }
                 ShortcutAction::SelectPane(direction) => {
@@ -450,29 +451,6 @@ fn tmux_split_direction(orientation: CfgSplitOrientation) -> SplitDirection {
     }
 }
 
-/// `send-keys -X -t %<id> -N <lines> scroll-up|scroll-down` — one copy-mode wheel notch.
-///
-/// ozmux drives copy-mode wheel scrolling with this single, targeted command
-/// rather than relaying tmux's copy-table `WheelUpPane`/`WheelDownPane`
-/// bindings, which are `select-pane \; send-keys …` sequences: relaying a
-/// sequence as one control-mode command makes tmux emit an extra reply block
-/// the protocol client cannot correlate (the `no pending command` storm).
-struct Scroll<'a> {
-    target: &'a str,
-    up: bool,
-    lines: u32,
-}
-impl TmuxCommand for Scroll<'_> {
-    fn into_raw_command(self) -> String {
-        format!(
-            "send-keys -X -t {} -N {} {}",
-            self.target,
-            self.lines,
-            if self.up { "scroll-up" } else { "scroll-down" }
-        )
-    }
-}
-
 /// `send-keys -t %<id> -N <lines> Up|Down` — scrolls an alt-screen (non-copy-mode) pane.
 struct AltScreenScroll<'a> {
     target: &'a str,
@@ -579,8 +557,9 @@ fn resolve_tmux_webview_wheel_target(
 /// runs on the same pane (gated off only by `MouseDisabled`) and owns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WheelOwner {
-    /// Copy-mode pane: tmux drives scrolling via `send-keys -X scroll-up|down`.
-    /// These panes carry `MouseDisabled`, so ozma never acts on them.
+    /// Copy-mode pane: `forward_wheel_to_tmux` scrolls the local
+    /// `TerminalHandle` directly. These panes carry `MouseDisabled`, so ozma
+    /// never acts on them.
     CopyMode,
     /// Alt-screen pane with neither `ALTERNATE_SCROLL` nor any `MOUSE_MODE` bit:
     /// the host's `WheelAction` resolves to a `ScrollViewport` that is a
@@ -599,7 +578,8 @@ enum WheelOwner {
 /// (→ SS3 arrows), or in a normal screen (→ real scrollback). The only case its
 /// `ScrollViewport` is a no-op is alt-screen WITHOUT `ALTERNATE_SCROLL` and
 /// WITHOUT a mouse mode — that residual is what tmux owns here. Copy-mode panes
-/// never reach `route` (they carry `MouseDisabled`), so tmux owns them outright.
+/// never reach `route` (they carry `MouseDisabled`), so this system scrolls
+/// them locally instead.
 fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) -> WheelOwner {
     if in_copy_mode {
         return WheelOwner::CopyMode;
@@ -623,12 +603,13 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 /// Otherwise the owner is decided for the CURSOR pane (resolved via
 /// `tmux_pane_at_phys`) as the exact complement of
 /// `ozma_tty_engine::wheel::WheelAction::route` (see `decide_wheel_owner`):
-/// a copy-mode pane (`CopyModeState`, always `MouseDisabled`) gets a targeted
-/// `send-keys -X scroll-up|scroll-down`; an alt-screen pane with neither
-/// `ALTERNATE_SCROLL` nor a `MOUSE_MODE` bit — where ozma's `ScrollViewport`
-/// would no-op on the alt buffer — gets `AltScreenScroll` (cursor
-/// keys). Every other case is ceded to ozma (local scrollback / SGR / SS3) and
-/// the accumulator is left untouched for that pane so no residual notch bleeds.
+/// a copy-mode pane (`CopyModeState`, always `MouseDisabled`) scrolls the
+/// local `TerminalHandle` directly via `TerminalHandle::scroll`; an
+/// alt-screen pane with neither `ALTERNATE_SCROLL` nor a `MOUSE_MODE` bit —
+/// where ozma's `ScrollViewport` would no-op on the alt buffer — gets
+/// `AltScreenScroll` (cursor keys) sent to tmux. Every other case is ceded to
+/// ozma (local scrollback / SGR / SS3) and the accumulator is left untouched
+/// for that pane so no residual notch bleeds.
 ///
 /// # Invariants
 ///
@@ -642,7 +623,7 @@ fn forward_wheel_to_tmux(
     mut wheel: MessageReader<MouseWheel>,
     mut accumulator: ResMut<TmuxWheelAccumulator>,
     mut client: Option<Single<&mut TmuxClient>>,
-    handles: Query<&TerminalHandle>,
+    mut handles: Query<(&mut TerminalHandle, &mut Coalescer)>,
     wheel_params: TmuxWebviewWheelParams,
     copy_prompt: Res<CopyPrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
@@ -702,7 +683,7 @@ fn forward_wheel_to_tmux(
     // and resetting it would fight the accumulation ozma performs independently.
     let in_copy_mode = copy_modes.get(entity).is_ok();
     let owner = match handles.get(entity) {
-        Ok(handle) => decide_wheel_owner(
+        Ok((handle, _)) => decide_wheel_owner(
             in_copy_mode,
             handle.is_in_alt_screen(),
             handle.current_modes(),
@@ -728,33 +709,32 @@ fn forward_wheel_to_tmux(
     let lines = configs.mouse.lines_per_notch;
     let total_lines = count as u32 * lines;
 
-    let Some(tmux) = client.as_deref_mut() else {
-        return;
+    let signed = if up {
+        total_lines as i32
+    } else {
+        -(total_lines as i32)
     };
-
-    let (cmd, failure) = match owner {
-        WheelOwner::CopyMode => (
-            Scroll {
+    match owner {
+        WheelOwner::CopyMode => {
+            if let Ok((mut handle, mut coalescer)) = handles.get_mut(entity) {
+                handle.scroll(&mut coalescer, signed);
+            }
+        }
+        WheelOwner::AltScreenResidual => {
+            let Some(tmux) = client.as_deref_mut() else {
+                return;
+            };
+            let cmd = AltScreenScroll {
                 target: &target,
                 up,
                 lines: total_lines,
             }
-            .into_raw_command(),
-            "copy-mode wheel scroll send failed",
-        ),
-        WheelOwner::AltScreenResidual => (
-            AltScreenScroll {
-                target: &target,
-                up,
-                lines: total_lines,
+            .into_raw_command();
+            if let Err(e) = tmux.send(&cmd) {
+                tracing::warn!(?e, "alt-screen wheel scroll send failed");
             }
-            .into_raw_command(),
-            "alt-screen wheel scroll send failed",
-        ),
-        WheelOwner::CededToOzma => return,
-    };
-    if let Err(e) = tmux.send(&cmd) {
-        tracing::warn!(?e, failure);
+        }
+        WheelOwner::CededToOzma => {}
     }
 }
 
@@ -836,22 +816,9 @@ mod tests {
     use bevy::input::mouse::MouseScrollUnit;
 
     #[test]
-    fn scroll_up_is_targeted_and_repeated() {
-        assert_eq!(
-            Scroll {
-                target: "%3",
-                up: true,
-                lines: 3,
-            }
-            .into_raw_command(),
-            "send-keys -X -t %3 -N 3 scroll-up"
-        );
-    }
-
-    #[test]
-    fn wheel_copy_mode_pane_is_owned_by_tmux() {
-        // Copy-mode panes carry MouseDisabled (ozma never runs), so tmux keeps
-        // the Scroll path regardless of screen / mode bits.
+    fn wheel_copy_mode_pane_owner_ignores_screen_and_mode_bits() {
+        // Copy-mode panes carry MouseDisabled (ozma never runs), so the
+        // wheel path scrolls the local handle regardless of screen / mode bits.
         assert_eq!(
             decide_wheel_owner(true, false, TermMode::empty()),
             WheelOwner::CopyMode
@@ -988,15 +955,65 @@ mod tests {
     }
 
     #[test]
-    fn scroll_down_is_targeted_and_repeated() {
-        assert_eq!(
-            Scroll {
-                target: "%3",
-                up: false,
-                lines: 5,
-            }
-            .into_raw_command(),
-            "send-keys -X -t %3 -N 5 scroll-down"
+    fn wheel_copy_mode_scrolls_local_handle() {
+        use bevy::window::WindowResolution;
+        use ozma_tty_renderer::CellMetrics;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_message::<MouseWheel>();
+        app.init_resource::<FocusedWebview>();
+        app.init_resource::<CopyPrompt>();
+        app.init_resource::<TmuxWheelAccumulator>();
+        app.insert_resource(OzmuxConfigsResource::default());
+        app.insert_resource(TerminalCellMetricsResource {
+            metrics: CellMetrics {
+                advance_phys: 8.0,
+                line_height_phys: 16.0,
+                ascent_phys: 12.0,
+                descent_phys: 4.0,
+                underline_position_phys: -2.0,
+                underline_thickness_phys: 1.0,
+                max_overflow_phys: 0.0,
+            },
+            phys_font_size: 16,
+        });
+
+        // A pane covering the whole 800x600 window so the cursor position
+        // below resolves to this entity via `tmux_pane_at_phys`.
+        let pane = spawn_pane_node(&mut app, true, false, 400.0, 800.0);
+        let mut handle = TerminalHandle::detached(20, 5);
+        handle.advance(b"l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\nl7\r\nl8\r\nl9\r\nl10\r\n");
+        app.world_mut()
+            .entity_mut(pane)
+            .insert((handle, Coalescer::default()));
+
+        let mut window = Window {
+            focused: true,
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.set_cursor_position(Some(Vec2::new(100.0, 100.0)));
+        app.world_mut().spawn((window, PrimaryWindow));
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
+            .write(make_wheel_event(MouseScrollUnit::Line, 2.0));
+
+        // No TmuxClient anywhere in this world — proves the copy-mode scroll
+        // does not depend on a tmux send.
+        app.world_mut()
+            .run_system_once(forward_wheel_to_tmux)
+            .unwrap();
+
+        let snapshot = app
+            .world()
+            .get::<TerminalHandle>(pane)
+            .unwrap()
+            .vi_indicator_snapshot();
+        assert!(
+            snapshot.scroll_offset > 0,
+            "copy-mode wheel scroll did not move the local handle"
         );
     }
 

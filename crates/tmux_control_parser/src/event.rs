@@ -434,6 +434,35 @@ impl<'a> Fields<'a> {
     }
 }
 
+/// Decodes `capture-pane -C` octal escapes (`\xxx`) back to bytes, passing
+/// any non-octal backslash sequence through verbatim.
+///
+/// Unlike `unescape_output` this never fails: tmux's `-C` escaping is
+/// known not to escape backslash itself, so a literal `\` in pane output
+/// arrives bare and must not be treated as a protocol error.
+pub fn unescape_capture(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        match bytes.get(i + 1..i + 4).and_then(decode_octal_triple) {
+            Some(byte) => {
+                out.push(byte);
+                i += 4;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 /// Parses an ASCII integer field into `T`, mapping failures to [`TmuxError::InvalidInt`].
 fn int<T: core::str::FromStr>(bytes: &[u8], field: &'static str) -> TmuxResult<T> {
     core::str::from_utf8(bytes)
@@ -489,35 +518,6 @@ fn unescape_output(bytes: &[u8]) -> TmuxResult<Vec<u8>> {
         }
     }
     Ok(out)
-}
-
-/// Decodes `capture-pane -C` octal escapes (`\xxx`) back to bytes, passing
-/// any non-octal backslash sequence through verbatim.
-///
-/// Unlike `unescape_output` this never fails: tmux's `-C` escaping is
-/// known not to escape backslash itself, so a literal `\` in pane output
-/// arrives bare and must not be treated as a protocol error.
-pub fn unescape_capture(bytes: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] != b'\\' {
-            out.push(bytes[i]);
-            i += 1;
-            continue;
-        }
-        match bytes.get(i + 1..i + 4).and_then(decode_octal_triple) {
-            Some(byte) => {
-                out.push(byte);
-                i += 4;
-            }
-            None => {
-                out.push(bytes[i]);
-                i += 1;
-            }
-        }
-    }
-    out
 }
 
 fn decode_octal_triple(triple: &[u8]) -> Option<u8> {

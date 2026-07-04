@@ -1,4 +1,4 @@
 //! Terminal-grid rendering features. tmux-only today: the pane layout → grid
-//! pipeline, paint rescue, and capture-driven copy-mode rendering.
+//! pipeline and paint rescue.
 
 pub(crate) mod tmux;

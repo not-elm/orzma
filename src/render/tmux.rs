@@ -2,24 +2,20 @@
 //! GPU render bundle to each projected `TmuxPane`, then routes tmux `%output`
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
-pub(crate) mod copy_mode;
-
 mod paint_rescue;
 
 use crate::app_mode::TmuxActiveSet;
-use crate::render::tmux::copy_mode::CopyModePlugin;
 use crate::render::tmux::paint_rescue::PaintRescuePlugin;
 use crate::surface::OzmaTerminal;
 use crate::surface::geometry::cells_for;
 use crate::theme;
 use crate::theme::PANE_GAP;
-use crate::ui::copy_mode::CopyModeState;
 use crate::ui::tmux::mode_ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_tty_engine::{TerminalHandle, TerminalTitle};
+use ozma_tty_engine::{Coalescer, TerminalHandle, TerminalTitle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::TerminalPaddingFallback;
 use ozma_tty_renderer::schema::TerminalGrid;
@@ -97,7 +93,7 @@ pub(crate) struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((PaintRescuePlugin, CopyModePlugin))
+        app.add_plugins(PaintRescuePlugin)
             .insert_resource(ClearColor(PANE_GAP))
             .init_resource::<LastClientSize>()
             .init_resource::<PendingPaneOutput>()
@@ -186,8 +182,9 @@ fn attach_tmux_window_container(
     }
 }
 
-/// Attaches a detached `TerminalHandle`, the `OzmaTerminal` marker, and a
-/// placeholder absolute `Node` to each `TmuxPane` that lacks a `TerminalHandle`.
+/// Attaches a detached `TerminalHandle`, a `Coalescer`, a `TerminalTitle`, the
+/// `OzmaTerminal` marker, and a placeholder absolute `Node` to each `TmuxPane`
+/// that lacks a `TerminalHandle`.
 /// The `On<Add, OzmaTerminal>` observer in `crate::surface` injects the
 /// `TerminalRenderBundle` (one per entity, no duplicate material creation here).
 /// The `TerminalGrid` lives on the pane entity itself, so `flush_emit` /
@@ -207,6 +204,7 @@ fn attach_tmux_pane_terminal(
 
         commands.entity(entity).insert((
             handle,
+            Coalescer::default(),
             TerminalTitle::default(),
             OzmaTerminal,
             Node {
@@ -229,21 +227,17 @@ fn pending_pane_output_waiting(pending: Res<PendingPaneOutput>) -> bool {
 /// already answers the program's device queries (DSR/DA) itself. So this drains
 /// the handle's reply queue and discards it — see the `take_replies` `NOTE`.
 ///
-/// While a pane is in copy mode the live bytes are still advanced (tmux keeps
-/// streaming `%output` — copy mode does not pause it), but the emit to the
-/// rendered grid is gated: the capture-fed refresh path
-/// (`CopyModePlugin`) paints the scrolled view instead. On exit, the
-/// `CopyModePlugin` `On<Remove, CopyModeState>` observer forces a full
-/// repaint of the live handle so the grid switches back from capture content
-/// (an idle pane emits no new `%output`, and a later delta would paint over the
-/// captured rows).
+/// The live bytes are advanced and emitted unconditionally, in and out of copy
+/// mode: the local vi applier (`crate::action::vi::applier`) scrolls and
+/// selects on this same `TerminalHandle`, so the handle's own scrolled view is
+/// what the rendered grid always shows — there is no separate capture-fed
+/// refresh path to defer to.
 fn route_tmux_output(
     mut commands: Commands,
     mut reader: MessageReader<PaneOutput>,
     mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle)>,
     mut pending: ResMut<PendingPaneOutput>,
     panes: Query<(Entity, &TmuxPane)>,
-    copy_modes: Query<(), With<CopyModeState>>,
 ) {
     let mut by_pane: HashMap<_, Vec<u8>> = HashMap::new();
     for msg in reader.read() {
@@ -277,12 +271,7 @@ fn route_tmux_output(
         // PtyHandle, so without this call a pane program's webview mount
         // OSC is parsed and then silently dropped (no webview ever mounts).
         handle.drain_control_events(&mut commands, entity, &mut title);
-        // NOTE: skip the live flush while in copy mode — `apply_copy_overlay` paints
-        // the captured scrollback onto the grid, and a late %output delta must not
-        // overwrite it. The exit observer forces a full repaint on return.
-        if copy_modes.get(entity).is_err() {
-            handle.flush_emit(&mut commands, entity);
-        }
+        handle.flush_emit(&mut commands, entity);
         // NOTE: drain and DISCARD — never forward these replies to tmux. The
         // handle is a display-only renderer; tmux already answered the program's
         // DSR/DA query. Injecting alacritty's duplicate answer via `send-keys -H`
@@ -911,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn copy_mode_pane_advances_but_gates_the_emit() {
+    fn copy_mode_pane_output_still_reaches_the_grid() {
         use crate::ui::copy_mode::CopyModeState;
 
         let mut app = App::new();
@@ -955,8 +944,10 @@ mod tests {
             .collect();
         assert!(baseline.starts_with("hi"), "baseline grid painted 'hi'");
 
-        // Enter copy mode, then deliver more output: the live handle must advance
-        // but the rendered grid must NOT change (emit gated).
+        // Enter copy mode, then deliver more output: the emit is no longer
+        // gated on CopyModeState, so the new content reaches the grid in the
+        // SAME frame it arrives — the local vi applier scrolls this same
+        // handle, so its own view is what must render.
         app.world_mut()
             .entity_mut(pane_entity)
             .insert(CopyModeState);
@@ -967,35 +958,18 @@ mod tests {
                 data: b"\r\nXY".to_vec(),
             });
         app.update();
-        let gated: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
+        let row0: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[0]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
-        assert!(
-            gated.starts_with("hi"),
-            "grid stays at the baseline while in copy mode, got {gated:?}",
-        );
-
-        // Exit copy mode and deliver one more (empty) output batch: now that the
-        // marker is gone, route_tmux_output emits, so the gated-but-advanced live
-        // content ("XY" on row 1) reaches the rendered grid.
-        app.world_mut()
-            .entity_mut(pane_entity)
-            .remove::<CopyModeState>();
-        app.world_mut()
-            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
-            .write(PaneOutput {
-                pane: pane_id,
-                data: Vec::new(),
-            });
-        app.update();
-        let resumed: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[1]
+        let row1: String = app.world().get::<TerminalGrid>(pane_entity).unwrap().cells[1]
             .iter()
             .map(|c| c.text.as_str())
             .collect();
+        assert!(row0.starts_with("hi"), "row 0 is untouched, got {row0:?}");
         assert!(
-            resumed.starts_with("XY"),
-            "the live handle advanced under copy mode; after exit + emit row 1 shows 'XY', got {resumed:?}",
+            row1.starts_with("XY"),
+            "row 1 reflects the new output immediately, while still in copy mode, got {row1:?}",
         );
     }
 
@@ -1674,6 +1648,378 @@ mod tests {
         assert!(
             app.world().entity(pane_entity).contains::<TerminalGrid>(),
             "On<Add, OzmaTerminal> must inject TerminalRenderBundle (TerminalGrid proves exactly one render bundle)",
+        );
+    }
+
+    #[test]
+    fn attach_inserts_coalescer_on_tmux_pane() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 20,
+                    height: 5,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+        app.add_systems(Update, attach_tmux_pane_terminal);
+        app.update();
+        assert!(app.world().get::<Coalescer>(entity).is_some());
+        assert!(app.world().get::<TerminalHandle>(entity).is_some());
+    }
+
+    /// Composed regression test for the bootstrap-rescue exposure the Task 1
+    /// code review flagged: once a tmux pane carries `Coalescer` (needed for
+    /// shared local copy mode), it also matches
+    /// `ozma_tty_engine::flush_due_terminals`'s bootstrap rescue, which has no
+    /// `PtyHandle` filter. That rescue can now fire on a tmux pane before
+    /// tmux's `capture-pane` seed lands, flipping `first_emit` to `false` on a
+    /// still-blank `Term`. Proves what actually happens end to end: the
+    /// bootstrap rescue fires exactly once (a blank `Snapshot{Initial}`), the
+    /// real seed then arrives classified as a `Delta` (not a
+    /// `Snapshot{Initial}`), and the FINAL rendered `TerminalGrid` still ends
+    /// up correct — because the bootstrap snapshot already sized `grid.cells`
+    /// to `rows`, so the later Delta's per-row bounds-checked write lands
+    /// exactly right.
+    #[test]
+    fn tmux_pane_bootstrap_rescue_before_seed_yields_correct_final_grid() {
+        use ozma_tty_engine::TerminalHandlePlugin;
+        use ozma_tty_renderer::schema::{
+            Cell as GridCell, FrameDelta, FrameSnapshot, SnapshotReason,
+        };
+
+        #[derive(Debug, Clone, PartialEq)]
+        enum LoggedFrame {
+            Snapshot(SnapshotReason),
+            Delta { dirty_rows: usize },
+        }
+
+        #[derive(Resource, Default)]
+        struct FrameLog(Vec<LoggedFrame>);
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(SurfacePlugin);
+        app.add_plugins(TerminalHandlePlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.add_message::<PaneOutput>();
+        app.init_resource::<PendingPaneOutput>();
+        app.init_resource::<FrameLog>();
+        app.add_observer(|ev: On<FrameSnapshot>, mut log: ResMut<FrameLog>| {
+            log.0.push(LoggedFrame::Snapshot(ev.reason));
+        });
+        app.add_observer(|ev: On<FrameDelta>, mut log: ResMut<FrameLog>| {
+            log.0.push(LoggedFrame::Delta {
+                dirty_rows: ev.dirty_rows.len(),
+            });
+        });
+
+        let pane_id = PaneId(1);
+        let pane_entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: pane_id,
+                dims: dims(),
+            })
+            .id();
+
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
+        );
+
+        // Simulate several frames ticking BEFORE tmux's capture-pane seed reply
+        // lands: no PaneOutput is ever sent, exactly the window the review
+        // flagged.
+        for _ in 0..4 {
+            app.update();
+        }
+
+        let pre_seed_log = app.world().resource::<FrameLog>().0.clone();
+        println!("pre-seed frame log: {pre_seed_log:?}");
+        assert_eq!(
+            pre_seed_log,
+            vec![LoggedFrame::Snapshot(SnapshotReason::Initial)],
+            "flush_due_terminals' bootstrap rescue fires exactly once on a tmux \
+             pane before any PaneOutput arrives, confirming the review's premise \
+             — got {pre_seed_log:?}",
+        );
+
+        let grid_before = app
+            .world()
+            .get::<TerminalGrid>(pane_entity)
+            .expect("bootstrap snapshot must have created a correctly-sized grid");
+        assert_eq!(
+            grid_before.rows as usize,
+            grid_before.cells.len(),
+            "bootstrap snapshot must size grid.cells to the real row count",
+        );
+        assert!(
+            grid_before.cells.iter().flatten().all(GridCell::is_blank),
+            "the bootstrap-rescue snapshot must be blank — nothing real has arrived yet",
+        );
+
+        // The capture-pane seed lands: two lines of real content on a 5-row
+        // pane (2/5 = 40%, under the 85% snapshot-promotion threshold), so
+        // decide_frame_kind classifies it as a Delta once first_emit is false.
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: b"hello world\r\nsecond line".to_vec(),
+            });
+        app.update();
+
+        let post_seed_log = app.world().resource::<FrameLog>().0.clone();
+        println!("post-seed frame log: {post_seed_log:?}");
+        assert_eq!(
+            post_seed_log.len(),
+            2,
+            "expected exactly one more frame after the seed lands, got {post_seed_log:?}",
+        );
+        assert!(
+            matches!(post_seed_log[1], LoggedFrame::Delta { .. }),
+            "confirms the review's exact concern: the pane's first REAL content \
+             arrives as a FrameDelta, not a FrameSnapshot{{reason: Initial}} — got {post_seed_log:?}",
+        );
+
+        // The real question: does the renderer end up with the right content
+        // regardless of the Delta/Snapshot classification? Check the FINAL grid.
+        let grid = app
+            .world()
+            .get::<TerminalGrid>(pane_entity)
+            .expect("pane still has TerminalGrid");
+        assert_eq!(
+            grid.rows as usize,
+            grid.cells.len(),
+            "grid must stay structurally sized (rows == cells.len()) after a Delta-classified seed",
+        );
+        let row0: String = grid.cells[0].iter().map(|c| c.text.as_str()).collect();
+        let row1: String = grid.cells[1].iter().map(|c| c.text.as_str()).collect();
+        println!("row0={row0:?} row1={row1:?}");
+        assert!(
+            row0.starts_with("hello world"),
+            "row 0 must carry the seed content despite the Delta classification, got {row0:?}",
+        );
+        assert!(
+            row1.starts_with("second line"),
+            "row 1 must carry the seed content despite the Delta classification, got {row1:?}",
+        );
+        for (i, row) in grid.cells.iter().enumerate().skip(2) {
+            assert!(
+                row.iter().all(GridCell::is_blank),
+                "row {i} must remain blank — a Delta must not corrupt untouched rows, got {row:?}",
+            );
+        }
+    }
+
+    /// End-to-end proof that local tmux copy mode is fully wired, on a real
+    /// tmux-pane entity carrying the exact bundle `attach_tmux_pane_terminal`
+    /// gives every projected pane: enter copy mode, scroll into pre-seeded
+    /// history, toggle + extend a selection, yank to the clipboard, and land
+    /// back on the live tail. Drives the shared `crate::action::vi` events
+    /// directly (the applier pipeline), not the keymap/key-gather layer.
+    #[test]
+    fn tmux_copy_mode_is_fully_local() {
+        use crate::action::vi::{
+            ViActionPlugin, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest,
+            ViYankRequest,
+        };
+        use crate::clipboard::Clipboard;
+        use crate::configs::OzmuxConfigsResource;
+        use crate::ui::copy_mode::{CopyModePlugin, CopyModeState, EnterCopyModeActionEvent};
+        use bevy::ecs::message::Messages;
+        use ozma_tty_engine::{SelectionType, TermMode, TerminalHandlePlugin, ViMotion};
+        use ozmux_configs::OzmuxConfigs;
+        use ozmux_configs::copy_mode::CopyScroll;
+        use std::time::Duration;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_plugins(TerminalGridPlugin);
+        app.add_plugins(SurfacePlugin);
+        app.add_plugins(TerminalHandlePlugin);
+        app.add_plugins(CopyModePlugin);
+        app.add_plugins(ViActionPlugin);
+        app.init_resource::<Assets<TerminalUiMaterial>>();
+        app.init_resource::<PendingPaneOutput>();
+        app.add_message::<PaneOutput>();
+        app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
+        app.insert_resource(Clipboard::in_memory());
+
+        let pane_id = PaneId(99);
+        let entity = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: pane_id,
+                dims: CellDims {
+                    width: 20,
+                    height: 6,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+        app.add_systems(
+            Update,
+            (
+                attach_tmux_pane_terminal,
+                route_tmux_output.run_if(on_message::<PaneOutput>),
+            )
+                .chain(),
+        );
+
+        // Frame 1: `[copy-mode]` key table resolution (Startup) plus the real
+        // tmux-pane attach bundle (TerminalHandle, Coalescer, TerminalTitle,
+        // OzmaTerminal, Node) — the same bundle a projected tmux pane gets.
+        // No output has arrived yet.
+        app.update();
+        assert!(
+            app.world().get::<TerminalHandle>(entity).is_some(),
+            "tmux-pane bundle must be attached before seeding history"
+        );
+
+        // Frame 2: seed several screens of distinct, recognizable history via
+        // a `PaneOutput` message, exactly how tmux's capture-pane seed and
+        // subsequent `%output` reach a real pane's handle.
+        let mut seed = String::new();
+        for i in 0..40 {
+            seed.push_str(&format!("SEEDLINE-{i:03}\r\n"));
+        }
+        app.world_mut()
+            .resource_mut::<Messages<PaneOutput>>()
+            .write(PaneOutput {
+                pane: pane_id,
+                data: seed.into_bytes(),
+            });
+        app.update();
+        let tail_row0: String = app.world().get::<TerminalGrid>(entity).unwrap().cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            tail_row0.contains("SEEDLINE-"),
+            "pre-copy-mode grid must show the seeded live tail, got {tail_row0:?}"
+        );
+
+        // 1. Enter copy mode.
+        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.update();
+        assert!(
+            app.world().get::<CopyModeState>(entity).is_some(),
+            "entering copy mode must insert CopyModeState"
+        );
+        let entered_vi = app
+            .world()
+            .get::<TerminalHandle>(entity)
+            .unwrap()
+            .current_modes()
+            .contains(TermMode::VI);
+        assert!(
+            entered_vi,
+            "entering copy mode must flip the handle into vi mode"
+        );
+
+        // 2. Scroll into the pre-seeded history via the shared vi applier.
+        app.world_mut().trigger(ViScrollRequest {
+            entity,
+            kind: CopyScroll::PageUp,
+        });
+        app.update();
+        let scroll_offset = app
+            .world()
+            .get::<TerminalHandle>(entity)
+            .unwrap()
+            .vi_indicator_snapshot()
+            .scroll_offset;
+        assert!(
+            scroll_offset > 0,
+            "PageUp must scroll the handle back into scrollback history"
+        );
+
+        // `vi_motion`/`scroll` arm the Coalescer instead of emitting
+        // immediately (`stage_full_damage_and_arm`); sleep past its 3ms IDLE
+        // debounce so `flush_due_terminals` actually flushes the scrolled
+        // frame to the render-facing TerminalGrid — proving the render leg of
+        // the pipeline (not just the handle's own internal state) reflects
+        // the scroll.
+        std::thread::sleep(Duration::from_millis(15));
+        app.update();
+        let scrolled_row0: String = app.world().get::<TerminalGrid>(entity).unwrap().cells[0]
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        assert!(
+            scrolled_row0.contains("SEEDLINE-"),
+            "scrolled grid row must still show seeded history text, got {scrolled_row0:?}"
+        );
+        assert_ne!(
+            scrolled_row0, tail_row0,
+            "scrolling into history must change what the grid renders"
+        );
+
+        // 3. Toggle a selection, extend it, then yank.
+        app.world_mut().trigger(ViSelectionToggleRequest {
+            entity,
+            ty: SelectionType::Simple,
+        });
+        app.update();
+        app.world_mut().trigger(ViMotionRequest {
+            entity,
+            motion: ViMotion::Right,
+        });
+        app.update();
+        app.world_mut().trigger(ViMotionRequest {
+            entity,
+            motion: ViMotion::Down,
+        });
+        app.update();
+
+        let expected_yank = app
+            .world()
+            .get::<TerminalHandle>(entity)
+            .unwrap()
+            .selection_to_string();
+        assert!(
+            expected_yank
+                .as_deref()
+                .is_some_and(|t| t.contains("SEEDLINE")),
+            "selection must cover seeded history text before yanking, got {expected_yank:?}"
+        );
+
+        app.world_mut().trigger(ViYankRequest { entity });
+        app.update();
+
+        assert!(
+            app.world().get::<CopyModeState>(entity).is_none(),
+            "yank must exit copy mode"
+        );
+        let clipboard_text = app.world_mut().resource_mut::<Clipboard>().read();
+        assert_eq!(
+            clipboard_text, expected_yank,
+            "yank must write exactly the selected text to the clipboard"
+        );
+
+        // 4. Exiting copy mode (via yank) snaps the handle back to the live
+        // tail and leaves vi mode.
+        let handle = app.world().get::<TerminalHandle>(entity).unwrap();
+        assert!(
+            handle.is_at_bottom(),
+            "exiting copy mode via yank must snap the viewport back to the live tail"
+        );
+        assert!(
+            !handle.current_modes().contains(TermMode::VI),
+            "exiting copy mode must leave vi mode"
         );
     }
 }

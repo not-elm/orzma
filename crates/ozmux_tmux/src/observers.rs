@@ -4,7 +4,6 @@
 use crate::components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,
 };
-use crate::copy_queries::CopyModeQueries;
 use crate::events::{
     PaneGeom, TmuxActivePaneChanged, TmuxActiveWindowChanged, TmuxConnectionReset,
     TmuxLayoutChanged, TmuxSessionChanged, TmuxWindowAdded, TmuxWindowClosed,
@@ -222,7 +221,6 @@ fn on_connection_reset(
     _ev: On<TmuxConnectionReset>,
     mut commands: Commands,
     mut index: ResMut<TmuxProjection>,
-    mut copy_queries: ResMut<CopyModeQueries>,
     mut batch: ResMut<TmuxEventBatch>,
 ) {
     // NOTE: try_despawn for the window entities only. They are reparented
@@ -238,7 +236,6 @@ fn on_connection_reset(
         commands.entity(e).despawn();
     }
     index.pending_active_pane = None;
-    copy_queries.clear();
     // Drop the closing connection's drained events (notably its `%exit`) so they
     // cannot leak into the next adopted connection. The drain is gated off in
     // Default mode, so a stale batch would otherwise survive to the re-adoption
@@ -329,7 +326,6 @@ mod tests {
     fn app() -> App {
         let mut app = App::new();
         app.init_resource::<TmuxProjection>()
-            .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>();
         register_observers(&mut app);
         app

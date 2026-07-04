@@ -12,6 +12,7 @@ use super::effect::{MultiSelectKind, TmuxMouseEffect};
 use crate::input::gesture::ClickTracker;
 use crate::render::tmux::DividerPixelRect;
 use bevy::prelude::*;
+use ozma_tty_engine::{Point, SelectionType, Side};
 use ozmux_tmux::PaneId;
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
@@ -39,8 +40,8 @@ pub(super) enum PressHit {
 pub(super) struct ReleaseCtx {
     /// Whether the `Pressed` pane is in copy mode (multi-click promotion gate).
     pub(super) copy_mode: bool,
-    /// Resolved click cell for a `click_count >= 2` release, when available.
-    pub(super) multi_cell: Option<(u16, u16)>,
+    /// Resolved click point for a `click_count >= 2` release, when available.
+    pub(super) multi_cell: Option<Point>,
     /// Pane under the cursor for a divider-click focus fallback.
     pub(super) pane_under: Option<PaneId>,
 }
@@ -56,20 +57,17 @@ pub(super) struct ContinuationCtx {
     pub(super) drag_threshold_phys: f32,
     /// Whether the `Pressed` pane is in copy mode (drag promotion gate).
     pub(super) copy_mode: bool,
-    /// Anchor cell resolved from the press origin (`Pressed` → `Selecting`).
-    pub(super) anchor_cell: Option<(u16, u16)>,
-    /// Copy-mode snapshot cursor (`Selecting` / `PendingMultiSelect`).
-    pub(super) snapshot_cursor: Option<(u16, u16)>,
-    /// Cell resolved from the live cursor (`Selecting` extend).
-    pub(super) selecting_cell: Option<(u16, u16)>,
+    /// Anchor point resolved from the press origin (`Pressed` → `Selecting`).
+    pub(super) anchor_point: Option<Point>,
+    /// Point resolved from the live cursor (`Selecting` extend).
+    pub(super) selecting_point: Option<Point>,
+    /// Which half of the cell the pointer is over, carried into the local
+    /// selection effects (`Selecting` / `PendingMultiSelect`).
+    pub(super) side: Side,
+    /// The selection granularity to begin a drag with (`Selecting`).
+    pub(super) ty: SelectionType,
     /// `floor(cursor.major / cell.major)` on the divider's major axis (`Resizing`).
     pub(super) resize_pointer_cell: Option<i32>,
-    /// Whether a tmux client is connected this frame. Only the
-    /// `PendingMultiSelect` arm reads it: it leaves the state and emits
-    /// `MultiSelect` only with a client, so a snapshot-present-but-no-client
-    /// frame stays `PendingMultiSelect` and retries (the observer would
-    /// otherwise drop the multi-select+copy with no client).
-    pub(super) client_present: bool,
 }
 
 /// Resolves a left press into the gesture-state transition and effects.
@@ -125,14 +123,11 @@ pub(super) fn decide_press(
 pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<TmuxMouseEffect> {
     let prior = std::mem::replace(state, GestureState::Idle);
     match prior {
-        GestureState::Selecting { pane_id, begun, .. } if begun => {
-            vec![TmuxMouseEffect::CopySelection { pane: pane_id }]
+        GestureState::Selecting { pane, begun, .. } if begun => {
+            vec![TmuxMouseEffect::CopySelection { entity: pane }]
         }
         GestureState::Pressed {
-            pane,
-            pane_id,
-            click_count,
-            ..
+            pane, click_count, ..
         } if click_count >= 2 && ctx.copy_mode => {
             let Some(cell) = ctx.multi_cell else {
                 return Vec::new();
@@ -142,12 +137,7 @@ pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<T
             } else {
                 MultiSelectKind::Line
             };
-            *state = GestureState::PendingMultiSelect {
-                pane,
-                pane_id,
-                cell,
-                kind,
-            };
+            *state = GestureState::PendingMultiSelect { pane, cell, kind };
             Vec::new()
         }
         GestureState::Resizing { resized, .. } if !resized => match ctx.pane_under {
@@ -163,24 +153,19 @@ pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<T
 ///
 /// Per behavior-preservation invariant 8, this never writes the send-confirmed
 /// fields (`begun` / `last_target` on the begin path, `last_sent`, `resized`);
-/// the apply observer commits those on send success. The `PendingMultiSelect`
-/// arm additionally requires `ctx.client_present`: with no client it stays
-/// `PendingMultiSelect` and emits nothing, since the observer would drop the
-/// multi-select+copy with no client (the `Selecting` / `Resizing` arms are
-/// already observer-committed-on-success, so they retry without a client).
+/// the apply observer commits those on success. The `PendingMultiSelect` arm
+/// completes on the very first continuation frame its pane is still alive —
+/// `MultiSelect` triggers local `TerminalSelection*` events only, so it needs
+/// no `TmuxClient`.
 pub(super) fn decide_continuation(
     state: &mut GestureState,
     ctx: ContinuationCtx,
 ) -> Vec<TmuxMouseEffect> {
     match &mut *state {
         GestureState::Pressed {
-            pane,
-            pane_id,
-            origin_phys,
-            ..
+            pane, origin_phys, ..
         } => {
             let pane = *pane;
-            let pane_id = *pane_id;
             let origin_phys = *origin_phys;
             let Some(cursor_phys) = ctx.cursor_phys else {
                 return Vec::new();
@@ -193,12 +178,11 @@ pub(super) fn decide_continuation(
                 return Vec::new();
             }
             if ctx.copy_mode {
-                let Some(anchor) = ctx.anchor_cell else {
+                let Some(anchor) = ctx.anchor_point else {
                     return Vec::new();
                 };
                 *state = GestureState::Selecting {
                     pane,
-                    pane_id,
                     anchor,
                     begun: false,
                     last_target: None,
@@ -209,13 +193,13 @@ pub(super) fn decide_continuation(
             Vec::new()
         }
         GestureState::Selecting {
-            pane_id,
+            pane,
             anchor,
             begun,
             last_target,
             ..
         } => {
-            let pane_id = *pane_id;
+            let pane = *pane;
             let anchor = *anchor;
             let begun = *begun;
             let last_target = *last_target;
@@ -223,53 +207,42 @@ pub(super) fn decide_continuation(
                 *state = GestureState::Idle;
                 return Vec::new();
             }
-            let Some(snapshot_cursor) = ctx.snapshot_cursor else {
-                return Vec::new();
-            };
-            let Some(cell) = ctx.selecting_cell else {
+            let Some(cell) = ctx.selecting_point else {
                 return Vec::new();
             };
             if !begun {
                 vec![TmuxMouseEffect::BeginCopyDrag {
-                    pane: pane_id,
-                    snapshot_cursor,
+                    entity: pane,
                     anchor,
+                    side: ctx.side,
+                    ty: ctx.ty,
                 }]
             } else if Some(cell) != last_target {
                 vec![TmuxMouseEffect::ExtendCopyDrag {
-                    pane: pane_id,
-                    snapshot_cursor,
+                    entity: pane,
                     cell,
+                    side: ctx.side,
                 }]
             } else {
                 Vec::new()
             }
         }
         GestureState::PendingMultiSelect {
-            pane_id,
-            cell,
-            kind,
-            ..
+            pane, cell, kind, ..
         } => {
-            let pane_id = *pane_id;
+            let pane = *pane;
             let cell = *cell;
             let kind = *kind;
             if !ctx.pane_alive {
                 *state = GestureState::Idle;
                 return Vec::new();
             }
-            let Some(snapshot_cursor) = ctx.snapshot_cursor else {
-                return Vec::new();
-            };
-            if !ctx.client_present {
-                return Vec::new();
-            }
             *state = GestureState::Idle;
             vec![TmuxMouseEffect::MultiSelect {
-                pane: pane_id,
+                entity: pane,
                 kind,
-                snapshot_cursor,
                 cell,
+                side: ctx.side,
             }]
         }
         GestureState::Resizing {
@@ -333,6 +306,31 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozma_tty_engine::{Column, Line};
+
+    impl ContinuationCtx {
+        /// All-`false`/`None` `ContinuationCtx`, for tests that only care about
+        /// a handful of fields and want the rest to be inert.
+        fn neutral() -> Self {
+            ContinuationCtx {
+                pane_alive: false,
+                cursor_phys: None,
+                drag_threshold_phys: 0.0,
+                copy_mode: false,
+                anchor_point: None,
+                selecting_point: None,
+                side: Side::Left,
+                ty: SelectionType::Simple,
+                resize_pointer_cell: None,
+            }
+        }
+    }
+
+    /// Builds a `Point` from a `(col, row)` pair, matching `cell_at_pane`'s
+    /// tuple order.
+    fn pt(col: usize, row: i32) -> Point {
+        Point::new(Line(row), Column(col))
+    }
 
     fn pixel_vdiv(pos: f32, span_start: f32, span_end: f32) -> DividerPixelRect {
         DividerPixelRect {
@@ -347,14 +345,7 @@ mod tests {
     fn base_ctx() -> ContinuationCtx {
         ContinuationCtx {
             pane_alive: true,
-            cursor_phys: None,
-            drag_threshold_phys: 0.0,
-            copy_mode: false,
-            anchor_cell: None,
-            snapshot_cursor: None,
-            selecting_cell: None,
-            resize_pointer_cell: None,
-            client_present: true,
+            ..ContinuationCtx::neutral()
         }
     }
 
@@ -489,10 +480,9 @@ mod tests {
     fn release_from_begun_selecting_copies() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            anchor: (3, 4),
+            anchor: pt(3, 4),
             begun: true,
-            last_target: Some((5, 4)),
+            last_target: Some(pt(5, 4)),
         };
         let fx = decide_release(
             &mut st,
@@ -502,7 +492,12 @@ mod tests {
                 pane_under: None,
             },
         );
-        assert_eq!(fx, vec![TmuxMouseEffect::CopySelection { pane: PaneId(7) }]);
+        assert_eq!(
+            fx,
+            vec![TmuxMouseEffect::CopySelection {
+                entity: Entity::from_bits(1)
+            }]
+        );
         assert!(matches!(st, GestureState::Idle));
     }
 
@@ -510,8 +505,7 @@ mod tests {
     fn release_from_unbegun_selecting_does_not_copy() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            anchor: (3, 4),
+            anchor: pt(3, 4),
             begun: false,
             last_target: None,
         };
@@ -539,7 +533,7 @@ mod tests {
             &mut st,
             ReleaseCtx {
                 copy_mode: true,
-                multi_cell: Some((6, 2)),
+                multi_cell: Some(pt(6, 2)),
                 pane_under: None,
             },
         );
@@ -547,10 +541,10 @@ mod tests {
         assert!(matches!(
             st,
             GestureState::PendingMultiSelect {
-                cell: (6, 2),
+                cell,
                 kind: MultiSelectKind::Word,
                 ..
-            }
+            } if cell == pt(6, 2)
         ));
     }
 
@@ -566,7 +560,7 @@ mod tests {
             &mut st,
             ReleaseCtx {
                 copy_mode: true,
-                multi_cell: Some((6, 2)),
+                multi_cell: Some(pt(6, 2)),
                 pane_under: None,
             },
         );
@@ -592,7 +586,7 @@ mod tests {
             &mut st,
             ReleaseCtx {
                 copy_mode: false,
-                multi_cell: Some((6, 2)),
+                multi_cell: Some(pt(6, 2)),
                 pane_under: None,
             },
         );
@@ -696,7 +690,7 @@ mod tests {
                 cursor_phys: Some(Vec2::new(200.0, 200.0)),
                 drag_threshold_phys: 4.0,
                 copy_mode: true,
-                anchor_cell: Some((3, 4)),
+                anchor_point: Some(pt(3, 4)),
                 ..base_ctx()
             },
         );
@@ -704,11 +698,11 @@ mod tests {
         assert!(matches!(
             st,
             GestureState::Selecting {
-                anchor: (3, 4),
+                anchor,
                 begun: false,
                 last_target: None,
                 ..
-            }
+            } if anchor == pt(3, 4)
         ));
     }
 
@@ -747,7 +741,7 @@ mod tests {
                 cursor_phys: Some(Vec2::new(200.0, 200.0)),
                 drag_threshold_phys: 4.0,
                 copy_mode: true,
-                anchor_cell: None,
+                anchor_point: None,
                 ..base_ctx()
             },
         );
@@ -780,8 +774,7 @@ mod tests {
     fn continuation_selecting_first_frame_emits_begin_not_extend() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            anchor: (3, 4),
+            anchor: pt(3, 4),
             begun: false,
             last_target: None,
         };
@@ -790,56 +783,85 @@ mod tests {
             cursor_phys: Some(Vec2::splat(99.0)),
             drag_threshold_phys: 4.0,
             copy_mode: true,
-            anchor_cell: None,
-            snapshot_cursor: Some((0, 0)),
-            selecting_cell: Some((5, 4)),
+            anchor_point: None,
+            selecting_point: Some(pt(5, 4)),
+            side: Side::Left,
+            ty: SelectionType::Simple,
             resize_pointer_cell: None,
-            client_present: true,
         };
         let fx = decide_continuation(&mut st, ctx);
         assert_eq!(
             fx,
             vec![TmuxMouseEffect::BeginCopyDrag {
-                pane: PaneId(7),
-                snapshot_cursor: (0, 0),
-                anchor: (3, 4)
+                entity: Entity::from_bits(1),
+                anchor: pt(3, 4),
+                side: Side::Left,
+                ty: SelectionType::Simple,
             }]
         );
         assert!(matches!(st, GestureState::Selecting { begun: false, .. }));
     }
 
     #[test]
+    fn selecting_first_move_begins_local_drag_with_points() {
+        use ozma_tty_engine::{Point, SelectionType, Side};
+        let mut state = GestureState::Selecting {
+            pane: Entity::from_bits(1),
+            anchor: Point::new(Line(0), Column(2)),
+            begun: false,
+            last_target: None,
+        };
+        let ctx = ContinuationCtx {
+            pane_alive: true,
+            cursor_phys: Some(Vec2::new(80.0, 0.0)),
+            drag_threshold_phys: 0.0,
+            selecting_point: Some(Point::new(Line(0), Column(5))),
+            side: Side::Left,
+            ty: SelectionType::Simple,
+            ..ContinuationCtx::neutral()
+        };
+        let effects = decide_continuation(&mut state, ctx);
+        assert_eq!(
+            effects,
+            vec![TmuxMouseEffect::BeginCopyDrag {
+                entity: Entity::from_bits(1),
+                anchor: Point::new(Line(0), Column(2)),
+                side: Side::Left,
+                ty: SelectionType::Simple,
+            }]
+        );
+    }
+
+    #[test]
     fn continuation_selecting_begun_extends_on_new_cell() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            anchor: (3, 4),
+            anchor: pt(3, 4),
             begun: true,
-            last_target: Some((3, 4)),
+            last_target: Some(pt(3, 4)),
         };
         let fx = decide_continuation(
             &mut st,
             ContinuationCtx {
-                snapshot_cursor: Some((0, 0)),
-                selecting_cell: Some((5, 4)),
+                selecting_point: Some(pt(5, 4)),
                 ..base_ctx()
             },
         );
         assert_eq!(
             fx,
             vec![TmuxMouseEffect::ExtendCopyDrag {
-                pane: PaneId(7),
-                snapshot_cursor: (0, 0),
-                cell: (5, 4)
+                entity: Entity::from_bits(1),
+                cell: pt(5, 4),
+                side: Side::Left,
             }]
         );
         assert!(matches!(
             st,
             GestureState::Selecting {
                 begun: true,
-                last_target: Some((3, 4)),
+                last_target,
                 ..
-            }
+            } if last_target == Some(pt(3, 4))
         ));
     }
 
@@ -847,16 +869,14 @@ mod tests {
     fn continuation_selecting_begun_same_cell_no_effect() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            anchor: (3, 4),
+            anchor: pt(3, 4),
             begun: true,
-            last_target: Some((5, 4)),
+            last_target: Some(pt(5, 4)),
         };
         let fx = decide_continuation(
             &mut st,
             ContinuationCtx {
-                snapshot_cursor: Some((0, 0)),
-                selecting_cell: Some((5, 4)),
+                selecting_point: Some(pt(5, 4)),
                 ..base_ctx()
             },
         );
@@ -865,19 +885,17 @@ mod tests {
     }
 
     #[test]
-    fn continuation_selecting_without_snapshot_stays() {
+    fn continuation_selecting_without_selecting_point_stays() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            anchor: (3, 4),
+            anchor: pt(3, 4),
             begun: false,
             last_target: None,
         };
         let fx = decide_continuation(
             &mut st,
             ContinuationCtx {
-                snapshot_cursor: None,
-                selecting_cell: Some((5, 4)),
+                selecting_point: None,
                 ..base_ctx()
             },
         );
@@ -889,8 +907,7 @@ mod tests {
     fn continuation_selecting_dead_pane_goes_idle() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            anchor: (3, 4),
+            anchor: pt(3, 4),
             begun: false,
             last_target: None,
         };
@@ -898,8 +915,7 @@ mod tests {
             &mut st,
             ContinuationCtx {
                 pane_alive: false,
-                snapshot_cursor: Some((0, 0)),
-                selecting_cell: Some((5, 4)),
+                selecting_point: Some(pt(5, 4)),
                 ..base_ctx()
             },
         );
@@ -911,90 +927,40 @@ mod tests {
     fn continuation_pending_multi_select_emits_then_idle() {
         let mut st = GestureState::PendingMultiSelect {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            cell: (6, 2),
+            cell: pt(6, 2),
             kind: MultiSelectKind::Word,
         };
-        let fx = decide_continuation(
-            &mut st,
-            ContinuationCtx {
-                snapshot_cursor: Some((0, 0)),
-                ..base_ctx()
-            },
-        );
+        let fx = decide_continuation(&mut st, base_ctx());
         assert_eq!(
             fx,
             vec![TmuxMouseEffect::MultiSelect {
-                pane: PaneId(7),
+                entity: Entity::from_bits(1),
                 kind: MultiSelectKind::Word,
-                snapshot_cursor: (0, 0),
-                cell: (6, 2)
+                cell: pt(6, 2),
+                side: Side::Left,
             }]
         );
         assert!(matches!(st, GestureState::Idle));
     }
 
     #[test]
-    fn continuation_pending_multi_select_without_snapshot_stays() {
+    fn continuation_pending_multi_select_completes_without_a_client() {
         let mut st = GestureState::PendingMultiSelect {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            cell: (6, 2),
+            cell: pt(6, 2),
             kind: MultiSelectKind::Word,
         };
-        let fx = decide_continuation(
-            &mut st,
-            ContinuationCtx {
-                snapshot_cursor: None,
-                ..base_ctx()
-            },
-        );
-        assert!(fx.is_empty());
-        assert!(matches!(st, GestureState::PendingMultiSelect { .. }));
-    }
-
-    #[test]
-    fn continuation_pending_multi_select_without_client_stays_then_retries() {
-        let mut st = GestureState::PendingMultiSelect {
-            pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            cell: (6, 2),
-            kind: MultiSelectKind::Word,
-        };
-        let fx = decide_continuation(
-            &mut st,
-            ContinuationCtx {
-                snapshot_cursor: Some((0, 0)),
-                client_present: false,
-                ..base_ctx()
-            },
-        );
-        assert!(
-            fx.is_empty(),
-            "a snapshot-present-but-no-client frame must emit nothing"
-        );
-        assert!(
-            matches!(st, GestureState::PendingMultiSelect { .. }),
-            "with no client the gesture must stay PendingMultiSelect to retry next frame"
-        );
-
-        let fx = decide_continuation(
-            &mut st,
-            ContinuationCtx {
-                snapshot_cursor: Some((0, 0)),
-                client_present: true,
-                ..base_ctx()
-            },
-        );
+        let fx = decide_continuation(&mut st, base_ctx());
         assert_eq!(
             fx,
             vec![TmuxMouseEffect::MultiSelect {
-                pane: PaneId(7),
+                entity: Entity::from_bits(1),
                 kind: MultiSelectKind::Word,
-                snapshot_cursor: (0, 0),
-                cell: (6, 2)
+                cell: pt(6, 2),
+                side: Side::Left,
             }],
-            "once a client is present the retry emits the multi-select"
+            "MultiSelect only triggers local TerminalSelection* events, so it must \
+             complete on the first continuation frame even with no TmuxClient connected"
         );
         assert!(matches!(st, GestureState::Idle));
     }
@@ -1003,15 +969,13 @@ mod tests {
     fn continuation_pending_multi_select_dead_pane_goes_idle() {
         let mut st = GestureState::PendingMultiSelect {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
-            cell: (6, 2),
+            cell: pt(6, 2),
             kind: MultiSelectKind::Word,
         };
         let fx = decide_continuation(
             &mut st,
             ContinuationCtx {
                 pane_alive: false,
-                snapshot_cursor: Some((0, 0)),
                 ..base_ctx()
             },
         );

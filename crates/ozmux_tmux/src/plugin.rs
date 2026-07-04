@@ -7,7 +7,6 @@ use crate::command::{
 };
 use crate::components::{PaneRecaptureState, TmuxPane, TmuxSession};
 use crate::connection::{TmuxAttached, TmuxClient};
-use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, PaneRestore, PendingReply, Slot, version_supports_per_window_refresh,
 };
@@ -20,7 +19,7 @@ use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, RequestPaneReseed, collect_pane_outputs};
 use crate::state_restore::parse_pane_state;
 use bevy::prelude::*;
-use ozma_tty_engine::{AdoptedControlMode, ControlModeReleased, TerminalRawWrite};
+use ozma_tty_engine::{AdoptedControlMode, ControlModeReleased, TerminalHandle, TerminalRawWrite};
 use tmux_control::{ClientEvent, TmuxCommand, TransportEvent};
 use tmux_control_parser::PaneId;
 
@@ -45,12 +44,11 @@ impl Plugin for TmuxSessionPlugin {
     fn build(&self, app: &mut App) {
         register_observers(app);
         app.init_resource::<TmuxProjection>()
-            .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
+            .init_resource::<HistorySeedLines>()
             .add_observer(on_gateway_release)
             .add_message::<PaneOutput>()
             .add_message::<RequestPaneReseed>()
-            .add_message::<CopyModeReply>()
             .add_message::<TmuxClientAttached>()
             .add_systems(
                 Update,
@@ -116,6 +114,18 @@ impl TmuxEventBatch {
     }
 }
 
+/// Lines of tmux history `RestoreDepth::Full` requests via `CapturePaneWithHistory`
+/// on pane attach. Defaults to the engine's real scrollback cap; the binary
+/// overrides it from `[scrollback] seed-lines` at startup.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistorySeedLines(pub usize);
+
+impl Default for HistorySeedLines {
+    fn default() -> Self {
+        Self(TerminalHandle::default_scroll_cap())
+    }
+}
+
 /// Sends the full restore command set once for each newly-projected pane so its
 /// tmux-side state (history+screen, saved primary, terminal modes, pending
 /// output) seeds the first paint. tmux `-CC` does not replay existing content on
@@ -126,8 +136,10 @@ impl TmuxEventBatch {
 fn request_pane_captures(
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
     new_panes: Query<&TmuxPane, Added<TmuxPane>>,
+    seed_lines: Res<HistorySeedLines>,
 ) {
     let (client, enumeration) = &mut *client;
+    let lines = seed_lines.0.min(TerminalHandle::default_scroll_cap());
     for pane in new_panes.iter() {
         request_pane_restore(
             client,
@@ -135,6 +147,7 @@ fn request_pane_captures(
             pane.id,
             pane.dims.height as u16,
             RestoreDepth::Full,
+            lines,
         );
     }
 }
@@ -171,13 +184,16 @@ fn send_restore_command(
 
 /// Sends the restore command set for `pane` and registers a [`PaneRestore`]
 /// buffer; [`apply_reply`] fills the slots and emits the synthesized seed
-/// once every requested reply resolves.
+/// once every requested reply resolves. `lines` is only read on the
+/// `RestoreDepth::Full` branch (the history-bearing capture); `Light` callers
+/// may pass any value.
 fn request_pane_restore(
     client: &mut TmuxClient,
     enumeration: &mut EnumerationState,
     pane: PaneId,
     pane_height: u16,
     depth: RestoreDepth,
+    lines: usize,
 ) {
     let mut buffer = match depth {
         RestoreDepth::Full => PaneRestore::new_full(pane_height),
@@ -187,7 +203,7 @@ fn request_pane_restore(
         RestoreDepth::Full => send_restore_command(
             client,
             enumeration,
-            CapturePaneWithHistory { id: pane },
+            CapturePaneWithHistory { id: pane, lines },
             PendingReply::RestoreBase { pane },
         ),
         RestoreDepth::Light => send_restore_command(
@@ -289,6 +305,7 @@ fn recapture_settled_panes(
                 pane.id,
                 pane.dims.height as u16,
                 RestoreDepth::Light,
+                TerminalHandle::default_scroll_cap(),
             );
         }
     }
@@ -326,6 +343,7 @@ fn handle_pane_reseed_requests(
             req.pane,
             pane_height,
             RestoreDepth::Light,
+            TerminalHandle::default_scroll_cap(),
         );
     }
 }
@@ -471,14 +489,11 @@ fn flush_tmux_outgoing(mut commands: Commands, mut client: Single<(Entity, &mut 
 
 /// Applies this frame's command replies and notifications to the world: drains
 /// each reply to what it answers, runs the active-pane→aggressive-resize
-/// follow-up, surfaces copy-mode replies, and triggers the projection events the
-/// observers consume.
+/// follow-up, and triggers the projection events the observers consume.
 fn apply_tmux_replies(
     mut commands: Commands,
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
-    mut copy_queries: ResMut<CopyModeQueries>,
     mut pane_output: MessageWriter<PaneOutput>,
-    mut copy_replies: MessageWriter<CopyModeReply>,
     batch: Res<TmuxEventBatch>,
 ) {
     let (client, enumeration) = &mut *client;
@@ -504,9 +519,6 @@ fn apply_tmux_replies(
             }
             TransportEvent::Closed { .. } => {}
         }
-    }
-    for reply in drain_copy_replies(&mut copy_queries, events) {
-        copy_replies.write(reply);
     }
 }
 
@@ -597,7 +609,17 @@ fn apply_reply(
         PendingReply::RestoreState { pane } => {
             let slot = match first_reply_line(ok, output, "pane-state") {
                 Some(line) => Slot::Ok(parse_pane_state(&line)),
-                None => Slot::Failed,
+                None => {
+                    // NOTE: a failed state query silently degrades an alt-screen
+                    // pane to a primary-screen restore (`restore_to_bytes` reads
+                    // `alternate_on` off this slot) — worth a warning since the
+                    // mirror can then desync from tmux's real mouse-routing mode.
+                    tracing::warn!(
+                        pane = pane.0,
+                        "pane-state query failed, restore may degrade"
+                    );
+                    Slot::Failed
+                }
             };
             fill_restore_slot(enumeration, pane_output, pane, slot, |r, s| r.state = s);
         }
@@ -671,6 +693,14 @@ fn on_gateway_release(ev: On<ControlModeReleased>, mut commands: Commands) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_seed_lines_defaults_to_engine_cap() {
+        assert_eq!(
+            HistorySeedLines::default().0,
+            TerminalHandle::default_scroll_cap()
+        );
+    }
 
     #[test]
     fn first_protocol_event_marks_attached_once() {
@@ -942,9 +972,9 @@ mod tests {
             MessageWriter<PaneOutput>,
         )> = SystemState::new(app.world_mut());
         {
-            let (mut commands, mut client_query, mut pane_output) =
+            let (mut commands, mut client_q, mut pane_output) =
                 system_state.get_mut(app.world_mut());
-            let (mut client, mut enumeration) = client_query
+            let (mut client, mut enumeration) = client_q
                 .single_mut()
                 .expect("gateway entity must carry TmuxClient + EnumerationState");
             apply_reply(
@@ -1017,9 +1047,9 @@ mod tests {
             MessageWriter<PaneOutput>,
         )> = SystemState::new(app.world_mut());
         {
-            let (mut commands, mut client_query, mut pane_output) =
+            let (mut commands, mut client_q, mut pane_output) =
                 system_state.get_mut(app.world_mut());
-            let (mut client, mut enumeration) = client_query
+            let (mut client, mut enumeration) = client_q
                 .single_mut()
                 .expect("gateway entity must carry TmuxClient + EnumerationState");
             // Apply the four replies in a shuffled order to prove ordering does
@@ -1116,9 +1146,9 @@ mod tests {
         .to_vec();
 
         // Build the app with the full projection pipeline registered: the plugin
-        // inits TmuxProjection / CopyModeQueries / TmuxEventBatch, the
-        // PaneOutput / CopyModeReply messages, the projection observers, plus
-        // the chained drain systems (gated on any_with_component::<TmuxClient>).
+        // inits TmuxProjection / TmuxEventBatch, the PaneOutput message, the
+        // projection observers, plus the chained drain systems (gated on
+        // any_with_component::<TmuxClient>).
         // EnumerationState is auto-required by TmuxClient.
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);

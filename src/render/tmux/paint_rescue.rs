@@ -64,90 +64,14 @@ pub(super) struct PaintRescuePlugin;
 
 impl Plugin for PaintRescuePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_observer(repaint_pane_from_mirror).add_systems(
             Update,
             (attach_rescue_state, rescue_unpainted_panes)
                 .chain()
                 .after(TmuxProjectionSet)
                 .before(TmuxLayoutSet)
                 .in_set(TmuxActiveSet),
-        )
-        .add_observer(repaint_pane_from_mirror);
-    }
-}
-
-/// Attaches the per-pane rescue state components once per pane. `TmuxPane` is
-/// defined in `ozmux_tmux`, so the binary cannot `#[require]` these onto it; the
-/// `Without<StructuralReseedState>` filter makes this run exactly once per pane
-/// (both components are always inserted together).
-fn attach_rescue_state(
-    mut commands: Commands,
-    panes: Query<Entity, (With<TmuxPane>, Without<StructuralReseedState>)>,
-) {
-    for entity in panes.iter() {
-        commands.entity(entity).insert((
-            StructuralReseedState::default(),
-            BlankRecoveryState::default(),
-        ));
-    }
-}
-
-/// Requests a tmux re-seed for each non-copy-mode pane whose grid is
-/// structurally unpainted (see [`grid_needs_full_seed`]) once the state has
-/// held for [`RESEED_DEBOUNCE_FRAMES`], then re-requests every
-/// [`RESEED_INFLIGHT_TIMEOUT`] frames until the grid paints.
-/// Copy-mode panes are skipped — they paint via the separate `CopyRenderHandle`.
-///
-/// Separately, recovers a grid that went *blank* (structurally fine) while its
-/// live mirror still holds content: it triggers [`RepaintLiveMirror`], whose
-/// observer repaints from the authoritative mirror. The gather query stays
-/// read-only on the handle; the `&mut TerminalHandle` write lives in the observer.
-fn rescue_unpainted_panes(
-    mut commands: Commands,
-    mut reseed_mw: MessageWriter<RequestPaneReseed>,
-    mut panes: Query<
-        (
-            Entity,
-            &TmuxPane,
-            &TerminalHandle,
-            &TerminalGrid,
-            &mut StructuralReseedState,
-            &mut BlankRecoveryState,
-        ),
-        Without<CopyModeState>,
-    >,
-) {
-    for (entity, pane, handle, grid, mut reseed_state, mut blank_state) in panes.iter_mut() {
-        let (h_cols, h_rows, _) = handle.read_geometry();
-        let needs = grid_needs_full_seed(grid.cols, grid.rows, grid.cells.len(), h_cols, h_rows);
-        // NOTE: run the deciders on a local copy and write back through the
-        // `Mut` only on a real change. A bare `&mut`/`*state = ...` every frame
-        // would mark these components `Changed` for every pane every frame
-        // (steady state included), defeating any future `Changed`/`run_if`
-        // consumer — the repo change-detection rule. `*state` reads via `Deref`
-        // (no change tick); the guarded assignment is the only `DerefMut`.
-        let mut next_reseed = *reseed_state;
-        if reseed_decision(&mut next_reseed, needs) {
-            reseed_mw.write(RequestPaneReseed { pane: pane.id });
-        }
-        if *reseed_state != next_reseed {
-            *reseed_state = next_reseed;
-        }
-        if needs {
-            // Structural reseed owns this pane; reopen blank-recovery so it
-            // re-evaluates once the grid is structurally repainted.
-            if *blank_state != BlankRecoveryState::default() {
-                *blank_state = BlankRecoveryState::default();
-            }
-            continue;
-        }
-        let mut next_blank = *blank_state;
-        if evaluate_blank_recovery(&mut next_blank, grid, handle) {
-            commands.trigger(RepaintLiveMirror { entity });
-        }
-        if *blank_state != next_blank {
-            *blank_state = next_blank;
-        }
+        );
     }
 }
 
@@ -253,6 +177,84 @@ fn evaluate_blank_recovery(
         true
     } else {
         false
+    }
+}
+
+/// Requests a tmux re-seed for each non-copy-mode pane whose grid is
+/// structurally unpainted (see [`grid_needs_full_seed`]) once the state has
+/// held for [`RESEED_DEBOUNCE_FRAMES`], then re-requests every
+/// [`RESEED_INFLIGHT_TIMEOUT`] frames until the grid paints. Copy-mode panes
+/// are skipped — the local vi applier (`crate::action::vi::applier`) is
+/// already scrolling this same `TerminalHandle`/`TerminalGrid`, and a
+/// structural reseed's `capture-pane` would recapture the live tail and
+/// clobber that scrolled view.
+///
+/// Separately, recovers a grid that went *blank* (structurally fine) while its
+/// live mirror still holds content: it triggers [`RepaintLiveMirror`], whose
+/// observer repaints from the authoritative mirror. The gather query stays
+/// read-only on the handle; the `&mut TerminalHandle` write lives in the observer.
+fn rescue_unpainted_panes(
+    mut commands: Commands,
+    mut reseed: MessageWriter<RequestPaneReseed>,
+    mut panes: Query<
+        (
+            Entity,
+            &TmuxPane,
+            &TerminalHandle,
+            &TerminalGrid,
+            &mut StructuralReseedState,
+            &mut BlankRecoveryState,
+        ),
+        Without<CopyModeState>,
+    >,
+) {
+    for (entity, pane, handle, grid, mut reseed_state, mut blank_state) in panes.iter_mut() {
+        let (h_cols, h_rows, _) = handle.read_geometry();
+        let needs = grid_needs_full_seed(grid.cols, grid.rows, grid.cells.len(), h_cols, h_rows);
+        // NOTE: run the deciders on a local copy and write back through the
+        // `Mut` only on a real change. A bare `&mut`/`*state = ...` every frame
+        // would mark these components `Changed` for every pane every frame
+        // (steady state included), defeating any future `Changed`/`run_if`
+        // consumer — the repo change-detection rule. `*state` reads via `Deref`
+        // (no change tick); the guarded assignment is the only `DerefMut`.
+        let mut next_reseed = *reseed_state;
+        if reseed_decision(&mut next_reseed, needs) {
+            reseed.write(RequestPaneReseed { pane: pane.id });
+        }
+        if *reseed_state != next_reseed {
+            *reseed_state = next_reseed;
+        }
+        if needs {
+            // Structural reseed owns this pane; reopen blank-recovery so it
+            // re-evaluates once the grid is structurally repainted.
+            if *blank_state != BlankRecoveryState::default() {
+                *blank_state = BlankRecoveryState::default();
+            }
+            continue;
+        }
+        let mut next_blank = *blank_state;
+        if evaluate_blank_recovery(&mut next_blank, grid, handle) {
+            commands.trigger(RepaintLiveMirror { entity });
+        }
+        if *blank_state != next_blank {
+            *blank_state = next_blank;
+        }
+    }
+}
+
+/// Attaches the per-pane rescue state components once per pane. `TmuxPane` is
+/// defined in `ozmux_tmux`, so the binary cannot `#[require]` these onto it; the
+/// `Without<StructuralReseedState>` filter makes this run exactly once per pane
+/// (both components are always inserted together).
+fn attach_rescue_state(
+    mut commands: Commands,
+    panes: Query<Entity, (With<TmuxPane>, Without<StructuralReseedState>)>,
+) {
+    for entity in panes.iter() {
+        commands.entity(entity).insert((
+            StructuralReseedState::default(),
+            BlankRecoveryState::default(),
+        ));
     }
 }
 

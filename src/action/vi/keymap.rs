@@ -4,8 +4,7 @@
 //! copy-mode key gathers.
 
 use crate::action::vi::{
-    ViExitRequest, ViMotionRequest, ViPromptRequest, ViScrollRequest, ViSearchStepRequest,
-    ViSelectionToggleRequest, ViYankRequest,
+    ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
 use crate::configs::OzmuxConfigsResource;
 use bevy::input::keyboard::{Key, KeyCode};
@@ -13,7 +12,7 @@ use bevy::prelude::*;
 use ozma_tty_engine::{SelectionType, ViMotion};
 use ozmux_configs::copy_mode::{
     CopyModeAction, CopyModeBaseKey, CopyModeKey, CopyModeNamedKey, CopyMotion, CopyPromptDir,
-    CopySearchStep, CopySelection,
+    CopySelection,
 };
 use ozmux_configs::shortcuts::Modifiers;
 use ozmux_tmux::PromptKind;
@@ -91,14 +90,10 @@ pub(crate) fn trigger_copy_mode_action(
         }),
         CopyModeAction::Yank => commands.trigger(ViYankRequest { entity }),
         CopyModeAction::Exit => commands.trigger(ViExitRequest { entity }),
-        CopyModeAction::Prompt(p) => commands.trigger(ViPromptRequest {
-            entity,
-            kind: prompt_kind(p),
-        }),
-        CopyModeAction::SearchStep(step) => commands.trigger(ViSearchStepRequest {
-            entity,
-            forward: step == CopySearchStep::Next,
-        }),
+        // TODO: wire to the local search applier once it exists (v1 defers
+        // local copy-mode search); until then these actions are swallowed.
+        CopyModeAction::Prompt(_) => {}
+        CopyModeAction::SearchStep(_) => {}
     }
 }
 
@@ -239,6 +234,10 @@ fn selection_type(selection: CopySelection) -> SelectionType {
     }
 }
 
+#[expect(
+    dead_code,
+    reason = "wired again when local copy-mode search ships; kept so the conversion is ready for CopyModeAction::Prompt's reconnection"
+)]
 fn prompt_kind(dir: CopyPromptDir) -> PromptKind {
     match dir {
         CopyPromptDir::SearchForward => PromptKind::SearchForward,
@@ -253,7 +252,8 @@ fn prompt_kind(dir: CopyPromptDir) -> PromptKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_configs::copy_mode::{CopyModeConfig, CopyScroll};
+    use crate::action::vi::{ViPromptRequest, ViSearchStepRequest};
+    use ozmux_configs::copy_mode::{CopyModeConfig, CopyScroll, CopySearchStep};
 
     fn resolved_default() -> ResolvedCopyModeKeys {
         let cfg = CopyModeConfig::default();
@@ -362,6 +362,68 @@ mod tests {
                 }
             ),
             Some(CopyModeAction::SearchStep(CopySearchStep::Previous))
+        );
+    }
+
+    #[test]
+    fn prompt_action_is_inert_for_v1() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_configs::copy_mode::{CopyModeAction, CopyPromptDir};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_write = fired.clone();
+        app.add_observer(move |_ev: On<ViPromptRequest>| {
+            fired_write.store(true, Ordering::SeqCst);
+        });
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                trigger_copy_mode_action(
+                    &mut commands,
+                    entity,
+                    CopyModeAction::Prompt(CopyPromptDir::SearchForward),
+                );
+            })
+            .unwrap();
+        app.update();
+        assert!(
+            !fired.load(Ordering::SeqCst),
+            "Prompt action must be inert in v1"
+        );
+    }
+
+    #[test]
+    fn search_step_action_is_inert_for_v1() {
+        use bevy::ecs::system::RunSystemOnce;
+        use ozmux_configs::copy_mode::{CopyModeAction, CopySearchStep};
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        let fired = Arc::new(AtomicBool::new(false));
+        let fired_write = fired.clone();
+        app.add_observer(move |_ev: On<ViSearchStepRequest>| {
+            fired_write.store(true, Ordering::SeqCst);
+        });
+        let entity = app.world_mut().spawn_empty().id();
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                trigger_copy_mode_action(
+                    &mut commands,
+                    entity,
+                    CopyModeAction::SearchStep(CopySearchStep::Next),
+                );
+            })
+            .unwrap();
+        app.update();
+        assert!(
+            !fired.load(Ordering::SeqCst),
+            "SearchStep action must be inert in v1"
         );
     }
 }

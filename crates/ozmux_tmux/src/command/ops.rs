@@ -153,17 +153,6 @@ impl TmuxCommand for ZoomPane {
     }
 }
 
-/// `copy-mode -t %<id>` — puts the target pane into tmux copy mode.
-pub struct EnterCopyMode {
-    /// Target pane id.
-    pub pane: PaneId,
-}
-impl TmuxCommand for EnterCopyMode {
-    fn into_raw_command(self) -> String {
-        format!("copy-mode -t %{}", self.pane.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,14 +234,10 @@ mod tests {
     }
 
     #[test]
-    fn zoom_and_copy_mode_target_pane() {
+    fn zoom_pane_targets_pane() {
         assert_eq!(
             ZoomPane { pane: PaneId(4) }.into_raw_command(),
             "resize-pane -Z -t %4"
-        );
-        assert_eq!(
-            EnterCopyMode { pane: PaneId(4) }.into_raw_command(),
-            "copy-mode -t %4"
         );
     }
 }

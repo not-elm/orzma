@@ -4,7 +4,6 @@
 
 use crate::enumerate::{LIST_WINDOWS_FORMAT, WINDOW_FLAGS_SUBSCRIPTION};
 use crate::state_restore::PANE_STATE_FORMAT;
-use ozma_tty_engine::TerminalHandle;
 use tmux_control::TmuxCommand;
 use tmux_control_parser::{PaneId, WindowId};
 
@@ -59,18 +58,15 @@ impl TmuxCommand for CapturePane {
     }
 }
 
-/// `capture-pane -peqJ -S -<cap>` — the pane's base grid: primary history
+/// `capture-pane -peqJ -S -<lines>` — the pane's base grid: primary history
 /// plus the CURRENT visible screen (the alt screen while alternate is on).
 pub(crate) struct CapturePaneWithHistory {
     pub id: PaneId,
+    pub lines: usize,
 }
 impl TmuxCommand for CapturePaneWithHistory {
     fn into_raw_command(self) -> String {
-        format!(
-            "capture-pane -peqJ -t %{} -S -{}",
-            self.id.0,
-            TerminalHandle::default_scroll_cap()
-        )
+        format!("capture-pane -peqJ -t %{} -S -{}", self.id.0, self.lines)
     }
 }
 
@@ -85,9 +81,9 @@ impl TmuxCommand for CapturePaneSavedPrimary {
     }
 }
 
-/// `display-message -p` over [`PANE_STATE_FORMAT`] (positional message, as
-/// `CopyStateQuery` does — display-message has no `-F` flag) — one pane's
-/// terminal modes, cursor, scroll region, and tab stops.
+/// `display-message -p` over [`PANE_STATE_FORMAT`] (positional message —
+/// display-message has no `-F` flag) — one pane's terminal modes, cursor,
+/// scroll region, and tab stops.
 pub(crate) struct PaneStateQuery {
     pub id: PaneId,
 }
@@ -174,15 +170,13 @@ mod tests {
     }
 
     #[test]
-    fn capture_with_history_reaches_mirror_scroll_cap() {
-        let cmd = CapturePaneWithHistory { id: PaneId(5) }.into_raw_command();
-        assert_eq!(
-            cmd,
-            format!(
-                "capture-pane -peqJ -t %5 -S -{}",
-                TerminalHandle::default_scroll_cap()
-            )
-        );
+    fn capture_pane_with_history_uses_the_given_line_count() {
+        let cmd = CapturePaneWithHistory {
+            id: PaneId(5),
+            lines: 2000,
+        }
+        .into_raw_command();
+        assert_eq!(cmd, "capture-pane -peqJ -t %5 -S -2000");
     }
 
     #[test]
