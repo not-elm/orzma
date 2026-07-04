@@ -195,10 +195,10 @@ fn app_shortcut_handler(
     if in_copy_mode && matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
         *leader_phase = LeaderPhase::Idle;
     }
-    for ev in events.read() {
-        if ev.state != ButtonState::Pressed {
-            continue;
-        }
+    for ev in events
+        .read()
+        .filter(|e| matches!(e.state, ButtonState::Pressed))
+    {
         if webview_focused && shortcuts.is_release_webview_focus(ev.key_code, mods) {
             clear_leader_phase(&mut leader_phase);
             focused_webview.0 = None;
