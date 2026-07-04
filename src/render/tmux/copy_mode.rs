@@ -34,23 +34,23 @@ pub(super) struct CopyModePlugin;
 
 impl Plugin for CopyModePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CopyRefreshState>();
-        app.add_observer(on_copy_mode_exit);
-        app.add_systems(
-            Update,
-            (
-                issue_copy_state.run_if(any_pane_in_copy_mode),
-                consume_copy_reply.run_if(on_message::<CopyModeReply>),
-                // NOTE: .after(consume_copy_reply) is load-bearing — the ApplyDeferred
-                // between them flushes the capture FrameSnapshot (which clears
-                // vi_cursor/selection) before this system re-asserts the overlay.
-                apply_copy_overlay
-                    .run_if(any_with_component::<CopyModeSnapshot>)
-                    .after(consume_copy_reply),
+        app.init_resource::<CopyRefreshState>()
+            .add_systems(
+                Update,
+                (
+                    issue_copy_state.run_if(any_pane_in_copy_mode),
+                    consume_copy_reply.run_if(on_message::<CopyModeReply>),
+                    // NOTE: .after(consume_copy_reply) is load-bearing — the ApplyDeferred
+                    // between them flushes the capture FrameSnapshot (which clears
+                    // vi_cursor/selection) before this system re-asserts the overlay.
+                    apply_copy_overlay
+                        .run_if(any_with_component::<CopyModeSnapshot>)
+                        .after(consume_copy_reply),
+                )
+                    .after(TmuxProjectionSet)
+                    .in_set(TmuxActiveSet),
             )
-                .after(TmuxProjectionSet)
-                .in_set(TmuxActiveSet),
-        );
+            .add_observer(on_copy_mode_exit);
     }
 }
 
@@ -122,38 +122,6 @@ struct CopyRenderHandle(TerminalHandle);
 /// system so it does not run (or acquire its data) when copy mode is inactive.
 fn any_pane_in_copy_mode(copy_modes: Query<(), With<CopyModeState>>) -> bool {
     !copy_modes.is_empty()
-}
-
-/// Observer for `On<Remove, CopyModeState>`. Fires for every copy-mode exit —
-/// `pane_in_mode==0`, an input-driven `ViExitRequest` (the `[copy-mode]`
-/// `exit` action), and despawn (e.g. `TmuxConnectionReset`). Forces a FULL
-/// repaint of the pane's live handle so
-/// the rendered grid switches back from the captured scrolled view to live
-/// content (`route_tmux_output` only emits on new `%output`, so an idle pane
-/// would otherwise stay frozen on capture content, and a later delta would
-/// paint over it), drops the scratch `CopyRenderHandle`, and prunes this pane's
-/// refresh bookkeeping (otherwise a stale `PaneId` wedges `issue_copy_state`'s
-/// coalescing guard and blocks re-entry capture at the same scroll position).
-fn on_copy_mode_exit(
-    ev: On<Remove, CopyModeState>,
-    mut commands: Commands,
-    mut refresh: ResMut<CopyRefreshState>,
-    mut live_handles: Query<&mut TerminalHandle>,
-    panes: Query<&TmuxPane>,
-) {
-    let entity = ev.entity;
-    if let Ok(mut handle) = live_handles.get_mut(entity) {
-        handle.repaint_full(&mut commands, entity);
-    }
-    commands
-        .entity(entity)
-        .remove::<CopyRenderHandle>()
-        .remove::<CopyModeSnapshot>();
-    if let Ok(pane) = panes.get(entity) {
-        refresh.state_in_flight.remove(&pane.id);
-        refresh.last_scroll.remove(&pane.id);
-        refresh.capture_in_flight.remove(&pane.id);
-    }
 }
 
 /// Issues one `display-message` copy-state query per in-copy-mode pane, coalesced
@@ -266,6 +234,38 @@ fn consume_copy_reply(
                 }
             }
         }
+    }
+}
+
+/// Observer for `On<Remove, CopyModeState>`. Fires for every copy-mode exit —
+/// `pane_in_mode==0`, an input-driven `ViExitRequest` (the `[copy-mode]`
+/// `exit` action), and despawn (e.g. `TmuxConnectionReset`). Forces a FULL
+/// repaint of the pane's live handle so
+/// the rendered grid switches back from the captured scrolled view to live
+/// content (`route_tmux_output` only emits on new `%output`, so an idle pane
+/// would otherwise stay frozen on capture content, and a later delta would
+/// paint over it), drops the scratch `CopyRenderHandle`, and prunes this pane's
+/// refresh bookkeeping (otherwise a stale `PaneId` wedges `issue_copy_state`'s
+/// coalescing guard and blocks re-entry capture at the same scroll position).
+fn on_copy_mode_exit(
+    ev: On<Remove, CopyModeState>,
+    mut commands: Commands,
+    mut refresh: ResMut<CopyRefreshState>,
+    mut live_handles: Query<&mut TerminalHandle>,
+    panes: Query<&TmuxPane>,
+) {
+    let entity = ev.entity;
+    if let Ok(mut handle) = live_handles.get_mut(entity) {
+        handle.repaint_full(&mut commands, entity);
+    }
+    commands
+        .entity(entity)
+        .remove::<CopyRenderHandle>()
+        .remove::<CopyModeSnapshot>();
+    if let Ok(pane) = panes.get(entity) {
+        refresh.state_in_flight.remove(&pane.id);
+        refresh.last_scroll.remove(&pane.id);
+        refresh.capture_in_flight.remove(&pane.id);
     }
 }
 
