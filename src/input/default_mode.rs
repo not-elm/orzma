@@ -232,11 +232,11 @@ fn apply_default_shortcuts(
             KeyEffect::Action { .. } => {}
             KeyEffect::CopyMode(action) => trigger_copy_mode_action(&mut commands, entity, action),
             KeyEffect::Type { logical, key_code } => {
-                // NOTE: drop the release-webview-focus chord before typing — in
-                // Default it was a reserved chord withheld from the PTY by the
-                // old `dispatch_input`; it is the one direct chord the decider
-                // emits as `Type` (all others resolve to `Action`). tmux
-                // forwards it instead (Task 6), so the drop belongs here.
+                // NOTE: a chord withheld from the PTY must never be typed. The
+                // release-webview-focus chord is the one direct chord the
+                // decider emits as `Type` (all others resolve to `Action`), so
+                // the applier drops it here rather than forward it to the
+                // terminal; tmux forwards it instead.
                 if !shortcuts.is_release_webview_focus(key_code, mods)
                     && let Some(key) = bevy_key_to_terminal_key(&logical)
                 {
@@ -541,6 +541,12 @@ mod tests {
             .press(KeyCode::SuperLeft);
     }
 
+    fn hold_ctrl_shift(app: &mut App) {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::ControlLeft);
+        keys.press(KeyCode::ShiftLeft);
+    }
+
     fn send_key(app: &mut App, key_code: KeyCode, logical: Key) {
         app.world_mut().write_message(KeyboardInput {
             key_code,
@@ -678,6 +684,48 @@ mod tests {
             app.world().resource::<Captured>().paste,
             1,
             "a leader-scoped paste must fire even in copy mode"
+        );
+    }
+
+    #[test]
+    fn release_webview_chord_is_not_typed() {
+        let (mut app, _term) = default_dispatch_app(test_shortcuts_with_direct_chord(
+            KeyCode::Escape,
+            Modifiers {
+                ctrl: true,
+                shift: true,
+                alt: false,
+                meta: false,
+            },
+            ShortcutAction::ReleaseWebviewFocus,
+        ));
+        hold_ctrl_shift(&mut app);
+        send_key(&mut app, KeyCode::Escape, Key::Escape);
+        app.update();
+        let c = app.world().resource::<Captured>();
+        assert_eq!(
+            (c.copy_mode, c.paste, c.keys.len(), c.quit),
+            (0, 0, 0, 0),
+            "with no webview focused the release chord (Ctrl+Shift+Escape) must be dropped by \
+             the applier, never typed into the PTY as Escape"
+        );
+    }
+
+    #[test]
+    fn enter_copy_mode_fires_even_when_already_in_copy_mode() {
+        let (mut app, term) = default_dispatch_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyS,
+            meta_mods(),
+            ShortcutAction::EnterCopyMode,
+        ));
+        app.world_mut().entity_mut(term).insert(CopyModeState);
+        hold_meta(&mut app);
+        send_key(&mut app, KeyCode::KeyS, Key::Character("s".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().copy_mode,
+            1,
+            "EnterCopyMode must fire unconditionally, even when copy mode is already active"
         );
     }
 }
