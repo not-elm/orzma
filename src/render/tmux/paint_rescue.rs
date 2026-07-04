@@ -64,14 +64,15 @@ pub(super) struct PaintRescuePlugin;
 
 impl Plugin for PaintRescuePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(repaint_pane_from_mirror).add_systems(
+        app.add_systems(
             Update,
             (attach_rescue_state, rescue_unpainted_panes)
                 .chain()
                 .after(TmuxProjectionSet)
                 .before(TmuxLayoutSet)
                 .in_set(TmuxActiveSet),
-        );
+        )
+        .add_observer(repaint_pane_from_mirror);
     }
 }
 

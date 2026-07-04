@@ -63,6 +63,7 @@ pub struct CopyStateQuery {
     /// The target pane.
     pub pane: PaneId,
 }
+
 impl TmuxCommand for CopyStateQuery {
     fn into_raw_command(self) -> String {
         format!(
