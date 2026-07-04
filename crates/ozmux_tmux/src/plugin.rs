@@ -20,7 +20,7 @@ use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, RequestPaneReseed, collect_pane_outputs};
 use crate::state_restore::parse_pane_state;
 use bevy::prelude::*;
-use ozma_tty_engine::{AdoptedControlMode, ControlModeReleased, TerminalRawWrite};
+use ozma_tty_engine::{AdoptedControlMode, ControlModeReleased, TerminalHandle, TerminalRawWrite};
 use tmux_control::{ClientEvent, TmuxCommand, TransportEvent};
 use tmux_control_parser::PaneId;
 
@@ -47,6 +47,7 @@ impl Plugin for TmuxSessionPlugin {
         app.init_resource::<TmuxProjection>()
             .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
+            .init_resource::<HistorySeedLines>()
             .add_observer(on_gateway_release)
             .add_message::<PaneOutput>()
             .add_message::<RequestPaneReseed>()
@@ -116,6 +117,18 @@ impl TmuxEventBatch {
     }
 }
 
+/// Lines of tmux history `RestoreDepth::Full` requests via `CapturePaneWithHistory`
+/// on pane attach. Defaults to the engine's real scrollback cap; the binary
+/// overrides it from `[scrollback] seed-lines` at startup.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistorySeedLines(pub usize);
+
+impl Default for HistorySeedLines {
+    fn default() -> Self {
+        Self(TerminalHandle::default_scroll_cap())
+    }
+}
+
 /// Sends the full restore command set once for each newly-projected pane so its
 /// tmux-side state (history+screen, saved primary, terminal modes, pending
 /// output) seeds the first paint. tmux `-CC` does not replay existing content on
@@ -126,8 +139,10 @@ impl TmuxEventBatch {
 fn request_pane_captures(
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
     new_panes: Query<&TmuxPane, Added<TmuxPane>>,
+    seed_lines: Res<HistorySeedLines>,
 ) {
     let (client, enumeration) = &mut *client;
+    let lines = seed_lines.0.min(TerminalHandle::default_scroll_cap());
     for pane in new_panes.iter() {
         request_pane_restore(
             client,
@@ -135,6 +150,7 @@ fn request_pane_captures(
             pane.id,
             pane.dims.height as u16,
             RestoreDepth::Full,
+            lines,
         );
     }
 }
@@ -171,13 +187,16 @@ fn send_restore_command(
 
 /// Sends the restore command set for `pane` and registers a [`PaneRestore`]
 /// buffer; [`apply_reply`] fills the slots and emits the synthesized seed
-/// once every requested reply resolves.
+/// once every requested reply resolves. `lines` is only read on the
+/// `RestoreDepth::Full` branch (the history-bearing capture); `Light` callers
+/// may pass any value.
 fn request_pane_restore(
     client: &mut TmuxClient,
     enumeration: &mut EnumerationState,
     pane: PaneId,
     pane_height: u16,
     depth: RestoreDepth,
+    lines: usize,
 ) {
     let mut buffer = match depth {
         RestoreDepth::Full => PaneRestore::new_full(pane_height),
@@ -187,7 +206,7 @@ fn request_pane_restore(
         RestoreDepth::Full => send_restore_command(
             client,
             enumeration,
-            CapturePaneWithHistory { id: pane },
+            CapturePaneWithHistory { id: pane, lines },
             PendingReply::RestoreBase { pane },
         ),
         RestoreDepth::Light => send_restore_command(
@@ -289,6 +308,7 @@ fn recapture_settled_panes(
                 pane.id,
                 pane.dims.height as u16,
                 RestoreDepth::Light,
+                TerminalHandle::default_scroll_cap(),
             );
         }
     }
@@ -324,6 +344,7 @@ fn handle_pane_reseed_requests(
             req.pane,
             pane_height,
             RestoreDepth::Light,
+            TerminalHandle::default_scroll_cap(),
         );
     }
 }
@@ -657,6 +678,14 @@ fn on_gateway_release(ev: On<ControlModeReleased>, mut commands: Commands) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_seed_lines_defaults_to_engine_cap() {
+        assert_eq!(
+            HistorySeedLines::default().0,
+            TerminalHandle::default_scroll_cap()
+        );
+    }
 
     #[test]
     fn first_protocol_event_marks_attached_once() {

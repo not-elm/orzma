@@ -6,10 +6,11 @@ mod locale;
 mod webview_tokens;
 
 use crate::app_mode::AppMode;
+use crate::configs::OzmuxConfigsResource;
 use adopt::AdoptPlugin;
 use bevy::prelude::*;
 use locale::TmuxLocalePlugin;
-use ozmux_tmux::{TmuxClient, TmuxConnectionClosed, TmuxSessionPlugin};
+use ozmux_tmux::{HistorySeedLines, TmuxClient, TmuxConnectionClosed, TmuxSessionPlugin};
 use webview_tokens::WebviewTokensPlugin;
 
 /// Bevy plugin aggregating the tmux connection-lifecycle sub-plugins.
@@ -17,13 +18,27 @@ pub(crate) struct TmuxLifecyclePlugin;
 
 impl Plugin for TmuxLifecyclePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_tmux_connection_closed).add_plugins((
-            TmuxSessionPlugin,
-            AdoptPlugin,
-            TmuxLocalePlugin,
-            WebviewTokensPlugin,
-        ));
+        app.add_observer(on_tmux_connection_closed)
+            .add_systems(Startup, sync_history_seed_lines)
+            .add_plugins((
+                TmuxSessionPlugin,
+                AdoptPlugin,
+                TmuxLocalePlugin,
+                WebviewTokensPlugin,
+            ));
     }
+}
+
+/// Copies `[scrollback] seed-lines` into [`HistorySeedLines`] once at startup,
+/// so `ozmux_tmux`'s attach-time history capture uses the configured depth
+/// instead of its resource default (the engine's max cap). Safe regardless of
+/// `add_plugins` order: `OzmuxConfigsResource` is inserted at `Plugin::build`
+/// time and every `Startup` system runs only after all plugins finish build.
+fn sync_history_seed_lines(
+    mut seed_lines: ResMut<HistorySeedLines>,
+    configs: Res<OzmuxConfigsResource>,
+) {
+    seed_lines.0 = configs.0.scrollback.seed_lines;
 }
 
 /// Sends `detach-client` over the live connection, if any.

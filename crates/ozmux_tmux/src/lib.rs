@@ -37,6 +37,6 @@ pub use enumerate::{
 pub use events::{TmuxConnectionClosed, TmuxConnectionReset};
 pub use input::{KeyMods, bevy_key_to_tmux_name};
 pub use output::{PaneOutput, RequestPaneReseed};
-pub use plugin::{TmuxEventBatch, TmuxProjectionSet, TmuxSessionPlugin};
+pub use plugin::{HistorySeedLines, TmuxEventBatch, TmuxProjectionSet, TmuxSessionPlugin};
 pub use tmux_control::{ClientEvent, ControlEvent, TmuxCommand, TransportEvent};
 pub use tmux_control_parser::{PaneId, SessionId, WindowId};
