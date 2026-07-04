@@ -2,6 +2,7 @@
 //! command has one `EntityEvent` + apply observer module under
 //! `src/action/tmux/`. This root aggregates their per-file plugins.
 
+mod detach_session;
 mod kill_pane;
 mod kill_window;
 mod new_window;
@@ -16,6 +17,8 @@ mod zoom_pane;
 
 use bevy::prelude::*;
 
+#[expect(unused_imports, reason = "consumed by Task 6's apply_tmux_shortcuts")]
+pub(crate) use detach_session::DetachSessionRequest;
 pub(crate) use kill_pane::KillPaneRequest;
 pub(crate) use kill_window::KillWindowRequest;
 pub(crate) use new_window::NewWindowRequest;
@@ -34,6 +37,7 @@ pub(super) struct TmuxActionPlugin;
 impl Plugin for TmuxActionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
+            detach_session::DetachSessionPlugin,
             kill_pane::KillPanePlugin,
             kill_window::KillWindowPlugin,
             new_window::NewWindowPlugin,
