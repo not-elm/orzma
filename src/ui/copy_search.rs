@@ -1,8 +1,16 @@
-//! Copy-mode search and jump-char prompt overlay. Opens when the tmux VI
-//! applier's `on_vi_prompt` observer handles a `ViPromptRequest`; owns the
-//! keyboard until the user submits (Enter / first char for jump kinds) or
-//! cancels (Escape). On submit, sends `send-keys -X -t %N <kind> -- '<text>'`
-//! to tmux via the active connection.
+//! Copy-mode search and jump-char prompt overlay.
+//!
+//! Currently inert: nothing in the codebase sets `CopyPrompt.open`. This
+//! module used to open in response to the tmux VI applier's `on_vi_prompt`
+//! observer handling a `ViPromptRequest`, but that applier (`tmux_mode.rs`)
+//! was deleted as part of the copy-mode-to-local migration, so the trigger
+//! no longer exists. Reconnecting this prompt to a local search applier is
+//! expected in a future change.
+//!
+//! When active, it owns the keyboard until the user submits (Enter / first
+//! char for jump kinds) or cancels (Escape). On submit, it sends
+//! `send-keys -X -t %N <kind> -- '<text>'` to tmux via the active
+//! connection.
 
 use crate::font::TerminalUiFont;
 use crate::input::InputPhase;

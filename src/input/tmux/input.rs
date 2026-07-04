@@ -3,8 +3,10 @@
 //! per-command action events (`crate::action::tmux`) and copy-mode
 //! entry commands; while a pane is in copy mode, keys resolve against the
 //! shared config-driven key table (`crate::action::vi::ResolvedCopyModeKeys`)
-//! and fire the shared VI events for `crate::action::vi::tmux_mode` to apply;
-//! unmatched keys forward straight to the pane in one `SendPaneKeys` batch
+//! and fire the shared VI events, which `crate::action::vi::default_mode`
+//! applies for every pane (tmux and non-tmux alike) rather than a
+//! tmux-specific applier module; unmatched keys forward straight to the pane
+//! in one `SendPaneKeys` batch
 //! per frame. Mouse-wheel forwarding handles only the
 //! cases `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it
 //! now runs on every tmux pane, gated off solely by `MouseDisabled`): an

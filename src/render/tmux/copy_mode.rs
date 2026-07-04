@@ -15,11 +15,20 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
-// NOTE: `#[expect(dead_code)]` cannot be used here — its fulfillment tracking
-// does not roll up from the many individual nested items below (functions,
-// structs, an enum, a const) to this one module-level attribute, so it
-// reports itself as unfulfilled even though the dead-code diagnostics it
-// suppresses are real. Fall back to `#[allow]` per the escape-hatch rule.
+// NOTE: `CopyModePlugin` is unregistered as of this task (Task 2), and the
+// file is deleted outright by Task 5 once Task 3 relocates `cell_at_pane` out
+// of it; `#[allow(dead_code)]` covers that transitional window.
+// `#[expect(dead_code)]` was tried instead (both module-level and per-item on
+// each of this module's ~19 unreachable functions/structs/enum/const) and
+// verified, via a clean `cargo build --workspace`, to report "this lint
+// expectation is unfulfilled" for a subset of those items even though the
+// same diagnostics fire under `#[allow]`/the default `#[warn]`. This is a
+// real interaction between rustc's dead-code reachability graph and this
+// module's bevy `Plugin` impl (a never-constructed `CopyModePlugin` whose
+// `build()` names several of these "dead" functions as system/observer
+// values) — not the general aggregation limitation a different attribute
+// placement would fix — so `#[allow]` is the escape-hatch fallback per
+// `.claude/rules/rust.md`.
 #![allow(
     dead_code,
     reason = "CopyModePlugin and its refresh systems are unregistered as of the \
