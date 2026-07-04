@@ -16,6 +16,7 @@ mod input;
 mod observers;
 mod output;
 mod plugin;
+mod state_restore;
 
 pub use command::{
     CopyModeCapture, CopyStateQuery, EnterCopyMode, KillPane, KillWindow, NewWindow, NextWindow,
