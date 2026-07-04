@@ -706,8 +706,10 @@ mod tests {
                 action: ShortcutAction::Paste,
                 via_leader: false,
             }],
-            "the decider still emits the direct paste action; the Default applier \
-             suppresses it in copy mode, per gui_action_suppressed_by_webview parity"
+            "the decider still emits the direct paste action; in copy mode the \
+             Default terminal carries KeyboardDisabled (inserted by \
+             maintain_input_gates), so dispatch_input's terminal.single() fails \
+             and the paste is dropped downstream"
         );
     }
 
@@ -732,6 +734,13 @@ mod tests {
 
     #[test]
     fn in_copy_mode_closes_stale_repeat_window_before_dispatch() {
+        // Discriminates the pre-loop guard specifically: an AUTO-REPEAT of the
+        // repeat-bound key (KeyH) inside an open window. Without the guard,
+        // `step_with_repeat` sees `ev.repeat && LeaderPhase::Repeat` and calls
+        // `step_leader`, which re-fires `Action{EnterCopyMode}` — `step_leader`'s
+        // own Repeat arm does NOT close the window here because the key MATCHES.
+        // The pre-loop guard is the only thing that forces the phase to Idle so
+        // the same key resolves to copy-mode (unbound → nothing) instead.
         let sc = test_shortcuts_with_repeat_prefix(
             KeyCode::KeyH,
             ShortcutAction::EnterCopyMode,
@@ -741,19 +750,21 @@ mod tests {
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
         };
-        let events = [press(KeyCode::KeyX, Key::Character("x".into()))];
+        let events = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
         let mut c = ctx(no_mods(), ms(0));
         c.in_copy_mode = true;
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert!(
-            !effects.iter().any(|e| matches!(
-                e,
-                KeyEffect::Action {
-                    action: ShortcutAction::EnterCopyMode,
-                    ..
-                }
-            )),
-            "a stale repeat window must not intercept a copy-mode key"
+            !effects
+                .iter()
+                .any(|e| matches!(e, KeyEffect::Action { .. })),
+            "the stale repeat window must be closed before dispatch, so a \
+             repeat-marked key in copy mode must NOT re-fire its bound action"
+        );
+        assert_eq!(
+            phase,
+            LeaderPhase::Idle,
+            "the pre-loop guard must close the window before the batch"
         );
     }
 
