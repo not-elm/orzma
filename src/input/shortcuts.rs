@@ -144,11 +144,7 @@ impl Shortcuts {
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
     /// binding is repeat-marked (`<Leader:r>`). The single predicate
     /// `step_leader` uses to decide which keys the repeat window consumes.
-    pub(crate) fn match_repeat_prefix(
-        &self,
-        keycode: KeyCode,
-        mods: Modifiers,
-    ) -> Option<ShortcutAction> {
+    fn match_repeat_prefix(&self, keycode: KeyCode, mods: Modifiers) -> Option<ShortcutAction> {
         self.match_prefix_entry(keycode, mods)
             .filter(|s| s.repeat)
             .map(|s| s.action)
