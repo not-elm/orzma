@@ -3,6 +3,7 @@
 //! replays captured content + modes into the display mirror.
 
 use std::collections::HashMap;
+use tmux_control_parser::unescape_capture;
 
 /// Tab-separated `key=#{key}` format dumping one pane's terminal state.
 ///
@@ -76,6 +77,91 @@ pub(crate) fn parse_pane_state(line: &str) -> PaneState {
     }
 }
 
+/// Captured grid content for one restore pass.
+///
+/// `Full` carries the adopt-time pair: `base` is the default capture
+/// (primary history + the CURRENT visible screen — which is the alt screen
+/// while alternate is active) and `saved_primary` is the `-a` capture (the
+/// primary screen snapshot tmux saved on alt entry). `VisibleOnly` is the
+/// light re-seed's single visible capture.
+pub(crate) enum GridCapture {
+    Full {
+        base: Vec<String>,
+        saved_primary: Vec<String>,
+        pane_height: u16,
+    },
+    VisibleOnly {
+        rows: Vec<String>,
+    },
+}
+
+/// Synthesizes one VT byte stream restoring content, terminal state, and
+/// pending output, in that order, for replay through the pane mirror.
+///
+/// NOTE: the reset prefix MUST precede the ESC[2J erase and the row replay —
+/// stale SGR floods the erase (the blue-pane bug) and a stale DECSTBM/DECOM
+/// scrolls the CRLF replay within wrong margins. Content is replayed before
+/// modes so `-J`-joined long lines re-wrap under the default wrap=on.
+pub(crate) fn restore_to_bytes(
+    grid: &GridCapture,
+    state: Option<&PaneState>,
+    pending: &[String],
+) -> Vec<u8> {
+    let mut bytes = b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2J".to_vec();
+    match grid {
+        GridCapture::Full {
+            base,
+            saved_primary,
+            pane_height,
+        } => {
+            let alt = state.is_some_and(|s| s.alternate_on);
+            let height = *pane_height as usize;
+            if alt && base.len() >= height {
+                let (history, alt_rows) = base.split_at(base.len() - height);
+                append_rows(&mut bytes, history);
+                if !history.is_empty() && !saved_primary.is_empty() {
+                    bytes.extend_from_slice(b"\r\n");
+                }
+                append_rows(&mut bytes, saved_primary);
+                let s = state.expect("alt implies state");
+                bytes.extend_from_slice(
+                    format!(
+                        "\x1b[{};{}H",
+                        s.alternate_saved_y + 1,
+                        s.alternate_saved_x + 1
+                    )
+                    .as_bytes(),
+                );
+                bytes.extend_from_slice(b"\x1b[?1049h\x1b[H\x1b[2J");
+                append_rows(&mut bytes, alt_rows);
+            } else {
+                append_rows(&mut bytes, base);
+            }
+        }
+        GridCapture::VisibleOnly { rows } => {
+            // NOTE: alacritty guards 1049 (set no-ops while already in alt,
+            // unset no-ops outside alt), so re-asserting membership is
+            // idempotent in the synced case and converges a desynced mirror.
+            if let Some(state) = state {
+                bytes.extend_from_slice(if state.alternate_on {
+                    b"\x1b[?1049h"
+                } else {
+                    b"\x1b[?1049l"
+                });
+                bytes.extend_from_slice(b"\x1b[H\x1b[2J");
+            }
+            append_rows(&mut bytes, rows);
+        }
+    }
+    if let Some(state) = state {
+        append_state_bytes(&mut bytes, state);
+    }
+    if !pending.is_empty() {
+        bytes.extend_from_slice(&unescape_capture(pending.join("\n").as_bytes()));
+    }
+    bytes
+}
+
 /// Splits a state reply into `key -> value`, re-splitting on a literal
 /// `\t` sequence when the transport escaped the tab separator (a known
 /// tmux transport quirk iTerm2 also works around).
@@ -135,6 +221,10 @@ fn append_state_bytes(bytes: &mut Vec<u8>, state: &PaneState) {
         state.cursor_y + 1
     };
     bytes.extend_from_slice(format!("\x1b[{};{}H", row, state.cursor_x + 1).as_bytes());
+}
+
+fn append_rows(bytes: &mut Vec<u8>, rows: &[String]) {
+    bytes.extend_from_slice(rows.join("\r\n").as_bytes());
 }
 
 #[cfg(test)]
@@ -346,5 +436,108 @@ mod tests {
         let region = text.find("\x1b[3;31r").expect("DECSTBM");
         let cup = text.rfind("\x1b[").expect("cursor CUP");
         assert!(region < cup);
+    }
+
+    fn rows(prefix: &str, n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("{prefix}{i}")).collect()
+    }
+
+    #[test]
+    fn visible_only_matches_reset_prefix_plus_rows() {
+        let grid = GridCapture::VisibleOnly {
+            rows: vec!["hello".into(), "world".into()],
+        };
+        let b = restore_to_bytes(&grid, None, &[]);
+        assert!(b.starts_with(b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2J"));
+        assert!(String::from_utf8_lossy(&b).contains("hello\r\nworld"));
+    }
+
+    #[test]
+    fn visible_only_reasserts_alt_membership_from_state() {
+        let mut state = parse_pane_state("");
+        state.alternate_on = true;
+        let grid = GridCapture::VisibleOnly {
+            rows: vec!["v".into()],
+        };
+        let text =
+            String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
+        assert!(text.find("\x1b[?1049h").expect("alt reasserted") < text.find('v').unwrap());
+    }
+
+    #[test]
+    fn full_without_alt_replays_base_wholesale() {
+        let grid = GridCapture::Full {
+            base: rows("h", 5),
+            saved_primary: vec![],
+            pane_height: 3,
+        };
+        let state = parse_pane_state("");
+        let text =
+            String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
+        assert!(text.contains("h0\r\nh1\r\nh2\r\nh3\r\nh4"));
+        assert!(!text.contains("\x1b[?1049h"));
+    }
+
+    #[test]
+    fn full_with_alt_splits_base_tail_into_alt_screen() {
+        // base = 5 rows of history + 3 rows of CURRENT (alt) screen;
+        // saved_primary = the primary screen snapshot taken at alt entry.
+        let grid = GridCapture::Full {
+            base: [rows("hist", 5), rows("alt", 3)].concat(),
+            saved_primary: rows("prim", 3),
+            pane_height: 3,
+        };
+        let mut state = parse_pane_state("");
+        state.alternate_on = true;
+        state.alternate_saved_x = 2;
+        state.alternate_saved_y = 1;
+        let text =
+            String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
+        let hist = text.find("hist4").expect("history replayed");
+        let prim = text.find("prim0").expect("saved primary replayed");
+        let saved_cup = text.find("\x1b[2;3H").expect("saved cursor placed");
+        let alt_on = text.find("\x1b[?1049h").expect("alt entered");
+        let alt = text.find("alt0").expect("alt screen replayed");
+        assert!(
+            hist < prim && prim < saved_cup && saved_cup < alt_on && alt_on < alt,
+            "wrong order in {text:?}"
+        );
+    }
+
+    #[test]
+    fn full_with_alt_but_short_base_degrades_to_primary_only() {
+        let grid = GridCapture::Full {
+            base: rows("h", 2),
+            saved_primary: rows("prim", 3),
+            pane_height: 3,
+        };
+        let mut state = parse_pane_state("");
+        state.alternate_on = true;
+        let text =
+            String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
+        assert!(!text.contains("\x1b[?1049h"));
+        assert!(text.contains("h0\r\nh1"));
+    }
+
+    #[test]
+    fn pending_output_is_decoded_and_last() {
+        let grid = GridCapture::VisibleOnly {
+            rows: vec!["x".into()],
+        };
+        let state = parse_pane_state("");
+        let b = restore_to_bytes(&grid, Some(&state), &["tail\\033[".to_string()]);
+        assert!(b.ends_with(b"tail\x1b["));
+    }
+
+    #[test]
+    fn state_section_comes_after_content() {
+        let grid = GridCapture::VisibleOnly {
+            rows: vec!["content".into()],
+        };
+        let mut state = parse_pane_state("");
+        state.mouse_sgr = true;
+        let text =
+            String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
+        assert!(text.find("content").unwrap() < text.find("\x1b[?1006h").unwrap());
     }
 }
