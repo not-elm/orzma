@@ -2,6 +2,7 @@
 
 use crate::components::WindowFlags;
 use crate::input::quote;
+use crate::state_restore::{GridCapture, PaneState, restore_to_bytes};
 use bevy::ecs::component::Component;
 use std::collections::{HashMap, HashSet};
 use tmux_control::{CommandId, TmuxResult};
@@ -234,6 +235,96 @@ pub(crate) enum PendingReply {
     Capture { pane: PaneId },
     /// Cursor-position query paired with a [`PendingReply::Capture`].
     Cursor { pane: PaneId },
+    /// The default (base) capture of a pane restore.
+    RestoreBase { pane: PaneId },
+    /// The `-a` saved-primary capture of a pane restore.
+    RestoreSavedPrimary { pane: PaneId },
+    /// The terminal-state (`PANE_STATE_FORMAT`) query of a pane restore.
+    RestoreState { pane: PaneId },
+    /// The pending-output capture of a pane restore.
+    RestorePending { pane: PaneId },
+}
+
+/// One in-flight reply slot of a pane restore.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Slot<T> {
+    NotRequested,
+    Pending,
+    Ok(T),
+    Failed,
+}
+
+impl<T> Slot<T> {
+    fn is_pending(&self) -> bool {
+        matches!(self, Slot::Pending)
+    }
+    fn ok(self) -> Option<T> {
+        match self {
+            Slot::Ok(value) => Some(value),
+            _ => None,
+        }
+    }
+}
+
+/// Accumulates the restore replies for one pane until every requested slot
+/// resolves, then synthesizes the seed bytes exactly once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneRestore {
+    pub(crate) pane_height: u16,
+    pub(crate) base: Slot<Vec<String>>,
+    pub(crate) saved_primary: Slot<Vec<String>>,
+    pub(crate) state: Slot<PaneState>,
+    pub(crate) pending: Slot<Vec<String>>,
+}
+
+impl PaneRestore {
+    /// Buffer for the adopt-time full restore (all four commands issued).
+    pub(crate) fn new_full(pane_height: u16) -> Self {
+        Self {
+            pane_height,
+            base: Slot::Pending,
+            saved_primary: Slot::Pending,
+            state: Slot::Pending,
+            pending: Slot::Pending,
+        }
+    }
+
+    /// Buffer for the light re-seed (visible capture + state only).
+    pub(crate) fn new_light(pane_height: u16) -> Self {
+        Self {
+            pane_height,
+            base: Slot::Pending,
+            saved_primary: Slot::NotRequested,
+            state: Slot::Pending,
+            pending: Slot::NotRequested,
+        }
+    }
+
+    /// Whether every requested slot has resolved (`Ok` or `Failed`).
+    pub(crate) fn complete(&self) -> bool {
+        !self.base.is_pending()
+            && !self.saved_primary.is_pending()
+            && !self.state.is_pending()
+            && !self.pending.is_pending()
+    }
+
+    /// Synthesizes the seed bytes from whatever slots succeeded.
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        let full = !matches!(&self.saved_primary, Slot::NotRequested);
+        let state = self.state.ok();
+        let pending = self.pending.ok().unwrap_or_default();
+        let base = self.base.ok().unwrap_or_default();
+        let grid = if full {
+            GridCapture::Full {
+                base,
+                saved_primary: self.saved_primary.ok().unwrap_or_default(),
+                pane_height: self.pane_height,
+            }
+        } else {
+            GridCapture::VisibleOnly { rows: base }
+        };
+        restore_to_bytes(&grid, state.as_ref(), &pending)
+    }
 }
 
 /// Correlates in-flight enumeration/query commands by [`CommandId`] and the
@@ -244,6 +335,7 @@ pub(crate) struct EnumerationState {
     pub(crate) aggressive_resize_checked: bool,
     pub(crate) capture_awaiting_cursor: HashMap<PaneId, Vec<String>>,
     pub(crate) panes_with_cursor_pending: HashSet<PaneId>,
+    pub(crate) restores: HashMap<PaneId, PaneRestore>,
 }
 
 impl EnumerationState {
@@ -260,7 +352,12 @@ impl EnumerationState {
                 // Capture/Cursor kinds are legitimately multi and exempt.
                 if !matches!(
                     reply,
-                    PendingReply::Capture { .. } | PendingReply::Cursor { .. }
+                    PendingReply::Capture { .. }
+                        | PendingReply::Cursor { .. }
+                        | PendingReply::RestoreBase { .. }
+                        | PendingReply::RestoreSavedPrimary { .. }
+                        | PendingReply::RestoreState { .. }
+                        | PendingReply::RestorePending { .. }
                 ) {
                     self.pending.retain(|_, r| *r != reply);
                 }
@@ -277,10 +374,11 @@ impl EnumerationState {
     }
 
     /// Drops the in-flight entries a session switch invalidates: the
-    /// capture/cursor pairs and the enumeration ids `send_session_enumeration`
-    /// re-issues. A `HashMap` keyed by `CommandId` does not get the old
-    /// `Option` fields' free last-write-wins overwrite, so a stale pre-switch
-    /// `list-windows`/active-pane reply would otherwise mis-seed the new session.
+    /// capture/cursor pairs, the pane-restore buffers, and the enumeration ids
+    /// `send_session_enumeration` re-issues. A `HashMap` keyed by `CommandId`
+    /// does not get the old `Option` fields' free last-write-wins overwrite,
+    /// so a stale pre-switch `list-windows`/active-pane reply would otherwise
+    /// mis-seed the new session.
     pub(crate) fn clear_for_session_switch(&mut self) {
         self.pending.retain(|_, r| {
             !matches!(
@@ -290,17 +388,23 @@ impl EnumerationState {
                     | PendingReply::ListWindows
                     | PendingReply::ActivePane
                     | PendingReply::AggressiveResize
+                    | PendingReply::RestoreBase { .. }
+                    | PendingReply::RestoreSavedPrimary { .. }
+                    | PendingReply::RestoreState { .. }
+                    | PendingReply::RestorePending { .. }
             )
         });
         self.capture_awaiting_cursor.clear();
         self.panes_with_cursor_pending.clear();
         self.aggressive_resize_checked = false;
+        self.restores.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state_restore::parse_pane_state;
 
     #[test]
     fn format_is_tab_separated_with_name_last() {
@@ -509,6 +613,50 @@ mod tests {
             "stale aggressive-resize dropped so new session is re-checked"
         );
         assert!(!state.aggressive_resize_checked, "aggressive guard reset");
+    }
+
+    #[test]
+    fn full_restore_completes_only_when_all_four_slots_resolve() {
+        let mut r = PaneRestore::new_full(4);
+        assert!(!r.complete());
+        r.base = Slot::Ok(vec!["a".into()]);
+        r.saved_primary = Slot::Ok(vec![]);
+        r.state = Slot::Ok(parse_pane_state(""));
+        assert!(!r.complete());
+        r.pending = Slot::Failed;
+        assert!(r.complete());
+    }
+
+    #[test]
+    fn light_restore_needs_only_base_and_state() {
+        let mut r = PaneRestore::new_light(4);
+        r.base = Slot::Ok(vec!["a".into()]);
+        assert!(!r.complete());
+        r.state = Slot::Ok(parse_pane_state(""));
+        assert!(r.complete());
+    }
+
+    #[test]
+    fn into_bytes_survives_partial_failure() {
+        let mut r = PaneRestore::new_full(2);
+        r.base = Slot::Ok(vec!["row".into()]);
+        r.saved_primary = Slot::Failed;
+        r.state = Slot::Failed;
+        r.pending = Slot::Failed;
+        let bytes = r.into_bytes();
+        assert!(String::from_utf8_lossy(&bytes).contains("row"));
+    }
+
+    #[test]
+    fn clear_for_session_switch_drops_restore_buffers_and_pending_kinds() {
+        let mut state = EnumerationState::default();
+        state.restores.insert(PaneId(1), PaneRestore::new_full(4));
+        state
+            .pending
+            .insert(CommandId(9), PendingReply::RestoreBase { pane: PaneId(1) });
+        state.clear_for_session_switch();
+        assert!(state.restores.is_empty());
+        assert!(state.pending.is_empty());
     }
 
     #[test]

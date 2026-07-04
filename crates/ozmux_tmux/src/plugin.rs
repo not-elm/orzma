@@ -507,6 +507,12 @@ fn apply_reply(
                 data: capture_to_bytes_with_cursor(&lines, cx, cy),
             });
         }
+        // TODO: wired by the restore-buffer dispatch (pane-restore reply
+        // correlation lands the actual handling here).
+        PendingReply::RestoreBase { .. }
+        | PendingReply::RestoreSavedPrimary { .. }
+        | PendingReply::RestoreState { .. }
+        | PendingReply::RestorePending { .. } => {}
     }
 }
 
