@@ -2,8 +2,6 @@
 //! GPU render bundle to each projected `TmuxPane`, then routes tmux `%output`
 //! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
 
-pub(crate) mod copy_mode;
-
 mod paint_rescue;
 
 use crate::app_mode::TmuxActiveSet;
