@@ -4,7 +4,7 @@
 
 use crate::action::terminal::PasteAction;
 use crate::clipboard::{Clipboard, build_paste_bytes};
-use crate::input::tmux::forward::pane_target;
+use crate::input::tmux::forward::{pane_target, snap_pane_to_bottom};
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
 use ozmux_tmux::{SendBytes, TmuxClient, TmuxPane};
@@ -46,11 +46,7 @@ fn on_paste_tmux(
         return;
     };
     let target = pane_target(pane.id);
-    if let Ok(mut handle) = handles.get_mut(ev.entity)
-        && handle.snap_to_bottom_vt_only()
-    {
-        handle.flush_emit(&mut commands, ev.entity);
-    }
+    snap_pane_to_bottom(&mut commands, &mut handles, ev.entity);
     let bytes = build_paste_bytes(&text, false);
     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
         if let Err(e) = client.send(SendBytes {

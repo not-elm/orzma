@@ -15,7 +15,7 @@ use crate::app_mode::AppMode;
 use crate::input::focus::MouseDisabled;
 use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::input::keyboard::{bevy_key_to_terminal_key, current_terminal_modifiers};
+use crate::input::keyboard::bevy_key_to_terminal_key;
 use crate::input::resolve::{BatchContext, KeyEffect, classify_key_batch};
 use crate::input::shortcuts::{LeaderGate, LeaderPhase, Shortcuts, clear_leader_phase};
 use crate::input::{InputPhase, current_modifiers};
@@ -190,7 +190,12 @@ fn apply_default_shortcuts(
     }
     let entity = terminal.single().ok();
     let mods = current_modifiers(&bevy_keys);
-    let terminal_mods = current_terminal_modifiers(&bevy_keys);
+    let terminal_mods = TerminalModifiers {
+        ctrl: mods.ctrl,
+        shift: mods.shift,
+        alt: mods.alt,
+        meta: mods.meta,
+    };
     let in_copy_mode = entity.is_some_and(|e| copy_modes.get(e).is_ok());
     let ctx = BatchContext {
         mods,

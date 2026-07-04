@@ -58,11 +58,7 @@ fn forward_ime_commit(
     let Ok(pane) = panes.get(ev.entity) else {
         return;
     };
-    if let Ok(mut handle) = handles.get_mut(ev.entity)
-        && handle.snap_to_bottom_vt_only()
-    {
-        handle.flush_emit(&mut commands, ev.entity);
-    }
+    snap_pane_to_bottom(&mut commands, &mut handles, ev.entity);
     let Some(client) = client.as_deref_mut() else {
         return;
     };
@@ -91,11 +87,7 @@ fn on_forward_pane_keys(
         return;
     };
     let target = pane_target(pane.id);
-    if let Ok(mut handle) = handles.get_mut(ev.entity)
-        && handle.snap_to_bottom_vt_only()
-    {
-        handle.flush_emit(&mut commands, ev.entity);
-    }
+    snap_pane_to_bottom(&mut commands, &mut handles, ev.entity);
     let Some(client) = client.as_deref_mut() else {
         return;
     };
@@ -124,10 +116,42 @@ pub(crate) fn pane_target(pane: PaneId) -> String {
     format!("%{}", pane.0)
 }
 
+/// Snaps `entity`'s local terminal view to the bottom and flushes the pending
+/// emit, matching the plain-key forward path before a tmux send.
+pub(crate) fn snap_pane_to_bottom(
+    commands: &mut Commands,
+    handles: &mut Query<&mut TerminalHandle>,
+    entity: Entity,
+) {
+    if let Ok(mut handle) = handles.get_mut(entity)
+        && handle.snap_to_bottom_vt_only()
+    {
+        handle.flush_emit(commands, entity);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use ozmux_tmux::TmuxCommand;
+    use tmux_control_parser::CellDims;
+
+    fn spawn_forward_pane(app: &mut App, id: u32) -> Entity {
+        app.world_mut()
+            .spawn((
+                TmuxPane {
+                    id: PaneId(id),
+                    dims: CellDims {
+                        width: 10,
+                        height: 5,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+                TerminalHandle::detached(10, 5),
+            ))
+            .id()
+    }
 
     #[test]
     fn forward_builds_send_keys_hex_for_pane() {
@@ -143,29 +167,12 @@ mod tests {
     #[test]
     fn ime_commit_observer_no_panic_without_client() {
         use crate::input::ime::ImeCommit;
-        use ozma_tty_engine::TerminalHandle;
-
-        use tmux_control_parser::{CellDims, PaneId};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_observer(forward_ime_commit);
 
-        let pane = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 10,
-                        height: 5,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-                TerminalHandle::detached(10, 5),
-            ))
-            .id();
+        let pane = spawn_forward_pane(&mut app, 1);
         // No live tmux client: the send is skipped; assert no panic.
         app.world_mut().trigger(ImeCommit {
             entity: pane,
@@ -176,28 +183,12 @@ mod tests {
 
     #[test]
     fn forward_pane_keys_sends_one_batched_send_keys() {
-        use tmux_control_parser::{CellDims, PaneId};
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_observer(on_forward_pane_keys);
 
         let client = app.world_mut().spawn(TmuxClient::new_adopted()).id();
-        let pane = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(7),
-                    dims: CellDims {
-                        width: 10,
-                        height: 5,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-                TerminalHandle::detached(10, 5),
-            ))
-            .id();
+        let pane = spawn_forward_pane(&mut app, 7);
         app.world_mut().trigger(ForwardPaneKeysRequest {
             entity: pane,
             names: vec!["a".to_string(), "C-c".to_string()],
@@ -211,27 +202,11 @@ mod tests {
 
     #[test]
     fn forward_pane_keys_observer_no_panic_without_client() {
-        use tmux_control_parser::{CellDims, PaneId};
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_observer(on_forward_pane_keys);
 
-        let pane = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(2),
-                    dims: CellDims {
-                        width: 10,
-                        height: 5,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-                TerminalHandle::detached(10, 5),
-            ))
-            .id();
+        let pane = spawn_forward_pane(&mut app, 2);
         // No live tmux client: the send is skipped; assert no panic.
         app.world_mut().trigger(ForwardPaneKeysRequest {
             entity: pane,

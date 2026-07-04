@@ -173,7 +173,7 @@ fn apply_tmux_shortcuts(
                 // NOTE: re-entry guard — re-triggering while already in copy mode
                 // would double-insert CopyModeState and re-enter vi mode.
                 if let Some(entity) = active_entity
-                    && copy_modes.get(entity).is_err()
+                    && !in_copy_mode
                 {
                     commands.trigger(EnterCopyModeActionEvent { entity });
                 }
