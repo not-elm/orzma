@@ -120,7 +120,7 @@ fn send_to_pane(client: &mut TmuxClient, pane: PaneId, bytes: &[u8], context: &s
 }
 
 /// The tmux target string (`%<id>`) for a pane id.
-fn pane_target(pane: PaneId) -> String {
+pub(crate) fn pane_target(pane: PaneId) -> String {
     format!("%{}", pane.0)
 }
 

@@ -135,14 +135,15 @@ fn apply_tmux_shortcuts(
         .and_then(|entity| forward_keys.get(entity).ok())
         .map(|chords| chords.0.as_slice())
         .unwrap_or(&[]);
+    let mods = current_modifiers(&bevy_keys);
     let kmods = KeyMods {
-        ctrl: bevy_keys.pressed(KeyCode::ControlLeft) || bevy_keys.pressed(KeyCode::ControlRight),
-        alt: bevy_keys.pressed(KeyCode::AltLeft) || bevy_keys.pressed(KeyCode::AltRight),
-        shift: bevy_keys.pressed(KeyCode::ShiftLeft) || bevy_keys.pressed(KeyCode::ShiftRight),
-        super_: bevy_keys.pressed(KeyCode::SuperLeft) || bevy_keys.pressed(KeyCode::SuperRight),
+        ctrl: mods.ctrl,
+        shift: mods.shift,
+        alt: mods.alt,
+        super_: mods.meta,
     };
     let ctx = BatchContext {
-        mods: current_modifiers(&bevy_keys),
+        mods,
         now: time.elapsed(),
         in_copy_mode,
         webview_focused: focused_webview.0.is_some(),
@@ -692,6 +693,7 @@ mod tests {
     use bevy::input::keyboard::Key;
     use bevy::input::mouse::MouseScrollUnit;
     use ozmux_configs::shortcuts::Modifiers;
+    use ozmux_tmux::PaneId;
     use std::time::Duration;
 
     #[test]
@@ -773,7 +775,7 @@ mod tests {
 
         let mut e = app.world_mut().spawn((
             TmuxPane {
-                id: ozmux_tmux::PaneId(1),
+                id: PaneId(1),
                 dims: CellDims {
                     width: 50,
                     height: 37,
@@ -966,7 +968,7 @@ mod tests {
             .world_mut()
             .spawn((
                 TmuxPane {
-                    id: ozmux_tmux::PaneId(1),
+                    id: PaneId(1),
                     dims: CellDims {
                         width: 100,
                         height: 37,
@@ -1178,7 +1180,7 @@ mod tests {
             .spawn((
                 ActivePane,
                 TmuxPane {
-                    id: ozmux_tmux::PaneId(1),
+                    id: PaneId(1),
                     dims: CellDims {
                         width: 80,
                         height: 24,

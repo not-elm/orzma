@@ -3,7 +3,7 @@
 //! input. The complementary tmux state and rendering live in
 //! `crate::ui::tmux` / `crate::render::tmux` / `crate::session::tmux`.
 
-mod forward;
+pub(crate) mod forward;
 mod gate;
 mod input;
 pub(crate) mod mouse;

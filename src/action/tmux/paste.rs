@@ -4,6 +4,7 @@
 
 use crate::action::terminal::PasteAction;
 use crate::clipboard::{Clipboard, build_paste_bytes};
+use crate::input::tmux::forward::pane_target;
 use bevy::prelude::*;
 use ozma_tty_engine::TerminalHandle;
 use ozmux_tmux::{SendBytes, TmuxClient, TmuxPane};
@@ -44,7 +45,7 @@ fn on_paste_tmux(
     let Some(client) = client.as_deref_mut() else {
         return;
     };
-    let target = format!("%{}", pane.id.0);
+    let target = pane_target(pane.id);
     if let Ok(mut handle) = handles.get_mut(ev.entity)
         && handle.snap_to_bottom_vt_only()
     {
