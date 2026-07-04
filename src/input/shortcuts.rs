@@ -356,6 +356,29 @@ pub(crate) fn test_shortcuts_with_repeat_prefix(
     }
 }
 
+/// Test-only constructor: a `Shortcuts` with one direct (non-leader) chord and
+/// no leader/prefix bindings. Used by `resolve.rs`'s decider tests, which
+/// cannot name this module's private fields.
+#[cfg(test)]
+pub(crate) fn test_shortcuts_with_direct_chord(
+    keycode: KeyCode,
+    modifiers: Modifiers,
+    action: ShortcutAction,
+) -> Shortcuts {
+    Shortcuts {
+        direct: vec![OzmuxShortcut {
+            keycode,
+            modifiers,
+            action,
+            repeat: false,
+        }],
+        prefix: Vec::new(),
+        leader: None,
+        tap_timeout: Duration::from_millis(300),
+        repeat_time: Duration::from_millis(500),
+    }
+}
+
 /// Clears the leader phase (pending or repeat window) and any in-progress
 /// modifier tap on an `AppMode` transition or a webview focus change, so a
 /// leader engaged/armed in one context never fires in another.

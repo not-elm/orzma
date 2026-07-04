@@ -11,6 +11,7 @@ pub(crate) mod ime;
 pub(crate) mod keyboard;
 pub(crate) mod mouse;
 pub(crate) mod option_as_alt;
+mod resolve;
 pub(crate) mod shortcuts;
 pub(crate) mod tmux;
 
