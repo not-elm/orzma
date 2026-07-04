@@ -47,6 +47,9 @@ struct PendingPaneOutput {
 
 impl PendingPaneOutput {
     fn push(&mut self, pane: PaneId, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
         if self.total + data.len() > PENDING_PANE_OUTPUT_CAP {
             if let Some(old) = self.buf.remove(&pane) {
                 self.total -= old.len();
@@ -255,18 +258,11 @@ fn route_tmux_output(
     for pane in pane_ids {
         let tmux_output = by_pane.remove(&pane).unwrap_or_default();
         let Some(&entity) = entity_of.get(&pane) else {
-            // NOTE: only buffer real bytes — pushing an empty `fresh` would
-            // create/keep a phantom entry that keeps `pending_pane_output_waiting`
-            // true and spins this system every frame.
-            if !tmux_output.is_empty() {
-                pending.push(pane, &tmux_output);
-            }
+            pending.push(pane, &tmux_output);
             continue;
         };
         let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
-            if !tmux_output.is_empty() {
-                pending.push(pane, &tmux_output);
-            }
+            pending.push(pane, &tmux_output);
             continue;
         };
         if let Some(buffered) = pending.take(pane) {

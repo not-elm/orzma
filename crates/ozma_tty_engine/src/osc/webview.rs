@@ -31,7 +31,8 @@ impl OscWebviewCapture {
     // NOTE: the caller MUST take the pending verb after every
     // advance_until_terminated stop; a stuck pending makes the next call
     // return 0 forever (infinite loop in TerminalHandle::advance).
-    pub(crate) fn take_pending(&mut self) -> Option<OscWebviewVerb> {
+    #[inline]
+    pub(crate) const fn take_pending(&mut self) -> Option<OscWebviewVerb> {
         self.pending.take()
     }
 }
