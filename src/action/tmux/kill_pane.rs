@@ -40,16 +40,10 @@ mod tests {
     use super::*;
     use tmux_control_parser::{CellDims, PaneId};
 
-    #[test]
-    fn kill_pane_opens_confirm_with_kill_command() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        app.add_observer(on_kill_pane);
-        app.world_mut().spawn(TmuxClient::new_adopted());
-        let target = app
-            .world_mut()
+    fn pane(app: &mut App, id: u32) -> Entity {
+        app.world_mut()
             .spawn(TmuxPane {
-                id: PaneId(5),
+                id: PaneId(id),
                 dims: CellDims {
                     width: 10,
                     height: 5,
@@ -57,33 +51,33 @@ mod tests {
                     yoff: 0,
                 },
             })
-            .id();
-        app.world_mut().trigger(KillPaneRequest { entity: target });
-        app.update();
-        let state = app.world().resource::<ConfirmState>();
-        assert_eq!(state.message, "kill-pane %5? (y/n)");
-        assert_eq!(state.command, "kill-pane -t %5");
+            .id()
     }
 
     #[test]
-    fn kill_pane_without_client_does_not_prompt() {
+    fn kill_pane_sends_kill_command() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_observer(on_kill_pane);
-        let target = app
-            .world_mut()
-            .spawn(TmuxPane {
-                id: PaneId(1),
-                dims: CellDims {
-                    width: 10,
-                    height: 5,
-                    xoff: 0,
-                    yoff: 0,
-                },
-            })
-            .id();
+        let client = app.world_mut().spawn(TmuxClient::new_adopted()).id();
+        let target = pane(&mut app, 5);
+
         app.world_mut().trigger(KillPaneRequest { entity: target });
         app.update();
-        assert!(!app.world().contains_resource::<ConfirmState>());
+
+        let mut client = app.world_mut().get_mut::<TmuxClient>(client).unwrap();
+        let out = String::from_utf8(client.take_outgoing()).unwrap();
+        assert!(out.contains("kill-pane -t %5"), "got {out:?}");
+    }
+
+    #[test]
+    fn kill_pane_no_panic_without_client() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins);
+        app.add_observer(on_kill_pane);
+        let target = pane(&mut app, 1);
+
+        app.world_mut().trigger(KillPaneRequest { entity: target });
+        app.update();
     }
 }
