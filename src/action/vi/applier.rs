@@ -11,11 +11,11 @@ use bevy::prelude::*;
 use ozma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
 use ozmux_configs::copy_mode::CopyScroll;
 
-/// Registers the Default-mode VI apply observers. `ViPromptRequest` /
+/// Registers the local VI apply observers. `ViPromptRequest` /
 /// `ViSearchStepRequest` have no local applier yet (ignored by design).
-pub(super) struct DefaultModeViPlugin;
+pub(super) struct ViApplierPlugin;
 
-impl Plugin for DefaultModeViPlugin {
+impl Plugin for ViApplierPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_vi_motion)
             .add_observer(on_vi_scroll)

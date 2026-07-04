@@ -1,8 +1,8 @@
 //! Shared VI (copy-mode) action events: one `EntityEvent` per operation kind,
-//! fired by the copy-mode key gather and applied by `vi/default_mode.rs`'s
+//! fired by the copy-mode key gather and applied by `vi/applier.rs`'s
 //! local terminal-engine observers, for every pane, tmux and non-tmux alike.
 
-mod default_mode;
+mod applier;
 mod keymap;
 
 use bevy::prelude::*;
@@ -90,14 +90,11 @@ pub(crate) struct ViSearchStepRequest {
     pub forward: bool,
 }
 
-/// Aggregates the per-mode VI appliers.
+/// Wires the copy-mode keymap to the local VI applier.
 pub(crate) struct ViActionPlugin;
 
 impl Plugin for ViActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            keymap::CopyModeKeymapPlugin,
-            default_mode::DefaultModeViPlugin,
-        ));
+        app.add_plugins((keymap::CopyModeKeymapPlugin, applier::ViApplierPlugin));
     }
 }
