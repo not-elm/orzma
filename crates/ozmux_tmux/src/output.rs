@@ -18,7 +18,7 @@ pub struct PaneOutput {
 
 /// Request from the renderer layer (the binary) to re-`capture-pane`-seed a
 /// pane whose grid was left structurally unpainted after a layout change. The
-/// crate handles it via `request_pane_capture`, reusing the existing reply
+/// crate handles it via `request_pane_restore`, reusing the existing reply
 /// correlation and in-flight suppression.
 #[derive(Message)]
 pub struct RequestPaneReseed {

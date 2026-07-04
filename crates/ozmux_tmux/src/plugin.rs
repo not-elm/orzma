@@ -318,6 +318,7 @@ fn recapture_settled_panes(
 fn handle_pane_reseed_requests(
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
     mut requests: MessageReader<RequestPaneReseed>,
+    index: Res<TmuxProjection>,
     panes: Query<&TmuxPane>,
 ) {
     let (client, enumeration) = &mut *client;
@@ -328,9 +329,10 @@ fn handle_pane_reseed_requests(
         if enumeration.restores.contains_key(&req.pane) {
             continue;
         }
-        let Some(pane_height) = panes
-            .iter()
-            .find(|p| p.id == req.pane)
+        let Some(pane_height) = index
+            .panes
+            .get(&req.pane)
+            .and_then(|(entity, _)| panes.get(*entity).ok())
             .map(|p| p.dims.height as u16)
         else {
             continue;
@@ -616,6 +618,12 @@ fn apply_reply(
 
 /// Resolves one slot of `pane`'s restore buffer and, once every requested
 /// slot has resolved, synthesizes and emits the seed exactly once.
+///
+/// NOTE: a failed base-capture slot leaves no real content to replay;
+/// emitting the seed anyway would clear an already-rendered pane's mirror to
+/// blank for no reason, so a failed `base` drops the buffer without emitting
+/// — matching the prior behavior of leaving the mirror untouched when
+/// `capture-pane` fails.
 fn fill_restore_slot<T>(
     enumeration: &mut EnumerationState,
     pane_output: &mut MessageWriter<PaneOutput>,
@@ -627,14 +635,20 @@ fn fill_restore_slot<T>(
         return;
     };
     assign(restore, slot);
-    if restore.complete()
-        && let Some(restore) = enumeration.restores.remove(&pane)
-    {
-        pane_output.write(PaneOutput {
-            pane,
-            data: restore.into_bytes(),
-        });
+    if !restore.complete() {
+        return;
     }
+    let Some(restore) = enumeration.restores.remove(&pane) else {
+        return;
+    };
+    if matches!(restore.base, Slot::Failed) {
+        tracing::warn!(pane = pane.0, "base capture failed, skipping restore seed");
+        return;
+    }
+    pane_output.write(PaneOutput {
+        pane,
+        data: restore.into_bytes(),
+    });
 }
 
 /// Sends the per-session enumeration queries (`list-windows` + active-pane) that

@@ -172,7 +172,10 @@ impl<T> Slot<T> {
 /// resolves, then synthesizes the seed bytes exactly once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneRestore {
-    pub(crate) pane_height: u16,
+    // NOTE: private — only read inside this module's own `into_bytes`; the
+    // `base`/`saved_primary`/`state`/`pending` slots below stay `pub(crate)`
+    // because plugin.rs's `fill_restore_slot` writes them from outside.
+    pane_height: u16,
     pub(crate) base: Slot<Vec<String>>,
     pub(crate) saved_primary: Slot<Vec<String>>,
     pub(crate) state: Slot<PaneState>,
