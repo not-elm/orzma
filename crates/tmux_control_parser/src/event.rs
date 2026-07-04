@@ -1017,7 +1017,10 @@ mod tests {
 
     #[test]
     fn unescape_capture_decodes_octal_triples() {
-        assert_eq!(unescape_capture(b"abc\\015\\012def"), b"abc\r\ndef".to_vec());
+        assert_eq!(
+            unescape_capture(b"abc\\015\\012def"),
+            b"abc\r\ndef".to_vec()
+        );
     }
 
     #[test]
