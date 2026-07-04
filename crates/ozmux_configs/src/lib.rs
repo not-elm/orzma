@@ -4,9 +4,13 @@
 
 #![warn(missing_docs)]
 
-use crate::font::FontConfig;
 use crate::inactive_pane::InactivePaneConfig;
+use crate::keyboard::KeyboardConfig;
+use crate::mouse::MouseConfig;
+use crate::ozma::OzmaConfig;
+use crate::scrollback::ScrollbackConfig;
 use crate::shortcuts::Shortcuts;
+use crate::{copy_mode::CopyModeConfig, font::FontConfig};
 pub use error::{OzmuxConfigsError, OzmuxConfigsResult};
 use serde::Deserialize;
 
@@ -29,20 +33,20 @@ pub struct OzmuxConfigs {
     pub shortcuts: Shortcuts,
     /// `[copy-mode]` table: copy-mode key bindings shared by both modes.
     #[serde(rename = "copy-mode")]
-    pub copy_mode: copy_mode::CopyModeConfig,
+    pub copy_mode: CopyModeConfig,
     /// Font configuration.
     pub font: FontConfig,
     /// Mouse-input configuration.
-    pub mouse: mouse::MouseConfig,
+    pub mouse: MouseConfig,
     /// Keyboard-input configuration (macOS Option-as-Meta).
-    pub keyboard: keyboard::KeyboardConfig,
+    pub keyboard: KeyboardConfig,
     /// Inactive-pane dimming configuration.
     pub inactive_pane: InactivePaneConfig,
     /// Ozma single-terminal mode configuration.
-    pub ozma: ozma::OzmaConfig,
+    pub ozma: OzmaConfig,
     /// Scrollback configuration.
     #[serde(default)]
-    pub scrollback: scrollback::ScrollbackConfig,
+    pub scrollback: ScrollbackConfig,
 }
 
 impl OzmuxConfigs {

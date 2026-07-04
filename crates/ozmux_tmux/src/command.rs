@@ -9,12 +9,12 @@ mod query;
 mod size;
 mod target;
 
-pub use copymode::{CopyModeCapture, CopyStateQuery, Prompt, PromptKind, ShowBuffer};
+pub use copymode::{Prompt, PromptKind};
 pub use env::{SetEnvironmentGlobal, SetEnvironmentInSession, UnsetEnvironmentGlobal};
 pub use io::{SendBytes, SendPaneKeys};
 pub use ops::{
-    EnterCopyMode, KillPane, KillWindow, NewWindow, NextWindow, PaneDirection, PreviousWindow,
-    SelectPaneTowards, SplitDirection, SplitWindow, ZoomPane,
+    KillPane, KillWindow, NewWindow, NextWindow, PaneDirection, PreviousWindow, SelectPaneTowards,
+    SplitDirection, SplitWindow, ZoomPane,
 };
 pub(crate) use query::{
     ActivePane, AggressiveResize, CapturePane, CapturePanePending, CapturePaneSavedPrimary,

@@ -1,8 +1,8 @@
 //! Shared VI (copy-mode) action events: one `EntityEvent` per operation kind,
-//! fired by the copy-mode key gather and applied by `vi/default_mode.rs`'s
+//! fired by the copy-mode key gather and applied by `vi/applier.rs`'s
 //! local terminal-engine observers, for every pane, tmux and non-tmux alike.
 
-mod default_mode;
+mod applier;
 mod keymap;
 
 use bevy::prelude::*;
@@ -57,11 +57,16 @@ pub(crate) struct ViExitRequest {
     pub entity: Entity,
 }
 
-/// Opens a search / jump prompt for `entity`. No applier reads this yet — the
-/// tmux `send-keys -X` applier that used to handle it was removed and the
-/// local applier has no prompt/search-step support (ignored by design, see
-/// `default_mode`'s doc comment).
+/// Opens a search / jump prompt for `entity`. Nothing constructs this event
+/// in v1 — `trigger_copy_mode_action`'s `Prompt` arm is a deliberate no-op
+/// until local copy-mode search ships, and the tmux `send-keys -X` applier
+/// that used to consume it was removed. Kept so the event/type surface is
+/// ready for that follow-up PR.
 #[derive(EntityEvent, Debug, Clone)]
+#[expect(
+    dead_code,
+    reason = "no constructor until local copy-mode search wires trigger_copy_mode_action's Prompt arm back up"
+)]
 pub(crate) struct ViPromptRequest {
     /// The copy-mode surface entity.
     #[event_target]
@@ -74,9 +79,13 @@ pub(crate) struct ViPromptRequest {
     pub kind: PromptKind,
 }
 
-/// Repeats the previous search on `entity`. No applier reads this yet — see
+/// Repeats the previous search on `entity`. No constructor yet — see
 /// `ViPromptRequest`'s doc comment.
 #[derive(EntityEvent, Debug, Clone)]
+#[expect(
+    dead_code,
+    reason = "no constructor until local copy-mode search wires trigger_copy_mode_action's SearchStep arm back up"
+)]
 pub(crate) struct ViSearchStepRequest {
     /// The copy-mode surface entity.
     #[event_target]
@@ -89,14 +98,11 @@ pub(crate) struct ViSearchStepRequest {
     pub forward: bool,
 }
 
-/// Aggregates the per-mode VI appliers.
+/// Wires the copy-mode keymap to the local VI applier.
 pub(crate) struct ViActionPlugin;
 
 impl Plugin for ViActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            keymap::CopyModeKeymapPlugin,
-            default_mode::DefaultModeViPlugin,
-        ));
+        app.add_plugins((keymap::CopyModeKeymapPlugin, applier::ViApplierPlugin));
     }
 }

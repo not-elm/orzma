@@ -7,7 +7,6 @@ use crate::command::{
 };
 use crate::components::{PaneRecaptureState, TmuxPane, TmuxSession};
 use crate::connection::{TmuxAttached, TmuxClient};
-use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
 use crate::enumerate::{
     EnumerationState, PaneRestore, PendingReply, Slot, version_supports_per_window_refresh,
 };
@@ -45,13 +44,11 @@ impl Plugin for TmuxSessionPlugin {
     fn build(&self, app: &mut App) {
         register_observers(app);
         app.init_resource::<TmuxProjection>()
-            .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxEventBatch>()
             .init_resource::<HistorySeedLines>()
             .add_observer(on_gateway_release)
             .add_message::<PaneOutput>()
             .add_message::<RequestPaneReseed>()
-            .add_message::<CopyModeReply>()
             .add_message::<TmuxClientAttached>()
             .add_systems(
                 Update,
@@ -321,6 +318,7 @@ fn recapture_settled_panes(
 fn handle_pane_reseed_requests(
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
     mut requests: MessageReader<RequestPaneReseed>,
+    index: Res<TmuxProjection>,
     panes: Query<&TmuxPane>,
 ) {
     let (client, enumeration) = &mut *client;
@@ -331,9 +329,10 @@ fn handle_pane_reseed_requests(
         if enumeration.restores.contains_key(&req.pane) {
             continue;
         }
-        let Some(pane_height) = panes
-            .iter()
-            .find(|p| p.id == req.pane)
+        let Some(pane_height) = index
+            .panes
+            .get(&req.pane)
+            .and_then(|(entity, _)| panes.get(*entity).ok())
             .map(|p| p.dims.height as u16)
         else {
             continue;
@@ -490,14 +489,11 @@ fn flush_tmux_outgoing(mut commands: Commands, mut client: Single<(Entity, &mut 
 
 /// Applies this frame's command replies and notifications to the world: drains
 /// each reply to what it answers, runs the active-pane→aggressive-resize
-/// follow-up, surfaces copy-mode replies, and triggers the projection events the
-/// observers consume.
+/// follow-up, and triggers the projection events the observers consume.
 fn apply_tmux_replies(
     mut commands: Commands,
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
-    mut copy_queries: ResMut<CopyModeQueries>,
     mut pane_output: MessageWriter<PaneOutput>,
-    mut copy_replies: MessageWriter<CopyModeReply>,
     batch: Res<TmuxEventBatch>,
 ) {
     let (client, enumeration) = &mut *client;
@@ -523,9 +519,6 @@ fn apply_tmux_replies(
             }
             TransportEvent::Closed { .. } => {}
         }
-    }
-    for reply in drain_copy_replies(&mut copy_queries, events) {
-        copy_replies.write(reply);
     }
 }
 
@@ -616,7 +609,17 @@ fn apply_reply(
         PendingReply::RestoreState { pane } => {
             let slot = match first_reply_line(ok, output, "pane-state") {
                 Some(line) => Slot::Ok(parse_pane_state(&line)),
-                None => Slot::Failed,
+                None => {
+                    // NOTE: a failed state query silently degrades an alt-screen
+                    // pane to a primary-screen restore (`restore_to_bytes` reads
+                    // `alternate_on` off this slot) — worth a warning since the
+                    // mirror can then desync from tmux's real mouse-routing mode.
+                    tracing::warn!(
+                        pane = pane.0,
+                        "pane-state query failed, restore may degrade"
+                    );
+                    Slot::Failed
+                }
             };
             fill_restore_slot(enumeration, pane_output, pane, slot, |r, s| r.state = s);
         }
@@ -625,6 +628,12 @@ fn apply_reply(
 
 /// Resolves one slot of `pane`'s restore buffer and, once every requested
 /// slot has resolved, synthesizes and emits the seed exactly once.
+///
+/// NOTE: a failed base-capture slot leaves no real content to replay;
+/// emitting the seed anyway would clear an already-rendered pane's mirror to
+/// blank for no reason, so a failed `base` drops the buffer without emitting
+/// — matching the prior behavior of leaving the mirror untouched when
+/// `capture-pane` fails.
 fn fill_restore_slot<T>(
     enumeration: &mut EnumerationState,
     pane_output: &mut MessageWriter<PaneOutput>,
@@ -636,14 +645,20 @@ fn fill_restore_slot<T>(
         return;
     };
     assign(restore, slot);
-    if restore.complete()
-        && let Some(restore) = enumeration.restores.remove(&pane)
-    {
-        pane_output.write(PaneOutput {
-            pane,
-            data: restore.into_bytes(),
-        });
+    if !restore.complete() {
+        return;
     }
+    let Some(restore) = enumeration.restores.remove(&pane) else {
+        return;
+    };
+    if matches!(restore.base, Slot::Failed) {
+        tracing::warn!(pane = pane.0, "base capture failed, skipping restore seed");
+        return;
+    }
+    pane_output.write(PaneOutput {
+        pane,
+        data: restore.into_bytes(),
+    });
 }
 
 /// Sends the per-session enumeration queries (`list-windows` + active-pane) that
@@ -1131,9 +1146,9 @@ mod tests {
         .to_vec();
 
         // Build the app with the full projection pipeline registered: the plugin
-        // inits TmuxProjection / CopyModeQueries / TmuxEventBatch, the
-        // PaneOutput / CopyModeReply messages, the projection observers, plus
-        // the chained drain systems (gated on any_with_component::<TmuxClient>).
+        // inits TmuxProjection / TmuxEventBatch, the PaneOutput message, the
+        // projection observers, plus the chained drain systems (gated on
+        // any_with_component::<TmuxClient>).
         // EnumerationState is auto-required by TmuxClient.
         let mut app = App::new();
         app.add_plugins(TmuxSessionPlugin);

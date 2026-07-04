@@ -3,7 +3,7 @@
 //! per-command action events (`crate::action::tmux`) and copy-mode
 //! entry commands; while a pane is in copy mode, keys resolve against the
 //! shared config-driven key table (`crate::action::vi::ResolvedCopyModeKeys`)
-//! and fire the shared VI events, which `crate::action::vi::default_mode`
+//! and fire the shared VI events, which `crate::action::vi::applier`
 //! applies for every pane (tmux and non-tmux alike) rather than a
 //! tmux-specific applier module; unmatched keys forward straight to the pane
 //! in one `SendPaneKeys` batch

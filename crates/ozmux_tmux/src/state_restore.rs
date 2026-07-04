@@ -10,31 +10,40 @@ use tmux_control_parser::unescape_capture;
 /// NOTE: unknown variables expand to the empty string on older tmux (e.g.
 /// `bracket_paste_flag` before 3.7), and the parser degrades empty to off —
 /// this is what makes the query version-gate-free.
-pub(crate) const PANE_STATE_FORMAT: &str = "pane_id=#{pane_id}\talternate_on=#{alternate_on}\talternate_saved_x=#{alternate_saved_x}\talternate_saved_y=#{alternate_saved_y}\tcursor_x=#{cursor_x}\tcursor_y=#{cursor_y}\tscroll_region_upper=#{scroll_region_upper}\tscroll_region_lower=#{scroll_region_lower}\tpane_tabs=#{pane_tabs}\tcursor_flag=#{cursor_flag}\tinsert_flag=#{insert_flag}\tkeypad_cursor_flag=#{keypad_cursor_flag}\tkeypad_flag=#{keypad_flag}\twrap_flag=#{wrap_flag}\torigin_flag=#{origin_flag}\tmouse_standard_flag=#{mouse_standard_flag}\tmouse_button_flag=#{mouse_button_flag}\tmouse_all_flag=#{mouse_all_flag}\tmouse_utf8_flag=#{mouse_utf8_flag}\tmouse_sgr_flag=#{mouse_sgr_flag}\tbracket_paste_flag=#{bracket_paste_flag}";
+pub(crate) const PANE_STATE_FORMAT: &str = "pane_id=#{pane_id}\talternate_on=#{alternate_on}\talternate_saved_x=#{alternate_saved_x}\talternate_saved_y=#{alternate_saved_y}\tcursor_x=#{cursor_x}\tcursor_y=#{cursor_y}\tscroll_region_upper=#{scroll_region_upper}\tscroll_region_lower=#{scroll_region_lower}\tpane_tabs=#{pane_tabs}\tcursor_flag=#{cursor_flag}\tinsert_flag=#{insert_flag}\tkeypad_cursor_flag=#{keypad_cursor_flag}\tkeypad_flag=#{keypad_flag}\twrap_flag=#{wrap_flag}\torigin_flag=#{origin_flag}\tmouse_standard_flag=#{mouse_standard_flag}\tmouse_button_flag=#{mouse_button_flag}\tmouse_all_flag=#{mouse_all_flag}\tmouse_utf8_flag=#{mouse_utf8_flag}\tmouse_sgr_flag=#{mouse_sgr_flag}\tbracket_paste_flag=#{bracket_paste_flag}\tpane_height=#{pane_height}";
 
 /// One pane's terminal state parsed from a [`PANE_STATE_FORMAT`] reply line.
+///
+/// NOTE: fields are private — every read lives in this module (`restore_to_bytes`
+/// / `append_state_bytes`); external code only holds this behind `Slot<PaneState>`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneState {
-    pub(crate) alternate_on: bool,
-    pub(crate) alternate_saved_x: u16,
-    pub(crate) alternate_saved_y: u16,
-    pub(crate) cursor_x: u16,
-    pub(crate) cursor_y: u16,
-    pub(crate) scroll_region_upper: u16,
-    pub(crate) scroll_region_lower: u16,
-    pub(crate) tabs: Vec<u16>,
-    pub(crate) cursor_visible: bool,
-    pub(crate) insert: bool,
-    pub(crate) app_cursor_keys: bool,
-    pub(crate) app_keypad: bool,
-    pub(crate) wrap: bool,
-    pub(crate) origin: bool,
-    pub(crate) mouse_standard: bool,
-    pub(crate) mouse_button: bool,
-    pub(crate) mouse_all: bool,
-    pub(crate) mouse_utf8: bool,
-    pub(crate) mouse_sgr: bool,
-    pub(crate) bracketed_paste: bool,
+    alternate_on: bool,
+    alternate_saved_x: u16,
+    alternate_saved_y: u16,
+    cursor_x: u16,
+    cursor_y: u16,
+    scroll_region_upper: u16,
+    scroll_region_lower: u16,
+    tabs: Vec<u16>,
+    cursor_visible: bool,
+    insert: bool,
+    app_cursor_keys: bool,
+    app_keypad: bool,
+    wrap: bool,
+    origin: bool,
+    mouse_standard: bool,
+    mouse_button: bool,
+    mouse_all: bool,
+    mouse_utf8: bool,
+    mouse_sgr: bool,
+    bracketed_paste: bool,
+    /// The pane's current row count, queried in the same reply batch as the
+    /// capture. Takes precedence over `GridCapture::Full`'s `pane_height` (an
+    /// ECS snapshot taken at `Added<TmuxPane>` time) for the alt-screen split
+    /// in `restore_to_bytes`, since a resize between that snapshot and the
+    /// capture reply landing would otherwise split `base` at a stale offset.
+    pane_height: u16,
 }
 
 /// Parses one [`PANE_STATE_FORMAT`] reply line. Missing, empty, or
@@ -74,6 +83,7 @@ pub(crate) fn parse_pane_state(line: &str) -> PaneState {
         mouse_utf8: flag("mouse_utf8_flag"),
         mouse_sgr: flag("mouse_sgr_flag"),
         bracketed_paste: flag("bracket_paste_flag"),
+        pane_height: num("pane_height"),
     }
 }
 
@@ -101,13 +111,17 @@ pub(crate) enum GridCapture {
 /// NOTE: the reset prefix MUST precede the ESC[2J erase and the row replay —
 /// stale SGR floods the erase (the blue-pane bug) and a stale DECSTBM/DECOM
 /// scrolls the CRLF replay within wrong margins. Content is replayed before
-/// modes so `-J`-joined long lines re-wrap under the default wrap=on.
+/// modes so `-J`-joined long lines re-wrap under the forced wrap=on the reset
+/// prefix now includes (a light re-seed reuses a long-lived mirror that can
+/// still carry a PRIOR restore's wrap=off, which would otherwise stop the
+/// replayed long line from re-wrapping before the real `wrap` flag is
+/// reapplied afterward).
 pub(crate) fn restore_to_bytes(
     grid: &GridCapture,
     state: Option<&PaneState>,
     pending: &[String],
 ) -> Vec<u8> {
-    let mut bytes = b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2J".to_vec();
+    let mut bytes = b"\x1b[r\x1b[?6l\x1b[?7h\x1b[0m\x1b[H\x1b[2J".to_vec();
     match grid {
         GridCapture::Full {
             base,
@@ -115,7 +129,16 @@ pub(crate) fn restore_to_bytes(
             pane_height,
         } => {
             let alt = state.is_some_and(|s| s.alternate_on);
-            let height = *pane_height as usize;
+            // NOTE: state.pane_height is queried in the same reply batch as
+            // the capture, so it reflects the pane's dims far more closely
+            // than `pane_height` (an ECS snapshot taken at `Added<TmuxPane>`
+            // time, which can go stale if the pane resizes before the reply
+            // lands) — falling back to it only when the state query itself
+            // failed.
+            let height = state
+                .map(|s| s.pane_height)
+                .filter(|h| *h > 0)
+                .unwrap_or(*pane_height) as usize;
             if alt && base.len() >= height {
                 let (history, alt_rows) = base.split_at(base.len() - height);
                 append_rows(&mut bytes, history);
@@ -127,8 +150,8 @@ pub(crate) fn restore_to_bytes(
                 bytes.extend_from_slice(
                     format!(
                         "\x1b[{};{}H",
-                        s.alternate_saved_y + 1,
-                        s.alternate_saved_x + 1
+                        s.alternate_saved_y.saturating_add(1),
+                        s.alternate_saved_x.saturating_add(1)
                     )
                     .as_bytes(),
                 );
@@ -203,8 +226,8 @@ fn append_state_bytes(bytes: &mut Vec<u8>, state: &PaneState) {
         bytes.extend_from_slice(
             format!(
                 "\x1b[{};{}r",
-                state.scroll_region_upper + 1,
-                state.scroll_region_lower + 1
+                state.scroll_region_upper.saturating_add(1),
+                state.scroll_region_lower.saturating_add(1)
             )
             .as_bytes(),
         );
@@ -212,15 +235,20 @@ fn append_state_bytes(bytes: &mut Vec<u8>, state: &PaneState) {
     if !state.tabs.is_empty() {
         bytes.extend_from_slice(b"\x1b[3g");
         for col in &state.tabs {
-            bytes.extend_from_slice(format!("\x1b[{}G\x1bH", col + 1).as_bytes());
+            bytes.extend_from_slice(format!("\x1b[{}G\x1bH", col.saturating_add(1)).as_bytes());
         }
     }
     let row = if state.origin {
-        state.cursor_y.saturating_sub(state.scroll_region_upper) + 1
+        state
+            .cursor_y
+            .saturating_sub(state.scroll_region_upper)
+            .saturating_add(1)
     } else {
-        state.cursor_y + 1
+        state.cursor_y.saturating_add(1)
     };
-    bytes.extend_from_slice(format!("\x1b[{};{}H", row, state.cursor_x + 1).as_bytes());
+    bytes.extend_from_slice(
+        format!("\x1b[{};{}H", row, state.cursor_x.saturating_add(1)).as_bytes(),
+    );
 }
 
 fn append_rows(bytes: &mut Vec<u8>, rows: &[String]) {
@@ -267,6 +295,7 @@ mod tests {
             "mouse_utf8_flag",
             "mouse_sgr_flag",
             "bracket_paste_flag",
+            "pane_height",
         ] {
             assert!(
                 PANE_STATE_FORMAT.contains(&format!("{key}=#{{{key}}}")),
@@ -452,7 +481,7 @@ mod tests {
             rows: vec!["hello".into(), "world".into()],
         };
         let b = restore_to_bytes(&grid, None, &[]);
-        assert!(b.starts_with(b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2J"));
+        assert!(b.starts_with(b"\x1b[r\x1b[?6l\x1b[?7h\x1b[0m\x1b[H\x1b[2J"));
         assert!(String::from_utf8_lossy(&b).contains("hello\r\nworld"));
     }
 
@@ -521,6 +550,29 @@ mod tests {
             String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
         assert!(!text.contains("\x1b[?1049h"));
         assert!(text.contains("h0\r\nh1"));
+    }
+
+    #[test]
+    fn full_with_alt_prefers_state_pane_height_over_stale_snapshot() {
+        // Regression: `pane_height` on `GridCapture::Full` is an ECS snapshot
+        // taken at `Added<TmuxPane>` time and can go stale if the pane resizes
+        // before the capture reply lands. `state.pane_height`, queried in the
+        // same reply batch as the capture, must win the split so a stale
+        // snapshot cannot misplace the alt/history boundary.
+        let grid = GridCapture::Full {
+            base: [rows("hist", 5), rows("alt", 3)].concat(),
+            saved_primary: rows("prim", 3),
+            pane_height: 10, // stale: would swallow all of `base` as "history"
+        };
+        let mut state = parse_pane_state("");
+        state.alternate_on = true;
+        state.pane_height = 3; // authoritative: the real current height
+        let text =
+            String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
+        assert!(text.contains("\x1b[?1049h"), "must still enter alt screen");
+        let hist = text.find("hist4").expect("history replayed");
+        let alt = text.find("alt0").expect("alt screen replayed");
+        assert!(hist < alt, "wrong order in {text:?}");
     }
 
     #[test]

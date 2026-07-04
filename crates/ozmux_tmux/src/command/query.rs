@@ -81,9 +81,9 @@ impl TmuxCommand for CapturePaneSavedPrimary {
     }
 }
 
-/// `display-message -p` over [`PANE_STATE_FORMAT`] (positional message, as
-/// `CopyStateQuery` does — display-message has no `-F` flag) — one pane's
-/// terminal modes, cursor, scroll region, and tab stops.
+/// `display-message -p` over [`PANE_STATE_FORMAT`] (positional message —
+/// display-message has no `-F` flag) — one pane's terminal modes, cursor,
+/// scroll region, and tab stops.
 pub(crate) struct PaneStateQuery {
     pub id: PaneId,
 }
