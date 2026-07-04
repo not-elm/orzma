@@ -4,8 +4,10 @@
 //! `tmux_webview_pointer` gathers raw events and hands unconsumed ones to
 //! `TmuxGestureButtons`; `tmux_gesture` reads that buffer and calls the pure
 //! deciders (`decide_press`, `decide_release`, `decide_continuation`) which return
-//! `TmuxMouseEffect`s; `on_tmux_mouse_effects` (observer in `apply`) applies them
-//! by sending tmux control-mode commands.
+//! `TmuxMouseEffect`s; `on_tmux_mouse_effects` (observer in `apply`) applies them:
+//! `SelectPane`/`ResizePane` send tmux control-mode commands, and the copy-drag
+//! variants trigger local `TerminalSelection*` events on the pane's own terminal
+//! handle.
 
 mod apply;
 mod decide;
@@ -17,8 +19,8 @@ use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::gesture::ClickTracker;
-use crate::render::tmux::copy_mode::{CopyModeSnapshot, cell_at_pane};
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
+use crate::surface::geometry::cell_at_pane;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
@@ -32,6 +34,7 @@ use decide::{
     ContinuationCtx, PressHit, ReleaseCtx, decide_continuation, decide_press, decide_release,
 };
 use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
+use ozma_tty_engine::{Column, Line, Point, SelectionType, Side};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozmux_tmux::{ActiveWindow, PaneId, TmuxClient, TmuxPane};
 use std::time::Duration;
@@ -82,11 +85,10 @@ fn pointer_active(
     windows.single().is_ok_and(|window| window.focused) && copy_prompt.open.is_none()
 }
 
-/// Bundles the two immutable copy-mode query reads used by `tmux_gesture`.
+/// Bundles the immutable copy-mode query read used by `tmux_gesture`.
 #[derive(SystemParam)]
 struct CopyModeGate<'w, 's> {
     copy_modes: Query<'w, 's, (), With<CopyModeState>>,
-    snapshots: Query<'w, 's, &'static CopyModeSnapshot>,
 }
 
 /// The current phase of a left-button gesture over a tmux pane.
@@ -104,21 +106,21 @@ enum GestureState {
         origin_phys: Vec2,
         click_count: u8,
     },
-    /// A double/triple click awaiting its copy-mode snapshot before positioning
-    /// the copy cursor and selecting a word/line.
+    /// A double/triple click awaiting a connected client before starting a
+    /// word/line selection at `cell` on the pane's local terminal handle.
     PendingMultiSelect {
         pane: Entity,
         pane_id: PaneId,
-        cell: (u16, u16),
+        cell: Point,
         kind: MultiSelectKind,
     },
     /// Selecting text in a pane via tmux copy-mode (entered on drag-start).
     Selecting {
         pane: Entity,
         pane_id: PaneId,
-        anchor: (u16, u16),
+        anchor: Point,
         begun: bool,
-        last_target: Option<(u16, u16)>,
+        last_target: Option<Point>,
     },
     /// Dragging a divider to resize its primary pane.
     Resizing {
@@ -153,9 +155,16 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
     )
 }
 
+/// Converts a `cell_at_pane` `(col, row)` result into the viewport-relative
+/// `Point` the local `TerminalSelection*` events expect. Both are 0-indexed,
+/// so no offset is needed.
+fn point_from_cell((col, row): (u16, u16)) -> Point {
+    Point::new(Line(row as i32), Column(col as usize))
+}
+
 /// Interprets the non-consumed left-button events handed off by
-/// `tmux_webview_pointer` (via `TmuxGestureButtons`) into tmux `select-pane`,
-/// `resize-pane`, or selection commands.
+/// `tmux_webview_pointer` into tmux `select-pane` / `resize-pane` commands, or
+/// local `TerminalSelection*` events on the pane's own terminal handle.
 ///
 /// On each `Pressed` event the cursor's physical position is hit-tested: a
 /// press within a divider's grab zone (whose primary pane has geometry) enters
@@ -164,10 +173,10 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// `drag_threshold_px` transitions to `Selecting` when the pane is already in
 /// copy mode (drag/selection for a pane NOT in copy mode is owned by
 /// the local terminal path). Multi-click (≥2) on a pane in copy mode enters
-/// `PendingMultiSelect` to wait for a copy-mode snapshot AND a connected client
-/// (it passes whether a `TmuxClient` is present to the decider so a no-client
-/// frame stays pending and retries), then selects a word/line via copy-mode
-/// commands. Each frame while `Resizing` the pointer's
+/// `PendingMultiSelect` to wait for a connected client (it passes whether a
+/// `TmuxClient` is present to the decider so a no-client frame stays pending
+/// and retries), then starts a word/line selection on the pane's local
+/// terminal handle. Each frame while `Resizing` the pointer's
 /// major-axis cell coordinate is mapped to an absolute target size and sent as
 /// `resize-pane -x/-y` whenever the target changes. On `Released` from
 /// `Selecting` a begun selection is copied to clipboard; from `Resizing` that
@@ -320,7 +329,7 @@ fn press_hit(
 }
 
 /// Resolves the `ReleaseCtx` for the gesture's current (pre-release) state:
-/// copy-mode + a `Pressed` multi-click's origin cell, and the pane under the
+/// copy-mode + a `Pressed` multi-click's origin point, and the pane under the
 /// cursor for a `Resizing`-click focus fallback.
 fn release_ctx(
     state: &GestureState,
@@ -335,11 +344,15 @@ fn release_ctx(
             pane, origin_phys, ..
         } => {
             let copy_mode = copy_gate.copy_modes.get(pane).is_ok();
-            let multi_cell = panes.get(pane).ok().and_then(|(_, p, node, transform)| {
-                let cols = p.dims.width as u16;
-                let rows = p.dims.height as u16;
-                cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
-            });
+            let multi_cell = panes
+                .get(pane)
+                .ok()
+                .and_then(|(_, p, node, transform)| {
+                    let cols = p.dims.width as u16;
+                    let rows = p.dims.height as u16;
+                    cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
+                })
+                .map(point_from_cell);
             ReleaseCtx {
                 copy_mode,
                 multi_cell,
@@ -361,8 +374,11 @@ fn release_ctx(
 
 /// Resolves the per-frame `ContinuationCtx` for the gesture's current state,
 /// reading only the inputs the active arm needs (cursor + copy-mode + origin
-/// anchor for `Pressed`; snapshot + live cell for `Selecting`; snapshot +
-/// client presence for `PendingMultiSelect`; pointer cell for `Resizing`).
+/// anchor point for `Pressed`; live selecting point for `Selecting`; client
+/// presence for `PendingMultiSelect`; pointer cell for `Resizing`). `side` /
+/// `ty` are set once for a plain drag: the pointer half-cell fraction is not
+/// resolved here, so every local selection starts as a `Simple`, `Left`-side
+/// selection.
 fn continuation_ctx(
     state: &GestureState,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -378,9 +394,10 @@ fn continuation_ctx(
         cursor_phys,
         drag_threshold_phys,
         copy_mode: false,
-        anchor_cell: None,
-        snapshot_cursor: None,
-        selecting_cell: None,
+        anchor_point: None,
+        selecting_point: None,
+        side: Side::Left,
+        ty: SelectionType::Simple,
         resize_pointer_cell: None,
         client_present,
     };
@@ -393,35 +410,25 @@ fn continuation_ctx(
                 ctx.pane_alive = true;
                 let cols = p.dims.width as u16;
                 let rows = p.dims.height as u16;
-                ctx.anchor_cell =
-                    cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows);
+                ctx.anchor_point =
+                    cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
+                        .map(point_from_cell);
             }
         }
         GestureState::Selecting { pane, .. } => {
             if let Ok((_, p, node, transform)) = panes.get(pane) {
                 ctx.pane_alive = true;
-                ctx.snapshot_cursor = copy_gate
-                    .snapshots
-                    .get(pane)
-                    .map(|s| (s.0.cursor_x, s.0.cursor_y))
-                    .ok();
                 if let Some(cursor_phys) = cursor_phys {
                     let cols = p.dims.width as u16;
                     let rows = p.dims.height as u16;
-                    ctx.selecting_cell =
-                        cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows);
+                    ctx.selecting_point =
+                        cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows)
+                            .map(point_from_cell);
                 }
             }
         }
         GestureState::PendingMultiSelect { pane, .. } => {
-            if panes.get(pane).is_ok() {
-                ctx.pane_alive = true;
-                ctx.snapshot_cursor = copy_gate
-                    .snapshots
-                    .get(pane)
-                    .map(|s| (s.0.cursor_x, s.0.cursor_y))
-                    .ok();
-            }
+            ctx.pane_alive = panes.get(pane).is_ok();
         }
         GestureState::Resizing { divider, .. } => {
             ctx.pane_alive = true;

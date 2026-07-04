@@ -1,6 +1,7 @@
 //! Effect values produced by the tmux mouse deciders and applied by the observer.
 
 use bevy::prelude::*;
+use ozma_tty_engine::{Point, SelectionType, Side};
 use ozmux_tmux::PaneId;
 use tmux_control_parser::DividerAxis;
 
@@ -12,7 +13,10 @@ pub(super) enum MultiSelectKind {
 }
 
 /// A single decided tmux side effect. Geometry is resolved at gather time and
-/// baked in, so the apply observer needs no world queries.
+/// baked in, so the apply observer needs no world queries. `SelectPane` /
+/// `ResizePane` are tmux control-mode commands; the copy-drag variants drive
+/// the pane's local terminal selection directly via `TerminalSelection*`
+/// events.
 #[derive(Debug, Clone, PartialEq)]
 pub(super) enum TmuxMouseEffect {
     SelectPane(PaneId),
@@ -22,29 +26,31 @@ pub(super) enum TmuxMouseEffect {
         size: u32,
     },
     BeginCopyDrag {
-        pane: PaneId,
-        snapshot_cursor: (u16, u16),
-        anchor: (u16, u16),
+        entity: Entity,
+        anchor: Point,
+        side: Side,
+        ty: SelectionType,
     },
     ExtendCopyDrag {
-        pane: PaneId,
-        snapshot_cursor: (u16, u16),
-        cell: (u16, u16),
+        entity: Entity,
+        cell: Point,
+        side: Side,
     },
     MultiSelect {
-        pane: PaneId,
+        entity: Entity,
         kind: MultiSelectKind,
-        snapshot_cursor: (u16, u16),
-        cell: (u16, u16),
+        cell: Point,
+        side: Side,
     },
     CopySelection {
-        pane: PaneId,
+        entity: Entity,
     },
 }
 
 /// Carries a frame's decided effects to `on_tmux_mouse_effects`; the
 /// `#[event_target] entity` is the gesture's pane and is not queried by the
-/// observer (every variant carries its own `PaneId`).
+/// observer (`SelectPane`/`ResizePane` carry their own `PaneId`; the copy-drag
+/// variants carry their own `Entity`).
 #[derive(EntityEvent, Debug, Clone)]
 pub(super) struct TmuxMouseEffects {
     #[event_target]

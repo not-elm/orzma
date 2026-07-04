@@ -48,6 +48,26 @@ pub(crate) fn cell_at_local(
     (col, row, side)
 }
 
+/// Maps a window cursor position (physical px) to the active `TmuxPane`'s
+/// visible `(col, row)`, clamped to `[0, cols) × [0, rows)`. Returns `None` when
+/// the projection is degenerate (zero-area node). The point is clamped (not
+/// rejected) when it falls outside the pane so a drag that leaves the pane edge
+/// still extends the selection to the nearest cell.
+pub(crate) fn cell_at_pane(
+    node: &ComputedNode,
+    transform: &UiGlobalTransform,
+    cursor_phys: Vec2,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    cols: u16,
+    rows: u16,
+) -> Option<(u16, u16)> {
+    let local = phys_to_pane_local(node, transform, cursor_phys)?;
+    let col = ((local.x / cell_w_phys).floor().max(0.0) as u32).min(cols.saturating_sub(1) as u32);
+    let row = ((local.y / cell_h_phys).floor().max(0.0) as u32).min(rows.saturating_sub(1) as u32);
+    Some((col as u16, row as u16))
+}
+
 /// Computes terminal dimensions in cells from physical pixel size.
 ///
 /// Returns `(cols, rows)`, each clamped to a minimum of 1.
@@ -94,5 +114,58 @@ mod tests {
         assert_eq!(cells_for(1, 1, 8.0, 16.0), (1, 1));
         assert_eq!(cells_for(0, 0, 8.0, 16.0), (1, 1));
         assert_eq!(cells_for(807, 607, 8.0, 16.0), (100, 37));
+    }
+
+    #[test]
+    fn cell_at_pane_maps_and_clamps() {
+        // A point at local (40, 48) with 8x16 px cells maps to col 5, row 3
+        // (floor(40/8)=5, floor(48/16)=3); cols/rows bound the clamp, not the node.
+        let node = ComputedNode {
+            size: Vec2::new(640.0, 384.0),
+            ..ComputedNode::DEFAULT
+        };
+        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
+        let cell = cell_at_pane(&node, &transform, Vec2::new(40.0, 48.0), 8.0, 16.0, 80, 24);
+        assert_eq!(cell, Some((5, 3)));
+    }
+
+    #[test]
+    fn cell_at_pane_clamps_past_the_far_edge() {
+        let node = ComputedNode {
+            size: Vec2::new(640.0, 384.0),
+            ..ComputedNode::DEFAULT
+        };
+        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
+        // A point well past the bottom-right clamps to (cols-1, rows-1).
+        let cell = cell_at_pane(
+            &node,
+            &transform,
+            Vec2::new(9999.0, 9999.0),
+            8.0,
+            16.0,
+            80,
+            24,
+        );
+        assert_eq!(cell, Some((79, 23)));
+    }
+
+    #[test]
+    fn cell_at_pane_clamps_negative_to_origin() {
+        let node = ComputedNode {
+            size: Vec2::new(640.0, 384.0),
+            ..ComputedNode::DEFAULT
+        };
+        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
+        // A point above-left of the node clamps to (0, 0).
+        let cell = cell_at_pane(
+            &node,
+            &transform,
+            Vec2::new(-50.0, -50.0),
+            8.0,
+            16.0,
+            80,
+            24,
+        );
+        assert_eq!(cell, Some((0, 0)));
     }
 }

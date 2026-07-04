@@ -4,10 +4,11 @@
 //! vi applier (`crate::action::vi::default_mode`) now scrolls the pane's own
 //! `TerminalHandle` directly, and `route_tmux_output` always flushes that
 //! handle's live view — there is no separate scrolled-viewport render path to
-//! feed anymore. The module stays only because the tmux mouse-forwarding code
-//! (`crate::input::tmux::mouse`) still imports `CopyModeSnapshot`,
-//! `cursor_deltas`, and `cell_at_pane` from it; a later change retires the
-//! rest.
+//! feed anymore. `crate::input::tmux::mouse` no longer imports anything from
+//! here (mouse drag-select now drives the local `TerminalSelection*` events
+//! directly, and the pure geometry helper it used, `cell_at_pane`, moved to
+//! `crate::surface::geometry`); the module stays dead until a later change
+//! deletes it outright.
 //!
 //! Reply correlation rides the crate-side [`CopyModeQueries`] / [`CopyModeReply`]
 //! channel: the binary registers each command by `CommandId`, and `ozmux_tmux`
@@ -15,9 +16,9 @@
 //! Cursor/selection overlay (Task 9) and the clipboard bridge (Task 10) read the
 //! stashed [`CopyModeSnapshot`] / handle the `Buffer` reply later.
 
-// NOTE: `CopyModePlugin` is unregistered as of this task (Task 2), and the
-// file is deleted outright by Task 5 once Task 3 relocates `cell_at_pane` out
-// of it; `#[allow(dead_code)]` covers that transitional window.
+// NOTE: `CopyModePlugin` is unregistered as of Task 2, and Task 3 has since
+// relocated `cell_at_pane` out of this file; the file is deleted outright by
+// Task 5. `#[allow(dead_code)]` covers this transitional window.
 // `#[expect(dead_code)]` was tried instead (both module-level and per-item on
 // each of this module's ~19 unreachable functions/structs/enum/const) and
 // verified, via a clean `cargo build --workspace`, to report "this lint
@@ -38,10 +39,8 @@
 
 use crate::app_mode::TmuxActiveSet;
 use crate::clipboard::Clipboard;
-use crate::surface::geometry::phys_to_pane_local;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
-use bevy::ui::{ComputedNode, UiGlobalTransform};
 use ozma_tty_engine::TerminalHandle;
 use ozma_tty_renderer::schema::{
     SelectionKind, SelectionRange, TerminalGrid, ViCursor, ViewportPoint,
@@ -132,7 +131,7 @@ fn decide_capture(
 /// changes (so `Changed<CopyModeSnapshot>` is meaningful), and read back to
 /// diff against the next reply.
 #[derive(Component)]
-pub(crate) struct CopyModeSnapshot(pub(crate) CopyState);
+struct CopyModeSnapshot(CopyState);
 
 /// A per-pane scratch terminal used only to parse `capture-pane` bytes into the
 /// pane's rendered grid while in copy mode. The pane's live handle stays
@@ -496,7 +495,7 @@ fn buffer_reply_to_text(lines: &[String]) -> String {
 /// one command: a positive horizontal delta emits `cursor-right`, negative
 /// `cursor-left`; a positive vertical delta emits `cursor-down`, negative
 /// `cursor-up`. A zero delta on an axis emits nothing.
-pub(crate) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
+fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> {
     let mut out = Vec::new();
     let (cx, cy) = (cur.0 as i32, cur.1 as i32);
     let (tx, ty) = (target.0 as i32, target.1 as i32);
@@ -513,26 +512,6 @@ pub(crate) fn cursor_deltas(cur: (u16, u16), target: (u16, u16)) -> Vec<String> 
         out.push(format!("send-keys -X -N {} cursor-up", -dy));
     }
     out
-}
-
-/// Maps a window cursor position (physical px) to the active `TmuxPane`'s
-/// visible `(col, row)`, clamped to `[0, cols) × [0, rows)`. Returns `None` when
-/// the projection is degenerate (zero-area node). The point is clamped (not
-/// rejected) when it falls outside the pane so a drag that leaves the pane edge
-/// still extends the selection to the nearest cell.
-pub(crate) fn cell_at_pane(
-    node: &ComputedNode,
-    transform: &UiGlobalTransform,
-    cursor_phys: Vec2,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    cols: u16,
-    rows: u16,
-) -> Option<(u16, u16)> {
-    let local = phys_to_pane_local(node, transform, cursor_phys)?;
-    let col = ((local.x / cell_w_phys).floor().max(0.0) as u32).min(cols.saturating_sub(1) as u32);
-    let row = ((local.y / cell_h_phys).floor().max(0.0) as u32).min(rows.saturating_sub(1) as u32);
-    Some((col as u16, row as u16))
 }
 
 #[cfg(test)]
@@ -580,59 +559,6 @@ mod tests {
             cursor_deltas((3, 9), (3, 2)),
             vec!["send-keys -X -N 7 cursor-up".to_string()],
         );
-    }
-
-    #[test]
-    fn cell_at_pane_maps_and_clamps() {
-        // A point at local (40, 48) with 8x16 px cells maps to col 5, row 3
-        // (floor(40/8)=5, floor(48/16)=3); cols/rows bound the clamp, not the node.
-        let node = ComputedNode {
-            size: Vec2::new(640.0, 384.0),
-            ..ComputedNode::DEFAULT
-        };
-        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
-        let cell = cell_at_pane(&node, &transform, Vec2::new(40.0, 48.0), 8.0, 16.0, 80, 24);
-        assert_eq!(cell, Some((5, 3)));
-    }
-
-    #[test]
-    fn cell_at_pane_clamps_past_the_far_edge() {
-        let node = ComputedNode {
-            size: Vec2::new(640.0, 384.0),
-            ..ComputedNode::DEFAULT
-        };
-        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
-        // A point well past the bottom-right clamps to (cols-1, rows-1).
-        let cell = cell_at_pane(
-            &node,
-            &transform,
-            Vec2::new(9999.0, 9999.0),
-            8.0,
-            16.0,
-            80,
-            24,
-        );
-        assert_eq!(cell, Some((79, 23)));
-    }
-
-    #[test]
-    fn cell_at_pane_clamps_negative_to_origin() {
-        let node = ComputedNode {
-            size: Vec2::new(640.0, 384.0),
-            ..ComputedNode::DEFAULT
-        };
-        let transform = UiGlobalTransform::from_xy(320.0, 192.0);
-        // A point above-left of the node clamps to (0, 0).
-        let cell = cell_at_pane(
-            &node,
-            &transform,
-            Vec2::new(-50.0, -50.0),
-            8.0,
-            16.0,
-            80,
-            24,
-        );
-        assert_eq!(cell, Some((0, 0)));
     }
 
     #[test]

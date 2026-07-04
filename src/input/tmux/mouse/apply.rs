@@ -1,17 +1,20 @@
 //! Apply observer for tmux mouse effects.
 //!
-//! Receives `TmuxMouseEffects` triggered by `tmux_gesture` and sends the
-//! corresponding tmux control-mode commands. Bookkeeping on `TmuxMouseGesture`
-//! is done here exactly when a send succeeds, preserving invariant 8.
+//! Receives `TmuxMouseEffects` triggered by `tmux_gesture` and applies them:
+//! `SelectPane` / `ResizePane` send tmux control-mode commands, gated on an
+//! active `TmuxClient`; the copy-drag variants trigger local
+//! `TerminalSelection*` events on the pane's own terminal handle directly, with
+//! no `TmuxClient` dependency. Bookkeeping on `TmuxMouseGesture` is done here
+//! exactly when a send/trigger succeeds, preserving invariant 8.
 
 use super::TmuxMouseGesture;
 use super::effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
-use crate::render::tmux::copy_mode::cursor_deltas;
-use bevy::prelude::*;
-use ozmux_tmux::{
-    CopyModeQueries, CopyQueryKind, PaneId, ResizePaneX, ResizePaneY, SelectPane, ShowBuffer,
-    TmuxClient,
+use crate::action::terminal::{
+    TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
 };
+use bevy::prelude::*;
+use ozma_tty_engine::SelectionType;
+use ozmux_tmux::{ResizePaneX, ResizePaneY, SelectPane, TmuxClient};
 use tmux_control_parser::DividerAxis;
 
 /// Plugin that registers the tmux mouse-effects apply observer.
@@ -23,23 +26,22 @@ impl Plugin for ApplyPlugin {
     }
 }
 
-/// Observer that applies a frame's decided `TmuxMouseEffects` by sending the
-/// corresponding tmux control-mode commands. Sends are gated on an active
-/// client; when none is present every effect is a no-op and the gesture state
-/// is left unchanged.
+/// Observer that applies a frame's decided `TmuxMouseEffects`. `SelectPane` /
+/// `ResizePane` sends are gated on an active client (a no-client frame is a
+/// no-op for those two variants); the copy-drag variants trigger local
+/// `TerminalSelection*` events unconditionally.
 fn on_tmux_mouse_effects(
     ev: On<TmuxMouseEffects>,
-    mut queries: ResMut<CopyModeQueries>,
+    mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
-    client: Option<Single<&mut TmuxClient>>,
+    mut client: Option<Single<&mut TmuxClient>>,
 ) {
-    let Some(mut handle) = client else {
-        return;
-    };
-    let handle = &mut *handle;
     for effect in &ev.effects {
         match *effect {
             TmuxMouseEffect::SelectPane(pane_id) => {
+                let Some(handle) = client.as_deref_mut() else {
+                    continue;
+                };
                 if let Err(e) = handle.send(SelectPane { id: pane_id }) {
                     tracing::warn!(?e, pane = pane_id.0, "select-pane send failed");
                 }
@@ -49,6 +51,9 @@ fn on_tmux_mouse_effects(
                 primary,
                 size,
             } => {
+                let Some(handle) = client.as_deref_mut() else {
+                    continue;
+                };
                 let result = match axis {
                     DividerAxis::Vertical => handle.send(ResizePaneX {
                         id: primary,
@@ -72,19 +77,18 @@ fn on_tmux_mouse_effects(
                 }
             }
             TmuxMouseEffect::BeginCopyDrag {
-                pane,
-                snapshot_cursor,
+                entity,
                 anchor,
+                side,
+                ty,
             } => {
-                for cmd in cursor_deltas(snapshot_cursor, anchor) {
-                    if let Err(e) = handle.send(&target_copy_cmd(pane, &cmd)) {
-                        tracing::warn!(?e, pane = pane.0, "drag-select anchor delta send failed");
-                    }
-                }
-                if let Err(e) = handle.send(&target_copy_cmd(pane, "send-keys -X begin-selection"))
-                {
-                    tracing::warn!(?e, pane = pane.0, "drag-select begin-selection send failed");
-                } else if let super::GestureState::Selecting {
+                commands.trigger(TerminalSelectionStart {
+                    entity,
+                    point: anchor,
+                    side,
+                    ty,
+                });
+                if let super::GestureState::Selecting {
                     begun, last_target, ..
                 } = &mut gesture.state
                 {
@@ -92,96 +96,50 @@ fn on_tmux_mouse_effects(
                     *last_target = Some(anchor);
                 }
             }
-            TmuxMouseEffect::ExtendCopyDrag {
-                pane,
-                snapshot_cursor,
-                cell,
-            } => {
-                for cmd in cursor_deltas(snapshot_cursor, cell) {
-                    if let Err(e) = handle.send(&target_copy_cmd(pane, &cmd)) {
-                        tracing::warn!(?e, pane = pane.0, "drag-select extend delta send failed");
-                    }
-                }
+            TmuxMouseEffect::ExtendCopyDrag { entity, cell, side } => {
+                commands.trigger(TerminalSelectionUpdate {
+                    entity,
+                    point: cell,
+                    side,
+                });
                 if let super::GestureState::Selecting { last_target, .. } = &mut gesture.state {
                     *last_target = Some(cell);
                 }
             }
             TmuxMouseEffect::MultiSelect {
-                pane,
+                entity,
                 kind,
-                snapshot_cursor,
                 cell,
+                side,
             } => {
-                for cmd in multi_select_commands(kind, snapshot_cursor, cell, pane) {
-                    if let Err(e) = handle.send(&cmd) {
-                        tracing::warn!(?e, pane = pane.0, "multi-select cmd send failed");
-                    }
-                }
-                match handle.send(ShowBuffer) {
-                    Ok(id) => queries.register(id, pane, CopyQueryKind::Buffer),
-                    Err(e) => {
-                        tracing::warn!(?e, pane = pane.0, "multi-select show-buffer send failed")
-                    }
-                }
+                let ty = match kind {
+                    MultiSelectKind::Word => SelectionType::Semantic,
+                    MultiSelectKind::Line => SelectionType::Lines,
+                };
+                commands.trigger(TerminalSelectionStart {
+                    entity,
+                    point: cell,
+                    side,
+                    ty,
+                });
+                commands.trigger(TerminalSelectionCopy { entity });
             }
-            TmuxMouseEffect::CopySelection { pane } => {
-                let copy = target_copy_cmd(pane, "send-keys -X copy-selection");
-                if let Err(e) = handle.send(&copy) {
-                    tracing::warn!(?e, pane = pane.0, "drag-select copy-selection send failed");
-                } else {
-                    match handle.send(ShowBuffer) {
-                        Ok(id) => queries.register(id, pane, CopyQueryKind::Buffer),
-                        Err(e) => {
-                            tracing::warn!(?e, pane = pane.0, "drag-select show-buffer send failed")
-                        }
-                    }
-                }
+            TmuxMouseEffect::CopySelection { entity } => {
+                commands.trigger(TerminalSelectionCopy { entity });
             }
         }
     }
 }
 
-/// Inserts `-t %<id>` into a `send-keys -X ...` copy-mode command so it targets
-/// a specific pane instead of the client's active pane. Non-`send-keys -X`
-/// commands are returned unchanged.
-fn target_copy_cmd(pane: PaneId, cmd: &str) -> String {
-    match cmd.strip_prefix("send-keys -X") {
-        Some(rest) => format!("send-keys -X -t %{}{}", pane.0, rest),
-        None => cmd.to_string(),
-    }
-}
-
-/// Pane-targeted copy-mode commands to position the copy cursor at `cell`
-/// (relative to the snapshot cursor) and select a word/line. Does NOT include
-/// `show-buffer` — the caller sends that separately to register the reply.
-fn multi_select_commands(
-    kind: MultiSelectKind,
-    snapshot_cursor: (u16, u16),
-    cell: (u16, u16),
-    pane: PaneId,
-) -> Vec<String> {
-    let mut out: Vec<String> = cursor_deltas(snapshot_cursor, cell)
-        .iter()
-        .map(|c| target_copy_cmd(pane, c))
-        .collect();
-    let select = match kind {
-        MultiSelectKind::Word => "send-keys -X select-word",
-        MultiSelectKind::Line => "send-keys -X select-line",
-    };
-    out.push(target_copy_cmd(pane, select));
-    out.push(target_copy_cmd(pane, "send-keys -X copy-selection"));
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozmux_tmux::PaneId;
 
     #[test]
     fn observer_applies_without_panic_when_no_client() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .init_resource::<CopyModeQueries>()
             .init_resource::<TmuxMouseGesture>()
             .add_observer(on_tmux_mouse_effects);
         let e = app.world_mut().spawn_empty().id();
@@ -189,52 +147,9 @@ mod tests {
             entity: e,
             effects: vec![
                 TmuxMouseEffect::SelectPane(PaneId(1)),
-                TmuxMouseEffect::CopySelection { pane: PaneId(1) },
+                TmuxMouseEffect::CopySelection { entity: e },
             ],
         });
-    }
-
-    #[test]
-    fn multi_select_commands_match_current_bytes() {
-        let cmds = multi_select_commands(MultiSelectKind::Word, (0, 0), (2, 0), PaneId(3));
-        assert!(cmds.iter().any(|c| c == "send-keys -X -t %3 select-word"));
-        assert!(cmds.last().unwrap() == "send-keys -X -t %3 copy-selection");
-    }
-
-    #[test]
-    fn multi_select_word_commands() {
-        let cmds = multi_select_commands(MultiSelectKind::Word, (0, 0), (3, 0), PaneId(2));
-        assert_eq!(
-            cmds,
-            vec![
-                "send-keys -X -t %2 -N 3 cursor-right".to_string(),
-                "send-keys -X -t %2 select-word".to_string(),
-                "send-keys -X -t %2 copy-selection".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_inserts_pane_target_after_send_keys_x() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "send-keys -X begin-selection"),
-            "send-keys -X -t %2 begin-selection",
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_preserves_flags_after_send_keys_x() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "send-keys -X -N 3 cursor-right"),
-            "send-keys -X -t %2 -N 3 cursor-right",
-        );
-    }
-
-    #[test]
-    fn target_copy_cmd_passes_non_matching_through() {
-        assert_eq!(
-            target_copy_cmd(PaneId(2), "copy-mode -t %2"),
-            "copy-mode -t %2",
-        );
+        app.world_mut().flush();
     }
 }
