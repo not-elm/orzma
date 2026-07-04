@@ -175,6 +175,13 @@ impl TerminalHandle {
         Self::new(cols, rows, listener, reply_rx, control_rx, control_tx)
     }
 
+    /// Returns the scrollback capacity a default-configured handle is built
+    /// with, so callers sizing external history fetches (e.g. tmux
+    /// `capture-pane -S`) stay in sync with the mirror's real cap.
+    pub fn default_scroll_cap() -> usize {
+        Config::default().scrolling_history
+    }
+
     /// Drains and returns any pending alacritty `PtyWrite` reply bytes
     /// (DSR / DA answers). A detached handle has no PTY to write them to;
     /// the caller forwards them to the external program (tmux input) or
@@ -1419,6 +1426,14 @@ mod tests {
         assert!(
             !h.is_noop_emit(&dirty, &curr_cursor, mode, mode, curr_vi, curr_sel),
             "selection appeared on prev_selection==None → must NOT be a no-op"
+        );
+    }
+
+    #[test]
+    fn default_scroll_cap_matches_config_default() {
+        assert_eq!(
+            TerminalHandle::default_scroll_cap(),
+            Config::default().scrolling_history
         );
     }
 

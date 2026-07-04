@@ -3,6 +3,8 @@
 //! cursor, aggressive-resize.
 
 use crate::enumerate::{LIST_WINDOWS_FORMAT, WINDOW_FLAGS_SUBSCRIPTION};
+use crate::state_restore::PANE_STATE_FORMAT;
+use ozma_tty_engine::TerminalHandle;
 use tmux_control::TmuxCommand;
 use tmux_control_parser::{PaneId, WindowId};
 
@@ -46,26 +48,66 @@ impl TmuxCommand for SubscribeWindowFlags {
     }
 }
 
-/// `capture-pane -p -e -t %<id>` — a pane's current visible content (with SGR).
+/// `capture-pane -peqJ -t %<id>` — the pane's visible screen (with SGR,
+/// wrapped lines joined, trailing spaces preserved by `-J`).
 pub(crate) struct CapturePane {
     pub id: PaneId,
 }
 impl TmuxCommand for CapturePane {
     fn into_raw_command(self) -> String {
-        format!("capture-pane -p -e -t %{}", self.id.0)
+        format!("capture-pane -peqJ -t %{}", self.id.0)
     }
 }
 
-/// `display-message -p -t %<id> '#{cursor_x} #{cursor_y}'` — a pane's real cursor.
-pub(crate) struct CursorQuery {
+/// `capture-pane -peqJ -S -<cap>` — the pane's base grid: primary history
+/// plus the CURRENT visible screen (the alt screen while alternate is on).
+pub(crate) struct CapturePaneWithHistory {
     pub id: PaneId,
 }
-impl TmuxCommand for CursorQuery {
+impl TmuxCommand for CapturePaneWithHistory {
     fn into_raw_command(self) -> String {
         format!(
-            "display-message -p -t %{} '#{{cursor_x}} #{{cursor_y}}'",
+            "capture-pane -peqJ -t %{} -S -{}",
+            self.id.0,
+            TerminalHandle::default_scroll_cap()
+        )
+    }
+}
+
+/// `capture-pane -peqJa` — the saved primary screen tmux snapshotted on alt
+/// entry (`saved_grid`); empty via `-q` when the pane never entered alt.
+pub(crate) struct CapturePaneSavedPrimary {
+    pub id: PaneId,
+}
+impl TmuxCommand for CapturePaneSavedPrimary {
+    fn into_raw_command(self) -> String {
+        format!("capture-pane -peqJa -t %{}", self.id.0)
+    }
+}
+
+/// `display-message -p` over [`PANE_STATE_FORMAT`] (positional message, as
+/// `CopyStateQuery` does — display-message has no `-F` flag) — one pane's
+/// terminal modes, cursor, scroll region, and tab stops.
+pub(crate) struct PaneStateQuery {
+    pub id: PaneId,
+}
+impl TmuxCommand for PaneStateQuery {
+    fn into_raw_command(self) -> String {
+        format!(
+            "display-message -p -t %{} \"{PANE_STATE_FORMAT}\"",
             self.id.0
         )
+    }
+}
+
+/// `capture-pane -pPC` — pending (unflushed) pane output with control
+/// characters octal-escaped.
+pub(crate) struct CapturePanePending {
+    pub id: PaneId,
+}
+impl TmuxCommand for CapturePanePending {
+    fn into_raw_command(self) -> String {
+        format!("capture-pane -pPC -t %{}", self.id.0)
     }
 }
 
@@ -124,18 +166,46 @@ mod tests {
     }
 
     #[test]
-    fn capture_pane_targets_at_id_with_escapes() {
+    fn capture_pane_visible_uses_escape_flags() {
         assert_eq!(
             CapturePane { id: PaneId(5) }.into_raw_command(),
-            "capture-pane -p -e -t %5"
+            "capture-pane -peqJ -t %5"
         );
     }
 
     #[test]
-    fn cursor_query_targets_pane() {
+    fn capture_with_history_reaches_mirror_scroll_cap() {
+        let cmd = CapturePaneWithHistory { id: PaneId(5) }.into_raw_command();
         assert_eq!(
-            CursorQuery { id: PaneId(4) }.into_raw_command(),
-            "display-message -p -t %4 '#{cursor_x} #{cursor_y}'"
+            cmd,
+            format!(
+                "capture-pane -peqJ -t %5 -S -{}",
+                TerminalHandle::default_scroll_cap()
+            )
+        );
+    }
+
+    #[test]
+    fn capture_saved_primary_uses_alternate_flag() {
+        assert_eq!(
+            CapturePaneSavedPrimary { id: PaneId(7) }.into_raw_command(),
+            "capture-pane -peqJa -t %7"
+        );
+    }
+
+    #[test]
+    fn pane_state_query_embeds_the_state_format() {
+        let cmd = PaneStateQuery { id: PaneId(3) }.into_raw_command();
+        assert!(cmd.starts_with("display-message -p -t %3 \""));
+        assert!(cmd.contains("alternate_on=#{alternate_on}"));
+        assert!(cmd.ends_with('"'));
+    }
+
+    #[test]
+    fn capture_pending_uses_pc_flags() {
+        assert_eq!(
+            CapturePanePending { id: PaneId(2) }.into_raw_command(),
+            "capture-pane -pPC -t %2"
         );
     }
 

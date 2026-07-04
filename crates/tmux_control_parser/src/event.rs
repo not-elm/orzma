@@ -480,21 +480,53 @@ fn unescape_output(bytes: &[u8]) -> TmuxResult<Vec<u8>> {
             i += 1;
             continue;
         }
-        match bytes.get(i + 1..i + 4) {
-            Some(triple) if triple.iter().all(|&d| matches!(d, b'0'..=b'7')) => {
-                let value = u16::from(triple[0] - b'0') * 64
-                    + u16::from(triple[1] - b'0') * 8
-                    + u16::from(triple[2] - b'0');
-                if value > u16::from(u8::MAX) {
-                    return Err(invalid(&bytes[i..i + 4]));
-                }
-                out.push(value as u8);
+        match bytes.get(i + 1..i + 4).and_then(decode_octal_triple) {
+            Some(byte) => {
+                out.push(byte);
                 i += 4;
             }
-            _ => return Err(invalid(&bytes[i..bytes.len().min(i + 4)])),
+            None => return Err(invalid(&bytes[i..bytes.len().min(i + 4)])),
         }
     }
     Ok(out)
+}
+
+/// Decodes `capture-pane -C` octal escapes (`\xxx`) back to bytes, passing
+/// any non-octal backslash sequence through verbatim.
+///
+/// Unlike `unescape_output` this never fails: tmux's `-C` escaping is
+/// known not to escape backslash itself, so a literal `\` in pane output
+/// arrives bare and must not be treated as a protocol error.
+pub fn unescape_capture(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'\\' {
+            out.push(bytes[i]);
+            i += 1;
+            continue;
+        }
+        match bytes.get(i + 1..i + 4).and_then(decode_octal_triple) {
+            Some(byte) => {
+                out.push(byte);
+                i += 4;
+            }
+            None => {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+fn decode_octal_triple(triple: &[u8]) -> Option<u8> {
+    let [a, b, c] = triple else { return None };
+    if ![a, b, c].iter().all(|&&d| matches!(d, b'0'..=b'7')) {
+        return None;
+    }
+    let value = u16::from(a - b'0') * 64 + u16::from(b - b'0') * 8 + u16::from(c - b'0');
+    u8::try_from(value).ok()
 }
 
 #[cfg(test)]
@@ -981,5 +1013,26 @@ mod tests {
                 rest: "some args".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn unescape_capture_decodes_octal_triples() {
+        assert_eq!(
+            unescape_capture(b"abc\\015\\012def"),
+            b"abc\r\ndef".to_vec()
+        );
+    }
+
+    #[test]
+    fn unescape_capture_passes_lone_backslash_verbatim() {
+        // NOTE: capture-pane -C escapes control chars but NOT backslash itself,
+        // so a literal backslash followed by non-octal must survive unchanged.
+        assert_eq!(unescape_capture(b"a\\x9"), b"a\\x9".to_vec());
+        assert_eq!(unescape_capture(b"tail\\"), b"tail\\".to_vec());
+    }
+
+    #[test]
+    fn unescape_capture_passes_out_of_range_octal_verbatim() {
+        assert_eq!(unescape_capture(b"\\400"), b"\\400".to_vec());
     }
 }

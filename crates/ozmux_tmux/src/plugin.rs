@@ -2,24 +2,26 @@
 //! per-frame transport-drain system that triggers the projection events.
 
 use crate::command::{
-    ActivePane, AggressiveResize, CapturePane, ClientName, CursorQuery, ListWindows,
-    SubscribeWindowFlags, Version,
+    ActivePane, AggressiveResize, CapturePane, CapturePanePending, CapturePaneSavedPrimary,
+    CapturePaneWithHistory, ClientName, ListWindows, PaneStateQuery, SubscribeWindowFlags, Version,
 };
 use crate::components::{PaneRecaptureState, TmuxPane, TmuxSession};
 use crate::connection::{TmuxAttached, TmuxClient};
 use crate::copy_queries::{CopyModeQueries, CopyModeReply, drain_copy_replies};
-use crate::enumerate::{EnumerationState, PendingReply, version_supports_per_window_refresh};
+use crate::enumerate::{
+    EnumerationState, PaneRestore, PendingReply, Slot, version_supports_per_window_refresh,
+};
 use crate::event_pump::{
-    capture_to_bytes, capture_to_bytes_with_cursor, detect_session_switch, detect_window_added,
-    detect_window_switch, first_reply_line, log_transport_event, parse_active_pane,
-    parse_cursor_pos, trigger_notification, trigger_seed,
+    detect_session_switch, detect_window_added, detect_window_switch, first_reply_line,
+    log_transport_event, parse_active_pane, trigger_notification, trigger_seed,
 };
 use crate::events::{TmuxActivePaneChanged, TmuxWindowsRetained};
 use crate::observers::{TmuxProjection, register_observers};
 use crate::output::{PaneOutput, RequestPaneReseed, collect_pane_outputs};
+use crate::state_restore::parse_pane_state;
 use bevy::prelude::*;
 use ozma_tty_engine::{AdoptedControlMode, ControlModeReleased, TerminalRawWrite};
-use tmux_control::{ClientEvent, TransportEvent};
+use tmux_control::{ClientEvent, TmuxCommand, TransportEvent};
 use tmux_control_parser::PaneId;
 
 /// Soft per-frame event-count expectation. A single frame's feed produces the
@@ -114,48 +116,123 @@ impl TmuxEventBatch {
     }
 }
 
-/// Sends `capture-pane` and a companion cursor-position `display-message` once
-/// for each newly-projected pane so its current screen seeds the first paint
-/// with the cursor at the correct position. tmux `-CC` does not replay existing
-/// content on attach (it only streams new `%output`), so without this a
-/// quiescent pane stays blank until its program writes again. Gated on
-/// `Added<TmuxPane>` — runs once per pane. The capture/cursor replies are
-/// consumed by [`apply_reply`]'s `Capture`/`Cursor` arms and routed as
-/// `PaneOutput`.
+/// Sends the full restore command set once for each newly-projected pane so its
+/// tmux-side state (history+screen, saved primary, terminal modes, pending
+/// output) seeds the first paint. tmux `-CC` does not replay existing content on
+/// attach (it only streams new `%output`), so without this a quiescent pane
+/// stays blank until its program writes again. Gated on `Added<TmuxPane>` — runs
+/// once per pane. The replies are consumed by [`apply_reply`]'s `Restore*` arms,
+/// which synthesize and route the seed as `PaneOutput`.
 fn request_pane_captures(
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
     new_panes: Query<&TmuxPane, Added<TmuxPane>>,
 ) {
     let (client, enumeration) = &mut *client;
     for pane in new_panes.iter() {
-        request_pane_capture(client, enumeration, pane.id);
+        request_pane_restore(
+            client,
+            enumeration,
+            pane.id,
+            pane.dims.height as u16,
+            RestoreDepth::Full,
+        );
     }
 }
 
-/// Sends a `capture-pane` + cursor-position query for `pane` and registers the
-/// pending replies so [`apply_reply`] seeds the mirror from tmux's authoritative
-/// grid (clear-screen + rows + the real cursor position).
-fn request_pane_capture(client: &mut TmuxClient, enumeration: &mut EnumerationState, pane: PaneId) {
-    match client.send(CapturePane { id: pane }) {
-        Ok(cap_id) => {
-            enumeration
-                .pending
-                .insert(cap_id, PendingReply::Capture { pane });
-            match client.send(CursorQuery { id: pane }) {
-                Ok(cur_id) => {
-                    enumeration
-                        .pending
-                        .insert(cur_id, PendingReply::Cursor { pane });
-                    enumeration.panes_with_cursor_pending.insert(pane);
-                }
-                Err(error) => {
-                    tracing::warn!(?error, pane = pane.0, "failed to send cursor query");
-                }
-            }
+/// How much of a pane's tmux-side state one restore pass fetches.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RestoreDepth {
+    /// Adopt-time: history+screen, saved primary, state, pending output.
+    Full,
+    /// Re-seed: visible screen + state (history accumulates via %output).
+    Light,
+}
+
+/// Sends one restore command, registering its reply id. Returns false on a
+/// send failure so the caller resolves that slot as Failed immediately —
+/// a partially-sent restore still completes instead of wedging the pane.
+fn send_restore_command(
+    client: &mut TmuxClient,
+    enumeration: &mut EnumerationState,
+    command: impl TmuxCommand,
+    reply: PendingReply,
+) -> bool {
+    match client.send(command) {
+        Ok(id) => {
+            enumeration.pending.insert(id, reply);
+            true
         }
         Err(error) => {
-            tracing::warn!(?error, pane = pane.0, "failed to send capture-pane")
+            tracing::warn!(?error, ?reply, "failed to send restore command");
+            false
         }
+    }
+}
+
+/// Sends the restore command set for `pane` and registers a [`PaneRestore`]
+/// buffer; [`apply_reply`] fills the slots and emits the synthesized seed
+/// once every requested reply resolves.
+fn request_pane_restore(
+    client: &mut TmuxClient,
+    enumeration: &mut EnumerationState,
+    pane: PaneId,
+    pane_height: u16,
+    depth: RestoreDepth,
+) {
+    let mut buffer = match depth {
+        RestoreDepth::Full => PaneRestore::new_full(pane_height),
+        RestoreDepth::Light => PaneRestore::new_light(pane_height),
+    };
+    let base_sent = match depth {
+        RestoreDepth::Full => send_restore_command(
+            client,
+            enumeration,
+            CapturePaneWithHistory { id: pane },
+            PendingReply::RestoreBase { pane },
+        ),
+        RestoreDepth::Light => send_restore_command(
+            client,
+            enumeration,
+            CapturePane { id: pane },
+            PendingReply::RestoreBase { pane },
+        ),
+    };
+    if !base_sent {
+        buffer.base = Slot::Failed;
+    }
+    if !send_restore_command(
+        client,
+        enumeration,
+        PaneStateQuery { id: pane },
+        PendingReply::RestoreState { pane },
+    ) {
+        buffer.state = Slot::Failed;
+    }
+    if depth == RestoreDepth::Full {
+        if !send_restore_command(
+            client,
+            enumeration,
+            CapturePaneSavedPrimary { id: pane },
+            PendingReply::RestoreSavedPrimary { pane },
+        ) {
+            buffer.saved_primary = Slot::Failed;
+        }
+        if !send_restore_command(
+            client,
+            enumeration,
+            CapturePanePending { id: pane },
+            PendingReply::RestorePending { pane },
+        ) {
+            buffer.pending = Slot::Failed;
+        }
+    }
+    // NOTE: when every send failed the buffer is already complete and no
+    // reply will ever flush it; drop it (no seed) so the in-flight guard
+    // clears and the aged reseed tracker can retry later.
+    if !buffer.complete() {
+        enumeration.restores.insert(pane, buffer);
+    } else {
+        tracing::warn!(pane = pane.0, "all restore commands failed to send");
     }
 }
 
@@ -174,14 +251,14 @@ const RECAPTURE_SETTLE_FRAMES: u8 = 3;
 /// grown to the control client's size (the common case when an adopted
 /// `tmux -CC` session starts at tmux's default-size and the client then enlarges
 /// it), alacritty's grow pulls local scrollback onto the screen and pushes the
-/// prompt to mid-screen. A capture-pane + cursor seed (clear + tmux's rows + the
-/// real cursor) overwrites both. The seed re-arms whenever the pane's dims change
+/// prompt to mid-screen. A light restore (clear + tmux's visible rows + terminal
+/// state) overwrites both. The seed re-arms whenever the pane's dims change
 /// (`done` is reset on a size change in the loop below), so the post-grow size is
 /// re-seeded too; the settle delay debounces a window-drag to one re-seed per
 /// settle. Re-seeding from tmux's authoritative grid is correct for a
 /// display-only mirror — it resyncs and never loses real state (tmux owns the
-/// content). Skipped while an earlier capture for the pane is still in flight so
-/// the two capture/cursor pairs never collide.
+/// content). Skipped while an earlier restore for the pane is still in flight so
+/// the two restore passes never collide.
 fn recapture_settled_panes(
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
     mut panes: Query<(&TmuxPane, &mut PaneRecaptureState)>,
@@ -203,33 +280,53 @@ fn recapture_settled_panes(
         }
         if !state.done
             && state.stable >= RECAPTURE_SETTLE_FRAMES
-            && !enumeration.panes_with_cursor_pending.contains(&pane.id)
+            && !enumeration.restores.contains_key(&pane.id)
         {
             state.done = true;
-            request_pane_capture(client, enumeration, pane.id);
+            request_pane_restore(
+                client,
+                enumeration,
+                pane.id,
+                pane.dims.height as u16,
+                RestoreDepth::Light,
+            );
         }
     }
 }
 
-/// Re-seeds each requested pane via `request_pane_capture`. Retry cadence is
-/// owned by the binary's aged reseed tracker (spec §3.2); this additionally
-/// skips a pane that already has a capture/cursor pair in flight so it cannot
+/// Re-seeds each requested pane via a light `request_pane_restore`. Retry
+/// cadence is owned by the binary's aged reseed tracker (spec §3.2); this
+/// additionally skips a pane that already has a restore in flight so it cannot
 /// collide with `recapture_settled_panes`.
 fn handle_pane_reseed_requests(
     mut client: Single<(&mut TmuxClient, &mut EnumerationState)>,
     mut requests: MessageReader<RequestPaneReseed>,
+    index: Res<TmuxProjection>,
+    panes: Query<&TmuxPane>,
 ) {
     let (client, enumeration) = &mut *client;
     for req in requests.read() {
-        // NOTE: two in-flight capture/cursor pairs for one pane desync the
-        // per-pane cursor correlation (`panes_with_cursor_pending` /
-        // `capture_awaiting_cursor` are keyed by pane, not by command), so the
-        // second capture lands without cursor info. The aged reseed tracker
-        // retries later, so suppressing here cannot wedge the pane.
-        if enumeration.panes_with_cursor_pending.contains(&req.pane) {
+        // NOTE: a second restore for a pane whose buffer is still in flight
+        // would land a duplicate seed; the aged reseed tracker retries later, so
+        // suppressing here cannot wedge the pane.
+        if enumeration.restores.contains_key(&req.pane) {
             continue;
         }
-        request_pane_capture(client, enumeration, req.pane);
+        let Some(pane_height) = index
+            .panes
+            .get(&req.pane)
+            .and_then(|(entity, _)| panes.get(*entity).ok())
+            .map(|p| p.dims.height as u16)
+        else {
+            continue;
+        };
+        request_pane_restore(
+            client,
+            enumeration,
+            req.pane,
+            pane_height,
+            RestoreDepth::Light,
+        );
     }
 }
 
@@ -386,11 +483,6 @@ fn apply_tmux_replies(
 ) {
     let (client, enumeration) = &mut *client;
     let events = &batch.0;
-    // NOTE: this MUST stay a single in-order pass. tmux CC-mode replies are
-    // FIFO, and capture is sent before its paired cursor query, so the Capture
-    // arm fills capture_awaiting_cursor before the Cursor arm drains it.
-    // Splitting into two passes silently drops cursor fixes on same-batch
-    // arrivals.
     for event in events {
         match event {
             TransportEvent::Protocol(ClientEvent::CommandComplete { id, ok, output, .. }) => {
@@ -476,38 +568,75 @@ fn apply_reply(
                 }
             }
         }
-        PendingReply::Capture { pane } if ok => {
-            if enumeration.panes_with_cursor_pending.contains(&pane) {
-                enumeration
-                    .capture_awaiting_cursor
-                    .insert(pane, output.to_vec());
+        PendingReply::RestoreBase { pane } => {
+            let slot = if ok {
+                Slot::Ok(output.to_vec())
             } else {
-                pane_output.write(PaneOutput {
-                    pane,
-                    data: capture_to_bytes(output),
-                });
-            }
-        }
-        PendingReply::Capture { pane } => {
-            tracing::warn!(pane = pane.0, "capture-pane command failed");
-        }
-        PendingReply::Cursor { pane } => {
-            enumeration.panes_with_cursor_pending.remove(&pane);
-            let Some(lines) = enumeration.capture_awaiting_cursor.remove(&pane) else {
-                return;
+                Slot::Failed
             };
-            let (cx, cy) = if ok {
-                parse_cursor_pos(output).unwrap_or((0, 0))
+            fill_restore_slot(enumeration, pane_output, pane, slot, |r, s| r.base = s);
+        }
+        PendingReply::RestoreSavedPrimary { pane } => {
+            let slot = if ok {
+                Slot::Ok(output.to_vec())
             } else {
-                tracing::warn!(pane = pane.0, "cursor-position query failed");
-                (0, 0)
+                Slot::Failed
             };
-            pane_output.write(PaneOutput {
-                pane,
-                data: capture_to_bytes_with_cursor(&lines, cx, cy),
+            fill_restore_slot(enumeration, pane_output, pane, slot, |r, s| {
+                r.saved_primary = s
             });
         }
+        PendingReply::RestorePending { pane } => {
+            let slot = if ok {
+                Slot::Ok(output.to_vec())
+            } else {
+                Slot::Failed
+            };
+            fill_restore_slot(enumeration, pane_output, pane, slot, |r, s| r.pending = s);
+        }
+        PendingReply::RestoreState { pane } => {
+            let slot = match first_reply_line(ok, output, "pane-state") {
+                Some(line) => Slot::Ok(parse_pane_state(&line)),
+                None => Slot::Failed,
+            };
+            fill_restore_slot(enumeration, pane_output, pane, slot, |r, s| r.state = s);
+        }
     }
+}
+
+/// Resolves one slot of `pane`'s restore buffer and, once every requested
+/// slot has resolved, synthesizes and emits the seed exactly once.
+///
+/// NOTE: a failed base-capture slot leaves no real content to replay;
+/// emitting the seed anyway would clear an already-rendered pane's mirror to
+/// blank for no reason, so a failed `base` drops the buffer without emitting
+/// — matching the prior behavior of leaving the mirror untouched when
+/// `capture-pane` fails.
+fn fill_restore_slot<T>(
+    enumeration: &mut EnumerationState,
+    pane_output: &mut MessageWriter<PaneOutput>,
+    pane: PaneId,
+    slot: Slot<T>,
+    assign: impl FnOnce(&mut PaneRestore, Slot<T>),
+) {
+    let Some(restore) = enumeration.restores.get_mut(&pane) else {
+        return;
+    };
+    assign(restore, slot);
+    if !restore.complete() {
+        return;
+    }
+    let Some(restore) = enumeration.restores.remove(&pane) else {
+        return;
+    };
+    if matches!(restore.base, Slot::Failed) {
+        tracing::warn!(pane = pane.0, "base capture failed, skipping restore seed");
+        return;
+    }
+    pane_output.write(PaneOutput {
+        pane,
+        data: restore.into_bytes(),
+    });
 }
 
 /// Sends the per-session enumeration queries (`list-windows` + active-pane) that
@@ -724,7 +853,7 @@ mod tests {
                 .expect("gateway must carry EnumerationState")
                 .pending
                 .values()
-                .any(|r| matches!(r, PendingReply::Capture { pane } if *pane == PaneId(1)))
+                .any(|r| matches!(r, PendingReply::RestoreBase { pane } if *pane == PaneId(1)))
         };
 
         // Settle at the born size -> the re-seed fires once.
@@ -733,16 +862,16 @@ mod tests {
         }
         assert!(captured(&mut app), "first settle must seed the pane");
 
-        // Simulate the capture/cursor replies landing: clear the in-flight
-        // markers (so the next re-seed isn't blocked) and pending (so the second
-        // capture is detectable).
+        // Simulate the restore replies landing: clear the in-flight buffer (so
+        // the next re-seed isn't blocked) and pending (so the second restore is
+        // detectable).
         {
             let mut enumeration = app
                 .world_mut()
                 .query::<&mut EnumerationState>()
                 .single_mut(app.world_mut())
                 .expect("gateway must carry EnumerationState");
-            enumeration.panes_with_cursor_pending.clear();
+            enumeration.restores.clear();
             enumeration.pending.clear();
         }
 
@@ -813,9 +942,9 @@ mod tests {
             MessageWriter<PaneOutput>,
         )> = SystemState::new(app.world_mut());
         {
-            let (mut commands, mut client_q, mut pane_output) =
+            let (mut commands, mut client_query, mut pane_output) =
                 system_state.get_mut(app.world_mut());
-            let (mut client, mut enumeration) = client_q
+            let (mut client, mut enumeration) = client_query
                 .single_mut()
                 .expect("gateway entity must carry TmuxClient + EnumerationState");
             apply_reply(
@@ -849,6 +978,104 @@ mod tests {
         assert_eq!(
             *app.world().resource::<Added>().0.lock().unwrap(),
             vec![WindowId(1)]
+        );
+    }
+
+    #[test]
+    fn full_restore_emits_seed_once_after_all_replies_in_any_order() {
+        use crate::enumerate::{PaneRestore, Slot};
+        use bevy::ecs::system::SystemState;
+
+        let base = vec!["line one".to_string(), "line two".to_string()];
+        let saved_primary: Vec<String> = vec![];
+        let pending = vec!["pending-tail".to_string()];
+        let state_line = "cursor_x=3\tcursor_y=1\twrap_flag=1".to_string();
+
+        // Independently synthesize the bytes the buffer must emit once complete.
+        let expected = {
+            let mut r = PaneRestore::new_full(2);
+            r.base = Slot::Ok(base.clone());
+            r.saved_primary = Slot::Ok(saved_primary.clone());
+            r.pending = Slot::Ok(pending.clone());
+            r.state = Slot::Ok(parse_pane_state(&state_line));
+            r.into_bytes()
+        };
+
+        let mut app = App::new();
+        app.add_message::<PaneOutput>();
+        let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
+        // Seed the in-flight full restore buffer request_pane_restore would have.
+        app.world_mut()
+            .get_mut::<EnumerationState>(gateway)
+            .expect("TmuxClient auto-requires EnumerationState")
+            .restores
+            .insert(PaneId(1), PaneRestore::new_full(2));
+
+        let mut system_state: SystemState<(
+            Commands,
+            Query<(&mut TmuxClient, &mut EnumerationState)>,
+            MessageWriter<PaneOutput>,
+        )> = SystemState::new(app.world_mut());
+        {
+            let (mut commands, mut client_query, mut pane_output) =
+                system_state.get_mut(app.world_mut());
+            let (mut client, mut enumeration) = client_query
+                .single_mut()
+                .expect("gateway entity must carry TmuxClient + EnumerationState");
+            // Apply the four replies in a shuffled order to prove ordering does
+            // not matter: state, pending, saved-primary, base.
+            let replies = [
+                (
+                    PendingReply::RestoreState { pane: PaneId(1) },
+                    vec![state_line.clone()],
+                ),
+                (
+                    PendingReply::RestorePending { pane: PaneId(1) },
+                    pending.clone(),
+                ),
+                (
+                    PendingReply::RestoreSavedPrimary { pane: PaneId(1) },
+                    saved_primary.clone(),
+                ),
+                (PendingReply::RestoreBase { pane: PaneId(1) }, base.clone()),
+            ];
+            for (reply, output) in replies {
+                apply_reply(
+                    &mut commands,
+                    &mut enumeration,
+                    &mut pane_output,
+                    &mut client,
+                    reply,
+                    true,
+                    &output,
+                );
+            }
+        }
+        system_state.apply(app.world_mut());
+
+        let outputs: Vec<PaneOutput> = app
+            .world()
+            .resource::<Messages<PaneOutput>>()
+            .iter_current_update_messages()
+            .cloned()
+            .collect();
+        assert_eq!(
+            outputs.len(),
+            1,
+            "the seed must be emitted exactly once, after the final reply resolves"
+        );
+        assert_eq!(outputs[0].pane, PaneId(1));
+        assert_eq!(
+            outputs[0].data, expected,
+            "the emitted seed must match the synthesized restore bytes"
+        );
+        assert!(
+            !app.world()
+                .get::<EnumerationState>(gateway)
+                .unwrap()
+                .restores
+                .contains_key(&PaneId(1)),
+            "the restore buffer must be removed once the seed is emitted"
         );
     }
 
@@ -1241,7 +1468,7 @@ mod tests {
                 .expect("gateway must carry EnumerationState")
                 .pending
                 .values()
-                .any(|r| matches!(r, PendingReply::Capture { pane } if *pane == PaneId(1)))
+                .any(|r| matches!(r, PendingReply::RestoreBase { pane } if *pane == PaneId(1)))
         };
 
         // Settle pane %1 on gateway1 so the re-seed fires and done=true.
@@ -1257,7 +1484,7 @@ mod tests {
                 .query::<&mut EnumerationState>()
                 .single_mut(app.world_mut())
                 .expect("gateway must carry EnumerationState");
-            enumeration.panes_with_cursor_pending.clear();
+            enumeration.restores.clear();
             enumeration.pending.clear();
         }
         app.world_mut().entity_mut(pane1).despawn();

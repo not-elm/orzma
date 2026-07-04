@@ -368,10 +368,10 @@ fn apply_capture_reply(
 /// a clean-state prefix (reset scroll region + origin mode + SGR, then
 /// cursor-home + clear-screen) so the snapshot repaints from a clean grid, then
 /// the rows CRLF-joined (the reply omits line terminators). Mirrors
-/// `ozmux_tmux`'s `capture_to_bytes` for the live seed path.
+/// `ozmux_tmux`'s `restore_to_bytes` reset-prefix for the live seed path.
 fn capture_to_bytes(lines: &[String]) -> Vec<u8> {
     // NOTE: the reset prefix MUST precede the ESC[2J erase — see the matching
-    // NOTE on `ozmux_tmux`'s `capture_to_bytes`. A stale SGR background, scroll
+    // NOTE on `ozmux_tmux`'s `restore_to_bytes`. A stale SGR background, scroll
     // region (DECSTBM), or origin mode (DECOM) left in the reused render handle
     // would otherwise flood or mis-scroll the scrolled copy view on copy-mode
     // entry.

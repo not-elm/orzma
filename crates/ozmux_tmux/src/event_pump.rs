@@ -27,43 +27,6 @@ pub(crate) fn first_reply_line(ok: bool, output: &[String], what: &str) -> Optio
         .map(str::to_owned)
 }
 
-/// Parses a `'#{cursor_x} #{cursor_y}'` reply line into `(col, row)`.
-pub(crate) fn parse_cursor_pos(output: &[String]) -> Option<(u16, u16)> {
-    let line = output.first()?;
-    let (x, y) = line.trim().split_once(' ')?;
-    Some((x.parse().ok()?, y.parse().ok()?))
-}
-
-/// Joins `capture-pane -p -e` reply lines into VT bytes for seeding a pane's
-/// screen: a clean-state prefix (reset scroll region + origin mode + SGR, then
-/// cursor-home + clear-screen) so the snapshot repaints from a clean grid with
-/// the default background and absolute positioning, then the rows CRLF-joined
-/// (the reply omits line terminators). Home + clear also keep the rows from
-/// stacking when the reply arrives after live `%output` has moved the cursor.
-pub(crate) fn capture_to_bytes(lines: &[String]) -> Vec<u8> {
-    // NOTE: the reset prefix MUST precede the ESC[2J erase and the row replay.
-    // `capture-pane -e` output assumes a default-state terminal, but it is
-    // replayed into the long-lived pane mirror, which can still carry modes left
-    // by prior `%output` (e.g. nvim mid-redraw on a resize): a stale SGR
-    // background floods the erase and default-bg cells (the blue-pane bug), and
-    // a stale scroll region (DECSTBM) or origin mode (DECOM) scrolls the CRLF
-    // replay within the wrong margins or mis-places the cursor. Reset region
-    // (ESC[r), origin (ESC[?6l), and SGR (ESC[0m) first so the replay is
-    // faithful regardless of prior state.
-    let mut bytes = b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2J".to_vec();
-    bytes.extend_from_slice(lines.join("\r\n").as_bytes());
-    bytes
-}
-
-/// Like [`capture_to_bytes`] but appends a CSI cursor-position escape (`ESC[row;colH`,
-/// 1-origin) so the rendered cursor matches the real tmux pane cursor after the
-/// snapshot is painted.
-pub(crate) fn capture_to_bytes_with_cursor(lines: &[String], cx: u16, cy: u16) -> Vec<u8> {
-    let mut bytes = capture_to_bytes(lines);
-    bytes.extend_from_slice(format!("\x1b[{};{}H", cy + 1, cx + 1).as_bytes());
-    bytes
-}
-
 /// Returns the new session id if `events` contains a session-change to an id
 /// different from `current`, i.e. a real `switch-client`. Returns `None` on the
 /// first attach (`current == None`) or when the id is unchanged, so the initial
@@ -316,21 +279,6 @@ mod tests {
     fn parse_active_pane_parses_window_and_pane() {
         assert_eq!(parse_active_pane("@7 %88"), Some((WindowId(7), PaneId(88))));
         assert_eq!(parse_active_pane("garbage"), None);
-    }
-
-    #[test]
-    fn capture_to_bytes_with_cursor_appends_cursor_escape() {
-        // ESC[r ESC[?6l ESC[0m ESC[H ESC[2J + "hello" + ESC[6;4H  (cy=5→row 6, cx=3→col 4)
-        assert_eq!(
-            capture_to_bytes_with_cursor(&["hello".to_string()], 3, 5),
-            b"\x1b[r\x1b[?6l\x1b[0m\x1b[H\x1b[2Jhello\x1b[6;4H".to_vec()
-        );
-    }
-
-    #[test]
-    fn parse_cursor_pos_reads_col_row() {
-        assert_eq!(parse_cursor_pos(&["3 5".to_string()]), Some((3, 5)));
-        assert_eq!(parse_cursor_pos(&["nope".to_string()]), None);
     }
 
     #[test]
