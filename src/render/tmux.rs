@@ -13,6 +13,7 @@ use crate::surface::OzmaTerminal;
 use crate::surface::geometry::cells_for;
 use crate::theme;
 use crate::theme::PANE_GAP;
+use crate::ui::copy_mode::CopyModeState;
 use crate::ui::tmux::mode_ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
@@ -239,7 +240,7 @@ fn route_tmux_output(
     mut handles: Query<(&mut TerminalHandle, &mut TerminalTitle)>,
     mut pending: ResMut<PendingPaneOutput>,
     panes: Query<(Entity, &TmuxPane)>,
-    copy_modes: Query<(), With<crate::ui::copy_mode::CopyModeState>>,
+    copy_modes: Query<(), With<CopyModeState>>,
 ) {
     let mut by_pane: HashMap<_, Vec<u8>> = HashMap::new();
     for msg in reader.read() {
@@ -252,27 +253,27 @@ fn route_tmux_output(
     let mut pane_ids: HashSet<PaneId> = by_pane.keys().copied().collect();
     pane_ids.extend(pending.buf.keys().copied());
     for pane in pane_ids {
-        let fresh = by_pane.remove(&pane).unwrap_or_default();
+        let tmux_output = by_pane.remove(&pane).unwrap_or_default();
         let Some(&entity) = entity_of.get(&pane) else {
             // NOTE: only buffer real bytes — pushing an empty `fresh` would
             // create/keep a phantom entry that keeps `pending_pane_output_waiting`
             // true and spins this system every frame.
-            if !fresh.is_empty() {
-                pending.push(pane, &fresh);
+            if !tmux_output.is_empty() {
+                pending.push(pane, &tmux_output);
             }
             continue;
         };
         let Ok((mut handle, mut title)) = handles.get_mut(entity) else {
-            if !fresh.is_empty() {
-                pending.push(pane, &fresh);
+            if !tmux_output.is_empty() {
+                pending.push(pane, &tmux_output);
             }
             continue;
         };
         if let Some(buffered) = pending.take(pane) {
             handle.advance(&buffered);
         }
-        if !fresh.is_empty() {
-            handle.advance(&fresh);
+        if !tmux_output.is_empty() {
+            handle.advance(&tmux_output);
         }
         // NOTE: drain captured control frames — crucially the OSC 5379
         // mount/unmount verbs — into observer triggers. The engine's own control
