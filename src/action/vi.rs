@@ -72,10 +72,6 @@ pub(crate) struct ViPromptRequest {
     #[event_target]
     pub entity: Entity,
     /// Which prompt to open.
-    #[expect(
-        dead_code,
-        reason = "no applier reads this until prompt/search-step support lands"
-    )]
     pub kind: PromptKind,
 }
 
@@ -91,10 +87,6 @@ pub(crate) struct ViSearchStepRequest {
     #[event_target]
     pub entity: Entity,
     /// `true` repeats in the original direction (`n`), `false` reversed (`N`).
-    #[expect(
-        dead_code,
-        reason = "no applier reads this until prompt/search-step support lands"
-    )]
     pub forward: bool,
 }
 
