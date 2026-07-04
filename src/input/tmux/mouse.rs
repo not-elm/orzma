@@ -36,7 +36,7 @@ use decide::{
 use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
 use ozma_tty_engine::{Column, Line, Point, SelectionType, Side};
 use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{ActiveWindow, PaneId, TmuxClient, TmuxPane};
+use ozmux_tmux::{ActiveWindow, PaneId, TmuxPane};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 use webview::tmux_webview_pointer;
@@ -106,18 +106,17 @@ enum GestureState {
         origin_phys: Vec2,
         click_count: u8,
     },
-    /// A double/triple click awaiting a connected client before starting a
-    /// word/line selection at `cell` on the pane's local terminal handle.
+    /// A double/triple click resolved into a pending word/line selection at
+    /// `cell`, completed on the next continuation frame on the pane's local
+    /// terminal handle.
     PendingMultiSelect {
         pane: Entity,
-        pane_id: PaneId,
         cell: Point,
         kind: MultiSelectKind,
     },
     /// Selecting text in a pane via tmux copy-mode (entered on drag-start).
     Selecting {
         pane: Entity,
-        pane_id: PaneId,
         anchor: Point,
         begun: bool,
         last_target: Option<Point>,
@@ -173,14 +172,14 @@ fn point_from_cell((col, row): (u16, u16)) -> Point {
 /// `drag_threshold_px` transitions to `Selecting` when the pane is already in
 /// copy mode (drag/selection for a pane NOT in copy mode is owned by
 /// the local terminal path). Multi-click (≥2) on a pane in copy mode enters
-/// `PendingMultiSelect` to wait for a connected client (it passes whether a
-/// `TmuxClient` is present to the decider so a no-client frame stays pending
-/// and retries), then starts a word/line selection on the pane's local
-/// terminal handle. Each frame while `Resizing` the pointer's
-/// major-axis cell coordinate is mapped to an absolute target size and sent as
-/// `resize-pane -x/-y` whenever the target changes. On `Released` from
-/// `Selecting` a begun selection is copied to clipboard; from `Resizing` that
-/// never dragged, the pane under the cursor is focused as a fallback click.
+/// `PendingMultiSelect`, which starts a word/line selection on the pane's
+/// local terminal handle on the very next continuation frame — this is
+/// local-only and needs no `TmuxClient`. Each frame while `Resizing` the
+/// pointer's major-axis cell coordinate is mapped to an absolute target size
+/// and sent as `resize-pane -x/-y` whenever the target changes. On
+/// `Released` from `Selecting` a begun selection is copied to clipboard;
+/// from `Resizing` that never dragged, the pane under the cursor is focused
+/// as a fallback click.
 ///
 /// Gated by `run_if(pointer_active)`: this system runs only when a focused
 /// primary window exists and no modal (copy-search prompt) owns input.
@@ -198,7 +197,6 @@ fn tmux_gesture(
     mut commands: Commands,
     mut gesture: ResMut<TmuxMouseGesture>,
     mut buttons: ResMut<TmuxGestureButtons>,
-    client: Option<Single<&TmuxClient>>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -275,7 +273,6 @@ fn tmux_gesture(
         drag_threshold_phys,
         cell_w,
         cell_h,
-        client.is_some(),
     );
     effects.extend(decide_continuation(&mut gesture.state, ctx));
 
@@ -374,11 +371,10 @@ fn release_ctx(
 
 /// Resolves the per-frame `ContinuationCtx` for the gesture's current state,
 /// reading only the inputs the active arm needs (cursor + copy-mode + origin
-/// anchor point for `Pressed`; live selecting point for `Selecting`; client
-/// presence for `PendingMultiSelect`; pointer cell for `Resizing`). `side` /
-/// `ty` are set once for a plain drag: the pointer half-cell fraction is not
-/// resolved here, so every local selection starts as a `Simple`, `Left`-side
-/// selection.
+/// anchor point for `Pressed`; live selecting point for `Selecting`; pointer
+/// cell for `Resizing`). `side` / `ty` are set once for a plain drag: the
+/// pointer half-cell fraction is not resolved here, so every local selection
+/// starts as a `Simple`, `Left`-side selection.
 fn continuation_ctx(
     state: &GestureState,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -387,7 +383,6 @@ fn continuation_ctx(
     drag_threshold_phys: f32,
     cell_w: f32,
     cell_h: f32,
-    client_present: bool,
 ) -> ContinuationCtx {
     let mut ctx = ContinuationCtx {
         pane_alive: false,
@@ -399,7 +394,6 @@ fn continuation_ctx(
         side: Side::Left,
         ty: SelectionType::Simple,
         resize_pointer_cell: None,
-        client_present,
     };
     match *state {
         GestureState::Pressed {

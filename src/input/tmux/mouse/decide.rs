@@ -68,14 +68,6 @@ pub(super) struct ContinuationCtx {
     pub(super) ty: SelectionType,
     /// `floor(cursor.major / cell.major)` on the divider's major axis (`Resizing`).
     pub(super) resize_pointer_cell: Option<i32>,
-    /// Whether a tmux client is connected this frame. Only the
-    /// `PendingMultiSelect` arm reads it: it requires a connected client
-    /// before committing to a multi-select and leaving the state, even
-    /// though the resulting `MultiSelect` effect itself is now local-only —
-    /// this keeps multi-click promotion tied to a live tmux connection, like
-    /// the rest of the gesture pipeline, so a disconnected frame stays
-    /// `PendingMultiSelect` and retries once a client reappears.
-    pub(super) client_present: bool,
 }
 
 /// Resolves a left press into the gesture-state transition and effects.
@@ -135,10 +127,7 @@ pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<T
             vec![TmuxMouseEffect::CopySelection { entity: pane }]
         }
         GestureState::Pressed {
-            pane,
-            pane_id,
-            click_count,
-            ..
+            pane, click_count, ..
         } if click_count >= 2 && ctx.copy_mode => {
             let Some(cell) = ctx.multi_cell else {
                 return Vec::new();
@@ -148,12 +137,7 @@ pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<T
             } else {
                 MultiSelectKind::Line
             };
-            *state = GestureState::PendingMultiSelect {
-                pane,
-                pane_id,
-                cell,
-                kind,
-            };
+            *state = GestureState::PendingMultiSelect { pane, cell, kind };
             Vec::new()
         }
         GestureState::Resizing { resized, .. } if !resized => match ctx.pane_under {
@@ -170,22 +154,18 @@ pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<T
 /// Per behavior-preservation invariant 8, this never writes the send-confirmed
 /// fields (`begun` / `last_target` on the begin path, `last_sent`, `resized`);
 /// the apply observer commits those on success. The `PendingMultiSelect` arm
-/// additionally requires `ctx.client_present`: with no client it stays
-/// `PendingMultiSelect` and emits nothing, keeping multi-click promotion tied
-/// to a live tmux connection even though the resulting effect is local-only.
+/// completes on the very first continuation frame its pane is still alive —
+/// `MultiSelect` triggers local `TerminalSelection*` events only, so it needs
+/// no `TmuxClient`.
 pub(super) fn decide_continuation(
     state: &mut GestureState,
     ctx: ContinuationCtx,
 ) -> Vec<TmuxMouseEffect> {
     match &mut *state {
         GestureState::Pressed {
-            pane,
-            pane_id,
-            origin_phys,
-            ..
+            pane, origin_phys, ..
         } => {
             let pane = *pane;
-            let pane_id = *pane_id;
             let origin_phys = *origin_phys;
             let Some(cursor_phys) = ctx.cursor_phys else {
                 return Vec::new();
@@ -203,7 +183,6 @@ pub(super) fn decide_continuation(
                 };
                 *state = GestureState::Selecting {
                     pane,
-                    pane_id,
                     anchor,
                     begun: false,
                     last_target: None,
@@ -256,9 +235,6 @@ pub(super) fn decide_continuation(
             let kind = *kind;
             if !ctx.pane_alive {
                 *state = GestureState::Idle;
-                return Vec::new();
-            }
-            if !ctx.client_present {
                 return Vec::new();
             }
             *state = GestureState::Idle;
@@ -346,7 +322,6 @@ mod tests {
                 side: Side::Left,
                 ty: SelectionType::Simple,
                 resize_pointer_cell: None,
-                client_present: false,
             }
         }
     }
@@ -370,7 +345,6 @@ mod tests {
     fn base_ctx() -> ContinuationCtx {
         ContinuationCtx {
             pane_alive: true,
-            client_present: true,
             ..ContinuationCtx::neutral()
         }
     }
@@ -506,7 +480,6 @@ mod tests {
     fn release_from_begun_selecting_copies() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             anchor: pt(3, 4),
             begun: true,
             last_target: Some(pt(5, 4)),
@@ -532,7 +505,6 @@ mod tests {
     fn release_from_unbegun_selecting_does_not_copy() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             anchor: pt(3, 4),
             begun: false,
             last_target: None,
@@ -802,7 +774,6 @@ mod tests {
     fn continuation_selecting_first_frame_emits_begin_not_extend() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             anchor: pt(3, 4),
             begun: false,
             last_target: None,
@@ -817,7 +788,6 @@ mod tests {
             side: Side::Left,
             ty: SelectionType::Simple,
             resize_pointer_cell: None,
-            client_present: true,
         };
         let fx = decide_continuation(&mut st, ctx);
         assert_eq!(
@@ -837,7 +807,6 @@ mod tests {
         use ozma_tty_engine::{Point, SelectionType, Side};
         let mut state = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(1),
             anchor: Point::new(Line(0), Column(2)),
             begun: false,
             last_target: None,
@@ -867,7 +836,6 @@ mod tests {
     fn continuation_selecting_begun_extends_on_new_cell() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             anchor: pt(3, 4),
             begun: true,
             last_target: Some(pt(3, 4)),
@@ -901,7 +869,6 @@ mod tests {
     fn continuation_selecting_begun_same_cell_no_effect() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             anchor: pt(3, 4),
             begun: true,
             last_target: Some(pt(5, 4)),
@@ -921,7 +888,6 @@ mod tests {
     fn continuation_selecting_without_selecting_point_stays() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             anchor: pt(3, 4),
             begun: false,
             last_target: None,
@@ -941,7 +907,6 @@ mod tests {
     fn continuation_selecting_dead_pane_goes_idle() {
         let mut st = GestureState::Selecting {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             anchor: pt(3, 4),
             begun: false,
             last_target: None,
@@ -962,7 +927,6 @@ mod tests {
     fn continuation_pending_multi_select_emits_then_idle() {
         let mut st = GestureState::PendingMultiSelect {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             cell: pt(6, 2),
             kind: MultiSelectKind::Word,
         };
@@ -980,33 +944,13 @@ mod tests {
     }
 
     #[test]
-    fn continuation_pending_multi_select_without_client_stays_then_retries() {
+    fn continuation_pending_multi_select_completes_without_a_client() {
         let mut st = GestureState::PendingMultiSelect {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             cell: pt(6, 2),
             kind: MultiSelectKind::Word,
         };
-        let fx = decide_continuation(
-            &mut st,
-            ContinuationCtx {
-                client_present: false,
-                ..base_ctx()
-            },
-        );
-        assert!(fx.is_empty(), "a no-client frame must emit nothing");
-        assert!(
-            matches!(st, GestureState::PendingMultiSelect { .. }),
-            "with no client the gesture must stay PendingMultiSelect to retry next frame"
-        );
-
-        let fx = decide_continuation(
-            &mut st,
-            ContinuationCtx {
-                client_present: true,
-                ..base_ctx()
-            },
-        );
+        let fx = decide_continuation(&mut st, base_ctx());
         assert_eq!(
             fx,
             vec![TmuxMouseEffect::MultiSelect {
@@ -1015,7 +959,8 @@ mod tests {
                 cell: pt(6, 2),
                 side: Side::Left,
             }],
-            "once a client is present the retry emits the multi-select"
+            "MultiSelect only triggers local TerminalSelection* events, so it must \
+             complete on the first continuation frame even with no TmuxClient connected"
         );
         assert!(matches!(st, GestureState::Idle));
     }
@@ -1024,7 +969,6 @@ mod tests {
     fn continuation_pending_multi_select_dead_pane_goes_idle() {
         let mut st = GestureState::PendingMultiSelect {
             pane: Entity::from_bits(1),
-            pane_id: PaneId(7),
             cell: pt(6, 2),
             kind: MultiSelectKind::Word,
         };
