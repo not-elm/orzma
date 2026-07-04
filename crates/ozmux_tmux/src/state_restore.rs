@@ -87,6 +87,56 @@ fn split_state_fields(line: &str) -> HashMap<&str, &str> {
     parts.iter().filter_map(|p| p.split_once('=')).collect()
 }
 
+/// Appends the DECSET/DECSTBM/tabstop/cursor tail restoring `state` onto a
+/// content-replay byte stream. Every mode is emitted in BOTH directions
+/// (`h` when set, `l` when clear) so the light re-seed path — where the
+/// mirror still carries the previous seed's modes — converges without
+/// assuming a reset baseline. Ends with the cursor CUP.
+///
+/// NOTE: DECSTBM and DECOM home the cursor, so the cursor CUP MUST stay
+/// after both; under DECOM the CUP row is region-relative and is converted
+/// from tmux's absolute `cursor_y` here.
+fn append_state_bytes(bytes: &mut Vec<u8>, state: &PaneState) {
+    let mode = |bytes: &mut Vec<u8>, seq: &str, on: bool| {
+        bytes.extend_from_slice(seq.as_bytes());
+        bytes.push(if on { b'h' } else { b'l' });
+    };
+    mode(bytes, "\x1b[?1000", state.mouse_standard);
+    mode(bytes, "\x1b[?1002", state.mouse_button);
+    mode(bytes, "\x1b[?1003", state.mouse_all);
+    mode(bytes, "\x1b[?1005", state.mouse_utf8);
+    mode(bytes, "\x1b[?1006", state.mouse_sgr);
+    mode(bytes, "\x1b[?1", state.app_cursor_keys);
+    bytes.extend_from_slice(if state.app_keypad { b"\x1b=" } else { b"\x1b>" });
+    mode(bytes, "\x1b[4", state.insert);
+    mode(bytes, "\x1b[?2004", state.bracketed_paste);
+    mode(bytes, "\x1b[?25", state.cursor_visible);
+    mode(bytes, "\x1b[?7", state.wrap);
+    mode(bytes, "\x1b[?6", state.origin);
+    if state.scroll_region_lower > state.scroll_region_upper {
+        bytes.extend_from_slice(
+            format!(
+                "\x1b[{};{}r",
+                state.scroll_region_upper + 1,
+                state.scroll_region_lower + 1
+            )
+            .as_bytes(),
+        );
+    }
+    if !state.tabs.is_empty() {
+        bytes.extend_from_slice(b"\x1b[3g");
+        for col in &state.tabs {
+            bytes.extend_from_slice(format!("\x1b[{}G\x1bH", col + 1).as_bytes());
+        }
+    }
+    let row = if state.origin {
+        state.cursor_y.saturating_sub(state.scroll_region_upper) + 1
+    } else {
+        state.cursor_y + 1
+    };
+    bytes.extend_from_slice(format!("\x1b[{};{}H", row, state.cursor_x + 1).as_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +245,106 @@ mod tests {
         let s = parse_pane_state("");
         assert!(s.cursor_visible && s.wrap);
         assert!(!s.alternate_on);
+    }
+
+    fn state_bytes(state: &PaneState) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        append_state_bytes(&mut bytes, state);
+        bytes
+    }
+
+    fn default_state() -> PaneState {
+        parse_pane_state("")
+    }
+
+    #[test]
+    fn mouse_flags_emit_exclusive_tracking_and_encoding() {
+        let mut s = default_state();
+        s.mouse_button = true;
+        s.mouse_sgr = true;
+        let b = state_bytes(&s);
+        let text = String::from_utf8_lossy(&b);
+        assert!(text.contains("\x1b[?1000l") && text.contains("\x1b[?1003l"));
+        assert!(text.contains("\x1b[?1002h") && text.contains("\x1b[?1006h"));
+        assert!(text.contains("\x1b[?1005l"));
+    }
+
+    #[test]
+    fn all_off_state_emits_explicit_resets() {
+        let b = state_bytes(&default_state());
+        let text = String::from_utf8_lossy(&b);
+        for seq in [
+            "\x1b[?1000l",
+            "\x1b[?1002l",
+            "\x1b[?1003l",
+            "\x1b[?1006l",
+            "\x1b[?1l",
+            "\x1b[4l",
+            "\x1b[?2004l",
+            "\x1b>",
+        ] {
+            assert!(text.contains(seq), "missing {seq:?}");
+        }
+        assert!(text.contains("\x1b[?25h") && text.contains("\x1b[?7h"));
+    }
+
+    #[test]
+    fn hidden_cursor_and_no_wrap_emit_low() {
+        let mut s = default_state();
+        s.cursor_visible = false;
+        s.wrap = false;
+        let b = state_bytes(&s);
+        let text = String::from_utf8_lossy(&b);
+        assert!(text.contains("\x1b[?25l") && text.contains("\x1b[?7l"));
+    }
+
+    #[test]
+    fn cursor_cup_is_absolute_without_origin() {
+        let mut s = default_state();
+        s.cursor_x = 4;
+        s.cursor_y = 9;
+        let b = state_bytes(&s);
+        let text = String::from_utf8_lossy(&b);
+        assert!(text.ends_with("\x1b[10;5H"), "got {text:?}");
+    }
+
+    #[test]
+    fn cursor_cup_converts_to_region_relative_under_origin() {
+        let mut s = default_state();
+        s.origin = true;
+        s.scroll_region_upper = 3;
+        s.scroll_region_lower = 20;
+        s.cursor_x = 0;
+        s.cursor_y = 5;
+        let b = state_bytes(&s);
+        let text = String::from_utf8_lossy(&b);
+        // DECOM makes CUP region-relative: row = cursor_y - upper + 1 = 3.
+        assert!(text.contains("\x1b[?6h"));
+        assert!(text.contains("\x1b[4;21r"));
+        assert!(text.ends_with("\x1b[3;1H"), "got {text:?}");
+    }
+
+    #[test]
+    fn tabstops_clear_then_set_each_column() {
+        let mut s = default_state();
+        s.tabs = vec![8, 16];
+        let b = state_bytes(&s);
+        let text = String::from_utf8_lossy(&b);
+        let clear = text.find("\x1b[3g").expect("clear-all tabs");
+        assert!(text[clear..].contains("\x1b[9G\x1bH"));
+        assert!(text[clear..].contains("\x1b[17G\x1bH"));
+    }
+
+    #[test]
+    fn scroll_region_precedes_cursor_and_follows_modes() {
+        let mut s = default_state();
+        s.scroll_region_upper = 2;
+        s.scroll_region_lower = 30;
+        s.cursor_y = 4;
+        let b = state_bytes(&s);
+        let text = String::from_utf8_lossy(&b);
+        let region = text.find("\x1b[3;31r").expect("DECSTBM");
+        let cup = text.rfind("\x1b[").expect("cursor CUP");
+        assert!(region < cup);
     }
 }
