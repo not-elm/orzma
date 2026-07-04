@@ -174,7 +174,7 @@ fn handle_prompt_input(
 ) {
     // NOTE: the keystroke that opened the prompt (e.g. `/`, or `f` for a jump)
     // is still in the shared KeyboardInput buffer; each reader has its own
-    // cursor, so `forward_keys_to_tmux` clearing it does not advance ours. Skip
+    // cursor, so `apply_tmux_shortcuts` clearing it does not advance ours. Skip
     // the open frame — drain past the opening key without processing it — or the
     // opening char leaks into the prompt text (and single-char jumps submit on
     // it immediately).

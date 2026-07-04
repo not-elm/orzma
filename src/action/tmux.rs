@@ -18,7 +18,6 @@ mod zoom_pane;
 
 use bevy::prelude::*;
 
-#[expect(unused_imports, reason = "consumed by Task 6's apply_tmux_shortcuts")]
 pub(crate) use detach_session::DetachSessionRequest;
 pub(crate) use kill_pane::KillPaneRequest;
 pub(crate) use kill_window::KillWindowRequest;

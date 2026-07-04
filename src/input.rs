@@ -35,7 +35,7 @@ pub(crate) enum InputPhase {
     Hover,
     Dispatch,
     /// Keyboard shortcut dispatch and tmux key forwarding
-    /// (`forward_keys_to_tmux`) run in this slot, after `Dispatch` has applied
+    /// (`apply_tmux_shortcuts`) run in this slot, after `Dispatch` has applied
     /// any IME events so the forwarder sees fresh `ImeState`.
     FocusedKey,
 }
