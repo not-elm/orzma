@@ -1,18 +1,7 @@
 //! Pure decision layer for keyboard-shortcut dispatch: the `KeyEffect`
 //! intermediate representation plus the single decider `classify_key_batch`
-//! that later tasks wire into the Default and tmux keyboard dispatchers. No
-//! ECS handles — fully unit-testable without a Bevy `App`.
-
-// NOTE: this module is deliberately unwired (Task 1 of an incremental
-// refactor) — nothing outside this file's `#[cfg(test)]` tests calls
-// `classify_key_batch` yet; later tasks wire it into the Default and tmux
-// dispatchers. `#[allow]` (not `#[expect]`) because the lint only fires in
-// the non-test build — `#[expect]` would fail the test build instead, where
-// the tests are the callers.
-#![allow(
-    dead_code,
-    reason = "wired into the Default and tmux dispatchers by a later refactor task"
-)]
+//! that the Default and tmux keyboard dispatchers wire into. No ECS handles —
+//! fully unit-testable without a Bevy `App`.
 
 use crate::action::vi::ResolvedCopyModeKeys;
 use crate::input::shortcuts::{LeaderPhase, LeaderStep, Shortcuts, is_modifier_key, step_leader};
@@ -706,10 +695,10 @@ mod tests {
                 action: ShortcutAction::Paste,
                 via_leader: false,
             }],
-            "the decider still emits the direct paste action; in copy mode the \
-             Default terminal carries KeyboardDisabled (inserted by \
-             maintain_input_gates), so dispatch_input's terminal.single() fails \
-             and the paste is dropped downstream"
+            "the decider still emits the direct paste action; the Default \
+             applier is what suppresses it in copy mode (via `via_leader || \
+             !in_copy_mode`), so a direct paste never fires while copy mode is \
+             active"
         );
     }
 
