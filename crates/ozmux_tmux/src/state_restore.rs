@@ -230,6 +230,10 @@ fn append_rows(bytes: &mut Vec<u8>, rows: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ozma_tty_engine::{
+        CellCoord, Column, Line, Point, SelectionType, Side, TermMode, TerminalHandle, WheelAction,
+        WheelConfig, WheelModifiers,
+    };
 
     fn kv(pairs: &[(&str, &str)]) -> String {
         pairs
@@ -539,5 +543,90 @@ mod tests {
         let text =
             String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
         assert!(text.find("content").unwrap() < text.find("\x1b[?1006h").unwrap());
+    }
+
+    fn nvim_like_restore() -> Vec<u8> {
+        let grid = GridCapture::Full {
+            base: [rows("hist", 10), rows("alt", 4)].concat(),
+            saved_primary: rows("prim", 4),
+            pane_height: 4,
+        };
+        let mut state = parse_pane_state("");
+        state.alternate_on = true;
+        state.mouse_button = true;
+        state.mouse_sgr = true;
+        state.app_cursor_keys = true;
+        restore_to_bytes(&grid, Some(&state), &[])
+    }
+
+    #[test]
+    fn adopted_nvim_pane_routes_wheel_to_pty_not_scrollback() {
+        let mut handle = TerminalHandle::detached(80, 4);
+        handle.advance(&nvim_like_restore());
+        let modes = handle.current_modes();
+        assert!(modes.contains(TermMode::MOUSE_DRAG), "1002 must be set");
+        assert!(modes.contains(TermMode::SGR_MOUSE), "1006 must be set");
+        assert!(modes.contains(TermMode::ALT_SCREEN), "1049 must be set");
+        assert!(modes.contains(TermMode::APP_CURSOR), "DECCKM must be set");
+        let action = WheelAction::route(
+            modes,
+            -1,
+            CellCoord { col: 1, row: 1 },
+            WheelModifiers::default(),
+            &WheelConfig::default(),
+        );
+        assert!(
+            matches!(action, WheelAction::WriteToPty(ref b) if b.starts_with(b"\x1b[<64;")),
+            "wheel must be forwarded as an SGR report, got {action:?}"
+        );
+    }
+
+    #[test]
+    fn adopted_shell_pane_restores_history_into_scrollback() {
+        let grid = GridCapture::Full {
+            base: rows("line", 20),
+            saved_primary: vec![],
+            pane_height: 4,
+        };
+        let state = parse_pane_state("");
+        let mut handle = TerminalHandle::detached(80, 4);
+        handle.advance(&restore_to_bytes(&grid, Some(&state), &[]));
+        assert!(!handle.current_modes().contains(TermMode::ALT_SCREEN));
+        let snapshot = handle.vi_indicator_snapshot();
+        assert!(
+            snapshot.history_size >= 10,
+            "history must land in scrollback"
+        );
+    }
+
+    fn visible_line(handle: &mut TerminalHandle, row: i32) -> String {
+        handle.selection_start_at_vt_only(
+            Point::new(Line(row), Column(0)),
+            Side::Left,
+            SelectionType::Lines,
+        );
+        let text = handle.selection_to_string().unwrap_or_default();
+        handle.selection_clear_vt_only();
+        text.trim_end().to_string()
+    }
+
+    #[test]
+    fn adopted_nvim_pane_places_alt_and_primary_grids_correctly() {
+        // Regression guard for the capture-semantics inversion (spec §2/§7):
+        // cmd1's tail must land in the ALT grid, cmd2 in the PRIMARY grid.
+        let mut handle = TerminalHandle::detached(80, 4);
+        handle.advance(&nvim_like_restore());
+        assert!(handle.is_in_alt_screen());
+        assert_eq!(
+            visible_line(&mut handle, 0),
+            "alt0",
+            "alt grid must show cmd1 tail"
+        );
+        handle.advance(b"\x1b[?1049l");
+        assert_eq!(
+            visible_line(&mut handle, 0),
+            "prim0",
+            "primary grid must show cmd2 rows"
+        );
     }
 }
