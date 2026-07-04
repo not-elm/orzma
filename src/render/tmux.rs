@@ -7,9 +7,12 @@ pub(crate) mod copy_mode;
 mod paint_rescue;
 
 use crate::app_mode::TmuxActiveSet;
+use crate::render::tmux::copy_mode::CopyModePlugin;
+use crate::render::tmux::paint_rescue::PaintRescuePlugin;
 use crate::surface::OzmaTerminal;
 use crate::surface::geometry::cells_for;
 use crate::theme;
+use crate::theme::PANE_GAP;
 use crate::ui::tmux::mode_ui::WorkspaceUiRoot;
 use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
@@ -70,19 +73,6 @@ impl PendingPaneOutput {
     }
 }
 
-/// Drops a despawned pane's buffered output so its `PaneId` cannot keep
-/// `pending_pane_output_waiting` true (which would spin `route_tmux_output`
-/// every frame for the rest of the session).
-fn prune_pending_on_pane_removed(
-    ev: On<Remove, TmuxPane>,
-    mut pending: ResMut<PendingPaneOutput>,
-    panes: Query<&TmuxPane>,
-) {
-    if let Ok(pane) = panes.get(ev.entity) {
-        pending.take(pane.id);
-    }
-}
-
 /// Ordering handle for `layout_tmux_panes` so the paint-rescue system can run
 /// before this frame's grid-dims write (avoids the ≤1-frame resize transient
 /// where `cells.len() != rows`).
@@ -103,11 +93,11 @@ pub(crate) struct RenderPlugin;
 
 impl Plugin for RenderPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<LastClientSize>()
+        app.add_plugins((PaintRescuePlugin, CopyModePlugin))
+            .insert_resource(ClearColor(PANE_GAP))
+            .init_resource::<LastClientSize>()
             .init_resource::<PendingPaneOutput>()
-            .insert_resource(ClearColor(theme::PANE_GAP))
             .insert_resource(TerminalPaddingFallback(theme_background_bytes()))
-            .add_observer(prune_pending_on_pane_removed)
             .add_systems(
                 Update,
                 (
@@ -128,12 +118,12 @@ impl Plugin for RenderPlugin {
                     .after(TmuxProjectionSet)
                     .in_set(TmuxActiveSet),
             )
-            .add_plugins((paint_rescue::PaintRescuePlugin, copy_mode::CopyModePlugin));
+            .add_observer(prune_pending_on_pane_removed);
     }
 }
 
-/// Pixel-space position of a 1px inter-pane gap. Positions are in logical px
-/// (the same coordinate space as Bevy `Node` rects).
+/// Pixel-space position of a 1px inter-pane gap.
+/// Positions are in logical px (the same coordinate space as Bevy `Node` rects).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct DividerPixelRect {
     pub(crate) axis: DividerAxis,
@@ -157,6 +147,19 @@ pub(crate) struct PackedTmuxLayout {
     /// Height equals the workspace height passed to `collapse()` — the full logical
     /// pixel area available for panes (window height minus window bar, including slack).
     pub(crate) bbox: Vec2,
+}
+
+/// Drops a despawned pane's buffered output so its `PaneId` cannot keep
+/// `pending_pane_output_waiting` true (which would spin `route_tmux_output`
+/// every frame for the rest of the session).
+fn prune_pending_on_pane_removed(
+    ev: On<Remove, TmuxPane>,
+    mut pending: ResMut<PendingPaneOutput>,
+    panes: Query<&TmuxPane>,
+) {
+    if let Ok(pane) = panes.get(ev.entity) {
+        pending.take(pane.id);
+    }
 }
 
 fn attach_tmux_window_container(
