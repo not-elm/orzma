@@ -609,7 +609,17 @@ fn apply_reply(
         PendingReply::RestoreState { pane } => {
             let slot = match first_reply_line(ok, output, "pane-state") {
                 Some(line) => Slot::Ok(parse_pane_state(&line)),
-                None => Slot::Failed,
+                None => {
+                    // NOTE: a failed state query silently degrades an alt-screen
+                    // pane to a primary-screen restore (`restore_to_bytes` reads
+                    // `alternate_on` off this slot) — worth a warning since the
+                    // mirror can then desync from tmux's real mouse-routing mode.
+                    tracing::warn!(
+                        pane = pane.0,
+                        "pane-state query failed, restore may degrade"
+                    );
+                    Slot::Failed
+                }
             };
             fill_restore_slot(enumeration, pane_output, pane, slot, |r, s| r.state = s);
         }

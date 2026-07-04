@@ -10,7 +10,7 @@ use tmux_control_parser::unescape_capture;
 /// NOTE: unknown variables expand to the empty string on older tmux (e.g.
 /// `bracket_paste_flag` before 3.7), and the parser degrades empty to off —
 /// this is what makes the query version-gate-free.
-pub(crate) const PANE_STATE_FORMAT: &str = "pane_id=#{pane_id}\talternate_on=#{alternate_on}\talternate_saved_x=#{alternate_saved_x}\talternate_saved_y=#{alternate_saved_y}\tcursor_x=#{cursor_x}\tcursor_y=#{cursor_y}\tscroll_region_upper=#{scroll_region_upper}\tscroll_region_lower=#{scroll_region_lower}\tpane_tabs=#{pane_tabs}\tcursor_flag=#{cursor_flag}\tinsert_flag=#{insert_flag}\tkeypad_cursor_flag=#{keypad_cursor_flag}\tkeypad_flag=#{keypad_flag}\twrap_flag=#{wrap_flag}\torigin_flag=#{origin_flag}\tmouse_standard_flag=#{mouse_standard_flag}\tmouse_button_flag=#{mouse_button_flag}\tmouse_all_flag=#{mouse_all_flag}\tmouse_utf8_flag=#{mouse_utf8_flag}\tmouse_sgr_flag=#{mouse_sgr_flag}\tbracket_paste_flag=#{bracket_paste_flag}";
+pub(crate) const PANE_STATE_FORMAT: &str = "pane_id=#{pane_id}\talternate_on=#{alternate_on}\talternate_saved_x=#{alternate_saved_x}\talternate_saved_y=#{alternate_saved_y}\tcursor_x=#{cursor_x}\tcursor_y=#{cursor_y}\tscroll_region_upper=#{scroll_region_upper}\tscroll_region_lower=#{scroll_region_lower}\tpane_tabs=#{pane_tabs}\tcursor_flag=#{cursor_flag}\tinsert_flag=#{insert_flag}\tkeypad_cursor_flag=#{keypad_cursor_flag}\tkeypad_flag=#{keypad_flag}\twrap_flag=#{wrap_flag}\torigin_flag=#{origin_flag}\tmouse_standard_flag=#{mouse_standard_flag}\tmouse_button_flag=#{mouse_button_flag}\tmouse_all_flag=#{mouse_all_flag}\tmouse_utf8_flag=#{mouse_utf8_flag}\tmouse_sgr_flag=#{mouse_sgr_flag}\tbracket_paste_flag=#{bracket_paste_flag}\tpane_height=#{pane_height}";
 
 /// One pane's terminal state parsed from a [`PANE_STATE_FORMAT`] reply line.
 ///
@@ -38,6 +38,12 @@ pub(crate) struct PaneState {
     mouse_utf8: bool,
     mouse_sgr: bool,
     bracketed_paste: bool,
+    /// The pane's current row count, queried in the same reply batch as the
+    /// capture. Takes precedence over `GridCapture::Full`'s `pane_height` (an
+    /// ECS snapshot taken at `Added<TmuxPane>` time) for the alt-screen split
+    /// in `restore_to_bytes`, since a resize between that snapshot and the
+    /// capture reply landing would otherwise split `base` at a stale offset.
+    pane_height: u16,
 }
 
 /// Parses one [`PANE_STATE_FORMAT`] reply line. Missing, empty, or
@@ -77,6 +83,7 @@ pub(crate) fn parse_pane_state(line: &str) -> PaneState {
         mouse_utf8: flag("mouse_utf8_flag"),
         mouse_sgr: flag("mouse_sgr_flag"),
         bracketed_paste: flag("bracket_paste_flag"),
+        pane_height: num("pane_height"),
     }
 }
 
@@ -122,7 +129,16 @@ pub(crate) fn restore_to_bytes(
             pane_height,
         } => {
             let alt = state.is_some_and(|s| s.alternate_on);
-            let height = *pane_height as usize;
+            // NOTE: state.pane_height is queried in the same reply batch as
+            // the capture, so it reflects the pane's dims far more closely
+            // than `pane_height` (an ECS snapshot taken at `Added<TmuxPane>`
+            // time, which can go stale if the pane resizes before the reply
+            // lands) — falling back to it only when the state query itself
+            // failed.
+            let height = state
+                .map(|s| s.pane_height)
+                .filter(|h| *h > 0)
+                .unwrap_or(*pane_height) as usize;
             if alt && base.len() >= height {
                 let (history, alt_rows) = base.split_at(base.len() - height);
                 append_rows(&mut bytes, history);
@@ -279,6 +295,7 @@ mod tests {
             "mouse_utf8_flag",
             "mouse_sgr_flag",
             "bracket_paste_flag",
+            "pane_height",
         ] {
             assert!(
                 PANE_STATE_FORMAT.contains(&format!("{key}=#{{{key}}}")),
@@ -533,6 +550,29 @@ mod tests {
             String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
         assert!(!text.contains("\x1b[?1049h"));
         assert!(text.contains("h0\r\nh1"));
+    }
+
+    #[test]
+    fn full_with_alt_prefers_state_pane_height_over_stale_snapshot() {
+        // Regression: `pane_height` on `GridCapture::Full` is an ECS snapshot
+        // taken at `Added<TmuxPane>` time and can go stale if the pane resizes
+        // before the capture reply lands. `state.pane_height`, queried in the
+        // same reply batch as the capture, must win the split so a stale
+        // snapshot cannot misplace the alt/history boundary.
+        let grid = GridCapture::Full {
+            base: [rows("hist", 5), rows("alt", 3)].concat(),
+            saved_primary: rows("prim", 3),
+            pane_height: 10, // stale: would swallow all of `base` as "history"
+        };
+        let mut state = parse_pane_state("");
+        state.alternate_on = true;
+        state.pane_height = 3; // authoritative: the real current height
+        let text =
+            String::from_utf8_lossy(&restore_to_bytes(&grid, Some(&state), &[])).into_owned();
+        assert!(text.contains("\x1b[?1049h"), "must still enter alt screen");
+        let hist = text.find("hist4").expect("history replayed");
+        let alt = text.find("alt0").expect("alt screen replayed");
+        assert!(hist < alt, "wrong order in {text:?}");
     }
 
     #[test]

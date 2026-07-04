@@ -24,6 +24,24 @@ pub(crate) fn phys_to_pane_local(
         .map(|normalized| (normalized + Vec2::splat(0.5)) * node.size)
 }
 
+/// Divides `v` by `pitch`, clamped to non-negative, and splits the result into
+/// its floored cell index and the fractional (sub-cell) remainder.
+fn floor_frac(v: f32, pitch: f32) -> (u32, f32) {
+    let q = (v / pitch).max(0.0);
+    let floor = q.floor();
+    (floor as u32, q - floor)
+}
+
+/// Which half of a cell `frac_x` (the fractional part of a column coordinate)
+/// falls in.
+fn side_of(frac_x: f32) -> Side {
+    if frac_x < 0.5 {
+        Side::Left
+    } else {
+        Side::Right
+    }
+}
+
 /// 1-indexed `(col, row, side)` of the cell at `local_phys`, clamped to the
 /// grid. Clamps `col` to `1..=cols` and `row` to `1..=rows`. `cell_w_phys` /
 /// `cell_h_phys` are the physical-pixel cell pitch from
@@ -35,24 +53,18 @@ pub(crate) fn cell_at_local(
     cols: u16,
     rows: u16,
 ) -> (u32, u32, Side) {
-    let col_f = (local_phys.x / cell_w_phys).max(0.0);
-    let row_f = (local_phys.y / cell_h_phys).max(0.0);
-    let col = (col_f.floor() as u32 + 1).min(cols as u32).max(1);
-    let row = (row_f.floor() as u32 + 1).min(rows as u32).max(1);
-    let frac_x = col_f - col_f.floor();
-    let side = if frac_x < 0.5 {
-        Side::Left
-    } else {
-        Side::Right
-    };
-    (col, row, side)
+    let (col_floor, frac_x) = floor_frac(local_phys.x, cell_w_phys);
+    let (row_floor, _) = floor_frac(local_phys.y, cell_h_phys);
+    let col = (col_floor + 1).min(cols as u32).max(1);
+    let row = (row_floor + 1).min(rows as u32).max(1);
+    (col, row, side_of(frac_x))
 }
 
 /// Maps a window cursor position (physical px) to the active `TmuxPane`'s
-/// visible `(col, row)`, clamped to `[0, cols) × [0, rows)`. Returns `None` when
-/// the projection is degenerate (zero-area node). The point is clamped (not
-/// rejected) when it falls outside the pane so a drag that leaves the pane edge
-/// still extends the selection to the nearest cell.
+/// visible `(col, row, side)`, clamped to `[0, cols) × [0, rows)`. Returns
+/// `None` when the projection is degenerate (zero-area node). The point is
+/// clamped (not rejected) when it falls outside the pane so a drag that leaves
+/// the pane edge still extends the selection to the nearest cell.
 pub(crate) fn cell_at_pane(
     node: &ComputedNode,
     transform: &UiGlobalTransform,
@@ -61,11 +73,13 @@ pub(crate) fn cell_at_pane(
     cell_h_phys: f32,
     cols: u16,
     rows: u16,
-) -> Option<(u16, u16)> {
+) -> Option<(u16, u16, Side)> {
     let local = phys_to_pane_local(node, transform, cursor_phys)?;
-    let col = ((local.x / cell_w_phys).floor().max(0.0) as u32).min(cols.saturating_sub(1) as u32);
-    let row = ((local.y / cell_h_phys).floor().max(0.0) as u32).min(rows.saturating_sub(1) as u32);
-    Some((col as u16, row as u16))
+    let (col_floor, frac_x) = floor_frac(local.x, cell_w_phys);
+    let (row_floor, _) = floor_frac(local.y, cell_h_phys);
+    let col = col_floor.min(cols.saturating_sub(1) as u32);
+    let row = row_floor.min(rows.saturating_sub(1) as u32);
+    Some((col as u16, row as u16, side_of(frac_x)))
 }
 
 /// Computes terminal dimensions in cells from physical pixel size.
@@ -126,7 +140,7 @@ mod tests {
         };
         let transform = UiGlobalTransform::from_xy(320.0, 192.0);
         let cell = cell_at_pane(&node, &transform, Vec2::new(40.0, 48.0), 8.0, 16.0, 80, 24);
-        assert_eq!(cell, Some((5, 3)));
+        assert_eq!(cell, Some((5, 3, Side::Left)));
     }
 
     #[test]
@@ -146,7 +160,7 @@ mod tests {
             80,
             24,
         );
-        assert_eq!(cell, Some((79, 23)));
+        assert_eq!(cell, Some((79, 23, Side::Right)));
     }
 
     #[test]
@@ -166,6 +180,6 @@ mod tests {
             80,
             24,
         );
-        assert_eq!(cell, Some((0, 0)));
+        assert_eq!(cell, Some((0, 0, Side::Left)));
     }
 }

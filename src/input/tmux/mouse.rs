@@ -20,7 +20,7 @@ use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::gesture::ClickTracker;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
-use crate::surface::geometry::cell_at_pane;
+use crate::surface::geometry::{Side as CellSide, cell_at_pane};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use bevy::ecs::system::SystemParam;
@@ -159,6 +159,15 @@ pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
 /// so no offset is needed.
 fn point_from_cell((col, row): (u16, u16)) -> Point {
     Point::new(Line(row as i32), Column(col as usize))
+}
+
+/// Converts `cell_at_pane`'s pane-local half-cell [`CellSide`] into the
+/// engine's [`Side`] the local `TerminalSelection*` events expect.
+fn engine_side(side: CellSide) -> Side {
+    match side {
+        CellSide::Left => Side::Left,
+        CellSide::Right => Side::Right,
+    }
 }
 
 /// Interprets the non-consumed left-button events handed off by
@@ -349,7 +358,7 @@ fn release_ctx(
                     let rows = p.dims.height as u16;
                     cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
                 })
-                .map(point_from_cell);
+                .map(|(col, row, _)| point_from_cell((col, row)));
             ReleaseCtx {
                 copy_mode,
                 multi_cell,
@@ -372,9 +381,9 @@ fn release_ctx(
 /// Resolves the per-frame `ContinuationCtx` for the gesture's current state,
 /// reading only the inputs the active arm needs (cursor + copy-mode + origin
 /// anchor point for `Pressed`; live selecting point for `Selecting`; pointer
-/// cell for `Resizing`). `side` / `ty` are set once for a plain drag: the
-/// pointer half-cell fraction is not resolved here, so every local selection
-/// starts as a `Simple`, `Left`-side selection.
+/// cell for `Resizing`). `side` is resolved from whichever point the active
+/// arm reads (the press origin for `Pressed`, the live cursor for
+/// `Selecting`); `ty` is always `Simple` for a plain drag.
 fn continuation_ctx(
     state: &GestureState,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
@@ -404,9 +413,12 @@ fn continuation_ctx(
                 ctx.pane_alive = true;
                 let cols = p.dims.width as u16;
                 let rows = p.dims.height as u16;
-                ctx.anchor_point =
+                if let Some((col, row, side)) =
                     cell_at_pane(node, transform, origin_phys, cell_w, cell_h, cols, rows)
-                        .map(point_from_cell);
+                {
+                    ctx.anchor_point = Some(point_from_cell((col, row)));
+                    ctx.side = engine_side(side);
+                }
             }
         }
         GestureState::Selecting { pane, .. } => {
@@ -415,9 +427,12 @@ fn continuation_ctx(
                 if let Some(cursor_phys) = cursor_phys {
                     let cols = p.dims.width as u16;
                     let rows = p.dims.height as u16;
-                    ctx.selecting_point =
+                    if let Some((col, row, side)) =
                         cell_at_pane(node, transform, cursor_phys, cell_w, cell_h, cols, rows)
-                            .map(point_from_cell);
+                    {
+                        ctx.selecting_point = Some(point_from_cell((col, row)));
+                        ctx.side = engine_side(side);
+                    }
                 }
             }
         }
