@@ -54,3 +54,6 @@ node_modules
 
 docs/discussions/
 .serena/
+
+# Local bug-repro screenshot, not for version control
+/bug.png

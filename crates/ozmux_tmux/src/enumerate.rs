@@ -4,7 +4,7 @@ use crate::components::WindowFlags;
 use crate::input::quote;
 use crate::state_restore::{GridCapture, PaneState, restore_to_bytes};
 use bevy::ecs::component::Component;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use tmux_control::{CommandId, TmuxResult};
 use tmux_control_parser::{PaneId, WindowId, WindowLayout};
 
@@ -231,10 +231,6 @@ pub(crate) enum PendingReply {
     ActivePane,
     /// `aggressive-resize` option query → warn if `on`.
     AggressiveResize,
-    /// `capture-pane` of a pane's screen.
-    Capture { pane: PaneId },
-    /// Cursor-position query paired with a [`PendingReply::Capture`].
-    Cursor { pane: PaneId },
     /// The default (base) capture of a pane restore.
     RestoreBase { pane: PaneId },
     /// The `-a` saved-primary capture of a pane restore.
@@ -328,13 +324,11 @@ impl PaneRestore {
 }
 
 /// Correlates in-flight enumeration/query commands by [`CommandId`] and the
-/// capture/cursor pairing buffers, so each drained reply routes to its handler.
+/// per-pane restore buffers, so each drained reply routes to its handler.
 #[derive(Component, Default)]
 pub(crate) struct EnumerationState {
     pub(crate) pending: HashMap<CommandId, PendingReply>,
     pub(crate) aggressive_resize_checked: bool,
-    pub(crate) capture_awaiting_cursor: HashMap<PaneId, Vec<String>>,
-    pub(crate) panes_with_cursor_pending: HashSet<PaneId>,
     pub(crate) restores: HashMap<PaneId, PaneRestore>,
 }
 
@@ -349,12 +343,10 @@ impl EnumerationState {
                 // re-sent list-windows on %window-add while the attach enumeration
                 // is still in flight would fire trigger_seed twice, and a re-queried
                 // active-pane would fire TmuxActivePaneChanged twice). The per-pane
-                // Capture/Cursor kinds are legitimately multi and exempt.
+                // Restore kinds are legitimately multi and exempt.
                 if !matches!(
                     reply,
-                    PendingReply::Capture { .. }
-                        | PendingReply::Cursor { .. }
-                        | PendingReply::RestoreBase { .. }
+                    PendingReply::RestoreBase { .. }
                         | PendingReply::RestoreSavedPrimary { .. }
                         | PendingReply::RestoreState { .. }
                         | PendingReply::RestorePending { .. }
@@ -373,19 +365,16 @@ impl EnumerationState {
         self.pending.values().any(|r| *r == reply)
     }
 
-    /// Drops the in-flight entries a session switch invalidates: the
-    /// capture/cursor pairs, the pane-restore buffers, and the enumeration ids
-    /// `send_session_enumeration` re-issues. A `HashMap` keyed by `CommandId`
-    /// does not get the old `Option` fields' free last-write-wins overwrite,
-    /// so a stale pre-switch `list-windows`/active-pane reply would otherwise
-    /// mis-seed the new session.
+    /// Drops the in-flight entries a session switch invalidates: the pane-restore
+    /// buffers and the enumeration ids `send_session_enumeration` re-issues. A
+    /// `HashMap` keyed by `CommandId` does not get the old `Option` fields' free
+    /// last-write-wins overwrite, so a stale pre-switch `list-windows`/active-pane
+    /// reply would otherwise mis-seed the new session.
     pub(crate) fn clear_for_session_switch(&mut self) {
         self.pending.retain(|_, r| {
             !matches!(
                 r,
-                PendingReply::Capture { .. }
-                    | PendingReply::Cursor { .. }
-                    | PendingReply::ListWindows
+                PendingReply::ListWindows
                     | PendingReply::ActivePane
                     | PendingReply::AggressiveResize
                     | PendingReply::RestoreBase { .. }
@@ -394,8 +383,6 @@ impl EnumerationState {
                     | PendingReply::RestorePending { .. }
             )
         });
-        self.capture_awaiting_cursor.clear();
-        self.panes_with_cursor_pending.clear();
         self.aggressive_resize_checked = false;
         self.restores.clear();
     }
@@ -585,7 +572,7 @@ mod tests {
         state.pending.insert(CommandId(3), PendingReply::ClientName);
         state
             .pending
-            .insert(CommandId(4), PendingReply::Capture { pane: PaneId(7) });
+            .insert(CommandId(4), PendingReply::RestoreBase { pane: PaneId(7) });
         state
             .pending
             .insert(CommandId(5), PendingReply::AggressiveResize);
@@ -606,7 +593,7 @@ mod tests {
         );
         assert!(
             !state.pending.contains_key(&CommandId(4)),
-            "capture dropped"
+            "restore dropped"
         );
         assert!(
             !state.pending.contains_key(&CommandId(5)),
@@ -685,28 +672,40 @@ mod tests {
             Some(&PendingReply::ActivePane)
         );
 
-        state.register(Ok(CommandId(5)), PendingReply::Capture { pane: PaneId(3) });
-        state.register(Ok(CommandId(6)), PendingReply::Capture { pane: PaneId(3) });
+        state.register(
+            Ok(CommandId(5)),
+            PendingReply::RestoreBase { pane: PaneId(3) },
+        );
+        state.register(
+            Ok(CommandId(6)),
+            PendingReply::RestoreBase { pane: PaneId(3) },
+        );
         assert_eq!(
             state.pending.get(&CommandId(5)),
-            Some(&PendingReply::Capture { pane: PaneId(3) }),
-            "two concurrent identical-value captures for the same pane are both kept, not superseded"
+            Some(&PendingReply::RestoreBase { pane: PaneId(3) }),
+            "two concurrent identical-value restores for the same pane are both kept, not superseded"
         );
         assert_eq!(
             state.pending.get(&CommandId(6)),
-            Some(&PendingReply::Capture { pane: PaneId(3) })
+            Some(&PendingReply::RestoreBase { pane: PaneId(3) })
         );
 
-        state.register(Ok(CommandId(7)), PendingReply::Capture { pane: PaneId(1) });
-        state.register(Ok(CommandId(8)), PendingReply::Capture { pane: PaneId(2) });
+        state.register(
+            Ok(CommandId(7)),
+            PendingReply::RestoreBase { pane: PaneId(1) },
+        );
+        state.register(
+            Ok(CommandId(8)),
+            PendingReply::RestoreBase { pane: PaneId(2) },
+        );
         assert_eq!(
             state.pending.get(&CommandId(7)),
-            Some(&PendingReply::Capture { pane: PaneId(1) }),
-            "per-pane captures are independent — both kept"
+            Some(&PendingReply::RestoreBase { pane: PaneId(1) }),
+            "per-pane restores are independent — both kept"
         );
         assert_eq!(
             state.pending.get(&CommandId(8)),
-            Some(&PendingReply::Capture { pane: PaneId(2) })
+            Some(&PendingReply::RestoreBase { pane: PaneId(2) })
         );
     }
 }

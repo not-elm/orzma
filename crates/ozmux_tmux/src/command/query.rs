@@ -111,19 +111,6 @@ impl TmuxCommand for CapturePanePending {
     }
 }
 
-/// `display-message -p -t %<id> '#{cursor_x} #{cursor_y}'` — a pane's real cursor.
-pub(crate) struct CursorQuery {
-    pub id: PaneId,
-}
-impl TmuxCommand for CursorQuery {
-    fn into_raw_command(self) -> String {
-        format!(
-            "display-message -p -t %{} '#{{cursor_x}} #{{cursor_y}}'",
-            self.id.0
-        )
-    }
-}
-
 /// `show-options -wqv -t @<win> aggressive-resize` — the per-window option value.
 pub(crate) struct AggressiveResize {
     pub win: WindowId,
@@ -219,14 +206,6 @@ mod tests {
         assert_eq!(
             CapturePanePending { id: PaneId(2) }.into_raw_command(),
             "capture-pane -pPC -t %2"
-        );
-    }
-
-    #[test]
-    fn cursor_query_targets_pane() {
-        assert_eq!(
-            CursorQuery { id: PaneId(4) }.into_raw_command(),
-            "display-message -p -t %4 '#{cursor_x} #{cursor_y}'"
         );
     }
 
