@@ -37,7 +37,7 @@ libc = "0.2"
 open = { workspace = true }
 ozmux_configs = { path = "crates/ozmux_configs" }
 ozmux_webview_host = { path = "crates/webview_host", features = ["cef"] }
-ozmux_tmux = { path = "crates/tmux_session" }
+ozmux_tmux = { path = "crates/ozmux_tmux" }
 tmux_control = { path = "crates/tmux_control" }
 tmux_control_parser = { path = "crates/tmux_control_parser" }
 serde = { workspace = true }
