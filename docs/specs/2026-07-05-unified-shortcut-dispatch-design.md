@@ -121,16 +121,20 @@ No systems, no plugin — pure library code, exhaustively unit-tested
 /// carries no ECS handles so the classifier is unit-testable and the same
 /// batch drives either mode's applier.
 enum KeyEffect {
-    /// A GUI/app shortcut fired.
-    Action(ShortcutAction),
+    /// A GUI/app shortcut fired. `via_leader` records the paste origin: a
+    /// direct-chord paste vs a leader-scoped one. It is NOT dropped (see the
+    /// paste note below) — Default suppresses direct-chord paste in copy mode.
+    Action { action: ShortcutAction, via_leader: bool },
     /// The focused surface is in copy mode and this key maps to a vi action.
     CopyMode(CopyModeAction),
     /// A plain key to type into the focused surface. Each applier encodes it
-    /// for its own target (PTY VT bytes vs tmux key name).
-    Type { logical: Key, key_code: KeyCode, mods: Modifiers },
+    /// for its own target (PTY VT bytes vs tmux key name) using the batch's
+    /// modifier snapshot; `mods` is a per-frame constant held by the applier,
+    /// so it is NOT carried per key.
+    Type { logical: Key, key_code: KeyCode },
     /// A webview holds focus and declared this chord for forwarding to its
     /// pane. Only emitted when `ctx.forward_chords` is non-empty (tmux).
-    WebviewForward { logical: Key, key_code: KeyCode, mods: KeyMods },
+    WebviewForward { logical: Key, key_code: KeyCode },
     /// A webview holds focus and the configured release chord fired.
     ReleaseWebviewFocus,
 }
@@ -169,15 +173,44 @@ Key properties:
   Swallow per key against one `LeaderPhase`, the `dispatch_input`
   snapshot-coordination (open/close the repeat window "with" the leader
   machine) disappears. `dispatch_input` is deleted.
-- **`via_leader` is dropped.** It existed only to stop the direct-Cmd+V
-  path (`dispatch_input`) and the leader path (`app_shortcut_handler`) from
-  both firing `PasteAction`. With one pass, each key yields exactly one
-  effect, so a direct Cmd+V and a `<Leader>p` both resolve to
-  `Action(Paste)` → one paste. No double-fire is possible.
+- **`via_leader` is preserved (single-fire, not dropped).** One pass does
+  remove the *double-fire* risk (each key yields exactly one effect, so a
+  direct Cmd+V and a `<Leader>p` both resolve to one `Action(Paste)`), but
+  `via_leader` served a second purpose the collapse must keep: today Default
+  suppresses direct-chord paste while in copy mode (copy mode sets
+  `KeyboardDisabled`, so `dispatch_input` never fires the direct Cmd+V; the
+  leader path still pastes). Emitting an unconditional `Action(Paste)` for a
+  direct Cmd+V would newly paste into a copy-mode terminal — a regression.
+  So the Paste effect carries `via_leader`, and the Default applier pastes a
+  direct-chord Cmd+V only when NOT in copy mode; leader paste always fires.
 - **Typing stays target-specific at the edge.** `Type` carries the raw
-  key; the Default applier encodes via `bevy_key_to_terminal_key`, the tmux
-  applier via `bevy_key_to_tmux_name`. The decider does not unify the
-  encoding (VT bytes vs tmux key names are genuinely different targets).
+  key (no modifiers — those are a batch constant the applier holds); the
+  Default applier encodes via `bevy_key_to_terminal_key` + the frame's
+  `TerminalModifiers`, the tmux applier via `bevy_key_to_tmux_name` + the
+  frame's `KeyMods`. The decider does not unify the encoding (VT bytes vs
+  tmux key names are genuinely different targets).
+
+Behaviour-preserving decider invariants (fold these edge cases in exactly —
+each is a ported test):
+
+- **Release-webview-focus chord is swallowed even with no webview focus.**
+  Today `Shortcuts::input_bindings()` reserves EVERY non-paste direct chord
+  (including `ReleaseWebviewFocus`, e.g. the default Ctrl+Shift+Escape), so
+  `dispatch_input` withholds it from the PTY unconditionally — but
+  `match_gui_action`/`find_entry` deliberately EXCLUDE `ReleaseWebviewFocus`.
+  A naive "emit `Type` whenever `match_gui_action` is `None`" would type
+  Escape into the shell in Default. The decider MUST emit no `Type` for any
+  key matching `is_release_webview_focus`, regardless of webview focus.
+- **No `Type` while in copy mode.** Both current paths suppress typing in
+  copy mode (Default via `KeyboardDisabled`, tmux via its `in_copy_mode`
+  arm). When `ctx.in_copy_mode`, an unmatched key resolves to `CopyMode(..)`
+  or is swallowed — never `Type`.
+- **Webview branch is evaluated first and clears the leader.** When
+  `ctx.webview_focused`, the decider tests the webview branch per key BEFORE
+  stepping the leader, and CLEARS `LeaderPhase` to `Idle` (does not step it)
+  — mirroring `default_mode.rs:207-210` and `input.rs:230`. Under webview
+  focus it emits only `ReleaseWebviewFocus` / `WebviewForward`; GUI/leader
+  handling is suppressed.
 
 ### 2. Two thin mode appliers (`run_if(in_state)`)
 
@@ -193,8 +226,12 @@ and does gather → (pure decide) → trigger. Neither holds a `TmuxClient`,
   (`KeyboardFocused OzmaTerminal`, `CopyModeState`, `FocusedWebview`).
 - `classify_key_batch(...)`, then for each effect in `Vec` order:
   - `Action(Quit)` → `exit.write(AppExit::Success)`.
-  - `Action(EnterCopyMode)` → `commands.trigger(EnterCopyModeActionEvent { entity })`.
-  - `Action(Paste)` → `commands.trigger(PasteAction { entity })`.
+  - `Action(EnterCopyMode)` → `commands.trigger(EnterCopyModeActionEvent { entity })`
+    **unconditionally** (matches today's guardless Default path; the tmux
+    applier keeps its re-entry guard — see the EnterCopyMode note below).
+  - `Action { action: Paste, via_leader }` → `commands.trigger(PasteAction { entity })`
+    only when `via_leader || !in_copy_mode` (preserves today's suppression
+    of direct-chord paste in copy mode).
   - `Action(pane/window/DetachSession/ReleaseWebviewFocus)` → **no-op**
     (Default owns no such targets — preserves today's behaviour).
   - `CopyMode(a)` → `trigger_copy_mode_action(&mut commands, entity, a)`.
@@ -228,13 +265,29 @@ keyboard half of `forward_keys_to_tmux`; `run_if(in_state(AppMode::Tmux))`;
   - After the loop: if any names accumulated, trigger ONE
     `ForwardPaneKeysRequest { active_pane, names }` (new).
 
-Common effects (Quit, EnterCopyMode, Paste, CopyMode, ReleaseWebviewFocus)
-are identical in both appliers; a private helper
+Some effects (Quit, ReleaseWebviewFocus, CopyMode) are genuinely identical
+in both appliers. A private helper
 `apply_shared_effect(effect, entity, &mut commands, &mut exit,
-&mut focused_webview) -> bool` handles them and returns whether it
-consumed the effect, so the two appliers do not re-type those arms. Only
-the mode-divergent arms (pane/window targeting; Type encoding; the tmux
-forward batch) live in each applier.
+&mut focused_webview) -> bool` MAY factor those arms out — but only extract
+it once the duplication is real after implementation (YAGNI); do not
+pre-build it. Two effects are NOT identical and must stay per-applier:
+
+- **`EnterCopyMode` diverges by mode today.** The tmux applier guards
+  re-entry (`copy_modes.get(entity).is_err()`, `input.rs:315-322`); Default
+  triggers unconditionally; the `handle_enter_copy_mode_request` observer
+  itself has no guard and re-clears the selection + re-enters vi mode on
+  every trigger (`copy_mode.rs:51-70`). To stay behaviour-preserving, keep
+  each mode's current behaviour (Default unconditional, tmux guarded) and do
+  NOT route `EnterCopyMode` through `apply_shared_effect`. (Follow-up, out of
+  scope: moving the re-entry guard into the observer would make it idempotent
+  and unify both — but that changes Default's current re-clear behaviour, so
+  it is a separate, non-behaviour-preserving change.)
+- **`Paste` carries the copy-mode nuance** above (`via_leader || !in_copy_mode`
+  in Default; the tmux applier always triggers `PasteAction`, applied by
+  `on_paste_tmux`).
+
+Only the mode-divergent arms (pane/window targeting; Paste/EnterCopyMode as
+above; Type encoding; the tmux forward batch) live in each applier.
 
 ### 3. New apply-side EntityEvents
 
@@ -252,9 +305,11 @@ forward batch) live in each applier.
   `forward_keys_to_tmux:411-431`). This keeps the "accumulate → one
   `SendPaneKeys` per frame" contract that the module doc and the research
   both require, while removing `TmuxClient`/`TerminalHandle` from the
-  applier's params. Placed with the other tmux forward code
-  (`src/action/tmux/` or `src/input/tmux/forward.rs`; final location a
-  spec-review detail).
+  applier's params. Placed in `src/input/tmux/forward.rs`, which already owns
+  backend-bound key/byte/IME forwarding to panes — a closer home than the
+  semantic `src/action/tmux/*Request` action modules. It cannot reuse the
+  existing `TerminalForwardInput` (that sends `SendBytes` hex via
+  `send-keys -H`, not `SendPaneKeys` names).
 - **Tmux paste observer** — reuse the existing `PasteAction` event; add a
   `With<TmuxPane>` observer `on_paste_tmux` (in
   `src/action/terminal/paste.rs` or `src/action/tmux/`) that reads
@@ -274,14 +329,28 @@ forward batch) live in each applier.
   (`Detect`) still runs before the appliers (`Advance`), which stay in
   `InputPhase::FocusedKey`.
 - `KeyboardInputPlugin` currently owns `add_message::<KeyboardInput>()` and
-  the `TerminalInputBindings` init. The message registration must remain
-  (relocate if the plugin is retired). `TerminalInputBindings` /
-  `populate_input_bindings` / `Shortcuts::input_bindings()` exist only to
-  feed `dispatch_input`'s reserved/paste skip; the unified decider resolves
-  reserved chords to `Action`/`Swallow` and paste to `Action(Paste)`
-  directly from `Shortcuts`. **Verify `TerminalInputBindings` has no other
-  consumer**, then delete it and its startup system. (If a consumer
-  exists, keep it; noted as an implementation-time check.)
+  the `TerminalInputBindings` init. **The message registration MUST remain** —
+  `KeyboardInput` is read by many systems beyond the old dispatcher (the
+  appliers, prompts, `detect_modifier_tap`); relocate `add_message` to the
+  input root if the plugin is retired. Delete only the KEYBOARD binding path:
+  `TerminalInputBindings` + `ReservedChord`, `populate_input_bindings`,
+  `Shortcuts::input_bindings()`, and — now dead once `dispatch_input` is gone —
+  `Shortcuts::opens_repeat_window` (its only caller was `keyboard.rs:101`).
+  The unified decider resolves reserved chords to `Action`/`Swallow` and paste
+  to `Action(Paste)` directly from `Shortcuts`. **Do NOT touch the rest of
+  `src/input/bindings.rs`** — it also owns mouse policy (`OzmaMouseConfig`,
+  `FineModifier`) that the mouse path still uses. (Confirm no other consumer of
+  `TerminalInputBindings` before deleting; it is currently read only by
+  `dispatch_input` and produced by `populate_input_bindings`.)
+- **Verify before deleting `dispatch_input`:** it is mode-agnostic and types
+  to the `KeyboardFocused` `OzmaTerminal`. tmux mirrors `ActivePane` onto
+  `KeyboardFocused` (`src/ui/tmux/pane_focus.rs:90`), so a `KeyboardFocused`
+  entity exists in tmux mode too. Confirm the active tmux pane is
+  `KeyboardDisabled` (or otherwise not typed by `dispatch_input`) today, so
+  that deleting it — with the Default applier gated `run_if(in_state(Default))`
+  and thus inert in tmux — does not remove a live typing path. Expected: tmux
+  typing goes only through `apply_tmux_shortcuts` → `ForwardPaneKeysRequest`,
+  never `TerminalKeyInput`.
 - Per the repo's plugin-registration rule, each surviving/new system is
   registered by the plugin in its own file; aggregators only `add_plugins`.
 
@@ -324,9 +393,11 @@ forward batch) live in each applier.
   repeat-window withhold/close, pending suppression, same-frame duplicate,
   bare-modifier skip) and both dispatchers' repeat tests
   (`os_key_repeat_*`) as pure assertions over the returned `Vec<KeyEffect>`;
-  add cases for copy-mode shadowing order, `mods.meta` drop, and the
-  webview branch. This is the primary safety net and the main win of the
-  enum IR.
+  add cases for copy-mode shadowing order, `mods.meta` drop, the webview
+  branch (release chord + `ForwardKeys` + leader-clear), the
+  release-webview-focus chord swallowed with no webview focus, no `Type`
+  while `in_copy_mode`, and the `via_leader` paste distinction in copy mode.
+  This is the primary safety net and the main win of the enum IR.
 - **`step_leader` / `step_tap` tests** (`src/input/shortcuts.rs`):
   unchanged.
 - **Applier integration tests** (Bevy `App` + capturing observers, per
@@ -347,14 +418,24 @@ forward batch) live in each applier.
   `input.rs:398` parity).
 - `mods.meta` / `mods.super_` unmatched keys are dropped, never typed
   (decider emits no `Type`).
+- The release-webview-focus chord (default Ctrl+Shift+Escape) is swallowed
+  even with NO webview focused — never typed (Default) / never plain-forwarded
+  as an unmatched key; preserving today's reserved-chord withholding.
+- No `Type` is emitted while `in_copy_mode` (parity with today's
+  `KeyboardDisabled` (Default) / `in_copy_mode` arm (tmux) suppression).
+- `EnterCopyMode` keeps each mode's current guard behaviour: Default triggers
+  unconditionally, tmux guards re-entry — no unification in this refactor.
+- Direct-chord paste stays suppressed in Default copy mode (`via_leader ||
+  !in_copy_mode`); leader paste still fires; tmux paste unchanged.
 - Repeat window and pending-suppression semantics are identical (same
   `step_leader` + the same `ev.repeat` wrapper, now in the decider).
-- Webview-focused handling preserved: release chord clears focus; GUI
-  chords are suppressed under webview focus (Default); declared
-  `ForwardKeys` chords forward to the pane (tmux).
+- Webview-focused handling preserved: the decider evaluates the webview branch
+  first per key and clears `LeaderPhase` to `Idle` (does not step it); release
+  chord clears focus; GUI chords are suppressed under webview focus (Default);
+  declared `ForwardKeys` chords forward to the pane (tmux).
 - tmux emits exactly one `SendPaneKeys` per frame for plain keys, with the
   single `snap_to_bottom_vt_only`/`flush_emit`, via the batch event.
-- Paste behaviour is unchanged per mode (PTY paste vs chunked `SendBytes`).
+- Paste byte encoding is unchanged per mode (PTY paste vs chunked `SendBytes`).
 
 ## Risks and staging
 
