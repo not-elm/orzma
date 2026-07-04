@@ -7,6 +7,7 @@ mod kill_pane;
 mod kill_window;
 mod new_window;
 mod next_window;
+mod paste;
 mod previous_window;
 mod rename_session;
 mod rename_window;
@@ -42,6 +43,7 @@ impl Plugin for TmuxActionPlugin {
             kill_window::KillWindowPlugin,
             new_window::NewWindowPlugin,
             next_window::NextWindowPlugin,
+            paste::TmuxPastePlugin,
             previous_window::PreviousWindowPlugin,
             rename_session::RenameSessionPlugin,
             rename_window::RenameWindowPlugin,

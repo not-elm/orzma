@@ -5,6 +5,7 @@ use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::surface::OzmaTerminal;
 use bevy::prelude::*;
 use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
+use ozmux_tmux::TmuxPane;
 
 /// Pastes the system clipboard into the target terminal entity's PTY.
 #[derive(EntityEvent, Debug, Clone)]
@@ -26,7 +27,18 @@ impl Plugin for PastePlugin {
 fn on_paste(
     ev: On<PasteAction>,
     mut clipboard: ResMut<Clipboard>,
-    mut terminals: Query<(&mut TerminalHandle, &mut PtyHandle, &mut Coalescer), With<OzmaTerminal>>,
+    // NOTE: Without<TmuxPane> is defensive, mirroring the IME-commit split
+    // (`apply_ime_commit_to_terminal` in src/input/default_mode.rs) — tmux
+    // panes never carry a PtyHandle (src/render/tmux.rs attaches them via
+    // `TerminalHandle::detached`), so the `&mut PtyHandle` term below
+    // already excludes them from this query. Keep the filter anyway so
+    // this observer's tmux-exclusion doesn't rest solely on that
+    // PtyHandle invariant; tmux paste is applied by `on_paste_tmux`
+    // (src/action/tmux/paste.rs).
+    mut terminals: Query<
+        (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
+        (With<OzmaTerminal>, Without<TmuxPane>),
+    >,
 ) {
     let Some(text) = clipboard.read() else {
         return;
@@ -63,5 +75,40 @@ mod tests {
         // Reaching here proves the observer handled the missing-terminal and
         // unavailable/empty-clipboard paths without panicking. Byte correctness
         // is covered by the clipboard `build_paste_bytes_*` tests.
+    }
+
+    #[test]
+    fn on_paste_is_noop_for_tmux_pane() {
+        use ozmux_tmux::PaneId;
+        use tmux_control_parser::CellDims;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(PastePlugin)
+            .insert_resource(Clipboard::in_memory());
+        app.world_mut()
+            .resource_mut::<Clipboard>()
+            .write("hello".to_string());
+
+        let pane = app
+            .world_mut()
+            .spawn((
+                OzmaTerminal,
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: CellDims {
+                        width: 0,
+                        height: 0,
+                        xoff: 0,
+                        yoff: 0,
+                    },
+                },
+            ))
+            .id();
+        app.world_mut().trigger(PasteAction { entity: pane });
+        app.update();
+        // Reaching here proves the PTY-write path was not taken: the tmux
+        // pane entity has no PtyHandle/Coalescer, so on_paste's query
+        // cannot match it regardless of the Without<TmuxPane> filter.
     }
 }
