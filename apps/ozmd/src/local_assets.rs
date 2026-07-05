@@ -54,7 +54,10 @@ mod tests {
 
     #[test]
     fn token_differs_for_different_paths() {
-        assert_ne!(token_for(Path::new("/a/x.png")), token_for(Path::new("/b/x.png")));
+        assert_ne!(
+            token_for(Path::new("/a/x.png")),
+            token_for(Path::new("/b/x.png"))
+        );
     }
 
     #[test]
@@ -70,7 +73,10 @@ mod tests {
 
         let link = root.path().join(&url1);
         assert!(link.exists());
-        assert_eq!(fs::read_link(&link).unwrap(), fs::canonicalize(&img).unwrap());
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            fs::canonicalize(&img).unwrap()
+        );
 
         assert_eq!(stage(root.path(), base.path(), "pic.png").unwrap(), url1);
     }
@@ -86,7 +92,10 @@ mod tests {
 
         let url = stage(root.path(), base.path(), "img/a.gif").unwrap();
         let link = root.path().join(&url);
-        assert_eq!(fs::read_link(&link).unwrap(), fs::canonicalize(&img).unwrap());
+        assert_eq!(
+            fs::read_link(&link).unwrap(),
+            fs::canonicalize(&img).unwrap()
+        );
     }
 
     #[test]
