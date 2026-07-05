@@ -54,6 +54,20 @@ tmux pane). This is what lets one mode-agnostic System compute `in_copy_mode`
 and the effect targets — the reason the original design used two mode systems
 (each resolving its own focused entity) no longer applies.
 
+**Freshness caveat (load-bearing).** Today `apply_tmux_shortcuts` targets
+`ActivePane` DIRECTLY, which the input pipeline guarantees is fresh in
+`InputPhase::FocusedKey` (click-to-focus retargets `ActivePane` in `Dispatch`
+before the keyboard dispatcher reads it). `KeyboardFocused` is instead
+maintained by `sync_keyboard_focus_to_active_pane` (`pane_focus.rs`), which runs
+`in_set(TmuxActiveSet)` with NO ordering edge to `OzmuxSystems::Input` and
+applies via DEFERRED `commands`. So on a frame where the active pane changes,
+`resolve_shortcuts` (in `FocusedKey`) could read a STALE `KeyboardFocused` and
+target the previous pane / wrong `in_copy_mode`. This refactor therefore MUST
+add an ordering edge so the mirror flush lands before the resolver reads it:
+order `sync_keyboard_focus_to_active_pane` `.before(InputPhase::FocusedKey)`
+(or move it into `InputPhase::Dispatch`). This is a NEW requirement the switch
+from `ActivePane` to `KeyboardFocused` introduces.
+
 ## Non-goals
 
 - No behaviour change. Same `classify_key_batch` output, same triggered events,
@@ -102,10 +116,19 @@ pub(crate) enum ShortcutSet { Resolve, Apply }
   the focused-surface query
   `Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>`,
   `Query<(), With<CopyModeState>>`, `Query<&ForwardKeys>`, and the tmux prompt
-  guards as `Option<Res<CopyPrompt>>` / `Option<Res<ConfirmState>>` /
-  `Option<Res<RenamePrompt>>` (None in Default → guard reduces to IME/focus).
-  (`CopyPrompt`/`ConfirmState`/`RenamePrompt` must be `Option<Res<..>>` here —
-  they are not guaranteed present in Default mode.)
+  guards. `ConfirmState` / `RenamePrompt` are genuinely transient (inserted
+  on demand by tmux-only plugins, absent in Default) so they MUST be
+  `Option<Res<..>>`. `CopyPrompt`, however, is `init_resource`'d by a GLOBAL
+  plugin (`CopyPromptPlugin`, `main.rs`) and is always present, including in
+  Default — a plain `Res<CopyPrompt>` also works. NOTE: `resolve_shortcuts`
+  evaluating the `copy_prompt.open.is_some()` guard in Default is a guard the
+  old `apply_default_shortcuts` did not have; it is behaviour-neutral ONLY
+  because `CopyPrompt.open` is currently never set (inert). Record this as an
+  accepted, latent difference.
+- **Param count / bundling:** this signature is ~17 flat params, over Bevy's
+  16-`SystemParam` tuple-arity limit, so it will not compile flat. Tuple-bundle
+  the related params (as `apply_tmux_shortcuts` already does for its prompts) or
+  use `#[derive(SystemParam)]` structs.
 - Guards: if any prompt open / IME composing / window unfocused →
   `clear_leader_phase`, `events.clear()`, return (NO message written → appliers
   don't run).
@@ -128,14 +151,25 @@ query, and `bevy_keys` — everything now arrives in the batch.
 **`apply_default_shortcuts`** (`src/input/default_mode.rs`;
 `run_if(in_state(AppMode::Default))` + `run_if(on_message::<ShortcutBatch>)` +
 `in_set(ShortcutSet::Apply)`): params `Commands`,
-`MessageReader<ShortcutBatch>`. For each batch, for each effect:
+`MessageReader<ShortcutBatch>`, `Res<Shortcuts>` (still required — the
+release-webview-focus chord arrives as `KeyEffect::Type` and Default must drop
+it while tmux forwards it, so the applier calls
+`shortcuts.is_release_webview_focus(key_code, batch.mods)`; it cannot be dropped
+from the params). For each batch, for each effect:
 - `Action{EnterCopyMode}` → trigger `EnterCopyModeActionEvent{ batch.focused }` if `Some`.
 - `Action{Paste, via_leader}` → trigger `PasteAction{ batch.focused }` if `Some` and `via_leader || !batch.in_copy_mode`.
 - `Action{pane/window/detach}` → no-op (exhaustive list, as today).
 - `CopyMode(a)` → `trigger_copy_mode_action(batch.focused, a)` if `Some`.
 - `Type{logical, key_code}` → drop if `is_release_webview_focus`; else trigger
   `TerminalKeyInput{ batch.focused, key, TerminalModifiers-from-batch.mods }` if `Some`.
-- `WebviewForward` → not emitted for Default (empty forward_chords in that state).
+- `WebviewForward` → **no-op** (kept as an explicit arm). NOTE: unlike today
+  (where Default hardcodes `forward_chords: &[]`, so the decider never emits
+  this), `resolve_shortcuts` now resolves the focused webview's real
+  `ForwardKeys` in BOTH modes, so the decider CAN emit `WebviewForward` in
+  Default when a focused Default webview declares forward chords. Behaviour is
+  preserved by this drop arm (Default has no pane to forward to; the key was
+  dropped before, and is dropped here) — the drop lives in the applier, not in
+  "empty forward_chords".
 
 **`apply_tmux_shortcuts`** (`src/input/tmux/input.rs`;
 `run_if(in_state(AppMode::Tmux))` + `run_if(on_message::<ShortcutBatch>)` +
@@ -167,6 +201,16 @@ pane (the `KeyboardFocused` surface in tmux). For each effect:
   `DefaultHostInputPlugin`, `apply_tmux_shortcuts` by the tmux `InputPlugin` —
   each now gated on `on_message::<ShortcutBatch>` + `ShortcutSet::Apply` instead
   of `on_message::<KeyboardInput>` + `LeaderGate::Advance`.
+- **`KeyboardFocused` mirror must be fresh before the resolver reads it**
+  (the freshness caveat above): order `sync_keyboard_focus_to_active_pane`
+  (`src/ui/tmux/pane_focus.rs`) `.before(InputPhase::FocusedKey)` — expressed as
+  a cross-plugin ordering edge on the `InputPhase::FocusedKey` set, not a
+  `.after(fn)` — so its deferred `commands` flush lands before
+  `resolve_shortcuts` reads `KeyboardFocused`. Without this edge, the tmux target
+  can lag one frame when the active pane changes.
+- New items in `dispatch.rs` start at the narrowest visibility that compiles
+  (`ShortcutBatch` / `resolve_shortcuts` private or `pub(super)`; `ShortcutSet`
+  `pub(crate)` only because the appliers in other files reference it).
 
 ## Components and data flow
 
@@ -206,14 +250,23 @@ pane (the `KeyboardFocused` surface in tmux). For each effect:
   (via `batch.in_copy_mode`), tmux target correctness, one
   `ForwardPaneKeysRequest` per batch, `quit`/`release` handled upstream (assert
   the appliers do NOT need them).
+- Ordering regression tests (the two load-bearing schedule edges): (1) write a
+  `KeyboardInput` and assert the resulting `ShortcutBatch` is consumed in the
+  SAME `Update` (guards the `ShortcutSet::Resolve.chain(Apply)` edge — a dropped
+  chain would defer consumption a frame); (2) with a tmux fixture, change
+  `ActivePane` and press a key in the same tick, asserting the batch's `focused`
+  is the NEW pane (guards the `sync_keyboard_focus_to_active_pane`
+  `.before(FocusedKey)` edge).
 - Full gate: `cargo test -p ozmux`, `cargo clippy --workspace --all-targets --
   -D warnings`, `cargo fmt`.
 
 ## Behaviour-preservation checklist
 
-- Same `classify_key_batch` decision (byte-identical decider). Same guards
-  (Option prompts collapse to the identical condition set per mode). Same
-  `LeaderPhase` stepping (now in exactly one system).
+- Same `classify_key_batch` decision (byte-identical decider). Guards: the
+  transient `ConfirmState`/`RenamePrompt` are absent in Default (Option → None),
+  so the Default guard set is IME/focus as before; the always-present
+  `CopyPrompt` guard now also runs in Default but is inert (never set), so it is
+  behaviour-neutral. Same `LeaderPhase` stepping (now in exactly one system).
 - `focused` resolves to the same entity each applier used today (default
   terminal / active pane), because `KeyboardFocused` already tracks the active
   surface in both modes.
@@ -227,10 +280,13 @@ pane (the `KeyboardFocused` surface in tmux). For each effect:
 
 ## Risks and staging
 
-- The only real coupling is the same-frame Resolve→Apply ordering; the
-  `ShortcutSet` chain makes it explicit and testable. If the chain is dropped,
-  appliers read the previous frame's batch (a visible input lag) — a
-  registration test should assert the ordering.
+- **Two load-bearing schedule edges** (both covered by the ordering tests
+  above): (1) the same-frame Resolve→Apply ordering — the `ShortcutSet` chain
+  makes it explicit; dropping it defers apply a frame (visible input lag).
+  (2) the `KeyboardFocused` mirror must flush before the resolver reads it —
+  `sync_keyboard_focus_to_active_pane.before(InputPhase::FocusedKey)`; without
+  it, the tmux target lags one frame on active-pane changes. Both are cheap edges
+  but silently break correctness if omitted, so both get a regression test.
 - Staging: this must be a SINGLE atomic cutover — `resolve_shortcuts` and the
   old appliers cannot coexist (both would step `LeaderPhase`, double-firing).
   So one change: add `src/input/dispatch.rs` (`ShortcutBatch`,
