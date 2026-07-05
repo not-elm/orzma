@@ -43,7 +43,7 @@ impl Plugin for MouseWebviewPlugin {
 /// child even if the pointer drifted off-rect. Shared by both mode pipelines —
 /// only one mode is active at a time, so a single in-flight press suffices.
 #[derive(Resource, Default)]
-pub(in crate::input::mouse) struct WebviewPress(pub(in crate::input::mouse) Option<Entity>);
+pub(in crate::input::mouse) struct WebviewPress(pub Option<Entity>);
 
 /// Queries/resources the webview routing needs, bundled to stay within Bevy's
 /// system-parameter limit. Mode-agnostic: the surface-geometry lookup is
@@ -170,10 +170,10 @@ pub(in crate::input::mouse) fn release_webview_press(
 /// `(cell_w, cell_h)`, and the physical-pixel cursor position (`cursor_phys`,
 /// `None` when the pointer is off-window).
 pub(in crate::input::mouse) struct WebviewPointerFrame {
-    pub(in crate::input::mouse) scale: f32,
-    pub(in crate::input::mouse) cell_w: f32,
-    pub(in crate::input::mouse) cell_h: f32,
-    pub(in crate::input::mouse) cursor_phys: Option<Vec2>,
+    pub scale: f32,
+    pub cell_w: f32,
+    pub cell_h: f32,
+    pub cursor_phys: Option<Vec2>,
 }
 
 /// Computes the shared `WebviewPointerFrame` for the current frame: `scale` from
@@ -199,12 +199,11 @@ pub(in crate::input::mouse) fn webview_pointer_frame(
 /// (which would re-trip `clippy::too_many_arguments`). Both mode move systems own
 /// these params and borrow them into this bundle each frame.
 pub(in crate::input::mouse) struct WebviewMoveDeps<'a> {
-    pub(in crate::input::mouse) children: &'a Query<'a, 'a, &'static Children>,
-    pub(in crate::input::mouse) webviews:
-        &'a Query<'a, 'a, (&'static Webview, Has<NonInteractive>)>,
-    pub(in crate::input::mouse) overlay_rects: &'a Query<'a, 'a, &'static TerminalOverlays>,
-    pub(in crate::input::mouse) browsers: Option<&'a Browsers>,
-    pub(in crate::input::mouse) pressed_buttons: &'a ButtonInput<MouseButton>,
+    pub children: &'a Query<'a, 'a, &'static Children>,
+    pub webviews: &'a Query<'a, 'a, (&'static Webview, Has<NonInteractive>)>,
+    pub overlay_rects: &'a Query<'a, 'a, &'static TerminalOverlays>,
+    pub browsers: Option<&'a Browsers>,
+    pub pressed_buttons: &'a ButtonInput<MouseButton>,
 }
 
 /// Resolves the surface under `cursor_phys` via `resolve` (single-shell hit-test

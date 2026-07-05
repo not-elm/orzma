@@ -39,35 +39,35 @@ pub(super) enum PressHit {
 /// the state itself, which the decider then replaces with `Idle`).
 pub(super) struct ReleaseCtx {
     /// Whether the `Pressed` pane is in copy mode (multi-click promotion gate).
-    pub(super) copy_mode: bool,
+    pub copy_mode: bool,
     /// Resolved click point for a `click_count >= 2` release, when available.
-    pub(super) multi_cell: Option<Point>,
+    pub multi_cell: Option<Point>,
     /// Pane under the cursor for a divider-click focus fallback.
-    pub(super) pane_under: Option<PaneId>,
+    pub pane_under: Option<PaneId>,
 }
 
 /// Pre-resolved per-state inputs for `decide_continuation`. Only the fields
 /// relevant to the active state are read; the rest stay neutral / `None`.
 pub(super) struct ContinuationCtx {
     /// Whether the active gesture's pane entity is still alive.
-    pub(super) pane_alive: bool,
+    pub pane_alive: bool,
     /// Live physical-pixel cursor position, when the window has one.
-    pub(super) cursor_phys: Option<Vec2>,
+    pub cursor_phys: Option<Vec2>,
     /// Drag-promotion threshold in physical pixels.
-    pub(super) drag_threshold_phys: f32,
+    pub drag_threshold_phys: f32,
     /// Whether the `Pressed` pane is in copy mode (drag promotion gate).
-    pub(super) copy_mode: bool,
+    pub copy_mode: bool,
     /// Anchor point resolved from the press origin (`Pressed` → `Selecting`).
-    pub(super) anchor_point: Option<Point>,
+    pub anchor_point: Option<Point>,
     /// Point resolved from the live cursor (`Selecting` extend).
-    pub(super) selecting_point: Option<Point>,
+    pub selecting_point: Option<Point>,
     /// Which half of the cell the pointer is over, carried into the local
     /// selection effects (`Selecting` / `PendingMultiSelect`).
-    pub(super) side: Side,
+    pub side: Side,
     /// The selection granularity to begin a drag with (`Selecting`).
-    pub(super) ty: SelectionType,
+    pub ty: SelectionType,
     /// `floor(cursor.major / cell.major)` on the divider's major axis (`Resizing`).
-    pub(super) resize_pointer_cell: Option<i32>,
+    pub resize_pointer_cell: Option<i32>,
 }
 
 /// Resolves a left press into the gesture-state transition and effects.

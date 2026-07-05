@@ -21,13 +21,13 @@ pub(in crate::input::mouse) enum DragPhase {
 /// and the drag phase (drives lazy materialization of the selection).
 pub(in crate::input::mouse) struct DragGesture {
     /// The cell where the gesture originated.
-    pub(in crate::input::mouse) origin: CellCoord,
+    pub origin: CellCoord,
     /// The half of the origin cell where the gesture started.
-    pub(in crate::input::mouse) side: Side,
+    pub side: Side,
     /// The selection granularity (word, line, etc.).
-    pub(in crate::input::mouse) ty: SelectionType,
+    pub ty: SelectionType,
     /// Current phase of the drag.
-    pub(in crate::input::mouse) phase: DragPhase,
+    pub phase: DragPhase,
 }
 
 /// A held mouse button: the terminal the press landed on, the button, and the
@@ -37,25 +37,25 @@ pub(in crate::input::mouse) struct DragGesture {
 /// `drag`, so drag-motion synthesis must not depend on it.
 #[derive(Clone, Copy)]
 pub(in crate::input::mouse) struct HeldPointer {
-    pub(in crate::input::mouse) entity: Entity,
-    pub(in crate::input::mouse) button: MouseButtonKind,
-    pub(in crate::input::mouse) last_cell: CellCoord,
+    pub entity: Entity,
+    pub button: MouseButtonKind,
+    pub last_cell: CellCoord,
 }
 
 /// Tracks the current mouse gesture and consecutive-click count.
 #[derive(Resource, Default)]
 pub(in crate::input::mouse) struct OzmaMouseGesture {
     /// Consecutive-click counter for multi-click detection.
-    pub(in crate::input::mouse) click: ClickTracker,
+    pub click: ClickTracker,
     /// In-progress local-selection gesture, or `None` when idle.
-    pub(in crate::input::mouse) drag: Option<DragGesture>,
+    pub drag: Option<DragGesture>,
     /// Held button + last drag cell, for both local and app-forward drags.
-    pub(in crate::input::mouse) held: Option<HeldPointer>,
+    pub held: Option<HeldPointer>,
     /// Last observed physical cursor position, including out-of-bounds values
     /// carried by `CursorMoved` while a button is held. Lets a drag continue
     /// when `Window::cursor_position()` masks an off-window cursor; cleared on
     /// every gesture reset and on release.
-    pub(in crate::input::mouse) last_cursor_phys: Option<Vec2>,
+    pub last_cursor_phys: Option<Vec2>,
 }
 
 impl OzmaMouseGesture {
@@ -100,8 +100,8 @@ impl ClickTracker {
 /// last terminal the wheel targeted.
 #[derive(Resource, Default)]
 pub(in crate::input::mouse) struct WheelAccumulator {
-    pub(in crate::input::mouse) residual_cells: f32,
-    pub(in crate::input::mouse) residual_cells_h: f32,
+    pub residual_cells: f32,
+    pub residual_cells_h: f32,
     last_target: Option<Entity>,
 }
 
