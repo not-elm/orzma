@@ -12,7 +12,7 @@
 
 - Rust edition 2024. No `mod.rs`. Comments English-only; only `// TODO:` / `// NOTE:` / `// SAFETY:` line comments (NOTE = a wrong-if-overlooked caveat). No narrative comments, no commented-out code.
 - File-level `//!` on the new module; `///` on every `pub`/`pub(crate)` item. All `use` at the top in one contiguous block; no inline fully-qualified paths; no glob imports.
-- Visibility minimization is MANDATORY: `dispatch.rs` items start at the narrowest visibility that compiles — `ShortcutBatch` / `resolve_shortcuts` private or `pub(super)`; `ShortcutSet` `pub(crate)` only because the appliers in other files reference it.
+- Visibility minimization is MANDATORY: `dispatch.rs` items start at the narrowest visibility that compiles — `resolve_shortcuts` private or `pub(super)`; `ShortcutBatch` / `ShortcutSet` are `pub(in crate::input)` (the two appliers are descendants of `crate::input`, so `pub(crate)` is wider than needed); `mod dispatch;` stays private.
 - Mutable params first in signatures. `Query` params use descriptive nouns (no `_q`). Items ordered `pub` → `pub(crate)` → private within a block. System bodies ≤ ~150 lines.
 - Systems/observers are registered by the `Plugin` in their own file; aggregators only `add_plugins`. Cross-file system ordering is expressed with a shared `SystemSet` (or `.before/.after` a set), NEVER `.after(some_fn)`.
 - **`resolve_shortcuts` has ~17 candidate params — over Bevy's 16-`SystemParam` tuple-arity limit — so it MUST tuple-bundle related params (as `apply_tmux_shortcuts` already does) or use `#[derive(SystemParam)]` structs.**
@@ -41,19 +41,22 @@ This is a SINGLE atomic change: `resolve_shortcuts` and the old appliers cannot 
 - Modify: `src/input.rs`, `src/input/default_mode.rs`, `src/input/tmux/input.rs`, `src/ui/tmux/pane_focus.rs`
 
 **Interfaces:**
-- Consumes: `classify_key_batch(&mut LeaderPhase, &Shortcuts, &ResolvedCopyModeKeys, impl Iterator<Item=&KeyboardInput>, BatchContext) -> Vec<KeyEffect>`, `KeyEffect`, `BatchContext` (from `crate::input::resolve`, UNCHANGED); `clear_leader_phase`, `LeaderPhase`, `LeaderGate`, `Shortcuts` (`crate::input::shortcuts`); `current_modifiers` (`crate::input`); `KeyboardFocused` (`crate::input::focus`); `OzmaTerminal`, `CopyModeState`, `FocusedWebview`, `ForwardKeys`, `ImeState`, `Modifiers`, `CopyPrompt`/`ConfirmState`/`RenamePrompt`; the apply-side events (`TerminalKeyInput`, `PasteAction`, `EnterCopyModeActionEvent`, `trigger_copy_mode_action`, `DetachSessionRequest`, `ForwardPaneKeysRequest`, the tmux `*Request`), `ActionTargets`, `dispatch_tmux_action`, `bevy_key_to_terminal_key`, `bevy_key_to_tmux_name`, `current_terminal_modifiers`.
+- Consumes: `classify_key_batch(&mut LeaderPhase, &Shortcuts, &ResolvedCopyModeKeys, impl Iterator<Item=&KeyboardInput>, BatchContext) -> Vec<KeyEffect>`, `KeyEffect`, `BatchContext` (from `crate::input::resolve`, UNCHANGED); `clear_leader_phase`, `LeaderPhase`, `LeaderGate`, `Shortcuts` (`crate::input::shortcuts`); `current_modifiers` (`crate::input`); `KeyboardFocused` (`crate::input::focus`); `OzmaTerminal`, `CopyModeState`, `FocusedWebview`, `ForwardKeys`, `ImeState`, `Modifiers`, `CopyPrompt`/`ConfirmState`/`RenamePrompt`; the apply-side events (`TerminalKeyInput`, `PasteAction`, `EnterCopyModeActionEvent`, `trigger_copy_mode_action`, `DetachSessionRequest`, `ForwardPaneKeysRequest`, the tmux `*Request`), `ActionTargets`, `dispatch_tmux_action`, `bevy_key_to_terminal_key`, `bevy_key_to_tmux_name`. (NOT `current_terminal_modifiers` — the Default applier builds `TerminalModifiers` inline from `batch.mods`, so that helper is unused by this design.)
 - Produces:
   ```rust
+  // `pub(in crate::input)` — the narrowest visibility that still lets the two
+  // appliers (crate::input::default_mode, crate::input::tmux::input) read the
+  // batch; both are descendants of crate::input, so pub(crate) is wider than needed.
   #[derive(Message)]
-  pub(crate) struct ShortcutBatch {
-      pub(crate) effects: Vec<KeyEffect>,   // excludes Quit / ReleaseWebviewFocus (handled in resolve_shortcuts)
-      pub(crate) focused: Option<Entity>,   // the KeyboardFocused OzmaTerminal (default term / active pane)
-      pub(crate) in_copy_mode: bool,
-      pub(crate) mods: Modifiers,
+  pub(in crate::input) struct ShortcutBatch {
+      pub(in crate::input) effects: Vec<KeyEffect>,   // excludes Quit / ReleaseWebviewFocus (handled in resolve_shortcuts)
+      pub(in crate::input) focused: Option<Entity>,   // the KeyboardFocused OzmaTerminal (default term / active pane)
+      pub(in crate::input) in_copy_mode: bool,
+      pub(in crate::input) mods: Modifiers,
   }
   #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-  pub(crate) enum ShortcutSet { Resolve, Apply }
-  pub(super) struct DispatchPlugin;
+  pub(in crate::input) enum ShortcutSet { Resolve, Apply }
+  pub(super) struct DispatchPlugin;   // added by OzmuxInputPlugin in crate::input
   ```
 
 - [ ] **Step 1: Write the `resolve_shortcuts` unit + ordering tests (RED)**
@@ -86,8 +89,8 @@ Expected: FAIL (`todo!()` / missing items).
 ```rust
 // guards — behaviour-identical to the old appliers, prompts Option-guarded
 let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-if copy_prompt.map(|p| p.open.is_some()).unwrap_or(false)   // CopyPrompt is global; Option is harmless
-    || confirm_state.is_some() || rename_prompt.is_some()
+if copy_prompt.open.is_some()               // CopyPrompt is global (Res<CopyPrompt>, always present)
+    || confirm_state.is_some() || rename_prompt.is_some()   // ConfirmState/RenamePrompt: Option<Res<..>> (tmux-only)
     || ime.is_composing() || !focused_window
 {
     clear_leader_phase(&mut leader_phase);
@@ -135,7 +138,9 @@ for batch in batches.read() {
                     commands.trigger(TerminalKeyInput { entity: e, key, modifiers: terminal_mods });
                 },
             KeyEffect::WebviewForward { .. } => {}   // no-op — see spec (Default has no pane; drop)
-            // Quit / ReleaseWebviewFocus never reach here (handled in resolve_shortcuts)
+            // Quit / ReleaseWebviewFocus never reach here (handled in resolve_shortcuts),
+            // but the match must stay exhaustive over `KeyEffect` + `ShortcutAction`:
+            KeyEffect::ReleaseWebviewFocus => {}
             KeyEffect::Action { action: ShortcutAction::Quit | ShortcutAction::ReleaseWebviewFocus, .. } => {}
         }
     }
@@ -145,11 +150,11 @@ for batch in batches.read() {
 
 - [ ] **Step 5: Rewrite `apply_tmux_shortcuts` as a `ShortcutBatch` consumer**
 
-Params: `Commands`, `MessageReader<ShortcutBatch>`, `ActionTargets`. Register `run_if(in_state(AppMode::Tmux))` + `run_if(on_message::<ShortcutBatch>)` + `in_set(ShortcutSet::Apply)` + `in_set(TmuxActiveSet)`. `batch.focused` IS the active pane. Body (port the current arms; drop the read+decide/guards/leader/focused-webview): a `names` Vec accumulates `Type`/`WebviewForward` via `bevy_key_to_tmux_name(logical, key_code, KeyMods-from-batch.mods)`; `EnterCopyMode` guarded by `!batch.in_copy_mode`; `Paste`→`PasteAction{batch.focused}`; `DetachSession`→`DetachSessionRequest{targets.session}`; pane/window→`dispatch_tmux_action(&mut commands, action, batch.focused, &targets)`; `CopyMode`→`trigger_copy_mode_action(batch.focused, a)`; after the loop one `ForwardPaneKeysRequest{batch.focused, names}` if non-empty. `Quit`/`ReleaseWebviewFocus` arms are no-ops (handled upstream). Rework the tmux applier tests to WRITE a `ShortcutBatch`; keep the target-correctness + one-`ForwardPaneKeysRequest` cases.
+Params: `Commands`, `MessageReader<ShortcutBatch>`, `ActionTargets`. Register `run_if(in_state(AppMode::Tmux))` + `run_if(on_message::<ShortcutBatch>)` + `in_set(ShortcutSet::Apply)` + `in_set(TmuxActiveSet)`. `batch.focused` IS the active pane. Body (port the current arms; drop the read+decide/guards/leader/focused-webview). Iterating `&batch.effects` yields references, so deref the copied fields. A `let kmods = KeyMods { ctrl: batch.mods.ctrl, shift: batch.mods.shift, alt: batch.mods.alt, super_: batch.mods.meta };` up front; a `names` Vec accumulates `Type`/`WebviewForward` via `bevy_key_to_tmux_name(logical, *key_code, kmods)`; `EnterCopyMode`→`if let Some(e) = batch.focused && !batch.in_copy_mode { commands.trigger(EnterCopyModeActionEvent { entity: e }); }`; `Paste`→`PasteAction{ entity: e }` if `Some`; `DetachSession`→`if let Ok(e) = targets.session.single() { commands.trigger(DetachSessionRequest { entity: e }); }`; pane/window→`dispatch_tmux_action(&mut commands, *action, batch.focused, &targets)`; `CopyMode(a)`→`if let Some(e) = batch.focused { trigger_copy_mode_action(&mut commands, e, *a); }` (signature `(&mut Commands, Entity, CopyModeAction)`); after the loop `if let Some(e) = batch.focused && !names.is_empty() { commands.trigger(ForwardPaneKeysRequest { entity: e, names }); }`. `Quit` and both `ReleaseWebviewFocus` arms (the `Action` one and the top-level `KeyEffect::ReleaseWebviewFocus`) are no-ops (handled upstream) but must be present for exhaustiveness. Rework the tmux applier tests to WRITE a `ShortcutBatch`; keep the target-correctness + one-`ForwardPaneKeysRequest` cases.
 
 - [ ] **Step 6: Add the `KeyboardFocused` mirror ordering edge**
 
-In `src/ui/tmux/pane_focus.rs`, add `.before(InputPhase::FocusedKey)` to `sync_keyboard_focus_to_active_pane`'s registration (import `crate::input::InputPhase`). This makes its deferred `commands` flush land before `resolve_shortcuts` reads `KeyboardFocused`.
+In `src/ui/tmux/pane_focus.rs`, order `sync_keyboard_focus_to_active_pane` `.after(TmuxProjectionSet).before(InputPhase::FocusedKey)` (import `crate::input::InputPhase`; `TmuxProjectionSet` is already used by the sibling `augment_tmux_pane` in the same tuple). BOTH edges are load-bearing: `ActivePane` is set by the tmux-projection observer (not an optimistic same-frame insert), so `.after(TmuxProjectionSet)` makes the mirror run after `ActivePane` is fresh, and `.before(InputPhase::FocusedKey)` makes its deferred `commands` flush land before `resolve_shortcuts` reads `KeyboardFocused`. Together they close projection → mirror → resolve so `batch.focused`/`in_copy_mode` reflect the current active pane the same frame it changes (matching what the old `apply_tmux_shortcuts` saw reading `ActivePane` directly). Verify no schedule cycle (the mirror has no back-edge from `FocusedKey`).
 
 - [ ] **Step 7: Run the full suite + ordering tests (GREEN)**
 
@@ -175,7 +180,7 @@ Confirm the old per-applier read+decide left nothing dangling and the new items 
 ```bash
 rg -n 'MessageReader<KeyboardInput>|classify_key_batch|ShortcutBatch|ShortcutSet|resolve_shortcuts' src
 ```
-Expected: `MessageReader<KeyboardInput>` survives only in `resolve_shortcuts` (+ `detect_modifier_tap`/IME as before), NOT in the appliers; `classify_key_batch` is called only from `resolve_shortcuts`. Demote any `dispatch.rs` item used only within its module to private; confirm `ShortcutBatch`/`ShortcutSet` are `pub(crate)` only because cross-module appliers use them, and `resolve_shortcuts` is `pub(super)`/private.
+Expected: `MessageReader<KeyboardInput>` survives only in `resolve_shortcuts` (+ `detect_modifier_tap`/IME as before), NOT in the appliers; `classify_key_batch` is called only from `resolve_shortcuts`. Demote any `dispatch.rs` item used only within its module to private; confirm `ShortcutBatch`/`ShortcutSet` are `pub(in crate::input)` (not `pub(crate)`), `resolve_shortcuts` is `pub(super)`/private, and `mod dispatch;` is private.
 
 - [ ] **Step 2: Full gate**
 
