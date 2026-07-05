@@ -32,7 +32,7 @@ use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, M
 use ozma_webview::ForwardKeys;
 use ozmux_configs::shortcuts::Shortcut;
 
-/// Registers `resolve_shortcuts` and the `ShortcutSet` ordering.
+/// Registers `resolve_key_effects` and the `ShortcutSet` ordering.
 pub(super) struct KeyboardHandlerPlugin;
 
 impl Plugin for KeyboardHandlerPlugin {
@@ -60,7 +60,7 @@ struct ModalGuards<'w> {
     app_mode: Res<'w, State<AppMode>>,
 }
 
-/// The classifier inputs `resolve_shortcuts` feeds to `classify_key_batch`: the
+/// The classifier inputs `resolve_key_effects` feeds to `classify_key_batch`: the
 /// shortcut table, resolved copy-mode keys, held modifier keys, and the
 /// real-time clock the leader timeout is measured against.
 #[derive(SystemParam)]
@@ -500,6 +500,23 @@ mod tests {
     }
 
     #[test]
+    fn in_copy_mode_flag_clear_outside_copy_mode() {
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyA,
+            Modifiers::default(),
+            Shortcut::EnterCopyMode,
+        ));
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().in_copy_mode,
+            Some(false),
+            "a focused surface NOT in copy mode sets ShortcutMessage.in_copy_mode to false"
+        );
+    }
+
+    #[test]
     fn messages_consumed_same_update() {
         let mut app = resolve_app(Shortcuts::default());
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -525,7 +542,7 @@ mod tests {
         let cap = app.world().resource::<Captured>();
         assert_eq!(
             cap.app_exit, 1,
-            "Quit is handled inline in resolve_shortcuts regardless of focus, so Cmd+Q with no \
+            "Quit is handled inline in resolve_key_effects regardless of focus, so Cmd+Q with no \
              focused terminal still writes AppExit"
         );
         assert_eq!(
@@ -658,7 +675,7 @@ mod tests {
         app.update();
         assert!(
             app.world().resource::<DeliverProbe>().saw_claim,
-            "resolve_shortcuts must populate CefKeyboardFilter before KeyboardDeliverSet runs"
+            "resolve_key_effects must populate CefKeyboardFilter before KeyboardDeliverSet runs"
         );
     }
 }

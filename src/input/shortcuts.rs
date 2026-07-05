@@ -133,19 +133,19 @@ pub(in crate::input) struct ShortcutMessages<'w> {
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
-/// `resolve_shortcuts` (`Resolve`) fans out the per-responsibility messages
+/// `resolve_key_effects` (`Resolve`) fans out the per-responsibility messages
 /// before the per-mode appliers (`Apply`) read them, so every message is
 /// consumed the same frame it is written.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::input) enum ShortcutSet {
-    /// `resolve_shortcuts`: classifies keys and fans out the typed messages.
+    /// `resolve_key_effects`: classifies keys and fans out the typed messages.
     Resolve,
     /// The per-mode appliers: read the typed messages and apply their effects.
     Apply,
 }
 
 /// Shared leader phase: where the leader state machine is between keys.
-/// Owned by `ShortcutsPlugin`; advanced by `crate::input::dispatch::resolve_shortcuts`
+/// Owned by `ShortcutsPlugin`; advanced by `crate::input::keyboard::handler::resolve_key_effects`
 /// (the sole `LeaderGate::Advance` member) as it classifies each frame's keys.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LeaderPhase {
@@ -169,13 +169,13 @@ struct ModifierTapState {
 }
 
 /// Orders the `FocusedKey` systems that touch `LeaderPhase` so
-/// `detect_modifier_tap` (`Detect`) sets it before `resolve_shortcuts`
+/// `detect_modifier_tap` (`Detect`) sets it before `resolve_key_effects`
 /// (`Advance`) steps the leader machine and clears it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LeaderGate {
     /// `detect_modifier_tap`: sets `LeaderPhase` to `Pending` on a modifier tap.
     Detect,
-    /// `crate::input::dispatch::resolve_shortcuts`: advances the leader.
+    /// `crate::input::keyboard::handler::resolve_key_effects`: advances the leader.
     Advance,
 }
 

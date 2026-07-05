@@ -157,9 +157,7 @@ pub(in crate::input) fn apply_tmux_forward(
         );
     }
     for (entity, names) in by_pane {
-        if !names.is_empty() {
-            commands.trigger(ForwardPaneKeysRequest { entity, names });
-        }
+        commands.trigger(ForwardPaneKeysRequest { entity, names });
     }
 }
 
