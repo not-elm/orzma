@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { collectLocalImages, isLocalImageSrc, toLocalPath } from './images';
+import { __testables, collectLocalImages } from './images';
+
+const { isLocalImageSrc, toLocalPath } = __testables;
 
 describe('isLocalImageSrc', () => {
   it('accepts relative and absolute filesystem paths', () => {

@@ -32,11 +32,18 @@ pub(crate) fn stage(local_root: &Path, base_dir: &Path, raw: &str) -> Option<Str
 /// A content-addressed, filename-safe token for `resolved`: the blake3 hex of
 /// its (canonical) path bytes, plus the original extension so the host's
 /// extension-based MIME inference stays correct.
+///
+/// The extension is appended only when it is ASCII-alphanumeric. A raw
+/// filesystem extension can contain URL-reserved characters (`#`, `?`, `%`);
+/// splicing one into the returned URL would make the browser parse it as a
+/// fragment/query and request a path that no longer matches the on-disk
+/// symlink, silently breaking the image. Dropping such an extension falls back
+/// to MIME sniffing rather than a broken request.
 fn token_for(resolved: &Path) -> String {
     let hash = blake3::hash(resolved.as_os_str().as_bytes()).to_hex();
     match resolved.extension().and_then(|e| e.to_str()) {
-        Some(ext) => format!("{hash}.{ext}"),
-        None => hash.to_string(),
+        Some(ext) if ext.chars().all(|c| c.is_ascii_alphanumeric()) => format!("{hash}.{ext}"),
+        _ => hash.to_string(),
     }
 }
 
@@ -58,6 +65,13 @@ mod tests {
             token_for(Path::new("/a/x.png")),
             token_for(Path::new("/b/x.png"))
         );
+    }
+
+    #[test]
+    fn token_drops_url_unsafe_extension() {
+        let t = token_for(Path::new("/x/photo.png#2"));
+        assert!(!t.contains('#'));
+        assert!(!t.contains('.'));
     }
 
     #[test]
