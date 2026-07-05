@@ -11,7 +11,7 @@ use crate::action::vi::ResolvedCopyModeKeys;
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
-use crate::input::resolve::{BatchContext, KeyEffect, classify_key_batch};
+use crate::input::resolve::{BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch};
 use crate::input::shortcuts::{LeaderGate, LeaderPhase, Shortcuts, clear_leader_phase};
 use crate::input::{InputPhase, current_modifiers};
 use crate::ui::copy_mode::CopyModeState;
@@ -23,7 +23,7 @@ use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
-use bevy_cef::prelude::FocusedWebview;
+use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
 use ozma_webview::ForwardKeys;
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 
@@ -71,6 +71,7 @@ impl Plugin for DispatchPlugin {
                 resolve_shortcuts
                     .in_set(ShortcutSet::Resolve)
                     .in_set(LeaderGate::Advance)
+                    .before(KeyboardDeliverSet)
                     .run_if(on_message::<KeyboardInput>),
             );
     }
@@ -111,6 +112,7 @@ fn resolve_shortcuts(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
+    mut cef_filter: ResMut<CefKeyboardFilter>,
     mut leader_phase: ResMut<LeaderPhase>,
     mut batch: MessageWriter<ShortcutBatch>,
     guards: ModalGuards,
@@ -136,6 +138,7 @@ fn resolve_shortcuts(
             || guards.rename_prompt.is_some());
     if prompt_open || guards.ime.is_composing() || !focused_window {
         clear_leader_phase(&mut leader_phase);
+        clear_cef_filter(&mut cef_filter);
         events.clear();
         return;
     }
@@ -155,7 +158,16 @@ fn resolve_shortcuts(
         webview_focused: focused_webview.0.is_some(),
         forward_chords,
     };
-    let all = classify_key_batch(
+    // NOTE: snapshot the focused webview BEFORE the effects loop, which may set
+    // `focused_webview.0 = None` on a `ReleaseWebviewFocus` chord. Keying the
+    // filter to the value read here (not after the loop) keeps this frame's
+    // suppression tied to the webview the keys were classified against, rather
+    // than leaning on bevy_cef's None-target delivery guard to cover the gap.
+    let suppress_target = focused_webview.0;
+    let ClassifiedKeys {
+        effects: all,
+        webview_suppressed,
+    } = classify_key_batch(
         &mut leader_phase,
         &inputs.shortcuts,
         &inputs.resolved_copy,
@@ -182,17 +194,41 @@ fn resolve_shortcuts(
         in_copy_mode,
         mods,
     });
+    let ms = ModifiersState {
+        alt: mods.alt,
+        ctrl: mods.ctrl,
+        shift: mods.shift,
+        logo: mods.meta,
+    };
+    match suppress_target {
+        Some(webview) => cef_filter.set(
+            webview_suppressed
+                .into_iter()
+                .map(|code| (webview, code, ms)),
+        ),
+        None => clear_cef_filter(&mut cef_filter),
+    }
+}
+
+/// Empties `CefKeyboardFilter`. Used on the coarse-guard early return and when no
+/// webview owns the keyboard, so a stale leader claim never withholds a later key.
+fn clear_cef_filter(cef_filter: &mut CefKeyboardFilter) {
+    cef_filter.set(Vec::<(Entity, KeyCode, ModifiersState)>::new());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::shortcuts::test_shortcuts_with_direct_chord;
+    use crate::input::shortcuts::{
+        test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
+    };
     use crate::surface::OzmaTerminal;
+    use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use bevy::state::app::StatesPlugin;
     use ozmux_tmux::{PaneId, TmuxPane};
+    use std::time::Duration;
     use tmux_control_parser::CellDims;
 
     #[derive(Resource, Default)]
@@ -229,6 +265,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ImeState>()
             .init_resource::<FocusedWebview>()
+            .init_resource::<CefKeyboardFilter>()
             .init_resource::<LeaderPhase>()
             .init_resource::<ResolvedCopyModeKeys>()
             .init_resource::<CopyPrompt>()
@@ -237,7 +274,9 @@ mod tests {
             .insert_state(AppMode::Default)
             .add_systems(
                 Update,
-                (capture_batch, capture_exit).in_set(ShortcutSet::Apply),
+                (capture_batch, capture_exit)
+                    .chain()
+                    .in_set(ShortcutSet::Apply),
             );
         app.world_mut().spawn((
             Window {
@@ -469,6 +508,133 @@ mod tests {
                 }
             )),
             "no Quit effect reaches the batch even when nothing is focused"
+        );
+    }
+
+    #[test]
+    fn filter_holds_leader_claim_under_webview_focus() {
+        let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyS,
+            ShortcutAction::EnterCopyMode,
+            Duration::ZERO,
+        ));
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
+        press_key(&mut app, KeyCode::KeyS, Key::Character("s".into()));
+        app.update();
+        assert!(
+            app.world().resource::<CefKeyboardFilter>().contains(
+                webview,
+                KeyCode::KeyS,
+                ModifiersState::default()
+            ),
+            "the leader-claimed second key is withheld from CEF for the focused webview"
+        );
+    }
+
+    #[test]
+    fn filter_cleared_on_guarded_frame() {
+        let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyS,
+            ShortcutAction::EnterCopyMode,
+            Duration::ZERO,
+        ));
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+        app.world_mut().resource_mut::<CefKeyboardFilter>().set([(
+            webview,
+            KeyCode::KeyS,
+            ModifiersState::default(),
+        )]);
+        {
+            let mut windows = app
+                .world_mut()
+                .query_filtered::<&mut Window, With<PrimaryWindow>>();
+            windows.single_mut(app.world_mut()).unwrap().focused = false;
+        }
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
+        press_key(&mut app, KeyCode::KeyS, Key::Character("s".into()));
+        app.update();
+        assert!(
+            !app.world().resource::<CefKeyboardFilter>().contains(
+                webview,
+                KeyCode::KeyS,
+                ModifiersState::default()
+            ),
+            "a guarded frame clears the filter so a stale claim never lingers"
+        );
+    }
+
+    #[test]
+    fn filter_cleared_when_nothing_claimed() {
+        let mut app = resolve_app(Shortcuts::default());
+        let term = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
+        let stale = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<CefKeyboardFilter>().set([(
+            stale,
+            KeyCode::KeyS,
+            ModifiersState::default(),
+        )]);
+        press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        assert!(
+            !app.world().resource::<CefKeyboardFilter>().contains(
+                stale,
+                KeyCode::KeyS,
+                ModifiersState::default()
+            ),
+            "a frame that claims nothing clears the filter"
+        );
+        let _ = term;
+    }
+
+    #[derive(Resource, Default)]
+    struct DeliverProbe {
+        saw_claim: bool,
+    }
+
+    fn deliver_probe(
+        mut probe: ResMut<DeliverProbe>,
+        filter: Res<CefKeyboardFilter>,
+        webview: Res<ProbeWebview>,
+    ) {
+        if let Some(webview) = webview.0 {
+            probe.saw_claim = filter.contains(webview, KeyCode::KeyS, ModifiersState::default());
+        }
+    }
+
+    #[derive(Resource, Default)]
+    struct ProbeWebview(Option<Entity>);
+
+    #[test]
+    fn filter_is_populated_before_keyboard_deliver_set() {
+        let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyS,
+            ShortcutAction::EnterCopyMode,
+            Duration::ZERO,
+        ));
+        app.init_resource::<DeliverProbe>()
+            .init_resource::<ProbeWebview>()
+            .add_systems(Update, deliver_probe.in_set(KeyboardDeliverSet));
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+        app.world_mut().resource_mut::<ProbeWebview>().0 = Some(webview);
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
+        press_key(&mut app, KeyCode::KeyS, Key::Character("s".into()));
+        app.edit_schedule(Update, |schedule| {
+            schedule.set_build_settings(ScheduleBuildSettings {
+                ambiguity_detection: LogLevel::Error,
+                ..Default::default()
+            });
+        });
+        app.update();
+        assert!(
+            app.world().resource::<DeliverProbe>().saw_claim,
+            "resolve_shortcuts must populate CefKeyboardFilter before KeyboardDeliverSet runs"
         );
     }
 }
