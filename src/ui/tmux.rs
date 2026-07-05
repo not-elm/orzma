@@ -7,9 +7,6 @@ pub(crate) mod rename_prompt;
 pub(crate) mod window_bar;
 
 mod divider_handle;
-#[cfg(test)]
-pub(crate) mod pane_focus;
-#[cfg(not(test))]
 mod pane_focus;
 
 use bevy::prelude::*;

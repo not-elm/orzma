@@ -8,6 +8,7 @@
 //! the sole system that steps `LeaderPhase`.
 
 use crate::action::vi::ResolvedCopyModeKeys;
+use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::ImeState;
 use crate::input::resolve::{BatchContext, KeyEffect, classify_key_batch};
@@ -18,6 +19,7 @@ use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
+use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::Real;
@@ -40,6 +42,10 @@ pub(in crate::input) struct ShortcutBatch {
     pub(in crate::input) in_copy_mode: bool,
     /// The frame's modifier snapshot, shared by every effect in the batch.
     pub(in crate::input) mods: Modifiers,
+    /// The `AppMode` this batch was resolved under; each per-mode applier
+    /// ignores batches stamped with the other mode (see `apply_default_shortcuts`
+    /// for the cross-mode-replay hazard this guards).
+    pub(in crate::input) mode: AppMode,
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
@@ -68,7 +74,6 @@ impl Plugin for DispatchPlugin {
             .add_systems(
                 Update,
                 resolve_shortcuts
-                    .in_set(InputPhase::FocusedKey)
                     .in_set(ShortcutSet::Resolve)
                     .in_set(LeaderGate::Advance)
                     .run_if(on_message::<KeyboardInput>),
@@ -76,49 +81,65 @@ impl Plugin for DispatchPlugin {
     }
 }
 
+/// The modal-guard and mode inputs `resolve_shortcuts` reads: the tmux modal
+/// prompts, IME state, and the active `AppMode` stamped onto each batch.
+#[derive(SystemParam)]
+struct ModalGuards<'w> {
+    copy_prompt: Res<'w, CopyPrompt>,
+    confirm_state: Option<Res<'w, ConfirmState>>,
+    rename_prompt: Option<Res<'w, RenamePrompt>>,
+    ime: Res<'w, ImeState>,
+    app_mode: Res<'w, State<AppMode>>,
+}
+
+/// The classifier inputs `resolve_shortcuts` feeds to `classify_key_batch`: the
+/// shortcut table, resolved copy-mode keys, held modifier keys, and the
+/// real-time clock the leader timeout is measured against.
+#[derive(SystemParam)]
+struct ClassifyInputs<'w> {
+    shortcuts: Res<'w, Shortcuts>,
+    resolved_copy: Res<'w, ResolvedCopyModeKeys>,
+    bevy_keys: Res<'w, ButtonInput<KeyCode>>,
+    time: Res<'w, Time<Real>>,
+}
+
 /// Resolves the frame's pressed keys into a `ShortcutBatch`. Runs in both
 /// `AppMode`s (gated only on `on_message::<KeyboardInput>`), in
 /// `InputPhase::FocusedKey` / `ShortcutSet::Resolve` / `LeaderGate::Advance`.
-/// The sole `LeaderPhase`-stepping system: on a coarse guard (a modal prompt,
-/// IME composition, or an unfocused window) it clears the leader, drains the
-/// frame's keys, and emits no batch; otherwise it classifies the keys, applies
-/// `Quit` (`AppExit`) and `ReleaseWebviewFocus` (clear `FocusedWebview`) inline,
-/// and writes the remaining effects as one `ShortcutBatch`.
+/// The sole `LeaderPhase`-stepping system: on a coarse guard (a tmux modal
+/// prompt, IME composition, or an unfocused window) it clears the leader, drains
+/// the frame's keys, and emits no batch; otherwise it classifies the keys,
+/// applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (clear `FocusedWebview`)
+/// inline, and writes the remaining effects as one `ShortcutBatch` stamped with
+/// the resolving `AppMode`.
 fn resolve_shortcuts(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
     mut leader_phase: ResMut<LeaderPhase>,
     mut batch: MessageWriter<ShortcutBatch>,
-    (copy_prompt, confirm_state, rename_prompt, ime): (
-        Res<CopyPrompt>,
-        Option<Res<ConfirmState>>,
-        Option<Res<RenamePrompt>>,
-        Res<ImeState>,
-    ),
-    (shortcuts, resolved_copy, bevy_keys, time): (
-        Res<Shortcuts>,
-        Res<ResolvedCopyModeKeys>,
-        Res<ButtonInput<KeyCode>>,
-        Res<Time<Real>>,
-    ),
+    guards: ModalGuards,
+    inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
     focused_surface: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
     copy_modes: Query<(), With<CopyModeState>>,
     forward_keys: Query<&ForwardKeys>,
 ) {
-    // NOTE: each modal owner (copy-mode prompt, confirm-before prompt, rename
-    // prompt) holds the keyboard and reads raw keys in its own system; while
-    // composing, replaying preedit keys would garble IME + double-send; an
-    // unfocused window must not act. Drain (don't replay) so no key leaks to the
-    // terminal, tmux, or the prefix state machine — and emit no batch.
+    let mode = guards.app_mode.get().clone();
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    if copy_prompt.open.is_some()
-        || confirm_state.is_some()
-        || rename_prompt.is_some()
-        || ime.is_composing()
-        || !focused_window
-    {
+    // NOTE: the prompt guards (copy-mode prompt, confirm-before, rename) are
+    // tmux-only by design. Those resources are set by tmux actions and cleared
+    // only by their own handlers — never on a mode transition — so a prompt left
+    // open when the tmux connection drops (falling back to Default) would
+    // otherwise drain EVERY key and freeze Default keyboard input. IME + window
+    // focus guard both modes. When a guard fires, drain (don't replay) the
+    // frame's keys and emit no batch, so no key leaks to the terminal, tmux, or
+    // the prefix state machine (and no preedit key is double-sent).
+    let prompt_open = mode == AppMode::Tmux
+        && (guards.copy_prompt.open.is_some()
+            || guards.confirm_state.is_some()
+            || guards.rename_prompt.is_some());
+    if prompt_open || guards.ime.is_composing() || !focused_window {
         clear_leader_phase(&mut leader_phase);
         events.clear();
         return;
@@ -132,18 +153,18 @@ fn resolve_shortcuts(
         .and_then(|entity| forward_keys.get(entity).ok())
         .map(|chords| chords.0.as_slice())
         .unwrap_or(&[]);
-    let mods = current_modifiers(&bevy_keys);
+    let mods = current_modifiers(&inputs.bevy_keys);
     let ctx = BatchContext {
         mods,
-        now: time.elapsed(),
+        now: inputs.time.elapsed(),
         in_copy_mode,
         webview_focused,
         forward_chords,
     };
     let all = classify_key_batch(
         &mut leader_phase,
-        &shortcuts,
-        &resolved_copy,
+        &inputs.shortcuts,
+        &inputs.resolved_copy,
         events.read(),
         ctx,
     );
@@ -166,6 +187,7 @@ fn resolve_shortcuts(
         focused,
         in_copy_mode,
         mods,
+        mode,
     });
 }
 
@@ -173,10 +195,10 @@ fn resolve_shortcuts(
 mod tests {
     use super::*;
     use crate::input::shortcuts::test_shortcuts_with_direct_chord;
-    use crate::ui::tmux::pane_focus::sync_keyboard_focus_to_active_pane;
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
-    use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
+    use bevy::state::app::StatesPlugin;
+    use ozmux_tmux::{PaneId, TmuxPane};
     use tmux_control_parser::CellDims;
 
     #[derive(Resource, Default)]
@@ -206,6 +228,7 @@ mod tests {
     fn resolve_app(shortcuts: Shortcuts) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
+            .add_plugins(StatesPlugin)
             .add_plugins(DispatchPlugin)
             .add_message::<KeyboardInput>()
             .add_message::<AppExit>()
@@ -217,6 +240,7 @@ mod tests {
             .init_resource::<CopyPrompt>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
+            .insert_state(AppMode::Default)
             .add_systems(
                 Update,
                 (capture_batch, capture_exit).in_set(ShortcutSet::Apply),
@@ -416,27 +440,38 @@ mod tests {
     }
 
     #[test]
-    fn mirror_freshness_before_focusedkey() {
-        let mut app = resolve_app(Shortcuts::default());
-        app.add_systems(
-            Update,
-            sync_keyboard_focus_to_active_pane.before(InputPhase::FocusedKey),
-        );
-        let p1 = app
-            .world_mut()
-            .spawn((OzmaTerminal, tmux_pane(1), ActivePane, KeyboardFocused))
-            .id();
-        let p2 = app.world_mut().spawn((OzmaTerminal, tmux_pane(2))).id();
-        // ActivePane moves p1 -> p2 this tick; the mirror (before FocusedKey)
-        // must refresh KeyboardFocused so resolve_shortcuts reads p2 as focused.
-        app.world_mut().entity_mut(p1).remove::<ActivePane>();
-        app.world_mut().entity_mut(p2).insert(ActivePane);
-        press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+    fn quit_writes_appexit_with_no_focused_terminal() {
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyQ,
+            Modifiers {
+                ctrl: false,
+                shift: false,
+                alt: false,
+                meta: true,
+            },
+            ShortcutAction::Quit,
+        ));
+        // No KeyboardFocused terminal spawned; the window is focused.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::SuperLeft);
+        press_key(&mut app, KeyCode::KeyQ, Key::Character("q".into()));
         app.update();
+        let cap = app.world().resource::<Captured>();
         assert_eq!(
-            app.world().resource::<Captured>().focused,
-            Some(p2),
-            "the mirror edge makes batch.focused reflect the new active pane the same frame"
+            cap.app_exit, 1,
+            "Quit is handled inline in resolve_shortcuts regardless of focus, so Cmd+Q with no \
+             focused terminal still writes AppExit"
+        );
+        assert!(
+            !cap.effects.iter().any(|e| matches!(
+                e,
+                KeyEffect::Action {
+                    action: ShortcutAction::Quit,
+                    ..
+                }
+            )),
+            "no Quit effect reaches the batch even when nothing is focused"
         );
     }
 }
