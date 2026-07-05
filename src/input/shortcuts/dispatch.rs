@@ -1,4 +1,3 @@
-//! Central keyboard-shortcut resolution: `resolve_shortcuts` runs in both
 //! `AppMode`s, resolves the frame's pressed keys through the pure
 //! `crate::input::resolve::classify_key_batch` decider, handles the two
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
@@ -12,8 +11,10 @@ use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
 use crate::input::resolve::{BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch};
-use crate::input::shortcuts::{LeaderGate, LeaderPhase, Shortcuts, clear_leader_phase};
-use crate::input::{InputPhase, current_modifiers};
+use crate::input::shortcuts::{
+    LeaderGate, LeaderPhase, ShortcutBatch, ShortcutSet, Shortcuts, clear_leader_phase,
+};
+use crate::input::current_modifiers;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
@@ -25,55 +26,21 @@ use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
 use ozma_webview::ForwardKeys;
-use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
-
-/// The frame's resolved shortcut effects handed from `resolve_shortcuts` to the
-/// per-mode appliers. Excludes `Quit` and `ReleaseWebviewFocus`, which
-/// `resolve_shortcuts` handles inline. `focused` is the `KeyboardFocused`
-/// `OzmaTerminal` (the Default terminal or the active tmux pane).
-#[derive(Message)]
-pub(in crate::input) struct ShortcutBatch {
-    /// The mode-specific effects to apply (no `Quit` / `ReleaseWebviewFocus`).
-    pub effects: Vec<KeyEffect>,
-    /// The `KeyboardFocused` `OzmaTerminal`, or `None` when none is focused.
-    pub focused: Option<Entity>,
-    /// Whether the focused surface is in copy mode.
-    pub in_copy_mode: bool,
-    /// The frame's modifier snapshot, shared by every effect in the batch.
-    pub mods: Modifiers,
-}
-
-/// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
-/// `resolve_shortcuts` (`Resolve`) writes the `ShortcutBatch` before the
-/// per-mode appliers (`Apply`) read it, so the batch is consumed the same frame.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(in crate::input) enum ShortcutSet {
-    /// `resolve_shortcuts`: classifies keys and writes the `ShortcutBatch`.
-    Resolve,
-    /// The per-mode appliers: read the `ShortcutBatch` and apply its effects.
-    Apply,
-}
+use ozmux_configs::shortcuts::ShortcutAction;
 
 /// Registers `resolve_shortcuts` and the `ShortcutSet` ordering.
-pub(super) struct DispatchPlugin;
+pub(super) struct ShortcutsDispatchPlugin;
 
-impl Plugin for DispatchPlugin {
+impl Plugin for ShortcutsDispatchPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<ShortcutBatch>()
-            .configure_sets(
-                Update,
-                (ShortcutSet::Resolve, ShortcutSet::Apply)
-                    .chain()
-                    .in_set(InputPhase::FocusedKey),
-            )
-            .add_systems(
-                Update,
-                resolve_shortcuts
-                    .in_set(ShortcutSet::Resolve)
-                    .in_set(LeaderGate::Advance)
-                    .before(KeyboardDeliverSet)
-                    .run_if(on_message::<KeyboardInput>),
-            );
+        app.add_systems(
+            Update,
+            resolve_shortcuts
+                .in_set(ShortcutSet::Resolve)
+                .in_set(LeaderGate::Advance)
+                .before(KeyboardDeliverSet)
+                .run_if(on_message::<KeyboardInput>),
+        );
     }
 }
 
@@ -259,7 +226,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(StatesPlugin)
-            .add_plugins(DispatchPlugin)
+            .add_plugins(ShortcutsDispatchPlugin)
             .add_message::<KeyboardInput>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()

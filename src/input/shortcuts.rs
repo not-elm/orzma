@@ -5,7 +5,12 @@
 
 use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
+use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
+use crate::input::resolve::KeyEffect;
+use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
+use crate::input::shortcuts::dispatch::ShortcutsDispatchPlugin;
+use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::MouseButton;
@@ -20,36 +25,79 @@ use ozmux_configs::shortcuts::{
 };
 use std::time::Duration;
 
+mod default_mode;
+mod dispatch;
+mod tmux;
+
 pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Shortcuts>()
-            .init_resource::<LeaderPhase>()
-            .init_resource::<ModifierTapState>()
-            .configure_sets(Update, (LeaderGate::Detect, LeaderGate::Advance).chain())
-            .add_systems(Startup, (build_shortcuts, populate_mouse_config).chain())
-            .add_systems(
-                Update,
-                (
-                    // NOTE: intentionally not gated on `on_message::<KeyboardInput>` — must run
-                    // on keyboard-less frames so a mouse press (e.g. Cmd+click mid-tap) can
-                    // disarm `state.armed`; gating it on `on_message` would silently break it.
-                    detect_modifier_tap
-                        .in_set(LeaderGate::Detect)
-                        .run_if(tap_leader_enabled),
-                    // NOTE: webview focus moves on mouse clicks (no `KeyboardInput`), so the
-                    // keyboard dispatchers never see the round-trip; without this reset a
-                    // leader engaged before a mouse-only webview focus/blur would consume the
-                    // next terminal keystroke as its second key.
-                    reset_leader_phase
-                        .run_if(resource_exists_and_changed::<FocusedWebview>)
-                        .before(LeaderGate::Detect),
-                ),
-            )
-            .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
-            .add_systems(OnExit(AppMode::Default), reset_leader_phase);
+        app.add_plugins((
+            ShortcutsDispatchPlugin,
+            ShortcutsDefaultModePlugin,
+            ShortcutsTmuxModePlugin,
+        ))
+        .configure_sets(
+            Update,
+            (ShortcutSet::Resolve, ShortcutSet::Apply)
+                .chain()
+                .in_set(InputPhase::FocusedKey),
+        )
+        .add_message::<ShortcutBatch>()
+        .init_resource::<Shortcuts>()
+        .init_resource::<LeaderPhase>()
+        .init_resource::<ModifierTapState>()
+        .configure_sets(Update, (LeaderGate::Detect, LeaderGate::Advance).chain())
+        .add_systems(Startup, (build_shortcuts, populate_mouse_config).chain())
+        .add_systems(
+            Update,
+            (
+                // NOTE: intentionally not gated on `on_message::<KeyboardInput>` — must run
+                // on keyboard-less frames so a mouse press (e.g. Cmd+click mid-tap) can
+                // disarm `state.armed`; gating it on `on_message` would silently break it.
+                detect_modifier_tap
+                    .in_set(LeaderGate::Detect)
+                    .run_if(tap_leader_enabled),
+                // NOTE: webview focus moves on mouse clicks (no `KeyboardInput`), so the
+                // keyboard dispatchers never see the round-trip; without this reset a
+                // leader engaged before a mouse-only webview focus/blur would consume the
+                // next terminal keystroke as its second key.
+                reset_leader_phase
+                    .run_if(resource_exists_and_changed::<FocusedWebview>)
+                    .before(LeaderGate::Detect),
+            ),
+        )
+        .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
+        .add_systems(OnExit(AppMode::Default), reset_leader_phase);
     }
+}
+
+/// The frame's resolved shortcut effects handed from `resolve_shortcuts` to the
+/// per-mode appliers. Excludes `Quit` and `ReleaseWebviewFocus`, which
+/// `resolve_shortcuts` handles inline. `focused` is the `KeyboardFocused`
+/// `OzmaTerminal` (the Default terminal or the active tmux pane).
+#[derive(Message)]
+pub(in crate::input) struct ShortcutBatch {
+    /// The mode-specific effects to apply (no `Quit` / `ReleaseWebviewFocus`).
+    pub effects: Vec<KeyEffect>,
+    /// The `KeyboardFocused` `OzmaTerminal`, or `None` when none is focused.
+    pub focused: Option<Entity>,
+    /// Whether the focused surface is in copy mode.
+    pub in_copy_mode: bool,
+    /// The frame's modifier snapshot, shared by every effect in the batch.
+    pub mods: Modifiers,
+}
+
+/// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
+/// `resolve_shortcuts` (`Resolve`) writes the `ShortcutBatch` before the
+/// per-mode appliers (`Apply`) read it, so the batch is consumed the same frame.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(in crate::input) enum ShortcutSet {
+    /// `resolve_shortcuts`: classifies keys and writes the `ShortcutBatch`.
+    Resolve,
+    /// The per-mode appliers: read the `ShortcutBatch` and apply its effects.
+    Apply,
 }
 
 /// Shared leader phase: where the leader state machine is between keys.
