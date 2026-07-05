@@ -25,8 +25,8 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 
 mod button;
-pub(in crate::input) mod gesture;
-pub(crate) mod webview;
+mod gesture;
+mod webview;
 mod wheel;
 
 /// Aggregates the per-path mouse dispatch plugins and the shared config
@@ -170,7 +170,7 @@ fn hit_candidates<'a>(
 /// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to `>= 1` so
 /// a degenerate metric cannot divide by zero. Shared by both dispatchers' cursor
 /// → cell projection.
-fn cell_pitch(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
+fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
     (
         metrics.metrics.advance_phys.floor().max(1.0),
         metrics.metrics.line_height_phys.floor().max(1.0),

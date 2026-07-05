@@ -5,7 +5,7 @@
 //! `MouseButtonInputPlugin`; skips `MouseDisabled` surfaces.
 
 use super::{
-    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates,
+    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
     on_any_mouse_message, trigger_mouse_effects,
 };
 use crate::input::InputPhase;
@@ -136,7 +136,7 @@ fn resolve_frame(
     }
     let active = gesture.held.is_some() || gesture.drag.is_some();
     let cursor_phys = effective_drag_cursor(live, active, gesture.last_cursor_phys)?;
-    let (cell_w, cell_h) = cell_pitch(metrics);
+    let (cell_w, cell_h) = cell_dims(metrics);
     Some(FrameContext {
         cursor_phys,
         scale,

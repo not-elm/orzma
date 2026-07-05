@@ -20,6 +20,7 @@ mod effect;
 use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
+use crate::input::mouse::cell_dims;
 use crate::input::mouse::gesture::ClickTracker;
 use crate::input::mouse::webview::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
@@ -307,17 +308,6 @@ enum GestureState {
 struct TmuxMouseGesture {
     state: GestureState,
     click: ClickTracker,
-}
-
-/// Physical-pixel cell dimensions derived from `TerminalCellMetricsResource`.
-///
-/// Returns `(cell_w, cell_h)`: advance and line-height, floored and clamped to at
-/// least 1.0 so callers never divide by zero.
-pub(super) fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
-    (
-        metrics.metrics.advance_phys.floor().max(1.0),
-        metrics.metrics.line_height_phys.floor().max(1.0),
-    )
 }
 
 /// Converts a `cell_at_pane` `(col, row)` result into the viewport-relative

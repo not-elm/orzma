@@ -27,7 +27,7 @@ use ozma_webview::{
 mod default_mode;
 
 /// Registers the shared webview pointer resource and the per-mode webview routers.
-pub(in crate::input) struct MouseWebviewPlugin;
+pub(super) struct MouseWebviewPlugin;
 
 impl Plugin for MouseWebviewPlugin {
     fn build(&self, app: &mut App) {
@@ -41,7 +41,7 @@ impl Plugin for MouseWebviewPlugin {
 /// child even if the pointer drifted off-rect. Shared by both mode pipelines —
 /// only one mode is active at a time, so a single in-flight press suffices.
 #[derive(Resource, Default)]
-pub(crate) struct WebviewPress(pub(crate) Option<Entity>);
+pub(in crate::input::mouse) struct WebviewPress(pub(in crate::input::mouse) Option<Entity>);
 
 /// Queries/resources the webview routing needs, bundled to stay within Bevy's
 /// system-parameter limit. Mode-agnostic: the surface-geometry lookup is
@@ -49,15 +49,15 @@ pub(crate) struct WebviewPress(pub(crate) Option<Entity>);
 /// `OzmaTerminal`), not `TmuxPane`. `focused_webview` / `browsers` are optional
 /// so CEF-less tests construct it (state effects still apply).
 #[derive(SystemParam)]
-pub(crate) struct WebviewRouteParams<'w, 's> {
-    pub(crate) focused_webview: Option<ResMut<'w, FocusedWebview>>,
-    pub(crate) children: Query<'w, 's, &'static Children>,
-    pub(crate) webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
-    pub(crate) webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
-    pub(crate) overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
-    pub(crate) surface_geo:
+pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
+    focused_webview: Option<ResMut<'w, FocusedWebview>>,
+    children: Query<'w, 's, &'static Children>,
+    webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
+    webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
+    overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
+    surface_geo:
         Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<OzmaTerminal>>,
-    pub(crate) browsers: Option<NonSend<'w, Browsers>>,
+    browsers: Option<NonSend<'w, Browsers>>,
 }
 
 /// Routes a left press/release through the webview layer for a resolved
@@ -75,7 +75,7 @@ pub(crate) struct WebviewRouteParams<'w, 's> {
     clippy::too_many_arguments,
     reason = "inline routing needs the webview press state, route params, and pointer geometry"
 )]
-pub(crate) fn route_webview_left_click(
+pub(in crate::input::mouse) fn route_webview_left_click(
     webview_press: &mut WebviewPress,
     route: &mut WebviewRouteParams,
     terminal: Entity,
@@ -143,7 +143,7 @@ pub(crate) fn route_webview_left_click(
 /// unfocused) so the focused web page is not left logically pressed with no
 /// matching mouse-up. `cursor_phys` is `None` when there is no placeable cursor
 /// (off-window): then the press is dropped WITHOUT a CEF mouse-up.
-pub(crate) fn release_webview_press(
+pub(in crate::input::mouse) fn release_webview_press(
     webview_press: &mut WebviewPress,
     route: &WebviewRouteParams,
     cursor_phys: Option<Vec2>,
@@ -174,7 +174,7 @@ pub(crate) fn release_webview_press(
     clippy::too_many_arguments,
     reason = "the move forward needs the inline queries, browsers, held buttons, and pointer geometry"
 )]
-pub(crate) fn forward_webview_move(
+pub(in crate::input::mouse) fn forward_webview_move(
     children: &Query<&Children>,
     webviews: &Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: &Query<&TerminalOverlays>,
@@ -220,7 +220,7 @@ pub(crate) fn forward_webview_move(
     clippy::too_many_arguments,
     reason = "wheel targeting needs the focus state, inline queries, and pointer geometry"
 )]
-pub(crate) fn webview_wheel_target(
+pub(in crate::input::mouse) fn webview_wheel_target(
     focused_webview: &FocusedWebview,
     webview_parents: &Query<&ChildOf, With<Webview>>,
     children: &Query<&Children>,
@@ -250,7 +250,7 @@ pub(crate) fn webview_wheel_target(
 /// Converts a Bevy `MouseWheel` (`unit`, `x`, `y`) to the raw CEF wheel delta
 /// (no sign flip): `Line` units are scaled by 120 (one notch), `Pixel` units
 /// (trackpads / high-resolution wheels) pass through unchanged.
-pub(crate) fn webview_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
+pub(in crate::input::mouse) fn webview_wheel_delta(unit: MouseScrollUnit, x: f32, y: f32) -> Vec2 {
     match unit {
         MouseScrollUnit::Line => Vec2::new(x, y) * 120.0,
         MouseScrollUnit::Pixel => Vec2::new(x, y),

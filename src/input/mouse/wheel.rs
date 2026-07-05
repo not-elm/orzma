@@ -5,7 +5,7 @@
 //! `apply_wheel_action`. Registered by `MouseWheelInputPlugin`; skips
 //! `MouseDisabled` surfaces.
 
-use super::{TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates, on_any_mouse_message};
+use super::{TerminalSurfaces, cell_context_for, cell_dims, hit_candidates, on_any_mouse_message};
 use crate::action::terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
@@ -108,7 +108,7 @@ fn resolve_wheel_target(
     if !window.focused || terminals.is_empty() {
         return None;
     }
-    let (_, cell_h) = cell_pitch(metrics);
+    let (_, cell_h) = cell_dims(metrics);
     let cursor_phys = window
         .cursor_position()
         .map(|c| c * window.scale_factor())?;
@@ -132,7 +132,7 @@ fn resolve_wheel_cell(
     cursor_phys: Vec2,
     metrics: &TerminalCellMetricsResource,
 ) -> Option<(CellCoord, TermMode)> {
-    let (cell_w, cell_h) = cell_pitch(metrics);
+    let (cell_w, cell_h) = cell_dims(metrics);
     let (ctx, modes) = cell_context_for(terminals, target, cell_w, cell_h)?;
     let cell = ctx
         .hit(cursor_phys)

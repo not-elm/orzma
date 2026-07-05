@@ -10,7 +10,7 @@ use std::time::Duration;
 /// Phase of an in-progress left-drag: `Armed` after a single-click press (no
 /// selection started yet), `Started` once the pointer crossed into another cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DragPhase {
+pub(in crate::input::mouse) enum DragPhase {
     /// The button is held but the pointer has not left the origin cell.
     Armed,
     /// The pointer has crossed a cell boundary and selection is active.
@@ -19,15 +19,15 @@ pub(crate) enum DragPhase {
 
 /// An in-progress local-selection gesture: the selection anchor, the granularity,
 /// and the drag phase (drives lazy materialization of the selection).
-pub(crate) struct DragGesture {
+pub(in crate::input::mouse) struct DragGesture {
     /// The cell where the gesture originated.
-    pub(crate) origin: CellCoord,
+    pub(in crate::input::mouse) origin: CellCoord,
     /// The half of the origin cell where the gesture started.
-    pub(crate) side: Side,
+    pub(in crate::input::mouse) side: Side,
     /// The selection granularity (word, line, etc.).
-    pub(crate) ty: SelectionType,
+    pub(in crate::input::mouse) ty: SelectionType,
     /// Current phase of the drag.
-    pub(crate) phase: DragPhase,
+    pub(in crate::input::mouse) phase: DragPhase,
 }
 
 /// A held mouse button: the terminal the press landed on, the button, and the
@@ -36,33 +36,33 @@ pub(crate) struct DragGesture {
 /// for BOTH local selection and app-forward drags — the forward path never sets
 /// `drag`, so drag-motion synthesis must not depend on it.
 #[derive(Clone, Copy)]
-pub(crate) struct HeldPointer {
-    pub(crate) entity: Entity,
-    pub(crate) button: MouseButtonKind,
-    pub(crate) last_cell: CellCoord,
+pub(in crate::input::mouse) struct HeldPointer {
+    pub(in crate::input::mouse) entity: Entity,
+    pub(in crate::input::mouse) button: MouseButtonKind,
+    pub(in crate::input::mouse) last_cell: CellCoord,
 }
 
 /// Tracks the current mouse gesture and consecutive-click count.
 #[derive(Resource, Default)]
-pub(crate) struct OzmaMouseGesture {
+pub(in crate::input::mouse) struct OzmaMouseGesture {
     /// Consecutive-click counter for multi-click detection.
-    pub(crate) click: ClickTracker,
+    pub(in crate::input::mouse) click: ClickTracker,
     /// In-progress local-selection gesture, or `None` when idle.
-    pub(crate) drag: Option<DragGesture>,
+    pub(in crate::input::mouse) drag: Option<DragGesture>,
     /// Held button + last drag cell, for both local and app-forward drags.
-    pub(crate) held: Option<HeldPointer>,
+    pub(in crate::input::mouse) held: Option<HeldPointer>,
     /// Last observed physical cursor position, including out-of-bounds values
     /// carried by `CursorMoved` while a button is held. Lets a drag continue
     /// when `Window::cursor_position()` masks an off-window cursor; cleared on
     /// every gesture reset and on release.
-    pub(crate) last_cursor_phys: Option<Vec2>,
+    pub(in crate::input::mouse) last_cursor_phys: Option<Vec2>,
 }
 
 impl OzmaMouseGesture {
     /// Resets the in-progress gesture: drops any drag, held button, and cached
     /// cursor position. The multi-click counter is preserved so a follow-up
     /// click can still chain.
-    pub(crate) fn reset(&mut self) {
+    pub(in crate::input::mouse) fn reset(&mut self) {
         self.drag = None;
         self.held = None;
         self.last_cursor_phys = None;
@@ -71,14 +71,19 @@ impl OzmaMouseGesture {
 
 /// Consecutive-click counter using a timeout + positional-drift gate.
 #[derive(Default)]
-pub(crate) struct ClickTracker {
+pub(in crate::input::mouse) struct ClickTracker {
     last: Option<(Duration, Vec2, u8)>,
 }
 
 impl ClickTracker {
     /// Registers a press at `now` / logical `pos`, returning the click count
     /// (1..=3). `cfg` is `(timeout, drift_px)`.
-    pub(crate) fn register(&mut self, now: Duration, pos: Vec2, cfg: (Duration, f32)) -> u8 {
+    pub(in crate::input::mouse) fn register(
+        &mut self,
+        now: Duration,
+        pos: Vec2,
+        cfg: (Duration, f32),
+    ) -> u8 {
         let (timeout, drift) = cfg;
         let count = match self.last {
             Some((t, p, c)) if now.saturating_sub(t) <= timeout && p.distance(pos) <= drift => {
@@ -94,16 +99,16 @@ impl ClickTracker {
 /// Carries the sub-notch wheel remainder across frames, per axis, scoped to the
 /// last terminal the wheel targeted.
 #[derive(Resource, Default)]
-pub(crate) struct WheelAccumulator {
-    pub(crate) residual_cells: f32,
-    pub(crate) residual_cells_h: f32,
+pub(in crate::input::mouse) struct WheelAccumulator {
+    pub(in crate::input::mouse) residual_cells: f32,
+    pub(in crate::input::mouse) residual_cells_h: f32,
     last_target: Option<Entity>,
 }
 
 impl WheelAccumulator {
     /// Resets both residuals when the wheel target changes, so a sub-notch
     /// fraction accumulated over one terminal cannot bleed into the next.
-    pub(crate) fn retarget(&mut self, entity: Entity) {
+    pub(in crate::input::mouse) fn retarget(&mut self, entity: Entity) {
         if self.last_target != Some(entity) {
             self.residual_cells = 0.0;
             self.residual_cells_h = 0.0;
@@ -114,7 +119,11 @@ impl WheelAccumulator {
 
 /// Cells of scroll for one wheel event: `Line` units count directly, `Pixel`
 /// units divide by the cell height. Positive = wheel-up (toward older lines).
-pub(crate) fn wheel_delta_cells(unit: MouseScrollUnit, y: f32, cell_h: f32) -> f32 {
+pub(in crate::input::mouse) fn wheel_delta_cells(
+    unit: MouseScrollUnit,
+    y: f32,
+    cell_h: f32,
+) -> f32 {
     match unit {
         MouseScrollUnit::Line => y,
         MouseScrollUnit::Pixel => y / cell_h.max(1.0),
@@ -126,7 +135,7 @@ pub(crate) fn wheel_delta_cells(unit: MouseScrollUnit, y: f32, cell_h: f32) -> f
 /// carrying the remainder. Resets `residual` on a sign flip, then processes the
 /// new delta at full magnitude. A zero / negative-zero delta has no direction
 /// and must not trip the sign-flip reset.
-pub(crate) fn accumulate_notches(
+pub(in crate::input::mouse) fn accumulate_notches(
     residual: &mut f32,
     delta_cells: f32,
     cells_per_notch: f32,
@@ -155,7 +164,11 @@ pub(crate) fn accumulate_notches(
 /// gesture, `v == 0`, scrolls horizontally). The comparison is `>=`, not `>`, so
 /// `1.0` does not silently kill all horizontal scroll. A zero horizontal delta
 /// (the common pure-vertical frame) short-circuits before the `hypot`.
-pub(crate) fn lock_dominant_axis(vertical: f32, horizontal: f32, ratio: f32) -> (f32, f32) {
+pub(in crate::input::mouse) fn lock_dominant_axis(
+    vertical: f32,
+    horizontal: f32,
+    ratio: f32,
+) -> (f32, f32) {
     if ratio <= 0.0 || horizontal == 0.0 {
         return (vertical, horizontal);
     }

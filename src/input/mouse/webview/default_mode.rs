@@ -15,6 +15,7 @@
 
 use crate::app_mode::AppMode;
 use crate::input::InputPhase;
+use crate::input::mouse::cell_dims;
 use crate::input::mouse::webview::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
     route_webview_left_click, webview_wheel_delta, webview_wheel_target,
@@ -58,14 +59,6 @@ impl Plugin for MouseWebviewDefaultModePlugin {
                 .run_if(in_state(AppMode::Default).and(on_message::<MouseWheel>)),
         );
     }
-}
-
-/// Physical-pixel cell pitch (advance width, line height), each clamped to ≥ 1.
-fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
-    (
-        metrics.metrics.advance_phys.floor().max(1.0),
-        metrics.metrics.line_height_phys.floor().max(1.0),
-    )
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor on the
