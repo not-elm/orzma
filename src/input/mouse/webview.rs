@@ -9,6 +9,7 @@
 //! (`ozma_webview`), so `bevy_cef`'s native picking cannot reach them; this
 //! manual forwarding is the only path that delivers clicks to them.
 
+use crate::input::mouse::cell_dims;
 use crate::surface::OzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use bevy::ecs::system::SystemParam;
@@ -19,6 +20,7 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
+use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{
     NonInteractive, Webview, focused_webview_of, webview_hit_at, webview_local_dip,
@@ -209,6 +211,76 @@ pub(in crate::input::mouse) fn forward_webview_move(
             false,
         );
     }
+}
+
+/// The per-frame pointer geometry both webview pointer pipelines derive from the
+/// primary window and cell metrics: the display `scale`, the physical cell pitch
+/// `(cell_w, cell_h)`, and the physical-pixel cursor position (`cursor_phys`,
+/// `None` when the pointer is off-window).
+pub(in crate::input::mouse) struct WebviewPointerFrame {
+    pub(in crate::input::mouse) scale: f32,
+    pub(in crate::input::mouse) cell_w: f32,
+    pub(in crate::input::mouse) cell_h: f32,
+    pub(in crate::input::mouse) cursor_phys: Option<Vec2>,
+}
+
+/// Computes the shared `WebviewPointerFrame` for the current frame: `scale` from
+/// the window's scale factor, `(cell_w, cell_h)` from the cell metrics, and
+/// `cursor_phys` as the window cursor scaled to physical px (`None` off-window).
+pub(in crate::input::mouse) fn webview_pointer_frame(
+    window: &Window,
+    metrics: &TerminalCellMetricsResource,
+) -> WebviewPointerFrame {
+    let scale = window.scale_factor();
+    let (cell_w, cell_h) = cell_dims(metrics);
+    WebviewPointerFrame {
+        scale,
+        cell_w,
+        cell_h,
+        cursor_phys: window.cursor_position().map(|c| c * scale),
+    }
+}
+
+/// The queries, browsers handle, and held buttons `forward_webview_move_at`
+/// forwards through to `forward_webview_move`, bundled as one borrowed struct so
+/// the wrapper takes a single reference instead of expanded positional args
+/// (which would re-trip `clippy::too_many_arguments`). Both mode move systems own
+/// these params and borrow them into this bundle each frame.
+pub(in crate::input::mouse) struct WebviewMoveDeps<'a> {
+    pub(in crate::input::mouse) children: &'a Query<'a, 'a, &'static Children>,
+    pub(in crate::input::mouse) webviews:
+        &'a Query<'a, 'a, (&'static Webview, Has<NonInteractive>)>,
+    pub(in crate::input::mouse) overlay_rects: &'a Query<'a, 'a, &'static TerminalOverlays>,
+    pub(in crate::input::mouse) browsers: Option<&'a Browsers>,
+    pub(in crate::input::mouse) pressed_buttons: &'a ButtonInput<MouseButton>,
+}
+
+/// Resolves the surface under `cursor_phys` via `resolve` (single-shell hit-test
+/// for Default mode, multi-pane tmux hit-test for tmux mode) and forwards pointer
+/// motion to the inline CEF child there through `forward_webview_move`. A `None`
+/// resolution forwards nothing.
+pub(in crate::input::mouse) fn forward_webview_move_at(
+    deps: &WebviewMoveDeps,
+    resolve: impl Fn(Vec2) -> Option<(Entity, Vec2)>,
+    cursor_phys: Vec2,
+    frame: &WebviewPointerFrame,
+) {
+    let (terminal, local_phys) = match resolve(cursor_phys) {
+        Some(x) => x,
+        None => return,
+    };
+    forward_webview_move(
+        deps.children,
+        deps.webviews,
+        deps.overlay_rects,
+        deps.browsers,
+        deps.pressed_buttons,
+        terminal,
+        local_phys,
+        frame.cell_w,
+        frame.cell_h,
+        frame.scale,
+    );
 }
 
 /// The inline webview child that should receive a wheel event for a resolved

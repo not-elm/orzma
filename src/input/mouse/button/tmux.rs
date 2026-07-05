@@ -23,8 +23,8 @@ use crate::input::InputPhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::gesture::ClickTracker;
 use crate::input::mouse::webview::{
-    WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
-    route_webview_left_click,
+    WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
+    release_webview_press, route_webview_left_click, webview_pointer_frame,
 };
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
@@ -130,19 +130,17 @@ fn tmux_webview_pointer(
         gesture.state = GestureState::Idle;
         return;
     };
-    let scale = window.scale_factor();
-    let (cell_w, cell_h) = cell_dims(&metrics);
-    let cursor_phys = window.cursor_position().map(|c| c * scale);
+    let frame = webview_pointer_frame(window, &metrics);
     if !window.focused || copy_prompt.open.is_some() {
         buttons.clear();
         gesture.state = GestureState::Idle;
         release_webview_press(
             &mut webview_press,
             &webview_route,
-            cursor_phys,
-            cell_w,
-            cell_h,
-            scale,
+            frame.cursor_phys,
+            frame.cell_w,
+            frame.cell_h,
+            frame.scale,
         );
         return;
     }
@@ -150,7 +148,7 @@ fn tmux_webview_pointer(
         if ev.button != MouseButton::Left {
             continue;
         }
-        if let Some(cursor_phys) = cursor_phys
+        if let Some(cursor_phys) = frame.cursor_phys
             && let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys)
         {
             let consumed = route_webview_left_click(
@@ -160,9 +158,9 @@ fn tmux_webview_pointer(
                 local_phys,
                 cursor_phys,
                 ev.state,
-                cell_w,
-                cell_h,
-                scale,
+                frame.cell_w,
+                frame.cell_h,
+                frame.scale,
             );
             if consumed {
                 if ev.state == ButtonState::Pressed
@@ -182,16 +180,16 @@ fn tmux_webview_pointer(
 
 /// Forwards pointer motion over an interactive inline rect of the tmux pane
 /// under the cursor to the child's CEF browser via the shared
-/// `forward_webview_move`. `CursorMoved`-driven (one forward per frame, latest
+/// `forward_webview_move_at`. `CursorMoved`-driven (one forward per frame, latest
 /// position), so the one system serves both hover and an in-rect drag. Skipped
 /// while a copy-search prompt owns input. `Browsers` is optional so CEF-less
 /// tests construct it.
 fn forward_tmux_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    children: Query<&Children>,
-    webviews: Query<(&Webview, Has<NonInteractive>)>,
-    overlay_rects: Query<&TerminalOverlays>,
+    children: Query<'_, '_, &'static Children>,
+    webviews: Query<'_, '_, (&'static Webview, Has<NonInteractive>)>,
+    overlay_rects: Query<'_, '_, &'static TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -207,23 +205,23 @@ fn forward_tmux_webview_mouse_moves(
     let Ok(window) = windows.single() else {
         return;
     };
-    let scale = window.scale_factor();
-    let cursor_phys = moved.position * scale;
-    let (cell_w, cell_h) = cell_dims(&metrics);
-    let Some((terminal, _pane_id, local_phys)) = tmux_pane_at_phys(&panes, cursor_phys) else {
-        return;
+    let frame = webview_pointer_frame(window, &metrics);
+    let cursor_phys = moved.position * frame.scale;
+    let deps = WebviewMoveDeps {
+        children: &children,
+        webviews: &webviews,
+        overlay_rects: &overlay_rects,
+        browsers: browsers.as_deref(),
+        pressed_buttons: &mouse_buttons,
     };
-    forward_webview_move(
-        &children,
-        &webviews,
-        &overlay_rects,
-        browsers.as_deref(),
-        &mouse_buttons,
-        terminal,
-        local_phys,
-        cell_w,
-        cell_h,
-        scale,
+    forward_webview_move_at(
+        &deps,
+        |c| {
+            tmux_pane_at_phys(&panes, c)
+                .map(|(terminal, _pane_id, local_phys)| (terminal, local_phys))
+        },
+        cursor_phys,
+        &frame,
     );
 }
 
