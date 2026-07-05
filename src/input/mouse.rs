@@ -24,6 +24,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 
 mod button;
+pub(crate) mod webview;
 mod wheel;
 
 /// Aggregates the per-path mouse dispatch plugins and the shared config

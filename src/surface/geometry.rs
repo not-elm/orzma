@@ -1,7 +1,7 @@
 //! Shared terminal-surface geometry: cursor physical-pixel → pane-local px →
 //! cell (column/row/side). Mode-agnostic — used by the pointer router
-//! (`crate::webview_pointer`), both mode pipelines, and hyperlink hover. The
-//! `TmuxPane`-specific hit-test lives in `crate::input::tmux::pane_hit`.
+//! (`crate::input::mouse::webview`), both mode pipelines, and hyperlink hover.
+//! The `TmuxPane`-specific hit-test lives in `crate::input::tmux::pane_hit`.
 
 use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;

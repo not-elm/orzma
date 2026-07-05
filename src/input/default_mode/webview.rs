@@ -1,7 +1,7 @@
 //! Default-mode (`AppMode::Default`) webview pointer routing: forwards left
 //! press/release and pointer motion to the inline CEF child under the cursor on
 //! the single Default shell surface, via the mode-agnostic core in
-//! `crate::webview_pointer`. The tmux equivalent is `crate::input::tmux::mouse::webview`;
+//! `crate::input::mouse::webview`. The tmux equivalent is `crate::input::tmux::mouse::webview`;
 //! this is the single-surface analogue (no pane arbitration / gesture hand-off).
 //!
 //! The pointer system runs EVERY frame in `AppMode::Default` (not message-gated)
@@ -15,14 +15,14 @@
 
 use crate::app_mode::AppMode;
 use crate::input::InputPhase;
+use crate::input::mouse::webview::{
+    WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
+    route_webview_left_click, webview_wheel_delta, webview_wheel_target,
+};
 use crate::surface::OzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
 use crate::ui::copy_search::CopyPrompt;
-use crate::webview_pointer::{
-    WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
-    route_webview_left_click, webview_wheel_delta, webview_wheel_target,
-};
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};

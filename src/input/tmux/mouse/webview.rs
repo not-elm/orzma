@@ -2,7 +2,7 @@
 //!
 //! Resolves the inline CEF child under the cursor on the tmux pane the pointer
 //! is over (`tmux_pane_at_phys`) and delegates the CEF forwarding + focus to the
-//! mode-agnostic core in `crate::webview_pointer`. Owns the tmux-specific glue:
+//! mode-agnostic core in `crate::input::mouse::webview`. Owns the tmux-specific glue:
 //! the `TmuxGestureButtons` hand-off of non-consumed events to `tmux_gesture`,
 //! and the `SelectPane` trigger so the keyboard/paste target follows a consumed
 //! inline click.
@@ -12,11 +12,11 @@ use super::effect::{TmuxMouseEffect, TmuxMouseEffects};
 use super::{GestureState, TmuxGestureButtons, TmuxMouseGesture, cell_dims};
 use crate::app_mode::TmuxActiveSet;
 use crate::input::InputPhase;
-use crate::ui::copy_search::CopyPrompt;
-use crate::webview_pointer::{
+use crate::input::mouse::webview::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
     route_webview_left_click,
 };
+use crate::ui::copy_search::CopyPrompt;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
