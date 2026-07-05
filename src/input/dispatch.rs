@@ -158,10 +158,11 @@ fn resolve_shortcuts(
         webview_focused: focused_webview.0.is_some(),
         forward_chords,
     };
-    // Snapshot the webview entity BEFORE the effects loop below runs
-    // `ReleaseWebviewFocus`, which sets `focused_webview.0 = None`. Building the
-    // filter from `focused_webview.0` afterwards would drop the suppression on a
-    // frame carrying both a leader claim and a release chord.
+    // NOTE: snapshot the focused webview BEFORE the effects loop, which may set
+    // `focused_webview.0 = None` on a `ReleaseWebviewFocus` chord. Keying the
+    // filter to the value read here (not after the loop) keeps this frame's
+    // suppression tied to the webview the keys were classified against, rather
+    // than leaning on bevy_cef's None-target delivery guard to cover the gap.
     let suppress_target = focused_webview.0;
     let ClassifiedKeys {
         effects: all,
