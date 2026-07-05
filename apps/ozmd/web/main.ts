@@ -4,6 +4,7 @@ import { ozma } from '@ozma/web';
 import DOMPurify from 'dompurify';
 import mermaid from 'mermaid';
 import { installHeadingAnchors } from './anchors';
+import { collectLocalImages } from './images';
 import { classifyLink } from './links';
 import { renderMarkdown } from './render';
 import { Search } from './search';
@@ -143,12 +144,47 @@ async function renderMermaid(): Promise<void> {
   }
 }
 
+async function stageLocalImages(root: HTMLElement): Promise<void> {
+  const found = collectLocalImages(root);
+  if (found.length === 0) {
+    return;
+  }
+  const paths = [...new Set(found.map((f) => f.path))];
+  let urls: (string | null)[];
+  try {
+    const res = await ozma.call<{ urls: (string | null)[] }, { paths: string[] }>('stageAssets', {
+      paths,
+    });
+    urls = res.urls;
+  } catch (e) {
+    console.error(e);
+    return;
+  }
+  const byPath = new Map<string, string>();
+  paths.forEach((p, i) => {
+    const u = urls[i];
+    if (u != null) {
+      byPath.set(p, u);
+    }
+  });
+  const decoded: Promise<unknown>[] = [];
+  for (const { el, path } of found) {
+    const url = byPath.get(path);
+    if (url !== undefined) {
+      el.setAttribute('src', url);
+      decoded.push(el.decode().catch(() => {}));
+    }
+  }
+  await Promise.all(decoded);
+}
+
 async function setContent(payload: ContentPayload): Promise<void> {
   const generation = ++renderGeneration;
   const anchor = captureScrollAnchor();
   content.innerHTML = renderMarkdown(payload.markdown);
   installHeadingAnchors(content);
   await renderMermaid();
+  await stageLocalImages(content);
   // NOTE: a newer setContent superseded this one during the await (rapid reloads
   // race) — skip the stale scroll so only the latest render positions the viewport.
   if (generation !== renderGeneration) {
