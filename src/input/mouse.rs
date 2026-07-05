@@ -168,8 +168,8 @@ fn hit_candidates<'a>(
 }
 
 /// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to `>= 1` so
-/// a degenerate metric cannot divide by zero. Shared by both dispatchers' cursor
-/// → cell projection.
+/// a degenerate metric cannot divide by zero. Shared by the mouse dispatchers
+/// and webview pointer routing's cursor → cell projection.
 fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
     (
         metrics.metrics.advance_phys.floor().max(1.0),
