@@ -34,13 +34,13 @@ use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 #[derive(Message)]
 pub(in crate::input) struct ShortcutBatch {
     /// The mode-specific effects to apply (no `Quit` / `ReleaseWebviewFocus`).
-    pub(in crate::input) effects: Vec<KeyEffect>,
+    pub effects: Vec<KeyEffect>,
     /// The `KeyboardFocused` `OzmaTerminal`, or `None` when none is focused.
-    pub(in crate::input) focused: Option<Entity>,
+    pub focused: Option<Entity>,
     /// Whether the focused surface is in copy mode.
-    pub(in crate::input) in_copy_mode: bool,
+    pub in_copy_mode: bool,
     /// The frame's modifier snapshot, shared by every effect in the batch.
-    pub(in crate::input) mods: Modifiers,
+    pub mods: Modifiers,
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
