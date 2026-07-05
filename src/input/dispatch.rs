@@ -222,6 +222,7 @@ mod tests {
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
     use crate::surface::OzmaTerminal;
+    use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use bevy::state::app::StatesPlugin;
@@ -272,7 +273,9 @@ mod tests {
             .insert_state(AppMode::Default)
             .add_systems(
                 Update,
-                (capture_batch, capture_exit).in_set(ShortcutSet::Apply),
+                (capture_batch, capture_exit)
+                    .chain()
+                    .in_set(ShortcutSet::Apply),
             );
         app.world_mut().spawn((
             Window {
@@ -621,6 +624,12 @@ mod tests {
         app.world_mut().resource_mut::<ProbeWebview>().0 = Some(webview);
         *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
         press_key(&mut app, KeyCode::KeyS, Key::Character("s".into()));
+        app.edit_schedule(Update, |schedule| {
+            schedule.set_build_settings(ScheduleBuildSettings {
+                ambiguity_detection: LogLevel::Error,
+                ..Default::default()
+            });
+        });
         app.update();
         assert!(
             app.world().resource::<DeliverProbe>().saw_claim,
