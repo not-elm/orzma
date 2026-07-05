@@ -9,7 +9,7 @@
 
 use super::GestureState;
 use super::effect::{MultiSelectKind, TmuxMouseEffect};
-use crate::input::gesture::ClickTracker;
+use crate::input::mouse::gesture::ClickTracker;
 use crate::render::tmux::DividerPixelRect;
 use bevy::prelude::*;
 use ozma_tty_engine::{Point, SelectionType, Side};

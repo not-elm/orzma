@@ -24,6 +24,7 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 
 mod button;
+pub(in crate::input) mod gesture;
 pub(crate) mod webview;
 mod wheel;
 

@@ -18,7 +18,7 @@ use super::pane_hit::tmux_pane_at_phys;
 use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::gesture::ClickTracker;
+use crate::input::mouse::gesture::ClickTracker;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::surface::geometry::{Side as CellSide, cell_at_pane};
 use crate::ui::copy_mode::CopyModeState;

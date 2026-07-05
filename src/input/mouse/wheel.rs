@@ -9,10 +9,10 @@ use super::{TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates, on_a
 use crate::action::terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
-use crate::input::gesture::{
+use crate::input::keyboard::current_terminal_modifiers;
+use crate::input::mouse::gesture::{
     WheelAccumulator, accumulate_notches, lock_dominant_axis, wheel_delta_cells,
 };
-use crate::input::keyboard::current_terminal_modifiers;
 use crate::surface::geometry::topmost_surface_at;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
