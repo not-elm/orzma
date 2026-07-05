@@ -10,14 +10,16 @@ use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::keyboard::key_effect::KeyEffect;
 use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
 use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
+use ozmux_configs::copy_mode::CopyModeAction;
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use ozmux_configs::shortcuts::{
     Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
@@ -39,6 +41,10 @@ impl Plugin for ShortcutsPlugin {
                     .in_set(InputPhase::FocusedKey),
             )
             .add_message::<ShortcutBatch>()
+            .add_message::<ShortcutMessage>()
+            .add_message::<CopyModeMessage>()
+            .add_message::<TypeMessage>()
+            .add_message::<WebviewForwardMessage>()
             .init_resource::<Shortcuts>()
             .init_resource::<LeaderPhase>()
             .init_resource::<ModifierTapState>()
@@ -81,6 +87,79 @@ pub(in crate::input) struct ShortcutBatch {
     pub in_copy_mode: bool,
     /// The frame's modifier snapshot, shared by every effect in the batch.
     pub mods: Modifiers,
+}
+
+/// One resolved keyboard shortcut action, fanned out from `resolve_key_effects`
+/// to the per-mode appliers. Excludes `Quit` / `ReleaseWebviewFocus` (handled
+/// inline in `resolve_key_effects`). `focused` is the `KeyboardFocused` surface;
+/// `in_copy_mode` gates the copy-mode re-entry and paste-suppression rules.
+// NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
+// read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
+#[expect(dead_code, reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated")]
+#[derive(Message)]
+pub(in crate::input) struct ShortcutMessage {
+    /// The action to run.
+    pub action: Shortcut,
+    /// Whether the action was reached through the leader rather than a direct chord.
+    pub via_leader: bool,
+    /// The `KeyboardFocused` surface, or `None` when none is focused.
+    pub focused: Option<Entity>,
+    /// Whether the focused surface is in copy mode.
+    pub in_copy_mode: bool,
+}
+
+/// One matched `[copy-mode]` key, fanned out to the per-mode appliers.
+// NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
+// read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
+#[expect(dead_code, reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated")]
+#[derive(Message)]
+pub(in crate::input) struct CopyModeMessage {
+    /// The copy-mode action to run.
+    pub action: CopyModeAction,
+    /// The `KeyboardFocused` surface, or `None` when none is focused.
+    pub focused: Option<Entity>,
+}
+
+/// One raw key to type into / forward to the focused terminal.
+// NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
+// read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
+#[expect(dead_code, reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated")]
+#[derive(Message)]
+pub(in crate::input) struct TypeMessage {
+    /// The logical key, for text/printable-key mapping.
+    pub logical: Key,
+    /// The physical key, for named-key mapping.
+    pub key_code: KeyCode,
+    /// The `KeyboardFocused` surface, or `None` when none is focused.
+    pub focused: Option<Entity>,
+    /// The frame's modifier snapshot.
+    pub mods: Modifiers,
+}
+
+/// One key to forward to the focused webview's declared forward-key chord.
+// NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
+// read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
+#[expect(dead_code, reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated")]
+#[derive(Message)]
+pub(in crate::input) struct WebviewForwardMessage {
+    /// The logical key, for text/printable-key mapping.
+    pub logical: Key,
+    /// The physical key, for named-key mapping.
+    pub key_code: KeyCode,
+    /// The `KeyboardFocused` surface, or `None` when none is focused.
+    pub focused: Option<Entity>,
+    /// The frame's modifier snapshot.
+    pub mods: Modifiers,
+}
+
+/// The four shortcut-effect message writers `resolve_key_effects` fans out to,
+/// bundled to stay within Bevy's system-parameter limit.
+#[derive(SystemParam)]
+pub(in crate::input) struct ShortcutMessages<'w> {
+    pub shortcut: MessageWriter<'w, ShortcutMessage>,
+    pub copy_mode: MessageWriter<'w, CopyModeMessage>,
+    pub type_keys: MessageWriter<'w, TypeMessage>,
+    pub webview_forward: MessageWriter<'w, WebviewForwardMessage>,
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
@@ -163,11 +242,7 @@ pub(crate) struct Shortcuts {
 impl Shortcuts {
     /// Returns the GUI action bound to `(keycode, mods)` in the direct table, if
     /// any.
-    pub(crate) fn match_gui_action(
-        &self,
-        keycode: KeyCode,
-        mods: Modifiers,
-    ) -> Option<Shortcut> {
+    pub(crate) fn match_gui_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
         Self::find_entry(&self.direct, keycode, mods).map(|s| s.action)
     }
 
@@ -826,11 +901,7 @@ mod tests {
 
     #[test]
     fn test_constructor_builds_repeat_prefix() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            Shortcut::EnterCopyMode,
-            ms(500),
-        );
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
         assert_eq!(
             sc.match_repeat_prefix(KeyCode::KeyH, mods(false, false, false, false)),
             Some(Shortcut::EnterCopyMode)

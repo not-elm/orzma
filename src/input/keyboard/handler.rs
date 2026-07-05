@@ -15,7 +15,8 @@ use crate::input::keyboard::key_effect::{
     BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch,
 };
 use crate::input::shortcuts::{
-    LeaderGate, LeaderPhase, ShortcutBatch, ShortcutSet, Shortcuts, clear_leader_phase,
+    CopyModeMessage, LeaderGate, LeaderPhase, ShortcutBatch, ShortcutMessage, ShortcutMessages,
+    ShortcutSet, Shortcuts, TypeMessage, WebviewForwardMessage, clear_leader_phase,
 };
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
@@ -84,6 +85,7 @@ fn resolve_key_effects(
     mut cef_filter: ResMut<CefKeyboardFilter>,
     mut leader_phase: ResMut<LeaderPhase>,
     mut batch: MessageWriter<ShortcutBatch>,
+    mut messages: ShortcutMessages,
     guards: ModalGuards,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -158,6 +160,40 @@ fn resolve_key_effects(
                 ..
             } => focused_webview.0 = None,
             other => effects.push(other),
+        }
+    }
+    for effect in &effects {
+        match effect {
+            KeyEffect::Shortcut { action, via_leader } => {
+                messages.shortcut.write(ShortcutMessage {
+                    action: *action,
+                    via_leader: *via_leader,
+                    focused,
+                    in_copy_mode,
+                });
+            }
+            KeyEffect::CopyMode(action) => {
+                messages.copy_mode.write(CopyModeMessage {
+                    action: *action,
+                    focused,
+                });
+            }
+            KeyEffect::Type { logical, key_code } => {
+                messages.type_keys.write(TypeMessage {
+                    logical: logical.clone(),
+                    key_code: *key_code,
+                    focused,
+                    mods,
+                });
+            }
+            KeyEffect::WebviewForward { logical, key_code } => {
+                messages.webview_forward.write(WebviewForwardMessage {
+                    logical: logical.clone(),
+                    key_code: *key_code,
+                    focused,
+                    mods,
+                });
+            }
         }
     }
     batch.write(ShortcutBatch {
@@ -235,6 +271,10 @@ mod tests {
             .add_plugins(KeyboardHandlerPlugin)
             .add_message::<KeyboardInput>()
             .add_message::<ShortcutBatch>()
+            .add_message::<ShortcutMessage>()
+            .add_message::<CopyModeMessage>()
+            .add_message::<TypeMessage>()
+            .add_message::<WebviewForwardMessage>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ImeState>()
