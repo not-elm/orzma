@@ -5,16 +5,16 @@
 //! `MouseButtonInputPlugin`; skips `MouseDisabled` surfaces.
 
 use super::{
-    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates,
+    CellContext, MouseEffect, TerminalSurfaces, cell_context_for, cell_dims, hit_candidates,
     on_any_mouse_message, trigger_mouse_effects,
 };
 use crate::input::InputPhase;
 use crate::input::bindings::OzmaMouseConfig;
 use crate::input::current_modifiers;
-use crate::input::gesture::{DragGesture, DragPhase, HeldPointer, OzmaMouseGesture};
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
-use crate::webview_pointer::topmost_surface_at;
+use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OzmaMouseGesture};
+use crate::surface::geometry::topmost_surface_at;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
@@ -27,7 +27,10 @@ use ozma_tty_engine::{
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use std::time::Duration;
 
-/// Registers the mouse-button dispatcher and its gesture resource. Runs in
+pub(in crate::input::mouse) mod tmux;
+
+/// Registers the mouse-button dispatcher and its gesture resource, plus the
+/// tmux left-button gesture pipeline (`tmux::MouseButtonTmuxPlugin`). Runs in
 /// `InputPhase::Dispatch`, gated to frames carrying any mouse message — the
 /// focus/empty-candidate guard must still run on wheel-only frames to drain
 /// readers and reset the gesture.
@@ -35,12 +38,14 @@ pub(super) struct MouseButtonInputPlugin;
 
 impl Plugin for MouseButtonInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OzmaMouseGesture>().add_systems(
-            Update,
-            dispatch_mouse_buttons
-                .in_set(InputPhase::Dispatch)
-                .run_if(on_any_mouse_message()),
-        );
+        app.init_resource::<OzmaMouseGesture>()
+            .add_systems(
+                Update,
+                dispatch_mouse_buttons
+                    .in_set(InputPhase::Dispatch)
+                    .run_if(on_any_mouse_message()),
+            )
+            .add_plugins(tmux::MouseButtonTmuxPlugin);
     }
 }
 
@@ -131,7 +136,7 @@ fn resolve_frame(
     }
     let active = gesture.held.is_some() || gesture.drag.is_some();
     let cursor_phys = effective_drag_cursor(live, active, gesture.last_cursor_phys)?;
-    let (cell_w, cell_h) = cell_pitch(metrics);
+    let (cell_w, cell_h) = cell_dims(metrics);
     Some(FrameContext {
         cursor_phys,
         scale,

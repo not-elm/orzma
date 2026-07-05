@@ -4,8 +4,9 @@
 //! clear `FocusedWebview`), and fans out the remaining effects as the four
 //! per-responsibility shortcut messages (`ShortcutMessage`, `CopyModeMessage`,
 //! `TypeMessage`, `WebviewForwardMessage`). The per-mode appliers
-//! (`default_mode`, `tmux::input`) consume those messages and apply the
-//! mode-specific events. This is the sole system that steps `LeaderPhase`.
+//! (`crate::input::shortcuts::default_mode`, `crate::input::shortcuts::tmux`)
+//! consume those messages and apply the mode-specific events. This is the
+//! sole system that steps `LeaderPhase`.
 
 use crate::action::vi::ResolvedCopyModeKeys;
 use crate::app_mode::AppMode;

@@ -54,6 +54,6 @@ pub(super) enum TmuxMouseEffect {
 #[derive(EntityEvent, Debug, Clone)]
 pub(super) struct TmuxMouseEffects {
     #[event_target]
-    pub(super) entity: Entity,
-    pub(super) effects: Vec<TmuxMouseEffect>,
+    pub entity: Entity,
+    pub effects: Vec<TmuxMouseEffect>,
 }

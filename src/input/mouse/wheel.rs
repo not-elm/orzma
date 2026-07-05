@@ -5,22 +5,25 @@
 //! `apply_wheel_action`. Registered by `MouseWheelInputPlugin`; skips
 //! `MouseDisabled` surfaces.
 
-use super::{TerminalSurfaces, cell_context_for, cell_pitch, hit_candidates, on_any_mouse_message};
+use super::{TerminalSurfaces, cell_context_for, cell_dims, hit_candidates, on_any_mouse_message};
 use crate::action::terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
-use crate::input::gesture::{
+use crate::input::keyboard::current_terminal_modifiers;
+use crate::input::mouse::gesture::{
     WheelAccumulator, accumulate_notches, lock_dominant_axis, wheel_delta_cells,
 };
-use crate::input::keyboard::current_terminal_modifiers;
-use crate::webview_pointer::topmost_surface_at;
+use crate::surface::geometry::topmost_surface_at;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ozma_tty_engine::{CellCoord, TermMode, TerminalModifiers, WheelAction, WheelModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 
-/// Registers the mouse-wheel dispatcher and its accumulator resource. Runs in
+pub(in crate::input::mouse) mod tmux;
+
+/// Registers the mouse-wheel dispatcher and its accumulator resource, plus the
+/// tmux wheel-forwarding pipeline (`tmux::MouseWheelTmuxPlugin`). Runs in
 /// `InputPhase::Dispatch`, gated to frames carrying any mouse message — a
 /// cursor-only frame must still run `WheelAccumulator::retarget` so a pane's
 /// sub-notch residual is cleared when the cursor moves to another terminal.
@@ -28,12 +31,14 @@ pub(super) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WheelAccumulator>().add_systems(
-            Update,
-            dispatch_mouse_wheel
-                .in_set(InputPhase::Dispatch)
-                .run_if(on_any_mouse_message()),
-        );
+        app.init_resource::<WheelAccumulator>()
+            .add_systems(
+                Update,
+                dispatch_mouse_wheel
+                    .in_set(InputPhase::Dispatch)
+                    .run_if(on_any_mouse_message()),
+            )
+            .add_plugins(tmux::MouseWheelTmuxPlugin);
     }
 }
 
@@ -103,7 +108,7 @@ fn resolve_wheel_target(
     if !window.focused || terminals.is_empty() {
         return None;
     }
-    let (_, cell_h) = cell_pitch(metrics);
+    let (_, cell_h) = cell_dims(metrics);
     let cursor_phys = window
         .cursor_position()
         .map(|c| c * window.scale_factor())?;
@@ -127,7 +132,7 @@ fn resolve_wheel_cell(
     cursor_phys: Vec2,
     metrics: &TerminalCellMetricsResource,
 ) -> Option<(CellCoord, TermMode)> {
-    let (cell_w, cell_h) = cell_pitch(metrics);
+    let (cell_w, cell_h) = cell_dims(metrics);
     let (ctx, modes) = cell_context_for(terminals, target, cell_w, cell_h)?;
     let cell = ctx
         .hit(cursor_phys)

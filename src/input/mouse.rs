@@ -19,22 +19,30 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::CursorMoved;
+pub(crate) use button::tmux::divider_at;
 use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;
 
 mod button;
+mod gesture;
+mod webview;
 mod wheel;
 
 /// Aggregates the per-path mouse dispatch plugins and the shared config
 /// resource. The button and wheel dispatchers live in `button` / `wheel` and
-/// register themselves.
+/// register themselves; the webview pointer routers are aggregated via
+/// `webview::MouseWebviewPlugin`.
 pub(super) struct MouseInputPlugin;
 
 impl Plugin for MouseInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((MouseButtonInputPlugin, MouseWheelInputPlugin))
-            .init_resource::<OzmaMouseConfig>();
+        app.add_plugins((
+            MouseButtonInputPlugin,
+            MouseWheelInputPlugin,
+            webview::MouseWebviewPlugin,
+        ))
+        .init_resource::<OzmaMouseConfig>();
     }
 }
 
@@ -160,9 +168,9 @@ fn hit_candidates<'a>(
 }
 
 /// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to `>= 1` so
-/// a degenerate metric cannot divide by zero. Shared by both dispatchers' cursor
-/// → cell projection.
-fn cell_pitch(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
+/// a degenerate metric cannot divide by zero. Shared by the mouse dispatchers
+/// and webview pointer routing's cursor → cell projection.
+fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
     (
         metrics.metrics.advance_phys.floor().max(1.0),
         metrics.metrics.line_height_phys.floor().max(1.0),
@@ -297,85 +305,6 @@ mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::webview_pointer::topmost_surface_at;
-
-    #[test]
-    fn topmost_surface_at_picks_highest_stack_index_among_containing() {
-        let mut world = World::new();
-        let a = world.spawn_empty().id();
-        let b = world.spawn_empty().id();
-        let c = world.spawn_empty().id();
-        // A: left half (x 0..400), stack 5. B: right half (x 400..800), stack 3.
-        // C: left half, stack 9 — overlaps A and sits on top.
-        let node_a = ComputedNode {
-            size: Vec2::new(400.0, 600.0),
-            stack_index: 5,
-            ..ComputedNode::DEFAULT
-        };
-        let tf_a = UiGlobalTransform::from_xy(200.0, 300.0);
-        let node_b = ComputedNode {
-            size: Vec2::new(400.0, 600.0),
-            stack_index: 3,
-            ..ComputedNode::DEFAULT
-        };
-        let tf_b = UiGlobalTransform::from_xy(600.0, 300.0);
-        let node_c = ComputedNode {
-            size: Vec2::new(400.0, 600.0),
-            stack_index: 9,
-            ..ComputedNode::DEFAULT
-        };
-        let tf_c = UiGlobalTransform::from_xy(200.0, 300.0);
-        let candidates = [
-            (a, &node_a, &tf_a),
-            (b, &node_b, &tf_b),
-            (c, &node_c, &tf_c),
-        ];
-
-        assert_eq!(
-            topmost_surface_at(Vec2::new(600.0, 300.0), candidates.iter().copied()),
-            Some(b),
-            "a point only B contains must resolve to B"
-        );
-        assert_eq!(
-            topmost_surface_at(Vec2::new(100.0, 300.0), candidates.iter().copied()),
-            Some(c),
-            "where A and C overlap, the higher stack_index (C) wins"
-        );
-        assert_eq!(
-            topmost_surface_at(Vec2::new(2000.0, 2000.0), candidates.iter().copied()),
-            None,
-            "a point outside every node resolves to None"
-        );
-    }
-
-    #[test]
-    fn topmost_surface_at_breaks_stack_index_ties_deterministically() {
-        let mut world = World::new();
-        let lower = world.spawn_empty().id();
-        let higher = world.spawn_empty().id();
-        // Two fully-overlapping nodes with the SAME stack_index (only reachable
-        // before the first layout pass assigns indices). The winner must not
-        // depend on candidate iteration order.
-        let node = ComputedNode {
-            size: Vec2::new(400.0, 600.0),
-            stack_index: 0,
-            ..ComputedNode::DEFAULT
-        };
-        let tf = UiGlobalTransform::from_xy(200.0, 300.0);
-        let forward = [(lower, &node, &tf), (higher, &node, &tf)];
-        let reversed = [(higher, &node, &tf), (lower, &node, &tf)];
-        let winner = topmost_surface_at(Vec2::new(100.0, 300.0), forward.iter().copied());
-        assert_eq!(
-            winner,
-            topmost_surface_at(Vec2::new(100.0, 300.0), reversed.iter().copied()),
-            "tie resolution must not depend on iteration order"
-        );
-        assert_eq!(
-            winner,
-            Some(lower.max(higher)),
-            "a stack_index tie resolves by Entity order, deterministically"
-        );
-    }
 
     #[test]
     fn cell_at_local_is_one_indexed_and_clamped() {

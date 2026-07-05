@@ -1,7 +1,7 @@
 //! Default-mode (`AppMode::Default`) webview pointer routing: forwards left
 //! press/release and pointer motion to the inline CEF child under the cursor on
 //! the single Default shell surface, via the mode-agnostic core in
-//! `crate::webview_pointer`. The tmux equivalent is `crate::input::tmux::mouse::webview`;
+//! `crate::input::mouse::webview`. The tmux equivalent is `crate::input::mouse::button::tmux`;
 //! this is the single-surface analogue (no pane arbitration / gesture hand-off).
 //!
 //! The pointer system runs EVERY frame in `AppMode::Default` (not message-gated)
@@ -15,13 +15,16 @@
 
 use crate::app_mode::AppMode;
 use crate::input::InputPhase;
+use crate::input::mouse::cell_dims;
+use crate::input::mouse::webview::{
+    WebviewMoveDeps, WebviewPress, WebviewRouteParams, forward_webview_move_at,
+    release_webview_press, route_webview_left_click, webview_pointer_frame, webview_wheel_delta,
+    webview_wheel_target,
+};
 use crate::surface::OzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
+use crate::surface::geometry::topmost_surface_at;
 use crate::ui::copy_search::CopyPrompt;
-use crate::webview_pointer::{
-    WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
-    route_webview_left_click, topmost_surface_at, webview_wheel_delta, webview_wheel_target,
-};
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -32,41 +35,31 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview};
 
-/// Registers the Default-mode webview pointer systems and the shared
-/// `WebviewPress` resource (`init_resource` is idempotent; the tmux plugin may
-/// also init it).
-pub(super) struct DefaultWebviewPointerPlugin;
+/// Registers the Default-mode webview pointer systems. The shared
+/// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
+pub(super) struct MouseWebviewDefaultModePlugin;
 
-impl Plugin for DefaultWebviewPointerPlugin {
+impl Plugin for MouseWebviewDefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WebviewPress>()
-            .add_systems(
-                Update,
-                default_webview_pointer
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(in_state(AppMode::Default)),
-            )
-            .add_systems(
-                Update,
-                forward_default_webview_mouse_moves
-                    .in_set(InputPhase::Hover)
-                    .run_if(in_state(AppMode::Default).and(on_message::<CursorMoved>)),
-            )
-            .add_systems(
-                Update,
-                forward_default_webview_wheel
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(in_state(AppMode::Default).and(on_message::<MouseWheel>)),
-            );
+        app.add_systems(
+            Update,
+            default_webview_pointer
+                .in_set(InputPhase::Dispatch)
+                .run_if(in_state(AppMode::Default)),
+        )
+        .add_systems(
+            Update,
+            forward_default_webview_mouse_moves
+                .in_set(InputPhase::Hover)
+                .run_if(in_state(AppMode::Default).and(on_message::<CursorMoved>)),
+        )
+        .add_systems(
+            Update,
+            forward_default_webview_wheel
+                .in_set(InputPhase::Dispatch)
+                .run_if(in_state(AppMode::Default).and(on_message::<MouseWheel>)),
+        );
     }
-}
-
-/// Physical-pixel cell pitch (advance width, line height), each clamped to ≥ 1.
-fn cell_dims(metrics: &TerminalCellMetricsResource) -> (f32, f32) {
-    (
-        metrics.metrics.advance_phys.floor().max(1.0),
-        metrics.metrics.line_height_phys.floor().max(1.0),
-    )
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor on the
@@ -87,18 +80,16 @@ fn default_webview_pointer(
         webview_press.0 = None;
         return;
     };
-    let scale = window.scale_factor();
-    let (cell_w, cell_h) = cell_dims(&metrics);
-    let cursor_phys = window.cursor_position().map(|c| c * scale);
+    let frame = webview_pointer_frame(window, &metrics);
     if !window.focused || copy_prompt.open.is_some() {
         buttons.clear();
         release_webview_press(
             &mut webview_press,
             &webview_route,
-            cursor_phys,
-            cell_w,
-            cell_h,
-            scale,
+            frame.cursor_phys,
+            frame.cell_w,
+            frame.cell_h,
+            frame.scale,
         );
         return;
     }
@@ -106,7 +97,7 @@ fn default_webview_pointer(
         if ev.button != MouseButton::Left {
             continue;
         }
-        let Some(cursor_phys) = cursor_phys else {
+        let Some(cursor_phys) = frame.cursor_phys else {
             continue;
         };
         let Some(terminal) = topmost_surface_at(cursor_phys, surfaces.iter()) else {
@@ -125,22 +116,22 @@ fn default_webview_pointer(
             local_phys,
             cursor_phys,
             ev.state,
-            cell_w,
-            cell_h,
-            scale,
+            frame.cell_w,
+            frame.cell_h,
+            frame.scale,
         );
     }
 }
 
 /// Forwards pointer motion over an interactive inline rect of the Default shell
-/// to the child's CEF browser via the shared `forward_webview_move`. Skipped
+/// to the child's CEF browser via the shared `forward_webview_move_at`. Skipped
 /// while a copy-search prompt owns input.
 fn forward_default_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OzmaTerminal>>,
-    children: Query<&Children>,
-    webviews: Query<(&Webview, Has<NonInteractive>)>,
-    overlay_rects: Query<&TerminalOverlays>,
+    children: Query<'_, '_, &'static Children>,
+    webviews: Query<'_, '_, (&'static Webview, Has<NonInteractive>)>,
+    overlay_rects: Query<'_, '_, &'static TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
@@ -156,29 +147,24 @@ fn forward_default_webview_mouse_moves(
     let Ok(window) = windows.single() else {
         return;
     };
-    let scale = window.scale_factor();
-    let cursor_phys = moved.position * scale;
-    let (cell_w, cell_h) = cell_dims(&metrics);
-    let Some(terminal) = topmost_surface_at(cursor_phys, surfaces.iter()) else {
-        return;
+    let frame = webview_pointer_frame(window, &metrics);
+    let cursor_phys = moved.position * frame.scale;
+    let deps = WebviewMoveDeps {
+        children: &children,
+        webviews: &webviews,
+        overlay_rects: &overlay_rects,
+        browsers: browsers.as_deref(),
+        pressed_buttons: &mouse_buttons,
     };
-    let Ok((_, node, transform)) = surfaces.get(terminal) else {
-        return;
-    };
-    let Some(local_phys) = phys_to_pane_local(node, transform, cursor_phys) else {
-        return;
-    };
-    forward_webview_move(
-        &children,
-        &webviews,
-        &overlay_rects,
-        browsers.as_deref(),
-        &mouse_buttons,
-        terminal,
-        local_phys,
-        cell_w,
-        cell_h,
-        scale,
+    forward_webview_move_at(
+        &deps,
+        |c| {
+            let t = topmost_surface_at(c, surfaces.iter())?;
+            let (_, node, transform) = surfaces.get(t).ok()?;
+            Some((t, phys_to_pane_local(node, transform, c)?))
+        },
+        cursor_phys,
+        &frame,
     );
 }
 

@@ -4,7 +4,6 @@
 mod bindings;
 pub(crate) mod default_mode;
 pub(crate) mod focus;
-mod gesture;
 pub(crate) mod hyperlink;
 pub(crate) mod ime;
 pub(crate) mod keyboard;

@@ -1,6 +1,6 @@
 //! Tmux paste: applies `PasteAction` for a tmux pane by chunking the
-//! clipboard into `SendBytes`, relocated from the inline tmux paste arm
-//! previously in `src/input/tmux/input.rs`.
+//! clipboard into `SendBytes`, relocated from an inline match arm in the
+//! tmux keyboard-input dispatcher.
 
 use crate::action::terminal::PasteAction;
 use crate::clipboard::{Clipboard, build_paste_bytes};
@@ -39,9 +39,8 @@ fn on_paste_tmux(
     if text.is_empty() {
         return;
     }
-    // NOTE: gate on a live client BEFORE snap/flush, mirroring the source-of-
-    // truth ordering in src/input/tmux/input.rs — a scrolled-back pane with no
-    // client must not snap-to-bottom + repaint while pasting nothing.
+    // NOTE: gate on a live client BEFORE snap/flush — a scrolled-back pane
+    // with no client must not snap-to-bottom + repaint while pasting nothing.
     let Some(client) = client.as_deref_mut() else {
         return;
     };
