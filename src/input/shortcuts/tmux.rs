@@ -10,21 +10,24 @@ use crate::{
     },
     app_mode::{AppMode, TmuxActiveSet},
     input::{
-        keyboard::key_effect::KeyEffect,
-        shortcuts::{ShortcutBatch, ShortcutSet},
+        shortcuts::{
+            CopyModeMessage, ShortcutMessage, ShortcutSet, TypeMessage, WebviewForwardMessage,
+        },
         tmux::forward::ForwardPaneKeysRequest,
     },
     ui::copy_mode::EnterCopyModeActionEvent,
 };
+use bevy::input::keyboard::Key;
 use bevy::{ecs::system::SystemParam, prelude::*};
 use ozmux_configs::shortcuts::Shortcut;
 use ozmux_configs::shortcuts::{
-    PaneDirection as CfgPaneDirection, SplitOrientation as CfgSplitOrientation,
+    Modifiers, PaneDirection as CfgPaneDirection, SplitOrientation as CfgSplitOrientation,
 };
 use ozmux_tmux::{
     ActiveWindow, KeyMods, PaneDirection, SplitDirection, TmuxSession, TmuxWindow,
     bevy_key_to_tmux_name,
 };
+use std::collections::HashMap;
 
 pub(super) struct ShortcutsTmuxModePlugin;
 
@@ -32,13 +35,31 @@ impl Plugin for ShortcutsTmuxModePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (apply_tmux_shortcuts
-                .in_set(ShortcutSet::Apply)
-                .run_if(in_state(AppMode::Tmux))
-                .run_if(on_message::<ShortcutBatch>),)
+            (
+                apply_tmux_shortcuts
+                    .in_set(ShortcutSet::Apply)
+                    .run_if(in_state(AppMode::Tmux))
+                    .run_if(on_message::<ShortcutMessage>),
+                apply_tmux_copy_mode
+                    .in_set(ShortcutSet::Apply)
+                    .run_if(in_state(AppMode::Tmux))
+                    .run_if(on_message::<CopyModeMessage>),
+                apply_tmux_forward
+                    .in_set(ShortcutSet::Apply)
+                    .run_if(in_state(AppMode::Tmux))
+                    .run_if(on_tmux_forward_message())
+                    .after(apply_tmux_shortcuts)
+                    .after(apply_tmux_copy_mode),
+            )
                 .in_set(TmuxActiveSet),
         );
     }
+}
+
+/// Run condition for `apply_tmux_forward`: true on any frame carrying a key to
+/// forward (typed or webview-forwarded). The two never coexist in a frame.
+fn on_tmux_forward_message() -> impl SystemCondition<()> {
+    on_message::<TypeMessage>.or(on_message::<WebviewForwardMessage>)
 }
 
 /// Target-entity lookups for the tmux shortcut actions, bundled to stay
@@ -50,80 +71,113 @@ pub(in crate::input) struct ActionTargets<'w, 's> {
     windows: Query<'w, 's, (Entity, &'static TmuxWindow)>,
 }
 
-/// Applies `AppMode::Tmux` keyboard shortcuts from the frame's `ShortcutBatch`
-/// (produced by `crate::input::dispatch::resolve_shortcuts`): triggers the
-/// matching events on the active pane (`batch.focused`) / session / window —
-/// copy-mode entry, paste (`PasteAction`, applied by `on_paste_tmux`), detach
-/// (`DetachSessionRequest`), the pane/window action requests, the shared
-/// `[copy-mode]` key table, and raw-key forwarding batched into one
-/// `ForwardPaneKeysRequest` per frame. `Quit` and `ReleaseWebviewFocus` are
-/// handled upstream in `resolve_shortcuts`. Registered in `ShortcutSet::Apply`,
-/// gated on `in_state(AppMode::Tmux)` + `on_message::<ShortcutBatch>`.
+/// Applies tmux keyboard shortcuts from `ShortcutMessage`: copy-mode entry,
+/// paste (`PasteAction`), detach (`DetachSessionRequest`), and the pane/window
+/// action requests. `Quit` / `ReleaseWebviewFocus` are handled upstream in
+/// `resolve_key_effects`. Registered in `ShortcutSet::Apply`, gated on
+/// `in_state(AppMode::Tmux)` + `on_message::<ShortcutMessage>`, ordered before
+/// `apply_tmux_forward`.
 pub(in crate::input) fn apply_tmux_shortcuts(
     mut commands: Commands,
-    mut batches: MessageReader<ShortcutBatch>,
+    mut shortcuts: MessageReader<ShortcutMessage>,
     targets: ActionTargets,
 ) {
-    for batch in batches.read() {
-        let kmods = KeyMods {
-            ctrl: batch.mods.ctrl,
-            shift: batch.mods.shift,
-            alt: batch.mods.alt,
-            super_: batch.mods.meta,
-        };
-        let mut names: Vec<String> = Vec::new();
-        for effect in &batch.effects {
-            match effect {
-                KeyEffect::Shortcut {
-                    action: Shortcut::EnterCopyMode,
-                    ..
-                } => {
-                    // NOTE: re-entry guard — re-triggering while already in copy
-                    // mode would double-insert CopyModeState and re-enter vi mode.
-                    if let Some(entity) = batch.focused
-                        && !batch.in_copy_mode
-                    {
-                        commands.trigger(EnterCopyModeActionEvent { entity });
-                    }
-                }
-                KeyEffect::Shortcut {
-                    action: Shortcut::Paste,
-                    ..
-                } => {
-                    if let Some(entity) = batch.focused {
-                        commands.trigger(PasteAction { entity });
-                    }
-                }
-                KeyEffect::Shortcut {
-                    action: Shortcut::DetachSession,
-                    ..
-                } => {
-                    if let Ok(entity) = targets.session.single() {
-                        commands.trigger(DetachSessionRequest { entity });
-                    }
-                }
-                KeyEffect::Shortcut { action, .. } => {
-                    dispatch_tmux_action(&mut commands, *action, batch.focused, &targets);
-                }
-                KeyEffect::CopyMode(action) => {
-                    if let Some(entity) = batch.focused {
-                        trigger_copy_mode_action(&mut commands, entity, *action);
-                    }
-                }
-                KeyEffect::Type { logical, key_code }
-                | KeyEffect::WebviewForward { logical, key_code } => {
-                    if let Some(name) = bevy_key_to_tmux_name(logical, *key_code, kmods) {
-                        names.push(name);
-                    }
+    for msg in shortcuts.read() {
+        match msg.action {
+            Shortcut::EnterCopyMode => {
+                // NOTE: re-entry guard — re-triggering while already in copy
+                // mode would double-insert CopyModeState and re-enter vi mode.
+                if let Some(entity) = msg.focused
+                    && !msg.in_copy_mode
+                {
+                    commands.trigger(EnterCopyModeActionEvent { entity });
                 }
             }
+            Shortcut::Paste => {
+                if let Some(entity) = msg.focused {
+                    commands.trigger(PasteAction { entity });
+                }
+            }
+            Shortcut::DetachSession => {
+                if let Ok(entity) = targets.session.single() {
+                    commands.trigger(DetachSessionRequest { entity });
+                }
+            }
+            action => dispatch_tmux_action(&mut commands, action, msg.focused, &targets),
         }
+    }
+}
 
-        if let Some(entity) = batch.focused
-            && !names.is_empty()
-        {
+/// Applies matched `[copy-mode]` keys from `CopyModeMessage` on the focused
+/// pane. Registered in `ShortcutSet::Apply`, gated on `in_state(AppMode::Tmux)`
+/// + `on_message::<CopyModeMessage>`.
+pub(in crate::input) fn apply_tmux_copy_mode(
+    mut commands: Commands,
+    mut copy_mode: MessageReader<CopyModeMessage>,
+) {
+    for msg in copy_mode.read() {
+        if let Some(entity) = msg.focused {
+            trigger_copy_mode_action(&mut commands, entity, msg.action);
+        }
+    }
+}
+
+/// Forwards typed / webview-forwarded keys to the focused pane as one
+/// `ForwardPaneKeysRequest` per pane. `TypeMessage` and `WebviewForwardMessage`
+/// never coexist in a frame, so at most one reader is non-empty. Runs after the
+/// shortcut/copy appliers so their triggers are queued first (parity with the
+/// old single-system order). Gated on `on_tmux_forward_message`.
+pub(in crate::input) fn apply_tmux_forward(
+    mut commands: Commands,
+    mut type_keys: MessageReader<TypeMessage>,
+    mut webview_forward: MessageReader<WebviewForwardMessage>,
+) {
+    let mut by_pane: HashMap<Entity, Vec<String>> = HashMap::new();
+    for msg in type_keys.read() {
+        push_forward_name(
+            &mut by_pane,
+            msg.focused,
+            &msg.logical,
+            msg.key_code,
+            msg.mods,
+        );
+    }
+    for msg in webview_forward.read() {
+        push_forward_name(
+            &mut by_pane,
+            msg.focused,
+            &msg.logical,
+            msg.key_code,
+            msg.mods,
+        );
+    }
+    for (entity, names) in by_pane {
+        if !names.is_empty() {
             commands.trigger(ForwardPaneKeysRequest { entity, names });
         }
+    }
+}
+
+/// Appends the tmux key name for `(logical, key_code, mods)` to `focused`'s
+/// per-pane forward list, when the key maps to a name and a pane is focused.
+fn push_forward_name(
+    by_pane: &mut HashMap<Entity, Vec<String>>,
+    focused: Option<Entity>,
+    logical: &Key,
+    key_code: KeyCode,
+    mods: Modifiers,
+) {
+    let Some(entity) = focused else {
+        return;
+    };
+    let kmods = KeyMods {
+        ctrl: mods.ctrl,
+        shift: mods.shift,
+        alt: mods.alt,
+        super_: mods.meta,
+    };
+    if let Some(name) = bevy_key_to_tmux_name(logical, key_code, kmods) {
+        by_pane.entry(entity).or_default().push(name);
     }
 }
 

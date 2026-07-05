@@ -95,7 +95,10 @@ pub(in crate::input) struct ShortcutBatch {
 /// `in_copy_mode` gates the copy-mode re-entry and paste-suppression rules.
 // NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
 // read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
-#[expect(dead_code, reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated")]
+#[expect(
+    dead_code,
+    reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated"
+)]
 #[derive(Message)]
 pub(in crate::input) struct ShortcutMessage {
     /// The action to run.
@@ -109,9 +112,6 @@ pub(in crate::input) struct ShortcutMessage {
 }
 
 /// One matched `[copy-mode]` key, fanned out to the per-mode appliers.
-// NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
-// read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
-#[expect(dead_code, reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated")]
 #[derive(Message)]
 pub(in crate::input) struct CopyModeMessage {
     /// The copy-mode action to run.
@@ -121,9 +121,6 @@ pub(in crate::input) struct CopyModeMessage {
 }
 
 /// One raw key to type into / forward to the focused terminal.
-// NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
-// read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
-#[expect(dead_code, reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated")]
 #[derive(Message)]
 pub(in crate::input) struct TypeMessage {
     /// The logical key, for text/printable-key mapping.
@@ -137,9 +134,6 @@ pub(in crate::input) struct TypeMessage {
 }
 
 /// One key to forward to the focused webview's declared forward-key chord.
-// NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
-// read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
-#[expect(dead_code, reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated")]
 #[derive(Message)]
 pub(in crate::input) struct WebviewForwardMessage {
     /// The logical key, for text/printable-key mapping.

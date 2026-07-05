@@ -404,9 +404,12 @@ mod tests {
     use super::*;
     use crate::action::tmux::{DetachSessionRequest, SelectPaneRequest, SelectWindowRequest};
     use crate::input::keyboard::key_effect::KeyEffect;
-    use crate::input::shortcuts::ShortcutBatch;
     use crate::input::shortcuts::tmux::{
-        apply_tmux_shortcuts, tmux_pane_direction, tmux_split_direction,
+        apply_tmux_copy_mode, apply_tmux_forward, apply_tmux_shortcuts, tmux_pane_direction,
+        tmux_split_direction,
+    };
+    use crate::input::shortcuts::{
+        CopyModeMessage, ShortcutMessage, TypeMessage, WebviewForwardMessage,
     };
     use crate::input::tmux::forward::ForwardPaneKeysRequest;
     use bevy::ecs::system::RunSystemOnce;
@@ -838,17 +841,31 @@ mod tests {
         forward: Vec<(Entity, Vec<String>)>,
     }
 
-    /// Builds an app running `apply_tmux_shortcuts` as a bare `ShortcutBatch`
-    /// consumer with one tmux pane (the active pane / `batch.focused`),
-    /// capturing the action requests it triggers.
+    /// Builds an app running the three tmux appliers (`apply_tmux_shortcuts`,
+    /// `apply_tmux_copy_mode`, `apply_tmux_forward`, ordered as the real
+    /// plugin orders them) with one tmux pane (the active pane / the
+    /// dispatched messages' `focused`), capturing the action requests they
+    /// trigger.
     fn tmux_dispatch_app() -> (App, Entity) {
         use tmux_control_parser::CellDims;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<ShortcutBatch>()
+            .add_message::<ShortcutMessage>()
+            .add_message::<CopyModeMessage>()
+            .add_message::<TypeMessage>()
+            .add_message::<WebviewForwardMessage>()
             .init_resource::<TmuxCaptured>()
-            .add_systems(Update, apply_tmux_shortcuts)
+            .add_systems(
+                Update,
+                (
+                    apply_tmux_shortcuts,
+                    apply_tmux_copy_mode,
+                    apply_tmux_forward
+                        .after(apply_tmux_shortcuts)
+                        .after(apply_tmux_copy_mode),
+                ),
+            )
             .add_observer(|ev: On<SelectPaneRequest>, mut c: ResMut<TmuxCaptured>| {
                 c.select_pane.push((ev.entity, ev.direction));
             })
@@ -881,12 +898,39 @@ mod tests {
     }
 
     fn dispatch(app: &mut App, effects: Vec<KeyEffect>, focused: Option<Entity>) {
-        app.world_mut().write_message(ShortcutBatch {
-            effects,
-            focused,
-            in_copy_mode: false,
-            mods: Modifiers::default(),
-        });
+        let mods = Modifiers::default();
+        for effect in effects {
+            match effect {
+                KeyEffect::Shortcut { action, via_leader } => {
+                    app.world_mut().write_message(ShortcutMessage {
+                        action,
+                        via_leader,
+                        focused,
+                        in_copy_mode: false,
+                    });
+                }
+                KeyEffect::CopyMode(action) => {
+                    app.world_mut()
+                        .write_message(CopyModeMessage { action, focused });
+                }
+                KeyEffect::Type { logical, key_code } => {
+                    app.world_mut().write_message(TypeMessage {
+                        logical,
+                        key_code,
+                        focused,
+                        mods,
+                    });
+                }
+                KeyEffect::WebviewForward { logical, key_code } => {
+                    app.world_mut().write_message(WebviewForwardMessage {
+                        logical,
+                        key_code,
+                        focused,
+                        mods,
+                    });
+                }
+            }
+        }
         app.update();
     }
 
