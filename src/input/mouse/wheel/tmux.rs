@@ -29,7 +29,7 @@ use ozma_webview::{NonInteractive, Webview};
 use ozmux_tmux::{TmuxClient, TmuxCommand, TmuxPane};
 
 /// Registers the tmux mouse-wheel forwarding system.
-pub(in crate::input::mouse) struct MouseWheelTmuxPlugin;
+pub(super) struct MouseWheelTmuxPlugin;
 
 impl Plugin for MouseWheelTmuxPlugin {
     fn build(&self, app: &mut App) {

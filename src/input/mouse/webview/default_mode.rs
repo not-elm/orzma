@@ -37,7 +37,7 @@ use ozma_webview::{NonInteractive, Webview};
 
 /// Registers the Default-mode webview pointer systems. The shared
 /// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
-pub(in crate::input::mouse) struct MouseWebviewDefaultModePlugin;
+pub(super) struct MouseWebviewDefaultModePlugin;
 
 impl Plugin for MouseWebviewDefaultModePlugin {
     fn build(&self, app: &mut App) {

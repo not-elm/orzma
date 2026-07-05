@@ -165,54 +165,6 @@ pub(in crate::input::mouse) fn release_webview_press(
     }
 }
 
-/// Forwards pointer motion over an interactive inline rect of `terminal` to the
-/// child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
-/// whatever mouse buttons are held so one call serves both hover and an in-rect
-/// drag. Focus-gated inside `bevy_cef`, so motion over an unfocused browser is
-/// dropped browser-side. Takes granular query refs (not `WebviewRouteParams`)
-/// because the mode move systems read `ButtonInput<MouseButton>`, which the
-/// click `SystemParam` does not carry.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the move forward needs the inline queries, browsers, held buttons, and pointer geometry"
-)]
-pub(in crate::input::mouse) fn forward_webview_move(
-    children: &Query<&Children>,
-    webviews: &Query<(&Webview, Has<NonInteractive>)>,
-    overlay_rects: &Query<&TerminalOverlays>,
-    browsers: Option<&Browsers>,
-    pressed_buttons: &ButtonInput<MouseButton>,
-    terminal: Entity,
-    local_phys: Vec2,
-    cell_w_phys: f32,
-    cell_h_phys: f32,
-    scale: f32,
-) {
-    let Ok(overlays) = overlay_rects.get(terminal) else {
-        return;
-    };
-    let Some(hit) = webview_hit_at(
-        children,
-        webviews,
-        overlays,
-        terminal,
-        local_phys,
-        cell_w_phys,
-        cell_h_phys,
-        scale,
-    ) else {
-        return;
-    };
-    if let Some(browsers) = browsers {
-        browsers.send_mouse_move(
-            &hit.child,
-            pressed_buttons.get_pressed(),
-            hit.local_dip,
-            false,
-        );
-    }
-}
-
 /// The per-frame pointer geometry both webview pointer pipelines derive from the
 /// primary window and cell metrics: the display `scale`, the physical cell pitch
 /// `(cell_w, cell_h)`, and the physical-pixel cursor position (`cursor_phys`,
@@ -352,4 +304,52 @@ fn webview_release_dip(
         cell_h_phys,
         scale,
     )
+}
+
+/// Forwards pointer motion over an interactive inline rect of `terminal` to the
+/// child's CEF browser (`send_mouse_move`, webview-local DIP), forwarding
+/// whatever mouse buttons are held so one call serves both hover and an in-rect
+/// drag. Focus-gated inside `bevy_cef`, so motion over an unfocused browser is
+/// dropped browser-side. Takes granular query refs (not `WebviewRouteParams`)
+/// because the mode move systems read `ButtonInput<MouseButton>`, which the
+/// click `SystemParam` does not carry.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the move forward needs the inline queries, browsers, held buttons, and pointer geometry"
+)]
+fn forward_webview_move(
+    children: &Query<&Children>,
+    webviews: &Query<(&Webview, Has<NonInteractive>)>,
+    overlay_rects: &Query<&TerminalOverlays>,
+    browsers: Option<&Browsers>,
+    pressed_buttons: &ButtonInput<MouseButton>,
+    terminal: Entity,
+    local_phys: Vec2,
+    cell_w_phys: f32,
+    cell_h_phys: f32,
+    scale: f32,
+) {
+    let Ok(overlays) = overlay_rects.get(terminal) else {
+        return;
+    };
+    let Some(hit) = webview_hit_at(
+        children,
+        webviews,
+        overlays,
+        terminal,
+        local_phys,
+        cell_w_phys,
+        cell_h_phys,
+        scale,
+    ) else {
+        return;
+    };
+    if let Some(browsers) = browsers {
+        browsers.send_mouse_move(
+            &hit.child,
+            pressed_buttons.get_pressed(),
+            hit.local_dip,
+            false,
+        );
+    }
 }

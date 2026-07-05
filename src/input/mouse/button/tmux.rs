@@ -54,7 +54,7 @@ use tmux_control_parser::DividerAxis;
 /// Bevy plugin that registers the tmux left-button gesture pipeline: the webview
 /// pointer arbiter (gather), the gesture state machine (decide), and the apply
 /// observer.
-pub(in crate::input::mouse) struct MouseButtonTmuxPlugin;
+pub(super) struct MouseButtonTmuxPlugin;
 
 impl Plugin for MouseButtonTmuxPlugin {
     fn build(&self, app: &mut App) {
