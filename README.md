@@ -1,4 +1,4 @@
-# orzma (Orzma Terminal Multiplexer)
+# orzma
 
 > [!CAUTION]
 > This app is still in early development and may introduce breaking changes.
@@ -46,8 +46,8 @@ tmux windows and panes are rendered natively.
 
 ## CLI Tools
 
-| name                                    | description            |
-| --------------------------------------- | ---------------------- |
+| name                                      | description            |
+| ----------------------------------------- | ---------------------- |
 | [orzmd](./apps/orzmd/README.md)           | A rich markdown viewer |
 | [orzbrowser](./apps/orzbrowser/README.md) | A tiny browser         |
 
