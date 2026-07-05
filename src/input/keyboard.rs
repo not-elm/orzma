@@ -5,16 +5,20 @@
 //! plus the mouse dispatch).
 
 use crate::input::current_modifiers;
+use crate::input::keyboard::handler::KeyboardHandlerPlugin;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use ozma_tty_engine::{TerminalKey, TerminalModifiers};
+
+mod handler;
 
 /// Registers the `KeyboardInput` message stream.
 pub(super) struct KeyboardInputPlugin;
 
 impl Plugin for KeyboardInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<KeyboardInput>();
+        app.add_plugins(KeyboardHandlerPlugin)
+            .add_message::<KeyboardInput>();
     }
 }
 

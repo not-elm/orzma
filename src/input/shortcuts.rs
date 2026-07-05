@@ -9,7 +9,6 @@ use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use crate::input::resolve::KeyEffect;
 use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
-use crate::input::shortcuts::dispatch::ShortcutsDispatchPlugin;
 use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
@@ -26,50 +25,45 @@ use ozmux_configs::shortcuts::{
 use std::time::Duration;
 
 mod default_mode;
-mod dispatch;
 mod tmux;
 
 pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((
-            ShortcutsDispatchPlugin,
-            ShortcutsDefaultModePlugin,
-            ShortcutsTmuxModePlugin,
-        ))
-        .configure_sets(
-            Update,
-            (ShortcutSet::Resolve, ShortcutSet::Apply)
-                .chain()
-                .in_set(InputPhase::FocusedKey),
-        )
-        .add_message::<ShortcutBatch>()
-        .init_resource::<Shortcuts>()
-        .init_resource::<LeaderPhase>()
-        .init_resource::<ModifierTapState>()
-        .configure_sets(Update, (LeaderGate::Detect, LeaderGate::Advance).chain())
-        .add_systems(Startup, (build_shortcuts, populate_mouse_config).chain())
-        .add_systems(
-            Update,
-            (
-                // NOTE: intentionally not gated on `on_message::<KeyboardInput>` — must run
-                // on keyboard-less frames so a mouse press (e.g. Cmd+click mid-tap) can
-                // disarm `state.armed`; gating it on `on_message` would silently break it.
-                detect_modifier_tap
-                    .in_set(LeaderGate::Detect)
-                    .run_if(tap_leader_enabled),
-                // NOTE: webview focus moves on mouse clicks (no `KeyboardInput`), so the
-                // keyboard dispatchers never see the round-trip; without this reset a
-                // leader engaged before a mouse-only webview focus/blur would consume the
-                // next terminal keystroke as its second key.
-                reset_leader_phase
-                    .run_if(resource_exists_and_changed::<FocusedWebview>)
-                    .before(LeaderGate::Detect),
-            ),
-        )
-        .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
-        .add_systems(OnExit(AppMode::Default), reset_leader_phase);
+        app.add_plugins((ShortcutsDefaultModePlugin, ShortcutsTmuxModePlugin))
+            .configure_sets(
+                Update,
+                (ShortcutSet::Resolve, ShortcutSet::Apply)
+                    .chain()
+                    .in_set(InputPhase::FocusedKey),
+            )
+            .add_message::<ShortcutBatch>()
+            .init_resource::<Shortcuts>()
+            .init_resource::<LeaderPhase>()
+            .init_resource::<ModifierTapState>()
+            .configure_sets(Update, (LeaderGate::Detect, LeaderGate::Advance).chain())
+            .add_systems(Startup, (build_shortcuts, populate_mouse_config).chain())
+            .add_systems(
+                Update,
+                (
+                    // NOTE: intentionally not gated on `on_message::<KeyboardInput>` — must run
+                    // on keyboard-less frames so a mouse press (e.g. Cmd+click mid-tap) can
+                    // disarm `state.armed`; gating it on `on_message` would silently break it.
+                    detect_modifier_tap
+                        .in_set(LeaderGate::Detect)
+                        .run_if(tap_leader_enabled),
+                    // NOTE: webview focus moves on mouse clicks (no `KeyboardInput`), so the
+                    // keyboard dispatchers never see the round-trip; without this reset a
+                    // leader engaged before a mouse-only webview focus/blur would consume the
+                    // next terminal keystroke as its second key.
+                    reset_leader_phase
+                        .run_if(resource_exists_and_changed::<FocusedWebview>)
+                        .before(LeaderGate::Detect),
+                ),
+            )
+            .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
+            .add_systems(OnExit(AppMode::Default), reset_leader_phase);
     }
 }
 

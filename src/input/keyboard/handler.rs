@@ -8,13 +8,13 @@
 
 use crate::action::vi::ResolvedCopyModeKeys;
 use crate::app_mode::AppMode;
+use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
 use crate::input::resolve::{BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch};
 use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, ShortcutBatch, ShortcutSet, Shortcuts, clear_leader_phase,
 };
-use crate::input::current_modifiers;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
@@ -29,13 +29,13 @@ use ozma_webview::ForwardKeys;
 use ozmux_configs::shortcuts::ShortcutAction;
 
 /// Registers `resolve_shortcuts` and the `ShortcutSet` ordering.
-pub(super) struct ShortcutsDispatchPlugin;
+pub(super) struct KeyboardHandlerPlugin;
 
-impl Plugin for ShortcutsDispatchPlugin {
+impl Plugin for KeyboardHandlerPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            resolve_shortcuts
+            resolve_key_effects
                 .in_set(ShortcutSet::Resolve)
                 .in_set(LeaderGate::Advance)
                 .before(KeyboardDeliverSet)
@@ -75,7 +75,7 @@ struct ClassifyInputs<'w> {
 /// applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (clear `FocusedWebview`)
 /// inline, and writes the remaining effects as one `ShortcutBatch` stamped with
 /// the resolving `AppMode`.
-fn resolve_shortcuts(
+fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
@@ -194,6 +194,7 @@ mod tests {
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use bevy::state::app::StatesPlugin;
+    use ozmux_configs::shortcuts::Modifiers;
     use ozmux_tmux::{PaneId, TmuxPane};
     use std::time::Duration;
     use tmux_control_parser::CellDims;
@@ -226,7 +227,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(StatesPlugin)
-            .add_plugins(ShortcutsDispatchPlugin)
+            .add_plugins(KeyboardHandlerPlugin)
             .add_message::<KeyboardInput>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()
