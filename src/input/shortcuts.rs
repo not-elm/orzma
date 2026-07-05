@@ -5,7 +5,7 @@
 
 use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
-use crate::input::bindings::{FineModifier, OzmaMouseConfig, ReservedChord, TerminalInputBindings};
+use crate::input::bindings::{FineModifier, OzmaMouseConfig};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::KeyboardInput;
 use bevy::input::mouse::MouseButton;
@@ -27,19 +27,8 @@ impl Plugin for ShortcutsPlugin {
         app.init_resource::<Shortcuts>()
             .init_resource::<LeaderPhase>()
             .init_resource::<ModifierTapState>()
-            .configure_sets(
-                Update,
-                (LeaderGate::Detect, LeaderGate::Read, LeaderGate::Advance).chain(),
-            )
-            .add_systems(
-                Startup,
-                (
-                    build_shortcuts,
-                    populate_input_bindings,
-                    populate_mouse_config,
-                )
-                    .chain(),
-            )
+            .configure_sets(Update, (LeaderGate::Detect, LeaderGate::Advance).chain())
+            .add_systems(Startup, (build_shortcuts, populate_mouse_config).chain())
             .add_systems(
                 Update,
                 (
@@ -64,9 +53,8 @@ impl Plugin for ShortcutsPlugin {
 }
 
 /// Shared leader phase: where the leader state machine is between keys.
-/// Owned by `ShortcutsPlugin`; advanced by the tmux and Default keyboard
-/// dispatchers and read by `dispatch_input` to withhold leader-consumed keys
-/// from PTY typing.
+/// Owned by `ShortcutsPlugin`; advanced by `crate::input::dispatch::resolve_shortcuts`
+/// (the sole `LeaderGate::Advance` member) as it classifies each frame's keys.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LeaderPhase {
     /// No leader sequence in progress.
@@ -88,17 +76,14 @@ struct ModifierTapState {
     armed: Option<Duration>,
 }
 
-/// Orders the three `FocusedKey` systems that touch `LeaderPhase` so
-/// `detect_modifier_tap` (`Detect`) sets it before `dispatch_input`
-/// (`Read`) observes it, and `app_shortcut_handler` (`Advance`) steps the
-/// leader machine and clears it last.
+/// Orders the `FocusedKey` systems that touch `LeaderPhase` so
+/// `detect_modifier_tap` (`Detect`) sets it before `resolve_shortcuts`
+/// (`Advance`) steps the leader machine and clears it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LeaderGate {
     /// `detect_modifier_tap`: sets `LeaderPhase` to `Pending` on a modifier tap.
     Detect,
-    /// `dispatch_input`: reads `LeaderPhase` to gate PTY typing.
-    Read,
-    /// `app_shortcut_handler` / `forward_keys_to_tmux`: advances the leader.
+    /// `crate::input::dispatch::resolve_shortcuts`: advances the leader.
     Advance,
 }
 
@@ -154,61 +139,13 @@ impl Shortcuts {
         })
     }
 
-    /// Derives the crate's `TerminalInputBindings` from the direct table: the
-    /// Paste chord becomes `paste`; every other direct chord — plus the leader
-    /// chord — becomes a `reserved` entry the crate dispatcher skips for the
-    /// host to handle. Reserving the leader keeps `dispatch_input` from typing
-    /// it into the PTY while the leader engages. Leader-scoped or unbound
-    /// paste yields `None` — no direct-chord fallback.
-    pub(crate) fn input_bindings(&self) -> TerminalInputBindings {
-        let mut paste = None;
-        let mut reserved = Vec::new();
-        for s in &self.direct {
-            let chord = ReservedChord {
-                key_code: s.keycode,
-                ctrl: s.modifiers.ctrl,
-                shift: s.modifiers.shift,
-                alt: s.modifiers.alt,
-                meta: s.modifiers.meta,
-            };
-            if s.action == ShortcutAction::Paste {
-                paste = Some(chord);
-            } else {
-                reserved.push(chord);
-            }
-        }
-        if let Some(ResolvedLeader::Chord(keycode, modifiers)) = self.leader {
-            reserved.push(ReservedChord {
-                key_code: keycode,
-                ctrl: modifiers.ctrl,
-                shift: modifiers.shift,
-                alt: modifiers.alt,
-                meta: modifiers.meta,
-            });
-        }
-        TerminalInputBindings { paste, reserved }
-    }
-
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
-    /// binding is repeat-marked (`<Leader:r>`). The single predicate shared by
-    /// `step_leader` (transition) and `dispatch_input` (PTY withholding) so the
-    /// two can never disagree about which keys the repeat window consumes.
-    pub(crate) fn match_repeat_prefix(
-        &self,
-        keycode: KeyCode,
-        mods: Modifiers,
-    ) -> Option<ShortcutAction> {
+    /// binding is repeat-marked (`<Leader:r>`). The single predicate
+    /// `step_leader` uses to decide which keys the repeat window consumes.
+    fn match_repeat_prefix(&self, keycode: KeyCode, mods: Modifiers) -> Option<ShortcutAction> {
         self.match_prefix_entry(keycode, mods)
             .filter(|s| s.repeat)
             .map(|s| s.action)
-    }
-
-    /// True when a leader second key `(keycode, mods)` opens the repeat window:
-    /// it matches a repeat-marked prefix binding and `repeat_time` is non-zero.
-    /// Mirrors the `step_leader` Pending arm so `dispatch_input` can start
-    /// withholding in the same frame the window opens.
-    pub(crate) fn opens_repeat_window(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        !self.repeat_time.is_zero() && self.match_repeat_prefix(keycode, mods).is_some()
     }
 
     /// True when `(keycode, mods)` is the configured leader chord.
@@ -356,6 +293,29 @@ pub(crate) fn test_shortcuts_with_repeat_prefix(
     }
 }
 
+/// Test-only constructor: a `Shortcuts` with one direct (non-leader) chord and
+/// no leader/prefix bindings. Used by `resolve.rs`'s decider tests, which
+/// cannot name this module's private fields.
+#[cfg(test)]
+pub(crate) fn test_shortcuts_with_direct_chord(
+    keycode: KeyCode,
+    modifiers: Modifiers,
+    action: ShortcutAction,
+) -> Shortcuts {
+    Shortcuts {
+        direct: vec![OzmuxShortcut {
+            keycode,
+            modifiers,
+            action,
+            repeat: false,
+        }],
+        prefix: Vec::new(),
+        leader: None,
+        tap_timeout: Duration::from_millis(300),
+        repeat_time: Duration::from_millis(500),
+    }
+}
+
 /// Clears the leader phase (pending or repeat window) and any in-progress
 /// modifier tap on an `AppMode` transition or a webview focus change, so a
 /// leader engaged/armed in one context never fires in another.
@@ -469,13 +429,6 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsRes
             "shortcuts.<Leader> bindings are set but the leader is disabled or unmappable; they are unreachable"
         );
     }
-}
-
-/// `Startup` system: inserts `TerminalInputBindings` derived from the resolved
-/// shortcut table, replacing the crate default. Runs after
-/// `build_shortcuts`.
-fn populate_input_bindings(mut commands: Commands, resolved: Res<Shortcuts>) {
-    commands.insert_resource(resolved.input_bindings());
 }
 
 /// `Startup` system: inserts `OzmaMouseConfig` from the resolved `[mouse]` block.
@@ -940,22 +893,6 @@ mod tests {
         assert!(!s.is_leader(KeyCode::SuperLeft, mods(false, false, false, false)));
     }
 
-    #[test]
-    fn input_bindings_tap_leader_reserves_nothing_extra() {
-        let s = Shortcuts {
-            direct: Vec::new(),
-            prefix: Vec::new(),
-            leader: Some(ResolvedLeader::Tap(TapModifier::Meta)),
-            tap_timeout: Duration::from_millis(300),
-            repeat_time: Duration::from_millis(500),
-        };
-        let b = s.input_bindings();
-        assert!(
-            b.reserved.is_empty(),
-            "a tap leader has no chord to reserve in TerminalInputBindings",
-        );
-    }
-
     fn mods(ctrl: bool, shift: bool, alt: bool, meta: bool) -> Modifiers {
         Modifiers {
             ctrl,
@@ -1014,24 +951,6 @@ mod tests {
                 .map(|s| s.action),
             None,
             "a leader-scoped release-webview-focus resolves to Swallow, not a dead RunAction",
-        );
-    }
-
-    #[test]
-    fn input_bindings_reserves_the_leader_chord() {
-        let mut s = direct_only(&ConfigShortcuts::default());
-        s.leader = Some(ResolvedLeader::Chord(
-            KeyCode::KeyA,
-            mods(true, false, false, false),
-        ));
-        let b = s.input_bindings();
-        assert!(
-            b.reserved.iter().any(|c| c.key_code == KeyCode::KeyA
-                && c.ctrl
-                && !c.shift
-                && !c.alt
-                && !c.meta),
-            "the leader chord must be reserved so dispatch_input never types it into the PTY",
         );
     }
 
@@ -1283,41 +1202,6 @@ mod tests {
             std::time::Duration::from_millis(mc.double_click_timeout_ms as u64)
         );
         assert_eq!(out.click_drift_px, mc.click_drift_px);
-    }
-
-    #[test]
-    fn input_bindings_excludes_paste_from_reserved() {
-        use ozmux_configs::shortcuts::parse_key_chord;
-
-        let mut config = OzmuxConfigs::default();
-        config.shortcuts.paste = Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()));
-        let r = resolved_shortcuts(config);
-        let b = r.input_bindings();
-        let paste = b.paste.expect("direct-bound paste must resolve to a chord");
-        assert_eq!(paste.key_code, KeyCode::KeyV);
-        assert!(paste.meta && !paste.ctrl && !paste.shift && !paste.alt);
-        assert!(
-            !b.reserved
-                .iter()
-                .any(|c| c.key_code == KeyCode::KeyV && c.meta),
-            "the paste chord must not appear in reserved",
-        );
-    }
-
-    #[test]
-    fn input_bindings_leader_paste_has_no_direct_chord() {
-        use ozmux_configs::shortcuts::parse_key_chord;
-
-        // A leader-scoped paste must NOT leave a Cmd+V direct-paste fallback in
-        // the crate dispatcher.
-        let mut config = OzmuxConfigs::default();
-        config.shortcuts.paste = Some(Binding::Leader {
-            chord: parse_key_chord("p").unwrap(),
-            repeat: false,
-        });
-        let resolved = resolved_shortcuts(config);
-        let b = resolved.input_bindings();
-        assert!(b.paste.is_none());
     }
 
     fn leader_fixture() -> Shortcuts {

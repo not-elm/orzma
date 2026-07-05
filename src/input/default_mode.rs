@@ -1,32 +1,31 @@
-//! Host-side input for `AppMode::Default`: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
-//! markers from the coarse guards (IME, focus, webview), and dispatches the
-//! application-level GUI shortcuts the terminal crate does not own (Quit,
-//! copy-mode entry, leader sequences) plus — while copy mode is active — the
-//! shared `[copy-mode]` key table, so leader/GUI chords shadow copy-mode keys
-//! in one ordered pass (tmux-mode parity). Raw-key forwarding and direct-chord
-//! paste are owned by the keyboard dispatcher and `crate::action::terminal::PasteAction`.
+//! Host-side input for `AppMode::Default`: maintains the crate's
+//! `KeyboardDisabled` / `MouseDisabled` markers from the coarse guards (IME,
+//! focus, webview), and applies the frame's `ShortcutBatch` (resolved by
+//! `crate::input::dispatch::resolve_shortcuts`) by triggering the matching
+//! events on the focused terminal — copy-mode entry, the shared `[copy-mode]`
+//! key table (while copy mode is active), direct-chord and leader paste, and
+//! raw-key forwarding (`crate::action::terminal::PasteAction`,
+//! `TerminalKeyInput`). Quit and release-webview-focus are handled upstream in
+//! `resolve_shortcuts`; the pane/window actions are no-ops in Default mode.
 
 mod webview;
 
 use crate::action::terminal::PasteAction;
-use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
+use crate::action::vi::trigger_copy_mode_action;
 use crate::app_mode::AppMode;
-use crate::input::focus::MouseDisabled;
-use crate::input::focus::{KeyboardDisabled, KeyboardFocused};
+use crate::input::InputPhase;
+use crate::input::dispatch::{ShortcutBatch, ShortcutSet};
+use crate::input::focus::{KeyboardDisabled, MouseDisabled};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::input::shortcuts::{
-    LeaderGate, LeaderPhase, LeaderStep, Shortcuts, clear_leader_phase, step_leader,
-};
-use crate::input::{InputPhase, current_modifiers};
+use crate::input::keyboard::bevy_key_to_terminal_key;
+use crate::input::resolve::KeyEffect;
+use crate::input::shortcuts::Shortcuts;
 use crate::surface::OzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use crate::webview_pointer::topmost_surface_at;
 use bevy::ecs::system::SystemParam;
-use bevy::input::ButtonState;
-use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
-use bevy::time::Real;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
@@ -51,11 +50,10 @@ impl Plugin for DefaultHostInputPlugin {
             )
             .add_systems(
                 Update,
-                app_shortcut_handler
-                    .in_set(InputPhase::FocusedKey)
-                    .in_set(LeaderGate::Advance)
+                apply_default_shortcuts
+                    .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Default))
-                    .run_if(on_message::<KeyboardInput>),
+                    .run_if(on_message::<ShortcutBatch>),
             )
             .add_observer(apply_ime_commit_to_terminal);
     }
@@ -160,128 +158,90 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
     Some(terminal)
 }
 
-fn app_shortcut_handler(
+/// Applies `AppMode::Default` keyboard shortcuts from the frame's
+/// `ShortcutBatch` (produced by `crate::input::dispatch::resolve_shortcuts`):
+/// triggers the matching events on `batch.focused` — copy-mode entry, paste
+/// (direct fires outside copy mode, leader fires unconditionally), the shared
+/// `[copy-mode]` key table, and raw-key typing. `Quit` and
+/// `ReleaseWebviewFocus` are handled upstream in `resolve_shortcuts`; the
+/// pane/window actions are no-ops in Default mode. Registered in
+/// `ShortcutSet::Apply`, gated on `in_state(AppMode::Default)` +
+/// `on_message::<ShortcutBatch>`.
+fn apply_default_shortcuts(
     mut commands: Commands,
-    mut exit: MessageWriter<AppExit>,
-    mut events: MessageReader<KeyboardInput>,
-    mut focused_webview: ResMut<FocusedWebview>,
-    mut leader_phase: ResMut<LeaderPhase>,
+    mut batches: MessageReader<ShortcutBatch>,
     shortcuts: Res<Shortcuts>,
-    ime: Res<ImeState>,
-    bevy_keys: Res<ButtonInput<KeyCode>>,
-    resolved_copy: Res<ResolvedCopyModeKeys>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    terminal: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
-    copy_modes: Query<(), With<CopyModeState>>,
-    time: Res<Time<Real>>,
 ) {
-    let focused = windows.single().map(|w| w.focused).unwrap_or(false);
-    if ime.is_composing() || !focused {
-        clear_leader_phase(&mut leader_phase);
-        events.clear();
-        return;
-    }
-    let mods = current_modifiers(&bevy_keys);
-    let webview_focused = focused_webview.0.is_some();
-    let now = time.elapsed();
-    let in_copy_mode = terminal
-        .single()
-        .is_ok_and(|entity| copy_modes.get(entity).is_ok());
-    // NOTE: an open repeat window must not intercept copy-mode keys — a
-    // repeat-marked key doubling as a copy-mode key (e.g. a <Leader:r>p paste
-    // after a <Leader:r>s copy-mode entry) would re-fire the bound action into
-    // the hidden live terminal instead of being handled by copy mode. Close
-    // the window before stepping (tmux-mode parity).
-    if in_copy_mode && matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
-        *leader_phase = LeaderPhase::Idle;
-    }
-    for ev in events
-        .read()
-        .filter(|e| matches!(e.state, ButtonState::Pressed))
-    {
-        if webview_focused && shortcuts.is_release_webview_focus(ev.key_code, mods) {
-            clear_leader_phase(&mut leader_phase);
-            focused_webview.0 = None;
-            continue;
-        }
-        // NOTE: the leader is honored only when a webview does not own the
-        // keyboard (v0 scope, mirrors tmux mode); resetting the leader phase
-        // here instead of stepping the state machine prevents a stale leader
-        // from firing once keyboard focus returns to the terminal.
-        let (action, via_leader) = if webview_focused {
-            clear_leader_phase(&mut leader_phase);
-            (shortcuts.match_gui_action(ev.key_code, mods), false)
-        } else {
-            // NOTE: OS key auto-repeat delivers extra Pressed events. Outside
-            // the repeat window they must not step the machine (pending would
-            // toggle by parity; while Pending they are skipped outright so a
-            // direct chord's repeats cannot re-fire mid-sequence — tmux
-            // parity). Inside the window they must step it so held keys keep
-            // firing.
-            let step = if ev.repeat {
-                match *leader_phase {
-                    LeaderPhase::Pending => continue,
-                    LeaderPhase::Repeat { .. } => {
-                        step_leader(&mut leader_phase, &shortcuts, ev.key_code, mods, now)
+    for batch in batches.read() {
+        let terminal_mods = TerminalModifiers {
+            ctrl: batch.mods.ctrl,
+            shift: batch.mods.shift,
+            alt: batch.mods.alt,
+            meta: batch.mods.meta,
+        };
+        for effect in &batch.effects {
+            match effect {
+                KeyEffect::Action {
+                    action: ShortcutAction::EnterCopyMode,
+                    ..
+                } => {
+                    if let Some(entity) = batch.focused {
+                        commands.trigger(EnterCopyModeActionEvent { entity });
                     }
-                    LeaderPhase::Idle => LeaderStep::Passthrough,
                 }
-            } else {
-                step_leader(&mut leader_phase, &shortcuts, ev.key_code, mods, now)
-            };
-            match step {
-                LeaderStep::RunAction(a) => (Some(a), true),
-                LeaderStep::Swallow => continue,
-                LeaderStep::Passthrough => (shortcuts.match_gui_action(ev.key_code, mods), false),
-            }
-        };
-        let Some(action) = action else {
-            // NOTE: copy-mode keys resolve only AFTER leader and GUI-shortcut
-            // dispatch declined the key, so `[shortcuts]` chords shadow
-            // `[copy-mode]` keys here exactly as documented (tmux-mode parity).
-            if in_copy_mode
-                && !webview_focused
-                && let Ok(entity) = terminal.single()
-                && let Some(copy_action) = resolved_copy.resolve(&ev.logical_key, ev.key_code, mods)
-            {
-                trigger_copy_mode_action(&mut commands, entity, copy_action);
-            }
-            continue;
-        };
-        if gui_action_suppressed_by_webview(webview_focused, action) {
-            continue;
-        }
-        match action {
-            ShortcutAction::Quit => {
-                exit.write(AppExit::Success);
-            }
-            ShortcutAction::EnterCopyMode => {
-                if let Ok(entity) = terminal.single() {
-                    commands.trigger(EnterCopyModeActionEvent { entity });
+                KeyEffect::Action {
+                    action: ShortcutAction::Paste,
+                    via_leader,
+                } => {
+                    if let Some(entity) = batch.focused
+                        && (*via_leader || !batch.in_copy_mode)
+                    {
+                        commands.trigger(PasteAction { entity });
+                    }
                 }
-            }
-            ShortcutAction::DetachSession => {}
-            ShortcutAction::Paste => {
-                // NOTE: only the leader-scoped paste fires here; a direct Cmd+V
-                // is handled by `dispatch_input`. Firing on the direct path too
-                // would double-paste. While a leader is pending, `dispatch_input`
-                // is suppressed ([1b]), so the leader path never double-fires.
-                if via_leader && let Ok(entity) = terminal.single() {
-                    commands.trigger(PasteAction { entity });
+                KeyEffect::Action {
+                    action:
+                        ShortcutAction::DetachSession
+                        | ShortcutAction::SelectPane(_)
+                        | ShortcutAction::SplitPane(_)
+                        | ShortcutAction::KillPane
+                        | ShortcutAction::ZoomPane
+                        | ShortcutAction::NewWindow
+                        | ShortcutAction::KillWindow
+                        | ShortcutAction::NextWindow
+                        | ShortcutAction::PreviousWindow
+                        | ShortcutAction::SelectWindow(_)
+                        | ShortcutAction::RenameWindow
+                        | ShortcutAction::RenameSession
+                        | ShortcutAction::Quit
+                        | ShortcutAction::ReleaseWebviewFocus,
+                    ..
+                } => {}
+                KeyEffect::CopyMode(action) => {
+                    if let Some(entity) = batch.focused {
+                        trigger_copy_mode_action(&mut commands, entity, *action);
+                    }
                 }
+                KeyEffect::Type { logical, key_code } => {
+                    // NOTE: a chord withheld from the PTY must never be typed.
+                    // The release-webview-focus chord is the one direct chord the
+                    // decider emits as `Type` (all others resolve to `Action`),
+                    // so the applier drops it here rather than forward it to the
+                    // terminal; tmux forwards it instead.
+                    if let Some(entity) = batch.focused
+                        && !shortcuts.is_release_webview_focus(*key_code, batch.mods)
+                        && let Some(key) = bevy_key_to_terminal_key(logical)
+                    {
+                        commands.trigger(TerminalKeyInput {
+                            entity,
+                            key,
+                            modifiers: terminal_mods,
+                        });
+                    }
+                }
+                KeyEffect::WebviewForward { .. } => {}
+                KeyEffect::ReleaseWebviewFocus => {}
             }
-            ShortcutAction::ReleaseWebviewFocus => {}
-            ShortcutAction::SelectPane(_)
-            | ShortcutAction::SplitPane(_)
-            | ShortcutAction::KillPane
-            | ShortcutAction::ZoomPane
-            | ShortcutAction::NewWindow
-            | ShortcutAction::KillWindow
-            | ShortcutAction::NextWindow
-            | ShortcutAction::PreviousWindow
-            | ShortcutAction::SelectWindow(_)
-            | ShortcutAction::RenameWindow
-            | ShortcutAction::RenameSession => {}
         }
     }
 }
@@ -305,27 +265,18 @@ fn apply_ime_commit_to_terminal(
     });
 }
 
-fn gui_action_suppressed_by_webview(webview_focused: bool, action: ShortcutAction) -> bool {
-    webview_focused && action != ShortcutAction::ReleaseWebviewFocus
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::focus::KeyboardFocused;
-    use crate::input::shortcuts::{LeaderPhase, test_shortcuts_with_repeat_prefix};
-    use crate::surface::OzmaTerminal;
+    use crate::input::shortcuts::test_shortcuts_with_direct_chord;
     use bevy::app::App;
-    use bevy::app::AppExit;
     use bevy::ecs::resource::Resource;
-    use bevy::input::ButtonInput;
-    use bevy::input::ButtonState;
-    use bevy::input::keyboard::{Key, KeyboardInput};
+    use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use bevy::window::PrimaryWindow;
-    use ozma_tty_engine::TerminalKeyInput;
+    use ozma_tty_engine::TerminalKey;
+    use ozmux_configs::shortcuts::Modifiers;
     use ozmux_tmux::{PaneId, TmuxPane};
-    use std::time::Duration;
     use tmux_control_parser::CellDims;
 
     #[test]
@@ -402,27 +353,6 @@ mod tests {
         assert!(should_disable_input(true, true, false));
         assert!(should_disable_input(false, false, false));
         assert!(should_disable_input(false, true, true));
-    }
-
-    #[test]
-    fn webview_focus_suppresses_all_but_release() {
-        assert!(gui_action_suppressed_by_webview(true, ShortcutAction::Quit));
-        assert!(gui_action_suppressed_by_webview(
-            true,
-            ShortcutAction::DetachSession
-        ));
-        assert!(gui_action_suppressed_by_webview(
-            true,
-            ShortcutAction::EnterCopyMode
-        ));
-        assert!(!gui_action_suppressed_by_webview(
-            true,
-            ShortcutAction::ReleaseWebviewFocus
-        ));
-        assert!(!gui_action_suppressed_by_webview(
-            false,
-            ShortcutAction::Quit
-        ));
     }
 
     /// Default shell (`OzmaTerminal`, no `TmuxPane`) at window center (400,300),
@@ -529,84 +459,204 @@ mod tests {
     }
 
     #[derive(Resource, Default)]
-    struct CopyModeHits(u32);
+    struct Captured {
+        copy_mode: u32,
+        paste: u32,
+        keys: Vec<TerminalKey>,
+    }
 
-    fn repeat_dispatch_app() -> App {
+    /// Builds an app running `apply_default_shortcuts` as a bare
+    /// `ShortcutBatch` consumer, capturing the events it triggers.
+    fn build_default_dispatch_app(shortcuts: Shortcuts) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<KeyboardInput>()
-            .add_message::<AppExit>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ImeState>()
-            .init_resource::<FocusedWebview>()
-            .init_resource::<LeaderPhase>()
-            .init_resource::<ResolvedCopyModeKeys>()
-            .init_resource::<CopyModeHits>()
-            .insert_resource(test_shortcuts_with_repeat_prefix(
-                KeyCode::KeyH,
-                ShortcutAction::EnterCopyMode,
-                Duration::from_secs(60),
-            ))
-            .add_systems(Update, app_shortcut_handler)
+            .add_message::<ShortcutBatch>()
+            .init_resource::<Captured>()
+            .insert_resource(shortcuts)
+            .add_systems(Update, apply_default_shortcuts)
             .add_observer(
-                |_ev: On<EnterCopyModeActionEvent>, mut hits: ResMut<CopyModeHits>| {
-                    hits.0 += 1;
+                |_ev: On<EnterCopyModeActionEvent>, mut c: ResMut<Captured>| {
+                    c.copy_mode += 1;
                 },
-            );
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            PrimaryWindow,
-        ));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+            )
+            .add_observer(|_ev: On<PasteAction>, mut c: ResMut<Captured>| {
+                c.paste += 1;
+            })
+            .add_observer(|ev: On<TerminalKeyInput>, mut c: ResMut<Captured>| {
+                c.keys.push(ev.key.clone());
+            });
         app
     }
 
-    fn send_key_repeat(app: &mut App, key_code: KeyCode, repeat: bool) {
-        app.world_mut().write_message(KeyboardInput {
-            key_code,
-            logical_key: Key::Character("h".into()),
-            state: ButtonState::Pressed,
-            text: None,
-            repeat,
-            window: Entity::PLACEHOLDER,
+    fn default_dispatch_app(shortcuts: Shortcuts) -> (App, Entity) {
+        let mut app = build_default_dispatch_app(shortcuts);
+        let term = app.world_mut().spawn(OzmaTerminal).id();
+        (app, term)
+    }
+
+    fn meta_mods() -> Modifiers {
+        Modifiers {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            meta: true,
+        }
+    }
+
+    fn dispatch(
+        app: &mut App,
+        effects: Vec<KeyEffect>,
+        focused: Option<Entity>,
+        in_copy_mode: bool,
+        mods: Modifiers,
+    ) {
+        app.world_mut().write_message(ShortcutBatch {
+            effects,
+            focused,
+            in_copy_mode,
+            mods,
         });
+        app.update();
+    }
+
+    fn type_effect(logical: Key, key_code: KeyCode) -> KeyEffect {
+        KeyEffect::Type { logical, key_code }
+    }
+
+    fn action_effect(action: ShortcutAction, via_leader: bool) -> KeyEffect {
+        KeyEffect::Action { action, via_leader }
     }
 
     #[test]
-    fn os_key_repeat_refires_inside_repeat_window() {
-        let mut app = repeat_dispatch_app();
-        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Repeat {
-            deadline: Duration::from_secs(60),
-        };
-        send_key_repeat(&mut app, KeyCode::KeyH, true);
-        app.update();
+    fn plain_key_triggers_terminal_key_input() {
+        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![type_effect(Key::Character("a".into()), KeyCode::KeyA)],
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
         assert_eq!(
-            app.world().resource::<CopyModeHits>().0,
+            app.world().resource::<Captured>().keys,
+            vec![TerminalKey::Text("a".into())],
+            "a Type effect must forward to the focused terminal as a TerminalKeyInput"
+        );
+    }
+
+    #[test]
+    fn pane_action_is_noop() {
+        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(ShortcutAction::ZoomPane, true)],
+            Some(term),
+            false,
+            Modifiers::default(),
+        );
+        let c = app.world().resource::<Captured>();
+        assert_eq!(
+            (c.copy_mode, c.paste, c.keys.len()),
+            (0, 0, 0),
+            "a Default-mode pane action resolves to a no-op: no event, no typing"
+        );
+    }
+
+    #[test]
+    fn direct_paste_outside_copy_mode_pastes() {
+        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(ShortcutAction::Paste, false)],
+            Some(term),
+            false,
+            meta_mods(),
+        );
+        assert_eq!(
+            app.world().resource::<Captured>().paste,
             1,
-            "an OS auto-repeat of a repeat-marked key must re-fire inside the window (tmux parity)"
-        );
-        assert!(
-            matches!(
-                *app.world().resource::<LeaderPhase>(),
-                LeaderPhase::Repeat { .. }
-            ),
-            "firing must keep (re-arm) the window"
+            "a direct paste (via_leader=false) outside copy mode must fire PasteAction"
         );
     }
 
     #[test]
-    fn os_key_repeat_outside_window_stays_passthrough() {
-        let mut app = repeat_dispatch_app();
-        send_key_repeat(&mut app, KeyCode::KeyH, true);
-        app.update();
-        assert_eq!(
-            app.world().resource::<CopyModeHits>().0,
-            0,
-            "auto-repeat with no window open must not step the leader machine"
+    fn direct_paste_in_copy_mode_suppressed() {
+        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(ShortcutAction::Paste, false)],
+            Some(term),
+            true,
+            meta_mods(),
         );
-        assert_eq!(*app.world().resource::<LeaderPhase>(), LeaderPhase::Idle);
+        assert_eq!(
+            app.world().resource::<Captured>().paste,
+            0,
+            "a direct paste in copy mode must be suppressed (via_leader || !in_copy_mode)"
+        );
+    }
+
+    #[test]
+    fn leader_paste_in_copy_mode_pastes() {
+        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(ShortcutAction::Paste, true)],
+            Some(term),
+            true,
+            Modifiers::default(),
+        );
+        assert_eq!(
+            app.world().resource::<Captured>().paste,
+            1,
+            "a leader-scoped paste (via_leader=true) must fire even in copy mode"
+        );
+    }
+
+    #[test]
+    fn release_webview_chord_is_not_typed() {
+        let ctrl_shift = Modifiers {
+            ctrl: true,
+            shift: true,
+            alt: false,
+            meta: false,
+        };
+        let (mut app, term) = default_dispatch_app(test_shortcuts_with_direct_chord(
+            KeyCode::Escape,
+            ctrl_shift,
+            ShortcutAction::ReleaseWebviewFocus,
+        ));
+        dispatch(
+            &mut app,
+            vec![type_effect(Key::Escape, KeyCode::Escape)],
+            Some(term),
+            false,
+            ctrl_shift,
+        );
+        let c = app.world().resource::<Captured>();
+        assert_eq!(
+            (c.copy_mode, c.paste, c.keys.len()),
+            (0, 0, 0),
+            "with no webview focused the release chord (Ctrl+Shift+Escape) must be dropped by \
+             the applier, never typed into the PTY as Escape"
+        );
+    }
+
+    #[test]
+    fn enter_copy_mode_fires_even_when_already_in_copy_mode() {
+        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(ShortcutAction::EnterCopyMode, false)],
+            Some(term),
+            true,
+            Modifiers::default(),
+        );
+        assert_eq!(
+            app.world().resource::<Captured>().copy_mode,
+            1,
+            "EnterCopyMode must fire unconditionally in Default mode, even when copy mode is \
+             already active"
+        );
     }
 }

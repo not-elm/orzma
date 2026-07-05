@@ -8,6 +8,7 @@
 
 use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
+use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
@@ -26,7 +27,15 @@ impl Plugin for PaneFocusPlugin {
             (
                 augment_tmux_pane.after(TmuxProjectionSet),
                 sync_inactive_pane_style.run_if(pane_active_state_changed),
-                sync_keyboard_focus_to_active_pane.run_if(pane_active_state_changed),
+                // NOTE: both edges are load-bearing. `.after(TmuxProjectionSet)`
+                // runs the mirror once `ActivePane` is fresh; `.before(FocusedKey)`
+                // flushes the deferred `KeyboardFocused` insert before
+                // `resolve_shortcuts` reads it, so `batch.focused` reflects the
+                // current active pane the same frame it changes.
+                sync_keyboard_focus_to_active_pane
+                    .run_if(pane_active_state_changed)
+                    .after(TmuxProjectionSet)
+                    .before(InputPhase::FocusedKey),
             )
                 .in_set(TmuxActiveSet),
         );
@@ -196,6 +205,62 @@ mod tests {
         assert!(
             app.world().entity(p2).contains::<KeyboardFocused>(),
             "new active gains focus"
+        );
+    }
+
+    #[test]
+    fn keyboard_focus_is_fresh_in_focusedkey_after_active_change() {
+        use crate::surface::OzmaTerminal;
+        use ozmux_tmux::ActivePane;
+
+        #[derive(Resource, Default)]
+        struct ProbeFocus(Option<Entity>);
+
+        fn probe(mut seen: ResMut<ProbeFocus>, focused: Query<Entity, With<KeyboardFocused>>) {
+            seen.0 = focused.single().ok();
+        }
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, PaneFocusPlugin))
+            .init_resource::<ProbeFocus>()
+            .add_systems(Update, probe.in_set(InputPhase::FocusedKey));
+
+        let p1 = app
+            .world_mut()
+            .spawn((
+                OzmaTerminal,
+                TmuxPane {
+                    id: PaneId(1),
+                    dims: dims(),
+                },
+                ActivePane,
+            ))
+            .id();
+        let p2 = app
+            .world_mut()
+            .spawn((
+                OzmaTerminal,
+                TmuxPane {
+                    id: PaneId(2),
+                    dims: dims(),
+                },
+            ))
+            .id();
+        app.update();
+
+        // ActivePane moves p1 -> p2 this tick. PaneFocusPlugin's
+        // .before(InputPhase::FocusedKey) edge must flush the deferred
+        // KeyboardFocused move before a FocusedKey system reads it.
+        app.world_mut().entity_mut(p1).remove::<ActivePane>();
+        app.world_mut().entity_mut(p2).insert(ActivePane);
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<ProbeFocus>().0,
+            Some(p2),
+            "a system in InputPhase::FocusedKey sees KeyboardFocused already moved to the new \
+             ActivePane the same frame — the real PaneFocusPlugin .before(FocusedKey) edge makes \
+             it fresh, not a frame stale on the former active pane"
         );
     }
 

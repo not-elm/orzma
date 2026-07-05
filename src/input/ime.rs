@@ -41,7 +41,7 @@ pub(crate) struct ImeCommit {
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
 /// (chained); both run in `InputPhase::Dispatch`, ahead of
-/// `InputPhase::FocusedKey` where `forward_keys_to_tmux` forwards keys to the
+/// `InputPhase::FocusedKey` where `apply_tmux_shortcuts` forwards keys to the
 /// active pane (and gates on `ImeState`, so IME must apply first).
 pub struct ImePlugin;
 

@@ -4,6 +4,7 @@
 
 mod bindings;
 pub(crate) mod default_mode;
+mod dispatch;
 pub(crate) mod focus;
 mod gesture;
 pub(crate) mod hyperlink;
@@ -11,14 +12,15 @@ pub(crate) mod ime;
 pub(crate) mod keyboard;
 pub(crate) mod mouse;
 pub(crate) mod option_as_alt;
+mod resolve;
 pub(crate) mod shortcuts;
 pub(crate) mod tmux;
 
 use crate::{
     input::{
-        default_mode::DefaultHostInputPlugin, keyboard::KeyboardInputPlugin,
-        mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
-        tmux::TmuxInputPlugin,
+        default_mode::DefaultHostInputPlugin, dispatch::DispatchPlugin,
+        keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
+        shortcuts::ShortcutsPlugin, tmux::TmuxInputPlugin,
     },
     system_set::OzmuxSystems,
 };
@@ -34,7 +36,7 @@ pub(crate) enum InputPhase {
     Hover,
     Dispatch,
     /// Keyboard shortcut dispatch and tmux key forwarding
-    /// (`forward_keys_to_tmux`) run in this slot, after `Dispatch` has applied
+    /// (`apply_tmux_shortcuts`) run in this slot, after `Dispatch` has applied
     /// any IME events so the forwarder sees fresh `ImeState`.
     FocusedKey,
 }
@@ -49,6 +51,7 @@ impl Plugin for OzmuxInputPlugin {
             OptionAsAltPlugin,
             KeyboardInputPlugin,
             MouseInputPlugin,
+            DispatchPlugin,
             TmuxInputPlugin,
             DefaultHostInputPlugin,
         ))
