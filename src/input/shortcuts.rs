@@ -53,9 +53,8 @@ impl Plugin for ShortcutsPlugin {
 }
 
 /// Shared leader phase: where the leader state machine is between keys.
-/// Owned by `ShortcutsPlugin`; advanced by the tmux and Default keyboard
-/// dispatchers (`apply_tmux_shortcuts` / `apply_default_shortcuts`) as they
-/// classify each frame's keys.
+/// Owned by `ShortcutsPlugin`; advanced by `crate::input::dispatch::resolve_shortcuts`
+/// (the sole `LeaderGate::Advance` member) as it classifies each frame's keys.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LeaderPhase {
     /// No leader sequence in progress.
@@ -78,14 +77,13 @@ struct ModifierTapState {
 }
 
 /// Orders the `FocusedKey` systems that touch `LeaderPhase` so
-/// `detect_modifier_tap` (`Detect`) sets it before the mode dispatchers
-/// (`apply_default_shortcuts` / `apply_tmux_shortcuts`, `Advance`) step the
-/// leader machine and clear it.
+/// `detect_modifier_tap` (`Detect`) sets it before `resolve_shortcuts`
+/// (`Advance`) steps the leader machine and clears it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LeaderGate {
     /// `detect_modifier_tap`: sets `LeaderPhase` to `Pending` on a modifier tap.
     Detect,
-    /// `apply_default_shortcuts` / `apply_tmux_shortcuts`: advances the leader.
+    /// `crate::input::dispatch::resolve_shortcuts`: advances the leader.
     Advance,
 }
 

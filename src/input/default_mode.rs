@@ -238,8 +238,6 @@ fn apply_default_shortcuts(
                     }
                 }
                 KeyEffect::WebviewForward { .. } => {}
-                // Quit / ReleaseWebviewFocus are handled in `resolve_shortcuts`
-                // and never reach the batch; the arms stay for exhaustiveness.
                 KeyEffect::ReleaseWebviewFocus => {}
                 KeyEffect::Action {
                     action: ShortcutAction::Quit | ShortcutAction::ReleaseWebviewFocus,

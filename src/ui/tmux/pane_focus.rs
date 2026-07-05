@@ -101,11 +101,11 @@ fn sync_inactive_pane_style(
 /// the host's bridge from the multiplexer's active-pane notion to the terminal
 /// crate's single focus marker (which `ozma_webview` and IME/title read).
 /// Writes conditionally so change detection fires only on real changes.
-///
-/// `pub(crate)` so the resolve/apply dispatch regression test
-/// (`crate::input::dispatch`) can register it to assert the
-/// `.before(InputPhase::FocusedKey)` mirror edge keeps `KeyboardFocused`
-/// fresh for `resolve_shortcuts`.
+// NOTE: `pub(crate)` is a test-only affordance for the `crate::input::dispatch`
+// mirror-ordering regression test. In production the module is declared
+// `#[cfg(not(test))] mod pane_focus`, which caps this fn private to
+// `crate::ui::tmux`; only under `#[cfg(test)]` (`pub(crate) mod`) is it
+// reachable cross-module, so the widened surface never ships.
 pub(crate) fn sync_keyboard_focus_to_active_pane(
     mut commands: Commands,
     panes: Query<(Entity, Has<ActivePane>, Has<KeyboardFocused>), With<TmuxPane>>,

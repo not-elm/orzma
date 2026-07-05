@@ -141,8 +141,6 @@ fn apply_tmux_shortcuts(
                         names.push(name);
                     }
                 }
-                // Handled upstream in `resolve_shortcuts`; never reaches the
-                // batch, but the arm stays for exhaustiveness.
                 KeyEffect::ReleaseWebviewFocus => {}
             }
         }
