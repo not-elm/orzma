@@ -769,6 +769,8 @@ pub enum Shortcut {
     KillPane,
     /// Toggles zoom on the active pane (tmux mode only).
     ZoomPane,
+    /// Resizes the active pane's border in the given direction (tmux mode only).
+    ResizePane(PaneDirection),
     /// Opens a new window in the current session (tmux mode only).
     NewWindow,
     /// Kills the active window after a confirm prompt (tmux mode only).

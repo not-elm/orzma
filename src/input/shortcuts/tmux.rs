@@ -9,7 +9,8 @@ use crate::{
         tmux::{
             DetachSessionRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest,
             NextWindowRequest, PreviousWindowRequest, RenameSessionRequest, RenameWindowRequest,
-            SelectPaneRequest, SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
+            ResizePaneRequest, SelectPaneRequest, SelectWindowRequest, SplitPaneRequest,
+            ZoomPaneRequest,
         },
         vi::trigger_copy_mode_action,
     },
@@ -220,6 +221,14 @@ fn dispatch_tmux_action(
                 commands.trigger(ZoomPaneRequest { entity });
             }
         }
+        Shortcut::ResizePane(direction) => {
+            if let Some(entity) = active_entity {
+                commands.trigger(ResizePaneRequest {
+                    entity,
+                    direction: tmux_pane_direction(direction),
+                });
+            }
+        }
         Shortcut::NewWindow => {
             if let Ok(entity) = targets.session.single() {
                 commands.trigger(NewWindowRequest { entity });
@@ -306,6 +315,7 @@ mod tests {
         select_window: Vec<Entity>,
         detach: Vec<Entity>,
         forward: Vec<(Entity, Vec<String>)>,
+        resize_pane: Vec<(Entity, PaneDirection)>,
     }
 
     /// Builds an app running the three tmux appliers (`apply_tmux_shortcuts`,
@@ -335,6 +345,9 @@ mod tests {
             )
             .add_observer(|ev: On<SelectPaneRequest>, mut c: ResMut<TmuxCaptured>| {
                 c.select_pane.push((ev.entity, ev.direction));
+            })
+            .add_observer(|ev: On<ResizePaneRequest>, mut c: ResMut<TmuxCaptured>| {
+                c.resize_pane.push((ev.entity, ev.direction));
             })
             .add_observer(|ev: On<SelectWindowRequest>, mut c: ResMut<TmuxCaptured>| {
                 c.select_window.push(ev.entity);
@@ -416,6 +429,24 @@ mod tests {
             app.world().resource::<TmuxCaptured>().select_pane,
             vec![(pane, PaneDirection::Left)],
             "a SelectPane(Left) effect must trigger SelectPaneRequest on batch.focused (active pane)"
+        );
+    }
+
+    #[test]
+    fn resize_pane_targets_active_pane() {
+        let (mut app, pane) = tmux_dispatch_app();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::ResizePane(CfgPaneDirection::Left),
+                via_leader: true,
+            }],
+            Some(pane),
+        );
+        assert_eq!(
+            app.world().resource::<TmuxCaptured>().resize_pane,
+            vec![(pane, PaneDirection::Left)],
+            "a ResizePane(Left) effect must trigger ResizePaneRequest on the active pane"
         );
     }
 
