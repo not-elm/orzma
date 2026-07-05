@@ -403,7 +403,7 @@ fn consume_wheel_notches(
 mod tests {
     use super::*;
     use crate::action::tmux::{DetachSessionRequest, SelectPaneRequest, SelectWindowRequest};
-    use crate::input::resolve::KeyEffect;
+    use crate::input::keyboard::key_effect::KeyEffect;
     use crate::input::shortcuts::ShortcutBatch;
     use crate::input::shortcuts::tmux::{
         apply_tmux_shortcuts, tmux_pane_direction, tmux_split_direction,

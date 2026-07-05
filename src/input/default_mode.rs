@@ -167,7 +167,7 @@ fn apply_ime_commit_to_terminal(
 mod tests {
     use super::*;
     use crate::action::terminal::PasteAction;
-    use crate::input::resolve::KeyEffect;
+    use crate::input::keyboard::key_effect::KeyEffect;
     use crate::input::shortcuts::default_mode::apply_default_shortcuts;
     use crate::input::shortcuts::{ShortcutBatch, Shortcuts};
     use crate::ui::copy_mode::EnterCopyModeActionEvent;

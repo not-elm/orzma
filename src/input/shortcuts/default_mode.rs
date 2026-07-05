@@ -2,8 +2,7 @@ use crate::{
     action::{terminal::PasteAction, vi::trigger_copy_mode_action},
     app_mode::AppMode,
     input::{
-        keyboard::bevy_key_to_terminal_key,
-        resolve::KeyEffect,
+        keyboard::{bevy_key_to_terminal_key, key_effect::KeyEffect},
         shortcuts::{ShortcutBatch, ShortcutSet},
     },
     ui::copy_mode::EnterCopyModeActionEvent,

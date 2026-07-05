@@ -7,7 +7,7 @@ use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
-use crate::input::resolve::KeyEffect;
+use crate::input::keyboard::key_effect::KeyEffect;
 use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
 use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
 use bevy::input::ButtonState;

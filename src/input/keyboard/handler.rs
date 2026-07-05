@@ -11,7 +11,9 @@ use crate::app_mode::AppMode;
 use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
-use crate::input::resolve::{BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch};
+use crate::input::keyboard::key_effect::{
+    BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch,
+};
 use crate::input::shortcuts::{
     LeaderGate, LeaderPhase, ShortcutBatch, ShortcutSet, Shortcuts, clear_leader_phase,
 };

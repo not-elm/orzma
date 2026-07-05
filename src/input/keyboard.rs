@@ -11,6 +11,7 @@ use bevy::prelude::*;
 use ozma_tty_engine::{TerminalKey, TerminalModifiers};
 
 mod handler;
+pub mod key_effect;
 
 /// Registers the `KeyboardInput` message stream.
 pub(super) struct KeyboardInputPlugin;

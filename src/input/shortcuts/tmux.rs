@@ -10,7 +10,7 @@ use crate::{
     },
     app_mode::{AppMode, TmuxActiveSet},
     input::{
-        resolve::KeyEffect,
+        keyboard::key_effect::KeyEffect,
         shortcuts::{ShortcutBatch, ShortcutSet},
         tmux::forward::ForwardPaneKeysRequest,
     },
