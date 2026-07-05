@@ -1492,7 +1492,7 @@ mod tests {
 
     #[test]
     fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
-        // NOTE: `ConfigShortcuts::default()` now ships 25 leader-scoped tmux
+        // NOTE: `ConfigShortcuts::default()` now ships 29 leader-scoped tmux
         // actions, so `OrzmaConfigs::default()` alone no longer exercises the
         // inert-leader path; every default `<Leader>`-bound field is explicitly
         // unbound here to reproduce a config with no leader bindings at all.
@@ -1507,6 +1507,10 @@ mod tests {
                 split_horizontal_pane: None,
                 kill_pane: None,
                 zoom_pane: None,
+                resize_left_pane: None,
+                resize_down_pane: None,
+                resize_up_pane: None,
+                resize_right_pane: None,
                 new_window: None,
                 kill_window: None,
                 next_window: None,
