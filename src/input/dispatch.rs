@@ -23,7 +23,7 @@ use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
-use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, ModifiersState};
+use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
 use ozma_webview::ForwardKeys;
 use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
 
@@ -71,6 +71,7 @@ impl Plugin for DispatchPlugin {
                 resolve_shortcuts
                     .in_set(ShortcutSet::Resolve)
                     .in_set(LeaderGate::Advance)
+                    .before(KeyboardDeliverSet)
                     .run_if(on_message::<KeyboardInput>),
             );
     }
@@ -584,5 +585,46 @@ mod tests {
             "a frame that claims nothing clears the filter"
         );
         let _ = term;
+    }
+
+    #[derive(Resource, Default)]
+    struct DeliverProbe {
+        saw_claim: bool,
+    }
+
+    fn deliver_probe(
+        mut probe: ResMut<DeliverProbe>,
+        filter: Res<CefKeyboardFilter>,
+        webview: Res<ProbeWebview>,
+    ) {
+        if let Some(webview) = webview.0 {
+            probe.saw_claim = filter.contains(webview, KeyCode::KeyS, ModifiersState::default());
+        }
+    }
+
+    #[derive(Resource, Default)]
+    struct ProbeWebview(Option<Entity>);
+
+    #[test]
+    fn filter_is_populated_before_keyboard_deliver_set() {
+        let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyS,
+            ShortcutAction::EnterCopyMode,
+            Duration::ZERO,
+        ));
+        app.init_resource::<DeliverProbe>()
+            .init_resource::<ProbeWebview>()
+            .add_systems(Update, deliver_probe.in_set(KeyboardDeliverSet));
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        let webview = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
+        app.world_mut().resource_mut::<ProbeWebview>().0 = Some(webview);
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
+        press_key(&mut app, KeyCode::KeyS, Key::Character("s".into()));
+        app.update();
+        assert!(
+            app.world().resource::<DeliverProbe>().saw_claim,
+            "resolve_shortcuts must populate CefKeyboardFilter before KeyboardDeliverSet runs"
+        );
     }
 }
