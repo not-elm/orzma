@@ -147,13 +147,13 @@ fn resolve_key_effects(
     let mut effects = Vec::with_capacity(all.len());
     for effect in all {
         match effect {
-            KeyEffect::Action {
+            KeyEffect::Shortcut {
                 action: Shortcut::Quit,
                 ..
             } => {
                 exit.write(AppExit::Success);
             }
-            KeyEffect::Action {
+            KeyEffect::Shortcut {
                 action: Shortcut::ReleaseWebviewFocus,
                 ..
             } => focused_webview.0 = None,
@@ -372,7 +372,7 @@ mod tests {
         assert!(
             !cap.effects.iter().any(|e| matches!(
                 e,
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action: Shortcut::Quit,
                     ..
                 }
@@ -411,7 +411,7 @@ mod tests {
         assert!(
             !cap.effects.iter().any(|e| matches!(
                 e,
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action: Shortcut::ReleaseWebviewFocus,
                     ..
                 }
@@ -481,7 +481,7 @@ mod tests {
         assert!(
             !cap.effects.iter().any(|e| matches!(
                 e,
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action: Shortcut::Quit,
                     ..
                 }

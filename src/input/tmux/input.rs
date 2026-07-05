@@ -895,7 +895,7 @@ mod tests {
         let (mut app, pane) = tmux_dispatch_app();
         dispatch(
             &mut app,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::SelectPane(CfgPaneDirection::Left),
                 via_leader: true,
             }],
@@ -946,7 +946,7 @@ mod tests {
             .id();
         dispatch(
             &mut app,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::DetachSession,
                 via_leader: false,
             }],
@@ -979,7 +979,7 @@ mod tests {
             .id();
         dispatch(
             &mut app,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::SelectWindow(2),
                 via_leader: false,
             }],

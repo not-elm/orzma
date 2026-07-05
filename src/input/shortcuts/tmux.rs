@@ -74,7 +74,7 @@ pub(in crate::input) fn apply_tmux_shortcuts(
         let mut names: Vec<String> = Vec::new();
         for effect in &batch.effects {
             match effect {
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action: Shortcut::EnterCopyMode,
                     ..
                 } => {
@@ -86,7 +86,7 @@ pub(in crate::input) fn apply_tmux_shortcuts(
                         commands.trigger(EnterCopyModeActionEvent { entity });
                     }
                 }
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action: Shortcut::Paste,
                     ..
                 } => {
@@ -94,7 +94,7 @@ pub(in crate::input) fn apply_tmux_shortcuts(
                         commands.trigger(PasteAction { entity });
                     }
                 }
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action: Shortcut::DetachSession,
                     ..
                 } => {
@@ -102,7 +102,7 @@ pub(in crate::input) fn apply_tmux_shortcuts(
                         commands.trigger(DetachSessionRequest { entity });
                     }
                 }
-                KeyEffect::Action { action, .. } => {
+                KeyEffect::Shortcut { action, .. } => {
                     dispatch_tmux_action(&mut commands, *action, batch.focused, &targets);
                 }
                 KeyEffect::CopyMode(action) => {

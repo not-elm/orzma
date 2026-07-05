@@ -426,7 +426,7 @@ mod tests {
     }
 
     fn action_effect(action: Shortcut, via_leader: bool) -> KeyEffect {
-        KeyEffect::Action { action, via_leader }
+        KeyEffect::Shortcut { action, via_leader }
     }
 
     #[test]

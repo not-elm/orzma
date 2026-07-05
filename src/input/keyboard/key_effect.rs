@@ -21,7 +21,7 @@ pub(crate) enum KeyEffect {
     /// firing from a direct GUI chord — appliers suppress a different subset
     /// of each (e.g. a direct `Paste` fires in copy mode, a leader `Paste`
     /// does not).
-    Action {
+    Shortcut {
         /// The action to run.
         action: Shortcut,
         /// Whether the action was reached through the leader (prefix table)
@@ -110,7 +110,7 @@ pub(crate) fn classify_key_batch<'a>(
                 }
                 LeaderStep::RunAction(action) => {
                     webview_suppressed.push(ev.key_code);
-                    effects.push(KeyEffect::Action {
+                    effects.push(KeyEffect::Shortcut {
                         action,
                         via_leader: true,
                     });
@@ -119,7 +119,7 @@ pub(crate) fn classify_key_batch<'a>(
                     if let Some(action @ Shortcut::ReleaseWebviewFocus) =
                         shortcuts.match_gui_action(ev.key_code, ctx.mods)
                     {
-                        effects.push(KeyEffect::Action {
+                        effects.push(KeyEffect::Shortcut {
                             action,
                             via_leader: false,
                         });
@@ -145,7 +145,7 @@ pub(crate) fn classify_key_batch<'a>(
                 .map(|action| (action, false)),
         };
         if let Some((action, via_leader)) = action {
-            effects.push(KeyEffect::Action { action, via_leader });
+            effects.push(KeyEffect::Shortcut { action, via_leader });
             continue;
         }
         // NOTE: copy-mode keys resolve only after leader and GUI-shortcut
@@ -326,7 +326,7 @@ mod tests {
         );
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::EnterCopyMode,
                 via_leader: true,
             }]
@@ -353,7 +353,7 @@ mod tests {
         );
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::Quit,
                 via_leader: false,
             }]
@@ -406,7 +406,7 @@ mod tests {
         );
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::EnterCopyMode,
                 via_leader: true,
             }]
@@ -468,7 +468,7 @@ mod tests {
         );
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::DetachSession,
                 via_leader: true,
             }],
@@ -558,7 +558,7 @@ mod tests {
         );
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::EnterCopyMode,
                 via_leader: true,
             }],
@@ -693,7 +693,7 @@ mod tests {
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::EnterCopyMode,
                 via_leader: false,
             }],
@@ -732,7 +732,7 @@ mod tests {
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::Paste,
                 via_leader: false,
             }],
@@ -755,7 +755,7 @@ mod tests {
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::Paste,
                 via_leader: true,
             }]
@@ -767,7 +767,7 @@ mod tests {
         // Discriminates the pre-loop guard specifically: an AUTO-REPEAT of the
         // repeat-bound key (KeyH) inside an open window. Without the guard,
         // `step_with_repeat` sees `ev.repeat && LeaderPhase::Repeat` and calls
-        // `step_leader`, which re-fires `Action{EnterCopyMode}` — `step_leader`'s
+        // `step_leader`, which re-fires `Shortcut{EnterCopyMode}` — `step_leader`'s
         // own Repeat arm does NOT close the window here because the key MATCHES.
         // The pre-loop guard is the only thing that forces the phase to Idle so
         // the same key resolves to copy-mode (unbound → nothing) instead.
@@ -787,7 +787,7 @@ mod tests {
         assert!(
             !effects
                 .iter()
-                .any(|e| matches!(e, KeyEffect::Action { .. })),
+                .any(|e| matches!(e, KeyEffect::Shortcut { .. })),
             "the stale repeat window must be closed before dispatch, so a \
              repeat-marked key in copy mode must NOT re-fire its bound action"
         );
@@ -813,7 +813,7 @@ mod tests {
         let out = run_full(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             out.effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::EnterCopyMode,
                 via_leader: true,
             }],
@@ -947,7 +947,7 @@ mod tests {
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::ReleaseWebviewFocus,
                 via_leader: false,
             }],
@@ -969,7 +969,7 @@ mod tests {
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             effects,
-            vec![KeyEffect::Action {
+            vec![KeyEffect::Shortcut {
                 action: Shortcut::ReleaseWebviewFocus,
                 via_leader: false,
             }],

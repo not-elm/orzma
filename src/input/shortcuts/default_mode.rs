@@ -47,7 +47,7 @@ pub(in crate::input) fn apply_default_shortcuts(
         };
         for effect in &batch.effects {
             match effect {
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action: Shortcut::EnterCopyMode,
                     ..
                 } => {
@@ -55,7 +55,7 @@ pub(in crate::input) fn apply_default_shortcuts(
                         commands.trigger(EnterCopyModeActionEvent { entity });
                     }
                 }
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action: Shortcut::Paste,
                     via_leader,
                 } => {
@@ -65,7 +65,7 @@ pub(in crate::input) fn apply_default_shortcuts(
                         commands.trigger(PasteAction { entity });
                     }
                 }
-                KeyEffect::Action {
+                KeyEffect::Shortcut {
                     action:
                         Shortcut::DetachSession
                         | Shortcut::SelectPane(_)
