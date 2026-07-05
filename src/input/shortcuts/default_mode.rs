@@ -1,3 +1,7 @@
+//! `AppMode::Default`'s shortcut appliers: reads `ShortcutMessage`,
+//! `CopyModeMessage`, and `TypeMessage` from `resolve_key_effects` and applies
+//! copy-mode entry, paste, and raw-key typing to the focused terminal.
+
 use crate::{
     action::{terminal::PasteAction, vi::trigger_copy_mode_action},
     app_mode::AppMode,

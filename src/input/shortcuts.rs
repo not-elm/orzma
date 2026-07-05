@@ -7,7 +7,6 @@ use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
-use crate::input::keyboard::key_effect::KeyEffect;
 use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
 use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
 use bevy::ecs::system::SystemParam;
@@ -40,7 +39,6 @@ impl Plugin for ShortcutsPlugin {
                     .chain()
                     .in_set(InputPhase::FocusedKey),
             )
-            .add_message::<ShortcutBatch>()
             .add_message::<ShortcutMessage>()
             .add_message::<CopyModeMessage>()
             .add_message::<TypeMessage>()
@@ -71,31 +69,6 @@ impl Plugin for ShortcutsPlugin {
             .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
             .add_systems(OnExit(AppMode::Default), reset_leader_phase);
     }
-}
-
-/// The frame's resolved shortcut effects handed from `resolve_shortcuts` to the
-/// per-mode appliers. Excludes `Quit` and `ReleaseWebviewFocus`, which
-/// `resolve_shortcuts` handles inline. `focused` is the `KeyboardFocused`
-/// `OzmaTerminal` (the Default terminal or the active tmux pane).
-// NOTE: no production consumer reads these fields anymore (both modes
-// migrated to the typed messages in Tasks 3-4); `resolve_shortcuts` still
-// dual-writes this message for Task 5 to remove. `#[allow]` (not `#[expect]`)
-// because a `#[cfg(test)]` reader in `keyboard::handler`'s tests reads the
-// fields, so whether `dead_code` fires depends on the test cfg.
-#[allow(
-    dead_code,
-    reason = "dual-written by resolve_shortcuts until Task 5 deletes ShortcutBatch; only a #[cfg(test)] reader remains"
-)]
-#[derive(Message)]
-pub(in crate::input) struct ShortcutBatch {
-    /// The mode-specific effects to apply (no `Quit` / `ReleaseWebviewFocus`).
-    pub effects: Vec<KeyEffect>,
-    /// The `KeyboardFocused` `OzmaTerminal`, or `None` when none is focused.
-    pub focused: Option<Entity>,
-    /// Whether the focused surface is in copy mode.
-    pub in_copy_mode: bool,
-    /// The frame's modifier snapshot, shared by every effect in the batch.
-    pub mods: Modifiers,
 }
 
 /// One resolved keyboard shortcut action, fanned out from `resolve_key_effects`
@@ -160,13 +133,14 @@ pub(in crate::input) struct ShortcutMessages<'w> {
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
-/// `resolve_shortcuts` (`Resolve`) writes the `ShortcutBatch` before the
-/// per-mode appliers (`Apply`) read it, so the batch is consumed the same frame.
+/// `resolve_shortcuts` (`Resolve`) fans out the per-responsibility messages
+/// before the per-mode appliers (`Apply`) read them, so every message is
+/// consumed the same frame it is written.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::input) enum ShortcutSet {
-    /// `resolve_shortcuts`: classifies keys and writes the `ShortcutBatch`.
+    /// `resolve_shortcuts`: classifies keys and fans out the typed messages.
     Resolve,
-    /// The per-mode appliers: read the `ShortcutBatch` and apply its effects.
+    /// The per-mode appliers: read the typed messages and apply their effects.
     Apply,
 }
 

@@ -1,3 +1,8 @@
+//! `AppMode::Tmux`'s shortcut appliers: reads `ShortcutMessage`,
+//! `CopyModeMessage`, `TypeMessage`, and `WebviewForwardMessage` from
+//! `resolve_key_effects` and applies them as tmux action requests, copy-mode
+//! keys, and forwarded pane keystrokes.
+
 use crate::{
     action::{
         terminal::PasteAction,

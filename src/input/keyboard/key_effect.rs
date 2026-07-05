@@ -280,11 +280,7 @@ mod tests {
 
     #[test]
     fn leader_press_swallows_and_no_type() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyS,
-            Shortcut::EnterCopyMode,
-            ms(500),
-        );
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterCopyMode, ms(500));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
@@ -389,11 +385,7 @@ mod tests {
 
     #[test]
     fn repeat_window_refires_on_os_repeat() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            Shortcut::EnterCopyMode,
-            ms(500),
-        );
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
         let events = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
@@ -420,11 +412,7 @@ mod tests {
 
     #[test]
     fn repeat_outside_window_passthrough_no_step() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            Shortcut::EnterCopyMode,
-            ms(500),
-        );
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
@@ -480,11 +468,7 @@ mod tests {
 
     #[test]
     fn pending_suppresses_type_for_second_key() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyZ,
-            Shortcut::DetachSession,
-            ms(500),
-        );
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::DetachSession, ms(500));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
@@ -505,11 +489,7 @@ mod tests {
 
     #[test]
     fn pending_types_trailing_same_frame_key() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyZ,
-            Shortcut::DetachSession,
-            ms(500),
-        );
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::DetachSession, ms(500));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [
@@ -535,11 +515,8 @@ mod tests {
 
     #[test]
     fn repeat_window_withholds_matching_key() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            Shortcut::EnterCopyMode,
-            ms(60_000),
-        );
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(60_000));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
@@ -568,11 +545,8 @@ mod tests {
 
     #[test]
     fn repeat_window_types_non_matching_key() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            Shortcut::EnterCopyMode,
-            ms(60_000),
-        );
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(60_000));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
@@ -602,11 +576,8 @@ mod tests {
 
     #[test]
     fn window_closing_key_stops_withholding_same_frame() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            Shortcut::EnterCopyMode,
-            ms(60_000),
-        );
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(60_000));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
@@ -680,11 +651,8 @@ mod tests {
 
     #[test]
     fn copy_key_shadowed_by_gui() {
-        let sc = test_shortcuts_with_direct_chord(
-            KeyCode::KeyV,
-            no_mods(),
-            Shortcut::EnterCopyMode,
-        );
+        let sc =
+            test_shortcuts_with_direct_chord(KeyCode::KeyV, no_mods(), Shortcut::EnterCopyMode);
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyV, Key::Character("v".into()))];
@@ -745,8 +713,7 @@ mod tests {
 
     #[test]
     fn leader_paste_fires_in_copy_mode() {
-        let sc =
-            test_shortcuts_with_repeat_prefix(KeyCode::KeyP, Shortcut::Paste, Duration::ZERO);
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyP, Shortcut::Paste, Duration::ZERO);
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyP, Key::Character("p".into()))];
@@ -771,11 +738,8 @@ mod tests {
         // own Repeat arm does NOT close the window here because the key MATCHES.
         // The pre-loop guard is the only thing that forces the phase to Idle so
         // the same key resolves to copy-mode (unbound → nothing) instead.
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            Shortcut::EnterCopyMode,
-            ms(60_000),
-        );
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(60_000));
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
