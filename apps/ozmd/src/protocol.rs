@@ -77,6 +77,24 @@ pub(crate) struct Content {
     pub(crate) scroll_to: ScrollTo,
 }
 
+/// A page request to stage local image files referenced by the current
+/// document (`stageAssets` call).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StageAssetsRequest {
+    /// Percent-decoded, query/fragment-stripped local paths to stage.
+    pub(crate) paths: Vec<String>,
+}
+
+/// The staged served URLs for a `stageAssets` request, aligned to the request
+/// order; an entry is `None` when that path could not be staged.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct StageAssetsResponse {
+    /// Root-relative served URL (`_local/<token>.<ext>`) per input path.
+    pub(crate) urls: Vec<Option<String>>,
+}
+
 /// Search-result counts the page reports back (`searchCount` event).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -213,5 +231,23 @@ mod tests {
         let b: NavigateRequest =
             serde_json::from_value(json!({"path": "a.md", "fragment": null})).unwrap();
         assert_eq!(b.fragment, None);
+    }
+
+    #[test]
+    fn stage_assets_request_reads_paths() {
+        let r: StageAssetsRequest =
+            serde_json::from_value(json!({"paths": ["a.png", "/b.png"]})).unwrap();
+        assert_eq!(r.paths, vec!["a.png".to_string(), "/b.png".to_string()]);
+    }
+
+    #[test]
+    fn stage_assets_response_serializes_urls_with_nulls() {
+        let r = StageAssetsResponse {
+            urls: vec![Some("_local/x.png".to_string()), None],
+        };
+        assert_eq!(
+            serde_json::to_value(&r).unwrap(),
+            json!({"urls": ["_local/x.png", null]})
+        );
     }
 }
