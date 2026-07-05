@@ -1,26 +1,17 @@
-//! Forwards focused keyboard and mouse-wheel input to the active tmux pane.
-//! Keyboard forwarding dispatches a fixed set of ozmux GUI chords as
-//! per-command action events (`crate::action::tmux`) and copy-mode
-//! entry commands; while a pane is in copy mode, keys resolve against the
-//! shared config-driven key table (`crate::action::vi::ResolvedCopyModeKeys`)
-//! and fire the shared VI events, which `crate::action::vi::applier`
-//! applies for every pane (tmux and non-tmux alike) rather than a
-//! tmux-specific applier module; unmatched keys forward straight to the pane
-//! in one `SendPaneKeys` batch
-//! per frame. Mouse-wheel forwarding handles only the
-//! cases `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it
-//! now runs on every tmux pane, gated off solely by `MouseDisabled`): an
-//! inline webview under the pointer (forwarded to CEF), a copy-mode pane
-//! (scrolled directly via `TerminalHandle::scroll`), and the alt-screen
-//! residual where ozma's viewport scroll would no-op (cursor-key
-//! `send-keys`). Events accumulate into cell-deltas (so trackpad /
-//! high-resolution `Pixel` scrolling quantizes the same way the native
-//! terminal path does); every other case is ceded to ozma.
+//! Forwards the mouse wheel to the active tmux pane for the cases the host
+//! `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it now runs
+//! on every tmux pane, gated off solely by `MouseDisabled`): an inline webview
+//! under the pointer (forwarded to CEF), a copy-mode pane (scrolled directly
+//! via `TerminalHandle::scroll`), and the alt-screen residual where ozma's
+//! viewport scroll would no-op (cursor-key `send-keys`). Events accumulate
+//! into cell-deltas (so trackpad / high-resolution `Pixel` scrolling
+//! quantizes the same way the native terminal path does); every other case is
+//! ceded to ozma.
 
-use super::pane_hit::tmux_pane_at_phys;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
 use crate::input::mouse::webview::{webview_wheel_delta, webview_wheel_target};
+use crate::input::tmux::pane_hit::tmux_pane_at_phys;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
@@ -37,10 +28,10 @@ use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview};
 use ozmux_tmux::{TmuxClient, TmuxCommand, TmuxPane};
 
-/// Registers the tmux keyboard-forwarding and mouse-wheel systems.
-pub(super) struct InputPlugin;
+/// Registers the tmux mouse-wheel forwarding system.
+pub(in crate::input::mouse) struct MouseWheelTmuxPlugin;
 
-impl Plugin for InputPlugin {
+impl Plugin for MouseWheelTmuxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxWheelAccumulator>().add_systems(
             Update,
