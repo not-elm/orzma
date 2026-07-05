@@ -4,6 +4,7 @@ mod app;
 mod assets;
 mod document;
 mod keymap;
+mod local_assets;
 mod outline;
 mod protocol;
 mod ui;

@@ -4941,6 +4941,7 @@ name = "ozmd"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "notify-debouncer-full",
  "pulldown-cmark",
  "ratatui",
