@@ -14,7 +14,7 @@ use crate::app::{App, Cmd};
 use crate::document::Document;
 use crate::protocol::{
     Content, NavigateRequest, OpenExternal, OpenPath, Scroll, ScrollState, ScrollTo, Search,
-    SearchCount, SearchNav,
+    SearchCount, SearchNav, StageAssetsRequest, StageAssetsResponse,
 };
 use crate::ui::LiveStatus;
 use crate::watcher::FileWatcher;
@@ -274,6 +274,8 @@ fn register_view(
     shared: Arc<Mutex<Document>>,
 ) -> anyhow::Result<WebviewHandle> {
     let ready_doc = Arc::clone(&shared);
+    let stage_doc = Arc::clone(&shared);
+    let local_root = asset_dir.path().to_path_buf();
     let view = ozma.register(
         Webview::dir(asset_dir.path(), "index.html")
             .interactive(true)
@@ -291,6 +293,21 @@ fn register_view(
                 let doc = ready_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
                 Ok(content_for(&doc, ScrollTo::Preserve))
             })
+            .on(
+                "stageAssets",
+                move |req: StageAssetsRequest| -> Result<StageAssetsResponse, RpcError> {
+                    let base_dir = {
+                        let doc = stage_doc.lock().map_err(|_| RpcError::new("poisoned"))?;
+                        doc.base_dir.clone()
+                    };
+                    let urls = req
+                        .paths
+                        .iter()
+                        .map(|p| local_assets::stage(&local_root, &base_dir, p))
+                        .collect();
+                    Ok(StageAssetsResponse { urls })
+                },
+            )
             .add_event::<SearchCount>("searchCount")
             .add_event::<ScrollState>("scrollState")
             .add_event::<NavigateRequest>("navigate")
