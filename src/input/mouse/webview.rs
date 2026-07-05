@@ -2,7 +2,7 @@
 //! tmux gesture arbiter: forwards left press/release and pointer motion to the
 //! inline CEF child under the cursor, on ANY `OzmaTerminal` surface (a tmux
 //! pane or the Default-mode shell). The mode-specific systems
-//! (`crate::input::tmux::mouse::webview`, `crate::input::mouse::webview::default_mode`) resolve
+//! (`crate::input::mouse::button::tmux`, `crate::input::mouse::webview::default_mode`) resolve
 //! which surface is under the cursor — multi-pane hit-test for tmux, the
 //! single shell for Default — and then delegate the CEF forwarding + focus to
 //! the helpers here. Inline webviews are Node/Mesh-free `ChildOf` children

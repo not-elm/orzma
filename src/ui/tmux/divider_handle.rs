@@ -11,7 +11,7 @@
 use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::tmux::mouse::divider_at;
+use crate::input::mouse::divider_at;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::theme;
 use bevy::prelude::*;

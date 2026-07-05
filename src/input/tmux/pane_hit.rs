@@ -9,7 +9,7 @@ use ozmux_tmux::{PaneId, TmuxPane};
 
 /// The first `TmuxPane` under `cursor_phys_px`, with the pointer in pane-local
 /// physical px. Skips panes without a laid-out node.
-pub(super) fn tmux_pane_at_phys(
+pub(in crate::input) fn tmux_pane_at_phys(
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     cursor_phys_px: Vec2,
 ) -> Option<(Entity, PaneId, Vec2)> {

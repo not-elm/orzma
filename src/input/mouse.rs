@@ -19,6 +19,7 @@ use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::CursorMoved;
+pub(crate) use button::tmux::divider_at;
 use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::schema::TerminalGrid;

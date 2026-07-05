@@ -4,7 +4,7 @@
 //! every inactive pane at the renderer via `PaneInactiveStyle` (the terminal
 //! shader blends inactive backgrounds toward a configured grey). `select-pane`
 //! on press is owned by the tmux mouse gesture system
-//! (`mouse::MousePlugin`).
+//! (`input::mouse::button::tmux::MouseButtonTmuxPlugin`).
 
 use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
