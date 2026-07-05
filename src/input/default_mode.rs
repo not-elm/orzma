@@ -9,8 +9,6 @@
 //! release-webview-focus are handled upstream; the pane/window actions are
 //! no-ops in Default mode.
 
-mod webview;
-
 use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::input::focus::{KeyboardDisabled, MouseDisabled};
@@ -35,14 +33,13 @@ pub(super) struct DefaultHostInputPlugin;
 
 impl Plugin for DefaultHostInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(webview::DefaultWebviewPointerPlugin)
-            .add_systems(
-                Update,
-                maintain_input_gates
-                    .before(InputPhase::Hover)
-                    .run_if(in_state(AppMode::Default)),
-            )
-            .add_observer(apply_ime_commit_to_terminal);
+        app.add_systems(
+            Update,
+            maintain_input_gates
+                .before(InputPhase::Hover)
+                .run_if(in_state(AppMode::Default)),
+        )
+        .add_observer(apply_ime_commit_to_terminal);
     }
 }
 

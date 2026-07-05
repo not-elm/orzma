@@ -30,13 +30,18 @@ mod wheel;
 
 /// Aggregates the per-path mouse dispatch plugins and the shared config
 /// resource. The button and wheel dispatchers live in `button` / `wheel` and
-/// register themselves.
+/// register themselves; the webview pointer routers are aggregated via
+/// `webview::MouseWebviewPlugin`.
 pub(super) struct MouseInputPlugin;
 
 impl Plugin for MouseInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((MouseButtonInputPlugin, MouseWheelInputPlugin))
-            .init_resource::<OzmaMouseConfig>();
+        app.add_plugins((
+            MouseButtonInputPlugin,
+            MouseWheelInputPlugin,
+            webview::MouseWebviewPlugin,
+        ))
+        .init_resource::<OzmaMouseConfig>();
     }
 }
 

@@ -1,7 +1,7 @@
 //! Default-mode (`AppMode::Default`) webview pointer routing: forwards left
 //! press/release and pointer motion to the inline CEF child under the cursor on
 //! the single Default shell surface, via the mode-agnostic core in
-//! `crate::input::mouse::webview`. The tmux equivalent is `crate::input::tmux::mouse::webview`;
+//! `crate::input::mouse::webview`. The tmux equivalent is `crate::input::mouse::button::tmux`;
 //! this is the single-surface analogue (no pane arbitration / gesture hand-off).
 //!
 //! The pointer system runs EVERY frame in `AppMode::Default` (not message-gated)
@@ -33,32 +33,30 @@ use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview};
 
-/// Registers the Default-mode webview pointer systems and the shared
-/// `WebviewPress` resource (`init_resource` is idempotent; the tmux plugin may
-/// also init it).
-pub(super) struct DefaultWebviewPointerPlugin;
+/// Registers the Default-mode webview pointer systems. The shared
+/// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
+pub(in crate::input::mouse) struct MouseWebviewDefaultModePlugin;
 
-impl Plugin for DefaultWebviewPointerPlugin {
+impl Plugin for MouseWebviewDefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WebviewPress>()
-            .add_systems(
-                Update,
-                default_webview_pointer
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(in_state(AppMode::Default)),
-            )
-            .add_systems(
-                Update,
-                forward_default_webview_mouse_moves
-                    .in_set(InputPhase::Hover)
-                    .run_if(in_state(AppMode::Default).and(on_message::<CursorMoved>)),
-            )
-            .add_systems(
-                Update,
-                forward_default_webview_wheel
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(in_state(AppMode::Default).and(on_message::<MouseWheel>)),
-            );
+        app.add_systems(
+            Update,
+            default_webview_pointer
+                .in_set(InputPhase::Dispatch)
+                .run_if(in_state(AppMode::Default)),
+        )
+        .add_systems(
+            Update,
+            forward_default_webview_mouse_moves
+                .in_set(InputPhase::Hover)
+                .run_if(in_state(AppMode::Default).and(on_message::<CursorMoved>)),
+        )
+        .add_systems(
+            Update,
+            forward_default_webview_wheel
+                .in_set(InputPhase::Dispatch)
+                .run_if(in_state(AppMode::Default).and(on_message::<MouseWheel>)),
+        );
     }
 }
 
