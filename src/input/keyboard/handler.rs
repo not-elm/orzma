@@ -28,7 +28,7 @@ use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
 use ozma_webview::ForwardKeys;
-use ozmux_configs::shortcuts::ShortcutAction;
+use ozmux_configs::shortcuts::Shortcut;
 
 /// Registers `resolve_shortcuts` and the `ShortcutSet` ordering.
 pub(super) struct KeyboardHandlerPlugin;
@@ -148,13 +148,13 @@ fn resolve_key_effects(
     for effect in all {
         match effect {
             KeyEffect::Action {
-                action: ShortcutAction::Quit,
+                action: Shortcut::Quit,
                 ..
             } => {
                 exit.write(AppExit::Success);
             }
             KeyEffect::Action {
-                action: ShortcutAction::ReleaseWebviewFocus,
+                action: Shortcut::ReleaseWebviewFocus,
                 ..
             } => focused_webview.0 = None,
             other => effects.push(other),
@@ -350,7 +350,7 @@ mod tests {
         let mut app = resolve_app(test_shortcuts_with_direct_chord(
             KeyCode::KeyQ,
             meta_mods(),
-            ShortcutAction::Quit,
+            Shortcut::Quit,
         ));
         if spawn_focused {
             app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -373,7 +373,7 @@ mod tests {
             !cap.effects.iter().any(|e| matches!(
                 e,
                 KeyEffect::Action {
-                    action: ShortcutAction::Quit,
+                    action: Shortcut::Quit,
                     ..
                 }
             )),
@@ -391,7 +391,7 @@ mod tests {
                 alt: false,
                 meta: false,
             },
-            ShortcutAction::ReleaseWebviewFocus,
+            Shortcut::ReleaseWebviewFocus,
         ));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
@@ -412,7 +412,7 @@ mod tests {
             !cap.effects.iter().any(|e| matches!(
                 e,
                 KeyEffect::Action {
-                    action: ShortcutAction::ReleaseWebviewFocus,
+                    action: Shortcut::ReleaseWebviewFocus,
                     ..
                 }
             )),
@@ -482,7 +482,7 @@ mod tests {
             !cap.effects.iter().any(|e| matches!(
                 e,
                 KeyEffect::Action {
-                    action: ShortcutAction::Quit,
+                    action: Shortcut::Quit,
                     ..
                 }
             )),
@@ -494,7 +494,7 @@ mod tests {
     fn filter_holds_leader_claim_under_webview_focus() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         ));
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -517,7 +517,7 @@ mod tests {
     fn filter_cleared_on_guarded_frame() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         ));
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -592,7 +592,7 @@ mod tests {
     fn filter_is_populated_before_keyboard_deliver_set() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         ));
         app.init_resource::<DeliverProbe>()

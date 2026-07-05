@@ -563,133 +563,127 @@ impl Shortcuts {
     /// The single source of truth for the action schema.
     pub fn bindings_iter(
         &self,
-    ) -> impl Iterator<Item = (&'static str, &Option<Binding>, ShortcutAction)> + '_ {
+    ) -> impl Iterator<Item = (&'static str, &Option<Binding>, Shortcut)> + '_ {
         [
-            ("paste", &self.paste, ShortcutAction::Paste),
+            ("paste", &self.paste, Shortcut::Paste),
             (
                 "release-webview-focus",
                 &self.release_webview_focus,
-                ShortcutAction::ReleaseWebviewFocus,
+                Shortcut::ReleaseWebviewFocus,
             ),
-            ("quit", &self.quit, ShortcutAction::Quit),
+            ("quit", &self.quit, Shortcut::Quit),
             (
                 "enter-copy-mode",
                 &self.enter_copy_mode,
-                ShortcutAction::EnterCopyMode,
+                Shortcut::EnterCopyMode,
             ),
             (
                 "detach-session",
                 &self.detach_session,
-                ShortcutAction::DetachSession,
+                Shortcut::DetachSession,
             ),
             (
                 "select-left-pane",
                 &self.select_left_pane,
-                ShortcutAction::SelectPane(PaneDirection::Left),
+                Shortcut::SelectPane(PaneDirection::Left),
             ),
             (
                 "select-down-pane",
                 &self.select_down_pane,
-                ShortcutAction::SelectPane(PaneDirection::Down),
+                Shortcut::SelectPane(PaneDirection::Down),
             ),
             (
                 "select-up-pane",
                 &self.select_up_pane,
-                ShortcutAction::SelectPane(PaneDirection::Up),
+                Shortcut::SelectPane(PaneDirection::Up),
             ),
             (
                 "select-right-pane",
                 &self.select_right_pane,
-                ShortcutAction::SelectPane(PaneDirection::Right),
+                Shortcut::SelectPane(PaneDirection::Right),
             ),
             (
                 "split-vertical-pane",
                 &self.split_vertical_pane,
-                ShortcutAction::SplitPane(SplitOrientation::Vertical),
+                Shortcut::SplitPane(SplitOrientation::Vertical),
             ),
             (
                 "split-horizontal-pane",
                 &self.split_horizontal_pane,
-                ShortcutAction::SplitPane(SplitOrientation::Horizontal),
+                Shortcut::SplitPane(SplitOrientation::Horizontal),
             ),
-            ("kill-pane", &self.kill_pane, ShortcutAction::KillPane),
-            ("zoom-pane", &self.zoom_pane, ShortcutAction::ZoomPane),
-            ("new-window", &self.new_window, ShortcutAction::NewWindow),
-            ("kill-window", &self.kill_window, ShortcutAction::KillWindow),
-            ("next-window", &self.next_window, ShortcutAction::NextWindow),
+            ("kill-pane", &self.kill_pane, Shortcut::KillPane),
+            ("zoom-pane", &self.zoom_pane, Shortcut::ZoomPane),
+            ("new-window", &self.new_window, Shortcut::NewWindow),
+            ("kill-window", &self.kill_window, Shortcut::KillWindow),
+            ("next-window", &self.next_window, Shortcut::NextWindow),
             (
                 "previous-window",
                 &self.previous_window,
-                ShortcutAction::PreviousWindow,
+                Shortcut::PreviousWindow,
             ),
             (
                 "select-window-0",
                 &self.select_window_0,
-                ShortcutAction::SelectWindow(0),
+                Shortcut::SelectWindow(0),
             ),
             (
                 "select-window-1",
                 &self.select_window_1,
-                ShortcutAction::SelectWindow(1),
+                Shortcut::SelectWindow(1),
             ),
             (
                 "select-window-2",
                 &self.select_window_2,
-                ShortcutAction::SelectWindow(2),
+                Shortcut::SelectWindow(2),
             ),
             (
                 "select-window-3",
                 &self.select_window_3,
-                ShortcutAction::SelectWindow(3),
+                Shortcut::SelectWindow(3),
             ),
             (
                 "select-window-4",
                 &self.select_window_4,
-                ShortcutAction::SelectWindow(4),
+                Shortcut::SelectWindow(4),
             ),
             (
                 "select-window-5",
                 &self.select_window_5,
-                ShortcutAction::SelectWindow(5),
+                Shortcut::SelectWindow(5),
             ),
             (
                 "select-window-6",
                 &self.select_window_6,
-                ShortcutAction::SelectWindow(6),
+                Shortcut::SelectWindow(6),
             ),
             (
                 "select-window-7",
                 &self.select_window_7,
-                ShortcutAction::SelectWindow(7),
+                Shortcut::SelectWindow(7),
             ),
             (
                 "select-window-8",
                 &self.select_window_8,
-                ShortcutAction::SelectWindow(8),
+                Shortcut::SelectWindow(8),
             ),
             (
                 "select-window-9",
                 &self.select_window_9,
-                ShortcutAction::SelectWindow(9),
+                Shortcut::SelectWindow(9),
             ),
-            (
-                "rename-window",
-                &self.rename_window,
-                ShortcutAction::RenameWindow,
-            ),
+            ("rename-window", &self.rename_window, Shortcut::RenameWindow),
             (
                 "rename-session",
                 &self.rename_session,
-                ShortcutAction::RenameSession,
+                Shortcut::RenameSession,
             ),
         ]
         .into_iter()
     }
 
     /// Bound direct chords only: `(label, chord, action)`.
-    pub fn direct_chords(
-        &self,
-    ) -> impl Iterator<Item = (&'static str, &KeyChord, ShortcutAction)> + '_ {
+    pub fn direct_chords(&self) -> impl Iterator<Item = (&'static str, &KeyChord, Shortcut)> + '_ {
         self.bindings_iter()
             .filter_map(|(label, bound, action)| match bound {
                 Some(Binding::Direct(chord)) => Some((label, chord, action)),
@@ -700,7 +694,7 @@ impl Shortcuts {
     /// Bound leader-scoped chords only: `(label, chord, action, repeat)`.
     pub fn leader_chords(
         &self,
-    ) -> impl Iterator<Item = (&'static str, &KeyChord, ShortcutAction, bool)> + '_ {
+    ) -> impl Iterator<Item = (&'static str, &KeyChord, Shortcut, bool)> + '_ {
         self.bindings_iter()
             .filter_map(|(label, bound, action)| match bound {
                 Some(Binding::Leader { chord, repeat }) => Some((label, chord, action, *repeat)),
@@ -755,7 +749,7 @@ pub enum SplitOrientation {
 /// Shortcut actions. GUI-local actions plus the tmux pane/window operations
 /// (the latter are inert outside `AppMode::Tmux`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ShortcutAction {
+pub enum Shortcut {
     /// Paste the system clipboard into the active terminal.
     Paste,
     /// Releases keyboard focus from a focused webview back to the terminal.
@@ -970,7 +964,7 @@ fn parse_default_binding(s: &str) -> Binding {
 /// Detects chord collisions across a table's bound entries. Returns a `Vec`
 /// sorted by chord (BTreeMap key order) for deterministic error output.
 fn conflicts<'a>(
-    entries: impl Iterator<Item = (&'static str, &'a KeyChord, ShortcutAction)>,
+    entries: impl Iterator<Item = (&'static str, &'a KeyChord, Shortcut)>,
 ) -> Result<(), Vec<DuplicateChord>> {
     let mut by_chord: BTreeMap<KeyChord, Vec<&'static str>> = BTreeMap::new();
     for (label, chord, _action) in entries {

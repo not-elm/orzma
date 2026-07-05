@@ -178,7 +178,7 @@ Delete the existing `webview_focus_clears_leader_and_forwards` test (it asserted
     fn webview_pending_leader_fires_action_and_suppresses() {
         let sc = test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         );
         let resolved_copy = ResolvedCopyModeKeys::default();
@@ -190,7 +190,7 @@ Delete the existing `webview_focus_clears_leader_and_forwards` test (it asserted
         assert_eq!(
             out.effects,
             vec![KeyEffect::Action {
-                action: ShortcutAction::EnterCopyMode,
+                action: Shortcut::EnterCopyMode,
                 via_leader: true,
             }],
             "a bound second key fires its leader action even while a webview is focused"
@@ -208,7 +208,7 @@ Delete the existing `webview_focus_clears_leader_and_forwards` test (it asserted
         // The fixture's leader is the Ctrl+A chord.
         let sc = test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         );
         let resolved_copy = ResolvedCopyModeKeys::default();
@@ -234,7 +234,7 @@ Delete the existing `webview_focus_clears_leader_and_forwards` test (it asserted
     fn webview_pending_unbound_key_swallowed_and_suppressed() {
         let sc = test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         );
         let resolved_copy = ResolvedCopyModeKeys::default();
@@ -440,7 +440,7 @@ Add these tests to the `#[cfg(test)] mod tests` (they reuse the existing `resolv
     fn filter_holds_leader_claim_under_webview_focus() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             std::time::Duration::ZERO,
         ));
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -463,7 +463,7 @@ Add these tests to the `#[cfg(test)] mod tests` (they reuse the existing `resolv
     fn filter_cleared_on_guarded_frame() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             std::time::Duration::ZERO,
         ));
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -616,7 +616,7 @@ This proves the guarantee's purpose: a probe registered in `KeyboardDeliverSet` 
     fn filter_is_populated_before_keyboard_deliver_set() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             std::time::Duration::ZERO,
         ));
         app.init_resource::<DeliverProbe>()

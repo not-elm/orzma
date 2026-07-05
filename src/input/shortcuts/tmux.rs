@@ -17,7 +17,7 @@ use crate::{
     ui::copy_mode::EnterCopyModeActionEvent,
 };
 use bevy::{ecs::system::SystemParam, prelude::*};
-use ozmux_configs::shortcuts::ShortcutAction;
+use ozmux_configs::shortcuts::Shortcut;
 use ozmux_configs::shortcuts::{
     PaneDirection as CfgPaneDirection, SplitOrientation as CfgSplitOrientation,
 };
@@ -75,7 +75,7 @@ pub(in crate::input) fn apply_tmux_shortcuts(
         for effect in &batch.effects {
             match effect {
                 KeyEffect::Action {
-                    action: ShortcutAction::EnterCopyMode,
+                    action: Shortcut::EnterCopyMode,
                     ..
                 } => {
                     // NOTE: re-entry guard — re-triggering while already in copy
@@ -87,7 +87,7 @@ pub(in crate::input) fn apply_tmux_shortcuts(
                     }
                 }
                 KeyEffect::Action {
-                    action: ShortcutAction::Paste,
+                    action: Shortcut::Paste,
                     ..
                 } => {
                     if let Some(entity) = batch.focused {
@@ -95,7 +95,7 @@ pub(in crate::input) fn apply_tmux_shortcuts(
                     }
                 }
                 KeyEffect::Action {
-                    action: ShortcutAction::DetachSession,
+                    action: Shortcut::DetachSession,
                     ..
                 } => {
                     if let Ok(entity) = targets.session.single() {
@@ -133,12 +133,12 @@ pub(in crate::input) fn apply_tmux_shortcuts(
 /// non-tmux actions (handled by the caller before this helper) are no-ops.
 fn dispatch_tmux_action(
     commands: &mut Commands,
-    action: ShortcutAction,
+    action: Shortcut,
     active_entity: Option<Entity>,
     targets: &ActionTargets,
 ) {
     match action {
-        ShortcutAction::SelectPane(direction) => {
+        Shortcut::SelectPane(direction) => {
             if let Some(entity) = active_entity {
                 commands.trigger(SelectPaneRequest {
                     entity,
@@ -146,7 +146,7 @@ fn dispatch_tmux_action(
                 });
             }
         }
-        ShortcutAction::SplitPane(orientation) => {
+        Shortcut::SplitPane(orientation) => {
             if let Some(entity) = active_entity {
                 commands.trigger(SplitPaneRequest {
                     entity,
@@ -154,32 +154,32 @@ fn dispatch_tmux_action(
                 });
             }
         }
-        ShortcutAction::KillPane => {
+        Shortcut::KillPane => {
             if let Some(entity) = active_entity {
                 commands.trigger(KillPaneRequest { entity });
             }
         }
-        ShortcutAction::ZoomPane => {
+        Shortcut::ZoomPane => {
             if let Some(entity) = active_entity {
                 commands.trigger(ZoomPaneRequest { entity });
             }
         }
-        ShortcutAction::NewWindow => {
+        Shortcut::NewWindow => {
             if let Ok(entity) = targets.session.single() {
                 commands.trigger(NewWindowRequest { entity });
             }
         }
-        ShortcutAction::NextWindow => {
+        Shortcut::NextWindow => {
             if let Ok(entity) = targets.session.single() {
                 commands.trigger(NextWindowRequest { entity });
             }
         }
-        ShortcutAction::PreviousWindow => {
+        Shortcut::PreviousWindow => {
             if let Ok(entity) = targets.session.single() {
                 commands.trigger(PreviousWindowRequest { entity });
             }
         }
-        ShortcutAction::SelectWindow(index) => {
+        Shortcut::SelectWindow(index) => {
             if let Some(entity) = targets
                 .windows
                 .iter()
@@ -189,26 +189,26 @@ fn dispatch_tmux_action(
                 commands.trigger(SelectWindowRequest { entity });
             }
         }
-        ShortcutAction::KillWindow => {
+        Shortcut::KillWindow => {
             if let Ok(entity) = targets.active_window.single() {
                 commands.trigger(KillWindowRequest { entity });
             }
         }
-        ShortcutAction::RenameWindow => {
+        Shortcut::RenameWindow => {
             if let Ok(entity) = targets.active_window.single() {
                 commands.trigger(RenameWindowRequest { entity });
             }
         }
-        ShortcutAction::RenameSession => {
+        Shortcut::RenameSession => {
             if let Ok(entity) = targets.session.single() {
                 commands.trigger(RenameSessionRequest { entity });
             }
         }
-        ShortcutAction::Quit
-        | ShortcutAction::EnterCopyMode
-        | ShortcutAction::Paste
-        | ShortcutAction::DetachSession
-        | ShortcutAction::ReleaseWebviewFocus => {}
+        Shortcut::Quit
+        | Shortcut::EnterCopyMode
+        | Shortcut::Paste
+        | Shortcut::DetachSession
+        | Shortcut::ReleaseWebviewFocus => {}
     }
 }
 

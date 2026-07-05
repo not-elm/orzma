@@ -9,7 +9,7 @@ use crate::{
 };
 use bevy::prelude::*;
 use ozma_tty_engine::{TerminalKeyInput, TerminalModifiers};
-use ozmux_configs::shortcuts::ShortcutAction;
+use ozmux_configs::shortcuts::Shortcut;
 
 pub(super) struct ShortcutsDefaultModePlugin;
 
@@ -48,7 +48,7 @@ pub(in crate::input) fn apply_default_shortcuts(
         for effect in &batch.effects {
             match effect {
                 KeyEffect::Action {
-                    action: ShortcutAction::EnterCopyMode,
+                    action: Shortcut::EnterCopyMode,
                     ..
                 } => {
                     if let Some(entity) = batch.focused {
@@ -56,7 +56,7 @@ pub(in crate::input) fn apply_default_shortcuts(
                     }
                 }
                 KeyEffect::Action {
-                    action: ShortcutAction::Paste,
+                    action: Shortcut::Paste,
                     via_leader,
                 } => {
                     if let Some(entity) = batch.focused
@@ -67,20 +67,20 @@ pub(in crate::input) fn apply_default_shortcuts(
                 }
                 KeyEffect::Action {
                     action:
-                        ShortcutAction::DetachSession
-                        | ShortcutAction::SelectPane(_)
-                        | ShortcutAction::SplitPane(_)
-                        | ShortcutAction::KillPane
-                        | ShortcutAction::ZoomPane
-                        | ShortcutAction::NewWindow
-                        | ShortcutAction::KillWindow
-                        | ShortcutAction::NextWindow
-                        | ShortcutAction::PreviousWindow
-                        | ShortcutAction::SelectWindow(_)
-                        | ShortcutAction::RenameWindow
-                        | ShortcutAction::RenameSession
-                        | ShortcutAction::Quit
-                        | ShortcutAction::ReleaseWebviewFocus,
+                        Shortcut::DetachSession
+                        | Shortcut::SelectPane(_)
+                        | Shortcut::SplitPane(_)
+                        | Shortcut::KillPane
+                        | Shortcut::ZoomPane
+                        | Shortcut::NewWindow
+                        | Shortcut::KillWindow
+                        | Shortcut::NextWindow
+                        | Shortcut::PreviousWindow
+                        | Shortcut::SelectWindow(_)
+                        | Shortcut::RenameWindow
+                        | Shortcut::RenameSession
+                        | Shortcut::Quit
+                        | Shortcut::ReleaseWebviewFocus,
                     ..
                 } => {}
                 KeyEffect::CopyMode(action) => {

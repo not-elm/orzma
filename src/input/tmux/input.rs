@@ -413,7 +413,7 @@ mod tests {
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::input::mouse::MouseScrollUnit;
     use ozmux_configs::shortcuts::{
-        Modifiers, PaneDirection as CfgPaneDirection, ShortcutAction,
+        Modifiers, PaneDirection as CfgPaneDirection, Shortcut,
         SplitOrientation as CfgSplitOrientation,
     };
     use ozmux_tmux::{ActivePane, PaneDirection, PaneId, SplitDirection, TmuxSession, TmuxWindow};
@@ -896,7 +896,7 @@ mod tests {
         dispatch(
             &mut app,
             vec![KeyEffect::Action {
-                action: ShortcutAction::SelectPane(CfgPaneDirection::Left),
+                action: Shortcut::SelectPane(CfgPaneDirection::Left),
                 via_leader: true,
             }],
             Some(pane),
@@ -947,7 +947,7 @@ mod tests {
         dispatch(
             &mut app,
             vec![KeyEffect::Action {
-                action: ShortcutAction::DetachSession,
+                action: Shortcut::DetachSession,
                 via_leader: false,
             }],
             Some(pane),
@@ -980,7 +980,7 @@ mod tests {
         dispatch(
             &mut app,
             vec![KeyEffect::Action {
-                action: ShortcutAction::SelectWindow(2),
+                action: Shortcut::SelectWindow(2),
                 via_leader: false,
             }],
             Some(pane),

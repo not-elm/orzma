@@ -177,7 +177,7 @@ mod tests {
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use bevy::window::PrimaryWindow;
     use ozma_tty_engine::TerminalKey;
-    use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
+    use ozmux_configs::shortcuts::{Modifiers, Shortcut};
     use ozmux_tmux::{PaneId, TmuxPane};
     use tmux_control_parser::CellDims;
 
@@ -425,7 +425,7 @@ mod tests {
         KeyEffect::Type { logical, key_code }
     }
 
-    fn action_effect(action: ShortcutAction, via_leader: bool) -> KeyEffect {
+    fn action_effect(action: Shortcut, via_leader: bool) -> KeyEffect {
         KeyEffect::Action { action, via_leader }
     }
 
@@ -451,7 +451,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::ZoomPane, true)],
+            vec![action_effect(Shortcut::ZoomPane, true)],
             Some(term),
             false,
             Modifiers::default(),
@@ -469,7 +469,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::Paste, false)],
+            vec![action_effect(Shortcut::Paste, false)],
             Some(term),
             false,
             meta_mods(),
@@ -486,7 +486,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::Paste, false)],
+            vec![action_effect(Shortcut::Paste, false)],
             Some(term),
             true,
             meta_mods(),
@@ -503,7 +503,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::Paste, true)],
+            vec![action_effect(Shortcut::Paste, true)],
             Some(term),
             true,
             Modifiers::default(),
@@ -520,7 +520,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::EnterCopyMode, false)],
+            vec![action_effect(Shortcut::EnterCopyMode, false)],
             Some(term),
             true,
             Modifiers::default(),
