@@ -17,10 +17,11 @@ use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::surface::OzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
+use crate::surface::geometry::topmost_surface_at;
 use crate::ui::copy_search::CopyPrompt;
 use crate::webview_pointer::{
     WebviewPress, WebviewRouteParams, forward_webview_move, release_webview_press,
-    route_webview_left_click, topmost_surface_at, webview_wheel_delta, webview_wheel_target,
+    route_webview_left_click, webview_wheel_delta, webview_wheel_target,
 };
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;

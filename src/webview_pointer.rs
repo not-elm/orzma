@@ -198,22 +198,6 @@ pub(crate) fn forward_webview_move(
     }
 }
 
-/// Returns the topmost `OzmaTerminal` surface whose node contains `cursor_phys`,
-/// or `None` when the cursor is over none. "Topmost" is the highest
-/// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); ties
-/// break by `Entity` for determinism. The Default-mode pointer/gate path uses
-/// this to pick the single shell (or the frontmost surface) under the cursor;
-/// tmux keeps its own multi-pane `tmux_pane_at_phys` resolution.
-pub(crate) fn topmost_surface_at<'a>(
-    cursor_phys: Vec2,
-    candidates: impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)>,
-) -> Option<Entity> {
-    candidates
-        .filter(|&(_, node, transform)| node.contains_point(*transform, cursor_phys))
-        .max_by_key(|&(entity, node, _)| (node.stack_index(), entity))
-        .map(|(entity, _, _)| entity)
-}
-
 /// The inline webview child that should receive a wheel event for a resolved
 /// `(terminal, local_phys)`, with the pointer in webview-local DIP — `Some` only
 /// when the FOCUSED webview of `terminal` is the interactive rect under the

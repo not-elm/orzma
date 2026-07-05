@@ -13,7 +13,7 @@ use crate::input::gesture::{
     WheelAccumulator, accumulate_notches, lock_dominant_axis, wheel_delta_cells,
 };
 use crate::input::keyboard::current_terminal_modifiers;
-use crate::webview_pointer::topmost_surface_at;
+use crate::surface::geometry::topmost_surface_at;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;

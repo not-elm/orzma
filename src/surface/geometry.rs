@@ -3,6 +3,7 @@
 //! (`crate::webview_pointer`), both mode pipelines, and hyperlink hover. The
 //! `TmuxPane`-specific hit-test lives in `crate::input::tmux::pane_hit`.
 
+use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 
@@ -91,9 +92,26 @@ pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16,
     (cols, rows)
 }
 
+/// Returns the topmost `OzmaTerminal` surface whose node contains `cursor_phys`,
+/// or `None` when the cursor is over none. "Topmost" is the highest
+/// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); ties
+/// break by `Entity` for determinism. The Default-mode pointer/gate path uses
+/// this to pick the single shell (or the frontmost surface) under the cursor;
+/// tmux keeps its own multi-pane `tmux_pane_at_phys` resolution.
+pub(crate) fn topmost_surface_at<'a>(
+    cursor_phys: Vec2,
+    candidates: impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)>,
+) -> Option<Entity> {
+    candidates
+        .filter(|&(_, node, transform)| node.contains_point(*transform, cursor_phys))
+        .max_by_key(|&(entity, node, _)| (node.stack_index(), entity))
+        .map(|(entity, _, _)| entity)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::world::World;
     use bevy::math::Vec2;
 
     #[test]
@@ -181,5 +199,83 @@ mod tests {
             24,
         );
         assert_eq!(cell, Some((0, 0, Side::Left)));
+    }
+
+    #[test]
+    fn topmost_surface_at_picks_highest_stack_index_among_containing() {
+        let mut world = World::new();
+        let a = world.spawn_empty().id();
+        let b = world.spawn_empty().id();
+        let c = world.spawn_empty().id();
+        // A: left half (x 0..400), stack 5. B: right half (x 400..800), stack 3.
+        // C: left half, stack 9 — overlaps A and sits on top.
+        let node_a = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 5,
+            ..ComputedNode::DEFAULT
+        };
+        let tf_a = UiGlobalTransform::from_xy(200.0, 300.0);
+        let node_b = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 3,
+            ..ComputedNode::DEFAULT
+        };
+        let tf_b = UiGlobalTransform::from_xy(600.0, 300.0);
+        let node_c = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 9,
+            ..ComputedNode::DEFAULT
+        };
+        let tf_c = UiGlobalTransform::from_xy(200.0, 300.0);
+        let candidates = [
+            (a, &node_a, &tf_a),
+            (b, &node_b, &tf_b),
+            (c, &node_c, &tf_c),
+        ];
+
+        assert_eq!(
+            topmost_surface_at(Vec2::new(600.0, 300.0), candidates.iter().copied()),
+            Some(b),
+            "a point only B contains must resolve to B"
+        );
+        assert_eq!(
+            topmost_surface_at(Vec2::new(100.0, 300.0), candidates.iter().copied()),
+            Some(c),
+            "where A and C overlap, the higher stack_index (C) wins"
+        );
+        assert_eq!(
+            topmost_surface_at(Vec2::new(2000.0, 2000.0), candidates.iter().copied()),
+            None,
+            "a point outside every node resolves to None"
+        );
+    }
+
+    #[test]
+    fn topmost_surface_at_breaks_stack_index_ties_deterministically() {
+        let mut world = World::new();
+        let lower = world.spawn_empty().id();
+        let higher = world.spawn_empty().id();
+        // Two fully-overlapping nodes with the SAME stack_index (only reachable
+        // before the first layout pass assigns indices). The winner must not
+        // depend on candidate iteration order.
+        let node = ComputedNode {
+            size: Vec2::new(400.0, 600.0),
+            stack_index: 0,
+            ..ComputedNode::DEFAULT
+        };
+        let tf = UiGlobalTransform::from_xy(200.0, 300.0);
+        let forward = [(lower, &node, &tf), (higher, &node, &tf)];
+        let reversed = [(higher, &node, &tf), (lower, &node, &tf)];
+        let winner = topmost_surface_at(Vec2::new(100.0, 300.0), forward.iter().copied());
+        assert_eq!(
+            winner,
+            topmost_surface_at(Vec2::new(100.0, 300.0), reversed.iter().copied()),
+            "tie resolution must not depend on iteration order"
+        );
+        assert_eq!(
+            winner,
+            Some(lower.max(higher)),
+            "a stack_index tie resolves by Entity order, deterministically"
+        );
     }
 }
