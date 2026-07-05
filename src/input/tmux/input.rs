@@ -821,5 +821,4 @@ mod tests {
             PaneDirection::Right
         );
     }
-
 }
