@@ -6,6 +6,8 @@
 ozmux is a terminal emulator that can render webviews directly inside the
 terminal, with built-in tmux integration.
 
+![thumbnail](./docs/thumbnail.png)
+
 ## Installation
 
 macOS (Apple Silicon) via Homebrew Cask:
