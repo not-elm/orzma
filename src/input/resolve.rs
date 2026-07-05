@@ -64,6 +64,15 @@ pub(crate) struct BatchContext<'a> {
     pub(crate) forward_chords: &'a [NormalizedChord],
 }
 
+/// The decided output of `classify_key_batch`: the per-key `KeyEffect`s, plus the
+/// physical keys the leader claimed while a webview owned the keyboard. The caller
+/// applies the frame's modifier snapshot when withholding `webview_suppressed`
+/// from CEF via `CefKeyboardFilter`; it is empty on the non-webview path.
+pub(crate) struct ClassifiedKeys {
+    pub(crate) effects: Vec<KeyEffect>,
+    pub(crate) webview_suppressed: Vec<KeyCode>,
+}
+
 /// Classifies one frame's pressed `KeyboardInput` events into `KeyEffect`s,
 /// threading the shared leader state machine across the batch. Pure: no ECS
 /// handles, so callers can drive it in a unit test with no `App`.
@@ -78,7 +87,7 @@ pub(crate) fn classify_key_batch<'a>(
     resolved_copy: &ResolvedCopyModeKeys,
     events: impl Iterator<Item = &'a KeyboardInput>,
     ctx: BatchContext<'a>,
-) -> Vec<KeyEffect> {
+) -> ClassifiedKeys {
     // NOTE: an open repeat window must not intercept copy-mode keys — a
     // repeat-marked key doubling as a copy-mode key would re-fire its bound
     // action into the hidden live terminal instead of being resolved as a
@@ -88,24 +97,40 @@ pub(crate) fn classify_key_batch<'a>(
         *leader_phase = LeaderPhase::Idle;
     }
     let mut effects = Vec::new();
+    let mut webview_suppressed = Vec::new();
     for ev in events.filter(|ev| ev.state == ButtonState::Pressed) {
         if ctx.webview_focused {
-            // NOTE: the leader is honored only when a webview does not own
-            // the keyboard; resetting the phase here (instead of stepping
-            // the state machine) prevents a stale leader from firing once
-            // keyboard focus returns to the terminal.
-            *leader_phase = LeaderPhase::Idle;
-            if shortcuts.is_release_webview_focus(ev.key_code, ctx.mods) {
-                effects.push(KeyEffect::ReleaseWebviewFocus);
-            } else if ctx
-                .forward_chords
-                .iter()
-                .any(|chord| chord_matches(chord, ev.key_code, ctx.mods))
-            {
-                effects.push(KeyEffect::WebviewForward {
-                    logical: ev.logical_key.clone(),
-                    key_code: ev.key_code,
-                });
+            // NOTE: the leader runs even while a webview owns the keyboard, so
+            // `<Leader>` shortcuts work regardless of focus. Keys the leader
+            // claims (the leader chord itself, an abandoned second key, or a
+            // fired binding) are recorded in `webview_suppressed` so the caller
+            // withholds them from CEF; a key the leader does not claim
+            // (`Passthrough`) still resolves to release / forward as before.
+            match step_with_repeat(leader_phase, shortcuts, ev, ctx.mods, ctx.now) {
+                LeaderStep::Swallow => {
+                    webview_suppressed.push(ev.key_code);
+                }
+                LeaderStep::RunAction(action) => {
+                    webview_suppressed.push(ev.key_code);
+                    effects.push(KeyEffect::Action {
+                        action,
+                        via_leader: true,
+                    });
+                }
+                LeaderStep::Passthrough => {
+                    if shortcuts.is_release_webview_focus(ev.key_code, ctx.mods) {
+                        effects.push(KeyEffect::ReleaseWebviewFocus);
+                    } else if ctx
+                        .forward_chords
+                        .iter()
+                        .any(|chord| chord_matches(chord, ev.key_code, ctx.mods))
+                    {
+                        effects.push(KeyEffect::WebviewForward {
+                            logical: ev.logical_key.clone(),
+                            key_code: ev.key_code,
+                        });
+                    }
+                }
             }
             continue;
         }
@@ -139,7 +164,10 @@ pub(crate) fn classify_key_batch<'a>(
             key_code: ev.key_code,
         });
     }
-    effects
+    ClassifiedKeys {
+        effects,
+        webview_suppressed,
+    }
 }
 
 /// Advances the leader machine for one pressed event, honoring OS auto-repeat:
@@ -234,6 +262,16 @@ mod tests {
         events: &'a [KeyboardInput],
         ctx: BatchContext<'a>,
     ) -> Vec<KeyEffect> {
+        classify_key_batch(leader_phase, shortcuts, resolved_copy, events.iter(), ctx).effects
+    }
+
+    fn run_full<'a>(
+        leader_phase: &mut LeaderPhase,
+        shortcuts: &Shortcuts,
+        resolved_copy: &ResolvedCopyModeKeys,
+        events: &'a [KeyboardInput],
+        ctx: BatchContext<'a>,
+    ) -> ClassifiedKeys {
         classify_key_batch(leader_phase, shortcuts, resolved_copy, events.iter(), ctx)
     }
 
@@ -758,10 +796,113 @@ mod tests {
     }
 
     #[test]
-    fn webview_focus_clears_leader_and_forwards() {
-        let sc = Shortcuts::default();
+    fn webview_pending_leader_fires_action_and_suppresses() {
+        let sc = test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyS,
+            ShortcutAction::EnterCopyMode,
+            Duration::ZERO,
+        );
         let resolved_copy = ResolvedCopyModeKeys::default();
         let mut phase = LeaderPhase::Pending;
+        let events = [press(KeyCode::KeyS, Key::Character("s".into()))];
+        let mut c = ctx(no_mods(), ms(0));
+        c.webview_focused = true;
+        let out = run_full(&mut phase, &sc, &resolved_copy, &events, c);
+        assert_eq!(
+            out.effects,
+            vec![KeyEffect::Action {
+                action: ShortcutAction::EnterCopyMode,
+                via_leader: true,
+            }],
+            "a bound second key fires its leader action even while a webview is focused"
+        );
+        assert_eq!(
+            out.webview_suppressed,
+            vec![KeyCode::KeyS],
+            "the fired key is withheld from CEF"
+        );
+        assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    #[test]
+    fn webview_idle_leader_chord_engages_and_suppresses() {
+        // The fixture's leader is the Ctrl+A chord.
+        let sc = test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyS,
+            ShortcutAction::EnterCopyMode,
+            Duration::ZERO,
+        );
+        let resolved_copy = ResolvedCopyModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
+        let mut c = ctx(mods(true, false, false, false), ms(0));
+        c.webview_focused = true;
+        let out = run_full(&mut phase, &sc, &resolved_copy, &events, c);
+        assert_eq!(
+            out.effects,
+            vec![],
+            "the leader chord itself emits no effect"
+        );
+        assert_eq!(
+            out.webview_suppressed,
+            vec![KeyCode::KeyA],
+            "the leader chord is withheld from CEF"
+        );
+        assert_eq!(
+            phase,
+            LeaderPhase::Pending,
+            "pressing the leader chord under webview focus engages Pending"
+        );
+    }
+
+    #[test]
+    fn webview_pending_unbound_key_swallowed_and_suppressed() {
+        let sc = test_shortcuts_with_repeat_prefix(
+            KeyCode::KeyS,
+            ShortcutAction::EnterCopyMode,
+            Duration::ZERO,
+        );
+        let resolved_copy = ResolvedCopyModeKeys::default();
+        let mut phase = LeaderPhase::Pending;
+        let events = [press(KeyCode::KeyZ, Key::Character("z".into()))];
+        let mut c = ctx(no_mods(), ms(0));
+        c.webview_focused = true;
+        let out = run_full(&mut phase, &sc, &resolved_copy, &events, c);
+        assert_eq!(out.effects, vec![], "an unbound second key emits nothing");
+        assert_eq!(
+            out.webview_suppressed,
+            vec![KeyCode::KeyZ],
+            "the swallowed second key is still withheld from CEF"
+        );
+        assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    #[test]
+    fn webview_idle_plain_key_not_suppressed() {
+        let sc = Shortcuts::default();
+        let resolved_copy = ResolvedCopyModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::KeyB, Key::Character("b".into()))];
+        let mut c = ctx(no_mods(), ms(0));
+        c.webview_focused = true;
+        let out = run_full(&mut phase, &sc, &resolved_copy, &events, c);
+        assert_eq!(
+            out.effects,
+            vec![],
+            "a plain key under webview focus emits nothing"
+        );
+        assert!(
+            out.webview_suppressed.is_empty(),
+            "a non-leader key is NOT withheld — the webview must still receive it"
+        );
+        assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    #[test]
+    fn webview_idle_forward_chord_forwards_and_not_suppressed() {
+        let sc = Shortcuts::default();
+        let resolved_copy = ResolvedCopyModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
         let chords = [NormalizedChord {
             code: KeyCode::KeyK,
             alt: false,
@@ -773,19 +914,20 @@ mod tests {
         let mut c = ctx(no_mods(), ms(0));
         c.webview_focused = true;
         c.forward_chords = &chords;
-        let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
+        let out = run_full(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
-            effects,
+            out.effects,
             vec![KeyEffect::WebviewForward {
                 logical: Key::Character("k".into()),
                 key_code: KeyCode::KeyK,
-            }]
+            }],
+            "with no leader engaged a declared forward chord still forwards"
         );
-        assert_eq!(
-            phase,
-            LeaderPhase::Idle,
-            "webview focus must clear any pending leader"
+        assert!(
+            out.webview_suppressed.is_empty(),
+            "a forward chord is not a leader claim — not withheld from CEF"
         );
+        assert_eq!(phase, LeaderPhase::Idle);
     }
 
     #[test]
