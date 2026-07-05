@@ -76,7 +76,7 @@ pub(in crate::input) struct ActionTargets<'w, 's> {
 /// `resolve_key_effects`. Registered in `ShortcutSet::Apply`, gated on
 /// `in_state(AppMode::Tmux)` + `on_message::<ShortcutMessage>`, ordered before
 /// `apply_tmux_forward`.
-pub(in crate::input) fn apply_tmux_shortcuts(
+fn apply_tmux_shortcuts(
     mut commands: Commands,
     mut shortcuts: MessageReader<ShortcutMessage>,
     targets: ActionTargets,
@@ -110,10 +110,7 @@ pub(in crate::input) fn apply_tmux_shortcuts(
 /// Applies matched `[copy-mode]` keys from `CopyModeMessage` on the focused
 /// pane. Registered in `ShortcutSet::Apply`, gated on `in_state(AppMode::Tmux)`
 /// + `on_message::<CopyModeMessage>`.
-pub(in crate::input) fn apply_tmux_copy_mode(
-    mut commands: Commands,
-    mut copy_mode: MessageReader<CopyModeMessage>,
-) {
+fn apply_tmux_copy_mode(mut commands: Commands, mut copy_mode: MessageReader<CopyModeMessage>) {
     for msg in copy_mode.read() {
         if let Some(entity) = msg.focused {
             trigger_copy_mode_action(&mut commands, entity, msg.action);
@@ -127,7 +124,7 @@ pub(in crate::input) fn apply_tmux_copy_mode(
 /// pane, so the mapped key names accumulate into a single ordered batch. Runs
 /// after the shortcut/copy appliers so their triggers are queued first (parity
 /// with the old single-system order). Gated on `on_tmux_forward_message`.
-pub(in crate::input) fn apply_tmux_forward(
+fn apply_tmux_forward(
     mut commands: Commands,
     mut type_keys: MessageReader<TypeMessage>,
     mut webview_forward: MessageReader<WebviewForwardMessage>,
@@ -295,4 +292,214 @@ pub(in crate::input) fn tmux_split_direction(orientation: CfgSplitOrientation) -
 /// forward (typed or webview-forwarded). The two never coexist in a frame.
 fn on_tmux_forward_message() -> impl SystemCondition<()> {
     on_message::<TypeMessage>.or(on_message::<WebviewForwardMessage>)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::input::keyboard::key_effect::KeyEffect;
+    use ozmux_tmux::{PaneId, TmuxPane};
+
+    #[derive(Resource, Default)]
+    struct TmuxCaptured {
+        select_pane: Vec<(Entity, PaneDirection)>,
+        select_window: Vec<Entity>,
+        detach: Vec<Entity>,
+        forward: Vec<(Entity, Vec<String>)>,
+    }
+
+    /// Builds an app running the three tmux appliers (`apply_tmux_shortcuts`,
+    /// `apply_tmux_copy_mode`, `apply_tmux_forward`, ordered as the real
+    /// plugin orders them) with one tmux pane (the active pane / the
+    /// dispatched messages' `focused`), capturing the action requests they
+    /// trigger.
+    fn tmux_dispatch_app() -> (App, Entity) {
+        use tmux_control_parser::CellDims;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_message::<ShortcutMessage>()
+            .add_message::<CopyModeMessage>()
+            .add_message::<TypeMessage>()
+            .add_message::<WebviewForwardMessage>()
+            .init_resource::<TmuxCaptured>()
+            .add_systems(
+                Update,
+                (
+                    apply_tmux_shortcuts,
+                    apply_tmux_copy_mode.after(apply_tmux_shortcuts),
+                    apply_tmux_forward
+                        .after(apply_tmux_shortcuts)
+                        .after(apply_tmux_copy_mode),
+                ),
+            )
+            .add_observer(|ev: On<SelectPaneRequest>, mut c: ResMut<TmuxCaptured>| {
+                c.select_pane.push((ev.entity, ev.direction));
+            })
+            .add_observer(|ev: On<SelectWindowRequest>, mut c: ResMut<TmuxCaptured>| {
+                c.select_window.push(ev.entity);
+            })
+            .add_observer(
+                |ev: On<DetachSessionRequest>, mut c: ResMut<TmuxCaptured>| {
+                    c.detach.push(ev.entity);
+                },
+            )
+            .add_observer(
+                |ev: On<ForwardPaneKeysRequest>, mut c: ResMut<TmuxCaptured>| {
+                    c.forward.push((ev.entity, ev.names.clone()));
+                },
+            );
+        let pane = app
+            .world_mut()
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
+                },
+            })
+            .id();
+        (app, pane)
+    }
+
+    fn dispatch(app: &mut App, effects: Vec<KeyEffect>, focused: Option<Entity>) {
+        let mods = Modifiers::default();
+        for effect in effects {
+            match effect {
+                KeyEffect::Shortcut { action, via_leader } => {
+                    app.world_mut().write_message(ShortcutMessage {
+                        action,
+                        via_leader,
+                        focused,
+                        in_copy_mode: false,
+                    });
+                }
+                KeyEffect::CopyMode(action) => {
+                    app.world_mut()
+                        .write_message(CopyModeMessage { action, focused });
+                }
+                KeyEffect::Type { logical, key_code } => {
+                    app.world_mut().write_message(TypeMessage {
+                        logical,
+                        key_code,
+                        focused,
+                        mods,
+                    });
+                }
+                KeyEffect::WebviewForward { logical, key_code } => {
+                    app.world_mut().write_message(WebviewForwardMessage {
+                        logical,
+                        key_code,
+                        focused,
+                        mods,
+                    });
+                }
+            }
+        }
+        app.update();
+    }
+
+    #[test]
+    fn select_pane_targets_active_pane() {
+        let (mut app, pane) = tmux_dispatch_app();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::SelectPane(CfgPaneDirection::Left),
+                via_leader: true,
+            }],
+            Some(pane),
+        );
+        assert_eq!(
+            app.world().resource::<TmuxCaptured>().select_pane,
+            vec![(pane, PaneDirection::Left)],
+            "a SelectPane(Left) effect must trigger SelectPaneRequest on batch.focused (active pane)"
+        );
+    }
+
+    #[test]
+    fn plain_keys_batch_into_one_forward_request() {
+        let (mut app, pane) = tmux_dispatch_app();
+        dispatch(
+            &mut app,
+            vec![
+                KeyEffect::Type {
+                    logical: Key::Character("a".into()),
+                    key_code: KeyCode::KeyA,
+                },
+                KeyEffect::Type {
+                    logical: Key::Character("b".into()),
+                    key_code: KeyCode::KeyB,
+                },
+            ],
+            Some(pane),
+        );
+        assert_eq!(
+            app.world().resource::<TmuxCaptured>().forward,
+            vec![(pane, vec!["a".to_string(), "b".to_string()])],
+            "Type effects in one batch must batch into a single ForwardPaneKeysRequest"
+        );
+    }
+
+    #[test]
+    fn detach_triggers_detach_session_request() {
+        use tmux_control_parser::SessionId;
+
+        let (mut app, pane) = tmux_dispatch_app();
+        let session = app
+            .world_mut()
+            .spawn(TmuxSession {
+                id: SessionId(1),
+                name: "main".into(),
+            })
+            .id();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::DetachSession,
+                via_leader: false,
+            }],
+            Some(pane),
+        );
+        assert_eq!(
+            app.world().resource::<TmuxCaptured>().detach,
+            vec![session],
+            "a DetachSession effect must trigger DetachSessionRequest on the session"
+        );
+    }
+
+    #[test]
+    fn select_window_targets_indexed_window() {
+        use tmux_control_parser::WindowId;
+
+        let (mut app, pane) = tmux_dispatch_app();
+        app.world_mut().spawn(TmuxWindow {
+            id: WindowId(1),
+            index: 1,
+            name: "one".into(),
+        });
+        let window_two = app
+            .world_mut()
+            .spawn(TmuxWindow {
+                id: WindowId(2),
+                index: 2,
+                name: "two".into(),
+            })
+            .id();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::SelectWindow(2),
+                via_leader: false,
+            }],
+            Some(pane),
+        );
+        assert_eq!(
+            app.world().resource::<TmuxCaptured>().select_window,
+            vec![window_two],
+            "SelectWindow(2) must target the window whose display index is 2"
+        );
+    }
 }
