@@ -111,6 +111,10 @@ split-vertical-pane   = "<Leader>i"    # split-window -h (side-by-side)
 split-horizontal-pane = "<Leader>o"    # split-window -v (stacked)
 kill-pane             = "<Leader>p"    # kill-pane, after a confirm prompt
 zoom-pane             = "<Leader>z"    # resize-pane -Z
+resize-left-pane      = "<Leader:r>Shift+H"  # resize-pane -L 5 (repeatable)
+resize-down-pane      = "<Leader:r>Shift+J"  # resize-pane -D 5 (repeatable)
+resize-up-pane        = "<Leader:r>Shift+K"  # resize-pane -U 5 (repeatable)
+resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
 
 # --- window actions (tmux mode only) ---
 new-window            = "<Leader>c"        # new-window
@@ -234,6 +238,10 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `select-down-pane` | `<Leader>j` | Focus the pane below (tmux mode only). |
 | `select-up-pane` | `<Leader>k` | Focus the pane above (tmux mode only). |
 | `select-right-pane` | `<Leader>l` | Focus the pane to the right (tmux mode only). |
+| `resize-left-pane` | `<Leader:r>Shift+H` | Resize the active pane's border left by 5 cells, repeatable (tmux mode only). |
+| `resize-down-pane` | `<Leader:r>Shift+J` | Resize the active pane's border down by 5 cells, repeatable (tmux mode only). |
+| `resize-up-pane` | `<Leader:r>Shift+K` | Resize the active pane's border up by 5 cells, repeatable (tmux mode only). |
+| `resize-right-pane` | `<Leader:r>Shift+L` | Resize the active pane's border right by 5 cells, repeatable (tmux mode only). |
 | `split-vertical-pane` | `<Leader>i` | Split the active pane side-by-side (tmux `split-window -h`) (tmux mode only). |
 | `split-horizontal-pane` | `<Leader>o` | Split the active pane stacked (tmux `split-window -v`) (tmux mode only). |
 | `kill-pane` | `<Leader>p` | Kill the active pane, after a confirm prompt (tmux mode only). |
