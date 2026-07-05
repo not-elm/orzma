@@ -222,7 +222,9 @@ fn apply_default_shortcuts(
                         | ShortcutAction::PreviousWindow
                         | ShortcutAction::SelectWindow(_)
                         | ShortcutAction::RenameWindow
-                        | ShortcutAction::RenameSession,
+                        | ShortcutAction::RenameSession
+                        | ShortcutAction::Quit
+                        | ShortcutAction::ReleaseWebviewFocus,
                     ..
                 } => {}
                 KeyEffect::CopyMode(action) => {
@@ -249,10 +251,6 @@ fn apply_default_shortcuts(
                 }
                 KeyEffect::WebviewForward { .. } => {}
                 KeyEffect::ReleaseWebviewFocus => {}
-                KeyEffect::Action {
-                    action: ShortcutAction::Quit | ShortcutAction::ReleaseWebviewFocus,
-                    ..
-                } => {}
             }
         }
     }

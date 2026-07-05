@@ -10,11 +10,10 @@
 use crate::action::vi::ResolvedCopyModeKeys;
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::input::ime::ImeState;
+use crate::input::ime::{ImeState, resolve_focused_surface};
 use crate::input::resolve::{BatchContext, KeyEffect, classify_key_batch};
 use crate::input::shortcuts::{LeaderGate, LeaderPhase, Shortcuts, clear_leader_phase};
 use crate::input::{InputPhase, current_modifiers};
-use crate::surface::OzmaTerminal;
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
@@ -121,7 +120,7 @@ fn resolve_shortcuts(
     guards: ModalGuards,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
-    focused_surface: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
+    focused_surface: Query<Entity, With<KeyboardFocused>>,
     copy_modes: Query<(), With<CopyModeState>>,
     forward_keys: Query<&ForwardKeys>,
 ) {
@@ -145,9 +144,8 @@ fn resolve_shortcuts(
         return;
     }
 
-    let focused = focused_surface.single().ok();
+    let focused = resolve_focused_surface(&focused_surface);
     let in_copy_mode = focused.is_some_and(|entity| copy_modes.get(entity).is_ok());
-    let webview_focused = focused_webview.0.is_some();
     let forward_chords = focused_webview
         .0
         .and_then(|entity| forward_keys.get(entity).ok())
@@ -158,7 +156,7 @@ fn resolve_shortcuts(
         mods,
         now: inputs.time.elapsed(),
         in_copy_mode,
-        webview_focused,
+        webview_focused: focused_webview.0.is_some(),
         forward_chords,
     };
     let all = classify_key_batch(
@@ -195,6 +193,7 @@ fn resolve_shortcuts(
 mod tests {
     use super::*;
     use crate::input::shortcuts::test_shortcuts_with_direct_chord;
+    use crate::surface::OzmaTerminal;
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use bevy::state::app::StatesPlugin;
@@ -296,9 +295,10 @@ mod tests {
         );
         assert_eq!(cap.focused, Some(term));
         assert!(!cap.in_copy_mode);
-        assert!(
-            cap.mods.is_some(),
-            "the batch carries the frame's modifiers"
+        assert_eq!(
+            cap.mods,
+            Some(Modifiers::default()),
+            "no modifier keys are held, so the batch carries the default modifiers"
         );
     }
 
@@ -328,19 +328,30 @@ mod tests {
         );
     }
 
-    #[test]
-    fn quit_writes_appexit_not_in_batch() {
+    fn meta_mods() -> Modifiers {
+        Modifiers {
+            ctrl: false,
+            shift: false,
+            alt: false,
+            meta: true,
+        }
+    }
+
+    fn quit_test_app(spawn_focused: bool) -> App {
         let mut app = resolve_app(test_shortcuts_with_direct_chord(
             KeyCode::KeyQ,
-            Modifiers {
-                ctrl: false,
-                shift: false,
-                alt: false,
-                meta: true,
-            },
+            meta_mods(),
             ShortcutAction::Quit,
         ));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        if spawn_focused {
+            app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        }
+        app
+    }
+
+    #[test]
+    fn quit_writes_appexit_not_in_batch() {
+        let mut app = quit_test_app(true);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::SuperLeft);
@@ -441,17 +452,8 @@ mod tests {
 
     #[test]
     fn quit_writes_appexit_with_no_focused_terminal() {
-        let mut app = resolve_app(test_shortcuts_with_direct_chord(
-            KeyCode::KeyQ,
-            Modifiers {
-                ctrl: false,
-                shift: false,
-                alt: false,
-                meta: true,
-            },
-            ShortcutAction::Quit,
-        ));
         // No KeyboardFocused terminal spawned; the window is focused.
+        let mut app = quit_test_app(false);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::SuperLeft);
