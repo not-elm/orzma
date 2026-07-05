@@ -47,7 +47,11 @@ Rationale: `classify_key_batch` is pure and fully unit-tested without a Bevy
 
 ### 2. Four typed, context-carrying messages (tailored fields)
 
-Each message carries only the frame context its consumer actually uses:
+Each message carries only the frame context its consumer actually uses. All four
+are `pub(in crate::input)` (matching `ShortcutBatch`'s current visibility — they
+are cross-file within `input` only, never crate-external) and each carries a
+`///` summary per the repo doc rule. The field lists below omit these for
+brevity:
 
 ```rust
 #[derive(Message)]
@@ -91,14 +95,22 @@ Field tailoring, derived from what the current appliers read off the batch:
 - `TypeMessage` / `WebviewForwardMessage` need `focused` and `mods` (to build
   the tmux key name / terminal modifiers). They do **not** need `in_copy_mode`.
 
-Ordering safety: `classify_key_batch` branches on `webview_focused` at the top,
-so a single frame emits either the webview family (`WebviewForward` + leader
-`Shortcut`) or the terminal family (`Type` / `CopyMode` / `Shortcut`), never
-both. Splitting the transport into independent message queues therefore
-introduces no cross-type ordering hazard. Within a family, `Type` order is
-preserved by `MessageReader` write order; `Shortcut` triggers are deferred
-commands whose ordering relative to the once-per-frame forward request is
-already flush-ordered today.
+Ordering safety: `classify_key_batch` reads `webview_focused` once as a
+batch-level constant, so `Type` / `CopyMode` (terminal branch) and
+`WebviewForward` (webview branch) are **mutually exclusive within a frame** —
+only one forwarding queue is ever non-empty. `Shortcut`, however, is emitted in
+**both** branches (a leader action fires under webview focus too), so it can
+coexist with `WebviewForward` or with `Type` / `CopyMode` in one frame.
+
+This coexistence is the one ordering hazard the split introduces. Today a single
+applier triggers the shortcut/copy-mode commands while iterating and then
+triggers the once-per-frame `ForwardPaneKeysRequest` **after** the loop
+(`tmux.rs`), so shortcut-triggered commands are always queued before the forward
+request. Independently-scheduled appliers do not preserve that order. §4 pins it
+back with an explicit `apply_*_shortcuts` / `apply_*_copy_mode` **before**
+`apply_*_forward` ordering, restoring the current deterministic command-queue
+order. Within the forward queue, key order is preserved by `MessageReader` write
+order.
 
 ### 3. Producer: `resolve_key_effects` fans out; `ShortcutBatch` deleted
 
@@ -122,6 +134,13 @@ removed; the four new messages are registered in `ShortcutsPlugin` (they are the
 cross-file transport, so registering them in the plugin that owns
 `ShortcutSet` is consistent).
 
+Existing-worktree note: `src/input/shortcuts.rs` already carries a partial
+`#[derive(Message)] pub struct ShortcutMessage { action, via_leader }` (a bare
+`pub`, no doc comment, missing `focused` / `in_copy_mode`). This refactor
+**replaces** that stub with the final form above — widen the fields, demote its
+visibility to `pub(in crate::input)`, and add the `///` summary — rather than
+adding a second type alongside it.
+
 ### 4. Consumers: split appliers per message
 
 Each applier reads exactly the message it owns and is gated on its own
@@ -144,7 +163,17 @@ current `apply_default_shortcuts`), so no Default system reads it.
 `apply_tmux_forward` reads both `TypeMessage` and `WebviewForwardMessage`
 because both map to `bevy_key_to_tmux_name` → a single `ForwardPaneKeysRequest`.
 Since the two never coexist in a frame, only one queue is non-empty per frame;
-the system is gated on `on_message::<TypeMessage>` OR `on_message::<WebviewForwardMessage>`.
+the system is gated on `on_message::<TypeMessage>` OR
+`on_message::<WebviewForwardMessage>` (`SystemCondition::or`, already used in the
+repo, e.g. `src/input/mouse.rs`).
+
+Ordering constraint (preserves current behavior): within each mode, the shortcut
+and copy-mode appliers must run **before** the forward applier —
+`(apply_tmux_shortcuts, apply_tmux_copy_mode).before(apply_tmux_forward)` and the
+Default equivalent — because a `Shortcut` can share a frame with a forwarded key,
+and today shortcut/copy commands are queued before the frame's
+`ForwardPaneKeysRequest`. Expressed with `.before()` / a shared sub-set inside
+`ShortcutSet::Apply`, per the repo's cross-file-ordering rule.
 
 `dispatch_tmux_action`, `tmux_pane_direction`, `tmux_split_direction` are
 unchanged; `apply_tmux_shortcuts` still calls `dispatch_tmux_action` for the
@@ -162,6 +191,31 @@ instead of `ShortcutBatch`.
 - `default_mode.rs` and `tmux/input.rs` test harnesses: their `dispatch`
   helpers write the new typed messages (with stamped context) instead of a
   `ShortcutBatch`.
+
+## Considered alternatives
+
+- **Three messages (fold `WebviewForward` into `Type`).** `resolve_key_effects`
+  already knows the `AppMode`, and in tmux `WebviewForward` and `Type` are
+  handled identically (both → `bevy_key_to_tmux_name`), while in Default
+  `WebviewForward` is a no-op. So the fan-out could map
+  `KeyEffect::WebviewForward` → `TypeMessage` only in tmux and drop it in
+  Default, eliminating `WebviewForwardMessage`, the OR-gate on
+  `apply_tmux_forward`, and a never-read Default queue (3 messages / 5 appliers).
+  **Deferred** in favor of the 4-message form chosen during brainstorming: the
+  4-message split keeps a webview-forwarded key semantically distinct from a
+  typed key and keeps `resolve_key_effects` mode-agnostic in its fan-out. Revisit
+  if the OR-gate or the dead Default queue proves awkward in implementation.
+
+- **`EntityEvent` + observer instead of `Message`.** The repo's documented
+  primary handoff idiom is `EntityEvent` + observer (entity-targeted,
+  flush-ordered), and this dispatch is entity-targeted (`focused`) and applies
+  same-frame. `Message` is chosen anyway because the appliers are **mode
+  routers** — they branch on `AppMode` and resolve session/window targets — and
+  the leaf effects they emit (`EnterCopyModeActionEvent`, `PasteAction`,
+  `TerminalKeyInput`, `trigger_copy_mode_action`) are *already* `EntityEvent`s.
+  A buffered `Message` transport into mode-gated appliers is the right vehicle;
+  per-effect observers would each have to duplicate the mode branch and target
+  resolution.
 
 ## Risks
 
