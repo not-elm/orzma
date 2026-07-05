@@ -29,7 +29,8 @@ impl Plugin for ShortcutsDefaultModePlugin {
                 apply_default_copy_mode
                     .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Default))
-                    .run_if(on_message::<CopyModeMessage>),
+                    .run_if(on_message::<CopyModeMessage>)
+                    .after(apply_default_shortcuts),
                 apply_default_type
                     .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Default))

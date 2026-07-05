@@ -860,7 +860,7 @@ mod tests {
                 Update,
                 (
                     apply_tmux_shortcuts,
-                    apply_tmux_copy_mode,
+                    apply_tmux_copy_mode.after(apply_tmux_shortcuts),
                     apply_tmux_forward
                         .after(apply_tmux_shortcuts)
                         .after(apply_tmux_copy_mode),

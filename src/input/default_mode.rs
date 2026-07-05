@@ -384,7 +384,7 @@ mod tests {
                 Update,
                 (
                     apply_default_shortcuts,
-                    apply_default_copy_mode,
+                    apply_default_copy_mode.after(apply_default_shortcuts),
                     apply_default_type
                         .after(apply_default_shortcuts)
                         .after(apply_default_copy_mode),

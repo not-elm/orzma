@@ -32,7 +32,6 @@ use ozmux_tmux::{
     ActiveWindow, KeyMods, PaneDirection, SplitDirection, TmuxSession, TmuxWindow,
     bevy_key_to_tmux_name,
 };
-use std::collections::HashMap;
 
 pub(super) struct ShortcutsTmuxModePlugin;
 
@@ -48,7 +47,8 @@ impl Plugin for ShortcutsTmuxModePlugin {
                 apply_tmux_copy_mode
                     .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Tmux))
-                    .run_if(on_message::<CopyModeMessage>),
+                    .run_if(on_message::<CopyModeMessage>)
+                    .after(apply_tmux_shortcuts),
                 apply_tmux_forward
                     .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Tmux))
@@ -59,12 +59,6 @@ impl Plugin for ShortcutsTmuxModePlugin {
                 .in_set(TmuxActiveSet),
         );
     }
-}
-
-/// Run condition for `apply_tmux_forward`: true on any frame carrying a key to
-/// forward (typed or webview-forwarded). The two never coexist in a frame.
-fn on_tmux_forward_message() -> impl SystemCondition<()> {
-    on_message::<TypeMessage>.or(on_message::<WebviewForwardMessage>)
 }
 
 /// Target-entity lookups for the tmux shortcut actions, bundled to stay
@@ -128,19 +122,22 @@ pub(in crate::input) fn apply_tmux_copy_mode(
 }
 
 /// Forwards typed / webview-forwarded keys to the focused pane as one
-/// `ForwardPaneKeysRequest` per pane. `TypeMessage` and `WebviewForwardMessage`
-/// never coexist in a frame, so at most one reader is non-empty. Runs after the
-/// shortcut/copy appliers so their triggers are queued first (parity with the
-/// old single-system order). Gated on `on_tmux_forward_message`.
+/// `ForwardPaneKeysRequest`. `TypeMessage` and `WebviewForwardMessage` never
+/// coexist in a frame, and every message in a frame carries the same `focused`
+/// pane, so the mapped key names accumulate into a single ordered batch. Runs
+/// after the shortcut/copy appliers so their triggers are queued first (parity
+/// with the old single-system order). Gated on `on_tmux_forward_message`.
 pub(in crate::input) fn apply_tmux_forward(
     mut commands: Commands,
     mut type_keys: MessageReader<TypeMessage>,
     mut webview_forward: MessageReader<WebviewForwardMessage>,
 ) {
-    let mut by_pane: HashMap<Entity, Vec<String>> = HashMap::new();
+    let mut pane = None;
+    let mut names = Vec::new();
     for msg in type_keys.read() {
         push_forward_name(
-            &mut by_pane,
+            &mut names,
+            &mut pane,
             msg.focused,
             &msg.logical,
             msg.key_code,
@@ -149,22 +146,26 @@ pub(in crate::input) fn apply_tmux_forward(
     }
     for msg in webview_forward.read() {
         push_forward_name(
-            &mut by_pane,
+            &mut names,
+            &mut pane,
             msg.focused,
             &msg.logical,
             msg.key_code,
             msg.mods,
         );
     }
-    for (entity, names) in by_pane {
+    if let Some(entity) = pane
+        && !names.is_empty()
+    {
         commands.trigger(ForwardPaneKeysRequest { entity, names });
     }
 }
 
-/// Appends the tmux key name for `(logical, key_code, mods)` to `focused`'s
-/// per-pane forward list, when the key maps to a name and a pane is focused.
+/// Appends the tmux key name for `(logical, key_code, mods)` to `names` and
+/// records the focused pane, when the key maps to a name and a pane is focused.
 fn push_forward_name(
-    by_pane: &mut HashMap<Entity, Vec<String>>,
+    names: &mut Vec<String>,
+    pane: &mut Option<Entity>,
     focused: Option<Entity>,
     logical: &Key,
     key_code: KeyCode,
@@ -180,7 +181,8 @@ fn push_forward_name(
         super_: mods.meta,
     };
     if let Some(name) = bevy_key_to_tmux_name(logical, key_code, kmods) {
-        by_pane.entry(entity).or_default().push(name);
+        *pane = Some(entity);
+        names.push(name);
     }
 }
 
@@ -287,4 +289,10 @@ pub(in crate::input) fn tmux_split_direction(orientation: CfgSplitOrientation) -
         CfgSplitOrientation::Vertical => SplitDirection::Horizontal,
         CfgSplitOrientation::Horizontal => SplitDirection::Vertical,
     }
+}
+
+/// Run condition for `apply_tmux_forward`: true on any frame carrying a key to
+/// forward (typed or webview-forwarded). The two never coexist in a frame.
+fn on_tmux_forward_message() -> impl SystemCondition<()> {
+    on_message::<TypeMessage>.or(on_message::<WebviewForwardMessage>)
 }
