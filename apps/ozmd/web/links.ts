@@ -1,3 +1,5 @@
+import { decode, schemeOf } from './url';
+
 /** A classified `<a href>` target: where a click should be routed. */
 export type LinkTarget =
   | { kind: 'anchor'; fragment: string }
@@ -33,17 +35,4 @@ export function classifyLink(href: string): LinkTarget {
     return { kind: 'markdown', path, fragment };
   }
   return { kind: 'file', path };
-}
-
-function schemeOf(raw: string): string | null {
-  const m = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(raw);
-  return m === null ? null : m[1].toLowerCase();
-}
-
-function decode(s: string): string {
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
-  }
 }
