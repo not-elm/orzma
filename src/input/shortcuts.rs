@@ -77,6 +77,15 @@ impl Plugin for ShortcutsPlugin {
 /// per-mode appliers. Excludes `Quit` and `ReleaseWebviewFocus`, which
 /// `resolve_shortcuts` handles inline. `focused` is the `KeyboardFocused`
 /// `OzmaTerminal` (the Default terminal or the active tmux pane).
+// NOTE: no production consumer reads these fields anymore (both modes
+// migrated to the typed messages in Tasks 3-4); `resolve_shortcuts` still
+// dual-writes this message for Task 5 to remove. `#[allow]` (not `#[expect]`)
+// because a `#[cfg(test)]` reader in `keyboard::handler`'s tests reads the
+// fields, so whether `dead_code` fires depends on the test cfg.
+#[allow(
+    dead_code,
+    reason = "dual-written by resolve_shortcuts until Task 5 deletes ShortcutBatch; only a #[cfg(test)] reader remains"
+)]
 #[derive(Message)]
 pub(in crate::input) struct ShortcutBatch {
     /// The mode-specific effects to apply (no `Quit` / `ReleaseWebviewFocus`).
@@ -93,12 +102,6 @@ pub(in crate::input) struct ShortcutBatch {
 /// to the per-mode appliers. Excludes `Quit` / `ReleaseWebviewFocus` (handled
 /// inline in `resolve_key_effects`). `focused` is the `KeyboardFocused` surface;
 /// `in_copy_mode` gates the copy-mode re-entry and paste-suppression rules.
-// NOTE: fields are only constructed here; Tasks 3-5 add the consumers that
-// read them (migrating off `ShortcutBatch`), so `dead_code` fires until then.
-#[expect(
-    dead_code,
-    reason = "consumed by the Task 3-5 per-mode appliers, not yet migrated"
-)]
 #[derive(Message)]
 pub(in crate::input) struct ShortcutMessage {
     /// The action to run.

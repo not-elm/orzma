@@ -2,8 +2,8 @@ use crate::{
     action::{terminal::PasteAction, vi::trigger_copy_mode_action},
     app_mode::AppMode,
     input::{
-        keyboard::{bevy_key_to_terminal_key, key_effect::KeyEffect},
-        shortcuts::{ShortcutBatch, ShortcutSet},
+        keyboard::bevy_key_to_terminal_key,
+        shortcuts::{CopyModeMessage, ShortcutMessage, ShortcutSet, TypeMessage},
     },
     ui::copy_mode::EnterCopyModeActionEvent,
 };
@@ -17,90 +17,105 @@ impl Plugin for ShortcutsDefaultModePlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            apply_default_shortcuts
-                .in_set(ShortcutSet::Apply)
-                .run_if(in_state(AppMode::Default))
-                .run_if(on_message::<ShortcutBatch>),
+            (
+                apply_default_shortcuts
+                    .in_set(ShortcutSet::Apply)
+                    .run_if(in_state(AppMode::Default))
+                    .run_if(on_message::<ShortcutMessage>),
+                apply_default_copy_mode
+                    .in_set(ShortcutSet::Apply)
+                    .run_if(in_state(AppMode::Default))
+                    .run_if(on_message::<CopyModeMessage>),
+                apply_default_type
+                    .in_set(ShortcutSet::Apply)
+                    .run_if(in_state(AppMode::Default))
+                    .run_if(on_message::<TypeMessage>)
+                    .after(apply_default_shortcuts)
+                    .after(apply_default_copy_mode),
+            ),
         );
     }
 }
 
-/// Applies `AppMode::Default` keyboard shortcuts from the frame's
-/// `ShortcutBatch` (produced by `crate::input::dispatch::resolve_shortcuts`):
-/// triggers the matching events on `batch.focused` — copy-mode entry, paste
-/// (direct fires outside copy mode, leader fires unconditionally), the shared
-/// `[copy-mode]` key table, and raw-key typing. `Quit` and
-/// `ReleaseWebviewFocus` are handled upstream in `resolve_shortcuts`; the
-/// pane/window actions are no-ops in Default mode. Registered in
-/// `ShortcutSet::Apply`, gated on `in_state(AppMode::Default)` +
-/// `on_message::<ShortcutBatch>`.
+/// Applies `AppMode::Default` keyboard shortcuts from `ShortcutMessage`:
+/// copy-mode entry and paste (direct paste fires outside copy mode; a leader
+/// paste fires unconditionally). `Quit` / `ReleaseWebviewFocus` are handled
+/// upstream in `resolve_key_effects`; pane/window actions are no-ops in Default.
+/// Registered in `ShortcutSet::Apply`, gated on `in_state(AppMode::Default)` +
+/// `on_message::<ShortcutMessage>`.
 pub(in crate::input) fn apply_default_shortcuts(
     mut commands: Commands,
-    mut batches: MessageReader<ShortcutBatch>,
+    mut shortcuts: MessageReader<ShortcutMessage>,
 ) {
-    for batch in batches.read() {
-        let terminal_mods = TerminalModifiers {
-            ctrl: batch.mods.ctrl,
-            shift: batch.mods.shift,
-            alt: batch.mods.alt,
-            meta: batch.mods.meta,
-        };
-        for effect in &batch.effects {
-            match effect {
-                KeyEffect::Shortcut {
-                    action: Shortcut::EnterCopyMode,
-                    ..
-                } => {
-                    if let Some(entity) = batch.focused {
-                        commands.trigger(EnterCopyModeActionEvent { entity });
-                    }
+    for msg in shortcuts.read() {
+        match msg.action {
+            Shortcut::EnterCopyMode => {
+                if let Some(entity) = msg.focused {
+                    commands.trigger(EnterCopyModeActionEvent { entity });
                 }
-                KeyEffect::Shortcut {
-                    action: Shortcut::Paste,
-                    via_leader,
-                } => {
-                    if let Some(entity) = batch.focused
-                        && (*via_leader || !batch.in_copy_mode)
-                    {
-                        commands.trigger(PasteAction { entity });
-                    }
-                }
-                KeyEffect::Shortcut {
-                    action:
-                        Shortcut::DetachSession
-                        | Shortcut::SelectPane(_)
-                        | Shortcut::SplitPane(_)
-                        | Shortcut::KillPane
-                        | Shortcut::ZoomPane
-                        | Shortcut::NewWindow
-                        | Shortcut::KillWindow
-                        | Shortcut::NextWindow
-                        | Shortcut::PreviousWindow
-                        | Shortcut::SelectWindow(_)
-                        | Shortcut::RenameWindow
-                        | Shortcut::RenameSession
-                        | Shortcut::Quit
-                        | Shortcut::ReleaseWebviewFocus,
-                    ..
-                } => {}
-                KeyEffect::CopyMode(action) => {
-                    if let Some(entity) = batch.focused {
-                        trigger_copy_mode_action(&mut commands, entity, *action);
-                    }
-                }
-                KeyEffect::Type { logical, .. } => {
-                    if let Some(entity) = batch.focused
-                        && let Some(key) = bevy_key_to_terminal_key(logical)
-                    {
-                        commands.trigger(TerminalKeyInput {
-                            entity,
-                            key,
-                            modifiers: terminal_mods,
-                        });
-                    }
-                }
-                KeyEffect::WebviewForward { .. } => {}
             }
+            Shortcut::Paste => {
+                if let Some(entity) = msg.focused
+                    && (msg.via_leader || !msg.in_copy_mode)
+                {
+                    commands.trigger(PasteAction { entity });
+                }
+            }
+            Shortcut::DetachSession
+            | Shortcut::SelectPane(_)
+            | Shortcut::SplitPane(_)
+            | Shortcut::KillPane
+            | Shortcut::ZoomPane
+            | Shortcut::NewWindow
+            | Shortcut::KillWindow
+            | Shortcut::NextWindow
+            | Shortcut::PreviousWindow
+            | Shortcut::SelectWindow(_)
+            | Shortcut::RenameWindow
+            | Shortcut::RenameSession
+            | Shortcut::Quit
+            | Shortcut::ReleaseWebviewFocus => {}
+        }
+    }
+}
+
+/// Applies matched `[copy-mode]` keys from `CopyModeMessage` on the focused
+/// terminal. Registered in `ShortcutSet::Apply`, gated on
+/// `in_state(AppMode::Default)` + `on_message::<CopyModeMessage>`.
+pub(in crate::input) fn apply_default_copy_mode(
+    mut commands: Commands,
+    mut copy_mode: MessageReader<CopyModeMessage>,
+) {
+    for msg in copy_mode.read() {
+        if let Some(entity) = msg.focused {
+            trigger_copy_mode_action(&mut commands, entity, msg.action);
+        }
+    }
+}
+
+/// Types raw keys from `TypeMessage` into the focused terminal as
+/// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
+/// `ShortcutSet::Apply`, gated on `in_state(AppMode::Default)` +
+/// `on_message::<TypeMessage>`.
+pub(in crate::input) fn apply_default_type(
+    mut commands: Commands,
+    mut type_keys: MessageReader<TypeMessage>,
+) {
+    for msg in type_keys.read() {
+        if let Some(entity) = msg.focused
+            && let Some(key) = bevy_key_to_terminal_key(&msg.logical)
+        {
+            let terminal_mods = TerminalModifiers {
+                ctrl: msg.mods.ctrl,
+                shift: msg.mods.shift,
+                alt: msg.mods.alt,
+                meta: msg.mods.meta,
+            };
+            commands.trigger(TerminalKeyInput {
+                entity,
+                key,
+                modifiers: terminal_mods,
+            });
         }
     }
 }

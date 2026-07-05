@@ -1,12 +1,13 @@
 //! Host-side input for `AppMode::Default`: maintains the crate's
 //! `KeyboardDisabled` / `MouseDisabled` markers from the coarse guards (IME,
-//! focus, webview), and applies the frame's `ShortcutBatch` (resolved by
-//! `crate::input::dispatch::resolve_shortcuts`) by triggering the matching
-//! events on the focused terminal — copy-mode entry, the shared `[copy-mode]`
-//! key table (while copy mode is active), direct-chord and leader paste, and
-//! raw-key forwarding (`crate::action::terminal::PasteAction`,
-//! `TerminalKeyInput`). Quit and release-webview-focus are handled upstream in
-//! `resolve_shortcuts`; the pane/window actions are no-ops in Default mode.
+//! focus, webview). The frame's shortcut messages (resolved by
+//! `crate::input::keyboard::key_effect::classify_key_batch`) are applied by
+//! `crate::input::shortcuts::default_mode`'s per-message systems — copy-mode
+//! entry, the shared `[copy-mode]` key table (while copy mode is active),
+//! direct-chord and leader paste, and raw-key typing
+//! (`crate::action::terminal::PasteAction`, `TerminalKeyInput`). Quit and
+//! release-webview-focus are handled upstream; the pane/window actions are
+//! no-ops in Default mode.
 
 mod webview;
 
@@ -168,8 +169,10 @@ mod tests {
     use super::*;
     use crate::action::terminal::PasteAction;
     use crate::input::keyboard::key_effect::KeyEffect;
-    use crate::input::shortcuts::default_mode::apply_default_shortcuts;
-    use crate::input::shortcuts::{ShortcutBatch, Shortcuts};
+    use crate::input::shortcuts::default_mode::{
+        apply_default_copy_mode, apply_default_shortcuts, apply_default_type,
+    };
+    use crate::input::shortcuts::{CopyModeMessage, ShortcutMessage, Shortcuts, TypeMessage};
     use crate::ui::copy_mode::EnterCopyModeActionEvent;
     use bevy::app::App;
     use bevy::ecs::resource::Resource;
@@ -367,15 +370,26 @@ mod tests {
         keys: Vec<TerminalKey>,
     }
 
-    /// Builds an app running `apply_default_shortcuts` as a bare
-    /// `ShortcutBatch` consumer, capturing the events it triggers.
+    /// Builds an app running the three Default appliers as bare
+    /// per-message consumers, capturing the events they trigger.
     fn build_default_dispatch_app(shortcuts: Shortcuts) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<ShortcutBatch>()
+            .add_message::<ShortcutMessage>()
+            .add_message::<CopyModeMessage>()
+            .add_message::<TypeMessage>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
-            .add_systems(Update, apply_default_shortcuts)
+            .add_systems(
+                Update,
+                (
+                    apply_default_shortcuts,
+                    apply_default_copy_mode,
+                    apply_default_type
+                        .after(apply_default_shortcuts)
+                        .after(apply_default_copy_mode),
+                ),
+            )
             .add_observer(
                 |_ev: On<EnterCopyModeActionEvent>, mut c: ResMut<Captured>| {
                     c.copy_mode += 1;
@@ -412,12 +426,31 @@ mod tests {
         in_copy_mode: bool,
         mods: Modifiers,
     ) {
-        app.world_mut().write_message(ShortcutBatch {
-            effects,
-            focused,
-            in_copy_mode,
-            mods,
-        });
+        for effect in effects {
+            match effect {
+                KeyEffect::Shortcut { action, via_leader } => {
+                    app.world_mut().write_message(ShortcutMessage {
+                        action,
+                        via_leader,
+                        focused,
+                        in_copy_mode,
+                    });
+                }
+                KeyEffect::CopyMode(action) => {
+                    app.world_mut()
+                        .write_message(CopyModeMessage { action, focused });
+                }
+                KeyEffect::Type { logical, key_code } => {
+                    app.world_mut().write_message(TypeMessage {
+                        logical,
+                        key_code,
+                        focused,
+                        mods,
+                    });
+                }
+                KeyEffect::WebviewForward { .. } => {}
+            }
+        }
         app.update();
     }
 
