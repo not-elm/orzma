@@ -92,7 +92,7 @@ pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16,
     (cols, rows)
 }
 
-/// Returns the topmost `OzmaTerminal` surface whose node contains `cursor_phys`,
+/// Returns the topmost `OrzmaTerminal` surface whose node contains `cursor_phys`,
 /// or `None` when the cursor is over none. "Topmost" is the highest
 /// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); ties
 /// break by `Entity` for determinism. The Default-mode pointer/gate path uses

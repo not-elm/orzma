@@ -15,10 +15,10 @@ use crate::{
         mouse_write::MouseWritePlugin, open_uri::OpenUriPlugin, paste::PastePlugin,
         selection::SelectionPlugin, viewport_scroll::ViewportScrollPlugin,
     },
-    surface::OzmaTerminal,
+    surface::OrzmaTerminal,
 };
 use bevy::prelude::*;
-use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
+use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 pub(crate) use forward_input::TerminalForwardInput;
 pub(crate) use mouse_write::TerminalMouseWrite;
@@ -54,7 +54,7 @@ type TerminalBackendQuery<'w, 's> = Query<
         Option<&'static mut PtyHandle>,
         Option<&'static mut Coalescer>,
     ),
-    With<OzmaTerminal>,
+    With<OrzmaTerminal>,
 >;
 
 /// Applies one handle-touching mouse op to `entity`, branching on whether

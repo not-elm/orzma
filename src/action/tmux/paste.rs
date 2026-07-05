@@ -6,8 +6,8 @@ use crate::action::terminal::PasteAction;
 use crate::clipboard::{Clipboard, build_paste_bytes};
 use crate::input::tmux::forward::{pane_target, snap_pane_to_bottom};
 use bevy::prelude::*;
-use ozma_tty_engine::TerminalHandle;
-use ozmux_tmux::{SendBytes, TmuxClient, TmuxPane};
+use orzma_tmux::{SendBytes, TmuxClient, TmuxPane};
+use orzma_tty_engine::TerminalHandle;
 
 /// Registers the tmux `PasteAction` apply observer.
 pub(super) struct TmuxPastePlugin;
@@ -61,7 +61,7 @@ fn on_paste_tmux(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_tmux::PaneId;
+    use orzma_tmux::PaneId;
     use tmux_control_parser::CellDims;
 
     fn spawn_pane(app: &mut App, id: u32) -> Entity {

@@ -1,4 +1,4 @@
-//! Mouse-button dispatch for every `OzmaTerminal` surface: app reporting, local
+//! Mouse-button dispatch for every `OrzmaTerminal` surface: app reporting, local
 //! text selection + copy, and Cmd-click hyperlink open. Hit-tests the cursor to
 //! a cell, drives the engine's pure `ButtonAction` router, and fans the decided
 //! effects out via the shared `trigger_mouse_effects`. Registered by
@@ -9,22 +9,22 @@ use super::{
     on_any_mouse_message, trigger_mouse_effects,
 };
 use crate::input::InputPhase;
-use crate::input::bindings::OzmaMouseConfig;
+use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::current_modifiers;
 use crate::input::hyperlink::link_modifier_held;
 use crate::input::keyboard::current_terminal_modifiers;
-use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OzmaMouseGesture};
+use crate::input::mouse::gesture::{DragGesture, DragPhase, HeldPointer, OrzmaMouseGesture};
 use crate::surface::geometry::topmost_surface_at;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
 use bevy::prelude::*;
 use bevy::time::{Real, Time};
 use bevy::window::{CursorMoved, PrimaryWindow};
-use ozma_tty_engine::{
+use orzma_tty_engine::{
     ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
     MouseButtonKind, Point, ProtocolModifiers, Side, TermMode,
 };
-use ozma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::TerminalCellMetricsResource;
 use std::time::Duration;
 
 pub(in crate::input::mouse) mod tmux;
@@ -38,7 +38,7 @@ pub(super) struct MouseButtonInputPlugin;
 
 impl Plugin for MouseButtonInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<OzmaMouseGesture>()
+        app.init_resource::<OrzmaMouseGesture>()
             .add_systems(
                 Update,
                 dispatch_mouse_buttons
@@ -64,15 +64,15 @@ struct FrameContext {
 /// cursor on press, locks drag/release to that terminal, tracks clicks and drag
 /// state, drives `decide_button`, and fans the decided effects out to
 /// per-operation `EntityEvent`s via `trigger_mouse_effects`. Skips any
-/// `OzmaTerminal` carrying `MouseDisabled`; an empty candidate set (modal
+/// `OrzmaTerminal` carrying `MouseDisabled`; an empty candidate set (modal
 /// suppression) drains events and resets the gesture.
 fn dispatch_mouse_buttons(
     mut commands: Commands,
-    mut gesture: ResMut<OzmaMouseGesture>,
+    mut gesture: ResMut<OrzmaMouseGesture>,
     mut buttons: MessageReader<MouseButtonInput>,
     mut cursor_moved: MessageReader<CursorMoved>,
     terminals: TerminalSurfaces,
-    cfg: Res<OzmaMouseConfig>,
+    cfg: Res<OrzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time<Real>>,
@@ -113,7 +113,7 @@ fn dispatch_mouse_buttons(
 /// caller drains the input readers and resets the gesture — this fn does not
 /// (it reads `cursor_moved` only to refresh `last_cursor_phys`).
 fn resolve_frame(
-    gesture: &mut OzmaMouseGesture,
+    gesture: &mut OrzmaMouseGesture,
     cursor_moved: &mut MessageReader<CursorMoved>,
     terminals: &TerminalSurfaces<'_, '_>,
     windows: &Query<&Window, With<PrimaryWindow>>,
@@ -162,10 +162,10 @@ fn ctx_for<'a>(
 /// updates the held-pointer state, and triggers the decided effects.
 fn process_button_event(
     commands: &mut Commands,
-    gesture: &mut OzmaMouseGesture,
+    gesture: &mut OrzmaMouseGesture,
     terminals: &TerminalSurfaces<'_, '_>,
     frame: &FrameContext,
-    cfg: &OzmaMouseConfig,
+    cfg: &OrzmaMouseConfig,
     ev: &MouseButtonInput,
     now: Duration,
 ) {
@@ -226,10 +226,10 @@ fn process_button_event(
 /// no-op when nothing is held; resets the gesture if the held surface is gone.
 fn synthesize_held_drag(
     commands: &mut Commands,
-    gesture: &mut OzmaMouseGesture,
+    gesture: &mut OrzmaMouseGesture,
     terminals: &TerminalSurfaces<'_, '_>,
     frame: &FrameContext,
-    cfg: &OzmaMouseConfig,
+    cfg: &OrzmaMouseConfig,
 ) {
     let Some(held) = gesture.held else {
         return;
@@ -259,7 +259,7 @@ fn synthesize_held_drag(
 /// cell opens the URL and consumes the event; otherwise the engine's
 /// `ButtonAction::route` decides forward-to-app vs local selection.
 fn decide_button(
-    gesture: &mut OzmaMouseGesture,
+    gesture: &mut OrzmaMouseGesture,
     modes: TermMode,
     evt: ButtonEvent,
     mods: ProtocolModifiers,
@@ -356,14 +356,14 @@ fn to_viewport_point(cell: CellCoord) -> Point {
 /// mapping, the off-node release fallback, click-count registration, and the
 /// modifier-gated hyperlink lookup.
 fn resolve_button_event(
-    gesture: &mut OzmaMouseGesture,
+    gesture: &mut OrzmaMouseGesture,
     ctx: &CellContext,
     ev: &MouseButtonInput,
     cursor_phys: Vec2,
     scale: f32,
     modifier_held: bool,
     now: Duration,
-    cfg: &OzmaMouseConfig,
+    cfg: &OrzmaMouseConfig,
 ) -> Option<(ButtonEvent, Option<String>)> {
     let button = map_button(ev.button)?;
     let kind = button_kind(ev.state);
@@ -406,7 +406,7 @@ fn resolve_button_event(
 /// cell. Returns the decided effects and the new last-cell to record, or `None`
 /// when no button is held, the pointer is off-node, or it has not moved.
 fn synthesize_drag(
-    gesture: &mut OzmaMouseGesture,
+    gesture: &mut OrzmaMouseGesture,
     ctx: &CellContext,
     cursor_phys: Vec2,
     modes: TermMode,
@@ -432,7 +432,7 @@ fn synthesize_drag(
 
 /// Lazily materializes an armed selection on the first cell change, then extends.
 fn update_selection(
-    gesture: &mut OzmaMouseGesture,
+    gesture: &mut OrzmaMouseGesture,
     cell: CellCoord,
     side: Side,
 ) -> Vec<MouseEffect> {
@@ -493,11 +493,11 @@ mod tests {
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
-    use crate::surface::OzmaTerminal;
+    use crate::surface::OrzmaTerminal;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use ozma_tty_engine::SelectionType;
-    use ozma_tty_engine::TerminalHandle;
-    use ozma_tty_renderer::schema::TerminalGrid;
+    use orzma_tty_engine::SelectionType;
+    use orzma_tty_engine::TerminalHandle;
+    use orzma_tty_renderer::schema::TerminalGrid;
 
     fn make_selection_app() -> App {
         use bevy::window::WindowResolution;
@@ -506,8 +506,8 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<MouseButtonInput>()
             .add_message::<CursorMoved>()
-            .init_resource::<OzmaMouseConfig>()
-            .init_resource::<OzmaMouseGesture>()
+            .init_resource::<OrzmaMouseConfig>()
+            .init_resource::<OrzmaMouseGesture>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Clipboard>()
             .init_resource::<CapturedEffects>()
@@ -518,7 +518,7 @@ mod tests {
         let handle = TerminalHandle::detached(100, 37);
         // Node at window center (400,300), size 800x600 -> top-left (0,0).
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             handle,
             ComputedNode {
                 size: Vec2::new(800.0, 600.0),
@@ -606,7 +606,7 @@ mod tests {
         app.update();
         assert!(
             matches!(
-                app.world().resource::<OzmaMouseGesture>().drag,
+                app.world().resource::<OrzmaMouseGesture>().drag,
                 Some(DragGesture {
                     phase: DragPhase::Started,
                     ..
@@ -622,7 +622,7 @@ mod tests {
         write_cursor_moved(&mut app, Vec2::new(900.0, 700.0));
         app.update();
 
-        let g = app.world().resource::<OzmaMouseGesture>();
+        let g = app.world().resource::<OrzmaMouseGesture>();
         assert!(
             g.held.is_some(),
             "leaving the window must NOT drop the held pointer"
@@ -677,7 +677,7 @@ mod tests {
             "releasing after leaving the window must copy the selection, got {:?}",
             cap.0
         );
-        let g = app.world().resource::<OzmaMouseGesture>();
+        let g = app.world().resource::<OrzmaMouseGesture>();
         assert!(
             g.held.is_none() && g.drag.is_none(),
             "release must end the gesture"
@@ -693,7 +693,7 @@ mod tests {
         write_cursor_moved(&mut app, Vec2::new(900.0, 700.0));
         app.update();
 
-        let g = app.world().resource::<OzmaMouseGesture>();
+        let g = app.world().resource::<OrzmaMouseGesture>();
         assert!(
             g.drag.is_none() && g.held.is_none(),
             "an idle frame with no in-window cursor must stay reset"
@@ -710,13 +710,13 @@ mod tests {
         app.add_plugins(MinimalPlugins)
             .add_message::<MouseButtonInput>()
             .add_message::<CursorMoved>()
-            .init_resource::<OzmaMouseConfig>()
-            .init_resource::<OzmaMouseGesture>()
+            .init_resource::<OrzmaMouseConfig>()
+            .init_resource::<OrzmaMouseGesture>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Clipboard>()
             .insert_resource(test_metrics())
             .add_systems(Update, dispatch_mouse_buttons);
-        app.world_mut().spawn((OzmaTerminal, MouseDisabled));
+        app.world_mut().spawn((OrzmaTerminal, MouseDisabled));
         app.world_mut().spawn((
             Window {
                 focused: true,
@@ -732,12 +732,12 @@ mod tests {
                 window: Entity::PLACEHOLDER,
             });
         app.update();
-        assert!(app.world().resource::<OzmaMouseGesture>().drag.is_none());
+        assert!(app.world().resource::<OrzmaMouseGesture>().drag.is_none());
     }
 
     #[test]
     fn local_single_press_arms_drag_and_clears() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let fx = decide_button(
             &mut g,
             TermMode::empty(),
@@ -761,7 +761,7 @@ mod tests {
 
     #[test]
     fn local_drag_materializes_then_extends() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let cfg = ButtonConfig {
             max_protocol_events_per_frame: 8,
         };
@@ -817,7 +817,7 @@ mod tests {
 
     #[test]
     fn release_after_drag_copies() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let cfg = ButtonConfig {
             max_protocol_events_per_frame: 8,
         };
@@ -854,7 +854,7 @@ mod tests {
 
     #[test]
     fn release_after_bare_click_does_not_copy() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let cfg = ButtonConfig {
             max_protocol_events_per_frame: 8,
         };
@@ -882,7 +882,7 @@ mod tests {
 
     #[test]
     fn double_click_starts_word_selection() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let cfg = ButtonConfig {
             max_protocol_events_per_frame: 8,
         };
@@ -907,7 +907,7 @@ mod tests {
 
     #[test]
     fn app_capture_press_forwards_sgr_bytes() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
         let fx = decide_button(
             &mut g,
@@ -931,7 +931,7 @@ mod tests {
 
     #[test]
     fn app_capture_drag_forwards_motion_bytes() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
         let cfg = ButtonConfig {
             max_protocol_events_per_frame: 8,
@@ -962,7 +962,7 @@ mod tests {
 
     #[test]
     fn shift_bypass_selects_even_when_captured() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let modes = TermMode::MOUSE_DRAG | TermMode::SGR_MOUSE;
         let mods = ProtocolModifiers {
             shift: true,
@@ -991,7 +991,7 @@ mod tests {
 
     #[test]
     fn cmd_click_on_link_opens_and_consumes() {
-        let mut g = OzmaMouseGesture::default();
+        let mut g = OrzmaMouseGesture::default();
         let fx = decide_button(
             &mut g,
             TermMode::empty(),

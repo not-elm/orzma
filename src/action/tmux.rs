@@ -1,4 +1,4 @@
-//! Per-command tmux action events: each ozmux shortcut that drives a tmux
+//! Per-command tmux action events: each orzma shortcut that drives a tmux
 //! command has one `EntityEvent` + apply observer module under
 //! `src/action/tmux/`. This root aggregates their per-file plugins.
 

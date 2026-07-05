@@ -1,17 +1,17 @@
-# ozmux Configuration
+# orzma Configuration
 
-ozmux reads its configuration from a TOML file at startup. If the file does
+orzma reads its configuration from a TOML file at startup. If the file does
 not exist, all defaults below are used.
 
 ## File location
 
-ozmux resolves the config path in this order:
+orzma resolves the config path in this order:
 
-1. `$OZMUX_CONFIG` — used verbatim if set.
-2. `$XDG_CONFIG_HOME/ozmux/config.toml` — if `$XDG_CONFIG_HOME` is set.
-3. `~/.config/ozmux/config.toml` — the default.
+1. `$ORZMA_CONFIG` — used verbatim if set.
+2. `$XDG_CONFIG_HOME/orzma/config.toml` — if `$XDG_CONFIG_HOME` is set.
+3. `~/.config/orzma/config.toml` — the default.
 
-Unknown sections are rejected at startup, as are unknown keys in `[ozma]`,
+Unknown sections are rejected at startup, as are unknown keys in `[orzma]`,
 `[keyboard]`, `[shortcuts]`, and `[copy-mode]`. Unknown keys in `[font]`,
 `[mouse]`, and `[inactive_pane]` are silently ignored. Most invalid values are
 startup errors too; the few that are silently clamped or reverted are noted
@@ -23,9 +23,9 @@ Every key below shows its **default** value. Keep only the lines you want to
 change — omitted keys fall back to these defaults.
 
 ```toml
-# ~/.config/ozmux/config.toml
+# ~/.config/orzma/config.toml
 
-[ozma]
+[orzma]
 # Shell launched in new terminals. Default: the $SHELL environment variable.
 # Absolute path; no ~ expansion.
 # shell = "/bin/zsh"
@@ -227,7 +227,7 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | --- | --- | --- |
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
 | `release-webview-focus` | `Ctrl+Shift+Escape` | Return keyboard focus from a focused webview to the terminal. |
-| `quit` | `Cmd+Q` | Quit ozmux. |
+| `quit` | `Cmd+Q` | Quit orzma. |
 | `enter-copy-mode` | `Cmd+S` | Enter copy mode. |
 | `detach-session` | `Ctrl+Shift+D` | Detach the current tmux session (tmux mode only). |
 | `select-left-pane` | `<Leader>h` | Focus the pane to the left (tmux mode only). |
@@ -267,14 +267,14 @@ leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is
 a chord or a modifier tap.
 
 Note on tmux.conf bindings: with the tmux prefix key no longer intercepted by
-ozmux, root-table and prefix-table bindings from your `tmux.conf` do not fire
-inside ozmux — the tmux prefix key passes straight through to the pane like
+orzma, root-table and prefix-table bindings from your `tmux.conf` do not fire
+inside orzma — the tmux prefix key passes straight through to the pane like
 any other keystroke. Use the `[shortcuts]` actions above instead. Keys pressed
 **inside copy mode** (Default mode's Alacritty vi mode and tmux mode's
 copy-mode alike) no longer follow tmux's own copy-mode key tables at all:
-ozmux resolves every copy-mode key itself from the `[copy-mode]` table, so
+orzma resolves every copy-mode key itself from the `[copy-mode]` table, so
 your `tmux.conf` copy-mode / copy-mode-vi customizations and the tmux
-`mode-keys` option have no effect inside ozmux. See "Copy-mode keys" below.
+`mode-keys` option have no effect inside orzma. See "Copy-mode keys" below.
 
 Note on the leader: because the stock defaults above bind two dozen actions to
 `<Leader>...`, the `Cmd` tap leader is armed by default — tapping and
@@ -329,7 +329,7 @@ A `[copy-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
 - **`""` or `[]` unbinds** an action (see `search-forward = ""` in the
   fixture-style examples below).
 - **Duplicate keys are a startup error**: if the same key string is bound to
-  more than one `[copy-mode]` action, ozmux fails at startup naming every
+  more than one `[copy-mode]` action, orzma fails at startup naming every
   colliding action (analogous to `[shortcuts]`'s `DuplicateChords`). Unknown
   action names are rejected the same way unknown `[shortcuts]` actions are.
 
@@ -337,7 +337,7 @@ Shadowing note: `[shortcuts]` chords (both leader-scoped and direct) are
 matched **before** `[copy-mode]` keys. If the same keystroke is bound in both
 tables, the `[shortcuts]` action always fires and the `[copy-mode]` binding
 never sees it — e.g. setting `leader = "Ctrl+B"` shadows the default
-`page-up = "Ctrl+B"` binding while copy mode is active. ozmux does not
+`page-up = "Ctrl+B"` binding while copy mode is active. orzma does not
 validate across the two tables; check your own bindings for overlap.
 
 ### Copy-mode actions
@@ -401,12 +401,12 @@ and tmux copy-mode.
 By default, `Escape` is bound to the `exit` action, which leaves copy mode
 entirely. Note that stock tmux binds `Escape` to clear-selection only
 (deselecting the current selection without exiting copy mode). To deselect a
-selection in ozmux without leaving copy mode, press `v` (toggle-selection is a
+selection in orzma without leaving copy mode, press `v` (toggle-selection is a
 toggle: with a selection active, it clears it).
 
 Keys not bound to any `[copy-mode]` action are swallowed while copy mode is
 active (they never reach the pane) — this includes stock `copy-mode-vi` keys
-that ozmux does not carry over by default, such as `:` (goto-line), digit
+that orzma does not carry over by default, such as `:` (goto-line), digit
 repeat prefixes, `o` (other-end), `A` (append-and-cancel), `X` / `M-x`
 (mark), `;` / `,` (jump repeat), `z` (scroll-middle), and `D`
 (copy-end-of-line-and-cancel). Bind them to a `[copy-mode]` action yourself

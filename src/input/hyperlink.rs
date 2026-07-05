@@ -1,7 +1,7 @@
 //! OSC 8 hyperlink hover detection and cursor-icon control — the single
 //! authority for `HyperlinkHoverState` (the renderer underline) and the window
 //! `CursorIcon` over every terminal surface: tmux panes, the Default-mode shell,
-//! and webview hosts (all are `OzmaTerminal` entities). Over a linked cell the
+//! and webview hosts (all are `OrzmaTerminal` entities). Over a linked cell the
 //! cursor becomes a pointer while the platform activation modifier
 //! (`link_modifier_held`) is held, and text otherwise; over a webview host the
 //! cursor is left to `bevy_cef`'s `SystemCursorIconPlugin`. Surfaces with input
@@ -14,7 +14,7 @@
 
 use crate::input::focus::MouseDisabled;
 use crate::input::{InputPhase, current_modifiers};
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::topmost_surface_at;
 use crate::surface::geometry::{cell_at_local, phys_to_pane_local};
 use bevy::ecs::entity::Entity;
@@ -25,9 +25,9 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
-use ozmux_configs::shortcuts::Modifiers;
+use orzma_configs::shortcuts::Modifiers;
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 
 /// Plugin: registers `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
 pub(crate) struct HyperlinkInputPlugin;
@@ -63,7 +63,7 @@ fn hyperlink_hover_and_cursor(
     windows: Query<&Window, With<PrimaryWindow>>,
     surfaces: Query<
         (Entity, &ComputedNode, &UiGlobalTransform),
-        (With<OzmaTerminal>, Without<MouseDisabled>),
+        (With<OrzmaTerminal>, Without<MouseDisabled>),
     >,
     grids: Query<&TerminalGrid>,
     webview_hosts: Query<&WebviewSource>,
@@ -280,7 +280,7 @@ mod tests {
         );
     }
 
-    use ozma_tty_renderer::CellMetrics;
+    use orzma_tty_renderer::CellMetrics;
 
     fn hover_test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn hover_over_default_mode_terminal_link_sets_state_and_pointer() {
-        use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -378,7 +378,7 @@ mod tests {
         let term = app
             .world_mut()
             .spawn((
-                OzmaTerminal,
+                OrzmaTerminal,
                 ComputedNode {
                     size: Vec2::new(80.0, 80.0),
                     ..ComputedNode::DEFAULT
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(
             hover.entity,
             Some(term),
-            "hover must resolve to the Default-mode OzmaTerminal (no TmuxPane) under the cursor"
+            "hover must resolve to the Default-mode OrzmaTerminal (no TmuxPane) under the cursor"
         );
         assert_eq!(
             hover.hyperlink_id,
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn hover_skips_mouse_disabled_surface() {
-        use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -457,7 +457,7 @@ mod tests {
             ..default()
         };
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             MouseDisabled,
             ComputedNode {
                 size: Vec2::new(80.0, 80.0),
@@ -485,7 +485,7 @@ mod tests {
 
     #[test]
     fn hover_over_webview_host_leaves_cursor_to_cef() {
-        use ozma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
+        use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -507,7 +507,7 @@ mod tests {
             ))
             .id();
 
-        // A webview host: an OzmaTerminal carrying WebviewSource. `on_add_inject_render`
+        // A webview host: an OrzmaTerminal carrying WebviewSource. `on_add_inject_render`
         // would also give it a (rendered-over) grid, so the webview check must win.
         let grid = TerminalGrid {
             cols: 10,
@@ -524,8 +524,8 @@ mod tests {
             ..default()
         };
         app.world_mut().spawn((
-            OzmaTerminal,
-            WebviewSource::new("ozma://example/index.html"),
+            OrzmaTerminal,
+            WebviewSource::new("orzma://example/index.html"),
             ComputedNode {
                 size: Vec2::new(80.0, 80.0),
                 ..ComputedNode::DEFAULT

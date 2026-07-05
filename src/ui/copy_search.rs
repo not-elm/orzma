@@ -21,7 +21,7 @@ use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ozmux_tmux::{PaneId, Prompt, PromptKind, TmuxClient};
+use orzma_tmux::{PaneId, Prompt, PromptKind, TmuxClient};
 
 const PROMPT_Z: i32 = 320;
 

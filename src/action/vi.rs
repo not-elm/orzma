@@ -7,9 +7,9 @@ mod keymap;
 
 use bevy::prelude::*;
 pub(crate) use keymap::{ResolvedCopyModeKeys, trigger_copy_mode_action};
-use ozma_tty_engine::{SelectionType, ViMotion};
-use ozmux_configs::copy_mode::CopyScroll;
-use ozmux_tmux::PromptKind;
+use orzma_configs::copy_mode::CopyScroll;
+use orzma_tmux::PromptKind;
+use orzma_tty_engine::{SelectionType, ViMotion};
 
 /// Moves the copy cursor on `entity`.
 #[derive(EntityEvent, Debug, Clone)]

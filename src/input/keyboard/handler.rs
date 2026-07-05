@@ -30,8 +30,8 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
-use ozma_webview::ForwardKeys;
-use ozmux_configs::shortcuts::Shortcut;
+use orzma_configs::shortcuts::Shortcut;
+use orzma_webview::ForwardKeys;
 
 /// Registers `resolve_key_effects` and the `ShortcutSet` ordering.
 pub(super) struct KeyboardHandlerPlugin;
@@ -220,13 +220,13 @@ mod tests {
     use crate::input::shortcuts::{
         test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
     };
-    use crate::surface::OzmaTerminal;
+    use crate::surface::OrzmaTerminal;
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use bevy::state::app::StatesPlugin;
-    use ozmux_configs::shortcuts::Modifiers;
-    use ozmux_tmux::{PaneId, TmuxPane};
+    use orzma_configs::shortcuts::Modifiers;
+    use orzma_tmux::{PaneId, TmuxPane};
     use std::time::Duration;
     use tmux_control_parser::CellDims;
 
@@ -346,7 +346,7 @@ mod tests {
     #[test]
     fn normal_key_resolves_to_one_type_message() {
         let mut app = resolve_app(Shortcuts::default());
-        let term = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
+        let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         let cap = app.world().resource::<Captured>();
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn guarded_frame_emits_no_messages() {
         let mut app = resolve_app(Shortcuts::default());
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         // Window unfocused: a coarse guard drains the frame with no messages.
         {
             let mut windows = app
@@ -410,7 +410,7 @@ mod tests {
             Shortcut::Quit,
         ));
         if spawn_focused {
-            app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+            app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         }
         app
     }
@@ -471,7 +471,7 @@ mod tests {
         let mut app = resolve_app(Shortcuts::default());
         let pane = app
             .world_mut()
-            .spawn((OzmaTerminal, tmux_pane(1), KeyboardFocused))
+            .spawn((OrzmaTerminal, tmux_pane(1), KeyboardFocused))
             .id();
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
@@ -490,7 +490,7 @@ mod tests {
             Shortcut::EnterCopyMode,
         ));
         app.world_mut()
-            .spawn((OzmaTerminal, KeyboardFocused, CopyModeState));
+            .spawn((OrzmaTerminal, KeyboardFocused, CopyModeState));
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert_eq!(
@@ -507,7 +507,7 @@ mod tests {
             Modifiers::default(),
             Shortcut::EnterCopyMode,
         ));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert_eq!(
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn messages_consumed_same_update() {
         let mut app = resolve_app(Shortcuts::default());
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert_eq!(
@@ -560,7 +560,7 @@ mod tests {
             Shortcut::EnterCopyMode,
             Duration::ZERO,
         ));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
         *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
@@ -583,7 +583,7 @@ mod tests {
             Shortcut::EnterCopyMode,
             Duration::ZERO,
         ));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
         app.world_mut().resource_mut::<CefKeyboardFilter>().set([(
@@ -613,7 +613,7 @@ mod tests {
     #[test]
     fn filter_cleared_when_nothing_claimed() {
         let mut app = resolve_app(Shortcuts::default());
-        let term = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
+        let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
         let stale = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<CefKeyboardFilter>().set([(
             stale,
@@ -661,7 +661,7 @@ mod tests {
         app.init_resource::<DeliverProbe>()
             .init_resource::<ProbeWebview>()
             .add_systems(Update, deliver_probe.in_set(KeyboardDeliverSet));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
         app.world_mut().resource_mut::<ProbeWebview>().0 = Some(webview);

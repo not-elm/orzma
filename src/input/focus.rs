@@ -4,18 +4,18 @@
 //! to route keyboard and mouse input.
 
 use crate::input::InputPhase;
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use bevy_cef::prelude::{FocusedWebview, WebviewSource};
-use ozma_webview::{NonInteractive, Webview};
+use orzma_webview::{NonInteractive, Webview};
 
-/// When present on an `OzmaTerminal` entity, the crate's default keyboard
+/// When present on an `OrzmaTerminal` entity, the crate's default keyboard
 /// dispatcher skips it entirely — the host routes keyboard input elsewhere
 /// (tmux, a focused webview, an open picker, IME composition).
 #[derive(Component)]
 pub(crate) struct KeyboardDisabled;
 
-/// When present on an `OzmaTerminal` entity, that terminal is the keyboard
+/// When present on an `OrzmaTerminal` entity, that terminal is the keyboard
 /// focus: the crate's keyboard dispatcher routes raw keys to it, and the host
 /// routes IME commits and anchors the OS candidate window to it. The host owns
 /// focus policy and maintains the "exactly one focused" invariant; a terminal
@@ -23,7 +23,7 @@ pub(crate) struct KeyboardDisabled;
 #[derive(Component)]
 pub(crate) struct KeyboardFocused;
 
-/// When present on an `OzmaTerminal` entity, the host's mouse dispatchers and
+/// When present on an `OrzmaTerminal` entity, the host's mouse dispatchers and
 /// hover-cursor system skip it — it is removed from the hit-test candidate set,
 /// so the pointer falls through to the next terminal below it. The host marks
 /// every terminal `MouseDisabled` for modal suppression (picker / IME / focused
@@ -40,7 +40,7 @@ impl Plugin for FocusSyncPlugin {
     }
 }
 
-/// Keeps `bevy_cef`'s `FocusedWebview` in step with ozmux's active pane.
+/// Keeps `bevy_cef`'s `FocusedWebview` in step with orzma's active pane.
 ///
 /// bevy_cef only updates `FocusedWebview` when a *webview* node is clicked
 /// (`set_focus_on_press`), so moving focus to a terminal pane (a non-webview)
@@ -52,7 +52,7 @@ impl Plugin for FocusSyncPlugin {
 ///
 /// One case is PRESERVED instead of driven: when `FocusedWebview` holds an
 /// webview child (`Webview`) whose `ChildOf` parent is a live
-/// `OzmaTerminal` surface — active or not — that inline focus stands (spec §7, single
+/// `OrzmaTerminal` surface — active or not — that inline focus stands (spec §7, single
 /// focus source). This covers click-granted focus and the app-declared focus
 /// set via the control-plane `SetFocus` op, and means switching the active
 /// pane does NOT clear a webview's focus: the webview keeps keyboard
@@ -61,11 +61,11 @@ impl Plugin for FocusSyncPlugin {
 /// pane to `None`.
 fn sync_focused_webview(
     mut focused: ResMut<FocusedWebview>,
-    active_pane: Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>,
+    active_pane: Query<Entity, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
     webviews: Query<(), With<WebviewSource>>,
     non_interactive: Query<(), With<NonInteractive>>,
     webview_parents: Query<&ChildOf, With<Webview>>,
-    surfaces: Query<(), With<OzmaTerminal>>,
+    surfaces: Query<(), With<OrzmaTerminal>>,
 ) {
     // NOTE: a despawned inline child fails `webview_parents.get` here and so
     // falls through to the clear path below, which resolves to `None` and
@@ -103,12 +103,12 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        // The active OzmaTerminal IS the active surface. The webview pane carries a
+        // The active OrzmaTerminal IS the active surface. The webview pane carries a
         // WebviewSource; the terminal pane does not.
-        let terminal_pane = app.world_mut().spawn(OzmaTerminal).id();
+        let terminal_pane = app.world_mut().spawn(OrzmaTerminal).id();
         let ext_pane = app
             .world_mut()
-            .spawn((OzmaTerminal, WebviewSource::new("ozma://memo/index.html")))
+            .spawn((OrzmaTerminal, WebviewSource::new("orzma://memo/index.html")))
             .id();
 
         let set_active = move |app: &mut App, active: Entity, inactive: Entity| {
@@ -141,12 +141,12 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        // The active OzmaTerminal carries a NonInteractive WebviewSource: it must
+        // The active OrzmaTerminal carries a NonInteractive WebviewSource: it must
         // never be focused.
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             KeyboardFocused,
-            WebviewSource::new("ozma://memo/index.html"),
+            WebviewSource::new("orzma://memo/index.html"),
             NonInteractive,
         ));
 
@@ -166,7 +166,7 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        let pane = app.world_mut().spawn(OzmaTerminal).id();
+        let pane = app.world_mut().spawn(OrzmaTerminal).id();
         let child = app
             .world_mut()
             .spawn((
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<FocusedWebview>().0,
             Some(child),
-            "an inline child of a live OzmaTerminal must keep FocusedWebview across the per-frame sync",
+            "an inline child of a live OrzmaTerminal must keep FocusedWebview across the per-frame sync",
         );
     }
 
@@ -196,7 +196,7 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.add_systems(Update, sync_focused_webview);
 
-        let pane = app.world_mut().spawn(OzmaTerminal).id();
+        let pane = app.world_mut().spawn(OrzmaTerminal).id();
         let child = app
             .world_mut()
             .spawn((
@@ -222,8 +222,8 @@ mod tests {
 
     #[test]
     fn sync_preserves_app_declared_inline_focus() {
-        // NOTE: ozma_webview's apply_control_events and its supporting resource types
-        // (OzmaRegistry, ControlEvents, etc.) are pub(crate) and unreachable from the
+        // NOTE: orzma_webview's apply_control_events and its supporting resource types
+        // (OrzmaRegistry, ControlEvents, etc.) are pub(crate) and unreachable from the
         // binary. Setting FocusedWebview directly produces the same world state that
         // apply_control_events(SetFocus) would — the sync behavior under test is
         // identical regardless of how FocusedWebview was last written.
@@ -233,7 +233,7 @@ mod tests {
             .init_resource::<FocusedWebview>()
             .add_systems(Update, sync_focused_webview);
 
-        let surface = app.world_mut().spawn(OzmaTerminal).id();
+        let surface = app.world_mut().spawn(OrzmaTerminal).id();
         let child = app
             .world_mut()
             .spawn((

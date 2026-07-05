@@ -6,16 +6,16 @@
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
-use crate::configs::OzmuxConfigsResource;
+use crate::configs::OrzmaConfigsResource;
 use bevy::input::keyboard::{Key, KeyCode};
 use bevy::prelude::*;
-use ozma_tty_engine::{SelectionType, ViMotion};
-use ozmux_configs::copy_mode::{
+use orzma_configs::copy_mode::{
     CopyModeAction, CopyModeBaseKey, CopyModeKey, CopyModeNamedKey, CopyMotion, CopyPromptDir,
     CopySelection,
 };
-use ozmux_configs::shortcuts::Modifiers;
-use ozmux_tmux::PromptKind;
+use orzma_configs::shortcuts::Modifiers;
+use orzma_tmux::PromptKind;
+use orzma_tty_engine::{SelectionType, ViMotion};
 use std::collections::HashMap;
 
 /// Registers the `Startup` resolution of the `[copy-mode]` table.
@@ -112,7 +112,7 @@ enum ResolvedKey {
 /// validation already rejected duplicates, so plain inserts are safe.
 fn build_copy_mode_keys(
     mut resolved: ResMut<ResolvedCopyModeKeys>,
-    configs: Res<OzmuxConfigsResource>,
+    configs: Res<OrzmaConfigsResource>,
 ) {
     let mut map = HashMap::new();
     for (label, keys, action) in configs.copy_mode.bindings_iter() {
@@ -253,7 +253,7 @@ fn prompt_kind(dir: CopyPromptDir) -> PromptKind {
 mod tests {
     use super::*;
     use crate::action::vi::{ViPromptRequest, ViSearchStepRequest};
-    use ozmux_configs::copy_mode::{CopyModeConfig, CopyScroll, CopySearchStep};
+    use orzma_configs::copy_mode::{CopyModeConfig, CopyScroll, CopySearchStep};
 
     fn resolved_default() -> ResolvedCopyModeKeys {
         let cfg = CopyModeConfig::default();
@@ -368,7 +368,7 @@ mod tests {
     #[test]
     fn prompt_action_is_inert_for_v1() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_configs::copy_mode::{CopyModeAction, CopyPromptDir};
+        use orzma_configs::copy_mode::{CopyModeAction, CopyPromptDir};
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn search_step_action_is_inert_for_v1() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozmux_configs::copy_mode::{CopyModeAction, CopySearchStep};
+        use orzma_configs::copy_mode::{CopyModeAction, CopySearchStep};
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 

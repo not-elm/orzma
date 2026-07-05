@@ -1,0 +1,140 @@
+//! Run inside an orzma pane: `cargo run -p ratatui-orzma --example ratatui_webview`.
+//!
+//! Renders a webview and a native status line. The app OWNS focus in a simple
+//! `web_focused` bool: `Alt+l` focuses the webview, `Alt+h` returns focus to the
+//! app, and `q` quits while the app is focused. `Alt+h`/`Alt+l` are declared as
+//! forward-key chords, so the host forwards them to the PTY (reaching plain
+//! `event::read`) and suppresses them from the page even while the webview is
+//! focused. `WebviewWidget::focused` tells the SDK the current focus; the
+//! `OrzmaBackend` wrapping the terminal emits the control-plane focus op on change.
+//!
+//! The inline page emits a `hello` event when the user presses Enter in the input;
+//! the app drains `view.read_events::<HelloMsg>()` each frame and displays the
+//! latest message in the status line.
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use ratatui::crossterm::execute;
+use ratatui::crossterm::terminal::{
+    EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
+use ratatui::layout::{Constraint, Layout};
+use ratatui::widgets::{Block, Paragraph};
+use ratatui_orzma::{
+    KeyChord, Orzma, OrzmaBackend, RpcError, Webview, WebviewHandle, WebviewWidget,
+};
+use std::io::Stdout;
+use std::io::stdout;
+use std::time::{Duration, Instant};
+
+type Backend = OrzmaBackend<CrosstermBackend<Stdout>>;
+
+#[derive(serde::Deserialize)]
+struct HelloMsg {
+    message: String,
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut orzma = Orzma::connect()?;
+    let html = concat!(
+        "<body style='background:#13131a;color:#8be9fd;font:16px sans-serif;margin:0;padding:8px'>",
+        "<h1>ratatui-orzma</h1><div id='out'>calling ping…</div><div id='tick'>no ticks</div>",
+        "<input id='in' placeholder='type here…' style='font:14px monospace;padding:6px'>",
+        "<script>",
+        "window.orzma.call('ping','hi').then(v=>out.textContent='ping → '+v);",
+        "window.orzma.on('tick',n=>tick.textContent='tick #'+n);",
+        "var inp=document.getElementById('in');",
+        "inp.addEventListener('keydown',function(e){",
+        "  if(e.key==='Enter'){ window.orzma.emit('hello',{message:inp.value}); inp.value=''; }",
+        "});",
+        "inp.focus();",
+        "</script></body>"
+    );
+
+    let view = orzma.register(
+        Webview::inline(html)
+            .forward_keys([
+                KeyChord {
+                    mods: KeyModifiers::ALT,
+                    code: KeyCode::Char('h'),
+                },
+                KeyChord {
+                    mods: KeyModifiers::ALT,
+                    code: KeyCode::Char('l'),
+                },
+            ])
+            .on("ping", |arg: String| {
+                Ok::<_, RpcError>(format!("pong:{arg}"))
+            })
+            .add_event::<HelloMsg>("hello"),
+    )?;
+
+    enable_raw_mode()?;
+    if let Err(e) = execute!(stdout(), EnterAlternateScreen) {
+        // NOTE: EnterAlternateScreen failed after raw mode was enabled — undo it so
+        // the shell isn't left in raw mode.
+        let _ = disable_raw_mode();
+        return Err(e.into());
+    }
+
+    let result = (|| -> Result<(), Box<dyn std::error::Error>> {
+        let backend = OrzmaBackend::new(CrosstermBackend::new(stdout()), &orzma);
+        let mut terminal = Terminal::new(backend)?;
+        run(&mut terminal, &mut orzma, &view)
+    })();
+
+    let _ = disable_raw_mode();
+    let _ = execute!(stdout(), LeaveAlternateScreen);
+    result
+}
+
+fn run(
+    terminal: &mut Terminal<Backend>,
+    orzma: &mut Orzma,
+    view: &WebviewHandle,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut web_focused = false;
+    let mut last_msg = String::new();
+    let mut n: u64 = 0;
+    let mut last = Instant::now();
+    loop {
+        terminal.draw(|f| {
+            let rows =
+                Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(f.area());
+            f.render_widget(
+                Paragraph::new(format!(
+                    "Alt+l focus webview · Alt+h leave · q quit · last: {last_msg}"
+                )),
+                rows[0],
+            );
+            f.render_stateful_widget(
+                WebviewWidget::new(view.id())
+                    .focused(web_focused)
+                    .fallback(Block::bordered().title("loading…")),
+                rows[1],
+                &mut *orzma.frame(),
+            );
+        })?;
+
+        if last.elapsed() >= Duration::from_secs(1) {
+            n += 1;
+            let _ = view.emit("tick", &n);
+            last = Instant::now();
+        }
+
+        for HelloMsg { message } in view.read_events::<HelloMsg>() {
+            last_msg = message;
+        }
+
+        if event::poll(Duration::from_millis(50))?
+            && let Event::Key(k) = event::read()?
+        {
+            match (k.modifiers, k.code) {
+                (KeyModifiers::ALT, KeyCode::Char('l')) => web_focused = true,
+                (KeyModifiers::ALT, KeyCode::Char('h')) => web_focused = false,
+                (KeyModifiers::NONE, KeyCode::Char('q')) if !web_focused => return Ok(()),
+                _ => {}
+            }
+        }
+    }
+}

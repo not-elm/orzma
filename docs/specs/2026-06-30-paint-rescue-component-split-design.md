@@ -58,7 +58,7 @@ struct BlankRecoveryState {
 
 ### Attaching the components
 
-`TmuxPane` is defined in the `ozmux_tmux` crate, so the binary cannot add
+`TmuxPane` is defined in the `orzma_tmux` crate, so the binary cannot add
 `#[require(...)]` to it. Instead, a dedicated attach system inserts both
 components once per pane, mirroring the existing `augment_tmux_pane`
 (`src/mode/tmux/pane_focus.rs`) and `attach_tmux_pane_terminal`
@@ -224,7 +224,7 @@ the reasoning is not relitigated.
   `attach_tmux_pane_terminal` idiom.
 - **`On<Add, TmuxPane>` observer** to insert the components once per spawn,
   rather than a per-frame `Without<…>` polling system. Viable and idiomatic
-  (mirrors `On<Add, OzmaTerminal>`); roughly a wash. Not chosen because the
+  (mirrors `On<Add, OrzmaTerminal>`); roughly a wash. Not chosen because the
   polling system stays gated inside `TmuxActiveSet` (`in_state(AppMode::Tmux)`),
   whereas an observer fires regardless of `AppMode` (harmless but a minor
   widening), and the insert is command-deferred either way.

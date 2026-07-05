@@ -5,7 +5,7 @@ use crate::app_mode::AppMode;
 use crate::ui::UiRoot;
 use crate::ui::tmux::window_bar::spawn_window_bar;
 use bevy::prelude::*;
-use ozma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::TerminalCellMetricsResource;
 
 /// Root of the Tmux-mode UI subtree, mounted under `UiRoot` while in
 /// `AppMode::Tmux`. Carries `DespawnOnExit(AppMode::Tmux)`, so leaving Tmux mode
@@ -77,7 +77,7 @@ mod tests {
     use bevy::state::app::StatesPlugin;
 
     fn build_app() -> App {
-        use ozma_tty_renderer::CellMetrics;
+        use orzma_tty_renderer::CellMetrics;
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Tmux);

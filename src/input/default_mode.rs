@@ -13,7 +13,7 @@ use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::input::focus::{KeyboardDisabled, MouseDisabled};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
 use crate::ui::copy_mode::CopyModeState;
@@ -22,11 +22,11 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{NonInteractive, Webview, webview_hit_at};
-use ozmux_tmux::TmuxPane;
+use orzma_tmux::TmuxPane;
+use orzma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::prelude::TerminalOverlays;
+use orzma_webview::{NonInteractive, Webview, webview_hit_at};
 
 /// Registers the host-side input systems for `AppMode::Default`.
 pub(super) struct DefaultHostInputPlugin;
@@ -63,7 +63,7 @@ struct WebviewClaimParams<'w, 's> {
         'w,
         's,
         (Entity, &'static ComputedNode, &'static UiGlobalTransform),
-        With<OzmaTerminal>,
+        With<OrzmaTerminal>,
     >,
     children: Query<'w, 's, &'static Children>,
     webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
@@ -82,7 +82,7 @@ fn maintain_input_gates(
             Has<MouseDisabled>,
             Has<CopyModeState>,
         ),
-        With<OzmaTerminal>,
+        With<OrzmaTerminal>,
     >,
     claim: WebviewClaimParams,
 ) {
@@ -115,7 +115,7 @@ fn maintain_input_gates(
 
 /// The Default shell whose INTERACTIVE inline webview rect is under the cursor,
 /// or `None`. Mirrors `crate::input::tmux::gate::claimed_webview_pane` for the single
-/// Default surface: resolve the topmost `OzmaTerminal` under the cursor, then
+/// Default surface: resolve the topmost `OrzmaTerminal` under the cursor, then
 /// hit-test its active overlay rects (`webview_hit_at` skips `NonInteractive`
 /// children). A claimed surface is marked `MouseDisabled` so
 /// `dispatch_mouse_buttons` yields the click to the webview router.
@@ -145,9 +145,9 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
 fn apply_ime_commit_to_terminal(
     ev: On<ImeCommit>,
     mut commands: Commands,
-    terminals: Query<(), (With<OzmaTerminal>, Without<TmuxPane>)>,
+    terminals: Query<(), (With<OrzmaTerminal>, Without<TmuxPane>)>,
 ) {
-    // NOTE: discriminate on TmuxPane absence — tmux panes are also OzmaTerminal
+    // NOTE: discriminate on TmuxPane absence — tmux panes are also OrzmaTerminal
     // entities (src/render/tmux.rs), and their commits go out via the tmux
     // observer in src/input/tmux/forward.rs. Without this filter the commit would be
     // double-delivered.
@@ -176,16 +176,16 @@ mod tests {
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use bevy::window::PrimaryWindow;
-    use ozma_tty_engine::TerminalKey;
-    use ozmux_configs::shortcuts::{Modifiers, Shortcut};
-    use ozmux_tmux::{PaneId, TmuxPane};
+    use orzma_configs::shortcuts::{Modifiers, Shortcut};
+    use orzma_tmux::{PaneId, TmuxPane};
+    use orzma_tty_engine::TerminalKey;
     use tmux_control_parser::CellDims;
 
     #[test]
     fn ime_commit_fires_terminal_key_input_for_plain_terminal() {
         use crate::input::ime::ImeCommit;
-        use crate::surface::OzmaTerminal;
-        use ozma_tty_engine::TerminalKey;
+        use crate::surface::OrzmaTerminal;
+        use orzma_tty_engine::TerminalKey;
 
         #[derive(Resource, Default)]
         struct Hits(Vec<(Entity, TerminalKey)>);
@@ -198,7 +198,7 @@ mod tests {
                 h.0.push((ev.entity, ev.key.clone()));
             });
 
-        let term = app.world_mut().spawn(OzmaTerminal).id();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
         app.world_mut().trigger(ImeCommit {
             entity: term,
             text: "あ".into(),
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn ime_commit_is_noop_for_tmux_pane_target() {
         use crate::input::ime::ImeCommit;
-        use crate::surface::OzmaTerminal;
+        use crate::surface::OrzmaTerminal;
 
         #[derive(Resource, Default)]
         struct Hits(u32);
@@ -228,7 +228,7 @@ mod tests {
         let pane = app
             .world_mut()
             .spawn((
-                OzmaTerminal,
+                OrzmaTerminal,
                 TmuxPane {
                     id: PaneId(1),
                     dims: CellDims {
@@ -257,14 +257,14 @@ mod tests {
         assert!(should_disable_input(false, true, true));
     }
 
-    /// Default shell (`OzmaTerminal`, no `TmuxPane`) at window center (400,300),
+    /// Default shell (`OrzmaTerminal`, no `TmuxPane`) at window center (400,300),
     /// size 800x600, with one interactive inline rect rows 2..12, cols 3..43
     /// (phys y 32..192, x 24..344 at the 8x16 px cell pitch). Runs
     /// `maintain_input_gates`. Returns `(app, shell)`.
     fn make_gate_app() -> (App, Entity) {
         use bevy::math::IVec4;
         use bevy::window::WindowResolution;
-        use ozma_tty_renderer::CellMetrics;
+        use orzma_tty_renderer::CellMetrics;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -289,7 +289,7 @@ mod tests {
         let shell = app
             .world_mut()
             .spawn((
-                OzmaTerminal,
+                OrzmaTerminal,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
                     ..ComputedNode::DEFAULT
@@ -403,7 +403,7 @@ mod tests {
 
     fn default_dispatch_app(shortcuts: Shortcuts) -> (App, Entity) {
         let mut app = build_default_dispatch_app(shortcuts);
-        let term = app.world_mut().spawn(OzmaTerminal).id();
+        let term = app.world_mut().spawn(OrzmaTerminal).id();
         (app, term)
     }
 

@@ -1,34 +1,34 @@
 //! Host overlay: binds each tmux pane's `%N` id (matching `$TMUX_PANE`) to its
-//! entity in `ozma_webview`'s token registry, so a program's `hello %N` resolves
+//! entity in `orzma_webview`'s token registry, so a program's `hello %N` resolves
 //! to the pane that owns it. This is the multiplexer-specific half of webview
-//! token resolution; the generic per-surface `$OZMA_TOKEN` path lives in the
+//! token resolution; the generic per-surface `$ORZMA_TOKEN` path lives in the
 //! webview crate.
 //!
-//! This module also propagates `$OZMA_SOCK` (the control-plane socket path) into
+//! This module also propagates `$ORZMA_SOCK` (the control-plane socket path) into
 //! the tmux environment so panes can reach the live control plane. Two writes
 //! cover the two ways a program reads it back:
 //!
 //! - A global `-g` set (on the attach edge) so the process environment of any
-//!   pane spawned *after* the set inherits `$OZMA_SOCK` directly.
+//!   pane spawned *after* the set inherits `$ORZMA_SOCK` directly.
 //! - A per-session `-t` set (on each session add or switch) so
-//!   `tmux show-environment OZMA_SOCK` recovers the value from *any* pane of the
+//!   `tmux show-environment ORZMA_SOCK` recovers the value from *any* pane of the
 //!   session — including a pane that forked before the global set (the adopted
 //!   control-mode pane, and any pane attached to a pre-existing session). A
 //!   global-scope variable is invisible to session-scope `show-environment`, so
-//!   the per-session set is what makes the ratatui-ozma SDK's tmux recovery path
+//!   the per-session set is what makes the ratatui-orzma SDK's tmux recovery path
 //!   work in the first pane.
 //!
 //! On app exit the global is unset and the runtime dir is removed.
 
 use bevy::prelude::*;
-use ozma_tty_engine::TerminalRawWrite;
-use ozma_webview::ControlPlaneHandle;
-use ozmux_tmux::{
+use orzma_tmux::{
     SetEnvironmentGlobal, SetEnvironmentInSession, TmuxClient, TmuxClientMut, TmuxPane,
     TmuxSession, UnsetEnvironmentGlobal,
 };
+use orzma_tty_engine::TerminalRawWrite;
+use orzma_webview::ControlPlaneHandle;
 
-/// Registers the tmux `%N` token binder and `$OZMA_SOCK` propagation systems.
+/// Registers the tmux `%N` token binder and `$ORZMA_SOCK` propagation systems.
 pub(super) struct WebviewTokensPlugin;
 
 impl Plugin for WebviewTokensPlugin {
@@ -39,17 +39,17 @@ impl Plugin for WebviewTokensPlugin {
         )
         .add_systems(
             Update,
-            refresh_ozma_sock
+            refresh_orzma_sock
                 .run_if(tmux_client_added)
                 .run_if(resource_exists::<ControlPlaneHandle>),
         )
         .add_systems(
             Update,
-            bind_ozma_sock_to_session
+            bind_orzma_sock_to_session
                 .run_if(tmux_session_changed)
                 .run_if(resource_exists::<ControlPlaneHandle>),
         )
-        .add_systems(Last, cleanup_ozma_sock.run_if(on_message::<AppExit>));
+        .add_systems(Last, cleanup_orzma_sock.run_if(on_message::<AppExit>));
     }
 }
 
@@ -76,12 +76,12 @@ fn bind_tmux_pane_tokens(
     }
 }
 
-/// Propagates `$OZMA_SOCK` into the tmux global environment on each attach edge.
+/// Propagates `$ORZMA_SOCK` into the tmux global environment on each attach edge.
 ///
 /// Runs exactly once per attach (`Added<TmuxClient>`). The global `-g` set seeds
 /// the process environment of every pane spawned *after* it. It does not reach a
 /// pane that forked earlier, and a global-scope value is invisible to
-/// session-scope `tmux show-environment`; [`bind_ozma_sock_to_session`] covers
+/// session-scope `tmux show-environment`; [`bind_orzma_sock_to_session`] covers
 /// those panes with a per-session set.
 ///
 /// For a remote-adopted session the socket path refers to a local path the
@@ -90,35 +90,35 @@ fn bind_tmux_pane_tokens(
 ///
 /// Gated by `run_if(resource_exists::<ControlPlaneHandle>)`, so it never runs
 /// when the control plane is absent.
-fn refresh_ozma_sock(mut client: TmuxClientMut<'_, '_>, control: Res<ControlPlaneHandle>) {
+fn refresh_orzma_sock(mut client: TmuxClientMut<'_, '_>, control: Res<ControlPlaneHandle>) {
     let sock = control.sock_path.to_string_lossy();
     if let Err(e) = client.send(SetEnvironmentGlobal {
-        key: "OZMA_SOCK",
+        key: "ORZMA_SOCK",
         value: sock.as_ref(),
     }) {
-        tracing::warn!(?e, "failed to set global $OZMA_SOCK");
+        tracing::warn!(?e, "failed to set global $ORZMA_SOCK");
     }
 }
 
-/// Sets `$OZMA_SOCK` at session scope for each tmux session as it appears or the
+/// Sets `$ORZMA_SOCK` at session scope for each tmux session as it appears or the
 /// attached session changes.
 ///
 /// Gated on `Changed<TmuxSession>`, so it fires on the initial projection and
 /// again whenever the control client switches to (or is re-attached to) a
 /// different session — `on_session_changed` reuses one session entity, so a
 /// switch is a component re-insert, not an `Added` edge. The global set in
-/// [`refresh_ozma_sock`] only reaches the process environment of panes spawned
+/// [`refresh_orzma_sock`] only reaches the process environment of panes spawned
 /// *after* it and is invisible to session-scope `show-environment`; a pane that
 /// forked earlier (the adopted control-mode pane, or any pane of a pre-existing
 /// session switched into) therefore cannot see it. tmux injects `$TMUX` into
-/// every pane, so the ratatui-ozma SDK recovers the value with
-/// `tmux show-environment OZMA_SOCK` — but only when it is set at session scope,
+/// every pane, so the ratatui-orzma SDK recovers the value with
+/// `tmux show-environment ORZMA_SOCK` — but only when it is set at session scope,
 /// which this system does. The session is targeted by id (`$N`), which is stable
 /// and unique, rather than name, which may be empty or duplicated.
 ///
 /// Gated by `run_if(resource_exists::<ControlPlaneHandle>)`, so it never runs
 /// when the control plane is absent.
-fn bind_ozma_sock_to_session(
+fn bind_orzma_sock_to_session(
     mut client: TmuxClientMut<'_, '_>,
     sessions: Query<&TmuxSession, Changed<TmuxSession>>,
     control: Res<ControlPlaneHandle>,
@@ -128,21 +128,21 @@ fn bind_ozma_sock_to_session(
         let target = format!("${}", session.id.0);
         if let Err(e) = client.send(SetEnvironmentInSession {
             session: &target,
-            key: "OZMA_SOCK",
+            key: "ORZMA_SOCK",
             value: sock.as_ref(),
         }) {
-            tracing::warn!(?e, session = %target, "failed to set session $OZMA_SOCK");
+            tracing::warn!(?e, session = %target, "failed to set session $ORZMA_SOCK");
         }
     }
 }
 
-/// Unsets `$OZMA_SOCK` from the tmux global environment on app exit and removes
+/// Unsets `$ORZMA_SOCK` from the tmux global environment on app exit and removes
 /// the control runtime dir.
 ///
 /// Gated by `run_if(on_message::<AppExit>)` so it runs only on the exit frame.
 /// The unset is best-effort; a hard kill (SIGKILL / unhandled SIGTERM) skips
 /// all of this, and the next attach overwrites the value via
-/// [`refresh_ozma_sock`].
+/// [`refresh_orzma_sock`].
 ///
 /// The runtime dir (`sock_path`'s grandparent — `<temp>/<pid>/control`) is
 /// removed explicitly here rather than relying solely on `RuntimeRoot`'s `Drop`,
@@ -158,7 +158,7 @@ fn bind_ozma_sock_to_session(
 /// (the scheduled flusher) ran in `Update` and will not run again this frame, so
 /// bytes queued with `handle.send()` alone would never reach the PTY. Triggering
 /// `TerminalRawWrite` directly bypasses that gap.
-fn cleanup_ozma_sock(world: &mut World) {
+fn cleanup_orzma_sock(world: &mut World) {
     let runtime_root = world
         .get_resource::<ControlPlaneHandle>()
         .and_then(|c| c.sock_path.parent()?.parent().map(|p| p.to_path_buf()));
@@ -168,7 +168,7 @@ fn cleanup_ozma_sock(world: &mut World) {
         .single_mut(world)
         .ok()
         .and_then(|(gateway, mut client)| {
-            let _ = client.send(UnsetEnvironmentGlobal { key: "OZMA_SOCK" });
+            let _ = client.send(UnsetEnvironmentGlobal { key: "ORZMA_SOCK" });
             let bytes = client.take_outgoing();
             if bytes.is_empty() {
                 None
@@ -192,8 +192,8 @@ fn cleanup_ozma_sock(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozma_webview::TokenRegistry;
-    use ozmux_tmux::{PaneId, SessionId};
+    use orzma_tmux::{PaneId, SessionId};
+    use orzma_webview::TokenRegistry;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tmux_control_parser::CellDims;
@@ -245,7 +245,7 @@ mod tests {
 
         app.add_systems(
             Update,
-            refresh_ozma_sock
+            refresh_orzma_sock
                 .run_if(tmux_client_added)
                 .run_if(resource_exists::<ControlPlaneHandle>),
         );
@@ -257,7 +257,7 @@ mod tests {
             .unwrap()
             .take_outgoing();
         assert_eq!(
-            out, b"set-environment -g OZMA_SOCK /tmp/ctl.sock\n",
+            out, b"set-environment -g ORZMA_SOCK /tmp/ctl.sock\n",
             "refresh sends a global set-environment over the adopted connection"
         );
     }
@@ -276,7 +276,7 @@ mod tests {
 
         app.add_systems(
             Update,
-            bind_ozma_sock_to_session
+            bind_orzma_sock_to_session
                 .run_if(tmux_session_changed)
                 .run_if(resource_exists::<ControlPlaneHandle>),
         );
@@ -293,7 +293,7 @@ mod tests {
             .unwrap()
             .take_outgoing();
         assert_eq!(
-            out, b"set-environment -t '$3' OZMA_SOCK /tmp/ctl.sock\n",
+            out, b"set-environment -t '$3' ORZMA_SOCK /tmp/ctl.sock\n",
             "a newly projected session gets a session-scoped set so show-environment recovers it"
         );
     }
@@ -310,7 +310,7 @@ mod tests {
         });
         app.add_systems(
             Update,
-            bind_ozma_sock_to_session
+            bind_orzma_sock_to_session
                 .run_if(tmux_session_changed)
                 .run_if(resource_exists::<ControlPlaneHandle>),
         );
@@ -343,7 +343,7 @@ mod tests {
             .unwrap()
             .take_outgoing();
         assert_eq!(
-            out, b"set-environment -t '$5' OZMA_SOCK /tmp/ctl.sock\n",
+            out, b"set-environment -t '$5' ORZMA_SOCK /tmp/ctl.sock\n",
             "switching to a different session re-sends the session-scoped set for the new id"
         );
     }
@@ -357,7 +357,7 @@ mod tests {
 
         app.add_systems(
             Update,
-            bind_ozma_sock_to_session
+            bind_orzma_sock_to_session
                 .run_if(tmux_session_changed)
                 .run_if(resource_exists::<ControlPlaneHandle>),
         );
@@ -388,7 +388,7 @@ mod tests {
 
         app.add_systems(
             Update,
-            refresh_ozma_sock
+            refresh_orzma_sock
                 .run_if(tmux_client_added)
                 .run_if(resource_exists::<ControlPlaneHandle>),
         );
@@ -423,13 +423,13 @@ mod tests {
 
         let gateway = app.world_mut().spawn(TmuxClient::new_adopted()).id();
 
-        // NOTE: cleanup_ozma_sock remove_dir_all's the sock_path's GRANDPARENT.
+        // NOTE: cleanup_orzma_sock remove_dir_all's the sock_path's GRANDPARENT.
         // This path must stay deep + under a non-existent temp subdir so that
         // grandparent is a harmless absent dir — never a shallow system dir. A
         // `/tmp/ctl.sock` here has grandparent `/`, i.e. `remove_dir_all("/")`.
         app.insert_resource(ControlPlaneHandle {
             sock_path: std::env::temp_dir()
-                .join("ozmux-cleanup-test-nonexistent")
+                .join("orzma-cleanup-test-nonexistent")
                 .join("control")
                 .join("sock")
                 .join("control.sock"),
@@ -437,14 +437,14 @@ mod tests {
         });
 
         app.add_message::<AppExit>();
-        app.add_systems(Last, cleanup_ozma_sock.run_if(on_message::<AppExit>));
+        app.add_systems(Last, cleanup_orzma_sock.run_if(on_message::<AppExit>));
         app.world_mut().write_message(AppExit::Success);
         app.update();
 
         let written = app.world().resource::<Written>().0.lock().unwrap().clone();
         assert_eq!(
             written,
-            vec![(gateway, b"set-environment -gu OZMA_SOCK\n".to_vec())],
+            vec![(gateway, b"set-environment -gu ORZMA_SOCK\n".to_vec())],
             "cleanup synchronously triggers TerminalRawWrite with the unset command"
         );
     }

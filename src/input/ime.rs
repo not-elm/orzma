@@ -22,9 +22,9 @@ use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{Ime, PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
-use ozma_webview::{Webview, focused_webview_of};
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::prelude::{TerminalGrid, TerminalOverlays};
+use orzma_webview::{Webview, focused_webview_of};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
@@ -153,7 +153,7 @@ pub(crate) fn apply_event(state: &mut ImeState, event: &Ime) -> Option<String> {
 }
 
 /// Resolves the single keyboard-focused terminal surface — the active tmux pane
-/// or the Default `OzmaTerminal`, both of which carry `KeyboardFocused`. Returns
+/// or the Default `OrzmaTerminal`, both of which carry `KeyboardFocused`. Returns
 /// `None` when zero or more than one entity is focused; both degrade to "no
 /// surface". The host maintains the "exactly one focused" invariant.
 pub(crate) fn resolve_focused_surface(
@@ -168,7 +168,7 @@ pub(crate) fn resolve_focused_surface(
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
 /// IME through bevy_cef's `Ime` → CEF bridge), OR a surface exists that does
 /// NOT have `CopyModeState`. The surface is the active tmux pane or the
-/// Default `OzmaTerminal`, both resolved uniformly via `KeyboardFocused`.
+/// Default `OrzmaTerminal`, both resolved uniformly via `KeyboardFocused`.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
 /// window — computed from the surface's `UiGlobalTransform`
@@ -195,7 +195,7 @@ fn ime_policy_system(
     let surface = resolve_focused_surface(&focused);
 
     // NOTE: a focused CEF webview drives its own IME through bevy_cef's
-    // `Ime` → CEF bridge. ozmux MUST keep `ime_enabled` true here, or
+    // `Ime` → CEF bridge. orzma MUST keep `ime_enabled` true here, or
     // bevy_winit calls winit `set_ime_allowed(false)` and the OS delivers
     // no `Ime` events at all — starving that bridge so webview IME silently
     // breaks. Removing this branch reintroduces that bug.
@@ -327,7 +327,7 @@ fn read_ime_events(
         }
         let Some(entity) = surface else {
             tracing::warn!(
-                target: "ozmux::input::ime",
+                target: "orzma::input::ime",
                 "IME commit dropped: no keyboard-focused surface",
             );
             continue;
@@ -375,16 +375,16 @@ fn webview_ime_position(
 mod tests {
     use super::*;
     use crate::app_mode::AppMode;
-    use crate::surface::OzmaTerminal;
+    use crate::surface::OrzmaTerminal;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::prelude::{AppExtStates, MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
-    use ozma_tty_renderer::CellMetrics;
-    use ozma_tty_renderer::prelude::{Cursor, TerminalGrid};
-    use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
+    use orzma_tmux::{ActivePane, PaneId, TmuxPane};
+    use orzma_tty_renderer::CellMetrics;
+    use orzma_tty_renderer::prelude::{Cursor, TerminalGrid};
     use tmux_control_parser::CellDims;
 
     #[test]
@@ -744,7 +744,7 @@ mod tests {
 
     #[test]
     fn ime_position_anchors_at_inline_rect_origin_for_focused_inline() {
-        use ozma_tty_renderer::prelude::TerminalOverlays;
+        use orzma_tty_renderer::prelude::TerminalOverlays;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
@@ -908,8 +908,8 @@ mod tests {
 
         // A second, unfocused terminal: the commit must route to the
         // KeyboardFocused one, not merely "the only one".
-        app.world_mut().spawn(OzmaTerminal);
-        let focused = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
+        app.world_mut().spawn(OrzmaTerminal);
+        let focused = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
 
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<Ime>>()
@@ -926,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    fn ime_enabled_and_anchored_for_focused_ozma_terminal() {
+    fn ime_enabled_and_anchored_for_focused_orzma_terminal() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
@@ -944,9 +944,9 @@ mod tests {
             phys_font_size: 12,
         });
 
-        app.world_mut().spawn(OzmaTerminal);
+        app.world_mut().spawn(OrzmaTerminal);
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             KeyboardFocused,
             ComputedNode::default(),
             UiGlobalTransform::default(),
@@ -973,7 +973,7 @@ mod tests {
         let window = q.single(app.world()).expect("primary window");
         assert!(
             window.ime_enabled,
-            "IME must enable for the focused Ozma terminal even with another terminal present"
+            "IME must enable for the focused Orzma terminal even with another terminal present"
         );
         assert_eq!(
             window.ime_position,
@@ -1001,7 +1001,7 @@ mod tests {
             phys_font_size: 12,
         });
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             KeyboardFocused,
             ComputedNode::default(),
             UiGlobalTransform::default(),

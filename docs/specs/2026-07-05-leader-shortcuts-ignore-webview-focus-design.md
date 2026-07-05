@@ -54,7 +54,7 @@ purely a decider question; no new event plumbing is needed.
 ### Why suppression is required (`bevy_cef` delivers to the focused webview)
 
 `bevy_cef` 0.11's `send_key_event` (in its `KeyboardDeliverSet`) delivers every
-`KeyboardInput` to the entity in `FocusedWebview`, and ozmux does not currently
+`KeyboardInput` to the entity in `FocusedWebview`, and orzma does not currently
 populate `bevy_cef`'s opt-out filter. bevy_cef exposes exactly the hook we need:
 
 ```rust
@@ -146,7 +146,7 @@ uses) instead of the unconditional `Idle` reset:
   during webview focus returns `Swallow` and sets `Pending` (and is suppressed
   from CEF — Part 2), rather than reaching the web page.
 - Normal typing into a webview is unchanged: `Idle` + a non-leader key returns
-  `Passthrough`, is not suppressed, and (as today) is swallowed by ozmux while
+  `Passthrough`, is not suppressed, and (as today) is swallowed by orzma while
   bevy_cef delivers it to the page.
 - The old NOTE about resetting to prevent a "stale leader firing when focus
   returns" is obsolete: the machine is now stepped, and the existing
@@ -207,13 +207,13 @@ the classification:
 
 - Add `.before(KeyboardDeliverSet)` to `resolve_shortcuts` in `DispatchPlugin`
   (import `KeyboardDeliverSet` from `bevy_cef::prelude`). This is the only new
-  ordering edge; bevy_cef's delivery systems have no dependency on ozmux input
+  ordering edge; bevy_cef's delivery systems have no dependency on orzma input
   sets, so no cycle is introduced.
 - Existing set membership (`InputPhase::FocusedKey`, `ShortcutSet::Resolve`,
   `LeaderGate::Advance`, `run_if(on_message::<KeyboardInput>)`) is unchanged.
 
 `CefKeyboardFilter` is `init_resource`d by bevy_cef's `KeyboardPlugin` (wired via
-`OzmaWebviewPlugin` / `cef_plugin`), so it exists at runtime; tests init it
+`OrzmaWebviewPlugin` / `cef_plugin`), so it exists at runtime; tests init it
 explicitly.
 
 ## Components and data flow
@@ -282,7 +282,7 @@ Applier / ordering tests (`src/input/dispatch.rs`, `App`):
 - Non-webview keyboard dispatch (terminal / tmux pane) is byte-for-byte
   unchanged: the new struct field is empty and the filter is cleared.
 - Webview typing with no leader engaged is unchanged: keys pass through to CEF;
-  ozmux emits nothing.
+  orzma emits nothing.
 - `ReleaseWebviewFocus` and `forward_keys` continue to reach CEF and behave as
   before.
 - Direct GUI chords keep their current webview-focus behavior (webview-owned).

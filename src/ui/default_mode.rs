@@ -1,15 +1,15 @@
-//! Default-mode UI subtree: lazily (re)spawns the single `OzmaTerminal` shell
+//! Default-mode UI subtree: lazily (re)spawns the single `OrzmaTerminal` shell
 //! under `UiRoot` while in `AppMode::Default`.
 
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
 use crate::session::default::spawn::{
-    OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig, full_size_node,
+    OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig, full_size_node,
 };
 use crate::ui::UiRoot;
 use bevy::prelude::*;
-use ozma_tty_engine::ControlModeWatch;
-use ozma_webview::ControlPlaneHandle;
+use orzma_tty_engine::ControlModeWatch;
+use orzma_webview::ControlPlaneHandle;
 
 /// Root of the Default-mode UI subtree, mounted under `UiRoot`.
 ///
@@ -53,7 +53,7 @@ fn ensure_default_mode_ui(
     mut commands: Commands,
     mut exit: MessageWriter<AppExit>,
     ui_root: Query<Entity, With<UiRoot>>,
-    config: Res<OzmaTerminalConfig>,
+    config: Res<OrzmaTerminalConfig>,
     control: Option<Res<ControlPlaneHandle>>,
 ) {
     let Ok(ui_root) = ui_root.single() else {
@@ -70,7 +70,7 @@ fn ensure_default_mode_ui(
         .as_deref()
         .map(|c| c.surface_env(shell).to_vec())
         .unwrap_or_default();
-    match OzmaTerminalBundle::spawn(OzmaSpawnOptions {
+    match OrzmaTerminalBundle::spawn(OrzmaSpawnOptions {
         shell: config.shell.clone(),
         env,
         ..default()
@@ -92,7 +92,7 @@ fn ensure_default_mode_ui(
         }
         Err(e) => {
             commands.entity(shell).despawn();
-            tracing::error!(?e, "failed to spawn ozma terminal");
+            tracing::error!(?e, "failed to spawn orzma terminal");
             exit.write(AppExit::Success);
         }
     }
@@ -125,7 +125,7 @@ mod tests {
     use super::*;
     use crate::app_mode::AppMode;
     use bevy::state::app::StatesPlugin;
-    use ozma_webview::TokenRegistry;
+    use orzma_webview::TokenRegistry;
     use std::path::PathBuf;
 
     fn build_app(initial_mode: AppMode) -> App {
@@ -210,11 +210,11 @@ mod tests {
                 .single(world)
                 .expect("DefaultShell spawned")
         };
-        let token = format!("ozma:{}", shell.to_bits());
+        let token = format!("orzma:{}", shell.to_bits());
         assert_eq!(
             tokens.resolve(&token),
             Some(shell),
-            "the default shell's $OZMA_TOKEN must resolve to its own surface entity"
+            "the default shell's $ORZMA_TOKEN must resolve to its own surface entity"
         );
     }
 

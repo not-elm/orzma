@@ -18,12 +18,12 @@ use crate::{
         mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
         tmux::TmuxInputPlugin,
     },
-    system_set::OzmuxSystems,
+    system_set::OrzmaSystems,
 };
 use bevy::prelude::*;
-use ozmux_configs::shortcuts::Modifiers;
+use orzma_configs::shortcuts::Modifiers;
 
-/// Sub-phases of `OzmuxSystems::Input`. Runs in the order:
+/// Sub-phases of `OrzmaSystems::Input`. Runs in the order:
 /// `Hover` (cursor / hyperlink hover detection) → `Dispatch`
 /// (mouse / wheel button routing) → `FocusedKey` (keyboard
 /// shortcut + key forwarding).
@@ -38,9 +38,9 @@ pub(crate) enum InputPhase {
 }
 
 /// Bevy Plugin that registers the keyboard shortcut handling pipeline.
-pub struct OzmuxInputPlugin;
+pub struct OrzmaInputPlugin;
 
-impl Plugin for OzmuxInputPlugin {
+impl Plugin for OrzmaInputPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             ShortcutsPlugin,
@@ -58,7 +58,7 @@ impl Plugin for OzmuxInputPlugin {
                 InputPhase::FocusedKey,
             )
                 .chain()
-                .in_set(OzmuxSystems::Input),
+                .in_set(OrzmaSystems::Input),
         );
     }
 }

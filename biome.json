@@ -1,7 +1,7 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.4.14/schema.json",
   "files": {
-    "includes": ["sdk/**", "apps/ozmd/web/**", "!**/node_modules", "!**/dist", "!**/target"],
+    "includes": ["sdk/**", "apps/orzmd/web/**", "!**/node_modules", "!**/dist", "!**/target"],
     "ignoreUnknown": true
   },
   "vcs": {

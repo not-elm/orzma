@@ -7,14 +7,14 @@
 //! (`input::mouse::button::tmux::MouseButtonTmuxPlugin`).
 
 use crate::app_mode::TmuxActiveSet;
-use crate::configs::OzmuxConfigsResource;
+use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
-use ozma_tty_engine::TerminalHandle;
-use ozma_tty_renderer::material::PaneInactiveStyle;
-use ozmux_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
+use orzma_tmux::{ActivePane, TmuxPane, TmuxProjectionSet};
+use orzma_tty_engine::TerminalHandle;
+use orzma_tty_renderer::material::PaneInactiveStyle;
 
 /// Registers the pane augmentation (adds `Button` + `FocusPolicy::Block`) and
 /// dim systems. `select-pane` on press is handled by `tmux_gesture`.
@@ -80,7 +80,7 @@ fn pane_active_state_changed(
 fn sync_inactive_pane_style(
     mut commands: Commands,
     panes: Query<(Entity, Has<ActivePane>, Option<&PaneInactiveStyle>), With<TmuxPane>>,
-    configs: Option<Res<OzmuxConfigsResource>>,
+    configs: Option<Res<OrzmaConfigsResource>>,
 ) {
     let inactive = inactive_style(configs.as_deref());
     let any_active = panes.iter().any(|(_, active, _)| active);
@@ -99,7 +99,7 @@ fn sync_inactive_pane_style(
 /// Mirrors tmux's `ActivePane` onto the terminal-level `KeyboardFocused` marker:
 /// the active pane gains `KeyboardFocused`, every other pane loses it. This is
 /// the host's bridge from the multiplexer's active-pane notion to the terminal
-/// crate's single focus marker (which `ozma_webview` and IME/title read).
+/// crate's single focus marker (which `orzma_webview` and IME/title read).
 /// Writes conditionally so change detection fires only on real changes.
 fn sync_keyboard_focus_to_active_pane(
     mut commands: Commands,
@@ -118,7 +118,7 @@ fn sync_keyboard_focus_to_active_pane(
 /// treatment is enabled: background tint (`tint_color` linearized + `tint`
 /// amount) and the webview overlay treatment (`webview_dim` /
 /// `webview_desaturate`). Disabled or absent config yields the no-op default.
-fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> PaneInactiveStyle {
+fn inactive_style(configs: Option<&OrzmaConfigsResource>) -> PaneInactiveStyle {
     match configs {
         Some(cfg) if cfg.inactive_pane.enabled => {
             let (r, g, b) = cfg.inactive_pane.tint_color_rgb();
@@ -137,7 +137,7 @@ fn inactive_style(configs: Option<&OzmuxConfigsResource>) -> PaneInactiveStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_tmux::TmuxPane;
+    use orzma_tmux::TmuxPane;
 
     use tmux_control_parser::{CellDims, PaneId};
 
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn active_pane_gains_keyboard_focus_and_inactive_loses_it() {
-        use ozmux_tmux::{ActivePane, PaneId, TmuxPane};
+        use orzma_tmux::{ActivePane, PaneId, TmuxPane};
         use tmux_control_parser::CellDims;
 
         let dims = CellDims {
@@ -210,8 +210,8 @@ mod tests {
 
     #[test]
     fn keyboard_focus_is_fresh_in_focusedkey_after_active_change() {
-        use crate::surface::OzmaTerminal;
-        use ozmux_tmux::ActivePane;
+        use crate::surface::OrzmaTerminal;
+        use orzma_tmux::ActivePane;
 
         #[derive(Resource, Default)]
         struct ProbeFocus(Option<Entity>);
@@ -228,7 +228,7 @@ mod tests {
         let p1 = app
             .world_mut()
             .spawn((
-                OzmaTerminal,
+                OrzmaTerminal,
                 TmuxPane {
                     id: PaneId(1),
                     dims: dims(),
@@ -239,7 +239,7 @@ mod tests {
         let p2 = app
             .world_mut()
             .spawn((
-                OzmaTerminal,
+                OrzmaTerminal,
                 TmuxPane {
                     id: PaneId(2),
                     dims: dims(),
@@ -266,11 +266,11 @@ mod tests {
 
     #[test]
     fn sync_sets_pane_dim_from_active_marker() {
-        use ozmux_tmux::ActivePane;
+        use orzma_tmux::ActivePane;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, PaneFocusPlugin));
-        app.insert_resource(OzmuxConfigsResource::default());
+        app.insert_resource(OrzmaConfigsResource::default());
         let h = || TerminalHandle::detached(10, 5);
 
         let p1 = app
@@ -335,11 +335,11 @@ mod tests {
 
     #[test]
     fn disabled_config_leaves_every_pane_untreated() {
-        use ozmux_tmux::ActivePane;
+        use orzma_tmux::ActivePane;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, PaneFocusPlugin));
-        let mut configs = OzmuxConfigsResource::default();
+        let mut configs = OrzmaConfigsResource::default();
         configs.0.inactive_pane.enabled = false;
         app.insert_resource(configs);
         let h = || TerminalHandle::detached(10, 5);

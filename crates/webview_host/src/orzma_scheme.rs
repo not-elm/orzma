@@ -1,0 +1,342 @@
+//! `orzma://<handle>/<path>` custom-scheme handler for Tier 1 dynamic
+//! webviews. Resolves `<handle>` to a registered asset (`Dir` root or inline
+//! HTML bytes) via a shared `WebviewAssetRegistry` and serves files through
+//! `serve_static_asset` or directly from memory. Behind the `cef` feature.
+
+#[cfg(feature = "cef")]
+use crate::asset::{AssetOutcome, serve_static_asset};
+#[cfg(feature = "cef")]
+use bevy_cef_core::prelude::{
+    CefCustomScheme, CefSchemeBody, CefSchemeHandler, CefSchemeOptions, CefSchemeRequest,
+    CefSchemeResponse,
+};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
+
+/// The content backing one dynamic handle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WebviewAsset {
+    /// Files served under this absolute root directory.
+    Dir(PathBuf),
+    /// A single inline HTML document served from memory.
+    Inline(Vec<u8>),
+}
+
+/// A shared, interior-mutable map of dynamic `handle → WebviewAsset` for
+/// Tier 1 dynamic webview registrations. The CEF scheme handler is constructed
+/// at `CefPlugin::build()` and reads handles registered after its construction.
+#[derive(Clone, Default)]
+pub struct WebviewAssetRegistry(Arc<RwLock<HashMap<String, WebviewAsset>>>);
+
+impl WebviewAssetRegistry {
+    /// Returns (cloning) the asset for `handle`, if registered.
+    pub fn get(&self, handle: &str) -> Option<WebviewAsset> {
+        self.0.read().unwrap().get(handle).cloned()
+    }
+
+    /// Inserts/replaces an on-disk directory root for `handle`.
+    pub fn insert_dir(&self, handle: impl Into<String>, root: PathBuf) {
+        self.0
+            .write()
+            .unwrap()
+            .insert(handle.into(), WebviewAsset::Dir(root));
+    }
+
+    /// Inserts/replaces inline HTML bytes for `handle`.
+    pub fn insert_inline(&self, handle: impl Into<String>, html: Vec<u8>) {
+        self.0
+            .write()
+            .unwrap()
+            .insert(handle.into(), WebviewAsset::Inline(html));
+    }
+
+    /// Removes `handle`, if present.
+    pub fn remove(&self, handle: &str) {
+        self.0.write().unwrap().remove(handle);
+    }
+}
+
+/// Parses `orzma://<handle>/<path>[?query]` into `(handle, path)`; strips
+/// the query/fragment and defaults an empty path to `"index.html"`. Returns
+/// `None` unless it is a well-formed `orzma://` URL with a non-empty handle.
+#[cfg_attr(not(feature = "cef"), allow(dead_code))]
+fn parse_orzma_url(url: &str) -> Option<(&str, &str)> {
+    let rest = url.strip_prefix("orzma://")?;
+    let rest = rest
+        .split_once(['?', '#'])
+        .map_or(rest, |(before, _)| before);
+    let (handle, path) = match rest.split_once('/') {
+        Some((h, p)) => (h, p),
+        None => (rest, ""),
+    };
+    if handle.is_empty() {
+        return None;
+    }
+    let path = if path.is_empty() { "index.html" } else { path };
+    Some((handle, path))
+}
+
+/// The resolved outcome of an `orzma://` URL lookup.
+#[cfg_attr(not(feature = "cef"), allow(dead_code))]
+enum ResolvedOrzma<'a> {
+    /// Serve files from this directory root; `path` is the relative file path.
+    Dir { root: PathBuf, path: &'a str },
+    /// Serve these inline HTML bytes directly from memory.
+    Inline(Vec<u8>),
+}
+
+/// Resolves an `orzma://<handle>/<path>` URL via the registry, or `Err(404)`
+/// for an unknown or unparseable handle.
+#[cfg_attr(not(feature = "cef"), allow(dead_code))]
+fn resolve_request<'a>(
+    registry: &WebviewAssetRegistry,
+    url: &'a str,
+) -> Result<ResolvedOrzma<'a>, u16> {
+    let (handle, path) = parse_orzma_url(url).ok_or(404u16)?;
+    match registry.get(handle).ok_or(404u16)? {
+        WebviewAsset::Dir(root) => Ok(ResolvedOrzma::Dir { root, path }),
+        // NOTE: an inline registration is a single self-contained document served
+        // at the canonical entry only. A relative subresource request gets 404
+        // rather than the document body under a mismatched MIME type — use a Dir
+        // registration for multi-file content.
+        WebviewAsset::Inline(html) if path == "index.html" => Ok(ResolvedOrzma::Inline(html)),
+        WebviewAsset::Inline(_) => Err(404),
+    }
+}
+
+/// Returns the bare media type (drops any `;`-delimited parameters) for CEF's
+/// `mime_type` field, flooring an empty/blank input to `application/octet-stream`.
+/// CEF expects a bare type (e.g. `text/html`); a full `Content-Type` value with
+/// parameters (`text/html; charset=utf-8`) is not recognized, so Chromium fails
+/// to classify the document and renders blank. An empty `mime_type` triggers the
+/// same blank render, so it is floored to `application/octet-stream` (matching
+/// the SDK file handler's default) rather than passed through empty.
+#[cfg(feature = "cef")]
+fn bare_mime(content_type: &str) -> String {
+    let bare = content_type.split(';').next().unwrap_or("").trim();
+    if bare.is_empty() {
+        "application/octet-stream".to_string()
+    } else {
+        bare.to_string()
+    }
+}
+
+/// A minimal text `CefSchemeResponse` for error statuses (bevy_cef provides only
+/// `not_found()` / `bytes()`).
+#[cfg(feature = "cef")]
+fn status_text(status: u16, msg: &str) -> CefSchemeResponse {
+    CefSchemeResponse {
+        status,
+        mime_type: "text/plain".into(),
+        headers: Vec::new(),
+        body: CefSchemeBody::Bytes(msg.as_bytes().to_vec()),
+    }
+}
+
+/// The custom scheme name registered with CEF for dynamic Tier 1 webviews.
+#[cfg(feature = "cef")]
+pub const SCHEME_NAME: &str = "orzma";
+
+/// Serves `orzma://<handle>/<path>` by dispatching `<handle>` through a
+/// shared `WebviewAssetRegistry` to `serve_static_asset` (Dir) or memory (Inline).
+#[cfg(feature = "cef")]
+struct OrzmaScheme {
+    registry: WebviewAssetRegistry,
+}
+
+#[cfg(feature = "cef")]
+impl OrzmaScheme {
+    fn new(registry: WebviewAssetRegistry) -> Self {
+        Self { registry }
+    }
+}
+
+#[cfg(feature = "cef")]
+impl CefSchemeHandler for OrzmaScheme {
+    fn handle(&self, request: &CefSchemeRequest) -> CefSchemeResponse {
+        match resolve_request(&self.registry, &request.url) {
+            Err(_) => {
+                bevy::log::debug!(
+                    url = %request.url,
+                    "orzma request unresolved (unknown handle or non-index inline path) -> 404"
+                );
+                CefSchemeResponse::not_found()
+            }
+            Ok(ResolvedOrzma::Inline(html)) => {
+                bevy::log::debug!(
+                    url = %request.url,
+                    bytes = html.len(),
+                    "orzma inline html served"
+                );
+                CefSchemeResponse {
+                    status: 200,
+                    mime_type: "text/html".to_string(),
+                    headers: Vec::new(),
+                    body: CefSchemeBody::Bytes(html),
+                }
+            }
+            Ok(ResolvedOrzma::Dir { root, path }) => match serve_static_asset(&root, path) {
+                AssetOutcome::Ok { content_type, body } => {
+                    let mime = bare_mime(&content_type);
+                    bevy::log::debug!(
+                        url = %request.url,
+                        mime = %mime,
+                        bytes = body.len(),
+                        "orzma static asset served"
+                    );
+                    CefSchemeResponse {
+                        status: 200,
+                        mime_type: mime,
+                        headers: Vec::new(),
+                        body: CefSchemeBody::Bytes(body),
+                    }
+                }
+                AssetOutcome::NotFound => CefSchemeResponse::not_found(),
+                AssetOutcome::Forbidden => status_text(403, "forbidden asset path"),
+                AssetOutcome::TooLarge => status_text(413, "asset too large"),
+            },
+        }
+    }
+}
+
+/// Builds the `orzma` scheme registration to pass to `CefPlugin`, dispatching
+/// every `orzma://<handle>/…` URL through the shared `WebviewAssetRegistry`.
+#[cfg(feature = "cef")]
+pub fn custom_orzma_scheme(registry: WebviewAssetRegistry) -> CefCustomScheme {
+    CefCustomScheme {
+        name: SCHEME_NAME.to_string(),
+        options: CefSchemeOptions::STANDARD
+            | CefSchemeOptions::SECURE
+            | CefSchemeOptions::CORS_ENABLED
+            | CefSchemeOptions::FETCH_ENABLED
+            | CefSchemeOptions::DISPLAY_ISOLATED,
+        domain: None,
+        handler: Arc::new(OrzmaScheme::new(registry)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_handle_and_path() {
+        assert_eq!(
+            parse_orzma_url("orzma://abc/index.html"),
+            Some(("abc", "index.html"))
+        );
+        assert_eq!(
+            parse_orzma_url("orzma://abc/sub/app.js"),
+            Some(("abc", "sub/app.js"))
+        );
+    }
+
+    #[test]
+    fn empty_path_defaults_to_index() {
+        assert_eq!(parse_orzma_url("orzma://abc/"), Some(("abc", "index.html")));
+        assert_eq!(parse_orzma_url("orzma://abc"), Some(("abc", "index.html")));
+    }
+
+    #[test]
+    fn strips_query_and_fragment() {
+        assert_eq!(
+            parse_orzma_url("orzma://abc/a.js?v=2"),
+            Some(("abc", "a.js"))
+        );
+        assert_eq!(
+            parse_orzma_url("orzma://abc/a.js#section"),
+            Some(("abc", "a.js"))
+        );
+    }
+
+    #[test]
+    fn rejects_foreign_or_empty_handle() {
+        assert_eq!(parse_orzma_url("orzma-ext://abc/x"), None);
+        assert_eq!(parse_orzma_url("orzma:///x"), None);
+    }
+
+    #[test]
+    fn registry_holds_dir_and_inline_variants() {
+        let reg = WebviewAssetRegistry::default();
+        reg.insert_dir("d1", PathBuf::from("/abs/ui"));
+        reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
+        assert!(
+            matches!(reg.get("d1"), Some(WebviewAsset::Dir(p)) if *p == *std::path::Path::new("/abs/ui"))
+        );
+        assert!(matches!(reg.get("i1"), Some(WebviewAsset::Inline(b)) if b == b"<h1>hi</h1>"));
+        assert!(reg.get("missing").is_none());
+        reg.remove("i1");
+        assert!(reg.get("i1").is_none());
+    }
+
+    #[test]
+    fn resolve_request_returns_inline_bytes_as_html() {
+        let reg = WebviewAssetRegistry::default();
+        reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
+        match resolve_request(&reg, "orzma://i1/index.html").expect("registered") {
+            ResolvedOrzma::Inline(html) => assert_eq!(html, b"<h1>hi</h1>"),
+            ResolvedOrzma::Dir { .. } => panic!("expected inline"),
+        }
+    }
+
+    #[test]
+    fn inline_404s_subresource_paths_other_than_the_index() {
+        let reg = WebviewAssetRegistry::default();
+        reg.insert_inline("i1", b"<h1>hi</h1>".to_vec());
+        assert!(resolve_request(&reg, "orzma://i1/").is_ok());
+        assert!(resolve_request(&reg, "orzma://i1/index.html").is_ok());
+        assert_eq!(resolve_request(&reg, "orzma://i1/app.js").err(), Some(404));
+        assert_eq!(
+            resolve_request(&reg, "orzma://i1/logo.png").err(),
+            Some(404)
+        );
+    }
+
+    #[test]
+    fn resolves_registered_dir_and_404s_unknown() {
+        let reg = WebviewAssetRegistry::default();
+        assert_eq!(
+            resolve_request(&reg, "orzma://ghost/index.html").err(),
+            Some(404)
+        );
+        reg.insert_dir("h1", PathBuf::from("/abs/ui"));
+        match resolve_request(&reg, "orzma://h1/app.js").expect("registered") {
+            ResolvedOrzma::Dir { root, path } => {
+                assert_eq!(root, PathBuf::from("/abs/ui"));
+                assert_eq!(path, "app.js");
+            }
+            ResolvedOrzma::Inline(_) => panic!("expected dir"),
+        }
+    }
+
+    #[test]
+    fn remove_drops_the_handle() {
+        let reg = WebviewAssetRegistry::default();
+        reg.insert_dir("h1", PathBuf::from("/abs/ui"));
+        reg.remove("h1");
+        assert_eq!(
+            resolve_request(&reg, "orzma://h1/index.html").err(),
+            Some(404)
+        );
+    }
+
+    #[cfg(feature = "cef")]
+    #[test]
+    fn bare_mime_strips_charset_parameter() {
+        assert_eq!(bare_mime("text/html; charset=utf-8"), "text/html");
+        assert_eq!(
+            bare_mime("text/javascript; charset=utf-8"),
+            "text/javascript"
+        );
+        assert_eq!(bare_mime("application/wasm"), "application/wasm");
+    }
+
+    #[cfg(feature = "cef")]
+    #[test]
+    fn bare_mime_floors_empty_to_octet_stream() {
+        assert_eq!(bare_mime(""), "application/octet-stream");
+        assert_eq!(bare_mime("   "), "application/octet-stream");
+        assert_eq!(bare_mime("; charset=utf-8"), "application/octet-stream");
+    }
+}

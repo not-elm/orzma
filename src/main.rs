@@ -1,4 +1,4 @@
-//! ozmux Bevy GUI entry point.
+//! orzma Bevy GUI entry point.
 
 mod action;
 mod app_mode;
@@ -26,21 +26,21 @@ use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::surface::SurfacePlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
-use bootstrap::OzmuxBootstrapPlugin;
-use configs::OzmuxConfigsPlugin;
+use bootstrap::OrzmaBootstrapPlugin;
+use configs::OrzmaConfigsPlugin;
 use font::FontBridgePlugin;
-use input::OzmuxInputPlugin;
+use input::OrzmaInputPlugin;
 use input::ime::ImePlugin;
-use ozma_tty_engine::TerminalHandlePlugin;
-use ozma_tty_renderer::TerminalRendererPlugin;
-use ozma_webview::{OzmaWebviewPlugin, cef_plugin};
-use ozmux_webview_host::WebviewAssetRegistry;
+use orzma_tty_engine::TerminalHandlePlugin;
+use orzma_tty_renderer::TerminalRendererPlugin;
+use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
+use orzma_webview_host::WebviewAssetRegistry;
 use render::tmux::RenderPlugin;
 use session::default::DefaultSessionPlugin;
 use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
-    OzmuxUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
+    OrzmaUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
     copy_search::CopyPromptPlugin,
 };
 
@@ -50,8 +50,8 @@ fn main() {
     ensure_terminfo_env();
     ensure_utf8_locale_env();
 
-    let pre_configs = ozmux_configs::OzmuxConfigs::load().unwrap_or_default();
-    let ozma_registry = WebviewAssetRegistry::default();
+    let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
+    let orzma_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
     App::new()
         .add_plugins((
@@ -59,13 +59,13 @@ fn main() {
                 primary_window: Some(primary_window()),
                 ..default()
             }),
-            cef_plugin(ozma_registry.clone(), cef_profile.path()),
+            cef_plugin(orzma_registry.clone(), cef_profile.path()),
         ))
         .add_plugins((
             AppModePlugin,
             SurfacePlugin,
             DefaultSessionPlugin {
-                shell: pre_configs.ozma.shell.clone(),
+                shell: pre_configs.orzma.shell.clone(),
             },
             ClipboardPlugin,
             TerminalHandlePlugin,
@@ -73,15 +73,15 @@ fn main() {
             RenderPlugin,
             TmuxLifecyclePlugin,
             ActionPlugin,
-            OzmuxConfigsPlugin,
+            OrzmaConfigsPlugin,
             FontBridgePlugin,
-            OzmuxBootstrapPlugin,
-            OzmuxInputPlugin,
-            OzmuxUiPlugin,
+            OrzmaBootstrapPlugin,
+            OrzmaInputPlugin,
+            OrzmaUiPlugin,
         ))
         .add_plugins((
-            OzmaWebviewPlugin {
-                ozma_assets: ozma_registry,
+            OrzmaWebviewPlugin {
+                orzma_assets: orzma_registry,
             },
             CopyModePlugin,
             CopyModeIndicatorPlugin,
@@ -104,7 +104,7 @@ fn main() {
 /// to `true` on the first focused-surface tick, producing the arming transition.
 fn primary_window() -> Window {
     Window {
-        title: "ozmux".to_string(),
+        title: "orzma".to_string(),
         ime_enabled: false,
         ..default()
     }
@@ -113,7 +113,7 @@ fn primary_window() -> Window {
 /// Fills `TERM`/`COLORTERM` with a portable default when the inherited `TERM`
 /// is unset or empty, mirroring `alacritty_terminal::tty::setup_env`.
 ///
-/// A child shell (a tmux pane or the native ozma PTY) whose `TERM` is empty
+/// A child shell (a tmux pane or the native orzma PTY) whose `TERM` is empty
 /// cannot load terminfo, so zsh's line editor (ZLE) — Backspace included —
 /// silently breaks; a bundled `.app` launched from Finder inherits launchd's
 /// empty `TERM`. `xterm-256color` is exactly Alacritty's fallback when the
@@ -139,7 +139,7 @@ fn ensure_terminfo_env() {
     }
 }
 
-/// The portable `TERM` ozmux substitutes when the inherited one cannot resolve
+/// The portable `TERM` orzma substitutes when the inherited one cannot resolve
 /// terminfo, or `None` to keep a usable inherited value. Returns the fallback
 /// for an unset (`None`) or empty `TERM`; otherwise `None`.
 fn term_fallback(current: Option<&str>) -> Option<&'static str> {
@@ -149,18 +149,18 @@ fn term_fallback(current: Option<&str>) -> Option<&'static str> {
     }
 }
 
-/// The UTF-8 `LC_CTYPE` ozmux installs when the inherited locale is not UTF-8.
+/// The UTF-8 `LC_CTYPE` orzma installs when the inherited locale is not UTF-8.
 /// Guaranteed present on macOS, the only platform [`ensure_utf8_locale_env`]
 /// writes it on. Also the fallback advertised to tmux panes
 /// (`crate::session::tmux::locale`).
 pub(crate) const UTF8_CTYPE_FALLBACK: &str = "en_US.UTF-8";
 
 /// Ensures `LC_CTYPE` advertises a UTF-8 locale when the inherited environment
-/// selects none, so tmux treats ozmux's control client as UTF-8 capable.
+/// selects none, so tmux treats orzma's control client as UTF-8 capable.
 ///
 /// tmux replaces every TAB (and other non-printable byte) in `display-message`
 /// / `list-windows` format output with `_` when its effective `LC_CTYPE` is not
-/// UTF-8 (the C/POSIX locale). ozmux's tab-separated `LIST_WINDOWS_FORMAT`
+/// UTF-8 (the C/POSIX locale). orzma's tab-separated `LIST_WINDOWS_FORMAT`
 /// query then collapses into a single unsplittable field, breaking window
 /// enumeration. A bundled `.app` launched from Finder inherits launchd's
 /// environment with no `LANG`/`LC_*`, so it falls into the C locale; this
@@ -202,7 +202,7 @@ fn set_utf8_ctype_fallback() {
 #[cfg(not(target_os = "macos"))]
 fn set_utf8_ctype_fallback() {}
 
-/// The UTF-8 `LC_CTYPE` ozmux substitutes when the effective locale is not
+/// The UTF-8 `LC_CTYPE` orzma substitutes when the effective locale is not
 /// UTF-8, or `None` to keep the inherited locale.
 ///
 /// Mirrors tmux's own `LC_ALL` > `LC_CTYPE` > `LANG` resolution: the first

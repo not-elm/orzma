@@ -1,4 +1,4 @@
-//! Mouse-wheel dispatch for every `OzmaTerminal` surface: scrollback and
+//! Mouse-wheel dispatch for every `OrzmaTerminal` surface: scrollback and
 //! app-forward wheel reporting with sub-notch accumulation and dominant-axis
 //! lock. Hit-tests the cursor to a cell, drives the engine's pure `WheelAction`
 //! router, and triggers the matched per-operation `EntityEvent` directly via
@@ -8,7 +8,7 @@
 use super::{TerminalSurfaces, cell_context_for, cell_dims, hit_candidates, on_any_mouse_message};
 use crate::action::terminal::{TerminalMouseWrite, TerminalViewportScroll};
 use crate::input::InputPhase;
-use crate::input::bindings::{FineModifier, OzmaMouseConfig};
+use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
 use crate::input::keyboard::current_terminal_modifiers;
 use crate::input::mouse::gesture::{
     WheelAccumulator, accumulate_notches, lock_dominant_axis, wheel_delta_cells,
@@ -17,8 +17,8 @@ use crate::surface::geometry::topmost_surface_at;
 use bevy::input::mouse::MouseWheel;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_tty_engine::{CellCoord, TermMode, TerminalModifiers, WheelAction, WheelModifiers};
-use ozma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_engine::{CellCoord, TermMode, TerminalModifiers, WheelAction, WheelModifiers};
+use orzma_tty_renderer::TerminalCellMetricsResource;
 
 pub(in crate::input::mouse) mod tmux;
 
@@ -63,7 +63,7 @@ fn dispatch_mouse_wheel(
     mut gesture_acc: ResMut<WheelAccumulator>,
     mut wheel: MessageReader<MouseWheel>,
     terminals: TerminalSurfaces,
-    cfg: Res<OzmaMouseConfig>,
+    cfg: Res<OrzmaMouseConfig>,
     metrics: Res<TerminalCellMetricsResource>,
     keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -147,7 +147,7 @@ fn accumulate_wheel(
     gesture_acc: &mut WheelAccumulator,
     wheel: &mut MessageReader<MouseWheel>,
     cell_h: f32,
-    cfg: &OzmaMouseConfig,
+    cfg: &OrzmaMouseConfig,
 ) -> (i32, i32) {
     let (delta_v, delta_h) = wheel.read().fold((0.0f32, 0.0f32), |(v, h), ev| {
         // NOTE: BOTH axes divide by cell_h (line height), not cell_w, so a given
@@ -187,7 +187,7 @@ fn apply_wheel(
     raw_v: i32,
     raw_h: i32,
     keys: &ButtonInput<KeyCode>,
-    cfg: &OzmaMouseConfig,
+    cfg: &OrzmaMouseConfig,
 ) {
     if raw_v != 0 {
         // NOTE: Bevy +y (up/older) → engine convention (negative = up/older).
@@ -237,7 +237,7 @@ fn apply_wheel_action(commands: &mut Commands, entity: Entity, action: WheelActi
 /// (and by default unmapped) variant. Other platforms pass modifiers through.
 fn build_wheel_modifiers_horizontal(
     keys: &ButtonInput<KeyCode>,
-    cfg: &OzmaMouseConfig,
+    cfg: &OrzmaMouseConfig,
 ) -> WheelModifiers {
     let mut mods = build_wheel_modifiers(keys, cfg);
     if cfg!(target_os = "macos") {
@@ -247,7 +247,7 @@ fn build_wheel_modifiers_horizontal(
 }
 
 /// Builds `WheelModifiers` from the held keys + the fine-scroll config.
-fn build_wheel_modifiers(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> WheelModifiers {
+fn build_wheel_modifiers(keys: &ButtonInput<KeyCode>, cfg: &OrzmaMouseConfig) -> WheelModifiers {
     let m = current_terminal_modifiers(keys);
     WheelModifiers {
         shift: m.shift,
@@ -274,11 +274,11 @@ mod tests {
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
     };
-    use crate::surface::OzmaTerminal;
+    use crate::surface::OrzmaTerminal;
     use bevy::input::mouse::MouseScrollUnit;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
-    use ozma_tty_engine::TerminalHandle;
-    use ozma_tty_renderer::schema::TerminalGrid;
+    use orzma_tty_engine::TerminalHandle;
+    use orzma_tty_renderer::schema::TerminalGrid;
 
     fn make_wheel_app(enable_modes: &[u8]) -> App {
         use bevy::window::WindowResolution;
@@ -286,7 +286,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<MouseWheel>()
-            .init_resource::<OzmaMouseConfig>()
+            .init_resource::<OrzmaMouseConfig>()
             .init_resource::<WheelAccumulator>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Clipboard>()
@@ -298,7 +298,7 @@ mod tests {
         let mut handle = TerminalHandle::detached(100, 37);
         handle.advance(enable_modes);
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             handle,
             ComputedNode {
                 size: Vec2::new(800.0, 600.0),
@@ -342,7 +342,7 @@ mod tests {
     }
 
     fn disable_axis_lock(app: &mut App) {
-        app.insert_resource(OzmaMouseConfig {
+        app.insert_resource(OrzmaMouseConfig {
             axis_lock_ratio: 0.0,
             ..default()
         });
@@ -353,7 +353,7 @@ mod tests {
     fn horizontal_modifiers_strip_shift_on_macos() {
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::ShiftLeft);
-        let cfg = OzmaMouseConfig::default();
+        let cfg = OrzmaMouseConfig::default();
         let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
         assert!(
             !mods.shift,

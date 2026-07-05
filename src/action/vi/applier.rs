@@ -8,8 +8,8 @@ use crate::action::vi::{
 use crate::clipboard::Clipboard;
 use crate::ui::copy_mode::ExitCopyMode;
 use bevy::prelude::*;
-use ozma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
-use ozmux_configs::copy_mode::CopyScroll;
+use orzma_configs::copy_mode::CopyScroll;
+use orzma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
 
 /// Registers the local VI apply observers. `ViPromptRequest` /
 /// `ViSearchStepRequest` have no local applier yet (ignored by design).
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn appliers_ignore_entities_missing_coalescer() {
-        use ozmux_tmux::TmuxPane;
+        use orzma_tmux::TmuxPane;
         use tmux_control_parser::{CellDims, PaneId};
 
         let mut app = App::new();
@@ -179,9 +179,9 @@ mod tests {
 
     #[test]
     fn vi_scroll_applies_to_a_tmux_pane_entity() {
-        use ozma_tty_engine::{Coalescer, TerminalHandle};
-        use ozmux_configs::copy_mode::CopyScroll;
-        use ozmux_tmux::TmuxPane;
+        use orzma_configs::copy_mode::CopyScroll;
+        use orzma_tmux::TmuxPane;
+        use orzma_tty_engine::{Coalescer, TerminalHandle};
         use tmux_control_parser::{CellDims, PaneId};
 
         let mut app = App::new();
@@ -227,7 +227,7 @@ mod tests {
     fn yank_writes_selection_to_clipboard_and_exits() {
         use crate::ui::copy_mode::{CopyModePlugin, CopyModeState, EnterCopyModeActionEvent};
         use bevy::ecs::system::RunSystemOnce;
-        use ozma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
+        use orzma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);

@@ -14,7 +14,7 @@
 - Debounce constants unchanged: `RESEED_DEBOUNCE_FRAMES = 3`, `RESEED_INFLIGHT_TIMEOUT = 30`.
 - Rust conventions (`.claude/rules/rust.md`): no `mod.rs`; non-doc comments only `// TODO:` / `// NOTE:` / `// SAFETY:`; all `use` at top in one contiguous block, no inline fully-qualified paths; minimize visibility (these items are module-private — no `pub`); `Plugin::build` is a single method chain; mutable params before immutable; private items declared after exported ones.
 - Lint gate after each task: `cargo build`, `cargo clippy --workspace` (0 warnings), `cargo fmt --check`.
-- Test gate after each task: `cargo test --bin ozmux paint_rescue -- --test-threads=1` (plus `cargo test -p ozma_tty_engine has_visible_content` stays green — unchanged but a smoke check).
+- Test gate after each task: `cargo test --bin orzma paint_rescue -- --test-threads=1` (plus `cargo test -p orzma_tty_engine has_visible_content` stays green — unchanged but a smoke check).
 
 ---
 
@@ -76,7 +76,7 @@ fn attach_inserts_both_state_components_once() {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `cargo test --bin ozmux attach_inserts_both_state_components_once -- --test-threads=1`
+Run: `cargo test --bin orzma attach_inserts_both_state_components_once -- --test-threads=1`
 Expected: FAIL — `cannot find type StructuralReseedState` / `cannot find function attach_rescue_state` (compile error).
 
 - [ ] **Step 3: Add the two components**
@@ -108,7 +108,7 @@ Add this system (place it near the other systems, after `rescue_unpainted_panes`
 
 ```rust
 /// Attaches the per-pane rescue state components once per pane. `TmuxPane` is
-/// defined in `ozmux_tmux`, so the binary cannot `#[require]` these onto it; the
+/// defined in `orzma_tmux`, so the binary cannot `#[require]` these onto it; the
 /// `Without<StructuralReseedState>` filter makes this run exactly once per pane
 /// (both components are always inserted together).
 fn attach_rescue_state(
@@ -147,12 +147,12 @@ impl Plugin for PaintRescuePlugin {
 
 - [ ] **Step 6: Run the test to verify it passes**
 
-Run: `cargo test --bin ozmux attach_inserts_both_state_components_once -- --test-threads=1`
+Run: `cargo test --bin orzma attach_inserts_both_state_components_once -- --test-threads=1`
 Expected: PASS.
 
 - [ ] **Step 7: Lint + full paint_rescue suite**
 
-Run: `cargo clippy --workspace 2>&1 | tail -2` (expect 0 warnings) and `cargo fmt` then `cargo test --bin ozmux paint_rescue -- --test-threads=1`
+Run: `cargo clippy --workspace 2>&1 | tail -2` (expect 0 warnings) and `cargo fmt` then `cargo test --bin orzma paint_rescue -- --test-threads=1`
 Expected: clippy clean, all paint_rescue tests PASS (the new components are unused-by-system this task, but attached — no behavior change).
 
 - [ ] **Step 8: Commit**
@@ -338,7 +338,7 @@ impl Plugin for PaintRescuePlugin {
 
 - [ ] **Step 5: Remove the now-unused `HashMap` import**
 
-In the top `use` block, delete `use std::collections::HashMap;`. (Leave `PaneId` in the `ozmux_tmux` import — it is still used by `RequestPaneReseed { pane: pane.id }` only via `pane.id`; if `cargo build` reports `PaneId` unused, remove it too.)
+In the top `use` block, delete `use std::collections::HashMap;`. (Leave `PaneId` in the `orzma_tmux` import — it is still used by `RequestPaneReseed { pane: pane.id }` only via `pane.id`; if `cargo build` reports `PaneId` unused, remove it too.)
 
 - [ ] **Step 6: Update the unit tests for the new types**
 
@@ -356,7 +356,7 @@ This attaches the components on the first `app.update()`, exactly as in producti
 
 - [ ] **Step 8: Run the full paint_rescue suite**
 
-Run: `cargo test --bin ozmux paint_rescue -- --test-threads=1`
+Run: `cargo test --bin orzma paint_rescue -- --test-threads=1`
 Expected: PASS — all structural-reseed unit tests, blank-recovery unit tests, `attach_inserts_both_state_components_once`, and both integration tests green.
 
 - [ ] **Step 9: Lint gate**

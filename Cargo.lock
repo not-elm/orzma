@@ -4853,6 +4853,156 @@ dependencies = [
 ]
 
 [[package]]
+name = "orzbrowser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "ratatui",
+ "ratatui-orzma",
+ "serde_json",
+]
+
+[[package]]
+name = "orzma"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "anyhow",
+ "arboard",
+ "bevy",
+ "bevy_cef",
+ "bevy_cef_core",
+ "cosmic-text",
+ "crossbeam-channel",
+ "data-encoding",
+ "getrandom 0.2.17",
+ "libc",
+ "open",
+ "orzma_configs",
+ "orzma_tmux",
+ "orzma_tty_engine",
+ "orzma_tty_renderer",
+ "orzma_webview",
+ "orzma_webview_host",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tmux_control",
+ "tmux_control_parser",
+ "tracing",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+ "url",
+ "winit",
+]
+
+[[package]]
+name = "orzma_configs"
+version = "0.1.0"
+dependencies = [
+ "dirs",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "orzma_tmux"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bitflags 2.13.0",
+ "orzma_tty_engine",
+ "tmux_control",
+ "tmux_control_parser",
+ "tracing",
+]
+
+[[package]]
+name = "orzma_tty_engine"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "bevy",
+ "crossbeam-channel",
+ "gethostname",
+ "orzma_tty_renderer",
+ "percent-encoding",
+ "portable-pty",
+ "tracing",
+ "unicode-width 0.2.0",
+ "vte",
+]
+
+[[package]]
+name = "orzma_tty_renderer"
+version = "0.1.0"
+dependencies = [
+ "ab_glyph",
+ "bevy",
+ "rmp-serde",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "thiserror 2.0.18",
+ "ttf-parser",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+]
+
+[[package]]
+name = "orzma_webview"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_cef",
+ "bevy_cef_core",
+ "crossbeam-channel",
+ "data-encoding",
+ "getrandom 0.2.17",
+ "libc",
+ "orzma_tty_engine",
+ "orzma_tty_renderer",
+ "orzma_webview_host",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "orzma_webview_host"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_cef_core",
+ "tempfile",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "orzmd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "notify-debouncer-full",
+ "pulldown-cmark",
+ "ratatui",
+ "ratatui-orzma",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "os_pipe"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4869,156 +5019,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "36820e9051aca1014ddc75770aab4d68bc1e9e632f0f5627c4086bc216fb583b"
 dependencies = [
  "ttf-parser",
-]
-
-[[package]]
-name = "ozbrowser"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossbeam-channel",
- "ratatui",
- "ratatui-ozma",
- "serde_json",
-]
-
-[[package]]
-name = "ozma_tty_engine"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "bevy",
- "crossbeam-channel",
- "gethostname",
- "ozma_tty_renderer",
- "percent-encoding",
- "portable-pty",
- "tracing",
- "unicode-width 0.2.0",
- "vte",
-]
-
-[[package]]
-name = "ozma_tty_renderer"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "bevy",
- "rmp-serde",
- "serde",
- "serde_bytes",
- "serde_json",
- "thiserror 2.0.18",
- "ttf-parser",
- "unicode-segmentation",
- "unicode-width 0.2.0",
-]
-
-[[package]]
-name = "ozma_webview"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_cef",
- "bevy_cef_core",
- "crossbeam-channel",
- "data-encoding",
- "getrandom 0.2.17",
- "libc",
- "ozma_tty_engine",
- "ozma_tty_renderer",
- "ozmux_webview_host",
- "serde",
- "serde_json",
- "tempfile",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "ozmd"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "blake3",
- "notify-debouncer-full",
- "pulldown-cmark",
- "ratatui",
- "ratatui-ozma",
- "rust-embed",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "ozmux"
-version = "0.1.0"
-dependencies = [
- "ab_glyph",
- "anyhow",
- "arboard",
- "bevy",
- "bevy_cef",
- "bevy_cef_core",
- "cosmic-text",
- "crossbeam-channel",
- "data-encoding",
- "getrandom 0.2.17",
- "libc",
- "open",
- "ozma_tty_engine",
- "ozma_tty_renderer",
- "ozma_webview",
- "ozmux_configs",
- "ozmux_tmux",
- "ozmux_webview_host",
- "serde",
- "serde_json",
- "tempfile",
- "tmux_control",
- "tmux_control_parser",
- "tracing",
- "unicode-segmentation",
- "unicode-width 0.2.0",
- "url",
- "winit",
-]
-
-[[package]]
-name = "ozmux_configs"
-version = "0.1.0"
-dependencies = [
- "dirs",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "ozmux_tmux"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bitflags 2.13.0",
- "ozma_tty_engine",
- "tmux_control",
- "tmux_control_parser",
- "tracing",
-]
-
-[[package]]
-name = "ozmux_webview_host"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_cef_core",
- "tempfile",
- "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -5409,7 +5409,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ratatui-ozma"
+name = "ratatui-orzma"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",

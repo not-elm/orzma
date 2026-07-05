@@ -3,7 +3,7 @@
 //! observer only needs the projected `TmuxWindow` id.
 
 use bevy::prelude::*;
-use ozmux_tmux::{SelectWindow, TmuxClient, TmuxWindow};
+use orzma_tmux::{SelectWindow, TmuxClient, TmuxWindow};
 
 /// Switches to the tmux window owning `entity`.
 #[derive(EntityEvent, Debug, Clone)]

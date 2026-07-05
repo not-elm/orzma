@@ -2,7 +2,7 @@
 //! session.
 
 use bevy::prelude::*;
-use ozmux_tmux::{NewWindow, TmuxClient, TmuxSession};
+use orzma_tmux::{NewWindow, TmuxClient, TmuxSession};
 
 /// Opens a new window in the client's current session, starting in the active
 /// pane's current directory. The `new-window` deliberately carries no `-t` (its

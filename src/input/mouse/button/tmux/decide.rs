@@ -12,8 +12,8 @@ use super::effect::{MultiSelectKind, TmuxMouseEffect};
 use crate::input::mouse::gesture::ClickTracker;
 use crate::render::tmux::DividerPixelRect;
 use bevy::prelude::*;
-use ozma_tty_engine::{Point, SelectionType, Side};
-use ozmux_tmux::PaneId;
+use orzma_tmux::PaneId;
+use orzma_tty_engine::{Point, SelectionType, Side};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 
@@ -306,7 +306,7 @@ fn resize_target_size(near: i32, pointer_cell: i32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozma_tty_engine::{Column, Line};
+    use orzma_tty_engine::{Column, Line};
 
     impl ContinuationCtx {
         /// All-`false`/`None` `ContinuationCtx`, for tests that only care about
@@ -804,7 +804,7 @@ mod tests {
 
     #[test]
     fn selecting_first_move_begins_local_drag_with_points() {
-        use ozma_tty_engine::{Point, SelectionType, Side};
+        use orzma_tty_engine::{Point, SelectionType, Side};
         let mut state = GestureState::Selecting {
             pane: Entity::from_bits(1),
             anchor: Point::new(Line(0), Column(2)),

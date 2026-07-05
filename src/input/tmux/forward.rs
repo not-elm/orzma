@@ -4,8 +4,8 @@
 use crate::action::terminal::TerminalForwardInput;
 use crate::input::ime::ImeCommit;
 use bevy::prelude::*;
-use ozma_tty_engine::TerminalHandle;
-use ozmux_tmux::{PaneId, SendBytes, SendPaneKeys, TmuxClient, TmuxPane};
+use orzma_tmux::{PaneId, SendBytes, SendPaneKeys, TmuxClient, TmuxPane};
+use orzma_tty_engine::TerminalHandle;
 
 /// Registers the `TerminalForwardInput` → tmux `send-keys -H` observer.
 pub(super) struct ForwardPlugin;
@@ -133,7 +133,7 @@ pub(crate) fn snap_pane_to_bottom(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_tmux::TmuxCommand;
+    use orzma_tmux::TmuxCommand;
     use tmux_control_parser::CellDims;
 
     fn spawn_forward_pane(app: &mut App, id: u32) -> Entity {

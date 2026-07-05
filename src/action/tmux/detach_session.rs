@@ -2,7 +2,7 @@
 
 use crate::session::tmux::request_detach;
 use bevy::prelude::*;
-use ozmux_tmux::{TmuxClient, TmuxSession};
+use orzma_tmux::{TmuxClient, TmuxSession};
 
 /// Detaches the tmux client owning `entity`'s session.
 #[derive(EntityEvent, Debug, Clone)]

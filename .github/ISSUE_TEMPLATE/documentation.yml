@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Thanks for helping improve the docs!
-        Please search [existing issues](https://github.com/not-elm/ozmux/issues?q=is%3Aissue) first to avoid duplicates.
+        Please search [existing issues](https://github.com/not-elm/orzma/issues?q=is%3Aissue) first to avoid duplicates.
   - type: input
     id: location
     attributes:

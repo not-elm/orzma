@@ -306,7 +306,7 @@ Delete the existing `webview_focus_clears_leader_and_forwards` test (it asserted
 
 - [ ] **Step 4: Run the resolve.rs tests to verify Steps 1-3**
 
-Run: `cargo test -p ozmux input::resolve::tests -- --nocapture`
+Run: `cargo test -p orzma input::resolve::tests -- --nocapture`
 Expected: PASS, including the five new `webview_*` tests. (`src/input/dispatch.rs` will NOT compile yet — that is Step 5. If cargo reports a build error in `dispatch.rs` before running resolve tests, that is expected; proceed to Step 5, then re-run.)
 
 - [ ] **Step 5: Consume `ClassifiedKeys` and populate `CefKeyboardFilter` in `src/input/dispatch.rs`**
@@ -443,7 +443,7 @@ Add these tests to the `#[cfg(test)] mod tests` (they reuse the existing `resolv
             Shortcut::EnterCopyMode,
             std::time::Duration::ZERO,
         ));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
         *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
@@ -466,7 +466,7 @@ Add these tests to the `#[cfg(test)] mod tests` (they reuse the existing `resolv
             Shortcut::EnterCopyMode,
             std::time::Duration::ZERO,
         ));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
         app.world_mut()
@@ -495,7 +495,7 @@ Add these tests to the `#[cfg(test)] mod tests` (they reuse the existing `resolv
     #[test]
     fn filter_cleared_when_nothing_claimed() {
         let mut app = resolve_app(Shortcuts::default());
-        let term = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
+        let term = app.world_mut().spawn((OrzmaTerminal, KeyboardFocused)).id();
         let stale = app.world_mut().spawn_empty().id();
         app.world_mut()
             .resource_mut::<CefKeyboardFilter>()
@@ -517,12 +517,12 @@ Add these tests to the `#[cfg(test)] mod tests` (they reuse the existing `resolv
 
 - [ ] **Step 7: Run the full affected test set**
 
-Run: `cargo test -p ozmux input::`
+Run: `cargo test -p orzma input::`
 Expected: PASS — the resolve.rs decider tests (including the five new `webview_*`) and the dispatch.rs tests (including the three new `filter_*`).
 
 - [ ] **Step 8: Verify a clean build (no dead-code / unused warnings) and lint/format**
 
-Run: `cargo build -p ozmux 2>&1 | grep -iE "warning|error" || echo "clean"`
+Run: `cargo build -p orzma 2>&1 | grep -iE "warning|error" || echo "clean"`
 Expected: `clean` (in particular, `webview_suppressed` is read in production by `resolve_shortcuts`, so no `dead_code`).
 
 Run: `cargo clippy --workspace --all-targets && cargo fmt`
@@ -622,7 +622,7 @@ This proves the guarantee's purpose: a probe registered in `KeyboardDeliverSet` 
         app.init_resource::<DeliverProbe>()
             .init_resource::<ProbeWebview>()
             .add_systems(Update, deliver_probe.in_set(KeyboardDeliverSet));
-        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
         app.world_mut().resource_mut::<ProbeWebview>().0 = Some(webview);
@@ -638,12 +638,12 @@ This proves the guarantee's purpose: a probe registered in `KeyboardDeliverSet` 
 
 - [ ] **Step 3: Run the ordering test**
 
-Run: `cargo test -p ozmux input::dispatch::tests::filter_is_populated_before_keyboard_deliver_set`
+Run: `cargo test -p orzma input::dispatch::tests::filter_is_populated_before_keyboard_deliver_set`
 Expected: PASS (no schedule-cycle panic; the probe observed the claim).
 
 - [ ] **Step 4: Lint/format and full build**
 
-Run: `cargo clippy --workspace --all-targets && cargo fmt && cargo build -p ozmux`
+Run: `cargo clippy --workspace --all-targets && cargo fmt && cargo build -p orzma`
 Expected: clean.
 
 - [ ] **Step 5: Commit**
@@ -669,12 +669,12 @@ EOF
 
 - [ ] **Step 1: Confirm the `CefKeyboardFilter` resource exists at runtime**
 
-Run: `cargo run -p ozmux` (requires `just setup-cef` provisioned). Confirm the app boots without a "resource does not exist: CefKeyboardFilter" panic — bevy_cef's `KeyboardPlugin` `init_resource`s it. If it panics because the resource is absent (e.g. a feature-gated build), defensively `init_resource::<CefKeyboardFilter>()` in `DispatchPlugin::build` and re-run; note this in the commit.
+Run: `cargo run -p orzma` (requires `just setup-cef` provisioned). Confirm the app boots without a "resource does not exist: CefKeyboardFilter" panic — bevy_cef's `KeyboardPlugin` `init_resource`s it. If it panics because the resource is absent (e.g. a feature-gated build), defensively `init_resource::<CefKeyboardFilter>()` in `DispatchPlugin::build` and re-run; note this in the commit.
 
 - [ ] **Step 2: Manually confirm the behavior**
 
 With a mounted, focused inline webview (click into it so keyboard focus transfers to CEF):
-1. Trigger a `<Leader>` shortcut (default: tap Cmd, then the bound key — e.g. `<Leader>` + copy-mode / new-window binding). Confirm the ozmux action fires.
+1. Trigger a `<Leader>` shortcut (default: tap Cmd, then the bound key — e.g. `<Leader>` + copy-mode / new-window binding). Confirm the orzma action fires.
 2. Confirm the leader's second key does NOT appear typed into a focused web input on the page.
 3. Confirm plain typing into the webview still reaches the page (no regression), and the release chord still blurs it.
 

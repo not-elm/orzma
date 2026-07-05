@@ -1,7 +1,7 @@
 //! `SplitPaneRequest` — splits the target tmux pane via `split-window`.
 
 use bevy::prelude::*;
-use ozmux_tmux::{SplitDirection, SplitWindow, TmuxClient, TmuxPane};
+use orzma_tmux::{SplitDirection, SplitWindow, TmuxClient, TmuxPane};
 
 /// Splits the tmux pane owning `entity` in `direction`.
 #[derive(EntityEvent, Debug, Clone)]

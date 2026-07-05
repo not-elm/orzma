@@ -2,7 +2,7 @@
 //! `select-pane -L|-D|-U|-R`.
 
 use bevy::prelude::*;
-use ozmux_tmux::{PaneDirection, SelectPaneTowards, TmuxClient, TmuxPane};
+use orzma_tmux::{PaneDirection, SelectPaneTowards, TmuxClient, TmuxPane};
 
 /// Focuses the `direction` neighbor of the tmux pane owning `entity`.
 #[derive(EntityEvent, Debug, Clone)]

@@ -1,12 +1,12 @@
 //! Render layer for tmux panes: attaches a PTY-less `TerminalHandle` plus the
 //! GPU render bundle to each projected `TmuxPane`, then routes tmux `%output`
-//! into the handle. Lives in the binary so `ozmux_tmux` stays renderer-free.
+//! into the handle. Lives in the binary so `orzma_tmux` stays renderer-free.
 
 mod paint_rescue;
 
 use crate::app_mode::TmuxActiveSet;
 use crate::render::tmux::paint_rescue::PaintRescuePlugin;
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::cells_for;
 use crate::theme;
 use crate::theme::PANE_GAP;
@@ -15,14 +15,14 @@ use bevy::ecs::message::MessageReader;
 use bevy::math::Rect;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_tty_engine::{Coalescer, TerminalHandle, TerminalTitle};
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::TerminalPaddingFallback;
-use ozma_tty_renderer::schema::TerminalGrid;
-use ozmux_tmux::{
+use orzma_tmux::{
     ActiveWindow, PaneOutput, RefreshClient, ResizeWindow, TmuxClientMut, TmuxCommand, TmuxPane,
     TmuxProjectionSet, TmuxWindow, TmuxWindowLayout, WindowId, WindowRefreshClient,
 };
+use orzma_tty_engine::{Coalescer, TerminalHandle, TerminalTitle};
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::TerminalPaddingFallback;
+use orzma_tty_renderer::schema::TerminalGrid;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use tmux_control_parser::{Cell, DividerAxis, PaneId, SplitDir};
@@ -183,9 +183,9 @@ fn attach_tmux_window_container(
 }
 
 /// Attaches a detached `TerminalHandle`, a `Coalescer`, a `TerminalTitle`, the
-/// `OzmaTerminal` marker, and a placeholder absolute `Node` to each `TmuxPane`
+/// `OrzmaTerminal` marker, and a placeholder absolute `Node` to each `TmuxPane`
 /// that lacks a `TerminalHandle`.
-/// The `On<Add, OzmaTerminal>` observer in `crate::surface` injects the
+/// The `On<Add, OrzmaTerminal>` observer in `crate::surface` injects the
 /// `TerminalRenderBundle` (one per entity, no duplicate material creation here).
 /// The `TerminalGrid` lives on the pane entity itself, so `flush_emit` /
 /// `emit_pending` and the webview overlay projection all target it
@@ -206,7 +206,7 @@ fn attach_tmux_pane_terminal(
             handle,
             Coalescer::default(),
             TerminalTitle::default(),
-            OzmaTerminal,
+            OrzmaTerminal,
             Node {
                 position_type: PositionType::Absolute,
                 ..default()
@@ -552,7 +552,7 @@ fn rows_for_panes(total_rows: u16) -> u16 {
 }
 
 /// The pinned tmux pane cell size (`(cols, rows)`) for the current GUI window,
-/// with one row reserved for the ozmux status bar. [`sync_client_size`] pins
+/// with one row reserved for the orzma status bar. [`sync_client_size`] pins
 /// tmux to this. The gateway PTY is sized to the full window (no bar
 /// reservation) by `sync_gateway_size`, so reconciliation to this size is
 /// always a shrink, never a grow.
@@ -615,9 +615,9 @@ fn reconcile_decision(
     window_or_size_changed || (drift && reported_changed)
 }
 
-/// Pins the active tmux window to ozmux's cell size via per-window
+/// Pins the active tmux window to orzma's cell size via per-window
 /// `refresh-client -C @win:WxH` (tmux ≥ 3.4) so a smaller foreign client cannot
-/// collapse it. One row is reserved for the ozmux status bar. Uses
+/// collapse it. One row is reserved for the orzma status bar. Uses
 /// [`reconcile_decision`] gated on [`LastClientSize`] to detect foreign-resize
 /// drift and recover without spinning when tmux refuses to grow the window.
 fn sync_client_size(
@@ -717,14 +717,14 @@ mod tests {
     use super::*;
     use crate::surface::SurfacePlugin;
     use bevy::math::{Rect, Vec2};
-    use ozma_tty_renderer::material::TerminalUiMaterial;
-    use ozma_tty_renderer::prelude::TerminalGridPlugin;
-    use ozmux_tmux::PaneOutput;
+    use orzma_tmux::PaneOutput;
+    use orzma_tty_renderer::material::TerminalUiMaterial;
+    use orzma_tty_renderer::prelude::TerminalGridPlugin;
     use tmux_control_parser::{Cell, CellDims, SplitDir};
 
     #[test]
     fn pin_selects_form_by_capability() {
-        use ozmux_tmux::WindowId;
+        use orzma_tmux::WindowId;
         assert_eq!(
             Pin {
                 per_window: Some(true),
@@ -759,7 +759,7 @@ mod tests {
 
     #[test]
     fn reconcile_sends_on_first_call_and_on_changes() {
-        use ozmux_tmux::WindowId;
+        use orzma_tmux::WindowId;
         let w = WindowId(1);
         // First call: nothing pinned yet → send.
         assert!(reconcile_decision((80, 24), w, None, None, None, (0, 0)));
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn reconcile_recovers_on_foreign_drift_but_does_not_spin() {
-        use ozmux_tmux::WindowId;
+        use orzma_tmux::WindowId;
         let w = WindowId(1);
         // Foreign just shrank the window: reported drifted to a NEW value → send (recovery).
         assert!(reconcile_decision(
@@ -827,7 +827,7 @@ mod tests {
     #[test]
     fn client_cell_size_matches_the_pinned_size_one_row_reserved() {
         // 1280x752 phys, 8x16 cells -> 160 cols x 47 rows; one row reserved for
-        // the ozmux status bar -> 46 pane rows. Birthing the new session's PTY at
+        // the orzma status bar -> 46 pane rows. Birthing the new session's PTY at
         // this size makes the first pane geometry equal the size sync_client_size
         // will pin, so no grow happens.
         assert_eq!(client_cell_size(1280, 752, 8.0, 16.0), (160, 46));
@@ -975,7 +975,7 @@ mod tests {
 
     #[test]
     fn mount_osc_from_pane_triggers_webview_request() {
-        use ozma_tty_engine::OscWebviewRequest;
+        use orzma_tty_engine::OscWebviewRequest;
 
         #[derive(Resource, Default)]
         struct Seen(u32);
@@ -1028,8 +1028,8 @@ mod tests {
     #[test]
     fn resize_only_updates_grid_dims_and_emits() {
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
-        use ozma_tty_renderer::schema::FrameSnapshot;
-        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+        use orzma_tty_renderer::schema::FrameSnapshot;
+        use orzma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
 
         #[derive(Resource, Default)]
         struct SnapHits(u32);
@@ -1060,7 +1060,7 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
 
-        use ozmux_tmux::{TmuxWindow, TmuxWindowLayout};
+        use orzma_tmux::{TmuxWindow, TmuxWindowLayout};
         use tmux_control_parser::{WindowId, WindowLayout};
 
         let window_e = app
@@ -1115,8 +1115,8 @@ mod tests {
     #[test]
     fn resize_fires_fresh_snapshot_after_first_emit() {
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
-        use ozma_tty_renderer::schema::FrameSnapshot;
-        use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+        use orzma_tty_renderer::schema::FrameSnapshot;
+        use orzma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
 
         #[derive(Resource, Default)]
         struct SnapHits(u32);
@@ -1147,7 +1147,7 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
 
-        use ozmux_tmux::{TmuxWindow, TmuxWindowLayout};
+        use orzma_tmux::{TmuxWindow, TmuxWindowLayout};
         use tmux_control_parser::{WindowId, WindowLayout};
 
         let pane_id = PaneId(2);
@@ -1622,7 +1622,7 @@ mod tests {
     }
 
     #[test]
-    fn attach_adds_ozma_terminal_and_render_bundle() {
+    fn attach_adds_orzma_terminal_and_render_bundle() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(TerminalGridPlugin);
@@ -1642,12 +1642,12 @@ mod tests {
         app.update();
 
         assert!(
-            app.world().entity(pane_entity).contains::<OzmaTerminal>(),
-            "projected pane must carry OzmaTerminal after attach",
+            app.world().entity(pane_entity).contains::<OrzmaTerminal>(),
+            "projected pane must carry OrzmaTerminal after attach",
         );
         assert!(
             app.world().entity(pane_entity).contains::<TerminalGrid>(),
-            "On<Add, OzmaTerminal> must inject TerminalRenderBundle (TerminalGrid proves exactly one render bundle)",
+            "On<Add, OrzmaTerminal> must inject TerminalRenderBundle (TerminalGrid proves exactly one render bundle)",
         );
     }
 
@@ -1676,7 +1676,7 @@ mod tests {
     /// Composed regression test for the bootstrap-rescue exposure the Task 1
     /// code review flagged: once a tmux pane carries `Coalescer` (needed for
     /// shared local copy mode), it also matches
-    /// `ozma_tty_engine::flush_due_terminals`'s bootstrap rescue, which has no
+    /// `orzma_tty_engine::flush_due_terminals`'s bootstrap rescue, which has no
     /// `PtyHandle` filter. That rescue can now fire on a tmux pane before
     /// tmux's `capture-pane` seed lands, flipping `first_emit` to `false` on a
     /// still-blank `Term`. Proves what actually happens end to end: the
@@ -1688,8 +1688,8 @@ mod tests {
     /// exactly right.
     #[test]
     fn tmux_pane_bootstrap_rescue_before_seed_yields_correct_final_grid() {
-        use ozma_tty_engine::TerminalHandlePlugin;
-        use ozma_tty_renderer::schema::{
+        use orzma_tty_engine::TerminalHandlePlugin;
+        use orzma_tty_renderer::schema::{
             Cell as GridCell, FrameDelta, FrameSnapshot, SnapshotReason,
         };
 
@@ -1836,12 +1836,12 @@ mod tests {
             ViYankRequest,
         };
         use crate::clipboard::Clipboard;
-        use crate::configs::OzmuxConfigsResource;
+        use crate::configs::OrzmaConfigsResource;
         use crate::ui::copy_mode::{CopyModePlugin, CopyModeState, EnterCopyModeActionEvent};
         use bevy::ecs::message::Messages;
-        use ozma_tty_engine::{SelectionType, TermMode, TerminalHandlePlugin, ViMotion};
-        use ozmux_configs::OzmuxConfigs;
-        use ozmux_configs::copy_mode::CopyScroll;
+        use orzma_configs::OrzmaConfigs;
+        use orzma_configs::copy_mode::CopyScroll;
+        use orzma_tty_engine::{SelectionType, TermMode, TerminalHandlePlugin, ViMotion};
         use std::time::Duration;
 
         let mut app = App::new();
@@ -1854,7 +1854,7 @@ mod tests {
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.init_resource::<PendingPaneOutput>();
         app.add_message::<PaneOutput>();
-        app.insert_resource(OzmuxConfigsResource(OzmuxConfigs::default()));
+        app.insert_resource(OrzmaConfigsResource(OrzmaConfigs::default()));
         app.insert_resource(Clipboard::in_memory());
 
         let pane_id = PaneId(99);
@@ -1881,7 +1881,7 @@ mod tests {
 
         // Frame 1: `[copy-mode]` key table resolution (Startup) plus the real
         // tmux-pane attach bundle (TerminalHandle, Coalescer, TerminalTitle,
-        // OzmaTerminal, Node) — the same bundle a projected tmux pane gets.
+        // OrzmaTerminal, Node) — the same bundle a projected tmux pane gets.
         // No output has arrived yet.
         app.update();
         assert!(

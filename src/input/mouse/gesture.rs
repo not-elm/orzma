@@ -4,7 +4,7 @@
 
 use bevy::input::mouse::MouseScrollUnit;
 use bevy::prelude::*;
-use ozma_tty_engine::{CellCoord, MouseButtonKind, SelectionType, Side};
+use orzma_tty_engine::{CellCoord, MouseButtonKind, SelectionType, Side};
 use std::time::Duration;
 
 /// Phase of an in-progress left-drag: `Armed` after a single-click press (no
@@ -44,7 +44,7 @@ pub(in crate::input::mouse) struct HeldPointer {
 
 /// Tracks the current mouse gesture and consecutive-click count.
 #[derive(Resource, Default)]
-pub(in crate::input::mouse) struct OzmaMouseGesture {
+pub(in crate::input::mouse) struct OrzmaMouseGesture {
     /// Consecutive-click counter for multi-click detection.
     pub click: ClickTracker,
     /// In-progress local-selection gesture, or `None` when idle.
@@ -58,7 +58,7 @@ pub(in crate::input::mouse) struct OzmaMouseGesture {
     pub last_cursor_phys: Option<Vec2>,
 }
 
-impl OzmaMouseGesture {
+impl OrzmaMouseGesture {
     /// Resets the in-progress gesture: drops any drag, held button, and cached
     /// cursor position. The multi-click counter is preserved so a follow-up
     /// click can still chain.
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn mouse_gesture_resource_default_is_idle() {
-        let g = OzmaMouseGesture::default();
+        let g = OrzmaMouseGesture::default();
         assert!(g.drag.is_none());
         let mut t = g.click;
         let cfg = (Duration::from_millis(400), 8.0f32);

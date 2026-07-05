@@ -5,15 +5,15 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>ozmux</string>
+    <string>orzma</string>
     <key>CFBundleExecutable</key>
-    <string>ozmux</string>
+    <string>orzma</string>
     <key>CFBundleIdentifier</key>
-    <string>not.elm.ozmux</string>
+    <string>not.elm.orzma</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>ozmux</string>
+    <string>orzma</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

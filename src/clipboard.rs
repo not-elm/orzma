@@ -49,7 +49,7 @@ impl Clipboard {
             ClipboardBackend::System(cb) => {
                 if let Err(e) = cb.set_text(text) {
                     tracing::warn!(
-                        target: "ozmux::clipboard",
+                        target: "orzma::clipboard",
                         error = ?e,
                         "clipboard write failed",
                     );
@@ -59,7 +59,7 @@ impl Clipboard {
             ClipboardBackend::Memory(slot) => *slot = Some(text),
             ClipboardBackend::Unavailable => {
                 tracing::debug!(
-                    target: "ozmux::clipboard",
+                    target: "orzma::clipboard",
                     "clipboard write skipped: arboard unavailable",
                 );
             }
@@ -83,14 +83,14 @@ impl Clipboard {
                 Ok(text) => Some(text),
                 Err(arboard::Error::ContentNotAvailable) => {
                     tracing::debug!(
-                        target: "ozmux::clipboard",
+                        target: "orzma::clipboard",
                         "clipboard read: nothing available (empty / non-text)",
                     );
                     None
                 }
                 Err(err) => {
                     tracing::warn!(
-                        target: "ozmux::clipboard",
+                        target: "orzma::clipboard",
                         error = ?err,
                         "clipboard read failed",
                     );
@@ -101,7 +101,7 @@ impl Clipboard {
             ClipboardBackend::Memory(slot) => slot.clone(),
             ClipboardBackend::Unavailable => {
                 tracing::debug!(
-                    target: "ozmux::clipboard",
+                    target: "orzma::clipboard",
                     "clipboard read skipped: arboard unavailable",
                 );
                 None
@@ -114,7 +114,7 @@ impl Clipboard {
             Ok(cb) => Self(ClipboardBackend::System(cb)),
             Err(e) => {
                 tracing::warn!(
-                    target: "ozmux::clipboard",
+                    target: "orzma::clipboard",
                     error = ?e,
                     "arboard init failed; clipboard writes will no-op",
                 );

@@ -18,7 +18,7 @@ mod decide;
 mod effect;
 
 use crate::app_mode::TmuxActiveSet;
-use crate::configs::OzmuxConfigsResource;
+use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::gesture::ClickTracker;
@@ -43,11 +43,11 @@ use decide::{
     ContinuationCtx, PressHit, ReleaseCtx, decide_continuation, decide_press, decide_release,
 };
 use effect::{MultiSelectKind, TmuxMouseEffect, TmuxMouseEffects};
-use ozma_tty_engine::{Column, Line, Point, SelectionType, Side};
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{NonInteractive, Webview};
-use ozmux_tmux::{ActiveWindow, PaneId, TmuxPane};
+use orzma_tmux::{ActiveWindow, PaneId, TmuxPane};
+use orzma_tty_engine::{Column, Line, Point, SelectionType, Side};
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::prelude::TerminalOverlays;
+use orzma_webview::{NonInteractive, Webview};
 use std::time::Duration;
 use tmux_control_parser::DividerAxis;
 
@@ -363,7 +363,7 @@ fn tmux_gesture(
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
-    configs: Option<Res<OzmuxConfigsResource>>,
+    configs: Option<Res<OrzmaConfigsResource>>,
     copy_gate: CopyModeGate,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -613,9 +613,9 @@ mod tests {
     use bevy::input::ButtonState;
     use bevy::input::mouse::MouseButtonInput;
     use bevy_cef::prelude::FocusedWebview;
-    use ozma_tty_renderer::CellMetrics;
-    use ozma_tty_renderer::prelude::TerminalOverlays;
-    use ozma_webview::{NonInteractive, Webview, webview_hit_at};
+    use orzma_tty_renderer::CellMetrics;
+    use orzma_tty_renderer::prelude::TerminalOverlays;
+    use orzma_webview::{NonInteractive, Webview, webview_hit_at};
 
     #[test]
     fn gesture_state_default_is_idle() {
@@ -639,7 +639,7 @@ mod tests {
 
     fn set_modal_open(app: &mut App, open: bool) {
         use crate::ui::copy_search::CopyPromptState;
-        use ozmux_tmux::{PaneId, PromptKind};
+        use orzma_tmux::{PaneId, PromptKind};
 
         app.world_mut().resource_mut::<CopyPrompt>().open = open.then(|| CopyPromptState {
             kind: PromptKind::SearchForward,

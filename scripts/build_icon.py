@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the ozmux macOS app icon (AppIcon.icns) from the master SVG."""
+"""Regenerate the orzma macOS app icon (AppIcon.icns) from the master SVG."""
 
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ def build_icon(svg: Path, out: Path, png_1024: Path, font: Path) -> None:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Regenerate the ozmux macOS app icon")
+    p = argparse.ArgumentParser(description="Regenerate the orzma macOS app icon")
     p.add_argument("--svg", default=str(DEFAULT_SVG))
     p.add_argument("--out", default=str(DEFAULT_ICNS))
     p.add_argument("--png-1024", default=str(DEFAULT_PNG_1024))

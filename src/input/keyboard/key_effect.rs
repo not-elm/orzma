@@ -7,9 +7,9 @@ use crate::action::vi::ResolvedCopyModeKeys;
 use crate::input::shortcuts::{LeaderPhase, LeaderStep, Shortcuts, is_modifier_key, step_leader};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
-use ozma_webview::NormalizedChord;
-use ozmux_configs::copy_mode::CopyModeAction;
-use ozmux_configs::shortcuts::{Modifiers, Shortcut};
+use orzma_configs::copy_mode::CopyModeAction;
+use orzma_configs::shortcuts::{Modifiers, Shortcut};
+use orzma_webview::NormalizedChord;
 use std::time::Duration;
 
 /// One decided effect of a single pressed key, produced by `classify_key_batch`.

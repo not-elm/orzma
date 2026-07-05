@@ -8,8 +8,8 @@ use crate::theme;
 use crate::ui::palette;
 use bevy::prelude::*;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow, WindowFlags, WindowId};
+use orzma_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow, WindowFlags, WindowId};
+use orzma_tty_renderer::TerminalCellMetricsResource;
 
 /// Marker on the tmux window bar root Node — the fixed-height Row mounted as a
 /// child of `TmuxModeUi`. `spawn_window_bar` inserts it once; `rebuild_window_bar`
@@ -414,7 +414,7 @@ fn flag_suffix(flags: WindowFlags) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
+    use orzma_tty_renderer::{CellMetrics, TerminalCellMetricsResource};
 
     #[test]
     fn window_label_formats_index_and_name() {
@@ -460,7 +460,7 @@ mod tests {
 
     #[test]
     fn flag_suffix_orders_and_space_prefixes() {
-        use ozmux_tmux::WindowFlags;
+        use orzma_tmux::WindowFlags;
         assert_eq!(flag_suffix(WindowFlags::default()), "");
         assert_eq!(flag_suffix(WindowFlags::ZOOM | WindowFlags::BELL), " Z!");
         assert_eq!(
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn entry_colors_active_is_dark_text() {
-        use ozmux_tmux::WindowFlags;
+        use orzma_tmux::WindowFlags;
         assert_eq!(
             entry_colors(true, WindowFlags::BELL),
             (palette::BACKGROUND, palette::BACKGROUND)
@@ -480,7 +480,7 @@ mod tests {
 
     #[test]
     fn entry_colors_inactive_bell_or_activity_is_warn() {
-        use ozmux_tmux::WindowFlags;
+        use orzma_tmux::WindowFlags;
         assert_eq!(
             entry_colors(false, WindowFlags::BELL),
             (palette::MUTED, palette::FLAG_WARN)
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn entry_colors_inactive_plain_is_muted() {
-        use ozmux_tmux::WindowFlags;
+        use orzma_tmux::WindowFlags;
         assert_eq!(
             entry_colors(false, WindowFlags::default()),
             (palette::MUTED, palette::MUTED)
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn rebuild_renders_session_block_active_pill_and_flags() {
-        use ozmux_tmux::{ActiveWindow, TmuxSession, TmuxWindow, WindowFlags};
+        use orzma_tmux::{ActiveWindow, TmuxSession, TmuxWindow, WindowFlags};
         use tmux_control_parser::SessionId;
 
         let mut app = App::new();
@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn rebuild_renders_window_entries_with_active_highlight() {
-        use ozmux_tmux::{ActiveWindow, TmuxWindow};
+        use orzma_tmux::{ActiveWindow, TmuxWindow};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);

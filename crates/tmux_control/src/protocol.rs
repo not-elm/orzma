@@ -49,7 +49,7 @@ pub enum ClientEvent {
 /// One slot in the command↔reply FIFO: a correlated query reply, or a drain that
 /// swallows an effect command's reply blocks up to its fence line.
 ///
-/// `fence` is the `OZMUXFENCE_<n>` line tmux echoes back, formatted once in
+/// `fence` is the `ORZMAFENCE_<n>` line tmux echoes back, formatted once in
 /// `send_effect`. The counter is internal `ProtocolClient` state, so no real
 /// binding's output collides with it — it is not a secret, though: a binding that
 /// deliberately emits the exact current line could end its own drain early
@@ -130,7 +130,7 @@ impl ProtocolClient {
         if raw.contains('\n') || raw.contains('\r') {
             return Err(TmuxError::InvalidCommand);
         }
-        let fence = format!("OZMUXFENCE_{}", self.next_fence);
+        let fence = format!("ORZMAFENCE_{}", self.next_fence);
         self.next_fence += 1;
         self.outgoing.extend_from_slice(raw.as_bytes());
         self.outgoing.push(b'\n');
@@ -857,7 +857,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             c.take_outgoing(),
-            b"if-shell -F 1 { display-message a } { display-message b }\ndisplay-message -p OZMUXFENCE_0\n"
+            b"if-shell -F 1 { display-message a } { display-message b }\ndisplay-message -p ORZMAFENCE_0\n"
                 .to_vec()
         );
     }
@@ -868,7 +868,7 @@ mod tests {
         c.send_effect("if-shell -F 1 { a } { b }").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\n%end 1 2 1\n%begin 1 3 1\nOZMUXFENCE_0\n%end 1 3 1\n")
+            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\n%end 1 2 1\n%begin 1 3 1\nORZMAFENCE_0\n%end 1 3 1\n")
             .unwrap();
         assert!(events.is_empty(), "all relay+fence blocks drained");
         assert_eq!(c.pending_len(), 0);
@@ -881,7 +881,7 @@ mod tests {
         let q = c.send("capture-pane -p -t %1").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\n%end 1 2 1\n%begin 1 3 1\nOZMUXFENCE_0\n%end 1 3 1\n%begin 1 4 1\nSCREEN\n%end 1 4 1\n")
+            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\n%end 1 2 1\n%begin 1 3 1\nORZMAFENCE_0\n%end 1 3 1\n%begin 1 4 1\nSCREEN\n%end 1 4 1\n")
             .unwrap();
         assert_eq!(
             events,
@@ -900,7 +900,7 @@ mod tests {
         c.send_effect("select-pane -t %0").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 1 1\n%end 1 1 1\n%output %0 hi\n%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n")
+            .feed(b"%begin 1 1 1\n%end 1 1 1\n%output %0 hi\n%begin 1 2 1\nORZMAFENCE_0\n%end 1 2 1\n")
             .unwrap();
         assert_eq!(
             events,
@@ -918,7 +918,7 @@ mod tests {
         c.send_effect("nonexistent-xyz").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 1 1\nparse error\n%error 1 1 1\n%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n")
+            .feed(b"%begin 1 1 1\nparse error\n%error 1 1 1\n%begin 1 2 1\nORZMAFENCE_0\n%end 1 2 1\n")
             .unwrap();
         assert!(events.is_empty());
         assert_eq!(c.pending_len(), 0);
@@ -931,7 +931,7 @@ mod tests {
         let _ = c.take_outgoing();
         // An %error whose body coincidentally equals the token must NOT end the drain.
         let events = c
-            .feed(b"%begin 1 1 1\nOZMUXFENCE_0\n%error 1 1 1\n")
+            .feed(b"%begin 1 1 1\nORZMAFENCE_0\n%error 1 1 1\n")
             .unwrap();
         assert!(events.is_empty());
         assert_eq!(
@@ -939,7 +939,7 @@ mod tests {
             1,
             "drain stays open after a failed fence-like block"
         );
-        let events2 = c.feed(b"%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n").unwrap();
+        let events2 = c.feed(b"%begin 1 2 1\nORZMAFENCE_0\n%end 1 2 1\n").unwrap();
         assert!(events2.is_empty());
         assert_eq!(c.pending_len(), 0);
     }
@@ -951,7 +951,7 @@ mod tests {
         c.send_effect("b").unwrap();
         let _ = c.take_outgoing();
         let events = c
-            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\nOZMUXFENCE_0\n%end 1 2 1\n%begin 1 3 1\n%end 1 3 1\n%begin 1 4 1\nOZMUXFENCE_1\n%end 1 4 1\n")
+            .feed(b"%begin 1 1 1\n%end 1 1 1\n%begin 1 2 1\nORZMAFENCE_0\n%end 1 2 1\n%begin 1 3 1\n%end 1 3 1\n%begin 1 4 1\nORZMAFENCE_1\n%end 1 4 1\n")
             .unwrap();
         assert!(events.is_empty());
         assert_eq!(c.pending_len(), 0);
@@ -1011,7 +1011,7 @@ mod tests {
         let stream = concat!(
             "%begin 1 100 1\n%end 1 100 1\n",
             "%begin 1 101 1\n%end 1 101 1\n",
-            "%begin 1 102 1\nOZMUXFENCE_0\n%end 1 102 1\n",
+            "%begin 1 102 1\nORZMAFENCE_0\n%end 1 102 1\n",
             "%begin 1 103 1\nP1\n%end 1 103 1\n",
             "%begin 1 104 1\n54 39\n%end 1 104 1\n",
             "%begin 1 105 1\nP2\n%end 1 105 1\n",

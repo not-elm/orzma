@@ -17,10 +17,10 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{NonInteractive, Webview, webview_hit_at};
-use ozmux_tmux::TmuxPane;
+use orzma_tmux::TmuxPane;
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::prelude::TerminalOverlays;
+use orzma_webview::{NonInteractive, Webview, webview_hit_at};
 
 /// Registers the Tmux-mode per-pane input gate maintainer.
 pub(super) struct GatePlugin;

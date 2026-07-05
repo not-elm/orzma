@@ -7,12 +7,12 @@ body:
     attributes:
       value: |
         Thanks for taking the time to file a bug report!
-        Please search [existing issues](https://github.com/not-elm/ozmux/issues?q=is%3Aissue) first to avoid duplicates.
+        Please search [existing issues](https://github.com/not-elm/orzma/issues?q=is%3Aissue) first to avoid duplicates.
   - type: input
     id: version
     attributes:
-      label: ozmux version
-      description: Find it with `brew info --cask ozmux`.
+      label: orzma version
+      description: Find it with `brew info --cask orzma`.
       placeholder: e.g. 0.1.0
     validations:
       required: true
@@ -92,7 +92,7 @@ body:
     id: config
     attributes:
       label: Relevant configuration
-      description: Relevant parts of your `~/.config/ozmux/config.toml`, if any.
+      description: Relevant parts of your `~/.config/orzma/config.toml`, if any.
       render: toml
   - type: textarea
     id: context

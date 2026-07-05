@@ -1,0 +1,27 @@
+[package]
+name = "orzmd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+readme.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "orzmd"
+path = "src/main.rs"
+
+[dependencies]
+ratatui-orzma = { path = "../../sdk/ratatui-orzma" }
+ratatui = "0.29"
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+pulldown-cmark = "0.12"
+notify-debouncer-full = "0.3"
+rust-embed = "8"
+tempfile = { workspace = true }
+blake3 = "1"
+
+[lints]
+workspace = true

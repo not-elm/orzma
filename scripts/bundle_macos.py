@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bundle ozmux into a CEF-embedded macOS .app and package it for Homebrew."""
+"""Bundle orzma into a CEF-embedded macOS .app and package it for Homebrew."""
 
 from __future__ import annotations
 
@@ -14,14 +14,14 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-APP_NAME = "ozmux"
-BIN_NAME = "ozmux"
-BUNDLE_ID_BASE = "not.elm.ozmux"
+APP_NAME = "orzma"
+BIN_NAME = "orzma"
+BUNDLE_ID_BASE = "not.elm.orzma"
 ARCH = "arm64"
 TARGET_TRIPLE = "aarch64-apple-darwin"
 CARGO_PROFILE = "dist"
 HELPER_SUFFIXES = ("", " (GPU)", " (Renderer)", " (Plugin)")
-COMPANION_BINS = ("ozbrowser", "ozmd")
+COMPANION_BINS = ("orzbrowser", "orzmd")
 MIN_MACOS = "11.0"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -150,11 +150,11 @@ def cargo_version(bin_name: str) -> str:
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Bundle ozmux into a CEF-embedded macOS .app")
+    p = argparse.ArgumentParser(description="Bundle orzma into a CEF-embedded macOS .app")
     p.add_argument("--version")
     p.add_argument("--bin")
-    p.add_argument("--ozbrowser-bin")
-    p.add_argument("--ozmd-bin")
+    p.add_argument("--orzbrowser-bin")
+    p.add_argument("--orzmd-bin")
     p.add_argument("--skip-build", action="store_true")
     p.add_argument("--no-sign", action="store_true")
     p.add_argument("--sign-identity")
@@ -396,23 +396,23 @@ def package(cfg: BundleConfig) -> str:
     return digest
 
 
-def verify_ozmd_web_assets(assets_dir: Path | None = None) -> None:
-    assets = assets_dir if assets_dir is not None else REPO_ROOT / "apps" / "ozmd" / "assets"
+def verify_orzmd_web_assets(assets_dir: Path | None = None) -> None:
+    assets = assets_dir if assets_dir is not None else REPO_ROOT / "apps" / "orzmd" / "assets"
     real = (
         [p for p in assets.glob("*") if p.name not in {".gitignore", ".gitkeep"}]
         if assets.is_dir() else []
     )
     if not real:
         raise SystemExit(
-            "ozmd web assets missing: apps/ozmd/assets/ has only placeholders. "
-            "Run `pnpm build` (or `just ozmd-web`) before bundling, "
-            "or ozmd will ship a blank viewer."
+            "orzmd web assets missing: apps/orzmd/assets/ has only placeholders. "
+            "Run `pnpm build` (or `just orzmd-web`) before bundling, "
+            "or orzmd will ship a blank viewer."
         )
 
 
 def cargo_build(cfg: BundleConfig) -> None:
     run(cargo_build_argv(cfg.target_triple, CARGO_PROFILE))
-    verify_ozmd_web_assets()
+    verify_orzmd_web_assets()
     run(companion_cargo_build_argv(cfg.target_triple, CARGO_PROFILE, COMPANION_BINS))
 
 

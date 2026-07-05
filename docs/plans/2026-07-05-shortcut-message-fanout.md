@@ -17,7 +17,7 @@
 - Plugin registration lives in the file that defines the systems.
 - Visibility minimization: anything used only in its defining module stays private.
 - Toolchain pinned 1.95; edition 2024.
-- Test command for the binary crate: `cargo test -p ozmux <filter>`. Compile check: `cargo build -p ozmux`.
+- Test command for the binary crate: `cargo test -p orzma <filter>`. Compile check: `cargo build -p orzma`.
 
 ---
 
@@ -105,12 +105,12 @@ Use a search for `KeyEffect::Action` across `src/` to confirm zero remain.
 
 - [ ] **Step 3: Verify the tree compiles**
 
-Run: `cargo build -p ozmux`
+Run: `cargo build -p orzma`
 Expected: builds with no errors.
 
 - [ ] **Step 4: Run the affected tests**
 
-Run: `cargo test -p ozmux input::keyboard`
+Run: `cargo test -p orzma input::keyboard`
 Expected: PASS — all `key_effect.rs` and `handler.rs` tests green (the rename is behavior-preserving).
 
 - [ ] **Step 5: Commit**
@@ -226,7 +226,7 @@ pub(in crate::input) struct ShortcutMessages<'w> {
 
 - Add `use bevy::ecs::system::SystemParam;` (mirrors `handler.rs`).
 - Add `use bevy::input::keyboard::Key;` (`KeyCode` and `KeyboardInput` are already imported at :14).
-- Add `use ozmux_configs::copy_mode::CopyModeAction;`.
+- Add `use orzma_configs::copy_mode::CopyModeAction;`.
 
 `MessageWriter`, `Entity`, and `Message` come from `bevy::prelude::*` (already imported at :16).
 
@@ -303,10 +303,10 @@ Immediately before the existing `batch.write(ShortcutBatch { ... })` (at :163), 
 
 - [ ] **Step 5: Verify compile and full green**
 
-Run: `cargo build -p ozmux`
+Run: `cargo build -p orzma`
 Expected: builds clean (no dead-code warnings — every message type is constructed and registered).
 
-Run: `cargo test -p ozmux input::`
+Run: `cargo test -p orzma input::`
 Expected: PASS — existing tests unaffected (consumers still read `ShortcutBatch`).
 
 - [ ] **Step 6: Commit**
@@ -483,10 +483,10 @@ fn push_forward_name(
 Update the `use` block at the top of `src/input/shortcuts/tmux.rs`:
 - In the `crate::input::{...}` import, drop `keyboard::key_effect::KeyEffect` and `ShortcutBatch`; add `CopyModeMessage`, `ShortcutMessage`, `TypeMessage`, `WebviewForwardMessage`; keep `ShortcutSet`. (`ShortcutMessages` is the producer-side writer bundle and is NOT needed here — consumers use `MessageReader`.)
 - Add `use bevy::input::keyboard::Key;` (`KeyCode` is already in `bevy::prelude::*`).
-- Add `use ozmux_configs::copy_mode::CopyModeAction;` **only if** `CopyModeMessage`'s field type is referenced directly — it is not here, so skip.
-- Add `use ozmux_configs::shortcuts::Modifiers;` (used by `push_forward_name`).
+- Add `use orzma_configs::copy_mode::CopyModeAction;` **only if** `CopyModeMessage`'s field type is referenced directly — it is not here, so skip.
+- Add `use orzma_configs::shortcuts::Modifiers;` (used by `push_forward_name`).
 - Add `use std::collections::HashMap;`.
-- `KeyMods` and `bevy_key_to_tmux_name` are already imported from `ozmux_tmux` (:24-27). `trigger_copy_mode_action` is already imported (:9). `ForwardPaneKeysRequest` is already imported (:15).
+- `KeyMods` and `bevy_key_to_tmux_name` are already imported from `orzma_tmux` (:24-27). `trigger_copy_mode_action` is already imported (:9). `ForwardPaneKeysRequest` is already imported (:15).
 - `SystemCondition` comes from `bevy::prelude::*` (already glob-imported via `bevy::{ecs::system::SystemParam, prelude::*}` at :19).
 
 Confirm no `KeyEffect` / `ShortcutBatch` reference remains in the file.
@@ -539,10 +539,10 @@ Update that test module's `use` / registration accordingly (register the four me
 
 - [ ] **Step 6: Verify compile and green**
 
-Run: `cargo build -p ozmux`
+Run: `cargo build -p orzma`
 Expected: clean.
 
-Run: `cargo test -p ozmux input::tmux`
+Run: `cargo test -p orzma input::tmux`
 Expected: PASS — the tmux appliers behave identically; forwarding still yields one `ForwardPaneKeysRequest` per focused pane.
 
 - [ ] **Step 7: Commit**
@@ -739,10 +739,10 @@ Preserve any test that exercised copy-mode paste suppression: those tests must s
 
 - [ ] **Step 6: Verify compile and green**
 
-Run: `cargo build -p ozmux`
+Run: `cargo build -p orzma`
 Expected: clean.
 
-Run: `cargo test -p ozmux input::`
+Run: `cargo test -p orzma input::`
 Expected: PASS — Default appliers behave identically (paste suppression, copy-mode entry, typing).
 
 - [ ] **Step 7: Commit**
@@ -872,15 +872,15 @@ Run a final search: `grep -rn "ShortcutBatch" src/` must return nothing.
 
 - [ ] **Step 5: Verify compile and full green**
 
-Run: `cargo build -p ozmux`
+Run: `cargo build -p orzma`
 Expected: clean, no warnings.
 
-Run: `cargo test -p ozmux input::`
+Run: `cargo test -p orzma input::`
 Expected: PASS — full input suite green with `ShortcutBatch` gone.
 
 - [ ] **Step 6: Run clippy + fmt**
 
-Run: `cargo clippy -p ozmux --all-targets && cargo fmt`
+Run: `cargo clippy -p orzma --all-targets && cargo fmt`
 Expected: no clippy warnings; fmt leaves the tree clean (or restages formatting).
 
 - [ ] **Step 7: Commit**

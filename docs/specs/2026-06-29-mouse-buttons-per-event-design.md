@@ -16,11 +16,11 @@ system; only the apply side is split per operation.
 Two files own the shared mouse path today:
 
 - `src/input/mouse.rs` — the gather/decide side. `dispatch_mouse_buttons`
-  reads `MouseButtonInput` / `CursorMoved`, owns the `OzmaMouseGesture`
+  reads `MouseButtonInput` / `CursorMoved`, owns the `OrzmaMouseGesture`
   state machine, hit-tests, drives the pure `decide_button` /
   `decide_wheel` deciders (which return `Vec<MouseEffect>`), and triggers
   `TerminalMouseEffects`.
-- `crates/ozma_terminal/src/mouse.rs` — the apply side. One observer
+- `crates/orzma_terminal/src/mouse.rs` — the apply side. One observer
   `on_terminal_mouse_effects` applies a `Vec<MouseEffect>` to the
   `TerminalHandle` / `Clipboard`, with two parallel match arms
   (`apply_effect` for the PTY-attached path, `apply_effect_detached` for
@@ -44,7 +44,7 @@ stay one system:
    reader systems all see the full stream.
 2. Same-frame temporal interleaving (`press A → release A → press B`)
    would be lost if press / release / drag were separate systems,
-   corrupting `OzmaMouseGesture` (held / drag phase / click count).
+   corrupting `OrzmaMouseGesture` (held / drag phase / click count).
 3. The drag-synthesis tail depends on `gesture.held` set earlier in the
    same run.
 
@@ -57,7 +57,7 @@ side into per-operation observers.
 ### Decision IR stays in the host, private
 
 `decide_button`, `decide_wheel`, and `effects_from_wheel_action` keep
-returning `Vec<MouseEffect>`. `MouseEffect` MOVES out of `ozma_terminal`
+returning `Vec<MouseEffect>`. `MouseEffect` MOVES out of `orzma_terminal`
 and becomes a **private** enum in `src/input/mouse.rs` — it is now purely
 the host-internal decision intermediate representation, no longer a
 cross-crate apply contract. This preserves the ~12 pure unit tests of the
@@ -78,7 +78,7 @@ mutation is split into focused single-op observers, and the
 attached/detached branch is centralized in one helper rather than the
 two-arm duplication (`apply_effect` / `apply_effect_detached`) today.
 
-### New apply-side EntityEvents (in `crates/ozma_terminal/src/mouse.rs`)
+### New apply-side EntityEvents (in `crates/orzma_terminal/src/mouse.rs`)
 
 One event per operation, each carrying the target `entity` via
 `#[event_target]`, replacing the `MouseEffect` variants:
@@ -97,11 +97,11 @@ One event per operation, each carrying the target `entity` via
 the PTY-less case).
 
 Each event is built in the host (`src/input/mouse.rs`) but defined and
-applied in `ozma_terminal`, so — like `TerminalMouseEffects` today — each
+applied in `orzma_terminal`, so — like `TerminalMouseEffects` today — each
 needs `pub` fields or a `pub fn new(...)` for cross-crate construction.
 This turns today's single cross-crate constructor into seven, and the
 events must be `pub` (the host crate triggers them), widening
-`ozma_terminal`'s surface from one carrier type to seven with no
+`orzma_terminal`'s surface from one carrier type to seven with no
 in-workspace consumer beyond their own observers. Accepted as the cost of
 per-operation discoverability / future observability; `pub(crate)` is not
 an option because the host crate constructs and triggers them.
@@ -109,7 +109,7 @@ an option because the host crate constructs and triggers them.
 ### One observer per event
 
 `on_terminal_mouse_effects` is replaced by one observer per event, each
-registered in `OzmaMousePlugin`. Each observer takes ONLY the access it
+registered in `OrzmaMousePlugin`. Each observer takes ONLY the access it
 needs — not a uniform query:
 
 - **Handle-touching observers** (`TerminalMouseWrite`,
@@ -158,8 +158,8 @@ coalescing machinery is added.
 
 `TerminalOpenUri` touches neither the `TerminalHandle` nor the
 `Clipboard` — its observer only calls `try_open_uri(uri)`, which is
-`pub(crate)` in `ozma_terminal` (`crates/ozma_terminal/src/hyperlink.rs`).
-The observer therefore MUST live in `ozma_terminal`; handling OpenUri in
+`pub(crate)` in `orzma_terminal` (`crates/orzma_terminal/src/hyperlink.rs`).
+The observer therefore MUST live in `orzma_terminal`; handling OpenUri in
 the host gather system instead would force widening `try_open_uri` to
 `pub` (or duplicating it), which this design rejects. The event keeps an
 `entity` field for uniformity with the other six, but the apply does not
@@ -172,12 +172,12 @@ read it. (An alternative — a non-`EntityEvent` plain event carrying just
 ```
 [gather: dispatch_mouse_buttons — 1 system]
   read CursorMoved + MouseButtonInput
-  drive OzmaMouseGesture state machine + hit-test
+  drive OrzmaMouseGesture state machine + hit-test
   decide_button() / decide_wheel()  -> Vec<MouseEffect>   (pure, host-private enum)
   for each MouseEffect in order: commands.trigger(<per-op EntityEvent>)
         |  FIFO, each trigger resolves before the next
         v
-[apply: N observers, one per event, in ozma_terminal::mouse]
+[apply: N observers, one per event, in orzma_terminal::mouse]
   on_terminal_mouse_write       -> PTY write | TerminalForwardInput
   on_terminal_selection_start   -> handle.selection_start_at[ _vt_only ] (+flush_emit if detached)
   on_terminal_selection_update  -> handle.selection_update_to[ _vt_only ] (+flush_emit if detached)
@@ -201,7 +201,7 @@ read it. (An alternative — a non-`EntityEvent` plain event carrying just
   triggered event type/payload; assertions that matched
   `MouseEffect::SelUpdate { .. }` etc. are rewritten against the
   corresponding event (e.g. `TerminalSelectionUpdate`).
-- **Apply tests** (`crates/ozma_terminal/src/mouse.rs`):
+- **Apply tests** (`crates/orzma_terminal/src/mouse.rs`):
   `detached_terminal_forwards_write_and_selects_via_vt_only` and
   `mouse_effects_on_entity_without_terminal_does_not_panic` reworked to
   trigger the per-operation events and assert the same outcomes
@@ -230,4 +230,4 @@ doc comments:
 - `TmuxMouseEffect` / `TmuxMouseEffects` (`src/input/tmux/mouse/`).
 - The wheel gather system structure (`dispatch_mouse_wheel`) beyond
   swapping its `TerminalMouseEffects` trigger for per-op event triggers.
-- Any change to `OzmaMouseGesture` semantics or the deciders' logic.
+- Any change to `OrzmaMouseGesture` semantics or the deciders' logic.

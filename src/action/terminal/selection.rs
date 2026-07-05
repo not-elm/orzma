@@ -3,9 +3,9 @@
 
 use crate::action::terminal::{TerminalBackendQuery, apply_to_terminal};
 use crate::clipboard::Clipboard;
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use ozma_tty_engine::{Point, SelectionType, Side, TerminalHandle};
+use orzma_tty_engine::{Point, SelectionType, Side, TerminalHandle};
 
 /// Starts a new local selection on `entity` at `point`.
 #[derive(EntityEvent, Debug, Clone)]
@@ -135,7 +135,7 @@ fn on_terminal_selection_clear(
 fn on_terminal_selection_copy(
     ev: On<TerminalSelectionCopy>,
     mut clipboard: ResMut<Clipboard>,
-    terminals: Query<&TerminalHandle, With<OzmaTerminal>>,
+    terminals: Query<&TerminalHandle, With<OrzmaTerminal>>,
 ) {
     let Ok(handle) = terminals.get(ev.entity) else {
         return;
@@ -148,12 +148,12 @@ fn on_terminal_selection_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozma_tty_engine::{Column, Line};
+    use orzma_tty_engine::{Column, Line};
 
     #[test]
     fn detached_selection_start_event_sets_selection_and_emits_frame() {
-        use ozma_tty_engine::TerminalHandle;
-        use ozma_tty_renderer::schema::{FrameDelta, FrameSnapshot};
+        use orzma_tty_engine::TerminalHandle;
+        use orzma_tty_renderer::schema::{FrameDelta, FrameSnapshot};
 
         #[derive(Resource, Default)]
         struct FramesEmitted(usize);
@@ -171,7 +171,7 @@ mod tests {
             });
 
         let handle = TerminalHandle::detached(10, 5);
-        let entity = app.world_mut().spawn((OzmaTerminal, handle)).id();
+        let entity = app.world_mut().spawn((OrzmaTerminal, handle)).id();
 
         app.world_mut().trigger(TerminalSelectionStart {
             entity,
@@ -184,7 +184,7 @@ mod tests {
         let handle = app.world().entity(entity).get::<TerminalHandle>().unwrap();
         assert!(
             handle.selection_to_string().is_some(),
-            "TerminalSelectionStart on a PTY-less OzmaTerminal must set a selection via vt_only"
+            "TerminalSelectionStart on a PTY-less OrzmaTerminal must set a selection via vt_only"
         );
         assert!(
             app.world().resource::<FramesEmitted>().0 >= 1,

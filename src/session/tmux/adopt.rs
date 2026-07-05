@@ -24,14 +24,14 @@ use crate::ui::UiRoot;
 use crate::ui::default_mode::{DefaultModeUi, restore_default_shell};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
-use ozma_tty_engine::{
-    ControlModeDetected, ControlModeReleased, ReleaseControlMode, TerminalChildExit, TerminalResize,
-};
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozmux_tmux::{
+use orzma_tmux::{
     ClientEvent, ControlEvent, TmuxClient, TmuxConnectionClosed, TmuxConnectionReset,
     TmuxEventBatch, TmuxProjectionSet, TransportEvent,
 };
+use orzma_tty_engine::{
+    ControlModeDetected, ControlModeReleased, ReleaseControlMode, TerminalChildExit, TerminalResize,
+};
+use orzma_tty_renderer::TerminalCellMetricsResource;
 
 /// Registers the adoption observer and the teardown systems/observer.
 pub(super) struct AdoptPlugin;
@@ -306,7 +306,7 @@ fn teardown_despawn(commands: &mut Commands, gateway: Entity) {
 mod tests {
     use super::*;
     use bevy::state::app::StatesPlugin;
-    use ozma_tty_engine::AdoptedControlMode;
+    use orzma_tty_engine::AdoptedControlMode;
 
     fn build_app() -> App {
         let mut app = App::new();
@@ -468,7 +468,7 @@ mod tests {
     #[test]
     fn exit_notification_restores_gateway_into_default_container() {
         use bevy::ecs::system::RunSystemOnce;
-        use ozma_tty_engine::ReleaseControlMode;
+        use orzma_tty_engine::ReleaseControlMode;
 
         let mut app = build_app();
         // Stand-in for the engine's ReleaseControlMode observer (release.rs)
@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn readoption_after_restore_reenters_tmux_on_the_same_entity() {
-        use ozma_tty_engine::ReleaseControlMode;
+        use orzma_tty_engine::ReleaseControlMode;
 
         let mut app = build_app();
         // Stand-in for the engine's ReleaseControlMode observer plus
@@ -635,7 +635,7 @@ mod tests {
         // after triggering ReleaseControlMode, clobbering the re-adoption:
         // AppMode was forced back to Default while the gateway stayed a live
         // (but now hidden-in-the-wrong-place) tmux connection underneath.
-        use ozma_tty_engine::ReleaseControlMode;
+        use orzma_tty_engine::ReleaseControlMode;
 
         let mut app = build_app();
         // Stand-in for the "stays adopted" outcome: re-fire ControlModeDetected
@@ -803,7 +803,7 @@ mod tests {
 
     fn install_metrics_and_window(app: &mut App, phys_w: u32, phys_h: u32) {
         use bevy::window::{PrimaryWindow, Window, WindowResolution};
-        use ozma_tty_renderer::CellMetrics;
+        use orzma_tty_renderer::CellMetrics;
 
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
@@ -923,8 +923,8 @@ mod tests {
         // `%exit` through TmuxSessionPlugin's drain so both systems run as
         // genuinely scheduled Update systems in one frame, not via a
         // bypassing direct call.
-        use ozma_tty_engine::ReleaseControlMode;
-        use ozmux_tmux::TmuxSessionPlugin;
+        use orzma_tmux::TmuxSessionPlugin;
+        use orzma_tty_engine::ReleaseControlMode;
 
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));

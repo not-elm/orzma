@@ -30,11 +30,11 @@ use bevy::ui::{
 };
 use bevy::window::{PrimaryWindow, Window};
 use layout::{CaretVisual, PlacedCell, compute_overlay_layout};
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::TerminalFontInitSet;
-use ozma_tty_renderer::TerminalFontSize;
-use ozma_tty_renderer::material::TerminalMaterialSystems;
-use ozma_tty_renderer::prelude::TerminalGrid;
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::TerminalFontInitSet;
+use orzma_tty_renderer::TerminalFontSize;
+use orzma_tty_renderer::material::TerminalMaterialSystems;
+use orzma_tty_renderer::prelude::TerminalGrid;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
@@ -679,9 +679,9 @@ mod tests {
     use bevy::math::Vec2;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
-    use ozma_tty_renderer::CellMetrics;
-    use ozmux_tmux::PaneId;
-    use ozmux_tmux::{ActivePane, TmuxPane};
+    use orzma_tmux::PaneId;
+    use orzma_tmux::{ActivePane, TmuxPane};
+    use orzma_tty_renderer::CellMetrics;
     use tmux_control_parser::CellDims;
 
     #[test]
@@ -732,7 +732,7 @@ mod tests {
 
     #[test]
     fn suppresses_cursor_on_focused_terminal_without_tmux() {
-        use crate::surface::OzmaTerminal;
+        use crate::surface::OrzmaTerminal;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -750,7 +750,7 @@ mod tests {
 
         let focused = app
             .world_mut()
-            .spawn((OzmaTerminal, KeyboardFocused, TerminalGrid::default()))
+            .spawn((OrzmaTerminal, KeyboardFocused, TerminalGrid::default()))
             .id();
         let other = app.world_mut().spawn(TerminalGrid::default()).id();
 
@@ -816,10 +816,10 @@ mod tests {
 
     #[test]
     fn overlay_background_matches_pane_default_bg_while_composing() {
-        use crate::surface::OzmaTerminal;
+        use crate::surface::OrzmaTerminal;
         use bevy::asset::Handle;
         use bevy::window::WindowResolution;
-        use ozma_tty_renderer::prelude::Cursor;
+        use orzma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -851,7 +851,7 @@ mod tests {
             PrimaryWindow,
         ));
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             KeyboardFocused,
             ComputedNode {
                 size: Vec2::new(800.0, 600.0),
@@ -892,10 +892,10 @@ mod tests {
     }
 
     fn run_overlay_with_composition(value: &str, caret: Option<(usize, usize)>) -> App {
-        use crate::surface::OzmaTerminal;
+        use crate::surface::OrzmaTerminal;
         use bevy::asset::Handle;
         use bevy::window::WindowResolution;
-        use ozma_tty_renderer::prelude::Cursor;
+        use orzma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -928,7 +928,7 @@ mod tests {
             PrimaryWindow,
         ));
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             KeyboardFocused,
             ComputedNode {
                 size: Vec2::new(800.0, 600.0),
@@ -1011,12 +1011,12 @@ mod tests {
 
     #[test]
     fn overlay_geometry_not_rechanged_on_unchanged_composition() {
-        use crate::surface::OzmaTerminal;
+        use crate::surface::OrzmaTerminal;
         use bevy::app::Update;
         use bevy::asset::Handle;
         use bevy::ecs::query::{Changed, Or};
         use bevy::window::WindowResolution;
-        use ozma_tty_renderer::prelude::Cursor;
+        use orzma_tty_renderer::prelude::Cursor;
 
         #[derive(Resource, Default)]
         struct ChangedOverlayNodes(usize);
@@ -1075,7 +1075,7 @@ mod tests {
             PrimaryWindow,
         ));
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             KeyboardFocused,
             ComputedNode {
                 size: Vec2::new(800.0, 600.0),
@@ -1159,11 +1159,11 @@ mod tests {
 
     #[test]
     fn overlay_hidden_and_idle_after_composition_ends() {
-        use crate::surface::OzmaTerminal;
+        use crate::surface::OrzmaTerminal;
         use bevy::app::PostUpdate;
         use bevy::asset::Handle;
         use bevy::window::WindowResolution;
-        use ozma_tty_renderer::prelude::Cursor;
+        use orzma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -1193,7 +1193,7 @@ mod tests {
             PrimaryWindow,
         ));
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             KeyboardFocused,
             ComputedNode {
                 size: Vec2::new(800.0, 600.0),

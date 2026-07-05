@@ -1,7 +1,7 @@
 //! `NextWindowRequest` — switches the target session to its next window.
 
 use bevy::prelude::*;
-use ozmux_tmux::{NextWindow, TmuxClient, TmuxSession};
+use orzma_tmux::{NextWindow, TmuxClient, TmuxSession};
 
 /// Switches the tmux session owning `entity` to its next window.
 #[derive(EntityEvent, Debug, Clone)]

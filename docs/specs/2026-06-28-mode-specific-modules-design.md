@@ -25,7 +25,7 @@ two mode modules are siblings with no cross-mode dependency.
   brainstorming.
 - **No plugin-registration consolidation** — keep the existing per-plugin
   registration in `main.rs`; only update paths.
-- **No cross-crate dedup** — e.g. `ozma_terminal::mouse::cell_at_local` stays;
+- **No cross-crate dedup** — e.g. `orzma_terminal::mouse::cell_at_local` stays;
   only the binary's geometry moves.
 
 ## Target module tree
@@ -38,7 +38,7 @@ src/
     default/
       input.rs         # DefaultHostInputPlugin (+ tests)
       webview.rs       # DefaultWebviewPointerPlugin (+ tests)
-    tmux.rs            # OzmuxTmuxPlugin, TmuxActiveSet (moved from src/tmux.rs)
+    tmux.rs            # OrzmaTmuxPlugin, TmuxActiveSet (moved from src/tmux.rs)
     tmux/              # moved from src/tmux/ (gate, input, mouse/, render, pane_focus, …, pane_hit)
   surface_geom.rs      # NEW neutral module: Side, phys_to_pane_local, cell_at_local (+ tests)
   webview_pointer.rs   # unchanged location (mode-agnostic shared pointer core)
@@ -100,7 +100,7 @@ updated to the new `crate::mode::tmux::…` paths.
   default_webview;` with `mod mode; mod surface_geom;` (`mod webview_pointer;`
   unchanged). Update plugin imports/registrations to the new paths:
   `mode::default::{DefaultModePlugin, DefaultHostInputPlugin,
-  DefaultWebviewPointerPlugin}`, `mode::tmux::OzmuxTmuxPlugin`. The plugins are
+  DefaultWebviewPointerPlugin}`, `mode::tmux::OrzmaTmuxPlugin`. The plugins are
   still registered individually (no aggregator change).
 - `src/mode.rs`: declares `pub(crate) mod default; pub(crate) mod tmux;` and
   defines `AppMode`.

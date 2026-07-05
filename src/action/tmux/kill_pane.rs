@@ -3,7 +3,7 @@
 
 use crate::error::OutputLogIfFalse;
 use bevy::prelude::*;
-use ozmux_tmux::{KillPane, TmuxClient, TmuxPane};
+use orzma_tmux::{KillPane, TmuxClient, TmuxPane};
 
 /// Asks for confirmation, then kills the tmux pane owning `entity`.
 #[derive(EntityEvent, Debug, Clone)]

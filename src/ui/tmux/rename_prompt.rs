@@ -1,4 +1,4 @@
-//! ozmux-owned rename prompt: the rename-window / rename-session shortcut
+//! orzma-owned rename prompt: the rename-window / rename-session shortcut
 //! actions open this prompt. It owns the keyboard, pre-fills the current
 //! name, and on submit sends a freshly-rebuilt, safely-quoted rename command.
 
@@ -13,7 +13,7 @@ use bevy::ecs::schedule::common_conditions::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ozmux_tmux::{RenameSession, RenameWindow, SessionId, TmuxClient, TmuxCommand, WindowId};
+use orzma_tmux::{RenameSession, RenameWindow, SessionId, TmuxClient, TmuxCommand, WindowId};
 
 const RENAME_Z: i32 = 340;
 

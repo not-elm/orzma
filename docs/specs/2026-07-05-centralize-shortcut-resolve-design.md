@@ -22,7 +22,7 @@ The current design (shipped in PR #239) has a single pure decider,
 appliers. Each applier repeats the same front half:
 
 - `apply_default_shortcuts` (`src/input/default_mode.rs`) — guards (IME / focus),
-  resolves the focused `OzmaTerminal`, `in_copy_mode`, `mods`, builds
+  resolves the focused `OrzmaTerminal`, `in_copy_mode`, `mods`, builds
   `BatchContext`, calls `classify_key_batch`, then `match`es effects.
 - `apply_tmux_shortcuts` (`src/input/tmux/input.rs`) — guards (5: `CopyPrompt` /
   `ConfirmState` / `RenamePrompt` / IME / focus), resolves `ActivePane`,
@@ -38,17 +38,17 @@ System, "apply the cut per mode" as another, decoupled by a `Message`.
 
 ### The enabling invariant
 
-Both modes already maintain exactly one **`KeyboardFocused` `OzmaTerminal`** on
+Both modes already maintain exactly one **`KeyboardFocused` `OrzmaTerminal`** on
 the active surface:
 
 - Default: the focused terminal carries `KeyboardFocused`
   (`src/input/focus.rs`, `src/input/default_mode.rs:182`).
 - Tmux: `sync_pane_keyboard_focus` (`src/ui/tmux/pane_focus.rs:90-103`) mirrors
   `ActivePane` onto `KeyboardFocused` — the active pane (a `TmuxPane` that is
-  also an `OzmaTerminal`) gains it, every other pane loses it. The gateway
+  also an `OrzmaTerminal`) gains it, every other pane loses it. The gateway
   terminal has `KeyboardFocused` removed on adopt (`src/session/tmux/adopt.rs:163`).
 
-So a single `Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>`
+So a single `Query<Entity, (With<OrzmaTerminal>, With<KeyboardFocused>)>`
 resolves THE focused surface in both modes (the default terminal, or the active
 tmux pane). This is what lets one mode-agnostic System compute `in_copy_mode`
 and the effect targets — the reason the original design used two mode systems
@@ -59,7 +59,7 @@ and the effect targets — the reason the original design used two mode systems
 `InputPhase::FocusedKey` (click-to-focus retargets `ActivePane` in `Dispatch`
 before the keyboard dispatcher reads it). `KeyboardFocused` is instead
 maintained by `sync_keyboard_focus_to_active_pane` (`pane_focus.rs`), which runs
-`in_set(TmuxActiveSet)` with NO ordering edge to `OzmuxSystems::Input` and
+`in_set(TmuxActiveSet)` with NO ordering edge to `OrzmaSystems::Input` and
 applies via DEFERRED `commands`. So on a frame where the active pane changes,
 `resolve_shortcuts` (in `FocusedKey`) could read a STALE `KeyboardFocused` and
 target the previous pane / wrong `in_copy_mode`. This refactor therefore MUST
@@ -114,7 +114,7 @@ pub(crate) enum ShortcutSet { Resolve, Apply }
   `Res<Shortcuts>`, `Res<ResolvedCopyModeKeys>`, `Res<ButtonInput<KeyCode>>`,
   `Res<Time<Real>>`, `Res<ImeState>`, `Query<&Window, With<PrimaryWindow>>`,
   the focused-surface query
-  `Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>`,
+  `Query<Entity, (With<OrzmaTerminal>, With<KeyboardFocused>)>`,
   `Query<(), With<CopyModeState>>`, `Query<&ForwardKeys>`, and the tmux prompt
   guards. `ConfirmState` / `RenamePrompt` are genuinely transient (inserted
   on demand by tmux-only plugins, absent in Default) so they MUST be
@@ -197,7 +197,7 @@ pane (the `KeyboardFocused` surface in tmux). For each effect:
   leave `LeaderGate`.
 - `resolve_shortcuts` + `add_message::<ShortcutBatch>()` + the `ShortcutSet`
   chain are registered by a new `DispatchPlugin` (`src/input/dispatch.rs`),
-  added by `OzmuxInputPlugin`. `apply_default_shortcuts` stays registered by
+  added by `OrzmaInputPlugin`. `apply_default_shortcuts` stays registered by
   `DefaultHostInputPlugin`, `apply_tmux_shortcuts` by the tmux `InputPlugin` —
   each now gated on `on_message::<ShortcutBatch>` + `ShortcutSet::Apply` instead
   of `on_message::<KeyboardInput>` + `LeaderGate::Advance`.
@@ -219,7 +219,7 @@ pane (the `KeyboardFocused` surface in tmux). For each effect:
         v
 [resolve_shortcuts]  (ShortcutSet::Resolve / LeaderGate::Advance; BOTH modes)
   guard (Option prompts / ime / focus) -> clear_leader + drain + return (no msg)
-  focused = Query<(OzmaTerminal, KeyboardFocused)>.single().ok()
+  focused = Query<(OrzmaTerminal, KeyboardFocused)>.single().ok()
   in_copy_mode / webview_focused / forward_chords / mods
   classify_key_batch(&mut LeaderPhase, ...)  -> Vec<KeyEffect>   (UNCHANGED decider)
   handle inline: Action{Quit} -> AppExit ; ReleaseWebviewFocus -> FocusedWebview.0 = None
@@ -242,7 +242,7 @@ pane (the `KeyboardFocused` surface in tmux). For each effect:
   `ShortcutBatch` with the expected `effects`/`focused`/`in_copy_mode`; `Quit`
   writes `AppExit` and is NOT in the batch; `ReleaseWebviewFocus` clears
   `FocusedWebview` and is NOT in the batch; the focused surface resolves for
-  both a plain `KeyboardFocused OzmaTerminal` and a `TmuxPane`+`KeyboardFocused`.
+  both a plain `KeyboardFocused OrzmaTerminal` and a `TmuxPane`+`KeyboardFocused`.
 - Applier tests (`default_mode.rs` / `tmux/input.rs`): reworked to WRITE a
   `ShortcutBatch` (instead of `KeyboardInput`) and assert the triggered events —
   smaller/faster than today (no leader/guard setup). Keep the discriminating
@@ -257,7 +257,7 @@ pane (the `KeyboardFocused` surface in tmux). For each effect:
   `ActivePane` and press a key in the same tick, asserting the batch's `focused`
   is the NEW pane (guards the `sync_keyboard_focus_to_active_pane`
   `.before(FocusedKey)` edge).
-- Full gate: `cargo test -p ozmux`, `cargo clippy --workspace --all-targets --
+- Full gate: `cargo test -p orzma`, `cargo clippy --workspace --all-targets --
   -D warnings`, `cargo fmt`.
 
 ## Behaviour-preservation checklist
