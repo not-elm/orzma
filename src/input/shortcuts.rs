@@ -24,8 +24,8 @@ use ozmux_configs::shortcuts::{
 };
 use std::time::Duration;
 
-mod default_mode;
-mod tmux;
+pub(in crate::input) mod default_mode;
+pub(in crate::input) mod tmux;
 
 pub(super) struct ShortcutsPlugin;
 

@@ -402,11 +402,23 @@ fn consume_wheel_notches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::tmux::{DetachSessionRequest, SelectPaneRequest, SelectWindowRequest};
+    use crate::input::resolve::KeyEffect;
+    use crate::input::shortcuts::tmux::{
+        apply_tmux_shortcuts, tmux_pane_direction, tmux_split_direction,
+    };
+    use crate::input::shortcuts::ShortcutBatch;
+    use crate::input::tmux::forward::ForwardPaneKeysRequest;
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::input::mouse::MouseScrollUnit;
-    use ozmux_configs::shortcuts::Modifiers;
-    use ozmux_tmux::{ActivePane, PaneId};
+    use ozmux_configs::shortcuts::{
+        Modifiers, PaneDirection as CfgPaneDirection, ShortcutAction,
+        SplitOrientation as CfgSplitOrientation,
+    };
+    use ozmux_tmux::{
+        ActivePane, PaneDirection, PaneId, SplitDirection, TmuxSession, TmuxWindow,
+    };
 
     #[test]
     fn wheel_copy_mode_pane_owner_ignores_screen_and_mode_bits() {

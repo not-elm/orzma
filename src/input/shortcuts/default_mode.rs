@@ -35,7 +35,7 @@ impl Plugin for ShortcutsDefaultModePlugin {
 /// pane/window actions are no-ops in Default mode. Registered in
 /// `ShortcutSet::Apply`, gated on `in_state(AppMode::Default)` +
 /// `on_message::<ShortcutBatch>`.
-fn apply_default_shortcuts(
+pub(in crate::input) fn apply_default_shortcuts(
     mut commands: Commands,
     mut batches: MessageReader<ShortcutBatch>,
     shortcuts: Res<Shortcuts>,

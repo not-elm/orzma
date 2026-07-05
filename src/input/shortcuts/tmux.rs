@@ -44,7 +44,7 @@ impl Plugin for ShortcutsTmuxModePlugin {
 /// Target-entity lookups for the tmux shortcut actions, bundled to stay
 /// within Bevy's system-parameter limit.
 #[derive(SystemParam)]
-struct ActionTargets<'w, 's> {
+pub(in crate::input) struct ActionTargets<'w, 's> {
     active_window: Query<'w, 's, Entity, With<ActiveWindow>>,
     session: Query<'w, 's, Entity, With<TmuxSession>>,
     windows: Query<'w, 's, (Entity, &'static TmuxWindow)>,
@@ -59,7 +59,7 @@ struct ActionTargets<'w, 's> {
 /// `ForwardPaneKeysRequest` per frame. `Quit` and `ReleaseWebviewFocus` are
 /// handled upstream in `resolve_shortcuts`. Registered in `ShortcutSet::Apply`,
 /// gated on `in_state(AppMode::Tmux)` + `on_message::<ShortcutBatch>`.
-fn apply_tmux_shortcuts(
+pub(in crate::input) fn apply_tmux_shortcuts(
     mut commands: Commands,
     mut batches: MessageReader<ShortcutBatch>,
     targets: ActionTargets,
@@ -215,7 +215,7 @@ fn dispatch_tmux_action(
 
 /// Maps the config-facing pane direction (named after the neighbor) to the
 /// tmux command enum.
-fn tmux_pane_direction(direction: CfgPaneDirection) -> PaneDirection {
+pub(in crate::input) fn tmux_pane_direction(direction: CfgPaneDirection) -> PaneDirection {
     match direction {
         CfgPaneDirection::Left => PaneDirection::Left,
         CfgPaneDirection::Down => PaneDirection::Down,
@@ -226,7 +226,7 @@ fn tmux_pane_direction(direction: CfgPaneDirection) -> PaneDirection {
 
 /// Maps the config-facing split orientation (named after the DIVIDER) to the
 /// tmux flag enum (named after the layout axis) — the two cross on purpose.
-fn tmux_split_direction(orientation: CfgSplitOrientation) -> SplitDirection {
+pub(in crate::input) fn tmux_split_direction(orientation: CfgSplitOrientation) -> SplitDirection {
     match orientation {
         CfgSplitOrientation::Vertical => SplitDirection::Horizontal,
         CfgSplitOrientation::Horizontal => SplitDirection::Vertical,

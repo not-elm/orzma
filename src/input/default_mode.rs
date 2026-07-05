@@ -166,14 +166,19 @@ fn apply_ime_commit_to_terminal(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::terminal::PasteAction;
+    use crate::input::resolve::KeyEffect;
+    use crate::input::shortcuts::default_mode::apply_default_shortcuts;
     use crate::input::shortcuts::test_shortcuts_with_direct_chord;
+    use crate::input::shortcuts::{ShortcutBatch, Shortcuts};
+    use crate::ui::copy_mode::EnterCopyModeActionEvent;
     use bevy::app::App;
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use bevy::window::PrimaryWindow;
     use ozma_tty_engine::TerminalKey;
-    use ozmux_configs::shortcuts::Modifiers;
+    use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
     use ozmux_tmux::{PaneId, TmuxPane};
     use tmux_control_parser::CellDims;
 

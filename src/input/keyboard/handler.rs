@@ -229,6 +229,7 @@ mod tests {
             .add_plugins(StatesPlugin)
             .add_plugins(KeyboardHandlerPlugin)
             .add_message::<KeyboardInput>()
+            .add_message::<ShortcutBatch>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ImeState>()
@@ -240,6 +241,7 @@ mod tests {
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
             .insert_state(AppMode::Default)
+            .configure_sets(Update, (ShortcutSet::Resolve, ShortcutSet::Apply).chain())
             .add_systems(
                 Update,
                 (capture_batch, capture_exit)
