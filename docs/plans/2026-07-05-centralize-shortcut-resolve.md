@@ -108,7 +108,7 @@ let all = classify_key_batch(&mut leader_phase, &shortcuts, &resolved_copy, even
 let mut effects = Vec::with_capacity(all.len());
 for effect in all {
     match effect {
-        KeyEffect::Action { action: ShortcutAction::Quit, .. } => exit.write(AppExit::Success),
+        KeyEffect::Action { action: Shortcut::Quit, .. } => exit.write(AppExit::Success),
         KeyEffect::ReleaseWebviewFocus => focused_webview.0 = None,
         other => effects.push(other),
     }
@@ -126,11 +126,11 @@ for batch in batches.read() {
     let terminal_mods = TerminalModifiers { ctrl: batch.mods.ctrl, shift: batch.mods.shift, alt: batch.mods.alt, meta: batch.mods.meta };
     for effect in &batch.effects {
         match effect {
-            KeyEffect::Action { action: ShortcutAction::EnterCopyMode, .. } =>
+            KeyEffect::Action { action: Shortcut::EnterCopyMode, .. } =>
                 if let Some(e) = batch.focused { commands.trigger(EnterCopyModeActionEvent { entity: e }); },
-            KeyEffect::Action { action: ShortcutAction::Paste, via_leader } =>
+            KeyEffect::Action { action: Shortcut::Paste, via_leader } =>
                 if let Some(e) = batch.focused && (*via_leader || !batch.in_copy_mode) { commands.trigger(PasteAction { entity: e }); },
-            KeyEffect::Action { action: ShortcutAction::SelectPane(_) | /* …all pane/window/detach… */ ShortcutAction::RenameSession, .. } => {}
+            KeyEffect::Action { action: Shortcut::SelectPane(_) | /* …all pane/window/detach… */ Shortcut::RenameSession, .. } => {}
             KeyEffect::CopyMode(a) => if let Some(e) = batch.focused { trigger_copy_mode_action(&mut commands, e, *a); },
             KeyEffect::Type { logical, key_code } =>
                 if let Some(e) = batch.focused && !shortcuts.is_release_webview_focus(*key_code, batch.mods)
@@ -139,9 +139,9 @@ for batch in batches.read() {
                 },
             KeyEffect::WebviewForward { .. } => {}   // no-op — see spec (Default has no pane; drop)
             // Quit / ReleaseWebviewFocus never reach here (handled in resolve_shortcuts),
-            // but the match must stay exhaustive over `KeyEffect` + `ShortcutAction`:
+            // but the match must stay exhaustive over `KeyEffect` + `Shortcut`:
             KeyEffect::ReleaseWebviewFocus => {}
-            KeyEffect::Action { action: ShortcutAction::Quit | ShortcutAction::ReleaseWebviewFocus, .. } => {}
+            KeyEffect::Action { action: Shortcut::Quit | Shortcut::ReleaseWebviewFocus, .. } => {}
         }
     }
 }

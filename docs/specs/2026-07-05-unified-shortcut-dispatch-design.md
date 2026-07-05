@@ -39,7 +39,7 @@ each re-implements the surrounding per-key loop: the `ev.repeat`
 auto-repeat wrapper, the `RunAction / Swallow / Passthrough →
 match_gui_action` resolution, the copy-mode fallthrough
 (`ResolvedCopyModeKeys::resolve` → `trigger_copy_mode_action`), and the
-`match ShortcutAction`. That duplicated scaffolding is the drift risk this
+`match Shortcut`. That duplicated scaffolding is the drift risk this
 refactor removes. `forward_keys_to_tmux`'s 345-line body also violates the
 `.claude/rules/rust.md` ~150-line/system cap.
 
@@ -124,7 +124,7 @@ enum KeyEffect {
     /// A GUI/app shortcut fired. `via_leader` records the paste origin: a
     /// direct-chord paste vs a leader-scoped one. It is NOT dropped (see the
     /// paste note below) — Default suppresses direct-chord paste in copy mode.
-    Action { action: ShortcutAction, via_leader: bool },
+    Action { action: Shortcut, via_leader: bool },
     /// The focused surface is in copy mode and this key maps to a vi action.
     CopyMode(CopyModeAction),
     /// A plain key to type into the focused surface. Each applier encodes it
@@ -484,4 +484,4 @@ to the implementation plan):
 - Internals of `step_leader`, `step_tap`, `detect_modifier_tap`, and the
   vi copy-mode applier.
 - Any change to shortcut config, key→`KeyCode` resolution, or the
-  `ShortcutAction` vocabulary.
+  `Shortcut` vocabulary.

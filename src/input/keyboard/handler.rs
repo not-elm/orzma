@@ -1,19 +1,24 @@
-//! Central keyboard-shortcut resolution: `resolve_shortcuts` runs in both
 //! `AppMode`s, resolves the frame's pressed keys through the pure
 //! `crate::input::resolve::classify_key_batch` decider, handles the two
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
-//! clear `FocusedWebview`), and emits the remaining effects as a single
-//! `ShortcutBatch` message. The per-mode appliers (`default_mode`,
-//! `tmux::input`) consume that batch and apply the mode-specific events. This is
-//! the sole system that steps `LeaderPhase`.
+//! clear `FocusedWebview`), and fans out the remaining effects as the four
+//! per-responsibility shortcut messages (`ShortcutMessage`, `CopyModeMessage`,
+//! `TypeMessage`, `WebviewForwardMessage`). The per-mode appliers
+//! (`default_mode`, `tmux::input`) consume those messages and apply the
+//! mode-specific events. This is the sole system that steps `LeaderPhase`.
 
 use crate::action::vi::ResolvedCopyModeKeys;
 use crate::app_mode::AppMode;
+use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
-use crate::input::resolve::{BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch};
-use crate::input::shortcuts::{LeaderGate, LeaderPhase, Shortcuts, clear_leader_phase};
-use crate::input::{InputPhase, current_modifiers};
+use crate::input::keyboard::key_effect::{
+    BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch,
+};
+use crate::input::shortcuts::{
+    CopyModeMessage, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
+    Shortcuts, TypeMessage, WebviewForwardMessage, clear_leader_phase,
+};
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
@@ -25,60 +30,27 @@ use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::{CefKeyboardFilter, FocusedWebview, KeyboardDeliverSet, ModifiersState};
 use ozma_webview::ForwardKeys;
-use ozmux_configs::shortcuts::{Modifiers, ShortcutAction};
+use ozmux_configs::shortcuts::Shortcut;
 
-/// The frame's resolved shortcut effects handed from `resolve_shortcuts` to the
-/// per-mode appliers. Excludes `Quit` and `ReleaseWebviewFocus`, which
-/// `resolve_shortcuts` handles inline. `focused` is the `KeyboardFocused`
-/// `OzmaTerminal` (the Default terminal or the active tmux pane).
-#[derive(Message)]
-pub(in crate::input) struct ShortcutBatch {
-    /// The mode-specific effects to apply (no `Quit` / `ReleaseWebviewFocus`).
-    pub effects: Vec<KeyEffect>,
-    /// The `KeyboardFocused` `OzmaTerminal`, or `None` when none is focused.
-    pub focused: Option<Entity>,
-    /// Whether the focused surface is in copy mode.
-    pub in_copy_mode: bool,
-    /// The frame's modifier snapshot, shared by every effect in the batch.
-    pub mods: Modifiers,
-}
+/// Registers `resolve_key_effects` and the `ShortcutSet` ordering.
+pub(super) struct KeyboardHandlerPlugin;
 
-/// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
-/// `resolve_shortcuts` (`Resolve`) writes the `ShortcutBatch` before the
-/// per-mode appliers (`Apply`) read it, so the batch is consumed the same frame.
-#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
-pub(in crate::input) enum ShortcutSet {
-    /// `resolve_shortcuts`: classifies keys and writes the `ShortcutBatch`.
-    Resolve,
-    /// The per-mode appliers: read the `ShortcutBatch` and apply its effects.
-    Apply,
-}
-
-/// Registers `resolve_shortcuts` and the `ShortcutSet` ordering.
-pub(super) struct DispatchPlugin;
-
-impl Plugin for DispatchPlugin {
+impl Plugin for KeyboardHandlerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<ShortcutBatch>()
-            .configure_sets(
-                Update,
-                (ShortcutSet::Resolve, ShortcutSet::Apply)
-                    .chain()
-                    .in_set(InputPhase::FocusedKey),
-            )
-            .add_systems(
-                Update,
-                resolve_shortcuts
-                    .in_set(ShortcutSet::Resolve)
-                    .in_set(LeaderGate::Advance)
-                    .before(KeyboardDeliverSet)
-                    .run_if(on_message::<KeyboardInput>),
-            );
+        app.add_systems(
+            Update,
+            resolve_key_effects
+                .in_set(ShortcutSet::Resolve)
+                .in_set(LeaderGate::Advance)
+                .before(KeyboardDeliverSet)
+                .run_if(on_message::<KeyboardInput>),
+        );
     }
 }
 
-/// The modal-guard and mode inputs `resolve_shortcuts` reads: the tmux modal
-/// prompts, IME state, and the active `AppMode` stamped onto each batch.
+/// The modal-guard and mode inputs `resolve_key_effects` reads: the tmux modal
+/// prompts, IME state, and the active `AppMode` that gates the tmux-only prompt
+/// guards.
 #[derive(SystemParam)]
 struct ModalGuards<'w> {
     copy_prompt: Res<'w, CopyPrompt>,
@@ -88,7 +60,7 @@ struct ModalGuards<'w> {
     app_mode: Res<'w, State<AppMode>>,
 }
 
-/// The classifier inputs `resolve_shortcuts` feeds to `classify_key_batch`: the
+/// The classifier inputs `resolve_key_effects` feeds to `classify_key_batch`: the
 /// shortcut table, resolved copy-mode keys, held modifier keys, and the
 /// real-time clock the leader timeout is measured against.
 #[derive(SystemParam)]
@@ -99,22 +71,23 @@ struct ClassifyInputs<'w> {
     time: Res<'w, Time<Real>>,
 }
 
-/// Resolves the frame's pressed keys into a `ShortcutBatch`. Runs in both
-/// `AppMode`s (gated only on `on_message::<KeyboardInput>`), in
-/// `InputPhase::FocusedKey` / `ShortcutSet::Resolve` / `LeaderGate::Advance`.
-/// The sole `LeaderPhase`-stepping system: on a coarse guard (a tmux modal
-/// prompt, IME composition, or an unfocused window) it clears the leader, drains
-/// the frame's keys, and emits no batch; otherwise it classifies the keys,
-/// applies `Quit` (`AppExit`) and `ReleaseWebviewFocus` (clear `FocusedWebview`)
-/// inline, and writes the remaining effects as one `ShortcutBatch` stamped with
-/// the resolving `AppMode`.
-fn resolve_shortcuts(
+/// Resolves the frame's pressed keys and fans out the per-responsibility
+/// shortcut messages. Runs in both `AppMode`s (gated only on
+/// `on_message::<KeyboardInput>`), in `InputPhase::FocusedKey` /
+/// `ShortcutSet::Resolve` / `LeaderGate::Advance`. The sole `LeaderPhase`-stepping
+/// system: on a coarse guard (a tmux modal prompt, IME composition, or an
+/// unfocused window) it clears the leader, drains the frame's keys, and writes no
+/// messages; otherwise it classifies the keys, applies `Quit` (`AppExit`) and
+/// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every other
+/// effect to its typed message (`ShortcutMessage`, `CopyModeMessage`,
+/// `TypeMessage`, `WebviewForwardMessage`).
+fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
     mut focused_webview: ResMut<FocusedWebview>,
     mut cef_filter: ResMut<CefKeyboardFilter>,
     mut leader_phase: ResMut<LeaderPhase>,
-    mut batch: MessageWriter<ShortcutBatch>,
+    mut messages: ShortcutMessages,
     guards: ModalGuards,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -130,8 +103,8 @@ fn resolve_shortcuts(
     // open when the tmux connection drops (falling back to Default) would
     // otherwise drain EVERY key and freeze Default keyboard input. IME + window
     // focus guard both modes. When a guard fires, drain (don't replay) the
-    // frame's keys and emit no batch, so no key leaks to the terminal, tmux, or
-    // the prefix state machine (and no preedit key is double-sent).
+    // frame's keys and write no messages, so no key leaks to the terminal,
+    // tmux, or the prefix state machine (and no preedit key is double-sent).
     let prompt_open = mode == AppMode::Tmux
         && (guards.copy_prompt.open.is_some()
             || guards.confirm_state.is_some()
@@ -175,25 +148,49 @@ fn resolve_shortcuts(
         ctx,
     );
 
-    let mut effects = Vec::with_capacity(all.len());
     for effect in all {
         match effect {
-            KeyEffect::Action {
-                action: ShortcutAction::Quit,
+            KeyEffect::Shortcut {
+                action: Shortcut::Quit,
                 ..
             } => {
                 exit.write(AppExit::Success);
             }
-            KeyEffect::ReleaseWebviewFocus => focused_webview.0 = None,
-            other => effects.push(other),
+            KeyEffect::Shortcut {
+                action: Shortcut::ReleaseWebviewFocus,
+                ..
+            } => focused_webview.0 = None,
+            KeyEffect::Shortcut { action, via_leader } => {
+                messages.shortcut.write(ShortcutMessage {
+                    action,
+                    via_leader,
+                    focused,
+                    in_copy_mode,
+                });
+            }
+            KeyEffect::CopyMode(action) => {
+                messages
+                    .copy_mode
+                    .write(CopyModeMessage { action, focused });
+            }
+            KeyEffect::Type { logical, key_code } => {
+                messages.type_keys.write(TypeMessage {
+                    logical,
+                    key_code,
+                    focused,
+                    mods,
+                });
+            }
+            KeyEffect::WebviewForward { logical, key_code } => {
+                messages.webview_forward.write(WebviewForwardMessage {
+                    logical,
+                    key_code,
+                    focused,
+                    mods,
+                });
+            }
         }
     }
-    batch.write(ShortcutBatch {
-        effects,
-        focused,
-        in_copy_mode,
-        mods,
-    });
     let ms = ModifiersState {
         alt: mods.alt,
         ctrl: mods.ctrl,
@@ -227,27 +224,56 @@ mod tests {
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use bevy::state::app::StatesPlugin;
+    use ozmux_configs::shortcuts::Modifiers;
     use ozmux_tmux::{PaneId, TmuxPane};
     use std::time::Duration;
     use tmux_control_parser::CellDims;
 
     #[derive(Resource, Default)]
     struct Captured {
-        count: usize,
         app_exit: usize,
-        effects: Vec<KeyEffect>,
+        shortcuts: Vec<(Shortcut, bool)>,
+        copy_mode: usize,
+        typed: usize,
+        webview_forward: usize,
         focused: Option<Entity>,
-        in_copy_mode: bool,
+        in_copy_mode: Option<bool>,
         mods: Option<Modifiers>,
+        last_typed: Option<(Key, KeyCode)>,
     }
 
-    fn capture_batch(mut reader: MessageReader<ShortcutBatch>, mut cap: ResMut<Captured>) {
-        for b in reader.read() {
-            cap.count += 1;
-            cap.effects = b.effects.clone();
-            cap.focused = b.focused;
-            cap.in_copy_mode = b.in_copy_mode;
-            cap.mods = Some(b.mods);
+    impl Captured {
+        fn message_count(&self) -> usize {
+            self.shortcuts.len() + self.copy_mode + self.typed + self.webview_forward
+        }
+    }
+
+    fn capture_messages(
+        mut cap: ResMut<Captured>,
+        mut shortcuts: MessageReader<ShortcutMessage>,
+        mut copy_mode: MessageReader<CopyModeMessage>,
+        mut typed: MessageReader<TypeMessage>,
+        mut webview_forward: MessageReader<WebviewForwardMessage>,
+    ) {
+        for m in shortcuts.read() {
+            cap.shortcuts.push((m.action, m.via_leader));
+            cap.focused = m.focused;
+            cap.in_copy_mode = Some(m.in_copy_mode);
+        }
+        for m in copy_mode.read() {
+            cap.copy_mode += 1;
+            cap.focused = m.focused;
+        }
+        for m in typed.read() {
+            cap.typed += 1;
+            cap.focused = m.focused;
+            cap.mods = Some(m.mods);
+            cap.last_typed = Some((m.logical.clone(), m.key_code));
+        }
+        for m in webview_forward.read() {
+            cap.webview_forward += 1;
+            cap.focused = m.focused;
+            cap.mods = Some(m.mods);
         }
     }
 
@@ -259,8 +285,12 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(StatesPlugin)
-            .add_plugins(DispatchPlugin)
+            .add_plugins(KeyboardHandlerPlugin)
             .add_message::<KeyboardInput>()
+            .add_message::<ShortcutMessage>()
+            .add_message::<CopyModeMessage>()
+            .add_message::<TypeMessage>()
+            .add_message::<WebviewForwardMessage>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ImeState>()
@@ -272,9 +302,10 @@ mod tests {
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
             .insert_state(AppMode::Default)
+            .configure_sets(Update, (ShortcutSet::Resolve, ShortcutSet::Apply).chain())
             .add_systems(
                 Update,
-                (capture_batch, capture_exit)
+                (capture_messages, capture_exit)
                     .chain()
                     .in_set(ShortcutSet::Apply),
             );
@@ -312,35 +343,35 @@ mod tests {
     }
 
     #[test]
-    fn normal_batch_carries_effects_focused_in_copy_mode() {
+    fn normal_key_resolves_to_one_type_message() {
         let mut app = resolve_app(Shortcuts::default());
         let term = app.world_mut().spawn((OzmaTerminal, KeyboardFocused)).id();
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         let cap = app.world().resource::<Captured>();
-        assert_eq!(cap.count, 1, "exactly one ShortcutBatch per keyboard frame");
         assert_eq!(
-            cap.effects,
-            vec![KeyEffect::Type {
-                logical: Key::Character("a".into()),
-                key_code: KeyCode::KeyA,
-            }],
-            "a plain key resolves to one Type effect carried in the batch"
+            cap.message_count(),
+            1,
+            "exactly one shortcut message resolves per keyboard frame"
+        );
+        assert_eq!(
+            cap.last_typed,
+            Some((Key::Character("a".into()), KeyCode::KeyA)),
+            "a plain key resolves to one TypeMessage"
         );
         assert_eq!(cap.focused, Some(term));
-        assert!(!cap.in_copy_mode);
         assert_eq!(
             cap.mods,
             Some(Modifiers::default()),
-            "no modifier keys are held, so the batch carries the default modifiers"
+            "no modifier keys are held, so the message carries the default modifiers"
         );
     }
 
     #[test]
-    fn guarded_frame_emits_no_batch() {
+    fn guarded_frame_emits_no_messages() {
         let mut app = resolve_app(Shortcuts::default());
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
-        // Window unfocused: a coarse guard drains the frame with no batch.
+        // Window unfocused: a coarse guard drains the frame with no messages.
         {
             let mut windows = app
                 .world_mut()
@@ -351,9 +382,9 @@ mod tests {
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert_eq!(
-            app.world().resource::<Captured>().count,
+            app.world().resource::<Captured>().message_count(),
             0,
-            "a guarded frame emits no ShortcutBatch"
+            "a guarded frame writes no shortcut messages"
         );
         assert_eq!(
             *app.world().resource::<LeaderPhase>(),
@@ -375,7 +406,7 @@ mod tests {
         let mut app = resolve_app(test_shortcuts_with_direct_chord(
             KeyCode::KeyQ,
             meta_mods(),
-            ShortcutAction::Quit,
+            Shortcut::Quit,
         ));
         if spawn_focused {
             app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -384,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn quit_writes_appexit_not_in_batch() {
+    fn quit_writes_appexit_and_no_message() {
         let mut app = quit_test_app(true);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -393,21 +424,15 @@ mod tests {
         app.update();
         let cap = app.world().resource::<Captured>();
         assert_eq!(cap.app_exit, 1, "Cmd+Q writes AppExit");
-        assert_eq!(cap.count, 1, "the batch is still emitted");
-        assert!(
-            !cap.effects.iter().any(|e| matches!(
-                e,
-                KeyEffect::Action {
-                    action: ShortcutAction::Quit,
-                    ..
-                }
-            )),
-            "Quit is handled inline and never reaches the batch"
+        assert_eq!(
+            cap.message_count(),
+            0,
+            "Quit is handled inline and never reaches a ShortcutMessage"
         );
     }
 
     #[test]
-    fn release_clears_webview_not_in_batch() {
+    fn release_clears_webview_and_no_message() {
         let mut app = resolve_app(test_shortcuts_with_direct_chord(
             KeyCode::Escape,
             Modifiers {
@@ -416,7 +441,7 @@ mod tests {
                 alt: false,
                 meta: false,
             },
-            ShortcutAction::ReleaseWebviewFocus,
+            Shortcut::ReleaseWebviewFocus,
         ));
         let webview = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(webview);
@@ -433,11 +458,10 @@ mod tests {
             None,
             "the release chord clears the focused webview inline"
         );
-        assert!(
-            !cap.effects
-                .iter()
-                .any(|e| matches!(e, KeyEffect::ReleaseWebviewFocus)),
-            "ReleaseWebviewFocus is handled inline and never reaches the batch"
+        assert_eq!(
+            cap.message_count(),
+            0,
+            "ReleaseWebviewFocus is handled inline and never reaches a ShortcutMessage"
         );
     }
 
@@ -453,33 +477,55 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().focused,
             Some(pane),
-            "a KeyboardFocused tmux pane resolves as batch.focused"
+            "a KeyboardFocused tmux pane resolves as the message's focused field"
         );
     }
 
     #[test]
     fn in_copy_mode_flag_set() {
-        let mut app = resolve_app(Shortcuts::default());
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyA,
+            Modifiers::default(),
+            Shortcut::EnterCopyMode,
+        ));
         app.world_mut()
             .spawn((OzmaTerminal, KeyboardFocused, CopyModeState));
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
-        assert!(
+        assert_eq!(
             app.world().resource::<Captured>().in_copy_mode,
-            "a focused surface in copy mode sets batch.in_copy_mode"
+            Some(true),
+            "a focused surface in copy mode sets ShortcutMessage.in_copy_mode"
         );
     }
 
     #[test]
-    fn batch_consumed_same_update() {
+    fn in_copy_mode_flag_clear_outside_copy_mode() {
+        let mut app = resolve_app(test_shortcuts_with_direct_chord(
+            KeyCode::KeyA,
+            Modifiers::default(),
+            Shortcut::EnterCopyMode,
+        ));
+        app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
+        press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<Captured>().in_copy_mode,
+            Some(false),
+            "a focused surface NOT in copy mode sets ShortcutMessage.in_copy_mode to false"
+        );
+    }
+
+    #[test]
+    fn messages_consumed_same_update() {
         let mut app = resolve_app(Shortcuts::default());
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert_eq!(
-            app.world().resource::<Captured>().count,
+            app.world().resource::<Captured>().typed,
             1,
-            "the ShortcutSet Resolve->Apply chain lets the applier consume the batch \
+            "the ShortcutSet Resolve->Apply chain lets the applier consume the message \
              the same frame it is written, not the next"
         );
     }
@@ -496,18 +542,13 @@ mod tests {
         let cap = app.world().resource::<Captured>();
         assert_eq!(
             cap.app_exit, 1,
-            "Quit is handled inline in resolve_shortcuts regardless of focus, so Cmd+Q with no \
+            "Quit is handled inline in resolve_key_effects regardless of focus, so Cmd+Q with no \
              focused terminal still writes AppExit"
         );
-        assert!(
-            !cap.effects.iter().any(|e| matches!(
-                e,
-                KeyEffect::Action {
-                    action: ShortcutAction::Quit,
-                    ..
-                }
-            )),
-            "no Quit effect reaches the batch even when nothing is focused"
+        assert_eq!(
+            cap.message_count(),
+            0,
+            "no ShortcutMessage is written even when nothing is focused"
         );
     }
 
@@ -515,7 +556,7 @@ mod tests {
     fn filter_holds_leader_claim_under_webview_focus() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         ));
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -538,7 +579,7 @@ mod tests {
     fn filter_cleared_on_guarded_frame() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         ));
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
@@ -613,7 +654,7 @@ mod tests {
     fn filter_is_populated_before_keyboard_deliver_set() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            ShortcutAction::EnterCopyMode,
+            Shortcut::EnterCopyMode,
             Duration::ZERO,
         ));
         app.init_resource::<DeliverProbe>()
@@ -634,7 +675,7 @@ mod tests {
         app.update();
         assert!(
             app.world().resource::<DeliverProbe>().saw_claim,
-            "resolve_shortcuts must populate CefKeyboardFilter before KeyboardDeliverSet runs"
+            "resolve_key_effects must populate CefKeyboardFilter before KeyboardDeliverSet runs"
         );
     }
 }

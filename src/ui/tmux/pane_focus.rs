@@ -30,8 +30,8 @@ impl Plugin for PaneFocusPlugin {
                 // NOTE: both edges are load-bearing. `.after(TmuxProjectionSet)`
                 // runs the mirror once `ActivePane` is fresh; `.before(FocusedKey)`
                 // flushes the deferred `KeyboardFocused` insert before
-                // `resolve_shortcuts` reads it, so `batch.focused` reflects the
-                // current active pane the same frame it changes.
+                // `resolve_key_effects` reads it, so the resolved messages' `focused`
+                // reflects the current active pane the same frame it changes.
                 sync_keyboard_focus_to_active_pane
                     .run_if(pane_active_state_changed)
                     .after(TmuxProjectionSet)

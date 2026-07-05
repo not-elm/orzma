@@ -17,21 +17,10 @@
 //! high-resolution `Pixel` scrolling quantizes the same way the native
 //! terminal path does); every other case is ceded to ozma.
 
-use super::forward::ForwardPaneKeysRequest;
 use super::pane_hit::tmux_pane_at_phys;
-use crate::action::terminal::PasteAction;
-use crate::action::tmux::{
-    DetachSessionRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest, NextWindowRequest,
-    PreviousWindowRequest, RenameSessionRequest, RenameWindowRequest, SelectPaneRequest,
-    SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
-};
-use crate::action::vi::trigger_copy_mode_action;
-use crate::app_mode::{AppMode, TmuxActiveSet};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::dispatch::{ShortcutBatch, ShortcutSet};
-use crate::input::resolve::KeyEffect;
-use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
+use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};
@@ -46,13 +35,7 @@ use ozma_tty_engine::{Coalescer, TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview};
-use ozmux_configs::shortcuts::{
-    PaneDirection as CfgPaneDirection, ShortcutAction, SplitOrientation as CfgSplitOrientation,
-};
-use ozmux_tmux::{
-    ActiveWindow, KeyMods, PaneDirection, SplitDirection, TmuxClient, TmuxCommand, TmuxPane,
-    TmuxSession, TmuxWindow, bevy_key_to_tmux_name,
-};
+use ozmux_tmux::{TmuxClient, TmuxCommand, TmuxPane};
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
 pub(super) struct InputPlugin;
@@ -61,203 +44,12 @@ impl Plugin for InputPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TmuxWheelAccumulator>().add_systems(
             Update,
-            (
-                apply_tmux_shortcuts
-                    .in_set(ShortcutSet::Apply)
-                    .run_if(in_state(AppMode::Tmux))
-                    .run_if(on_message::<ShortcutBatch>),
-                forward_wheel_to_tmux
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(on_message::<MouseWheel>),
-            )
-                .in_set(TmuxActiveSet),
+            forward_wheel_to_tmux
+                .in_set(InputPhase::Dispatch)
+                .run_if(on_message::<MouseWheel>),
         );
     }
 }
-
-/// Applies `AppMode::Tmux` keyboard shortcuts from the frame's `ShortcutBatch`
-/// (produced by `crate::input::dispatch::resolve_shortcuts`): triggers the
-/// matching events on the active pane (`batch.focused`) / session / window —
-/// copy-mode entry, paste (`PasteAction`, applied by `on_paste_tmux`), detach
-/// (`DetachSessionRequest`), the pane/window action requests, the shared
-/// `[copy-mode]` key table, and raw-key forwarding batched into one
-/// `ForwardPaneKeysRequest` per frame. `Quit` and `ReleaseWebviewFocus` are
-/// handled upstream in `resolve_shortcuts`. Registered in `ShortcutSet::Apply`,
-/// gated on `in_state(AppMode::Tmux)` + `on_message::<ShortcutBatch>`.
-fn apply_tmux_shortcuts(
-    mut commands: Commands,
-    mut batches: MessageReader<ShortcutBatch>,
-    targets: ActionTargets,
-) {
-    for batch in batches.read() {
-        let kmods = KeyMods {
-            ctrl: batch.mods.ctrl,
-            shift: batch.mods.shift,
-            alt: batch.mods.alt,
-            super_: batch.mods.meta,
-        };
-        let mut names: Vec<String> = Vec::new();
-        for effect in &batch.effects {
-            match effect {
-                KeyEffect::Action {
-                    action: ShortcutAction::EnterCopyMode,
-                    ..
-                } => {
-                    // NOTE: re-entry guard — re-triggering while already in copy
-                    // mode would double-insert CopyModeState and re-enter vi mode.
-                    if let Some(entity) = batch.focused
-                        && !batch.in_copy_mode
-                    {
-                        commands.trigger(EnterCopyModeActionEvent { entity });
-                    }
-                }
-                KeyEffect::Action {
-                    action: ShortcutAction::Paste,
-                    ..
-                } => {
-                    if let Some(entity) = batch.focused {
-                        commands.trigger(PasteAction { entity });
-                    }
-                }
-                KeyEffect::Action {
-                    action: ShortcutAction::DetachSession,
-                    ..
-                } => {
-                    if let Ok(entity) = targets.session.single() {
-                        commands.trigger(DetachSessionRequest { entity });
-                    }
-                }
-                KeyEffect::Action { action, .. } => {
-                    dispatch_tmux_action(&mut commands, *action, batch.focused, &targets);
-                }
-                KeyEffect::CopyMode(action) => {
-                    if let Some(entity) = batch.focused {
-                        trigger_copy_mode_action(&mut commands, entity, *action);
-                    }
-                }
-                KeyEffect::Type { logical, key_code }
-                | KeyEffect::WebviewForward { logical, key_code } => {
-                    if let Some(name) = bevy_key_to_tmux_name(logical, *key_code, kmods) {
-                        names.push(name);
-                    }
-                }
-                KeyEffect::ReleaseWebviewFocus => {}
-            }
-        }
-
-        if let Some(entity) = batch.focused
-            && !names.is_empty()
-        {
-            commands.trigger(ForwardPaneKeysRequest { entity, names });
-        }
-    }
-}
-
-/// Triggers the tmux pane/window action request for `action` on the resolved
-/// target: pane actions on `active_entity`, window actions on the active window
-/// or the display-indexed window, session-scoped actions on the session. The
-/// non-tmux actions (handled by the caller before this helper) are no-ops.
-fn dispatch_tmux_action(
-    commands: &mut Commands,
-    action: ShortcutAction,
-    active_entity: Option<Entity>,
-    targets: &ActionTargets,
-) {
-    match action {
-        ShortcutAction::SelectPane(direction) => {
-            if let Some(entity) = active_entity {
-                commands.trigger(SelectPaneRequest {
-                    entity,
-                    direction: tmux_pane_direction(direction),
-                });
-            }
-        }
-        ShortcutAction::SplitPane(orientation) => {
-            if let Some(entity) = active_entity {
-                commands.trigger(SplitPaneRequest {
-                    entity,
-                    direction: tmux_split_direction(orientation),
-                });
-            }
-        }
-        ShortcutAction::KillPane => {
-            if let Some(entity) = active_entity {
-                commands.trigger(KillPaneRequest { entity });
-            }
-        }
-        ShortcutAction::ZoomPane => {
-            if let Some(entity) = active_entity {
-                commands.trigger(ZoomPaneRequest { entity });
-            }
-        }
-        ShortcutAction::NewWindow => {
-            if let Ok(entity) = targets.session.single() {
-                commands.trigger(NewWindowRequest { entity });
-            }
-        }
-        ShortcutAction::NextWindow => {
-            if let Ok(entity) = targets.session.single() {
-                commands.trigger(NextWindowRequest { entity });
-            }
-        }
-        ShortcutAction::PreviousWindow => {
-            if let Ok(entity) = targets.session.single() {
-                commands.trigger(PreviousWindowRequest { entity });
-            }
-        }
-        ShortcutAction::SelectWindow(index) => {
-            if let Some(entity) = targets
-                .windows
-                .iter()
-                .find(|(_, window)| window.index == u32::from(index))
-                .map(|(entity, _)| entity)
-            {
-                commands.trigger(SelectWindowRequest { entity });
-            }
-        }
-        ShortcutAction::KillWindow => {
-            if let Ok(entity) = targets.active_window.single() {
-                commands.trigger(KillWindowRequest { entity });
-            }
-        }
-        ShortcutAction::RenameWindow => {
-            if let Ok(entity) = targets.active_window.single() {
-                commands.trigger(RenameWindowRequest { entity });
-            }
-        }
-        ShortcutAction::RenameSession => {
-            if let Ok(entity) = targets.session.single() {
-                commands.trigger(RenameSessionRequest { entity });
-            }
-        }
-        ShortcutAction::Quit
-        | ShortcutAction::EnterCopyMode
-        | ShortcutAction::Paste
-        | ShortcutAction::DetachSession
-        | ShortcutAction::ReleaseWebviewFocus => {}
-    }
-}
-
-/// Maps the config-facing pane direction (named after the neighbor) to the
-/// tmux command enum.
-fn tmux_pane_direction(direction: CfgPaneDirection) -> PaneDirection {
-    match direction {
-        CfgPaneDirection::Left => PaneDirection::Left,
-        CfgPaneDirection::Down => PaneDirection::Down,
-        CfgPaneDirection::Up => PaneDirection::Up,
-        CfgPaneDirection::Right => PaneDirection::Right,
-    }
-}
-
-/// Maps the config-facing split orientation (named after the DIVIDER) to the
-/// tmux flag enum (named after the layout axis) — the two cross on purpose.
-fn tmux_split_direction(orientation: CfgSplitOrientation) -> SplitDirection {
-    match orientation {
-        CfgSplitOrientation::Vertical => SplitDirection::Horizontal,
-        CfgSplitOrientation::Horizontal => SplitDirection::Vertical,
-    }
-}
-
 /// `send-keys -t %<id> -N <lines> Up|Down` — scrolls an alt-screen (non-copy-mode) pane.
 struct AltScreenScroll<'a> {
     target: &'a str,
@@ -314,15 +106,6 @@ struct TmuxWebviewWheelParams<'w, 's> {
     webviews: Query<'w, 's, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     browsers: Option<NonSend<'w, Browsers>>,
-}
-
-/// Target-entity lookups for the tmux shortcut actions, bundled to stay
-/// within Bevy's system-parameter limit.
-#[derive(SystemParam)]
-struct ActionTargets<'w, 's> {
-    active_window: Query<'w, 's, Entity, With<ActiveWindow>>,
-    session: Query<'w, 's, Entity, With<TmuxSession>>,
-    windows: Query<'w, 's, (Entity, &'static TmuxWindow)>,
 }
 
 /// Resolves the focused webview under the pointer, or `None` (the tmux
@@ -619,11 +402,13 @@ fn consume_wheel_notches(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::shortcuts::tmux::{tmux_pane_direction, tmux_split_direction};
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::input::keyboard::{Key, KeyCode};
     use bevy::input::mouse::MouseScrollUnit;
-    use ozmux_configs::shortcuts::Modifiers;
-    use ozmux_tmux::{ActivePane, PaneId};
+    use ozmux_configs::shortcuts::{
+        PaneDirection as CfgPaneDirection, SplitOrientation as CfgSplitOrientation,
+    };
+    use ozmux_tmux::{ActivePane, PaneDirection, PaneId, SplitDirection};
 
     #[test]
     fn wheel_copy_mode_pane_owner_ignores_screen_and_mode_bits() {
@@ -1034,168 +819,6 @@ mod tests {
         assert_eq!(
             tmux_pane_direction(CfgPaneDirection::Right),
             PaneDirection::Right
-        );
-    }
-
-    #[derive(Resource, Default)]
-    struct TmuxCaptured {
-        select_pane: Vec<(Entity, PaneDirection)>,
-        select_window: Vec<Entity>,
-        detach: Vec<Entity>,
-        forward: Vec<(Entity, Vec<String>)>,
-    }
-
-    /// Builds an app running `apply_tmux_shortcuts` as a bare `ShortcutBatch`
-    /// consumer with one tmux pane (the active pane / `batch.focused`),
-    /// capturing the action requests it triggers.
-    fn tmux_dispatch_app() -> (App, Entity) {
-        use tmux_control_parser::CellDims;
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_message::<ShortcutBatch>()
-            .init_resource::<TmuxCaptured>()
-            .add_systems(Update, apply_tmux_shortcuts)
-            .add_observer(|ev: On<SelectPaneRequest>, mut c: ResMut<TmuxCaptured>| {
-                c.select_pane.push((ev.entity, ev.direction));
-            })
-            .add_observer(|ev: On<SelectWindowRequest>, mut c: ResMut<TmuxCaptured>| {
-                c.select_window.push(ev.entity);
-            })
-            .add_observer(
-                |ev: On<DetachSessionRequest>, mut c: ResMut<TmuxCaptured>| {
-                    c.detach.push(ev.entity);
-                },
-            )
-            .add_observer(
-                |ev: On<ForwardPaneKeysRequest>, mut c: ResMut<TmuxCaptured>| {
-                    c.forward.push((ev.entity, ev.names.clone()));
-                },
-            );
-        let pane = app
-            .world_mut()
-            .spawn(TmuxPane {
-                id: PaneId(1),
-                dims: CellDims {
-                    width: 80,
-                    height: 24,
-                    xoff: 0,
-                    yoff: 0,
-                },
-            })
-            .id();
-        (app, pane)
-    }
-
-    fn dispatch(app: &mut App, effects: Vec<KeyEffect>, focused: Option<Entity>) {
-        app.world_mut().write_message(ShortcutBatch {
-            effects,
-            focused,
-            in_copy_mode: false,
-            mods: Modifiers::default(),
-        });
-        app.update();
-    }
-
-    #[test]
-    fn select_pane_targets_active_pane() {
-        let (mut app, pane) = tmux_dispatch_app();
-        dispatch(
-            &mut app,
-            vec![KeyEffect::Action {
-                action: ShortcutAction::SelectPane(CfgPaneDirection::Left),
-                via_leader: true,
-            }],
-            Some(pane),
-        );
-        assert_eq!(
-            app.world().resource::<TmuxCaptured>().select_pane,
-            vec![(pane, PaneDirection::Left)],
-            "a SelectPane(Left) effect must trigger SelectPaneRequest on batch.focused (active pane)"
-        );
-    }
-
-    #[test]
-    fn plain_keys_batch_into_one_forward_request() {
-        let (mut app, pane) = tmux_dispatch_app();
-        dispatch(
-            &mut app,
-            vec![
-                KeyEffect::Type {
-                    logical: Key::Character("a".into()),
-                    key_code: KeyCode::KeyA,
-                },
-                KeyEffect::Type {
-                    logical: Key::Character("b".into()),
-                    key_code: KeyCode::KeyB,
-                },
-            ],
-            Some(pane),
-        );
-        assert_eq!(
-            app.world().resource::<TmuxCaptured>().forward,
-            vec![(pane, vec!["a".to_string(), "b".to_string()])],
-            "Type effects in one batch must batch into a single ForwardPaneKeysRequest"
-        );
-    }
-
-    #[test]
-    fn detach_triggers_detach_session_request() {
-        use tmux_control_parser::SessionId;
-
-        let (mut app, pane) = tmux_dispatch_app();
-        let session = app
-            .world_mut()
-            .spawn(TmuxSession {
-                id: SessionId(1),
-                name: "main".into(),
-            })
-            .id();
-        dispatch(
-            &mut app,
-            vec![KeyEffect::Action {
-                action: ShortcutAction::DetachSession,
-                via_leader: false,
-            }],
-            Some(pane),
-        );
-        assert_eq!(
-            app.world().resource::<TmuxCaptured>().detach,
-            vec![session],
-            "a DetachSession effect must trigger DetachSessionRequest on the session"
-        );
-    }
-
-    #[test]
-    fn select_window_targets_indexed_window() {
-        use tmux_control_parser::WindowId;
-
-        let (mut app, pane) = tmux_dispatch_app();
-        app.world_mut().spawn(TmuxWindow {
-            id: WindowId(1),
-            index: 1,
-            name: "one".into(),
-        });
-        let window_two = app
-            .world_mut()
-            .spawn(TmuxWindow {
-                id: WindowId(2),
-                index: 2,
-                name: "two".into(),
-            })
-            .id();
-        dispatch(
-            &mut app,
-            vec![KeyEffect::Action {
-                action: ShortcutAction::SelectWindow(2),
-                via_leader: false,
-            }],
-            Some(pane),
-        );
-        assert_eq!(
-            app.world().resource::<TmuxCaptured>().select_window,
-            vec![window_two],
-            "SelectWindow(2) must target the window whose display index is 2"
         );
     }
 }

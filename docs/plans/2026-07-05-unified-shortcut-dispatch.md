@@ -47,11 +47,11 @@ Builds the single source of truth. Pure, no ECS handles, fully unit-tested. Noth
 - Modify: `src/input.rs` (add `mod resolve;` with the other submodule declarations)
 
 **Interfaces:**
-- Consumes: `LeaderPhase`, `Shortcuts`, `step_leader`, `LeaderStep`, `is_modifier_key` (from `crate::input::shortcuts`); `Modifiers`, `ShortcutAction` (from `ozmux_configs::shortcuts`); `ResolvedCopyModeKeys` (from `crate::action::vi`); `CopyModeAction` (from `ozmux_configs::copy_mode` — NOT re-exported by `crate::action::vi`); `bevy::input::keyboard::{Key, KeyCode, KeyboardInput}`; `ozma_webview::NormalizedChord` (the `ForwardKeys.0` element, fields `code/ctrl/shift/alt/logo`) for `forward_chords`.
+- Consumes: `LeaderPhase`, `Shortcuts`, `step_leader`, `LeaderStep`, `is_modifier_key` (from `crate::input::shortcuts`); `Modifiers`, `Shortcut` (from `ozmux_configs::shortcuts`); `ResolvedCopyModeKeys` (from `crate::action::vi`); `CopyModeAction` (from `ozmux_configs::copy_mode` — NOT re-exported by `crate::action::vi`); `bevy::input::keyboard::{Key, KeyCode, KeyboardInput}`; `ozma_webview::NormalizedChord` (the `ForwardKeys.0` element, fields `code/ctrl/shift/alt/logo`) for `forward_chords`.
 - Produces:
   ```rust
   pub(crate) enum KeyEffect {
-      Action { action: ShortcutAction, via_leader: bool },
+      Action { action: Shortcut, via_leader: bool },
       CopyMode(CopyModeAction),
       Type { logical: Key, key_code: KeyCode },
       WebviewForward { logical: Key, key_code: KeyCode },
@@ -402,10 +402,10 @@ Replace the `app_shortcut_handler` fn with `apply_default_shortcuts`. Body ≤15
 
 ```rust
 match effect {
-    KeyEffect::Action { action: ShortcutAction::Quit, .. } => exit.write(AppExit::Success),
-    KeyEffect::Action { action: ShortcutAction::EnterCopyMode, .. } =>
+    KeyEffect::Action { action: Shortcut::Quit, .. } => exit.write(AppExit::Success),
+    KeyEffect::Action { action: Shortcut::EnterCopyMode, .. } =>
         commands.trigger(EnterCopyModeActionEvent { entity }),
-    KeyEffect::Action { action: ShortcutAction::Paste, via_leader } =>
+    KeyEffect::Action { action: Shortcut::Paste, via_leader } =>
         if via_leader || !in_copy_mode { commands.trigger(PasteAction { entity }); },
     KeyEffect::Action { .. } => {} // pane/window/detach/release: Default no-op
     KeyEffect::CopyMode(a) => trigger_copy_mode_action(&mut commands, entity, a),
@@ -472,12 +472,12 @@ Body ≤150 lines: guards (drain+return for `CopyPrompt`/`ConfirmState`/`RenameP
 let mut names: Vec<String> = Vec::new();
 for effect in effects {
     match effect {
-        KeyEffect::Action { action: ShortcutAction::Quit, .. } => exit.write(AppExit::Success),
-        KeyEffect::Action { action: ShortcutAction::EnterCopyMode, .. } =>
+        KeyEffect::Action { action: Shortcut::Quit, .. } => exit.write(AppExit::Success),
+        KeyEffect::Action { action: Shortcut::EnterCopyMode, .. } =>
             if let Some(e) = active_entity && copy_modes.get(e).is_err() { commands.trigger(EnterCopyModeActionEvent { entity: e }); },
-        KeyEffect::Action { action: ShortcutAction::Paste, .. } =>
+        KeyEffect::Action { action: Shortcut::Paste, .. } =>
             if let Some(e) = active_entity { commands.trigger(PasteAction { entity: e }); },
-        KeyEffect::Action { action: ShortcutAction::DetachSession, .. } =>
+        KeyEffect::Action { action: Shortcut::DetachSession, .. } =>
             if let Ok(e) = targets.session.single() { commands.trigger(DetachSessionRequest { entity: e }); },
         KeyEffect::Action { action, .. } => dispatch_tmux_action(&mut commands, action, active_entity, &targets), // SelectPane/Split/Kill/Zoom/New/Next/Prev/Select/KillWindow/Rename* — port arms from input.rs:324-389
         KeyEffect::CopyMode(a) => if let Some(e) = active_entity { trigger_copy_mode_action(&mut commands, e, a); },

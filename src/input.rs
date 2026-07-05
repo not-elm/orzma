@@ -1,10 +1,8 @@
-//! Root of the host input pipeline: keyboard, mouse, focus, gesture and binding
-//! primitives, IME, hyperlink-hover, shortcuts, option-as-alt, and the
+//! Root of the host input pipeline: keyboard, mouse, focus, gesture and binding primitives, IME, hyperlink-hover, shortcuts, option-as-alt, and the
 //! per-mode (`default_mode`, `tmux`) dispatchers.
 
 mod bindings;
 pub(crate) mod default_mode;
-mod dispatch;
 pub(crate) mod focus;
 mod gesture;
 pub(crate) mod hyperlink;
@@ -12,15 +10,14 @@ pub(crate) mod ime;
 pub(crate) mod keyboard;
 pub(crate) mod mouse;
 pub(crate) mod option_as_alt;
-mod resolve;
 pub(crate) mod shortcuts;
 pub(crate) mod tmux;
 
 use crate::{
     input::{
-        default_mode::DefaultHostInputPlugin, dispatch::DispatchPlugin,
-        keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
-        shortcuts::ShortcutsPlugin, tmux::TmuxInputPlugin,
+        default_mode::DefaultHostInputPlugin, keyboard::KeyboardInputPlugin,
+        mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
+        tmux::TmuxInputPlugin,
     },
     system_set::OzmuxSystems,
 };
@@ -51,7 +48,6 @@ impl Plugin for OzmuxInputPlugin {
             OptionAsAltPlugin,
             KeyboardInputPlugin,
             MouseInputPlugin,
-            DispatchPlugin,
             TmuxInputPlugin,
             DefaultHostInputPlugin,
         ))

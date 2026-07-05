@@ -5,26 +5,45 @@
 
 use crate::app_mode::AppMode;
 use crate::configs::OzmuxConfigsResource;
+use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OzmaMouseConfig};
+use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
+use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
+use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
-use bevy::input::keyboard::KeyboardInput;
+use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::MouseButton;
 use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use ozma_tty_engine::{ButtonConfig, WheelConfig};
+use ozmux_configs::copy_mode::CopyModeAction;
 use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use ozmux_configs::shortcuts::{
-    Key as ConfigKey, KeyChord, Leader, Modifiers, ShortcutAction, TapModifier,
+    Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
 };
 use std::time::Duration;
+
+pub(in crate::input) mod default_mode;
+pub(in crate::input) mod tmux;
 
 pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Shortcuts>()
+        app.add_plugins((ShortcutsDefaultModePlugin, ShortcutsTmuxModePlugin))
+            .configure_sets(
+                Update,
+                (ShortcutSet::Resolve, ShortcutSet::Apply)
+                    .chain()
+                    .in_set(InputPhase::FocusedKey),
+            )
+            .add_message::<ShortcutMessage>()
+            .add_message::<CopyModeMessage>()
+            .add_message::<TypeMessage>()
+            .add_message::<WebviewForwardMessage>()
+            .init_resource::<Shortcuts>()
             .init_resource::<LeaderPhase>()
             .init_resource::<ModifierTapState>()
             .configure_sets(Update, (LeaderGate::Detect, LeaderGate::Advance).chain())
@@ -52,8 +71,81 @@ impl Plugin for ShortcutsPlugin {
     }
 }
 
+/// One resolved keyboard shortcut action, fanned out from `resolve_key_effects`
+/// to the per-mode appliers. Excludes `Quit` / `ReleaseWebviewFocus` (handled
+/// inline in `resolve_key_effects`). `focused` is the `KeyboardFocused` surface;
+/// `in_copy_mode` gates the copy-mode re-entry and paste-suppression rules.
+#[derive(Message)]
+pub(in crate::input) struct ShortcutMessage {
+    /// The action to run.
+    pub action: Shortcut,
+    /// Whether the action was reached through the leader rather than a direct chord.
+    pub via_leader: bool,
+    /// The `KeyboardFocused` surface, or `None` when none is focused.
+    pub focused: Option<Entity>,
+    /// Whether the focused surface is in copy mode.
+    pub in_copy_mode: bool,
+}
+
+/// One matched `[copy-mode]` key, fanned out to the per-mode appliers.
+#[derive(Message)]
+pub(in crate::input) struct CopyModeMessage {
+    /// The copy-mode action to run.
+    pub action: CopyModeAction,
+    /// The `KeyboardFocused` surface, or `None` when none is focused.
+    pub focused: Option<Entity>,
+}
+
+/// One raw key to type into / forward to the focused terminal.
+#[derive(Message)]
+pub(in crate::input) struct TypeMessage {
+    /// The logical key, for text/printable-key mapping.
+    pub logical: Key,
+    /// The physical key, for named-key mapping.
+    pub key_code: KeyCode,
+    /// The `KeyboardFocused` surface, or `None` when none is focused.
+    pub focused: Option<Entity>,
+    /// The frame's modifier snapshot.
+    pub mods: Modifiers,
+}
+
+/// One key to forward to the focused webview's declared forward-key chord.
+#[derive(Message)]
+pub(in crate::input) struct WebviewForwardMessage {
+    /// The logical key, for text/printable-key mapping.
+    pub logical: Key,
+    /// The physical key, for named-key mapping.
+    pub key_code: KeyCode,
+    /// The `KeyboardFocused` surface, or `None` when none is focused.
+    pub focused: Option<Entity>,
+    /// The frame's modifier snapshot.
+    pub mods: Modifiers,
+}
+
+/// The four shortcut-effect message writers `resolve_key_effects` fans out to,
+/// bundled to stay within Bevy's system-parameter limit.
+#[derive(SystemParam)]
+pub(in crate::input) struct ShortcutMessages<'w> {
+    pub shortcut: MessageWriter<'w, ShortcutMessage>,
+    pub copy_mode: MessageWriter<'w, CopyModeMessage>,
+    pub type_keys: MessageWriter<'w, TypeMessage>,
+    pub webview_forward: MessageWriter<'w, WebviewForwardMessage>,
+}
+
+/// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
+/// `resolve_key_effects` (`Resolve`) fans out the per-responsibility messages
+/// before the per-mode appliers (`Apply`) read them, so every message is
+/// consumed the same frame it is written.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub(in crate::input) enum ShortcutSet {
+    /// `resolve_key_effects`: classifies keys and fans out the typed messages.
+    Resolve,
+    /// The per-mode appliers: read the typed messages and apply their effects.
+    Apply,
+}
+
 /// Shared leader phase: where the leader state machine is between keys.
-/// Owned by `ShortcutsPlugin`; advanced by `crate::input::dispatch::resolve_shortcuts`
+/// Owned by `ShortcutsPlugin`; advanced by `crate::input::keyboard::handler::resolve_key_effects`
 /// (the sole `LeaderGate::Advance` member) as it classifies each frame's keys.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LeaderPhase {
@@ -77,13 +169,13 @@ struct ModifierTapState {
 }
 
 /// Orders the `FocusedKey` systems that touch `LeaderPhase` so
-/// `detect_modifier_tap` (`Detect`) sets it before `resolve_shortcuts`
+/// `detect_modifier_tap` (`Detect`) sets it before `resolve_key_effects`
 /// (`Advance`) steps the leader machine and clears it.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum LeaderGate {
     /// `detect_modifier_tap`: sets `LeaderPhase` to `Pending` on a modifier tap.
     Detect,
-    /// `crate::input::dispatch::resolve_shortcuts`: advances the leader.
+    /// `crate::input::keyboard::handler::resolve_key_effects`: advances the leader.
     Advance,
 }
 
@@ -102,7 +194,7 @@ enum ResolvedLeader {
 struct OzmuxShortcut {
     keycode: KeyCode,
     modifiers: Modifiers,
-    action: ShortcutAction,
+    action: Shortcut,
     repeat: bool,
 }
 
@@ -120,29 +212,15 @@ pub(crate) struct Shortcuts {
 
 impl Shortcuts {
     /// Returns the GUI action bound to `(keycode, mods)` in the direct table, if
-    /// any. Excludes `ReleaseWebviewFocus` (matched via `is_release_webview_focus`).
-    pub(crate) fn match_gui_action(
-        &self,
-        keycode: KeyCode,
-        mods: Modifiers,
-    ) -> Option<ShortcutAction> {
+    /// any.
+    pub(crate) fn match_gui_action(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
         Self::find_entry(&self.direct, keycode, mods).map(|s| s.action)
-    }
-
-    /// True when `(keycode, mods)` matches the configured release-webview-focus
-    /// chord in the direct table.
-    pub(crate) fn is_release_webview_focus(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        self.direct.iter().any(|s| {
-            s.action == ShortcutAction::ReleaseWebviewFocus
-                && s.keycode == keycode
-                && s.modifiers == mods
-        })
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
     /// binding is repeat-marked (`<Leader:r>`). The single predicate
     /// `step_leader` uses to decide which keys the repeat window consumes.
-    fn match_repeat_prefix(&self, keycode: KeyCode, mods: Modifiers) -> Option<ShortcutAction> {
+    fn match_repeat_prefix(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
         self.match_prefix_entry(keycode, mods)
             .filter(|s| s.repeat)
             .map(|s| s.action)
@@ -160,28 +238,21 @@ impl Shortcuts {
         }
     }
 
-    /// Returns the prefix-table entry bound to `(keycode, mods)`, excluding
-    /// `ReleaseWebviewFocus` (mirrors `match_gui_action`): leader dispatch only
-    /// runs when no webview is focused, so a leader-scoped
-    /// release-webview-focus could never fire — resolving it to `Swallow`
-    /// avoids a dead `RunAction`.
+    /// Returns the prefix-table entry bound to `(keycode, mods)`, if any.
     fn match_prefix_entry(&self, keycode: KeyCode, mods: Modifiers) -> Option<&OzmuxShortcut> {
         Self::find_entry(&self.prefix, keycode, mods)
     }
 
-    /// Returns the first entry in `table` bound to `(keycode, mods)`, excluding
-    /// `ReleaseWebviewFocus` (matched separately via `is_release_webview_focus`).
-    /// The single exclusion predicate behind both the direct and prefix lookups.
+    /// Returns the first entry in `table` bound to `(keycode, mods)`. The single
+    /// lookup predicate behind both the direct and prefix tables.
     fn find_entry(
         table: &[OzmuxShortcut],
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<&OzmuxShortcut> {
-        table.iter().find(|s| {
-            s.action != ShortcutAction::ReleaseWebviewFocus
-                && s.keycode == keycode
-                && s.modifiers == mods
-        })
+        table
+            .iter()
+            .find(|s| s.keycode == keycode && s.modifiers == mods)
     }
 }
 
@@ -190,7 +261,7 @@ impl Shortcuts {
 /// dispatch.
 pub(crate) enum LeaderStep {
     /// A leader-scoped binding matched; run this action.
-    RunAction(ShortcutAction),
+    RunAction(Shortcut),
     /// Consume the key with no effect (the leader itself, or an unmatched second
     /// key that abandons the sequence).
     Swallow,
@@ -268,7 +339,7 @@ pub(crate) fn clear_leader_phase(leader_phase: &mut ResMut<LeaderPhase>) {
 #[cfg(test)]
 pub(crate) fn test_shortcuts_with_repeat_prefix(
     keycode: KeyCode,
-    action: ShortcutAction,
+    action: Shortcut,
     repeat_time: Duration,
 ) -> Shortcuts {
     Shortcuts {
@@ -300,7 +371,7 @@ pub(crate) fn test_shortcuts_with_repeat_prefix(
 pub(crate) fn test_shortcuts_with_direct_chord(
     keycode: KeyCode,
     modifiers: Modifiers,
-    action: ShortcutAction,
+    action: Shortcut,
 ) -> Shortcuts {
     Shortcuts {
         direct: vec![OzmuxShortcut {
@@ -464,7 +535,7 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
 /// Resolves each bound chord to an `OzmuxShortcut`, skipping (with a warning)
 /// any chord whose logical key has no physical `KeyCode`.
 fn resolve_from_chords<'a>(
-    chords: impl Iterator<Item = (&'static str, &'a KeyChord, ShortcutAction, bool)>,
+    chords: impl Iterator<Item = (&'static str, &'a KeyChord, Shortcut, bool)>,
 ) -> Vec<OzmuxShortcut> {
     let mut out = Vec::new();
     for (label, chord, action, repeat) in chords {
@@ -643,19 +714,19 @@ mod tests {
                 OzmuxShortcut {
                     keycode: KeyCode::KeyS,
                     modifiers: mods(false, false, false, false),
-                    action: ShortcutAction::EnterCopyMode,
+                    action: Shortcut::EnterCopyMode,
                     repeat: true,
                 },
                 OzmuxShortcut {
                     keycode: KeyCode::KeyD,
                     modifiers: mods(false, false, false, false),
-                    action: ShortcutAction::DetachSession,
+                    action: Shortcut::DetachSession,
                     repeat: true,
                 },
                 OzmuxShortcut {
                     keycode: KeyCode::KeyP,
                     modifiers: mods(false, false, false, false),
-                    action: ShortcutAction::Paste,
+                    action: Shortcut::Paste,
                     repeat: false,
                 },
             ],
@@ -678,12 +749,12 @@ mod tests {
         let mut phase = LeaderPhase::Pending;
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(0)),
-            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterCopyMode)
         ));
         assert_eq!(phase, LeaderPhase::Repeat { deadline: ms(500) });
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(100)),
-            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterCopyMode)
         ));
         assert_eq!(
             phase,
@@ -698,7 +769,7 @@ mod tests {
         let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyD, no_mods(), ms(100)),
-            LeaderStep::RunAction(ShortcutAction::DetachSession)
+            LeaderStep::RunAction(Shortcut::DetachSession)
         ));
         assert_eq!(phase, LeaderPhase::Repeat { deadline: ms(600) });
     }
@@ -766,7 +837,7 @@ mod tests {
         let mut phase = LeaderPhase::Pending;
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(0)),
-            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterCopyMode)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }
@@ -794,21 +865,17 @@ mod tests {
         let mut phase = LeaderPhase::Pending;
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyP, no_mods(), ms(0)),
-            LeaderStep::RunAction(ShortcutAction::Paste)
+            LeaderStep::RunAction(Shortcut::Paste)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }
 
     #[test]
     fn test_constructor_builds_repeat_prefix() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            ShortcutAction::EnterCopyMode,
-            ms(500),
-        );
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
         assert_eq!(
             sc.match_repeat_prefix(KeyCode::KeyH, mods(false, false, false, false)),
-            Some(ShortcutAction::EnterCopyMode)
+            Some(Shortcut::EnterCopyMode)
         );
         assert!(sc.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
     }
@@ -930,13 +997,13 @@ mod tests {
     }
 
     #[test]
-    fn match_prefix_entry_excludes_release_webview_focus() {
+    fn match_prefix_entry_resolves_release_webview_focus() {
         let s = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OzmuxShortcut {
                 keycode: KeyCode::KeyR,
                 modifiers: mods(false, false, false, false),
-                action: ShortcutAction::ReleaseWebviewFocus,
+                action: Shortcut::ReleaseWebviewFocus,
                 repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
@@ -949,8 +1016,9 @@ mod tests {
         assert_eq!(
             s.match_prefix_entry(KeyCode::KeyR, mods(false, false, false, false))
                 .map(|s| s.action),
-            None,
-            "a leader-scoped release-webview-focus resolves to Swallow, not a dead RunAction",
+            Some(Shortcut::ReleaseWebviewFocus),
+            "release-webview-focus is a normal action; a leader-scoped binding resolves to it \
+             (leader dispatch runs under webview focus since #240)",
         );
     }
 
@@ -964,7 +1032,7 @@ mod tests {
             prefix: vec![OzmuxShortcut {
                 keycode: KeyCode::KeyD,
                 modifiers: mods(true, false, false, false),
-                action: ShortcutAction::DetachSession,
+                action: Shortcut::DetachSession,
                 repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
@@ -1028,7 +1096,7 @@ mod tests {
                 mods(true, false, false, false),
                 ms(0)
             ),
-            LeaderStep::RunAction(ShortcutAction::DetachSession)
+            LeaderStep::RunAction(Shortcut::DetachSession)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }
@@ -1040,7 +1108,7 @@ mod tests {
             prefix: vec![OzmuxShortcut {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
-                action: ShortcutAction::EnterCopyMode,
+                action: Shortcut::EnterCopyMode,
                 repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
@@ -1053,7 +1121,7 @@ mod tests {
         assert_eq!(
             s.match_prefix_entry(KeyCode::KeyS, mods(false, false, false, false))
                 .map(|s| s.action),
-            Some(ShortcutAction::EnterCopyMode)
+            Some(Shortcut::EnterCopyMode)
         );
         assert_eq!(
             s.match_prefix_entry(KeyCode::KeyS, mods(false, true, false, false))
@@ -1079,7 +1147,7 @@ mod tests {
         let resolved = resolve_from_chords(config.leader_chords());
         let detach = resolved
             .iter()
-            .find(|s| s.action == ShortcutAction::DetachSession)
+            .find(|s| s.action == Shortcut::DetachSession)
             .expect("detach-session must resolve as a leader chord");
         assert_eq!(detach.keycode, KeyCode::KeyD);
         assert!(
@@ -1122,15 +1190,15 @@ mod tests {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
             r.match_gui_action(KeyCode::KeyQ, mods(false, false, false, true)),
-            Some(ShortcutAction::Quit)
+            Some(Shortcut::Quit)
         );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyS, mods(false, false, false, true)),
-            Some(ShortcutAction::EnterCopyMode)
+            Some(Shortcut::EnterCopyMode)
         );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
-            Some(ShortcutAction::Paste),
+            Some(Shortcut::Paste),
             "paste is a direct Cmd+V chord by default"
         );
     }
@@ -1149,15 +1217,6 @@ mod tests {
     }
 
     #[test]
-    fn match_gui_action_excludes_release_webview_focus() {
-        let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(
-            r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
-            None
-        );
-    }
-
-    #[test]
     fn unmatched_chord_is_none() {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
@@ -1171,10 +1230,17 @@ mod tests {
     }
 
     #[test]
-    fn is_release_webview_focus_matches_default_chord() {
+    fn release_webview_focus_matches_default_chord() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert!(r.is_release_webview_focus(KeyCode::Escape, mods(true, true, false, false)));
-        assert!(!r.is_release_webview_focus(KeyCode::KeyV, mods(false, false, false, true)));
+        assert_eq!(
+            r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
+            Some(Shortcut::ReleaseWebviewFocus),
+            "the default release chord resolves through match_gui_action like any action",
+        );
+        assert_ne!(
+            r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
+            Some(Shortcut::ReleaseWebviewFocus),
+        );
     }
 
     #[test]
@@ -1210,7 +1276,7 @@ mod tests {
             prefix: vec![OzmuxShortcut {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
-                action: ShortcutAction::EnterCopyMode,
+                action: Shortcut::EnterCopyMode,
                 repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
@@ -1250,7 +1316,7 @@ mod tests {
         );
         assert!(matches!(
             step,
-            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterCopyMode)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }
@@ -1309,7 +1375,7 @@ mod tests {
         );
         assert!(matches!(
             second,
-            LeaderStep::RunAction(ShortcutAction::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterCopyMode)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }

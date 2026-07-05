@@ -1,28 +1,23 @@
 //! Host-side input for `AppMode::Default`: maintains the crate's
 //! `KeyboardDisabled` / `MouseDisabled` markers from the coarse guards (IME,
-//! focus, webview), and applies the frame's `ShortcutBatch` (resolved by
-//! `crate::input::dispatch::resolve_shortcuts`) by triggering the matching
-//! events on the focused terminal — copy-mode entry, the shared `[copy-mode]`
-//! key table (while copy mode is active), direct-chord and leader paste, and
-//! raw-key forwarding (`crate::action::terminal::PasteAction`,
-//! `TerminalKeyInput`). Quit and release-webview-focus are handled upstream in
-//! `resolve_shortcuts`; the pane/window actions are no-ops in Default mode.
+//! focus, webview). The frame's shortcut messages (resolved by
+//! `crate::input::keyboard::key_effect::classify_key_batch`) are applied by
+//! `crate::input::shortcuts::default_mode`'s per-message systems — copy-mode
+//! entry, the shared `[copy-mode]` key table (while copy mode is active),
+//! direct-chord and leader paste, and raw-key typing
+//! (`crate::action::terminal::PasteAction`, `TerminalKeyInput`). Quit and
+//! release-webview-focus are handled upstream; the pane/window actions are
+//! no-ops in Default mode.
 
 mod webview;
 
-use crate::action::terminal::PasteAction;
-use crate::action::vi::trigger_copy_mode_action;
 use crate::app_mode::AppMode;
 use crate::input::InputPhase;
-use crate::input::dispatch::{ShortcutBatch, ShortcutSet};
 use crate::input::focus::{KeyboardDisabled, MouseDisabled};
 use crate::input::ime::{ImeCommit, ImeState};
-use crate::input::keyboard::bevy_key_to_terminal_key;
-use crate::input::resolve::KeyEffect;
-use crate::input::shortcuts::Shortcuts;
 use crate::surface::OzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
-use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
+use crate::ui::copy_mode::CopyModeState;
 use crate::webview_pointer::topmost_surface_at;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -33,7 +28,6 @@ use ozma_tty_engine::{TerminalKey, TerminalKeyInput, TerminalModifiers};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
 use ozma_webview::{NonInteractive, Webview, webview_hit_at};
-use ozmux_configs::shortcuts::ShortcutAction;
 use ozmux_tmux::TmuxPane;
 
 /// Registers the host-side input systems for `AppMode::Default`.
@@ -47,13 +41,6 @@ impl Plugin for DefaultHostInputPlugin {
                 maintain_input_gates
                     .before(InputPhase::Hover)
                     .run_if(in_state(AppMode::Default)),
-            )
-            .add_systems(
-                Update,
-                apply_default_shortcuts
-                    .in_set(ShortcutSet::Apply)
-                    .run_if(in_state(AppMode::Default))
-                    .run_if(on_message::<ShortcutBatch>),
             )
             .add_observer(apply_ime_commit_to_terminal);
     }
@@ -158,94 +145,6 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
     Some(terminal)
 }
 
-/// Applies `AppMode::Default` keyboard shortcuts from the frame's
-/// `ShortcutBatch` (produced by `crate::input::dispatch::resolve_shortcuts`):
-/// triggers the matching events on `batch.focused` — copy-mode entry, paste
-/// (direct fires outside copy mode, leader fires unconditionally), the shared
-/// `[copy-mode]` key table, and raw-key typing. `Quit` and
-/// `ReleaseWebviewFocus` are handled upstream in `resolve_shortcuts`; the
-/// pane/window actions are no-ops in Default mode. Registered in
-/// `ShortcutSet::Apply`, gated on `in_state(AppMode::Default)` +
-/// `on_message::<ShortcutBatch>`.
-fn apply_default_shortcuts(
-    mut commands: Commands,
-    mut batches: MessageReader<ShortcutBatch>,
-    shortcuts: Res<Shortcuts>,
-) {
-    for batch in batches.read() {
-        let terminal_mods = TerminalModifiers {
-            ctrl: batch.mods.ctrl,
-            shift: batch.mods.shift,
-            alt: batch.mods.alt,
-            meta: batch.mods.meta,
-        };
-        for effect in &batch.effects {
-            match effect {
-                KeyEffect::Action {
-                    action: ShortcutAction::EnterCopyMode,
-                    ..
-                } => {
-                    if let Some(entity) = batch.focused {
-                        commands.trigger(EnterCopyModeActionEvent { entity });
-                    }
-                }
-                KeyEffect::Action {
-                    action: ShortcutAction::Paste,
-                    via_leader,
-                } => {
-                    if let Some(entity) = batch.focused
-                        && (*via_leader || !batch.in_copy_mode)
-                    {
-                        commands.trigger(PasteAction { entity });
-                    }
-                }
-                KeyEffect::Action {
-                    action:
-                        ShortcutAction::DetachSession
-                        | ShortcutAction::SelectPane(_)
-                        | ShortcutAction::SplitPane(_)
-                        | ShortcutAction::KillPane
-                        | ShortcutAction::ZoomPane
-                        | ShortcutAction::NewWindow
-                        | ShortcutAction::KillWindow
-                        | ShortcutAction::NextWindow
-                        | ShortcutAction::PreviousWindow
-                        | ShortcutAction::SelectWindow(_)
-                        | ShortcutAction::RenameWindow
-                        | ShortcutAction::RenameSession
-                        | ShortcutAction::Quit
-                        | ShortcutAction::ReleaseWebviewFocus,
-                    ..
-                } => {}
-                KeyEffect::CopyMode(action) => {
-                    if let Some(entity) = batch.focused {
-                        trigger_copy_mode_action(&mut commands, entity, *action);
-                    }
-                }
-                KeyEffect::Type { logical, key_code } => {
-                    // NOTE: a chord withheld from the PTY must never be typed.
-                    // The release-webview-focus chord is the one direct chord the
-                    // decider emits as `Type` (all others resolve to `Action`),
-                    // so the applier drops it here rather than forward it to the
-                    // terminal; tmux forwards it instead.
-                    if let Some(entity) = batch.focused
-                        && !shortcuts.is_release_webview_focus(*key_code, batch.mods)
-                        && let Some(key) = bevy_key_to_terminal_key(logical)
-                    {
-                        commands.trigger(TerminalKeyInput {
-                            entity,
-                            key,
-                            modifiers: terminal_mods,
-                        });
-                    }
-                }
-                KeyEffect::WebviewForward { .. } => {}
-                KeyEffect::ReleaseWebviewFocus => {}
-            }
-        }
-    }
-}
-
 fn apply_ime_commit_to_terminal(
     ev: On<ImeCommit>,
     mut commands: Commands,
@@ -268,14 +167,20 @@ fn apply_ime_commit_to_terminal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::shortcuts::test_shortcuts_with_direct_chord;
+    use crate::action::terminal::PasteAction;
+    use crate::input::keyboard::key_effect::KeyEffect;
+    use crate::input::shortcuts::default_mode::{
+        apply_default_copy_mode, apply_default_shortcuts, apply_default_type,
+    };
+    use crate::input::shortcuts::{CopyModeMessage, ShortcutMessage, Shortcuts, TypeMessage};
+    use crate::ui::copy_mode::EnterCopyModeActionEvent;
     use bevy::app::App;
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
     use bevy::prelude::{Entity, MinimalPlugins, On, ResMut};
     use bevy::window::PrimaryWindow;
     use ozma_tty_engine::TerminalKey;
-    use ozmux_configs::shortcuts::Modifiers;
+    use ozmux_configs::shortcuts::{Modifiers, Shortcut};
     use ozmux_tmux::{PaneId, TmuxPane};
     use tmux_control_parser::CellDims;
 
@@ -465,15 +370,26 @@ mod tests {
         keys: Vec<TerminalKey>,
     }
 
-    /// Builds an app running `apply_default_shortcuts` as a bare
-    /// `ShortcutBatch` consumer, capturing the events it triggers.
+    /// Builds an app running the three Default appliers as bare
+    /// per-message consumers, capturing the events they trigger.
     fn build_default_dispatch_app(shortcuts: Shortcuts) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<ShortcutBatch>()
+            .add_message::<ShortcutMessage>()
+            .add_message::<CopyModeMessage>()
+            .add_message::<TypeMessage>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
-            .add_systems(Update, apply_default_shortcuts)
+            .add_systems(
+                Update,
+                (
+                    apply_default_shortcuts,
+                    apply_default_copy_mode.after(apply_default_shortcuts),
+                    apply_default_type
+                        .after(apply_default_shortcuts)
+                        .after(apply_default_copy_mode),
+                ),
+            )
             .add_observer(
                 |_ev: On<EnterCopyModeActionEvent>, mut c: ResMut<Captured>| {
                     c.copy_mode += 1;
@@ -510,12 +426,31 @@ mod tests {
         in_copy_mode: bool,
         mods: Modifiers,
     ) {
-        app.world_mut().write_message(ShortcutBatch {
-            effects,
-            focused,
-            in_copy_mode,
-            mods,
-        });
+        for effect in effects {
+            match effect {
+                KeyEffect::Shortcut { action, via_leader } => {
+                    app.world_mut().write_message(ShortcutMessage {
+                        action,
+                        via_leader,
+                        focused,
+                        in_copy_mode,
+                    });
+                }
+                KeyEffect::CopyMode(action) => {
+                    app.world_mut()
+                        .write_message(CopyModeMessage { action, focused });
+                }
+                KeyEffect::Type { logical, key_code } => {
+                    app.world_mut().write_message(TypeMessage {
+                        logical,
+                        key_code,
+                        focused,
+                        mods,
+                    });
+                }
+                KeyEffect::WebviewForward { .. } => {}
+            }
+        }
         app.update();
     }
 
@@ -523,8 +458,8 @@ mod tests {
         KeyEffect::Type { logical, key_code }
     }
 
-    fn action_effect(action: ShortcutAction, via_leader: bool) -> KeyEffect {
-        KeyEffect::Action { action, via_leader }
+    fn action_effect(action: Shortcut, via_leader: bool) -> KeyEffect {
+        KeyEffect::Shortcut { action, via_leader }
     }
 
     #[test]
@@ -549,7 +484,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::ZoomPane, true)],
+            vec![action_effect(Shortcut::ZoomPane, true)],
             Some(term),
             false,
             Modifiers::default(),
@@ -567,7 +502,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::Paste, false)],
+            vec![action_effect(Shortcut::Paste, false)],
             Some(term),
             false,
             meta_mods(),
@@ -584,7 +519,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::Paste, false)],
+            vec![action_effect(Shortcut::Paste, false)],
             Some(term),
             true,
             meta_mods(),
@@ -601,7 +536,7 @@ mod tests {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::Paste, true)],
+            vec![action_effect(Shortcut::Paste, true)],
             Some(term),
             true,
             Modifiers::default(),
@@ -614,40 +549,11 @@ mod tests {
     }
 
     #[test]
-    fn release_webview_chord_is_not_typed() {
-        let ctrl_shift = Modifiers {
-            ctrl: true,
-            shift: true,
-            alt: false,
-            meta: false,
-        };
-        let (mut app, term) = default_dispatch_app(test_shortcuts_with_direct_chord(
-            KeyCode::Escape,
-            ctrl_shift,
-            ShortcutAction::ReleaseWebviewFocus,
-        ));
-        dispatch(
-            &mut app,
-            vec![type_effect(Key::Escape, KeyCode::Escape)],
-            Some(term),
-            false,
-            ctrl_shift,
-        );
-        let c = app.world().resource::<Captured>();
-        assert_eq!(
-            (c.copy_mode, c.paste, c.keys.len()),
-            (0, 0, 0),
-            "with no webview focused the release chord (Ctrl+Shift+Escape) must be dropped by \
-             the applier, never typed into the PTY as Escape"
-        );
-    }
-
-    #[test]
     fn enter_copy_mode_fires_even_when_already_in_copy_mode() {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(ShortcutAction::EnterCopyMode, false)],
+            vec![action_effect(Shortcut::EnterCopyMode, false)],
             Some(term),
             true,
             Modifiers::default(),
