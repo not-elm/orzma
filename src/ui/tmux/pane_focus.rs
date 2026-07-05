@@ -8,6 +8,7 @@
 
 use crate::app_mode::TmuxActiveSet;
 use crate::configs::OzmuxConfigsResource;
+use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
 use bevy::prelude::*;
 use bevy::ui::FocusPolicy;
@@ -26,7 +27,15 @@ impl Plugin for PaneFocusPlugin {
             (
                 augment_tmux_pane.after(TmuxProjectionSet),
                 sync_inactive_pane_style.run_if(pane_active_state_changed),
-                sync_keyboard_focus_to_active_pane.run_if(pane_active_state_changed),
+                // NOTE: both edges are load-bearing. `.after(TmuxProjectionSet)`
+                // runs the mirror once `ActivePane` is fresh; `.before(FocusedKey)`
+                // flushes the deferred `KeyboardFocused` insert before
+                // `resolve_shortcuts` reads it, so `batch.focused` reflects the
+                // current active pane the same frame it changes.
+                sync_keyboard_focus_to_active_pane
+                    .run_if(pane_active_state_changed)
+                    .after(TmuxProjectionSet)
+                    .before(InputPhase::FocusedKey),
             )
                 .in_set(TmuxActiveSet),
         );
@@ -92,7 +101,12 @@ fn sync_inactive_pane_style(
 /// the host's bridge from the multiplexer's active-pane notion to the terminal
 /// crate's single focus marker (which `ozma_webview` and IME/title read).
 /// Writes conditionally so change detection fires only on real changes.
-fn sync_keyboard_focus_to_active_pane(
+///
+/// `pub(crate)` so the resolve/apply dispatch regression test
+/// (`crate::input::dispatch`) can register it to assert the
+/// `.before(InputPhase::FocusedKey)` mirror edge keeps `KeyboardFocused`
+/// fresh for `resolve_shortcuts`.
+pub(crate) fn sync_keyboard_focus_to_active_pane(
     mut commands: Commands,
     panes: Query<(Entity, Has<ActivePane>, Has<KeyboardFocused>), With<TmuxPane>>,
 ) {

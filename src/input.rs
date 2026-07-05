@@ -4,6 +4,7 @@
 
 mod bindings;
 pub(crate) mod default_mode;
+mod dispatch;
 pub(crate) mod focus;
 mod gesture;
 pub(crate) mod hyperlink;
@@ -17,9 +18,9 @@ pub(crate) mod tmux;
 
 use crate::{
     input::{
-        default_mode::DefaultHostInputPlugin, keyboard::KeyboardInputPlugin,
-        mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
-        tmux::TmuxInputPlugin,
+        default_mode::DefaultHostInputPlugin, dispatch::DispatchPlugin,
+        keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
+        shortcuts::ShortcutsPlugin, tmux::TmuxInputPlugin,
     },
     system_set::OzmuxSystems,
 };
@@ -50,6 +51,7 @@ impl Plugin for OzmuxInputPlugin {
             OptionAsAltPlugin,
             KeyboardInputPlugin,
             MouseInputPlugin,
+            DispatchPlugin,
             TmuxInputPlugin,
             DefaultHostInputPlugin,
         ))

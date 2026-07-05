@@ -25,24 +25,19 @@ use crate::action::tmux::{
     PreviousWindowRequest, RenameSessionRequest, RenameWindowRequest, SelectPaneRequest,
     SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
 };
-use crate::action::vi::{ResolvedCopyModeKeys, trigger_copy_mode_action};
+use crate::action::vi::trigger_copy_mode_action;
 use crate::app_mode::{AppMode, TmuxActiveSet};
 use crate::configs::OzmuxConfigsResource;
 use crate::input::InputPhase;
-use crate::input::current_modifiers;
-use crate::input::ime::ImeState;
-use crate::input::resolve::{BatchContext, KeyEffect, classify_key_batch};
-use crate::input::shortcuts::{LeaderGate, LeaderPhase, Shortcuts, clear_leader_phase};
+use crate::input::dispatch::{ShortcutBatch, ShortcutSet};
+use crate::input::resolve::KeyEffect;
 use crate::ui::copy_mode::{CopyModeState, EnterCopyModeActionEvent};
 use crate::ui::copy_search::CopyPrompt;
-use crate::ui::tmux::confirm_prompt::ConfirmState;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::webview_pointer::{webview_wheel_delta, webview_wheel_target};
 use bevy::ecs::system::SystemParam;
-use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
-use bevy::time::Real;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
@@ -50,13 +45,13 @@ use bevy_cef_core::prelude::Browsers;
 use ozma_tty_engine::{Coalescer, TermMode, TerminalHandle};
 use ozma_tty_renderer::TerminalCellMetricsResource;
 use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{ForwardKeys, NonInteractive, Webview};
+use ozma_webview::{NonInteractive, Webview};
 use ozmux_configs::shortcuts::{
     PaneDirection as CfgPaneDirection, ShortcutAction, SplitOrientation as CfgSplitOrientation,
 };
 use ozmux_tmux::{
-    ActivePane, ActiveWindow, KeyMods, PaneDirection, SplitDirection, TmuxClient, TmuxCommand,
-    TmuxPane, TmuxSession, TmuxWindow, bevy_key_to_tmux_name,
+    ActiveWindow, KeyMods, PaneDirection, SplitDirection, TmuxClient, TmuxCommand, TmuxPane,
+    TmuxSession, TmuxWindow, bevy_key_to_tmux_name,
 };
 
 /// Registers the tmux keyboard-forwarding and mouse-wheel systems.
@@ -68,10 +63,9 @@ impl Plugin for InputPlugin {
             Update,
             (
                 apply_tmux_shortcuts
-                    .in_set(InputPhase::FocusedKey)
-                    .in_set(LeaderGate::Advance)
+                    .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Tmux))
-                    .run_if(on_message::<KeyboardInput>),
+                    .run_if(on_message::<ShortcutBatch>),
                 forward_wheel_to_tmux
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
@@ -81,141 +75,83 @@ impl Plugin for InputPlugin {
     }
 }
 
-/// Applies `AppMode::Tmux` keyboard shortcuts: resolves the frame's pressed keys
-/// through the pure `classify_key_batch` decider, then triggers the matching
-/// events on the active pane / session / window — Quit (`AppExit`), copy-mode
-/// entry, paste (`PasteAction`, applied by `on_paste_tmux`), detach
+/// Applies `AppMode::Tmux` keyboard shortcuts from the frame's `ShortcutBatch`
+/// (produced by `crate::input::dispatch::resolve_shortcuts`): triggers the
+/// matching events on the active pane (`batch.focused`) / session / window —
+/// copy-mode entry, paste (`PasteAction`, applied by `on_paste_tmux`), detach
 /// (`DetachSessionRequest`), the pane/window action requests, the shared
 /// `[copy-mode]` key table, and raw-key forwarding batched into one
-/// `ForwardPaneKeysRequest` per frame. Registered in `InputPhase::FocusedKey` /
-/// `LeaderGate::Advance`, gated on `in_state(AppMode::Tmux)` +
-/// `on_message::<KeyboardInput>`.
+/// `ForwardPaneKeysRequest` per frame. `Quit` and `ReleaseWebviewFocus` are
+/// handled upstream in `resolve_shortcuts`. Registered in `ShortcutSet::Apply`,
+/// gated on `in_state(AppMode::Tmux)` + `on_message::<ShortcutBatch>`.
 fn apply_tmux_shortcuts(
     mut commands: Commands,
-    mut exit: MessageWriter<AppExit>,
-    mut events: MessageReader<KeyboardInput>,
-    mut focused_webview: ResMut<FocusedWebview>,
-    mut leader_phase: ResMut<LeaderPhase>,
-    (copy_prompt, confirm_state, rename_prompt, ime): (
-        Res<CopyPrompt>,
-        Option<Res<ConfirmState>>,
-        Option<Res<RenamePrompt>>,
-        Res<ImeState>,
-    ),
-    shortcuts: Res<Shortcuts>,
-    resolved_copy: Res<ResolvedCopyModeKeys>,
-    bevy_keys: Res<ButtonInput<KeyCode>>,
-    time: Res<Time<Real>>,
+    mut batches: MessageReader<ShortcutBatch>,
     targets: ActionTargets,
-    active_pane: Option<Single<Entity, (With<ActivePane>, With<TmuxPane>)>>,
-    copy_modes: Query<(), With<CopyModeState>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    forward_keys: Query<&ForwardKeys>,
 ) {
-    // NOTE: each of these modal owners (copy-mode prompt, confirm-before prompt,
-    // rename prompt) holds the keyboard and reads raw keys in its own system;
-    // while composing, replaying preedit keys would garble IME + double-send; an
-    // unfocused window must not act. Drain (don't replay) so no key leaks to
-    // tmux, the pane, or the prefix state machine.
-    if copy_prompt.open.is_some()
-        || confirm_state.is_some()
-        || rename_prompt.is_some()
-        || ime.is_composing()
-        || !windows.single().map(|w| w.focused).unwrap_or(false)
-    {
-        clear_leader_phase(&mut leader_phase);
-        events.clear();
-        return;
-    }
-
-    let active_entity = active_pane.map(|pane| *pane);
-    let in_copy_mode = active_entity.is_some_and(|entity| copy_modes.get(entity).is_ok());
-    let forward_chords = focused_webview
-        .0
-        .and_then(|entity| forward_keys.get(entity).ok())
-        .map(|chords| chords.0.as_slice())
-        .unwrap_or(&[]);
-    let mods = current_modifiers(&bevy_keys);
-    let kmods = KeyMods {
-        ctrl: mods.ctrl,
-        shift: mods.shift,
-        alt: mods.alt,
-        super_: mods.meta,
-    };
-    let ctx = BatchContext {
-        mods,
-        now: time.elapsed(),
-        in_copy_mode,
-        webview_focused: focused_webview.0.is_some(),
-        forward_chords,
-    };
-    let effects = classify_key_batch(
-        &mut leader_phase,
-        &shortcuts,
-        &resolved_copy,
-        events.read(),
-        ctx,
-    );
-
-    let mut names: Vec<String> = Vec::new();
-    for effect in effects {
-        match effect {
-            KeyEffect::Action {
-                action: ShortcutAction::Quit,
-                ..
-            } => {
-                exit.write(AppExit::Success);
-            }
-            KeyEffect::Action {
-                action: ShortcutAction::EnterCopyMode,
-                ..
-            } => {
-                // NOTE: re-entry guard — re-triggering while already in copy mode
-                // would double-insert CopyModeState and re-enter vi mode.
-                if let Some(entity) = active_entity
-                    && !in_copy_mode
-                {
-                    commands.trigger(EnterCopyModeActionEvent { entity });
+    for batch in batches.read() {
+        let kmods = KeyMods {
+            ctrl: batch.mods.ctrl,
+            shift: batch.mods.shift,
+            alt: batch.mods.alt,
+            super_: batch.mods.meta,
+        };
+        let mut names: Vec<String> = Vec::new();
+        for effect in &batch.effects {
+            match effect {
+                KeyEffect::Action {
+                    action: ShortcutAction::EnterCopyMode,
+                    ..
+                } => {
+                    // NOTE: re-entry guard — re-triggering while already in copy
+                    // mode would double-insert CopyModeState and re-enter vi mode.
+                    if let Some(entity) = batch.focused
+                        && !batch.in_copy_mode
+                    {
+                        commands.trigger(EnterCopyModeActionEvent { entity });
+                    }
                 }
-            }
-            KeyEffect::Action {
-                action: ShortcutAction::Paste,
-                ..
-            } => {
-                if let Some(entity) = active_entity {
-                    commands.trigger(PasteAction { entity });
+                KeyEffect::Action {
+                    action: ShortcutAction::Paste,
+                    ..
+                } => {
+                    if let Some(entity) = batch.focused {
+                        commands.trigger(PasteAction { entity });
+                    }
                 }
-            }
-            KeyEffect::Action {
-                action: ShortcutAction::DetachSession,
-                ..
-            } => {
-                if let Ok(entity) = targets.session.single() {
-                    commands.trigger(DetachSessionRequest { entity });
+                KeyEffect::Action {
+                    action: ShortcutAction::DetachSession,
+                    ..
+                } => {
+                    if let Ok(entity) = targets.session.single() {
+                        commands.trigger(DetachSessionRequest { entity });
+                    }
                 }
-            }
-            KeyEffect::Action { action, .. } => {
-                dispatch_tmux_action(&mut commands, action, active_entity, &targets);
-            }
-            KeyEffect::CopyMode(action) => {
-                if let Some(entity) = active_entity {
-                    trigger_copy_mode_action(&mut commands, entity, action);
+                KeyEffect::Action { action, .. } => {
+                    dispatch_tmux_action(&mut commands, *action, batch.focused, &targets);
                 }
-            }
-            KeyEffect::Type { logical, key_code }
-            | KeyEffect::WebviewForward { logical, key_code } => {
-                if let Some(name) = bevy_key_to_tmux_name(&logical, key_code, kmods) {
-                    names.push(name);
+                KeyEffect::CopyMode(action) => {
+                    if let Some(entity) = batch.focused {
+                        trigger_copy_mode_action(&mut commands, entity, *action);
+                    }
                 }
+                KeyEffect::Type { logical, key_code }
+                | KeyEffect::WebviewForward { logical, key_code } => {
+                    if let Some(name) = bevy_key_to_tmux_name(logical, *key_code, kmods) {
+                        names.push(name);
+                    }
+                }
+                // Handled upstream in `resolve_shortcuts`; never reaches the
+                // batch, but the arm stays for exhaustiveness.
+                KeyEffect::ReleaseWebviewFocus => {}
             }
-            KeyEffect::ReleaseWebviewFocus => focused_webview.0 = None,
         }
-    }
 
-    if let Some(entity) = active_entity
-        && !names.is_empty()
-    {
-        commands.trigger(ForwardPaneKeysRequest { entity, names });
+        if let Some(entity) = batch.focused
+            && !names.is_empty()
+        {
+            commands.trigger(ForwardPaneKeysRequest { entity, names });
+        }
     }
 }
 
@@ -685,16 +621,11 @@ fn consume_wheel_notches(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::shortcuts::{
-        test_shortcuts_with_direct_chord, test_shortcuts_with_repeat_prefix,
-    };
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::input::ButtonState;
-    use bevy::input::keyboard::Key;
+    use bevy::input::keyboard::{Key, KeyCode};
     use bevy::input::mouse::MouseScrollUnit;
     use ozmux_configs::shortcuts::Modifiers;
-    use ozmux_tmux::PaneId;
-    use std::time::Duration;
+    use ozmux_tmux::{ActivePane, PaneId};
 
     #[test]
     fn wheel_copy_mode_pane_owner_ignores_screen_and_mode_bits() {
@@ -1110,48 +1041,23 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct TmuxCaptured {
-        quit: u32,
         select_pane: Vec<(Entity, PaneDirection)>,
         select_window: Vec<Entity>,
         detach: Vec<Entity>,
         forward: Vec<(Entity, Vec<String>)>,
     }
 
-    fn capture_tmux_app_exit(
-        mut exits: MessageReader<AppExit>,
-        mut captured: ResMut<TmuxCaptured>,
-    ) {
-        captured.quit += exits.read().count() as u32;
-    }
-
-    fn meta_only() -> Modifiers {
-        Modifiers {
-            ctrl: false,
-            shift: false,
-            alt: false,
-            meta: true,
-        }
-    }
-
-    /// Builds an app running `apply_tmux_shortcuts` with a focused window and a
-    /// single `ActivePane` tmux pane, capturing the action requests it triggers.
-    fn tmux_dispatch_app(shortcuts: Shortcuts) -> (App, Entity) {
+    /// Builds an app running `apply_tmux_shortcuts` as a bare `ShortcutBatch`
+    /// consumer with one tmux pane (the active pane / `batch.focused`),
+    /// capturing the action requests it triggers.
+    fn tmux_dispatch_app() -> (App, Entity) {
         use tmux_control_parser::CellDims;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_message::<KeyboardInput>()
-            .add_message::<AppExit>()
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<ImeState>()
-            .init_resource::<FocusedWebview>()
-            .init_resource::<LeaderPhase>()
-            .init_resource::<ResolvedCopyModeKeys>()
-            .init_resource::<CopyPrompt>()
+            .add_message::<ShortcutBatch>()
             .init_resource::<TmuxCaptured>()
-            .insert_resource(shortcuts)
             .add_systems(Update, apply_tmux_shortcuts)
-            .add_systems(Update, capture_tmux_app_exit.after(apply_tmux_shortcuts))
             .add_observer(|ev: On<SelectPaneRequest>, mut c: ResMut<TmuxCaptured>| {
                 c.select_pane.push((ev.entity, ev.direction));
             })
@@ -1168,88 +1074,70 @@ mod tests {
                     c.forward.push((ev.entity, ev.names.clone()));
                 },
             );
-        app.world_mut().spawn((
-            Window {
-                focused: true,
-                ..default()
-            },
-            PrimaryWindow,
-        ));
         let pane = app
             .world_mut()
-            .spawn((
-                ActivePane,
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 80,
-                        height: 24,
-                        xoff: 0,
-                        yoff: 0,
-                    },
+            .spawn(TmuxPane {
+                id: PaneId(1),
+                dims: CellDims {
+                    width: 80,
+                    height: 24,
+                    xoff: 0,
+                    yoff: 0,
                 },
-            ))
+            })
             .id();
         (app, pane)
     }
 
-    fn send_tmux_key(app: &mut App, key_code: KeyCode, logical: Key) {
-        app.world_mut().write_message(KeyboardInput {
-            key_code,
-            logical_key: logical,
-            state: ButtonState::Pressed,
-            text: None,
-            repeat: false,
-            window: Entity::PLACEHOLDER,
+    fn dispatch(app: &mut App, effects: Vec<KeyEffect>, focused: Option<Entity>) {
+        app.world_mut().write_message(ShortcutBatch {
+            effects,
+            focused,
+            in_copy_mode: false,
+            mods: Modifiers::default(),
         });
+        app.update();
     }
 
     #[test]
-    fn leader_h_triggers_select_pane_left() {
-        let (mut app, pane) = tmux_dispatch_app(test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyH,
-            ShortcutAction::SelectPane(CfgPaneDirection::Left),
-            Duration::ZERO,
-        ));
-        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
-        send_tmux_key(&mut app, KeyCode::KeyH, Key::Character("h".into()));
-        app.update();
+    fn select_pane_targets_active_pane() {
+        let (mut app, pane) = tmux_dispatch_app();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Action {
+                action: ShortcutAction::SelectPane(CfgPaneDirection::Left),
+                via_leader: true,
+            }],
+            Some(pane),
+        );
         assert_eq!(
             app.world().resource::<TmuxCaptured>().select_pane,
             vec![(pane, PaneDirection::Left)],
-            "a leader-scoped SelectPane(Left) must trigger SelectPaneRequest on the active pane"
-        );
-    }
-
-    #[test]
-    fn quit_writes_appexit() {
-        let (mut app, _pane) = tmux_dispatch_app(test_shortcuts_with_direct_chord(
-            KeyCode::KeyQ,
-            meta_only(),
-            ShortcutAction::Quit,
-        ));
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::SuperLeft);
-        send_tmux_key(&mut app, KeyCode::KeyQ, Key::Character("q".into()));
-        app.update();
-        assert_eq!(
-            app.world().resource::<TmuxCaptured>().quit,
-            1,
-            "the quit chord must write AppExit::Success"
+            "a SelectPane(Left) effect must trigger SelectPaneRequest on batch.focused (active pane)"
         );
     }
 
     #[test]
     fn plain_keys_batch_into_one_forward_request() {
-        let (mut app, pane) = tmux_dispatch_app(Shortcuts::default());
-        send_tmux_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
-        send_tmux_key(&mut app, KeyCode::KeyB, Key::Character("b".into()));
-        app.update();
+        let (mut app, pane) = tmux_dispatch_app();
+        dispatch(
+            &mut app,
+            vec![
+                KeyEffect::Type {
+                    logical: Key::Character("a".into()),
+                    key_code: KeyCode::KeyA,
+                },
+                KeyEffect::Type {
+                    logical: Key::Character("b".into()),
+                    key_code: KeyCode::KeyB,
+                },
+            ],
+            Some(pane),
+        );
         assert_eq!(
             app.world().resource::<TmuxCaptured>().forward,
             vec![(pane, vec!["a".to_string(), "b".to_string()])],
-            "plain keys in one frame must batch into a single ForwardPaneKeysRequest"
+            "Type effects in one batch must batch into a single ForwardPaneKeysRequest"
         );
     }
 
@@ -1257,16 +1145,7 @@ mod tests {
     fn detach_triggers_detach_session_request() {
         use tmux_control_parser::SessionId;
 
-        let (mut app, _pane) = tmux_dispatch_app(test_shortcuts_with_direct_chord(
-            KeyCode::KeyD,
-            Modifiers {
-                ctrl: true,
-                shift: true,
-                alt: false,
-                meta: false,
-            },
-            ShortcutAction::DetachSession,
-        ));
+        let (mut app, pane) = tmux_dispatch_app();
         let session = app
             .world_mut()
             .spawn(TmuxSession {
@@ -1274,17 +1153,18 @@ mod tests {
                 name: "main".into(),
             })
             .id();
-        {
-            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.press(KeyCode::ControlLeft);
-            keys.press(KeyCode::ShiftLeft);
-        }
-        send_tmux_key(&mut app, KeyCode::KeyD, Key::Character("d".into()));
-        app.update();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Action {
+                action: ShortcutAction::DetachSession,
+                via_leader: false,
+            }],
+            Some(pane),
+        );
         assert_eq!(
             app.world().resource::<TmuxCaptured>().detach,
             vec![session],
-            "the detach chord must trigger DetachSessionRequest on the session"
+            "a DetachSession effect must trigger DetachSessionRequest on the session"
         );
     }
 
@@ -1292,11 +1172,7 @@ mod tests {
     fn select_window_targets_indexed_window() {
         use tmux_control_parser::WindowId;
 
-        let (mut app, _pane) = tmux_dispatch_app(test_shortcuts_with_direct_chord(
-            KeyCode::Digit2,
-            meta_only(),
-            ShortcutAction::SelectWindow(2),
-        ));
+        let (mut app, pane) = tmux_dispatch_app();
         app.world_mut().spawn(TmuxWindow {
             id: WindowId(1),
             index: 1,
@@ -1310,11 +1186,14 @@ mod tests {
                 name: "two".into(),
             })
             .id();
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::SuperLeft);
-        send_tmux_key(&mut app, KeyCode::Digit2, Key::Character("2".into()));
-        app.update();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Action {
+                action: ShortcutAction::SelectWindow(2),
+                via_leader: false,
+            }],
+            Some(pane),
+        );
         assert_eq!(
             app.world().resource::<TmuxCaptured>().select_window,
             vec![window_two],

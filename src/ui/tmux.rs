@@ -7,7 +7,7 @@ pub(crate) mod rename_prompt;
 pub(crate) mod window_bar;
 
 mod divider_handle;
-mod pane_focus;
+pub(crate) mod pane_focus;
 
 use bevy::prelude::*;
 use confirm_prompt::ConfirmPromptPlugin;
