@@ -826,7 +826,6 @@ mod tests {
 
     #[test]
     fn webview_idle_leader_chord_engages_and_suppresses() {
-        // The fixture's leader is the Ctrl+A chord.
         let sc = test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
             ShortcutAction::EnterCopyMode,

@@ -225,6 +225,7 @@ mod tests {
     use bevy::input::keyboard::Key;
     use bevy::state::app::StatesPlugin;
     use ozmux_tmux::{PaneId, TmuxPane};
+    use std::time::Duration;
     use tmux_control_parser::CellDims;
 
     #[derive(Resource, Default)]
@@ -510,7 +511,7 @@ mod tests {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
             ShortcutAction::EnterCopyMode,
-            std::time::Duration::ZERO,
+            Duration::ZERO,
         ));
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
@@ -533,7 +534,7 @@ mod tests {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
             ShortcutAction::EnterCopyMode,
-            std::time::Duration::ZERO,
+            Duration::ZERO,
         ));
         app.world_mut().spawn((OzmaTerminal, KeyboardFocused));
         let webview = app.world_mut().spawn_empty().id();
@@ -543,7 +544,6 @@ mod tests {
             KeyCode::KeyS,
             ModifiersState::default(),
         )]);
-        // Window unfocused → coarse guard fires.
         {
             let mut windows = app
                 .world_mut()
@@ -573,7 +573,6 @@ mod tests {
             KeyCode::KeyS,
             ModifiersState::default(),
         )]);
-        // No webview focused; a plain key claims nothing.
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert!(
