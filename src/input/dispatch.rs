@@ -41,10 +41,6 @@ pub(in crate::input) struct ShortcutBatch {
     pub(in crate::input) in_copy_mode: bool,
     /// The frame's modifier snapshot, shared by every effect in the batch.
     pub(in crate::input) mods: Modifiers,
-    /// The `AppMode` this batch was resolved under; each per-mode applier
-    /// ignores batches stamped with the other mode (see `apply_default_shortcuts`
-    /// for the cross-mode-replay hazard this guards).
-    pub(in crate::input) mode: AppMode,
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
@@ -185,7 +181,6 @@ fn resolve_shortcuts(
         focused,
         in_copy_mode,
         mods,
-        mode,
     });
 }
 

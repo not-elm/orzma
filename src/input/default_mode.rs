@@ -173,16 +173,6 @@ fn apply_default_shortcuts(
     shortcuts: Res<Shortcuts>,
 ) {
     for batch in batches.read() {
-        // NOTE: skip a batch stamped with the other mode. `Messages<ShortcutBatch>`
-        // double-buffers ~2 frames, so one frame after a Tmux->Default transition
-        // (with no fresh KeyboardInput that frame) this applier — newly ungated by
-        // `in_state` — would otherwise replay a still-buffered Tmux-resolved batch
-        // against a `focused` entity resolved under the old mode (possibly
-        // despawned). `.read()` still advances the cursor, so the stale batch is
-        // consumed-and-skipped here, not re-replayed next frame.
-        if batch.mode != AppMode::Default {
-            continue;
-        }
         let terminal_mods = TerminalModifiers {
             ctrl: batch.mods.ctrl,
             shift: batch.mods.shift,
@@ -525,7 +515,6 @@ mod tests {
             focused,
             in_copy_mode,
             mods,
-            mode: AppMode::Default,
         });
         app.update();
     }

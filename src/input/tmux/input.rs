@@ -90,15 +90,6 @@ fn apply_tmux_shortcuts(
     targets: ActionTargets,
 ) {
     for batch in batches.read() {
-        // NOTE: skip a batch stamped with the other mode — see the cross-mode
-        // replay hazard documented on `apply_default_shortcuts`. `Messages`
-        // double-buffers ~2 frames, so one frame after a Default->Tmux transition
-        // this applier would otherwise replay a still-buffered Default-resolved
-        // batch. `.read()` advances the cursor, consuming-and-skipping the stale
-        // batch rather than re-replaying it.
-        if batch.mode != AppMode::Tmux {
-            continue;
-        }
         let kmods = KeyMods {
             ctrl: batch.mods.ctrl,
             shift: batch.mods.shift,
@@ -1102,7 +1093,6 @@ mod tests {
             focused,
             in_copy_mode: false,
             mods: Modifiers::default(),
-            mode: AppMode::Tmux,
         });
         app.update();
     }
