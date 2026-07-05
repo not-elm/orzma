@@ -48,8 +48,9 @@ impl Plugin for KeyboardHandlerPlugin {
     }
 }
 
-/// The modal-guard and mode inputs `resolve_shortcuts` reads: the tmux modal
-/// prompts, IME state, and the active `AppMode` stamped onto each batch.
+/// The modal-guard and mode inputs `resolve_key_effects` reads: the tmux modal
+/// prompts, IME state, and the active `AppMode` that gates the tmux-only prompt
+/// guards.
 #[derive(SystemParam)]
 struct ModalGuards<'w> {
     copy_prompt: Res<'w, CopyPrompt>,
