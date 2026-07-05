@@ -2,13 +2,13 @@
 //! `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it now runs
 //! on every tmux pane, gated off solely by `MouseDisabled`): an inline webview
 //! under the pointer (forwarded to CEF), a copy-mode pane (scrolled directly
-//! via `TerminalHandle::scroll`), and the alt-screen residual where ozma's
+//! via `TerminalHandle::scroll`), and the alt-screen residual where orzma's
 //! viewport scroll would no-op (cursor-key `send-keys`). Events accumulate
 //! into cell-deltas (so trackpad / high-resolution `Pixel` scrolling
 //! quantizes the same way the native terminal path does); every other case is
-//! ceded to ozma.
+//! ceded to orzma.
 
-use crate::configs::OzmuxConfigsResource;
+use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::mouse::webview::{webview_wheel_delta, webview_wheel_target};
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
@@ -22,11 +22,11 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_tty_engine::{Coalescer, TermMode, TerminalHandle};
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{NonInteractive, Webview};
-use ozmux_tmux::{TmuxClient, TmuxCommand, TmuxPane};
+use orzma_tmux::{TmuxClient, TmuxCommand, TmuxPane};
+use orzma_tty_engine::{Coalescer, TermMode, TerminalHandle};
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::prelude::TerminalOverlays;
+use orzma_webview::{NonInteractive, Webview};
 
 /// Registers the tmux mouse-wheel forwarding system.
 pub(super) struct MouseWheelTmuxPlugin;
@@ -134,27 +134,27 @@ fn resolve_tmux_webview_wheel_target(
 /// Which layer owns a wheel gesture over a tmux pane.
 ///
 /// `forward_wheel_to_tmux` handles only `CopyMode` and `AltScreenResidual`;
-/// every other case is `CededToOzma` — `crate::input::mouse::wheel::dispatch_mouse_wheel`
+/// every other case is `CededToOrzma` — `crate::input::mouse::wheel::dispatch_mouse_wheel`
 /// runs on the same pane (gated off only by `MouseDisabled`) and owns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WheelOwner {
     /// Copy-mode pane: `forward_wheel_to_tmux` scrolls the local
-    /// `TerminalHandle` directly. These panes carry `MouseDisabled`, so ozma
+    /// `TerminalHandle` directly. These panes carry `MouseDisabled`, so orzma
     /// never acts on them.
     CopyMode,
     /// Alt-screen pane with neither `ALTERNATE_SCROLL` nor any `MOUSE_MODE` bit:
     /// the host's `WheelAction` resolves to a `ScrollViewport` that is a
     /// no-op on the alt buffer, so tmux forwards cursor keys instead.
     AltScreenResidual,
-    /// Anything ozma usefully handles: normal-pane local scrollback, mouse-mode
+    /// Anything orzma usefully handles: normal-pane local scrollback, mouse-mode
     /// SGR/X10 reports, or alt-screen with `ALTERNATE_SCROLL` (SS3 arrows). tmux
     /// drops the wheel and must not touch the accumulator for this pane.
-    CededToOzma,
+    CededToOrzma,
 }
 
 /// Picks the wheel owner as the exact complement of `WheelAction::route`.
 ///
-/// `route` (in `ozma_tty_engine::wheel`) acts usefully when the pane is in a
+/// `route` (in `orzma_tty_engine::wheel`) acts usefully when the pane is in a
 /// mouse mode (`MOUSE_MODE` → SGR/X10), or in alt-screen with `ALTERNATE_SCROLL`
 /// (→ SS3 arrows), or in a normal screen (→ real scrollback). The only case its
 /// `ScrollViewport` is a no-op is alt-screen WITHOUT `ALTERNATE_SCROLL` and
@@ -171,7 +171,7 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
     {
         return WheelOwner::AltScreenResidual;
     }
-    WheelOwner::CededToOzma
+    WheelOwner::CededToOrzma
 }
 
 /// Forwards mouse-wheel events to the tmux pane UNDER THE POINTER for the cases
@@ -183,13 +183,13 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 ///
 /// Otherwise the owner is decided for the CURSOR pane (resolved via
 /// `tmux_pane_at_phys`) as the exact complement of
-/// `ozma_tty_engine::wheel::WheelAction::route` (see `decide_wheel_owner`):
+/// `orzma_tty_engine::wheel::WheelAction::route` (see `decide_wheel_owner`):
 /// a copy-mode pane (`CopyModeState`, always `MouseDisabled`) scrolls the
 /// local `TerminalHandle` directly via `TerminalHandle::scroll`; an
 /// alt-screen pane with neither `ALTERNATE_SCROLL` nor a `MOUSE_MODE` bit —
-/// where ozma's `ScrollViewport` would no-op on the alt buffer — gets
+/// where orzma's `ScrollViewport` would no-op on the alt buffer — gets
 /// `AltScreenScroll` (cursor keys) sent to tmux. Every other case is ceded to
-/// ozma (local scrollback / SGR / SS3) and the accumulator is left untouched
+/// orzma (local scrollback / SGR / SS3) and the accumulator is left untouched
 /// for that pane so no residual notch bleeds.
 ///
 /// # Invariants
@@ -208,7 +208,7 @@ fn forward_wheel_to_tmux(
     wheel_params: TmuxWebviewWheelParams,
     copy_prompt: Res<CopyPrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
-    configs: Res<OzmuxConfigsResource>,
+    configs: Res<OrzmaConfigsResource>,
     metrics: Res<TerminalCellMetricsResource>,
     copy_modes: Query<(), With<CopyModeState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -249,7 +249,7 @@ fn forward_wheel_to_tmux(
         accumulator.residual_cells = 0.0;
         return;
     }
-    // The wheel acts on the pane under the pointer — the same basis ozma's
+    // The wheel acts on the pane under the pointer — the same basis orzma's
     // dispatch_mouse_wheel and the gate's MouseDisabled use (see # Invariants).
     let Some((entity, pane_id, _local)) =
         cursor_phys.and_then(|c| tmux_pane_at_phys(&wheel_params.panes, c))
@@ -261,7 +261,7 @@ fn forward_wheel_to_tmux(
     // NOTE: decide the owner BEFORE touching the accumulator. A ceded frame must
     // leave the residual untouched for this pane — advancing then dropping it
     // would bleed a stale notch into the next copy-mode / alt-fallback gesture,
-    // and resetting it would fight the accumulation ozma performs independently.
+    // and resetting it would fight the accumulation orzma performs independently.
     let in_copy_mode = copy_modes.get(entity).is_ok();
     let owner = match handles.get(entity) {
         Ok((handle, _)) => decide_wheel_owner(
@@ -271,7 +271,7 @@ fn forward_wheel_to_tmux(
         ),
         Err(_) => decide_wheel_owner(in_copy_mode, false, TermMode::empty()),
     };
-    if owner == WheelOwner::CededToOzma {
+    if owner == WheelOwner::CededToOrzma {
         return;
     }
 
@@ -315,7 +315,7 @@ fn forward_wheel_to_tmux(
                 tracing::warn!(?e, "alt-screen wheel scroll send failed");
             }
         }
-        WheelOwner::CededToOzma => {}
+        WheelOwner::CededToOrzma => {}
     }
 }
 
@@ -396,14 +396,14 @@ mod tests {
     use crate::input::shortcuts::tmux::{tmux_pane_direction, tmux_split_direction};
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::mouse::MouseScrollUnit;
-    use ozmux_configs::shortcuts::{
+    use orzma_configs::shortcuts::{
         PaneDirection as CfgPaneDirection, SplitOrientation as CfgSplitOrientation,
     };
-    use ozmux_tmux::{ActivePane, PaneDirection, PaneId, SplitDirection};
+    use orzma_tmux::{ActivePane, PaneDirection, PaneId, SplitDirection};
 
     #[test]
     fn wheel_copy_mode_pane_owner_ignores_screen_and_mode_bits() {
-        // Copy-mode panes carry MouseDisabled (ozma never runs), so the
+        // Copy-mode panes carry MouseDisabled (orzma never runs), so the
         // wheel path scrolls the local handle regardless of screen / mode bits.
         assert_eq!(
             decide_wheel_owner(true, false, TermMode::empty()),
@@ -416,18 +416,18 @@ mod tests {
     }
 
     #[test]
-    fn wheel_owned_by_ozma_outside_copymode_altscreen_inline() {
+    fn wheel_owned_by_orzma_outside_copymode_altscreen_inline() {
         // A normal pane (not copy-mode, not alt-screen, no mouse mode) is ceded
         // to the local terminal — forward_wheel_to_tmux emits no send-keys for it.
         assert_eq!(
             decide_wheel_owner(false, false, TermMode::empty()),
-            WheelOwner::CededToOzma
+            WheelOwner::CededToOrzma
         );
     }
 
     #[test]
     fn wheel_alt_screen_without_alternate_scroll_is_tmux_residual() {
-        // ozma's WheelAction returns ScrollViewport here, which no-ops on the
+        // orzma's WheelAction returns ScrollViewport here, which no-ops on the
         // alt buffer; tmux owns the residual with cursor-key send-keys.
         assert_eq!(
             decide_wheel_owner(false, true, TermMode::ALT_SCREEN),
@@ -436,8 +436,8 @@ mod tests {
     }
 
     #[test]
-    fn wheel_alt_screen_with_alternate_scroll_is_ceded_to_ozma() {
-        // ALTERNATE_SCROLL makes ozma's route emit SS3 arrows; tmux must cede so
+    fn wheel_alt_screen_with_alternate_scroll_is_ceded_to_orzma() {
+        // ALTERNATE_SCROLL makes orzma's route emit SS3 arrows; tmux must cede so
         // the wheel is not double-forwarded.
         assert_eq!(
             decide_wheel_owner(
@@ -445,13 +445,13 @@ mod tests {
                 true,
                 TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL
             ),
-            WheelOwner::CededToOzma
+            WheelOwner::CededToOrzma
         );
     }
 
     #[test]
-    fn wheel_mouse_mode_pane_is_ceded_to_ozma() {
-        // Any MOUSE_MODE bit routes to ozma's SGR/X10 path (priority over the
+    fn wheel_mouse_mode_pane_is_ceded_to_orzma() {
+        // Any MOUSE_MODE bit routes to orzma's SGR/X10 path (priority over the
         // alt-screen translation), so tmux cedes even in alt-screen.
         for bit in [
             TermMode::MOUSE_REPORT_CLICK,
@@ -460,11 +460,11 @@ mod tests {
         ] {
             assert_eq!(
                 decide_wheel_owner(false, false, bit),
-                WheelOwner::CededToOzma
+                WheelOwner::CededToOrzma
             );
             assert_eq!(
                 decide_wheel_owner(false, true, TermMode::ALT_SCREEN | bit),
-                WheelOwner::CededToOzma
+                WheelOwner::CededToOrzma
             );
         }
     }
@@ -508,9 +508,9 @@ mod tests {
     fn wheel_owner_is_decided_from_cursor_pane_not_active_pane() {
         // Two non-overlapping panes: the cursor is over a NORMAL pane (left half),
         // while the ActivePane is a copy-mode pane (right half). The wheel owner
-        // MUST be decided from the cursor pane (→ CededToOzma), not the active
+        // MUST be decided from the cursor pane (→ CededToOrzma), not the active
         // pane (which would give CopyMode). This pins the cursor-pane targeting
-        // that keeps the complement aligned with ozma + the gate.
+        // that keeps the complement aligned with orzma + the gate.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         let cursor_pane = spawn_pane_node(&mut app, false, false, 200.0, 400.0);
@@ -525,7 +525,7 @@ mod tests {
                         tmux_pane_at_phys(&panes, Vec2::new(200.0, 300.0)).unwrap();
                     let in_copy_mode = copy_modes.get(entity).is_ok();
                     // No TerminalHandle in this harness → the Err arm: a normal,
-                    // non-alt cursor pane resolves to CededToOzma.
+                    // non-alt cursor pane resolves to CededToOrzma.
                     let owner = decide_wheel_owner(in_copy_mode, false, TermMode::empty());
                     (entity, owner)
                 },
@@ -535,15 +535,15 @@ mod tests {
         assert_eq!(resolved, cursor_pane, "wheel must target the cursor pane");
         assert_eq!(
             owner,
-            WheelOwner::CededToOzma,
-            "cursor pane is normal → ceded to ozma, despite the active pane being in copy mode"
+            WheelOwner::CededToOrzma,
+            "cursor pane is normal → ceded to orzma, despite the active pane being in copy mode"
         );
     }
 
     #[test]
     fn wheel_copy_mode_scrolls_local_handle() {
         use bevy::window::WindowResolution;
-        use ozma_tty_renderer::CellMetrics;
+        use orzma_tty_renderer::CellMetrics;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -551,7 +551,7 @@ mod tests {
         app.init_resource::<FocusedWebview>();
         app.init_resource::<CopyPrompt>();
         app.init_resource::<TmuxWheelAccumulator>();
-        app.insert_resource(OzmuxConfigsResource::default());
+        app.insert_resource(OrzmaConfigsResource::default());
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,

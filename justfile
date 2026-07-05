@@ -1,4 +1,4 @@
-# ozmux task runner. Ports the former Makefile; see
+# orzma task runner. Ports the former Makefile; see
 # docs/superpowers/specs/2026-06-21-makefile-to-just-migration-design.md.
 # https://just.systems/
 
@@ -23,11 +23,11 @@ default: help
 help:
     @just --list
 
-# bump all package versions to <version> (updates VERSION, Cargo.toml, sdk/ozma-web/package.json)
+# bump all package versions to <version> (updates VERSION, Cargo.toml, sdk/orzma-web/package.json)
 bump-version version:
     bash scripts/bump-version.sh {{ version }}
 
-# run the ozmux Bevy app
+# run the orzma Bevy app
 run:
     cargo run
 
@@ -38,8 +38,8 @@ build:
 install-apps:
     pnpm i
     pnpm build
-    cargo install --path ./apps/ozbrowser/
-    cargo install --path ./apps/ozmd/
+    cargo install --path ./apps/orzbrowser/
+    cargo install --path ./apps/orzmd/
 
 # remove the workspace target dir
 clean:
@@ -51,13 +51,13 @@ fix-lint:
     cargo fmt
     pnpm lint:fix
 
-# build the ozmd web bundle (esbuild)
-ozmd-web:
-    pnpm --filter @ozma/ozmd-web build
+# build the orzmd web bundle (esbuild)
+orzmd-web:
+    pnpm --filter @orzma/orzmd-web build
 
-# build the web bundle then the ozmd binary
-ozmd: ozmd-web
-    cargo build -p ozmd
+# build the web bundle then the orzmd binary
+orzmd: orzmd-web
+    cargo build -p orzmd
 
 # install the CEF framework + debug render process (macOS, one-time)
 [macos]
@@ -79,16 +79,16 @@ setup-cef-release:
 icon *args:
     python3 scripts/build_icon.py {{ args }}
 
-# build and package the ozmux .app (extra args pass through, e.g. --version 1.2.3)
+# build and package the orzma .app (extra args pass through, e.g. --version 1.2.3)
 [macos]
-bundle-macos *args: ozmd-web
+bundle-macos *args: orzmd-web
     pnpm i
     pnpm build
     python3 scripts/bundle_macos.py {{ args }}
 
 # setup-cef-release then bundle with notarization
 [macos]
-release-macos *args: setup-cef-release ozmd-web
+release-macos *args: setup-cef-release orzmd-web
     python3 scripts/bundle_macos.py --notarize {{ args }}
 
 # refresh the vendored Chromium credits from the provisioned CEF dir (run on cef_version bump)

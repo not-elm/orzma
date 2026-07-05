@@ -1,4 +1,4 @@
-//! Per-process CEF profile directory: a unique `root_cache_path` per ozmux
+//! Per-process CEF profile directory: a unique `root_cache_path` per orzma
 //! instance so concurrent instances never collide on Chromium's per-profile
 //! singleton lock.
 
@@ -6,10 +6,10 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-/// A per-process CEF profile directory (`$TMPDIR/ozmux-cef/<pid>/`), removed on drop.
+/// A per-process CEF profile directory (`$TMPDIR/orzma-cef/<pid>/`), removed on drop.
 ///
 /// Chromium's `ProcessSingleton` permits only one live process per profile
-/// directory, so a shared profile makes a second ozmux instance fail. Keying the
+/// directory, so a shared profile makes a second orzma instance fail. Keying the
 /// directory by PID guarantees concurrent instances never collide, since live
 /// PIDs are unique.
 pub(crate) struct CefProfileDir {
@@ -20,7 +20,7 @@ impl CefProfileDir {
     /// Sweeps stale per-PID profile directories (dead owners) under the shared
     /// base, then creates and claims this process's own profile directory.
     pub(crate) fn acquire() -> std::io::Result<Self> {
-        let base = std::env::temp_dir().join("ozmux-cef");
+        let base = std::env::temp_dir().join("orzma-cef");
         std::fs::create_dir_all(&base)?;
         #[cfg(unix)]
         std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700))?;

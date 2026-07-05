@@ -1,5 +1,5 @@
 [package]
-name = "ozmux_webview_host"
+name = "orzma_webview_host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,7 +8,7 @@ authors.workspace = true
 publish.workspace = true
 
 [features]
-# Pulls the bevy_cef_core path-dep + the ozma:// scheme handler.
+# Pulls the bevy_cef_core path-dep + the orzma:// scheme handler.
 # Off by default so the core builds/tests with std only.
 cef = ["dep:bevy_cef_core"]
 

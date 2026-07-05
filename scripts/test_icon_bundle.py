@@ -19,7 +19,7 @@ class TestBundleIconWiring(unittest.TestCase):
     def test_assemble_app_sets_icon_file_and_copies_icns(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
-            fake_bin = root / "ozmux"
+            fake_bin = root / "orzma"
             fake_bin.write_bytes(b"\x7fELF fake binary")
             args = bm.build_arg_parser().parse_args(
                 [

@@ -1,7 +1,7 @@
 //! `PreviousWindowRequest` — switches the target session to its previous window.
 
 use bevy::prelude::*;
-use ozmux_tmux::{PreviousWindow, TmuxClient, TmuxSession};
+use orzma_tmux::{PreviousWindow, TmuxClient, TmuxSession};
 
 /// Switches the tmux session owning `entity` to its previous window.
 #[derive(EntityEvent, Debug, Clone)]

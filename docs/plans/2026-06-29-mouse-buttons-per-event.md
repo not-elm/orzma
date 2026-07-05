@@ -4,9 +4,9 @@
 
 **Goal:** Replace the `MouseEffect` enum + `TerminalMouseEffects` carrier + single big-`match` apply observer with one `EntityEvent` per mouse operation and one focused observer each, while keeping the gather system single and the deciders pure.
 
-**Architecture:** Additive-then-remove, in three green-at-each-step tasks. Task 1 adds the 7 new events + per-op observers + a shared `apply_to_terminal` helper to `ozma_terminal` ALONGSIDE the existing path (both registered; new path receives no triggers yet) and adds new apply-side tests. Task 2 switches the host gather side: `MouseEffect` becomes a host-private decision IR in `src/input/mouse.rs`, the deciders keep returning `Vec<MouseEffect>`, and a thin `trigger_mouse_effects` translation fans the Vec out to per-op `commands.trigger(...)` in order; host tests are reworked to observe the new events. Task 3 deletes the now-dead `MouseEffect`/`TerminalMouseEffects`/`on_terminal_mouse_effects`/`apply_effect`/`apply_effect_detached` and their exports from `ozma_terminal`.
+**Architecture:** Additive-then-remove, in three green-at-each-step tasks. Task 1 adds the 7 new events + per-op observers + a shared `apply_to_terminal` helper to `orzma_terminal` ALONGSIDE the existing path (both registered; new path receives no triggers yet) and adds new apply-side tests. Task 2 switches the host gather side: `MouseEffect` becomes a host-private decision IR in `src/input/mouse.rs`, the deciders keep returning `Vec<MouseEffect>`, and a thin `trigger_mouse_effects` translation fans the Vec out to per-op `commands.trigger(...)` in order; host tests are reworked to observe the new events. Task 3 deletes the now-dead `MouseEffect`/`TerminalMouseEffects`/`on_terminal_mouse_effects`/`apply_effect`/`apply_effect_detached` and their exports from `orzma_terminal`.
 
-**Tech Stack:** Rust 2024, Bevy 0.18 ECS (`EntityEvent` + observer idiom), `ozma_tty_engine` `TerminalHandle`, `cargo test`.
+**Tech Stack:** Rust 2024, Bevy 0.18 ECS (`EntityEvent` + observer idiom), `orzma_tty_engine` `TerminalHandle`, `cargo test`.
 
 ## Global Constraints
 
@@ -14,16 +14,16 @@
 - Rust rules (`.claude/rules/rust.md`): no `mod.rs`; comment taxonomy `// TODO:` / `// NOTE:` / `// SAFETY:` only; doc comments (`///`) on every externally-`pub` item and `//!` on each module file; all `use` at top in one contiguous block, no inline fully-qualified paths; visibility minimized (private unless a cross-module caller forces wider); item ordering `pub` before private; mutable params before immutable; `Plugin::build` is one method chain; register systems/observers in the defining file's plugin; no `_q` suffix on `Query` params.
 - Bevy 0.18 ordering fact this design relies on: `commands.trigger(..)` enqueues a FIFO command and each trigger fully resolves (observers + their queued commands) before the next, so sequential triggers from one system body are observed in source order. One event = one observer here, so same-event observer-order arbitrariness does not apply.
 - Each new event is `pub` (the host crate constructs and triggers them) with `pub` fields (no `new` constructor needed). `TerminalForwardInput` is preserved (consumed by `src/input/tmux/forward.rs`).
-- After every task: `cargo test -p ozma_terminal` and/or `cargo test` (workspace) green, plus `cargo clippy --workspace --all-targets` clean and `cargo fmt`.
+- After every task: `cargo test -p orzma_terminal` and/or `cargo test` (workspace) green, plus `cargo clippy --workspace --all-targets` clean and `cargo fmt`.
 
 ---
 
-### Task 1: Add per-op events, observers, and shared helper to `ozma_terminal` (additive)
+### Task 1: Add per-op events, observers, and shared helper to `orzma_terminal` (additive)
 
 **Files:**
-- Modify: `crates/ozma_terminal/src/mouse.rs` (add 7 events, `apply_to_terminal` helper, 7 observers, register them; KEEP the existing `MouseEffect`/`TerminalMouseEffects`/`on_terminal_mouse_effects`/`apply_effect`/`apply_effect_detached` for now)
-- Modify: `crates/ozma_terminal/src/lib.rs:18` (export the 7 new events alongside the existing ones)
-- Test: `crates/ozma_terminal/src/mouse.rs` `#[cfg(test)] mod tests` (add new tests for the new events)
+- Modify: `crates/orzma_terminal/src/mouse.rs` (add 7 events, `apply_to_terminal` helper, 7 observers, register them; KEEP the existing `MouseEffect`/`TerminalMouseEffects`/`on_terminal_mouse_effects`/`apply_effect`/`apply_effect_detached` for now)
+- Modify: `crates/orzma_terminal/src/lib.rs:18` (export the 7 new events alongside the existing ones)
+- Test: `crates/orzma_terminal/src/mouse.rs` `#[cfg(test)] mod tests` (add new tests for the new events)
 
 **Interfaces:**
 - Produces (consumed by Task 2's host translation, all `pub` with `pub` fields, all `#[derive(EntityEvent, Debug, Clone)]`):
@@ -35,20 +35,20 @@
   - `TerminalViewportScroll { entity: Entity, lines: i32 }`
   - `TerminalOpenUri { entity: Entity, uri: String }`
   - (the `entity` field carries `#[event_target]` on each)
-- Consumes: existing `TerminalHandle`, `PtyHandle`, `Coalescer`, `Point`, `Side`, `SelectionType` (already imported at `mouse.rs:13`), `Clipboard` (`crate::clipboard::Clipboard`), `try_open_uri` (`crate::hyperlink::try_open_uri`, `pub(crate)`), `OzmaTerminal`, `TerminalForwardInput`.
+- Consumes: existing `TerminalHandle`, `PtyHandle`, `Coalescer`, `Point`, `Side`, `SelectionType` (already imported at `mouse.rs:13`), `Clipboard` (`crate::clipboard::Clipboard`), `try_open_uri` (`crate::hyperlink::try_open_uri`, `pub(crate)`), `OrzmaTerminal`, `TerminalForwardInput`.
 
 - [ ] **Step 1: Add the `Mut` import**
 
-In `crates/ozma_terminal/src/mouse.rs`, the imports already include `use bevy::prelude::*;` (which re-exports `Mut`). No new `use` is required — verify `Mut` resolves; if not, the bevy prelude provides it. (No edit unless the build complains.)
+In `crates/orzma_terminal/src/mouse.rs`, the imports already include `use bevy::prelude::*;` (which re-exports `Mut`). No new `use` is required — verify `Mut` resolves; if not, the bevy prelude provides it. (No edit unless the build complains.)
 
 - [ ] **Step 2: Write the failing tests for the new events**
 
-Append these tests INSIDE the existing `#[cfg(test)] mod tests { ... }` block in `crates/ozma_terminal/src/mouse.rs` (it already has `use super::*;` and imports `Column`, `Line`):
+Append these tests INSIDE the existing `#[cfg(test)] mod tests { ... }` block in `crates/orzma_terminal/src/mouse.rs` (it already has `use super::*;` and imports `Column`, `Line`):
 
 ```rust
     #[test]
     fn detached_write_event_forwards_bytes() {
-        use ozma_tty_engine::TerminalHandle;
+        use orzma_tty_engine::TerminalHandle;
 
         #[derive(Resource, Default)]
         struct CapturedForward(Vec<Vec<u8>>);
@@ -64,7 +64,7 @@ Append these tests INSIDE the existing `#[cfg(test)] mod tests { ... }` block in
             );
 
         let handle = TerminalHandle::detached(10, 5);
-        let entity = app.world_mut().spawn((OzmaTerminal, handle)).id();
+        let entity = app.world_mut().spawn((OrzmaTerminal, handle)).id();
 
         app.world_mut().trigger(TerminalMouseWrite {
             entity,
@@ -75,13 +75,13 @@ Append these tests INSIDE the existing `#[cfg(test)] mod tests { ... }` block in
         assert_eq!(
             app.world().resource::<CapturedForward>().0,
             vec![b"\x1b[<0;1;1M".to_vec()],
-            "TerminalMouseWrite on a PTY-less OzmaTerminal must emit TerminalForwardInput"
+            "TerminalMouseWrite on a PTY-less OrzmaTerminal must emit TerminalForwardInput"
         );
     }
 
     #[test]
     fn detached_selection_start_event_sets_selection_via_vt_only() {
-        use ozma_tty_engine::TerminalHandle;
+        use orzma_tty_engine::TerminalHandle;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -89,7 +89,7 @@ Append these tests INSIDE the existing `#[cfg(test)] mod tests { ... }` block in
             .add_observer(on_terminal_selection_start);
 
         let handle = TerminalHandle::detached(10, 5);
-        let entity = app.world_mut().spawn((OzmaTerminal, handle)).id();
+        let entity = app.world_mut().spawn((OrzmaTerminal, handle)).id();
 
         app.world_mut().trigger(TerminalSelectionStart {
             entity,
@@ -102,7 +102,7 @@ Append these tests INSIDE the existing `#[cfg(test)] mod tests { ... }` block in
         let handle = app.world().entity(entity).get::<TerminalHandle>().unwrap();
         assert!(
             handle.selection_to_string().is_some(),
-            "TerminalSelectionStart on a PTY-less OzmaTerminal must set a selection via vt_only"
+            "TerminalSelectionStart on a PTY-less OrzmaTerminal must set a selection via vt_only"
         );
     }
 
@@ -121,12 +121,12 @@ Append these tests INSIDE the existing `#[cfg(test)] mod tests { ... }` block in
 
 - [ ] **Step 3: Run the tests to verify they fail (symbols not defined yet)**
 
-Run: `cargo test -p ozma_terminal detached_write_event_forwards_bytes detached_selection_start_event_sets_selection_via_vt_only viewport_scroll_event_on_missing_terminal_does_not_panic 2>&1 | tail -20`
+Run: `cargo test -p orzma_terminal detached_write_event_forwards_bytes detached_selection_start_event_sets_selection_via_vt_only viewport_scroll_event_on_missing_terminal_does_not_panic 2>&1 | tail -20`
 Expected: FAIL — compile errors `cannot find ... TerminalMouseWrite / on_terminal_mouse_write / ...`.
 
 - [ ] **Step 4: Add the 7 event structs**
 
-In `crates/ozma_terminal/src/mouse.rs`, immediately AFTER the existing `TerminalForwardInput` struct (ends at line 51, before `TerminalMouseEffects`), insert:
+In `crates/orzma_terminal/src/mouse.rs`, immediately AFTER the existing `TerminalForwardInput` struct (ends at line 51, before `TerminalMouseEffects`), insert:
 
 ```rust
 /// Writes mouse-protocol report bytes to `entity`'s backend (PTY when
@@ -206,7 +206,7 @@ pub struct TerminalOpenUri {
 
 - [ ] **Step 5: Add the shared `apply_to_terminal` helper and the 7 observers**
 
-In `crates/ozma_terminal/src/mouse.rs`, insert the following AFTER `on_terminal_mouse_effects` and its `apply_effect` / `apply_effect_detached` (i.e. after line 204, before the `#[cfg(test)]` module). These are added alongside the existing code:
+In `crates/orzma_terminal/src/mouse.rs`, insert the following AFTER `on_terminal_mouse_effects` and its `apply_effect` / `apply_effect_detached` (i.e. after line 204, before the `#[cfg(test)]` module). These are added alongside the existing code:
 
 ```rust
 /// Applies one handle-touching mouse op to `entity`, branching on whether
@@ -240,7 +240,7 @@ fn on_terminal_mouse_write(
             Option<&mut PtyHandle>,
             Option<&mut Coalescer>,
         ),
-        With<OzmaTerminal>,
+        With<OrzmaTerminal>,
     >,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
@@ -254,7 +254,7 @@ fn on_terminal_mouse_write(
         ev.entity,
         |handle, pty, _coalescer| {
             if let Err(e) = handle.write(pty, &ev.bytes) {
-                tracing::warn!(?e, "ozma mouse pty write failed");
+                tracing::warn!(?e, "orzma mouse pty write failed");
             }
         },
         |commands, _handle, entity| {
@@ -277,7 +277,7 @@ fn on_terminal_selection_start(
             Option<&mut PtyHandle>,
             Option<&mut Coalescer>,
         ),
-        With<OzmaTerminal>,
+        With<OrzmaTerminal>,
     >,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
@@ -307,7 +307,7 @@ fn on_terminal_selection_update(
             Option<&mut PtyHandle>,
             Option<&mut Coalescer>,
         ),
-        With<OzmaTerminal>,
+        With<OrzmaTerminal>,
     >,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
@@ -337,7 +337,7 @@ fn on_terminal_selection_clear(
             Option<&mut PtyHandle>,
             Option<&mut Coalescer>,
         ),
-        With<OzmaTerminal>,
+        With<OrzmaTerminal>,
     >,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
@@ -367,7 +367,7 @@ fn on_terminal_viewport_scroll(
             Option<&mut PtyHandle>,
             Option<&mut Coalescer>,
         ),
-        With<OzmaTerminal>,
+        With<OrzmaTerminal>,
     >,
 ) {
     let Ok((mut handle, pty, coalescer)) = terminals.get_mut(ev.entity) else {
@@ -392,7 +392,7 @@ fn on_terminal_viewport_scroll(
 fn on_terminal_selection_copy(
     ev: On<TerminalSelectionCopy>,
     mut clipboard: ResMut<Clipboard>,
-    terminals: Query<&TerminalHandle, With<OzmaTerminal>>,
+    terminals: Query<&TerminalHandle, With<OrzmaTerminal>>,
 ) {
     let Ok(handle) = terminals.get(ev.entity) else {
         return;
@@ -408,12 +408,12 @@ fn on_terminal_open_uri(ev: On<TerminalOpenUri>) {
 }
 ```
 
-- [ ] **Step 6: Register the 7 observers in `OzmaMousePlugin`**
+- [ ] **Step 6: Register the 7 observers in `OrzmaMousePlugin`**
 
-In `crates/ozma_terminal/src/mouse.rs`, replace the existing `impl Plugin for OzmaMousePlugin` body (currently lines 80-84):
+In `crates/orzma_terminal/src/mouse.rs`, replace the existing `impl Plugin for OrzmaMousePlugin` body (currently lines 80-84):
 
 ```rust
-impl Plugin for OzmaMousePlugin {
+impl Plugin for OrzmaMousePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_terminal_mouse_effects);
     }
@@ -423,7 +423,7 @@ impl Plugin for OzmaMousePlugin {
 with (keeps the old observer, adds the 7 new ones — one method chain):
 
 ```rust
-impl Plugin for OzmaMousePlugin {
+impl Plugin for OrzmaMousePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_terminal_mouse_effects)
             .add_observer(on_terminal_mouse_write)
@@ -439,7 +439,7 @@ impl Plugin for OzmaMousePlugin {
 
 - [ ] **Step 7: Export the new events from `lib.rs`**
 
-In `crates/ozma_terminal/src/lib.rs`, replace line 18:
+In `crates/orzma_terminal/src/lib.rs`, replace line 18:
 
 ```rust
 pub use mouse::{MouseEffect, TerminalForwardInput, TerminalMouseEffects};
@@ -457,19 +457,19 @@ pub use mouse::{
 
 - [ ] **Step 8: Run the new tests to verify they pass**
 
-Run: `cargo test -p ozma_terminal 2>&1 | tail -25`
+Run: `cargo test -p orzma_terminal 2>&1 | tail -25`
 Expected: all green, including the 3 new tests and all pre-existing tests.
 
 - [ ] **Step 9: Clippy + fmt**
 
-Run: `cargo clippy -p ozma_terminal --all-targets 2>&1 | tail -15 && cargo fmt`
+Run: `cargo clippy -p orzma_terminal --all-targets 2>&1 | tail -15 && cargo fmt`
 Expected: no warnings.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add crates/ozma_terminal/src/mouse.rs crates/ozma_terminal/src/lib.rs
-git commit -m "feat(ozma_terminal): add per-operation mouse EntityEvents + observers (additive)"
+git add crates/orzma_terminal/src/mouse.rs crates/orzma_terminal/src/lib.rs
+git commit -m "feat(orzma_terminal): add per-operation mouse EntityEvents + observers (additive)"
 ```
 
 ---
@@ -480,7 +480,7 @@ git commit -m "feat(ozma_terminal): add per-operation mouse EntityEvents + obser
 - Modify: `src/input/mouse.rs` (define host-private `MouseEffect`; change the import at line 26; add `trigger_mouse_effects`; replace the 3 trigger sites; rework the integration tests)
 
 **Interfaces:**
-- Consumes (from Task 1, imported from `ozma_terminal`): `TerminalMouseWrite`, `TerminalSelectionStart`, `TerminalSelectionUpdate`, `TerminalSelectionClear`, `TerminalSelectionCopy`, `TerminalViewportScroll`, `TerminalOpenUri`, `OzmaTerminal`, `TerminalForwardInput`.
+- Consumes (from Task 1, imported from `orzma_terminal`): `TerminalMouseWrite`, `TerminalSelectionStart`, `TerminalSelectionUpdate`, `TerminalSelectionClear`, `TerminalSelectionCopy`, `TerminalViewportScroll`, `TerminalOpenUri`, `OrzmaTerminal`, `TerminalForwardInput`.
 - Produces: a host-private `enum MouseEffect` (same variants as before) used only as the deciders' return IR; `fn trigger_mouse_effects(commands: &mut Commands, entity: Entity, effects: Vec<MouseEffect>)`.
 
 - [ ] **Step 1: Move `MouseEffect` into the host as a private enum and fix imports**
@@ -488,14 +488,14 @@ git commit -m "feat(ozma_terminal): add per-operation mouse EntityEvents + obser
 In `src/input/mouse.rs`, replace the import at line 26:
 
 ```rust
-use ozma_terminal::{MouseEffect, OzmaTerminal, TerminalMouseEffects};
+use orzma_terminal::{MouseEffect, OrzmaTerminal, TerminalMouseEffects};
 ```
 
 with (drop `MouseEffect` + `TerminalMouseEffects`, add the 7 events):
 
 ```rust
-use ozma_terminal::{
-    OzmaTerminal, TerminalForwardInput, TerminalMouseWrite, TerminalOpenUri,
+use orzma_terminal::{
+    OrzmaTerminal, TerminalForwardInput, TerminalMouseWrite, TerminalOpenUri,
     TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
     TerminalViewportScroll,
 };
@@ -528,12 +528,12 @@ enum MouseEffect {
 }
 ```
 
-`Point`, `Side`, `SelectionType` are already in scope: `Point`, `Side` via `ozma_tty_engine::{... Point, ... Side, ...}` at line 27-31; `SelectionType` is currently used only in tests via `ozma_tty_engine::SelectionType`. Add `SelectionType` to the `ozma_tty_engine` import group at the top (line 27-31) so the enum and the deciders resolve it:
+`Point`, `Side`, `SelectionType` are already in scope: `Point`, `Side` via `orzma_tty_engine::{... Point, ... Side, ...}` at line 27-31; `SelectionType` is currently used only in tests via `orzma_tty_engine::SelectionType`. Add `SelectionType` to the `orzma_tty_engine` import group at the top (line 27-31) so the enum and the deciders resolve it:
 
-Change the `ozma_tty_engine` import to include `SelectionType` (insert it alphabetically), e.g.:
+Change the `orzma_tty_engine` import to include `SelectionType` (insert it alphabetically), e.g.:
 
 ```rust
-use ozma_tty_engine::{
+use orzma_tty_engine::{
     ButtonAction, ButtonConfig, ButtonEvent, ButtonEventKind, CellCoord, Column, Line,
     MouseButtonKind, Point, ProtocolModifiers, SelectionType, Side, TermMode, TerminalHandle,
     TerminalModifiers, WheelAction, WheelConfig, WheelModifiers,
@@ -624,7 +624,7 @@ with:
 
 - [ ] **Step 4: Run the full host build to surface test breakage**
 
-Run: `cargo test --bin ozmux mouse 2>&1 | tail -30`
+Run: `cargo test --bin orzma mouse 2>&1 | tail -30`
 Expected: production code compiles; the integration tests in `mod tests` FAIL to compile because they still reference `TerminalMouseEffects` and `CapturedEffects(Vec<Vec<MouseEffect>>)`. The decider unit tests (`decide_button` / `decide_wheel` / `effects_from_wheel_action`) still compile (they use the now-host-private `MouseEffect`). Proceed to fix the integration tests.
 
 - [ ] **Step 5: Rework `CapturedEffects` and the two test-app builders**
@@ -851,12 +851,12 @@ to:
 
 - [ ] **Step 8: Run the host tests to verify they pass**
 
-Run: `cargo test --bin ozmux mouse 2>&1 | tail -30`
+Run: `cargo test --bin orzma mouse 2>&1 | tail -30`
 Expected: all mouse tests green (deciders, gesture integration, wheel).
 
 - [ ] **Step 9: Clippy + fmt**
 
-Run: `cargo clippy --bin ozmux --all-targets 2>&1 | tail -20 && cargo fmt`
+Run: `cargo clippy --bin orzma --all-targets 2>&1 | tail -20 && cargo fmt`
 Expected: no warnings. If `TerminalForwardInput` is reported unused in non-test code, move it from the top-level `use` into the `#[cfg(test)] mod tests` import block (it is only referenced by tests in the host).
 
 - [ ] **Step 10: Commit**
@@ -868,11 +868,11 @@ git commit -m "refactor(input): trigger per-op mouse events; MouseEffect now hos
 
 ---
 
-### Task 3: Remove the dead legacy apply path from `ozma_terminal`
+### Task 3: Remove the dead legacy apply path from `orzma_terminal`
 
 **Files:**
-- Modify: `crates/ozma_terminal/src/mouse.rs` (delete `MouseEffect`, `TerminalMouseEffects`, `impl TerminalMouseEffects`, `on_terminal_mouse_effects`, `apply_effect`, `apply_effect_detached`, and the two legacy tests; remove the legacy observer registration; update the module `//!` doc)
-- Modify: `crates/ozma_terminal/src/lib.rs:18` (drop `MouseEffect` and `TerminalMouseEffects` from the export)
+- Modify: `crates/orzma_terminal/src/mouse.rs` (delete `MouseEffect`, `TerminalMouseEffects`, `impl TerminalMouseEffects`, `on_terminal_mouse_effects`, `apply_effect`, `apply_effect_detached`, and the two legacy tests; remove the legacy observer registration; update the module `//!` doc)
+- Modify: `crates/orzma_terminal/src/lib.rs:18` (drop `MouseEffect` and `TerminalMouseEffects` from the export)
 
 **Interfaces:**
 - Consumes: nothing new.
@@ -881,15 +881,15 @@ git commit -m "refactor(input): trigger per-op mouse events; MouseEffect now hos
 - [ ] **Step 1: Confirm nothing else references the legacy types**
 
 Run: `grep -rn "MouseEffect\b\|TerminalMouseEffects" --include=*.rs src/ crates/ | grep -v "src/input/mouse.rs"`
-Expected: only matches inside `crates/ozma_terminal/src/mouse.rs` (the code being deleted). `src/input/mouse.rs` now has its OWN private `MouseEffect` — that is fine and is excluded. (`TmuxMouseEffect`/`TmuxMouseEffects` are a different family and must NOT match `\bMouseEffect\b`/`TerminalMouseEffects`; verify none appear.)
+Expected: only matches inside `crates/orzma_terminal/src/mouse.rs` (the code being deleted). `src/input/mouse.rs` now has its OWN private `MouseEffect` — that is fine and is excluded. (`TmuxMouseEffect`/`TmuxMouseEffects` are a different family and must NOT match `\bMouseEffect\b`/`TerminalMouseEffects`; verify none appear.)
 
 - [ ] **Step 2: Delete the legacy `MouseEffect` enum**
 
-In `crates/ozma_terminal/src/mouse.rs`, delete the entire `pub enum MouseEffect { ... }` (currently lines 15-38, including its `///` docs above it starting at line 15).
+In `crates/orzma_terminal/src/mouse.rs`, delete the entire `pub enum MouseEffect { ... }` (currently lines 15-38, including its `///` docs above it starting at line 15).
 
 - [ ] **Step 3: Delete `TerminalMouseEffects`, its `impl`, and the legacy observer + apply fns**
 
-In `crates/ozma_terminal/src/mouse.rs`, delete:
+In `crates/orzma_terminal/src/mouse.rs`, delete:
 - the `pub struct TerminalMouseEffects { ... }` and its doc (currently lines 53-63),
 - the `impl TerminalMouseEffects { ... }` block (currently lines 65-75),
 - the `on_terminal_mouse_effects` fn (currently lines 86-130),
@@ -898,12 +898,12 @@ In `crates/ozma_terminal/src/mouse.rs`, delete:
 
 Keep: `TerminalForwardInput`, all 7 new events, `apply_to_terminal`, and the 7 new observers.
 
-- [ ] **Step 4: Remove the legacy observer from `OzmaMousePlugin`**
+- [ ] **Step 4: Remove the legacy observer from `OrzmaMousePlugin`**
 
-In `crates/ozma_terminal/src/mouse.rs`, change the plugin chain so it no longer registers `on_terminal_mouse_effects`. The chain must start at the first remaining observer:
+In `crates/orzma_terminal/src/mouse.rs`, change the plugin chain so it no longer registers `on_terminal_mouse_effects`. The chain must start at the first remaining observer:
 
 ```rust
-impl Plugin for OzmaMousePlugin {
+impl Plugin for OrzmaMousePlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_terminal_mouse_write)
             .add_observer(on_terminal_selection_start)
@@ -918,7 +918,7 @@ impl Plugin for OzmaMousePlugin {
 
 - [ ] **Step 5: Delete the two legacy apply tests**
 
-In `crates/ozma_terminal/src/mouse.rs` `#[cfg(test)] mod tests`, delete:
+In `crates/orzma_terminal/src/mouse.rs` `#[cfg(test)] mod tests`, delete:
 - `detached_terminal_forwards_write_and_selects_via_vt_only` (currently lines 211-255),
 - `mouse_effects_on_entity_without_terminal_does_not_panic` (currently lines 257-271).
 
@@ -926,10 +926,10 @@ Keep the 3 tests added in Task 1.
 
 - [ ] **Step 6: Update the module doc and the export**
 
-(a) In `crates/ozma_terminal/src/mouse.rs`, update the `//!` header (currently lines 1-7) to describe the new shape:
+(a) In `crates/orzma_terminal/src/mouse.rs`, update the `//!` header (currently lines 1-7) to describe the new shape:
 
 ```rust
-//! Mouse-effect apply path for the Ozma terminal: the per-operation
+//! Mouse-effect apply path for the Orzma terminal: the per-operation
 //! `EntityEvent`s (`TerminalMouseWrite`, `TerminalSelection{Start,Update,
 //! Clear,Copy}`, `TerminalViewportScroll`, `TerminalOpenUri`) plus the
 //! `TerminalForwardInput` backend-bytes event, and one focused apply
@@ -939,7 +939,7 @@ Keep the 3 tests added in Task 1.
 //! in the binary), scheduled in `InputPhase::Dispatch`.
 ```
 
-(b) In `crates/ozma_terminal/src/lib.rs`, change line 18 to drop the two removed names:
+(b) In `crates/orzma_terminal/src/lib.rs`, change line 18 to drop the two removed names:
 
 ```rust
 pub use mouse::{
@@ -951,7 +951,7 @@ pub use mouse::{
 - [ ] **Step 7: Run the full workspace test suite**
 
 Run: `cargo test 2>&1 | tail -30`
-Expected: all green. (Per the `ozmux-test-gotchas` memory, a pre-existing IME test may fail and parallel teardown may SIGSEGV unrelated to this change; if so, re-run the mouse-relevant crates: `cargo test -p ozma_terminal && cargo test --bin ozmux mouse`.)
+Expected: all green. (Per the `orzma-test-gotchas` memory, a pre-existing IME test may fail and parallel teardown may SIGSEGV unrelated to this change; if so, re-run the mouse-relevant crates: `cargo test -p orzma_terminal && cargo test --bin orzma mouse`.)
 
 - [ ] **Step 8: Clippy + fmt across the workspace**
 
@@ -961,15 +961,15 @@ Expected: no warnings.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add crates/ozma_terminal/src/mouse.rs crates/ozma_terminal/src/lib.rs
-git commit -m "refactor(ozma_terminal): remove legacy MouseEffect/TerminalMouseEffects apply path"
+git add crates/orzma_terminal/src/mouse.rs crates/orzma_terminal/src/lib.rs
+git commit -m "refactor(orzma_terminal): remove legacy MouseEffect/TerminalMouseEffects apply path"
 ```
 
 ---
 
 ## Notes for the implementer
 
-- The host gather system (`dispatch_mouse_buttons`) is intentionally NOT split — it owns a single sequential `OzmaMouseGesture` state machine over one `MessageReader<MouseButtonInput>`. Do not attempt to split it; only the apply side is per-event.
+- The host gather system (`dispatch_mouse_buttons`) is intentionally NOT split — it owns a single sequential `OrzmaMouseGesture` state machine over one `MessageReader<MouseButtonInput>`. Do not attempt to split it; only the apply side is per-event.
 - `decide_button` / `decide_wheel` / `effects_from_wheel_action` and ALL their unit tests are unchanged — they keep returning `Vec<MouseEffect>` against the host-private enum.
 - Ordering: the per-op triggers are emitted in `Vec` order inside `trigger_mouse_effects`; Bevy 0.18's FIFO command queue guarantees they are observed in that order (e.g. `SelClear` before `Write`). Each event has exactly one observer, so same-event observer-order arbitrariness is irrelevant.
-- `try_open_uri` stays `pub(crate)` in `ozma_terminal`; `TerminalOpenUri`'s observer lives in `ozma_terminal` for that reason.
+- `try_open_uri` stays `pub(crate)` in `orzma_terminal`; `TerminalOpenUri`'s observer lives in `orzma_terminal` for that reason.

@@ -1,4 +1,4 @@
-//! `OzmuxBootstrapPlugin` registers the `insert_initial_cursor_icon` Startup
+//! `OrzmaBootstrapPlugin` registers the `insert_initial_cursor_icon` Startup
 //! system, which inserts the default arrow cursor on the primary window so
 //! the hyperlink hover system can mutate it without first inserting it.
 
@@ -7,9 +7,9 @@ use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
 
 /// Bevy Plugin that registers the `insert_initial_cursor_icon` system in the
 /// `Startup` schedule.
-pub struct OzmuxBootstrapPlugin;
+pub struct OrzmaBootstrapPlugin;
 
-impl Plugin for OzmuxBootstrapPlugin {
+impl Plugin for OrzmaBootstrapPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, insert_initial_cursor_icon);
     }

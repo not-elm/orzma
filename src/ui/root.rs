@@ -12,9 +12,9 @@ use bevy::window::{PrimaryWindow, WindowRef};
 #[derive(Component)]
 pub struct WindowCamera;
 
-pub struct OzmuxUiRootPlugin;
+pub struct OrzmaUiRootPlugin;
 
-impl Plugin for OzmuxUiRootPlugin {
+impl Plugin for OrzmaUiRootPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(Startup, (spawn_camera, spawn_root_ui));
     }
@@ -23,7 +23,7 @@ impl Plugin for OzmuxUiRootPlugin {
 fn spawn_camera(mut commands: Commands, primary: Query<Entity, With<PrimaryWindow>>) {
     let Ok(window_entity) = primary.single() else {
         tracing::error!(
-            target: "ozmux::ui",
+            target: "orzma::ui",
             "setup_root_camera_and_ui_root: primary window missing",
         );
         return;

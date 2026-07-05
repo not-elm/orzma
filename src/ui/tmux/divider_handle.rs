@@ -9,14 +9,14 @@
 //! primary window while the pointer is over a divider.
 
 use crate::app_mode::TmuxActiveSet;
-use crate::configs::OzmuxConfigsResource;
+use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::mouse::divider_at;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::theme;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
-use ozmux_tmux::{ActiveWindow, TmuxProjectionSet};
+use orzma_tmux::{ActiveWindow, TmuxProjectionSet};
 use tmux_control_parser::DividerAxis;
 
 /// Registers the divider-handle visuals and the resize hover cursor.
@@ -109,7 +109,7 @@ fn divider_hover_feedback(
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     mut handles: Query<(&DividerHandle, &mut BackgroundColor)>,
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
-    configs: Option<Res<OzmuxConfigsResource>>,
+    configs: Option<Res<OrzmaConfigsResource>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else {

@@ -1,7 +1,7 @@
 //! Bevy UI Plugin and shared UI markers. Spawns the singleton `UiRoot` Node
-//! (via `OzmuxUiRootPlugin`) that each mode's UI subtree attaches under.
+//! (via `OrzmaUiRootPlugin`) that each mode's UI subtree attaches under.
 
-use crate::ui::root::OzmuxUiRootPlugin;
+use crate::ui::root::OrzmaUiRootPlugin;
 use bevy::prelude::*;
 
 pub mod copy_mode;
@@ -20,12 +20,12 @@ pub(crate) mod tmux;
 pub struct UiRoot;
 
 /// Bevy Plugin spawning the singleton UI root Node tree.
-pub struct OzmuxUiPlugin;
+pub struct OrzmaUiPlugin;
 
-impl Plugin for OzmuxUiPlugin {
+impl Plugin for OrzmaUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            OzmuxUiRootPlugin,
+            OrzmaUiRootPlugin,
             default_mode::DefaultModeUiPlugin,
             tmux::TmuxUiPlugin,
         ));

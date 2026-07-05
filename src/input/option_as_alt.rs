@@ -20,17 +20,17 @@ impl Plugin for OptionAsAltPlugin {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use crate::configs::OzmuxConfigsResource;
+    use crate::configs::OrzmaConfigsResource;
     use bevy::ecs::system::NonSendMarker;
     use bevy::prelude::*;
     use bevy::window::PrimaryWindow;
     use bevy::winit::WINIT_WINDOWS;
-    use ozmux_configs::keyboard::OptionAsAlt;
+    use orzma_configs::keyboard::OptionAsAlt;
     use winit::platform::macos::{OptionAsAlt as WinitOptionAsAlt, WindowExtMacOS};
 
     pub(super) fn apply_option_as_alt(
         mut done: Local<bool>,
-        configs: Res<OzmuxConfigsResource>,
+        configs: Res<OrzmaConfigsResource>,
         primary: Query<Entity, With<PrimaryWindow>>,
         _non_send_marker: NonSendMarker,
     ) {
@@ -88,7 +88,7 @@ mod macos {
         fn system_validates_and_runs_without_winit() {
             let mut app = App::new();
             app.add_plugins(MinimalPlugins);
-            app.init_resource::<crate::configs::OzmuxConfigsResource>();
+            app.init_resource::<crate::configs::OrzmaConfigsResource>();
             app.world_mut().spawn(PrimaryWindow);
             app.add_systems(Update, apply_option_as_alt);
             app.update();

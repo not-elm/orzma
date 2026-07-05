@@ -21,7 +21,7 @@ use crate::input::mouse::webview::{
     release_webview_press, route_webview_left_click, webview_pointer_frame, webview_wheel_delta,
     webview_wheel_target,
 };
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
 use crate::ui::copy_search::CopyPrompt;
@@ -31,9 +31,9 @@ use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{NonInteractive, Webview};
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::prelude::TerminalOverlays;
+use orzma_webview::{NonInteractive, Webview};
 
 /// Registers the Default-mode webview pointer systems. The shared
 /// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
@@ -70,7 +70,7 @@ fn default_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
     mut buttons: MessageReader<MouseButtonInput>,
-    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OzmaTerminal>>,
+    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
     metrics: Res<TerminalCellMetricsResource>,
     copy_prompt: Res<CopyPrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -128,7 +128,7 @@ fn default_webview_pointer(
 /// while a copy-search prompt owns input.
 fn forward_default_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
-    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OzmaTerminal>>,
+    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
     children: Query<'_, '_, &'static Children>,
     webviews: Query<'_, '_, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'_, '_, &'static TerminalOverlays>,
@@ -178,7 +178,7 @@ fn forward_default_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,
     webview_parents: Query<&ChildOf, With<Webview>>,
-    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OzmaTerminal>>,
+    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
     children: Query<&Children>,
     webviews: Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: Query<&TerminalOverlays>,
@@ -235,7 +235,7 @@ mod tests {
     use bevy::math::{DVec2, IVec4};
     use bevy::window::WindowResolution;
     use bevy_cef::prelude::FocusedWebview;
-    use ozma_tty_renderer::CellMetrics;
+    use orzma_tty_renderer::CellMetrics;
 
     fn test_metrics() -> TerminalCellMetricsResource {
         TerminalCellMetricsResource {
@@ -270,7 +270,7 @@ mod tests {
         let shell = app
             .world_mut()
             .spawn((
-                OzmaTerminal,
+                OrzmaTerminal,
                 ComputedNode {
                     size: Vec2::new(800.0, 600.0),
                     ..ComputedNode::DEFAULT

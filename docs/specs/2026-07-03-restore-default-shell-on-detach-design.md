@@ -31,7 +31,7 @@ Full continuity across the `Default → Tmux → Default` round-trip via detach:
 - Scrollback up to the `tmux -CC` command is preserved (the VT state was never
   destroyed — feeding was only paused).
 - The post-detach bytes (the returning shell prompt) are fed into the VT, and
-  ozmux synthesizes a `[detached (from session …)]` line from the parsed
+  orzma synthesizes a `[detached (from session …)]` line from the parsed
   `%exit` reason — in control mode tmux never writes that message to the PTY
   (it is the non-control branch of tmux's `client_main`), so the iTerm2-style
   readback must be fabricated locally.
@@ -103,7 +103,7 @@ surface — `take_residual()` (and `is_ended()` as needed) — because
 `teardown_on_exit_notification`'s query widens to `&mut TmuxClient`. New
 event/API types are exported from their crates' public surfaces.
 
-### 2. `crates/ozma_tty_engine` — un-adopt API
+### 2. `crates/orzma_tty_engine` — un-adopt API
 
 A new `EntityEvent` — `ReleaseControlMode { entity, residual: Vec<u8> }` —
 with an engine-side observer that, atomically at command-flush time (observers
@@ -113,7 +113,7 @@ run with exclusive world access, so no bytes can race past):
    that arrived after the `%exit` drain but before the release lands — then
    removes `AdoptedControlMode` and re-inserts `ControlModeWatch`. This is
    the inverse of the existing adoption-side in-loop drain
-   (`crates/ozma_tty_engine/src/lib.rs:191`), which handles the mirror-image
+   (`crates/orzma_tty_engine/src/lib.rs:191`), which handles the mirror-image
    race.
 2. Routes the event's `residual` bytes, then the late-captured bytes (in that
    order — residual was drained from `captured` earlier), through the same
@@ -128,14 +128,14 @@ run with exclusive world access, so no bytes can race past):
    until the next PTY chunk arrives and would drop OSC title/cwd/webview
    events parsed from the residue.
 
-The observer lives in `ozma_tty_engine`, so the crate-private ingest/scan
+The observer lives in `orzma_tty_engine`, so the crate-private ingest/scan
 machinery stays crate-private.
 
 ### 3. `crates/tmux_session` — gateway release cleanup
 
 No separate event: `TmuxSessionPlugin` registers its own observer on the
 engine's `ReleaseControlMode` (`tmux_session` already depends on
-`ozma_tty_engine`) that strips the connection components today's despawn
+`orzma_tty_engine`) that strips the connection components today's despawn
 removes for free: `TmuxClient`, `TmuxAttached`, and `EnumerationState`.
 `EnumerationState` is crate-private (auto-required by `TmuxClient`), which is
 why this cleanup must live in `tmux_session`, not the binary. The engine and
@@ -161,7 +161,7 @@ event-batch clear in `observers.rs::on_connection_reset`) is reused unchanged.
    canonical full-size `Node` shape and the `DefaultShell` marker are
    module-private to Default mode, so the restore surface lives there, not ad
    hoc in `adopt.rs`): insert the full-size absolute `Node` (same layout as
-   `OzmaTerminalBundle::spawn` — adoption *overwrote* the `Node` with
+   `OrzmaTerminalBundle::spawn` — adoption *overwrote* the `Node` with
    `Display::None` + defaults, so flipping `display` back is not enough),
    re-insert `KeyboardFocused` (keyboard routing requires exactly one focused
    terminal — `src/input/keyboard.rs`), spawn a fresh `DefaultModeUi`
@@ -181,7 +181,7 @@ No work needed elsewhere:
   title (`src/window_title.rs`).
 - **Webview surface token** stays valid — the entity is preserved, and GC only
   fires on `TerminalHandle` removal
-  (`crates/ozma_webview/src/control_plane.rs`).
+  (`crates/orzma_webview/src/control_plane.rs`).
 - **`DefaultShell` marker** never leaves the entity.
 
 ## Detach data flow (frame by frame)
@@ -189,7 +189,7 @@ No work needed elsewhere:
 1. User detaches. tmux writes `%exit <reason>\n`, then the DCS terminator
    `ESC \` with no trailing newline, and the client exits; the shell prompt
    then returns over the same gateway PTY. tmux writes no `[detached …]`
-   line in control mode — ozmux synthesizes it (step 4).
+   line in control mode — orzma synthesizes it (step 4).
 2. The engine pump appends those bytes to `AdoptedControlMode.captured` (VT
    feeding is still paused).
 3. `drain_tmux_transport` takes `captured` and feeds the protocol client: the
@@ -247,7 +247,7 @@ No work needed elsewhere:
   split across chunks (1-byte `ESC` carry); residual accumulating over later
   `feed()` calls; `feed()` after end produces no events; `take_residual()`
   drains once; `feed_strips_dcs_wrapper` rewritten to the real stream shape.
-- **`ozma_tty_engine`**: release observer mirrors the existing adoption-race
+- **`orzma_tty_engine`**: release observer mirrors the existing adoption-race
   test — bytes staged on `captured` at release time reach the VT; ordering
   (residual before late-captured); rendered without a subsequent PTY chunk
   (flush-or-arm honored); control events drained; `ControlModeWatch`

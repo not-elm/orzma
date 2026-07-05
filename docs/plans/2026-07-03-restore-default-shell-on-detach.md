@@ -13,7 +13,7 @@
 
 **Goal:** When the user detaches from `tmux -CC` (`%exit`), restore the original Default-mode shell terminal — same entity, same still-alive shell process, preserved scrollback — instead of despawning it and spawning a fresh shell.
 
-**Architecture:** Un-adopt in teardown (spec: `docs/specs/2026-07-03-restore-default-shell-on-detach-design.md`). Four work areas: (1) `tmux_control`'s `ProtocolClient` gains an *ended* state with byte-prefix DCS-terminator detection and a residual-byte buffer; (2) `ozma_tty_engine` gains a `ReleaseControlMode` entity event whose observer atomically re-feeds residual + late-captured bytes through the introducer scanner and re-arms `ControlModeWatch`; (3) `tmux_session` observes the same event to strip `TmuxClient`/`TmuxAttached`/`EnumerationState`, and `TmuxClient` gains a `take_residual()` passthrough; (4) the binary's `%exit` teardown becomes a restore path (synthesized detach line, UI restore via a `mode::default` helper, `GatewaySize` reset) while the child-death path keeps today's despawn.
+**Architecture:** Un-adopt in teardown (spec: `docs/specs/2026-07-03-restore-default-shell-on-detach-design.md`). Four work areas: (1) `tmux_control`'s `ProtocolClient` gains an *ended* state with byte-prefix DCS-terminator detection and a residual-byte buffer; (2) `orzma_tty_engine` gains a `ReleaseControlMode` entity event whose observer atomically re-feeds residual + late-captured bytes through the introducer scanner and re-arms `ControlModeWatch`; (3) `tmux_session` observes the same event to strip `TmuxClient`/`TmuxAttached`/`EnumerationState`, and `TmuxClient` gains a `take_residual()` passthrough; (4) the binary's `%exit` teardown becomes a restore path (synthesized detach line, UI restore via a `mode::default` helper, `GatewaySize` reset) while the child-death path keeps today's despawn.
 
 **Tech Stack:** Rust (edition 2024, toolchain 1.95), Bevy 0.18 ECS (EntityEvent + observer idiom), sans-io protocol client. No new dependencies.
 
@@ -27,7 +27,7 @@
 - `Plugin::build` bodies are a single method chain; systems/observers are registered by a `Plugin` defined in the same file that defines them.
 - Bevy `Query` params: no `_q` suffix; singular for `.single()`, plural for iteration.
 - Commit after every green test cycle. Run `cargo clippy --workspace --fix --allow-dirty --allow-staged && cargo fmt` before each commit (or `just fix-lint`).
-- Package names for `cargo test -p`: `tmux_control_parser`, `tmux_control`, `ozma_tty_engine`, `ozmux_tmux` (crates/tmux_session), `ozmux` (root binary).
+- Package names for `cargo test -p`: `tmux_control_parser`, `tmux_control`, `orzma_tty_engine`, `orzma_tmux` (crates/tmux_session), `orzma` (root binary).
 
 ---
 
@@ -255,23 +255,23 @@ git commit -m "feat(tmux-control): ended-state + residual bytes after the DCS te
 
 ---
 
-### Task 2: `ozma_tty_engine` — `ReleaseControlMode` event + release observer
+### Task 2: `orzma_tty_engine` — `ReleaseControlMode` event + release observer
 
 The inverse of adoption. A new module defines the event and an observer that, at command-flush time (observers run with exclusive world access, so no PTY bytes can race past): takes the late-captured bytes off `AdoptedControlMode`, routes residual + late bytes through `Handover::scan` (so a fresh `tmux -CC` introducer re-adopts instead of corrupting the VT), ingests VT-bound bytes with the normal flush-or-arm contract, drains control events, removes `AdoptedControlMode`, and re-inserts `ControlModeWatch`.
 
 **Files:**
-- Create: `crates/ozma_tty_engine/src/release.rs`
-- Modify: `crates/ozma_tty_engine/src/lib.rs` (module decl, export, plugin registration, `ingest_and_flush_or_arm` → `pub(crate)`)
+- Create: `crates/orzma_tty_engine/src/release.rs`
+- Modify: `crates/orzma_tty_engine/src/lib.rs` (module decl, export, plugin registration, `ingest_and_flush_or_arm` → `pub(crate)`)
 
 **Interfaces:**
 - Consumes: `Handover::scan` (`pub(crate)`), `AdoptedControlMode::take_captured()`, `AdoptedControlMode.captured` (`pub(crate)` field), `ingest_and_flush_or_arm` (lib.rs, currently private), `TerminalHandle::drain_control_events`, `TerminalHandle::detached` + `Coalescer::new()` + `TerminalTitle::default()` (tests).
 - Produces (used by Tasks 3 and 5):
-  - `pub struct ReleaseControlMode { pub entity: Entity, pub residual: Vec<u8> }` — an `EntityEvent`, exported from `ozma_tty_engine`.
+  - `pub struct ReleaseControlMode { pub entity: Entity, pub residual: Vec<u8> }` — an `EntityEvent`, exported from `orzma_tty_engine`.
   - Observer behavior: after release, the entity has `ControlModeWatch` and no `AdoptedControlMode` — unless the bytes contained a fresh introducer, in which case it stays adopted (new capture) and `ControlModeDetected` re-fires.
 
 - [ ] **Step 1: Create `release.rs` with the event, plugin, observer, and failing tests**
 
-Create `crates/ozma_tty_engine/src/release.rs`:
+Create `crates/orzma_tty_engine/src/release.rs`:
 
 ```rust
 //! Control-mode release: returns an adopted gateway terminal to normal VT
@@ -463,12 +463,12 @@ mod tests {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p ozma_tty_engine release`
+Run: `cargo test -p orzma_tty_engine release`
 Expected: 0 tests run — `test result: ok. 0 passed; 0 failed; ... 0 filtered out` (or similar). `release.rs` exists on disk but is not yet declared as a module, so the crate does not compile it and the name filter matches nothing. This confirms the module isn't wired in yet; Step 3 wires it in.
 
 - [ ] **Step 3: Wire the module into `lib.rs`**
 
-In `crates/ozma_tty_engine/src/lib.rs`:
+In `crates/orzma_tty_engine/src/lib.rs`:
 
 1. Add `mod release;` to the module list (alphabetical: between `mod raw_write;` and `mod resize;`).
 2. Add the export next to the other `pub use` lines: `pub use release::ReleaseControlMode;`.
@@ -487,14 +487,14 @@ pub(crate) fn ingest_and_flush_or_arm(
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p ozma_tty_engine`
+Run: `cargo test -p orzma_tty_engine`
 Expected: PASS (the three new `release::tests` plus all existing engine tests).
 
 - [ ] **Step 5: Lint + commit**
 
 ```bash
 cargo clippy --workspace --fix --allow-dirty --allow-staged && cargo fmt
-git add crates/ozma_tty_engine/src/release.rs crates/ozma_tty_engine/src/lib.rs
+git add crates/orzma_tty_engine/src/release.rs crates/orzma_tty_engine/src/lib.rs
 git commit -m "feat(tty-engine): ReleaseControlMode un-adopts a gateway back to VT feeding"
 ```
 
@@ -509,7 +509,7 @@ One event, two observers: `tmux_session` registers its own observer on the engin
 - Modify: `crates/tmux_session/src/plugin.rs` (observer + registration + tests)
 
 **Interfaces:**
-- Consumes: `ozma_tty_engine::ReleaseControlMode` (Task 2), `ProtocolClient::take_residual` (Task 1).
+- Consumes: `orzma_tty_engine::ReleaseControlMode` (Task 2), `ProtocolClient::take_residual` (Task 1).
 - Produces (used by Task 5):
   - `TmuxClient::take_residual(&mut self) -> Vec<u8>`
   - After a `ReleaseControlMode` flush, the gateway entity has no `TmuxClient`, `TmuxAttached`, or `EnumerationState` (all Update systems gated on `any_with_component::<TmuxClient>` go quiet next frame).
@@ -528,7 +528,7 @@ In `crates/tmux_session/src/connection.rs`'s `#[cfg(test)] mod tests`:
     }
 ```
 
-Run: `cargo test -p ozmux_tmux take_residual`
+Run: `cargo test -p orzma_tmux take_residual`
 Expected: FAIL — no method `take_residual` on `TmuxClient`.
 
 - [ ] **Step 2: Add the passthrough**
@@ -544,7 +544,7 @@ In `crates/tmux_session/src/connection.rs`, after `send_effect` (keeping `pub` m
     }
 ```
 
-Run: `cargo test -p ozmux_tmux take_residual`
+Run: `cargo test -p orzma_tmux take_residual`
 Expected: PASS.
 
 - [ ] **Step 3: Write the failing strip-observer tests**
@@ -587,7 +587,7 @@ And, next to the existing re-adoption/attach-edge test (the one that despawns `g
 ```rust
     #[test]
     fn attach_edge_refires_after_component_strip_release() {
-        use ozma_tty_engine::ReleaseControlMode;
+        use orzma_tty_engine::ReleaseControlMode;
 
         fn entry_block() -> Vec<u8> {
             b"\x1bP1000p%begin 1 1 0\r\n%end 1 1 0\r\n%session-changed $0 0\r\n".to_vec()
@@ -671,14 +671,14 @@ This test uses `app.add_plugins(TmuxSessionPlugin)` (not a bare `App`) so `on_ga
 
 - [ ] **Step 4: Run tests to verify they fail**
 
-Run: `cargo test -p ozmux_tmux gateway_release attach_edge_refires`
+Run: `cargo test -p orzma_tmux gateway_release attach_edge_refires`
 Expected: FAIL — `on_gateway_release` not defined / `ReleaseControlMode` not imported.
 
 - [ ] **Step 5: Implement the observer**
 
 In `crates/tmux_session/src/plugin.rs`:
 
-1. Extend the engine import: `use ozma_tty_engine::{AdoptedControlMode, ReleaseControlMode, TerminalRawWrite};`
+1. Extend the engine import: `use orzma_tty_engine::{AdoptedControlMode, ReleaseControlMode, TerminalRawWrite};`
 2. Import `EnumerationState` is already in scope (line 11).
 3. Add the observer (with the private functions, below the exported items):
 
@@ -710,7 +710,7 @@ fn on_gateway_release(ev: On<ReleaseControlMode>, mut commands: Commands) {
 
 - [ ] **Step 6: Run tests to verify they pass**
 
-Run: `cargo test -p ozmux_tmux`
+Run: `cargo test -p orzma_tmux`
 Expected: PASS (both new tests + full crate).
 
 - [ ] **Step 7: Lint + commit**
@@ -783,17 +783,17 @@ In `src/mode/default.rs`'s `#[cfg(test)] mod tests`:
     }
 ```
 
-Run: `cargo test -p ozmux restore_default_shell`
+Run: `cargo test -p orzma restore_default_shell`
 Expected: FAIL — `restore_default_shell` / `full_size_node` not defined.
 
 - [ ] **Step 2: Extract `full_size_node` in `spawn.rs`**
 
-In `src/mode/default/spawn.rs`, replace the inline `node:` construction in `OzmaTerminalBundle::spawn` and add the helper (after the `impl` block, before `DefaultSpawnPlugin`):
+In `src/mode/default/spawn.rs`, replace the inline `node:` construction in `OrzmaTerminalBundle::spawn` and add the helper (after the `impl` block, before `DefaultSpawnPlugin`):
 
 ```rust
         Ok(Self {
             terminal,
-            marker: OzmaTerminal,
+            marker: OrzmaTerminal,
             node: full_size_node(),
         })
 ```
@@ -818,7 +818,7 @@ pub(super) fn full_size_node() -> Node {
 
 In `src/mode/default.rs`:
 
-1. Add `full_size_node` to the file's existing spawn import (keep its current path style): `use crate::mode::default::spawn::{OzmaSpawnOptions, OzmaTerminalBundle, OzmaTerminalConfig, full_size_node};`.
+1. Add `full_size_node` to the file's existing spawn import (keep its current path style): `use crate::mode::default::spawn::{OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig, full_size_node};`.
 
 2. In `ensure_default_mode_ui`, replace the inline container spawn (the `commands.spawn((Name::new("Default Mode UI"), ...)).id()` block) with a call: `let mode_ui = spawn_default_mode_container(&mut commands, ui_root);` — keep the `// NOTE:` about spawning the container before the PTY attempt where it is.
 
@@ -868,7 +868,7 @@ fn spawn_default_mode_container(commands: &mut Commands, ui_root: Entity) -> Ent
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p ozmux mode::default`
+Run: `cargo test -p orzma mode::default`
 Expected: PASS — the new test plus all existing `mode::default` tests (`spawns_default_mode_ui_once`, `default_shell_survives_mode_roundtrip`, etc.).
 
 - [ ] **Step 5: Lint + commit**
@@ -926,11 +926,11 @@ In `src/mode/tmux/adopt.rs`'s `#[cfg(test)] mod tests`, add:
     fn exit_notification_restores_gateway_into_default_container() {
         use bevy::ecs::system::RunSystemOnce;
         use crate::mode::default::DefaultModeUi;
-        use ozma_tty_engine::ReleaseControlMode;
+        use orzma_tty_engine::ReleaseControlMode;
 
         let mut app = build_app();
         // Stand-in for tmux_session's on_gateway_release (that observer lives
-        // in the ozmux_tmux crate and is not registered by AdoptPlugin).
+        // in the orzma_tmux crate and is not registered by AdoptPlugin).
         app.add_observer(|ev: On<ReleaseControlMode>, mut commands: Commands| {
             commands.entity(ev.entity).remove::<TmuxClient>();
         });
@@ -1018,7 +1018,7 @@ In `src/mode/tmux/adopt.rs`'s `#[cfg(test)] mod tests`, add:
     #[test]
     fn readoption_after_restore_reenters_tmux_on_the_same_entity() {
         use crate::mode::default::DefaultModeUi;
-        use ozma_tty_engine::ReleaseControlMode;
+        use orzma_tty_engine::ReleaseControlMode;
 
         let mut app = build_app();
         app.add_observer(|ev: On<ReleaseControlMode>, mut commands: Commands| {
@@ -1093,14 +1093,14 @@ In `src/mode/tmux/adopt.rs`'s `#[cfg(test)] mod tests`, add:
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p ozmux adopt`
+Run: `cargo test -p orzma adopt`
 Expected: FAIL — `synthesized_detach_line`, `batch_exit_reason`, `restore_gateway` not defined.
 
 - [ ] **Step 3: Implement the teardown split**
 
 In `src/mode/tmux/adopt.rs`:
 
-1. Extend imports: add `ReleaseControlMode` to the `ozma_tty_engine` use; add `use crate::mode::default::restore_default_shell;`. (`DefaultModeUi` is already imported.)
+1. Extend imports: add `ReleaseControlMode` to the `orzma_tty_engine` use; add `use crate::mode::default::restore_default_shell;`. (`DefaultModeUi` is already imported.)
 
 2. Replace `batch_has_exit` with `batch_exit_reason`:
 
@@ -1215,12 +1215,12 @@ fn teardown_despawn(commands: &mut Commands, gateway: Entity) {
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `cargo test -p ozmux adopt`
+Run: `cargo test -p orzma adopt`
 Expected: PASS — all new and surviving tests.
 
 - [ ] **Step 5: Full binary test run**
 
-Run: `cargo test -p ozmux`
+Run: `cargo test -p orzma`
 Expected: PASS. Pay attention to `mode::default` tests — `default_shell_survives_mode_roundtrip` must still pass (the non-adopted roundtrip is untouched).
 
 - [ ] **Step 6: Lint + commit**

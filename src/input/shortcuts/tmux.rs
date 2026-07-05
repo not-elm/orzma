@@ -24,11 +24,11 @@ use crate::{
 };
 use bevy::input::keyboard::Key;
 use bevy::{ecs::system::SystemParam, prelude::*};
-use ozmux_configs::shortcuts::Shortcut;
-use ozmux_configs::shortcuts::{
+use orzma_configs::shortcuts::Shortcut;
+use orzma_configs::shortcuts::{
     Modifiers, PaneDirection as CfgPaneDirection, SplitOrientation as CfgSplitOrientation,
 };
-use ozmux_tmux::{
+use orzma_tmux::{
     ActiveWindow, KeyMods, PaneDirection, SplitDirection, TmuxSession, TmuxWindow,
     bevy_key_to_tmux_name,
 };
@@ -298,7 +298,7 @@ fn on_tmux_forward_message() -> impl SystemCondition<()> {
 mod tests {
     use super::*;
     use crate::input::keyboard::key_effect::KeyEffect;
-    use ozmux_tmux::{PaneId, TmuxPane};
+    use orzma_tmux::{PaneId, TmuxPane};
 
     #[derive(Resource, Default)]
     struct TmuxCaptured {

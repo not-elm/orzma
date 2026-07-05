@@ -290,10 +290,10 @@ reporting.
   symmetric and is the change that fully encapsulates the webview helpers (§4).
 - **Moving `tmux_pane_at_phys` to `surface/geometry.rs`** alongside
   `topmost_surface_at`. Rejected: `geometry.rs` is deliberately mode-agnostic;
-  `pane_hit` depends on `ozmux_tmux::{PaneId, TmuxPane}`, so the move would couple
+  `pane_hit` depends on `orzma_tmux::{PaneId, TmuxPane}`, so the move would couple
   a low-level geometry module to the tmux crate.
 - **Merging the two webview routers into one system** parameterized by a resolver.
-  Rejected: they need different `SystemParam` queries (`OzmaTerminal` surfaces vs
+  Rejected: they need different `SystemParam` queries (`OrzmaTerminal` surfaces vs
   `TmuxPane`s), different run gating, and each must own its `MouseButtonInput`
   reader every frame. Sharing scaffolding helpers (§5) captures the dedup without
   fighting Bevy's system-parameter model.

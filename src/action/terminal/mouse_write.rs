@@ -42,7 +42,7 @@ fn on_terminal_mouse_write(
         ev.entity,
         |handle, pty, _coalescer| {
             if let Err(e) = handle.write(pty, &ev.bytes) {
-                tracing::warn!(?e, "ozma mouse pty write failed");
+                tracing::warn!(?e, "orzma mouse pty write failed");
             }
         },
         |commands, _handle, entity| {
@@ -58,8 +58,8 @@ fn on_terminal_mouse_write(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::surface::OzmaTerminal;
-    use ozma_tty_engine::TerminalHandle;
+    use crate::surface::OrzmaTerminal;
+    use orzma_tty_engine::TerminalHandle;
 
     #[test]
     fn detached_write_event_forwards_bytes() {
@@ -76,7 +76,7 @@ mod tests {
             );
 
         let handle = TerminalHandle::detached(10, 5);
-        let entity = app.world_mut().spawn((OzmaTerminal, handle)).id();
+        let entity = app.world_mut().spawn((OrzmaTerminal, handle)).id();
 
         app.world_mut().trigger(TerminalMouseWrite {
             entity,
@@ -87,7 +87,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<CapturedForward>().0,
             vec![b"\x1b[<0;1;1M".to_vec()],
-            "TerminalMouseWrite on a PTY-less OzmaTerminal must emit TerminalForwardInput"
+            "TerminalMouseWrite on a PTY-less OrzmaTerminal must emit TerminalForwardInput"
         );
     }
 }

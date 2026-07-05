@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-/// The label enum labeling the types of systems in Ozmux
+/// The label enum labeling the types of systems in Orzma
 #[derive(Debug, Hash, PartialEq, Eq, Clone, SystemSet)]
-pub enum OzmuxSystems {
+pub enum OrzmaSystems {
     /// Per-frame input handling — keyboard and mouse. Members run in
     /// `crate::input::InputPhase` order: `Hover` → `Dispatch` →
     /// `FocusedKey`. The chain ensures click-to-focus (Dispatch)

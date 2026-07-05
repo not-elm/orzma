@@ -5,7 +5,7 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::system::Query;
 use bevy::math::Vec2;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
-use ozmux_tmux::{PaneId, TmuxPane};
+use orzma_tmux::{PaneId, TmuxPane};
 
 /// The first `TmuxPane` under `cursor_phys_px`, with the pointer in pane-local
 /// physical px. Skips panes without a laid-out node.

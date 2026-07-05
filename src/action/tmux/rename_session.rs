@@ -1,9 +1,9 @@
-//! `RenameSessionRequest` — opens the ozmux rename prompt pre-filled with the
+//! `RenameSessionRequest` — opens the orzma rename prompt pre-filled with the
 //! target session's current name.
 
 use crate::ui::tmux::rename_prompt::{RenamePrompt, RenameSubject};
 use bevy::prelude::*;
-use ozmux_tmux::TmuxSession;
+use orzma_tmux::TmuxSession;
 
 /// Opens the rename prompt for the tmux session owning `entity`.
 #[derive(EntityEvent, Debug, Clone)]

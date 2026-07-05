@@ -1,12 +1,12 @@
 //! Resolves configured shortcut chords (logical keys) into physical
 //! `KeyCode`-based entries the runtime input dispatcher matches against.
-//! The translation lives here (not in `ozmux_configs`) so the config crate
+//! The translation lives here (not in `orzma_configs`) so the config crate
 //! stays free of any `bevy` dependency.
 
 use crate::app_mode::AppMode;
-use crate::configs::OzmuxConfigsResource;
+use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
-use crate::input::bindings::{FineModifier, OzmaMouseConfig};
+use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
 use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
 use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
 use bevy::ecs::system::SystemParam;
@@ -17,12 +17,12 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
-use ozma_tty_engine::{ButtonConfig, WheelConfig};
-use ozmux_configs::copy_mode::CopyModeAction;
-use ozmux_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
-use ozmux_configs::shortcuts::{
+use orzma_configs::copy_mode::CopyModeAction;
+use orzma_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
+use orzma_configs::shortcuts::{
     Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
 };
+use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
 pub(in crate::input) mod default_mode;
@@ -191,20 +191,20 @@ enum ResolvedLeader {
 /// One configured shortcut resolved to a physical key: the `KeyCode` to match,
 /// the exact modifier set required, and the action to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct OzmuxShortcut {
+struct OrzmaShortcut {
     keycode: KeyCode,
     modifiers: Modifiers,
     action: Shortcut,
     repeat: bool,
 }
 
-/// The startup-resolved ozmux shortcut tables. Built once from
-/// `OzmuxConfigsResource`; consumed by the tmux and Default keyboard
+/// The startup-resolved orzma shortcut tables. Built once from
+/// `OrzmaConfigsResource`; consumed by the tmux and Default keyboard
 /// dispatchers.
 #[derive(Resource, Default, Debug, Clone)]
 pub(crate) struct Shortcuts {
-    direct: Vec<OzmuxShortcut>,
-    prefix: Vec<OzmuxShortcut>,
+    direct: Vec<OrzmaShortcut>,
+    prefix: Vec<OrzmaShortcut>,
     leader: Option<ResolvedLeader>,
     tap_timeout: Duration,
     repeat_time: Duration,
@@ -239,17 +239,17 @@ impl Shortcuts {
     }
 
     /// Returns the prefix-table entry bound to `(keycode, mods)`, if any.
-    fn match_prefix_entry(&self, keycode: KeyCode, mods: Modifiers) -> Option<&OzmuxShortcut> {
+    fn match_prefix_entry(&self, keycode: KeyCode, mods: Modifiers) -> Option<&OrzmaShortcut> {
         Self::find_entry(&self.prefix, keycode, mods)
     }
 
     /// Returns the first entry in `table` bound to `(keycode, mods)`. The single
     /// lookup predicate behind both the direct and prefix tables.
     fn find_entry(
-        table: &[OzmuxShortcut],
+        table: &[OrzmaShortcut],
         keycode: KeyCode,
         mods: Modifiers,
-    ) -> Option<&OzmuxShortcut> {
+    ) -> Option<&OrzmaShortcut> {
         table
             .iter()
             .find(|s| s.keycode == keycode && s.modifiers == mods)
@@ -269,7 +269,7 @@ pub(crate) enum LeaderStep {
     Passthrough,
 }
 
-/// Advances the ozmux leader state machine for one pressed key, threading
+/// Advances the orzma leader state machine for one pressed key, threading
 /// `phase` across frames. `now` is the caller's `Time<Real>::elapsed()`.
 /// Swallows the leader itself and any unmatched second key; drives the
 /// `<Leader:r>` repeat window (fire-and-extend inside the window, close and
@@ -344,7 +344,7 @@ pub(crate) fn test_shortcuts_with_repeat_prefix(
 ) -> Shortcuts {
     Shortcuts {
         direct: Vec::new(),
-        prefix: vec![OzmuxShortcut {
+        prefix: vec![OrzmaShortcut {
             keycode,
             modifiers: Modifiers::default(),
             action,
@@ -374,7 +374,7 @@ pub(crate) fn test_shortcuts_with_direct_chord(
     action: Shortcut,
 ) -> Shortcuts {
     Shortcuts {
-        direct: vec![OzmuxShortcut {
+        direct: vec![OrzmaShortcut {
             keycode,
             modifiers,
             action,
@@ -468,7 +468,7 @@ fn detect_modifier_tap(
 /// `Commands::insert_resource`) so the table is populated the moment this
 /// system runs, with no window in which a same-schedule reader could observe
 /// the empty default.
-fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsResource>) {
+fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OrzmaConfigsResource>) {
     let sc = &configs.shortcuts;
     resolved.direct = resolve_from_chords(
         sc.direct_chords()
@@ -502,15 +502,15 @@ fn build_shortcuts(mut resolved: ResMut<Shortcuts>, configs: Res<OzmuxConfigsRes
     }
 }
 
-/// `Startup` system: inserts `OzmaMouseConfig` from the resolved `[mouse]` block.
-fn populate_mouse_config(mut commands: Commands, configs: Res<OzmuxConfigsResource>) {
-    commands.insert_resource(ozma_mouse_config(&configs.mouse));
+/// `Startup` system: inserts `OrzmaMouseConfig` from the resolved `[mouse]` block.
+fn populate_mouse_config(mut commands: Commands, configs: Res<OrzmaConfigsResource>) {
+    commands.insert_resource(orzma_mouse_config(&configs.mouse));
 }
 
 /// Maps the resolved `[mouse]` config block to the terminal crate's
-/// `OzmaMouseConfig`.
-fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
-    OzmaMouseConfig {
+/// `OrzmaMouseConfig`.
+fn orzma_mouse_config(mc: &MouseConfig) -> OrzmaMouseConfig {
+    OrzmaMouseConfig {
         buttons: ButtonConfig {
             max_protocol_events_per_frame: mc.max_protocol_events_per_frame,
         },
@@ -532,15 +532,15 @@ fn ozma_mouse_config(mc: &MouseConfig) -> OzmaMouseConfig {
     }
 }
 
-/// Resolves each bound chord to an `OzmuxShortcut`, skipping (with a warning)
+/// Resolves each bound chord to an `OrzmaShortcut`, skipping (with a warning)
 /// any chord whose logical key has no physical `KeyCode`.
 fn resolve_from_chords<'a>(
     chords: impl Iterator<Item = (&'static str, &'a KeyChord, Shortcut, bool)>,
-) -> Vec<OzmuxShortcut> {
+) -> Vec<OrzmaShortcut> {
     let mut out = Vec::new();
     for (label, chord, action, repeat) in chords {
         match key_to_keycode(&chord.key) {
-            Some(keycode) => out.push(OzmuxShortcut {
+            Some(keycode) => out.push(OrzmaShortcut {
                 keycode,
                 modifiers: chord.modifiers,
                 action,
@@ -634,12 +634,12 @@ pub(crate) fn is_modifier_key(keycode: KeyCode) -> bool {
     )
 }
 
-/// Maps a config logical `Key` to the physical `KeyCode` ozmux matches on.
+/// Maps a config logical `Key` to the physical `KeyCode` orzma matches on.
 /// Returns `None` for keys with no stable physical mapping (`Plus`, `Other`,
 /// non-alphanumeric chars).
 fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
     // NOTE: keep this accepted domain in lockstep with
-    // `ozmux_configs::shortcuts::Key::maps_to_physical_key`; a divergence lets
+    // `orzma_configs::shortcuts::Key::maps_to_physical_key`; a divergence lets
     // an unmappable leader pass config validation yet resolve to no `KeyCode`,
     // silently disabling the whole prefix table.
     Some(match key {
@@ -700,8 +700,8 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
 mod tests {
     use super::*;
     use bevy::input::keyboard::Key;
-    use ozmux_configs::OzmuxConfigs;
-    use ozmux_configs::shortcuts::{Binding, Shortcuts as ConfigShortcuts};
+    use orzma_configs::OrzmaConfigs;
+    use orzma_configs::shortcuts::{Binding, Shortcuts as ConfigShortcuts};
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
@@ -711,19 +711,19 @@ mod tests {
         Shortcuts {
             direct: Vec::new(),
             prefix: vec![
-                OzmuxShortcut {
+                OrzmaShortcut {
                     keycode: KeyCode::KeyS,
                     modifiers: mods(false, false, false, false),
                     action: Shortcut::EnterCopyMode,
                     repeat: true,
                 },
-                OzmuxShortcut {
+                OrzmaShortcut {
                     keycode: KeyCode::KeyD,
                     modifiers: mods(false, false, false, false),
                     action: Shortcut::DetachSession,
                     repeat: true,
                 },
-                OzmuxShortcut {
+                OrzmaShortcut {
                     keycode: KeyCode::KeyP,
                     modifiers: mods(false, false, false, false),
                     action: Shortcut::Paste,
@@ -1000,7 +1000,7 @@ mod tests {
     fn match_prefix_entry_resolves_release_webview_focus() {
         let s = Shortcuts {
             direct: Vec::new(),
-            prefix: vec![OzmuxShortcut {
+            prefix: vec![OrzmaShortcut {
                 keycode: KeyCode::KeyR,
                 modifiers: mods(false, false, false, false),
                 action: Shortcut::ReleaseWebviewFocus,
@@ -1029,7 +1029,7 @@ mod tests {
         // Ctrl+B, prefix detach-session = Ctrl+D.
         let sc = Shortcuts {
             direct: Vec::new(),
-            prefix: vec![OzmuxShortcut {
+            prefix: vec![OrzmaShortcut {
                 keycode: KeyCode::KeyD,
                 modifiers: mods(true, false, false, false),
                 action: Shortcut::DetachSession,
@@ -1105,7 +1105,7 @@ mod tests {
     fn match_prefix_entry_resolves_and_requires_exact_mods() {
         let s = Shortcuts {
             direct: Vec::new(),
-            prefix: vec![OzmuxShortcut {
+            prefix: vec![OrzmaShortcut {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
                 action: Shortcut::EnterCopyMode,
@@ -1139,7 +1139,7 @@ mod tests {
     fn resolve_from_chords_accepts_leader_chords() {
         let config = ConfigShortcuts {
             detach_session: Some(Binding::Leader {
-                chord: ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
+                chord: orzma_configs::shortcuts::parse_key_chord("d").unwrap(),
                 repeat: true,
             }),
             ..Default::default()
@@ -1244,8 +1244,8 @@ mod tests {
     }
 
     #[test]
-    fn mouse_config_maps_from_ozmux_config() {
-        use ozmux_configs::mouse::{FineModifier as CfgFine, MouseConfig};
+    fn mouse_config_maps_from_orzma_config() {
+        use orzma_configs::mouse::{FineModifier as CfgFine, MouseConfig};
         let mc = MouseConfig {
             fine_modifier: CfgFine::Ctrl,
             max_protocol_events_per_frame: 5,
@@ -1253,7 +1253,7 @@ mod tests {
             axis_lock_ratio: 0.5,
             ..MouseConfig::default()
         };
-        let out = ozma_mouse_config(&mc);
+        let out = orzma_mouse_config(&mc);
         assert_eq!(out.buttons.max_protocol_events_per_frame, 5);
         assert_eq!(out.wheel.max_protocol_events_per_frame, 5);
         assert_eq!(out.wheel.lines_per_notch, mc.lines_per_notch);
@@ -1273,7 +1273,7 @@ mod tests {
     fn leader_fixture() -> Shortcuts {
         Shortcuts {
             direct: Vec::new(),
-            prefix: vec![OzmuxShortcut {
+            prefix: vec![OrzmaShortcut {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
                 action: Shortcut::EnterCopyMode,
@@ -1480,11 +1480,11 @@ mod tests {
         );
     }
 
-    fn resolved_shortcuts(config: OzmuxConfigs) -> Shortcuts {
+    fn resolved_shortcuts(config: OrzmaConfigs) -> Shortcuts {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Shortcuts>()
-            .insert_resource(OzmuxConfigsResource(config))
+            .insert_resource(OrzmaConfigsResource(config))
             .add_systems(Startup, build_shortcuts);
         app.update();
         app.world().resource::<Shortcuts>().clone()
@@ -1493,10 +1493,10 @@ mod tests {
     #[test]
     fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
         // NOTE: `ConfigShortcuts::default()` now ships 25 leader-scoped tmux
-        // actions, so `OzmuxConfigs::default()` alone no longer exercises the
+        // actions, so `OrzmaConfigs::default()` alone no longer exercises the
         // inert-leader path; every default `<Leader>`-bound field is explicitly
         // unbound here to reproduce a config with no leader bindings at all.
-        let config = OzmuxConfigs {
+        let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
                 paste: None,
                 select_left_pane: None,
@@ -1534,10 +1534,10 @@ mod tests {
 
     #[test]
     fn build_shortcuts_activates_default_cmd_leader_with_a_leader_binding() {
-        let config = OzmuxConfigs {
+        let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
                 detach_session: Some(Binding::Leader {
-                    chord: ozmux_configs::shortcuts::parse_key_chord("d").unwrap(),
+                    chord: orzma_configs::shortcuts::parse_key_chord("d").unwrap(),
                     repeat: false,
                 }),
                 ..Default::default()
@@ -1550,7 +1550,7 @@ mod tests {
 
     #[test]
     fn build_shortcuts_resolves_repeat_time() {
-        let config = OzmuxConfigs {
+        let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
                 repeat_time_ms: 250,
                 ..Default::default()

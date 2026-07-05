@@ -12,7 +12,7 @@ use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
 use bevy::ecs::observer::On;
 use bevy::ecs::system::{Commands, Query};
-use ozma_tty_engine::{Coalescer, TerminalHandle};
+use orzma_tty_engine::{Coalescer, TerminalHandle};
 
 /// Bevy Plugin: registers the two observers. The global `Clipboard`
 /// resource is provided by `crate::clipboard::ClipboardPlugin`.
@@ -94,7 +94,7 @@ mod tests {
     use super::*;
     use bevy::app::App;
     use bevy::prelude::MinimalPlugins;
-    use ozma_tty_engine::{SelectionType, SpawnOptions, TerminalBundle, TerminalHandle};
+    use orzma_tty_engine::{SelectionType, SpawnOptions, TerminalBundle, TerminalHandle};
 
     fn spawn_terminal_entity(app: &mut App) -> Entity {
         let opts = SpawnOptions {

@@ -3,7 +3,7 @@
 
 use crate::ui::tmux::confirm_prompt::ConfirmState;
 use bevy::prelude::*;
-use ozmux_tmux::{KillWindow, TmuxClient, TmuxCommand, TmuxWindow};
+use orzma_tmux::{KillWindow, TmuxClient, TmuxCommand, TmuxWindow};
 
 /// Asks for confirmation, then kills the tmux window owning `entity`.
 #[derive(EntityEvent, Debug, Clone)]

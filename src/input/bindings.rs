@@ -1,9 +1,9 @@
-//! Host-owned mouse input policy: `OzmaMouseConfig` / `FineModifier`, populated
-//! from `ozmux_configs` at startup
+//! Host-owned mouse input policy: `OrzmaMouseConfig` / `FineModifier`, populated
+//! from `orzma_configs` at startup
 //! (`crate::input::shortcuts::populate_mouse_config`).
 
 use bevy::prelude::*;
-use ozma_tty_engine::{ButtonConfig, WheelConfig};
+use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
 /// Which modifier activates "fine" (1 line per notch) wheel scrolling.
@@ -23,9 +23,9 @@ pub(crate) enum FineModifier {
 }
 
 /// Host-supplied mouse policy. `Default` is a working spawn-and-go config; the
-/// host overrides it from `ozmux_configs`.
+/// host overrides it from `orzma_configs`.
 #[derive(Resource)]
-pub(crate) struct OzmaMouseConfig {
+pub(crate) struct OrzmaMouseConfig {
     /// Button-report burst cap. MUST be non-zero or forwarded clicks are dropped.
     pub buttons: ButtonConfig,
     /// Wheel routing config (lines-per-notch, fine lines, burst cap).
@@ -44,7 +44,7 @@ pub(crate) struct OzmaMouseConfig {
     pub fine_modifier: FineModifier,
 }
 
-impl Default for OzmaMouseConfig {
+impl Default for OrzmaMouseConfig {
     fn default() -> Self {
         Self {
             buttons: ButtonConfig {
@@ -66,7 +66,7 @@ mod tests {
 
     #[test]
     fn default_config_sets_button_cap_explicitly() {
-        let cfg = OzmaMouseConfig::default();
+        let cfg = OrzmaMouseConfig::default();
         assert_eq!(
             cfg.buttons.max_protocol_events_per_frame, 8,
             "must NOT be ButtonConfig::default()'s 0"

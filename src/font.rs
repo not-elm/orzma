@@ -1,4 +1,4 @@
-//! Bridge between `OzmuxConfigsResource.font` and the renderer's
+//! Bridge between `OrzmaConfigsResource.font` and the renderer's
 //! `TerminalFonts` Resource, plus the `TerminalUiFont` handle that UI
 //! text builders consume. Runs at Startup, ordered
 //! `.before(TerminalFontInitSet::InitCellMetrics)` so the renderer's
@@ -9,12 +9,12 @@
 //! change-detection system in Update (and additionally re-issue cell
 //! metrics + invalidate the glyph atlas — see the renderer crate).
 
-use crate::configs::OzmuxConfigsResource;
+use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
 use bevy::text::{CosmicFontSystem, Font};
-use ozma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
-use ozmux_configs::font::FontConfig;
-use ozmux_configs::path::{SystemEnv, expand_user_path};
+use orzma_configs::font::FontConfig;
+use orzma_configs::path::{SystemEnv, expand_user_path};
+use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
 use std::path::Path;
 
 /// Strong handle to the UI font asset (regular face). Inserted by
@@ -99,12 +99,12 @@ fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -
 /// `FontFallbackIter::other_i` last-resort loop sees it.
 fn register_cjk_fallback_with_cosmic(mut font_system: ResMut<CosmicFontSystem>) {
     let source = cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
-        ozma_tty_renderer::bundled::FALLBACK_REGULAR,
+        orzma_tty_renderer::bundled::FALLBACK_REGULAR,
     )
         as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>);
     font_system.db_mut().load_font_source(source);
     tracing::info!(
-        target: "ozmux::font",
+        target: "orzma::font",
         "registered UDEVGothic35-Regular into cosmic-text fontdb",
     );
 }
@@ -114,7 +114,7 @@ fn bridge_font_config(
     mut fonts_assets: ResMut<Assets<Font>>,
     mut terminal_fonts: ResMut<TerminalFonts>,
     mut font_size: ResMut<TerminalFontSize>,
-    configs: Res<OzmuxConfigsResource>,
+    configs: Res<OrzmaConfigsResource>,
 ) {
     font_size.0 = configs.font.size;
     let font: &FontConfig = &configs.font;
@@ -164,10 +164,10 @@ fn bridge_font_config(
         bold_bytes,
         italic_bytes,
         bold_italic_bytes,
-        ozma_tty_renderer::bundled::FALLBACK_REGULAR.to_vec(),
-        ozma_tty_renderer::bundled::FALLBACK_BOLD.to_vec(),
-        ozma_tty_renderer::bundled::FALLBACK_ITALIC.to_vec(),
-        ozma_tty_renderer::bundled::FALLBACK_BOLD_ITALIC.to_vec(),
+        orzma_tty_renderer::bundled::FALLBACK_REGULAR.to_vec(),
+        orzma_tty_renderer::bundled::FALLBACK_BOLD.to_vec(),
+        orzma_tty_renderer::bundled::FALLBACK_ITALIC.to_vec(),
+        orzma_tty_renderer::bundled::FALLBACK_BOLD_ITALIC.to_vec(),
     )
     .expect("validated bytes must parse");
     *terminal_fonts = new_fonts;
@@ -204,20 +204,20 @@ fn make_ui_font_handle(regular_bytes: Vec<u8>, fonts_assets: &mut Assets<Font>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::configs::OzmuxConfigsPlugin;
+    use crate::configs::OrzmaConfigsPlugin;
     use ab_glyph::Font as AbFont;
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
-    use ozma_tty_renderer::TerminalFontPlugin;
-    use ozma_tty_renderer::bundled;
+    use orzma_tty_renderer::TerminalFontPlugin;
+    use orzma_tty_renderer::bundled;
     use std::io::Write;
 
     /// RAII guard for a process-environment variable. Constructing it via
     /// `EnvVarGuard::set(...)` sets the variable; dropping it removes
     /// it. The Drop runs even on panic, so a test that panics inside
     /// `app.update()` no longer leaks the stale env var into the next
-    /// test (which would then run against a misconfigured `OZMUX_CONFIG`
+    /// test (which would then run against a misconfigured `ORZMA_CONFIG`
     /// after recovering from the poisoned `env_guard` mutex).
     ///
     /// The caller MUST hold `crate::configs::env_guard()` for the full
@@ -258,7 +258,7 @@ mod tests {
 
     fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
         let guard = crate::configs::env_guard();
-        let env = EnvVarGuard::unset("OZMUX_CONFIG");
+        let env = EnvVarGuard::unset("ORZMA_CONFIG");
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -275,7 +275,7 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
         app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OzmuxConfigsPlugin);
+        app.add_plugins(OrzmaConfigsPlugin);
         app.add_plugins(FontBridgePlugin);
         (app, guard, env)
     }
@@ -314,8 +314,8 @@ mod tests {
         // Use the bundled JetBrains Mono regular bytes as the "override" — the
         // test verifies the bytes flow through std::fs::read, not that
         // they differ from bundled. Write to a temp file and point
-        // OZMUX_CONFIG at a TOML that uses it.
-        let tmp_dir = std::env::temp_dir().join("ozmux_font_bridge_test_normal");
+        // ORZMA_CONFIG at a TOML that uses it.
+        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_normal");
         let _ = std::fs::create_dir_all(&tmp_dir);
         let ttf_path = tmp_dir.join("regular.ttf");
         std::fs::write(&ttf_path, bundled::REGULAR).expect("write temp ttf");
@@ -326,7 +326,7 @@ mod tests {
         drop(f);
 
         let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("OZMUX_CONFIG", &toml_path);
+        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml_path);
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -340,7 +340,7 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
         app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OzmuxConfigsPlugin);
+        app.add_plugins(OrzmaConfigsPlugin);
         app.add_plugins(FontBridgePlugin);
         app.update();
 
@@ -357,9 +357,9 @@ mod tests {
 
     #[test]
     fn missing_normal_path_falls_back_to_bundled() {
-        let nonexistent = std::env::temp_dir().join("ozmux_font_bridge_test_missing.ttf");
+        let nonexistent = std::env::temp_dir().join("orzma_font_bridge_test_missing.ttf");
         let _ = std::fs::remove_file(&nonexistent);
-        let toml = std::env::temp_dir().join("ozmux_font_bridge_test_missing.toml");
+        let toml = std::env::temp_dir().join("orzma_font_bridge_test_missing.toml");
         std::fs::write(
             &toml,
             format!("[font]\nnormal = \"{}\"\n", nonexistent.to_string_lossy()),
@@ -367,7 +367,7 @@ mod tests {
         .expect("write toml");
 
         let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("OZMUX_CONFIG", &toml);
+        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -380,7 +380,7 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
         app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OzmuxConfigsPlugin);
+        app.add_plugins(OrzmaConfigsPlugin);
         app.add_plugins(FontBridgePlugin);
         app.update();
 
@@ -396,7 +396,7 @@ mod tests {
 
     #[test]
     fn normal_path_set_does_not_inherit_to_bold() {
-        let tmp_dir = std::env::temp_dir().join("ozmux_font_bridge_test_no_inherit");
+        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_no_inherit");
         let _ = std::fs::create_dir_all(&tmp_dir);
         let normal_path = tmp_dir.join("only-regular.ttf");
         std::fs::write(&normal_path, bundled::REGULAR).expect("write");
@@ -408,7 +408,7 @@ mod tests {
         .expect("write toml");
 
         let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("OZMUX_CONFIG", &toml);
+        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -421,7 +421,7 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
         app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OzmuxConfigsPlugin);
+        app.add_plugins(OrzmaConfigsPlugin);
         app.add_plugins(FontBridgePlugin);
         app.update();
 
@@ -465,11 +465,11 @@ mod tests {
 
     #[test]
     fn bridge_sets_terminal_font_size_from_config_override_without_font_paths() {
-        let tmp = std::env::temp_dir().join("ozmux_font_size_override.toml");
+        let tmp = std::env::temp_dir().join("orzma_font_size_override.toml");
         std::fs::write(&tmp, "[font]\nsize = 16.0\n").expect("write toml");
 
         let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("OZMUX_CONFIG", &tmp);
+        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -482,7 +482,7 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
         app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OzmuxConfigsPlugin);
+        app.add_plugins(OrzmaConfigsPlugin);
         app.add_plugins(FontBridgePlugin);
         app.update();
 
@@ -521,7 +521,7 @@ mod tests {
         // and a valid "normal" TTF (bundled JetBrains Mono regular). Verify
         // bridge_font_config keeps the normal override AND replaces only
         // the corrupt bold with bundled bold.
-        let tmp_dir = std::env::temp_dir().join("ozmux_font_bridge_test_corrupt_bold");
+        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_corrupt_bold");
         let _ = std::fs::create_dir_all(&tmp_dir);
         let normal_path = tmp_dir.join("regular.ttf");
         std::fs::write(&normal_path, bundled::REGULAR).expect("write regular");
@@ -539,7 +539,7 @@ mod tests {
         .expect("write toml");
 
         let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("OZMUX_CONFIG", &toml);
+        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -552,7 +552,7 @@ mod tests {
         window.resolution.set_scale_factor(1.0);
         app.world_mut().spawn((window, PrimaryWindow));
         app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OzmuxConfigsPlugin);
+        app.add_plugins(OrzmaConfigsPlugin);
         app.add_plugins(FontBridgePlugin);
         app.update();
 

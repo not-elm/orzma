@@ -7,9 +7,9 @@ horizontal swipes and Shift+wheel (which macOS converts to a horizontal scroll
 at the OS level) arrive as `MouseWheel` events with a non-zero `ev.x`, but every
 terminal-side consumer reads only `ev.y`:
 
-- `ozma_tty_engine::wheel::WheelDir` is `Up` / `Down` only; its doc comment
+- `orzma_tty_engine::wheel::WheelDir` is `Up` / `Down` only; its doc comment
   states *"Horizontal wheels are out of scope."*
-- `ozma_terminal::mouse::dispatch_mouse_wheel` aggregates only
+- `orzma_terminal::mouse::dispatch_mouse_wheel` aggregates only
   `wheel_delta_cells(ev.unit, ev.y, cell_h)`; `WheelAccumulator` carries a single
   residual axis.
 
@@ -54,7 +54,7 @@ three considered).
   horizontal has neither), so merging them only adds branching.
 - **C — encode SGR 66/67 in the host dispatcher, no engine change:** rejected.
   It duplicates the mouse-mode detection and SGR/X10 encoding that already live
-  in `ozma_tty_engine`, splitting protocol encoding across two crates.
+  in `orzma_tty_engine`, splitting protocol encoding across two crates.
 
 Approach A keeps the vertical `route` untouched (zero regression risk on the
 existing path) and matches the repo's "pure decider returning effect values"
@@ -62,7 +62,7 @@ idiom.
 
 ## Design
 
-### 1. Engine layer — `crates/ozma_tty_engine/`
+### 1. Engine layer — `crates/orzma_tty_engine/`
 
 **`wheel.rs`**
 
@@ -93,7 +93,7 @@ idiom.
 The shared encoder `mouse_encode::encode_protocol_event` needs **no change** —
 `cb_base` 66/67 already flow through its `+32` (X10) / SGR formatting unchanged.
 
-### 2. Host layer — `crates/ozma_terminal/src/mouse.rs`
+### 2. Host layer — `crates/orzma_terminal/src/mouse.rs`
 
 - `WheelAccumulator`: hold two **named** per-axis residuals — the existing
   `residual_cells` (vertical) plus a new horizontal residual — sharing one
@@ -161,12 +161,12 @@ MouseWheel{ev.x} → dispatch_mouse_wheel
 - `WheelAction::route` (vertical) — untouched.
 - `src/mode/tmux/input.rs` `forward_wheel_to_tmux` / `aggregate_tmux_wheel_cells`
   — untouched. Horizontal is mouse-mode-only, and mouse-mode panes are
-  `WheelOwner::CededToOzma`, owned by `dispatch_mouse_wheel`. The tmux forward
+  `WheelOwner::CededToOrzma`, owned by `dispatch_mouse_wheel`. The tmux forward
   path only handles copy-mode and alt-screen-residual, neither of which has a
   horizontal meaning. The two systems hold independent `MessageReader<MouseWheel>`
   cursors, so both observe every event regardless of which drains first.
 - `src/mode/default/*` — terminal wheel in Default mode is already handled by
-  `dispatch_mouse_wheel` (the always-on `OzmaMousePlugin`); Default's only wheel
+  `dispatch_mouse_wheel` (the always-on `OrzmaMousePlugin`); Default's only wheel
   system, `forward_default_webview_wheel`, is webview-only.
 - Webview wheel — already handles both axes.
 - Bevy's frame-summed `AccumulatedMouseScroll` is intentionally NOT adopted over
@@ -225,7 +225,7 @@ vertical.
 
 ## Testing
 
-Engine (`crates/ozma_tty_engine/src/wheel.rs`, pure unit tests):
+Engine (`crates/orzma_tty_engine/src/wheel.rs`, pure unit tests):
 
 - `route_horizontal` in a mouse mode emits SGR `\x1b[<66;…M` (left) and
   `\x1b[<67;…M` (right) at the cursor cell.
@@ -237,7 +237,7 @@ Engine (`crates/ozma_tty_engine/src/wheel.rs`, pure unit tests):
   (including the 0-cap `Noop`).
 - `encode_wheel_report` Left/Right encoding.
 
-Host (`crates/ozma_terminal/src/mouse.rs`):
+Host (`crates/orzma_terminal/src/mouse.rs`):
 
 - The shared `effects_from_wheel_action` maps `route_horizontal`'s `WriteToPty`
   → `Write` (mouse mode) and `Noop` → `[]` (no mouse mode).
@@ -253,7 +253,7 @@ Host (`crates/ozma_terminal/src/mouse.rs`):
   `cb 66/67`, not 70/71).
 - A diagonal frame emits both axes via a single `TerminalMouseEffects` trigger.
 
-No `ozmux_configs` test changes (no config surface change).
+No `orzma_configs` test changes (no config surface change).
 
 ## Assumptions to validate in review
 

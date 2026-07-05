@@ -1,4 +1,4 @@
-# cargo-about configuration for ozmux third-party license aggregation.
+# cargo-about configuration for orzma third-party license aggregation.
 # `accepted` mirrors deny.toml [licenses].allow (keep the two in sync).
 # targets keeps output deterministic across hosts.
 accepted = [

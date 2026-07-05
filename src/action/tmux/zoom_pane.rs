@@ -2,7 +2,7 @@
 //! `resize-pane -Z`.
 
 use bevy::prelude::*;
-use ozmux_tmux::{TmuxClient, TmuxPane, ZoomPane};
+use orzma_tmux::{TmuxClient, TmuxPane, ZoomPane};
 
 /// Toggles zoom on the tmux pane owning `entity`.
 #[derive(EntityEvent, Debug, Clone)]

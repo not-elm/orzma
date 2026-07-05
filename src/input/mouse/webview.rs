@@ -1,16 +1,16 @@
 //! Shared CEF pointer routing helpers for both the default-mode router and the
 //! tmux gesture arbiter: forwards left press/release and pointer motion to the
-//! inline CEF child under the cursor, on ANY `OzmaTerminal` surface (a tmux
+//! inline CEF child under the cursor, on ANY `OrzmaTerminal` surface (a tmux
 //! pane or the Default-mode shell). The mode-specific systems
 //! (`crate::input::mouse::button::tmux`, `crate::input::mouse::webview::default_mode`) resolve
 //! which surface is under the cursor — multi-pane hit-test for tmux, the
 //! single shell for Default — and then delegate the CEF forwarding + focus to
 //! the helpers here. Inline webviews are Node/Mesh-free `ChildOf` children
-//! (`ozma_webview`), so `bevy_cef`'s native picking cannot reach them; this
+//! (`orzma_webview`), so `bevy_cef`'s native picking cannot reach them; this
 //! manual forwarding is the only path that delivers clicks to them.
 
 use crate::input::mouse::cell_dims;
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -20,9 +20,9 @@ use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::prelude::TerminalOverlays;
-use ozma_webview::{
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::prelude::TerminalOverlays;
+use orzma_webview::{
     NonInteractive, Webview, focused_webview_of, webview_hit_at, webview_local_dip,
 };
 
@@ -47,8 +47,8 @@ pub(in crate::input::mouse) struct WebviewPress(pub Option<Entity>);
 
 /// Queries/resources the webview routing needs, bundled to stay within Bevy's
 /// system-parameter limit. Mode-agnostic: the surface-geometry lookup is
-/// `With<OzmaTerminal>` (both tmux panes and the Default shell are
-/// `OzmaTerminal`), not `TmuxPane`. `focused_webview` / `browsers` are optional
+/// `With<OrzmaTerminal>` (both tmux panes and the Default shell are
+/// `OrzmaTerminal`), not `TmuxPane`. `focused_webview` / `browsers` are optional
 /// so CEF-less tests construct it (state effects still apply).
 #[derive(SystemParam)]
 pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
@@ -58,7 +58,7 @@ pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {
     webview_parents: Query<'w, 's, &'static ChildOf, With<Webview>>,
     overlay_rects: Query<'w, 's, &'static TerminalOverlays>,
     surface_geo:
-        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<OzmaTerminal>>,
+        Query<'w, 's, (&'static ComputedNode, &'static UiGlobalTransform), With<OrzmaTerminal>>,
     browsers: Option<NonSend<'w, Browsers>>,
 }
 

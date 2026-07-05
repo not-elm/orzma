@@ -6,14 +6,14 @@
 
 **Architecture:** Add a dedicated horizontal route function to the pure engine wheel router (`WheelAction::route_horizontal`), leaving the vertical `route` untouched. In the host wheel dispatcher, accumulate the horizontal axis on its own residual and emit reports through the existing `MouseEffect::Write` → `TerminalMouseEffects` → tmux `send-keys -H` / PTY path. No new effect/event types, no new config keys.
 
-**Tech Stack:** Rust (edition 2024, toolchain 1.95), Bevy 0.18 ECS, `alacritty_terminal::TermMode`. Crates: `ozma_tty_engine` (pure wheel routing + SGR/X10 encoder), `ozma_terminal` (Bevy wheel dispatcher).
+**Tech Stack:** Rust (edition 2024, toolchain 1.95), Bevy 0.18 ECS, `alacritty_terminal::TermMode`. Crates: `orzma_tty_engine` (pure wheel routing + SGR/X10 encoder), `orzma_terminal` (Bevy wheel dispatcher).
 
 ## Global Constraints
 
 - Edition 2024, toolchain pinned to 1.95. Workspace builds with `cargo build`.
 - **Comments:** only `// TODO:` / `// NOTE:` / `// SAFETY:`; `// NOTE:` is for critical caveats only (concrete harm if overlooked). All comments in English. No block comments, no commented-out code, no narrative comments.
 - **Doc comments:** every externally-`pub` item gets a `///` one-line summary. (`route_horizontal` is `pub`; the private helpers are not required to have docs but a one-line `///` is welcome.)
-- **Visibility:** narrowest that compiles. `route_horizontal` is `pub` (called cross-crate from `ozma_terminal`). `emit_protocol_reports`, `effects_from_wheel_action`, `build_wheel_modifiers_horizontal` are private (used only in their defining file). New struct fields stay private.
+- **Visibility:** narrowest that compiles. `route_horizontal` is `pub` (called cross-crate from `orzma_terminal`). `emit_protocol_reports`, `effects_from_wheel_action`, `build_wheel_modifiers_horizontal` are private (used only in their defining file). New struct fields stay private.
 - **Parameter ordering:** mutable params before immutable (`accumulate_notches(residual: &mut f32, …)` keeps the `&mut` first).
 - **Item ordering:** `pub` before private within an `impl`/module.
 - No `mod.rs`. Imports at top of file, single contiguous block, no inline fully-qualified paths.
@@ -27,8 +27,8 @@ Reference spec: `docs/specs/2026-06-28-mouse-wheel-horizontal-scroll-design.md`.
 ### Task 1: Engine — horizontal wheel routing + encoding
 
 **Files:**
-- Modify: `crates/ozma_tty_engine/src/wheel.rs`
-- Test: `crates/ozma_tty_engine/src/wheel.rs` (inline `#[cfg(test)] mod route_tests`)
+- Modify: `crates/orzma_tty_engine/src/wheel.rs`
+- Test: `crates/orzma_tty_engine/src/wheel.rs` (inline `#[cfg(test)] mod route_tests`)
 
 **Interfaces:**
 - Consumes: existing `encode_wheel_report(modes, direction, mods, cell)`, `WheelConfig`, `WheelModifiers`, `CellCoord`, `alacritty_terminal::term::TermMode`.
@@ -38,7 +38,7 @@ Reference spec: `docs/specs/2026-06-28-mouse-wheel-horizontal-scroll-design.md`.
 
 - [ ] **Step 1: Write the failing tests**
 
-Add these tests inside the existing `#[cfg(test)] mod route_tests { … }` block in `crates/ozma_tty_engine/src/wheel.rs` (it already defines `cfg_default()` and `cell()` helpers):
+Add these tests inside the existing `#[cfg(test)] mod route_tests { … }` block in `crates/orzma_tty_engine/src/wheel.rs` (it already defines `cfg_default()` and `cell()` helpers):
 
 ```rust
     #[test]
@@ -117,12 +117,12 @@ Add these tests inside the existing `#[cfg(test)] mod route_tests { … }` block
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `cargo test -p ozma_tty_engine route_tests::horizontal`
+Run: `cargo test -p orzma_tty_engine route_tests::horizontal`
 Expected: FAIL — compile error `no variant or associated item named route_horizontal` / `no variant named Left` for `WheelDir`.
 
 - [ ] **Step 3: Implement the engine changes**
 
-In `crates/ozma_tty_engine/src/wheel.rs`:
+In `crates/orzma_tty_engine/src/wheel.rs`:
 
 **(a)** Extend `WheelDir` (replace the existing enum, dropping the "out of scope" doc):
 
@@ -219,13 +219,13 @@ fn emit_protocol_reports(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `cargo test -p ozma_tty_engine`
+Run: `cargo test -p orzma_tty_engine`
 Expected: PASS — all new `horizontal_*` tests pass AND every pre-existing `route_tests` / `sgr_tests` / `x10_tests` / `alt_screen_tests` test still passes (the `route` refactor is behavior-preserving).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add crates/ozma_tty_engine/src/wheel.rs
+git add crates/orzma_tty_engine/src/wheel.rs
 git commit -m "feat(tty-engine): horizontal wheel routing (SGR/X10 cb 66/67)"
 ```
 
@@ -234,17 +234,17 @@ git commit -m "feat(tty-engine): horizontal wheel routing (SGR/X10 cb 66/67)"
 ### Task 2: Host — per-axis accumulator refactor (no behavior change)
 
 **Files:**
-- Modify: `crates/ozma_terminal/src/mouse.rs`
-- Test: `crates/ozma_terminal/src/mouse.rs` (existing `#[cfg(test)] mod tests`)
+- Modify: `crates/orzma_terminal/src/mouse.rs`
+- Test: `crates/orzma_terminal/src/mouse.rs` (existing `#[cfg(test)] mod tests`)
 
 **Interfaces:**
 - Produces (used by Task 3):
   - `accumulate_notches(residual: &mut f32, delta_cells: f32, cells_per_notch: f32) -> i32` — now takes the residual by `&mut f32` so either axis can drive it. (`WheelAccumulator` itself is unchanged this task; the horizontal field is added in Task 3, where it is first used.)
-- Consumes: nothing new. This is a pure refactor: `cargo test -p ozma_terminal` must stay green with identical behavior.
+- Consumes: nothing new. This is a pure refactor: `cargo test -p orzma_terminal` must stay green with identical behavior.
 
 - [ ] **Step 1: Change `accumulate_notches` to take `&mut f32`**
 
-In `crates/ozma_terminal/src/mouse.rs`, replace `accumulate_notches` to take the residual by `&mut f32`. The `WheelAccumulator` struct is **unchanged** this task — the horizontal field is added in Task 3, where it is first used:
+In `crates/orzma_terminal/src/mouse.rs`, replace `accumulate_notches` to take the residual by `&mut f32`. The `WheelAccumulator` struct is **unchanged** this task — the horizontal field is added in Task 3, where it is first used:
 
 ```rust
 /// Adds `delta_cells` to `residual` and returns whole notches to emit
@@ -320,13 +320,13 @@ In the `#[cfg(test)] mod tests` block, update these three tests to pass `&mut ac
 
 - [ ] **Step 3: Run the tests to verify they pass**
 
-Run: `cargo test -p ozma_terminal`
+Run: `cargo test -p orzma_terminal`
 Expected: PASS — all tests green, behavior unchanged (the new `residual_cells_h` field is unused this task).
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add crates/ozma_terminal/src/mouse.rs
+git add crates/orzma_terminal/src/mouse.rs
 git commit -m "refactor(terminal): per-axis wheel accumulator (accumulate_notches takes &mut f32)"
 ```
 
@@ -335,8 +335,8 @@ git commit -m "refactor(terminal): per-axis wheel accumulator (accumulate_notche
 ### Task 3: Host — horizontal wheel dispatch
 
 **Files:**
-- Modify: `crates/ozma_terminal/src/mouse.rs`
-- Test: `crates/ozma_terminal/src/mouse.rs` (existing `#[cfg(test)] mod tests`)
+- Modify: `crates/orzma_terminal/src/mouse.rs`
+- Test: `crates/orzma_terminal/src/mouse.rs` (existing `#[cfg(test)] mod tests`)
 
 **Interfaces:**
 - Consumes:
@@ -345,7 +345,7 @@ git commit -m "refactor(terminal): per-axis wheel accumulator (accumulate_notche
   - Existing `decide_wheel`, `build_wheel_modifiers`, `wheel_delta_cells`, `CellContext { cell_w, cell_h, … }`, `TerminalMouseEffects`.
 - Produces:
   - `fn effects_from_wheel_action(action: WheelAction) -> Vec<MouseEffect>` (private) — the shared `WheelAction → effects` mapping.
-  - `fn build_wheel_modifiers_horizontal(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> WheelModifiers` (private) — strips Shift on macOS.
+  - `fn build_wheel_modifiers_horizontal(keys: &ButtonInput<KeyCode>, cfg: &OrzmaMouseConfig) -> WheelModifiers` (private) — strips Shift on macOS.
   - Updated `dispatch_mouse_wheel` emitting both axes in one merged `TerminalMouseEffects` trigger.
 
 - [ ] **Step 1: Write the helper tests**
@@ -371,7 +371,7 @@ In the `#[cfg(test)] mod tests` block, add:
     fn horizontal_modifiers_strip_shift_on_macos() {
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::ShiftLeft);
-        let cfg = OzmaMouseConfig::default();
+        let cfg = OrzmaMouseConfig::default();
         let mods = build_wheel_modifiers_horizontal(&keys, &cfg);
         assert!(
             !mods.shift,
@@ -382,12 +382,12 @@ In the `#[cfg(test)] mod tests` block, add:
 
 - [ ] **Step 2: Run to verify they fail**
 
-Run: `cargo test -p ozma_terminal effects_from_wheel_action_maps_each_variant`
+Run: `cargo test -p orzma_terminal effects_from_wheel_action_maps_each_variant`
 Expected: FAIL — compile error: `effects_from_wheel_action` / `build_wheel_modifiers_horizontal` not found.
 
 - [ ] **Step 3: Implement the two helpers and route `decide_wheel` through the mapper**
 
-In `crates/ozma_terminal/src/mouse.rs`:
+In `crates/orzma_terminal/src/mouse.rs`:
 
 Replace `decide_wheel` so the `WheelAction → effects` mapping lives in one shared helper:
 
@@ -422,7 +422,7 @@ Add `build_wheel_modifiers_horizontal` next to the existing `build_wheel_modifie
 /// horizontal scroll while Shift stays physically held; stripping the Shift bit
 /// keeps the report a plain `<ScrollWheelLeft/Right>` rather than the shifted
 /// (and by default unmapped) variant. Other platforms pass modifiers through.
-fn build_wheel_modifiers_horizontal(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouseConfig) -> WheelModifiers {
+fn build_wheel_modifiers_horizontal(keys: &ButtonInput<KeyCode>, cfg: &OrzmaMouseConfig) -> WheelModifiers {
     let mut mods = build_wheel_modifiers(keys, cfg);
     if cfg!(target_os = "macos") {
         mods.shift = false;
@@ -433,13 +433,13 @@ fn build_wheel_modifiers_horizontal(keys: &ButtonInput<KeyCode>, cfg: &OzmaMouse
 
 - [ ] **Step 4: Run the helper tests to verify they pass**
 
-Run: `cargo test -p ozma_terminal effects_from_wheel_action_maps_each_variant horizontal_modifiers_strip_shift_on_macos`
+Run: `cargo test -p orzma_terminal effects_from_wheel_action_maps_each_variant horizontal_modifiers_strip_shift_on_macos`
 Expected: PASS.
 
 - [ ] **Step 5: Commit the helpers**
 
 ```bash
-git add crates/ozma_terminal/src/mouse.rs
+git add crates/orzma_terminal/src/mouse.rs
 git commit -m "feat(terminal): wheel effect mapper + macOS horizontal modifier strip"
 ```
 
@@ -454,7 +454,7 @@ Add a wheel test harness and the dispatch tests to the `#[cfg(test)] mod tests` 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<MouseWheel>()
-            .init_resource::<OzmaMouseConfig>()
+            .init_resource::<OrzmaMouseConfig>()
             .init_resource::<WheelAccumulator>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<Clipboard>()
@@ -471,7 +471,7 @@ Add a wheel test harness and the dispatch tests to the `#[cfg(test)] mod tests` 
         // `\x1b[?1000;1006h` = enable X10 mouse reporting (?1000) + SGR ext (?1006).
         handle.advance(enable_modes);
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             handle,
             ComputedNode {
                 size: Vec2::new(800.0, 600.0),
@@ -577,7 +577,7 @@ Add a wheel test harness and the dispatch tests to the `#[cfg(test)] mod tests` 
 
 - [ ] **Step 7: Run to verify the dispatch tests fail**
 
-Run: `cargo test -p ozma_terminal dispatch_pure_horizontal_right_emits_sgr_67 dispatch_horizontal_left_emits_sgr_66 dispatch_diagonal_emits_both_axes_in_one_trigger`
+Run: `cargo test -p orzma_terminal dispatch_pure_horizontal_right_emits_sgr_67 dispatch_horizontal_left_emits_sgr_66 dispatch_diagonal_emits_both_axes_in_one_trigger`
 Expected: FAIL — `dispatch_mouse_wheel` still reads only `ev.y`, so no `cb 66/67` report is produced (the right/left/diagonal asserts fail). `dispatch_horizontal_without_mouse_mode_emits_no_report` may already pass.
 
 - [ ] **Step 8: Add the horizontal residual field, then rewrite `dispatch_mouse_wheel`**
@@ -653,13 +653,13 @@ Then replace the tail of `dispatch_mouse_wheel` — from `gesture_acc.retarget(t
 
 - [ ] **Step 9: Run the full crate test suite to verify everything passes**
 
-Run: `cargo test -p ozma_terminal`
+Run: `cargo test -p orzma_terminal`
 Expected: PASS — the four `dispatch_*` tests pass and every pre-existing test still passes.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add crates/ozma_terminal/src/mouse.rs
+git add crates/orzma_terminal/src/mouse.rs
 git commit -m "feat(terminal): forward horizontal wheel to mouse-mode apps (SGR 66/67)"
 ```
 
@@ -675,17 +675,17 @@ git commit -m "feat(terminal): forward horizontal wheel to mouse-mode apps (SGR 
 
 - [ ] **Step 1: Run both crates' tests**
 
-Run: `cargo test -p ozma_tty_engine -p ozma_terminal`
+Run: `cargo test -p orzma_tty_engine -p orzma_terminal`
 Expected: PASS — no failures.
 
 - [ ] **Step 2: Lint and format**
 
-Run: `cargo clippy -p ozma_tty_engine -p ozma_terminal --all-targets && cargo fmt`
+Run: `cargo clippy -p orzma_tty_engine -p orzma_terminal --all-targets && cargo fmt`
 Expected: no clippy warnings; `cargo fmt` leaves no diff (or run `git diff --exit-code` after to confirm).
 
 - [ ] **Step 3: Confirm the workspace still builds**
 
-Run: `cargo build -p ozma_tty_engine -p ozma_terminal`
+Run: `cargo build -p orzma_tty_engine -p orzma_terminal`
 Expected: clean build.
 
 - [ ] **Step 4: Manual direction verification (human-in-the-loop)**
@@ -713,5 +713,5 @@ git commit -m "fix(terminal): correct horizontal wheel direction after live veri
 ## Notes for the implementer
 
 - **Bevy `MouseWheel` fields:** the test harness writes `MouseWheel { unit, x, y, window }`. If the installed Bevy version's struct differs (e.g. no `window`), match the actual definition — the compiler will tell you.
-- **Why no change to `src/mode/tmux/input.rs`:** horizontal is mouse-mode-only, and mouse-mode tmux panes are `WheelOwner::CededToOzma`, owned by `dispatch_mouse_wheel`. `forward_wheel_to_tmux` only handles copy-mode and alt-screen-residual (no horizontal meaning), and holds an independent `MessageReader<MouseWheel>` cursor, so it needs no change.
+- **Why no change to `src/mode/tmux/input.rs`:** horizontal is mouse-mode-only, and mouse-mode tmux panes are `WheelOwner::CededToOrzma`, owned by `dispatch_mouse_wheel`. `forward_wheel_to_tmux` only handles copy-mode and alt-screen-residual (no horizontal meaning), and holds an independent `MessageReader<MouseWheel>` cursor, so it needs no change.
 - **Why no change to `src/mode/default/*`:** Default-mode terminal wheel is already owned by the always-on `dispatch_mouse_wheel`; the only Default wheel system is webview-only.

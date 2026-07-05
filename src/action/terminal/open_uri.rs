@@ -1,9 +1,9 @@
 //! Hyperlink open action: opens an allowlist-validated URI via the OS default
 //! handler, gated on the target terminal still existing.
 
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use ozma_tty_renderer::schema::is_allowed;
+use orzma_tty_renderer::schema::is_allowed;
 
 /// Opens `uri` in the host browser / handler, gated on the target terminal
 /// still existing.
@@ -29,7 +29,7 @@ impl Plugin for OpenUriPlugin {
 /// Applies a `TerminalOpenUri`: opens the link in the host handler, but only
 /// while the target terminal still exists — parity with the legacy apply
 /// path, which gated every effect behind the target's presence.
-fn on_terminal_open_uri(ev: On<TerminalOpenUri>, terminals: Query<(), With<OzmaTerminal>>) {
+fn on_terminal_open_uri(ev: On<TerminalOpenUri>, terminals: Query<(), With<OrzmaTerminal>>) {
     if terminals.get(ev.entity).is_ok() {
         try_open_uri(&ev.uri);
     }

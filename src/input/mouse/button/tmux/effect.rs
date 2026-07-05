@@ -1,8 +1,8 @@
 //! Effect values produced by the tmux mouse deciders and applied by the observer.
 
 use bevy::prelude::*;
-use ozma_tty_engine::{Point, SelectionType, Side};
-use ozmux_tmux::PaneId;
+use orzma_tmux::PaneId;
+use orzma_tty_engine::{Point, SelectionType, Side};
 use tmux_control_parser::DividerAxis;
 
 /// Word- vs line-granularity selection for a double/triple click.

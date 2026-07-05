@@ -1,5 +1,5 @@
 //! Structural rescue for tmux panes whose grid was left unpainted after a
-//! layout change: detects the unpainted state and asks `ozmux_tmux` to
+//! layout change: detects the unpainted state and asks `orzma_tmux` to
 //! re-`capture-pane` until the grid paints (spec Component 2).
 //!
 //! It also recovers a pane whose grid went *blank* (structurally fine, so the
@@ -11,9 +11,9 @@ use super::TmuxLayoutSet;
 use crate::app_mode::TmuxActiveSet;
 use crate::ui::copy_mode::CopyModeState;
 use bevy::prelude::*;
-use ozma_tty_engine::TerminalHandle;
-use ozma_tty_renderer::schema::{Cell, TerminalGrid};
-use ozmux_tmux::{RequestPaneReseed, TmuxPane, TmuxProjectionSet};
+use orzma_tmux::{RequestPaneReseed, TmuxPane, TmuxProjectionSet};
+use orzma_tty_engine::TerminalHandle;
+use orzma_tty_renderer::schema::{Cell, TerminalGrid};
 
 /// Frames the unpainted state must persist before the FIRST reseed request
 /// (filters the ≤1-frame resize transient).
@@ -243,7 +243,7 @@ fn rescue_unpainted_panes(
 }
 
 /// Attaches the per-pane rescue state components once per pane. `TmuxPane` is
-/// defined in `ozmux_tmux`, so the binary cannot `#[require]` these onto it; the
+/// defined in `orzma_tmux`, so the binary cannot `#[require]` these onto it; the
 /// `Without<StructuralReseedState>` filter makes this run exactly once per pane
 /// (both components are always inserted together).
 fn attach_rescue_state(
@@ -282,7 +282,7 @@ fn repaint_pane_from_mirror(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_tmux::PaneId;
+    use orzma_tmux::PaneId;
 
     #[test]
     fn zero_grid_against_sized_handle_needs_seed() {
@@ -343,8 +343,8 @@ mod tests {
         assert!(!reseed_decision(&mut t, true));
     }
 
-    fn cell(text: &str) -> ozma_tty_renderer::schema::Cell {
-        ozma_tty_renderer::schema::Cell {
+    fn cell(text: &str) -> orzma_tty_renderer::schema::Cell {
+        orzma_tty_renderer::schema::Cell {
             text: text.to_string(),
             width: 1,
             fg: Default::default(),
@@ -474,7 +474,7 @@ mod tests {
     #[test]
     fn blank_grid_with_live_content_repaints_from_mirror() {
         use bevy::ecs::message::Messages;
-        use ozma_tty_renderer::prelude::TerminalGridPlugin;
+        use orzma_tty_renderer::prelude::TerminalGridPlugin;
         use tmux_control_parser::CellDims;
 
         let mut app = App::new();
@@ -579,8 +579,8 @@ mod tests {
     #[test]
     fn blank_grid_with_blank_mirror_is_not_repainted() {
         use bevy::ecs::message::Messages;
-        use ozma_tty_renderer::prelude::TerminalGridPlugin;
-        use ozma_tty_renderer::schema::FrameSnapshot;
+        use orzma_tty_renderer::prelude::TerminalGridPlugin;
+        use orzma_tty_renderer::schema::FrameSnapshot;
         use tmux_control_parser::CellDims;
 
         #[derive(Resource, Default)]
@@ -634,7 +634,7 @@ mod tests {
     #[test]
     fn steady_pane_does_not_re_mark_state_changed_each_frame() {
         use bevy::ecs::message::Messages;
-        use ozma_tty_renderer::prelude::TerminalGridPlugin;
+        use orzma_tty_renderer::prelude::TerminalGridPlugin;
         use tmux_control_parser::CellDims;
 
         #[derive(Resource, Default)]

@@ -42,7 +42,7 @@ jobs:
           node-version: 22
           cache: pnpm
 
-      - name: Build ozmd web assets
+      - name: Build orzmd web assets
         run: |
           pnpm install --frozen-lockfile
           pnpm build
@@ -60,9 +60,9 @@ jobs:
           CARGO_VERSION="$(cargo metadata --format-version 1 --no-deps | python3 -c '
           import json, sys
           pkgs = json.load(sys.stdin)["packages"]
-          v = next((p["version"] for p in pkgs if p["name"] == "ozmux"), None)
+          v = next((p["version"] for p in pkgs if p["name"] == "orzma"), None)
           if v is None:
-              sys.exit("package ozmux not found in cargo metadata")
+              sys.exit("package orzma not found in cargo metadata")
           print(v)')"
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             TAG_VERSION="${GITHUB_REF_NAME#v}"
@@ -91,7 +91,7 @@ jobs:
         env:
           VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          ZIP="target/bundle/ozmux-${VERSION}-arm64.zip"
+          ZIP="target/bundle/orzma-${VERSION}-arm64.zip"
           test -f "$ZIP" || { echo "Bundle not found: $ZIP"; exit 1; }
           test -f "${ZIP}.sha256" || { echo "Missing sidecar: ${ZIP}.sha256"; exit 1; }
           SHA="$(cut -d' ' -f1 "${ZIP}.sha256")"
@@ -112,13 +112,13 @@ jobs:
           VERSION: ${{ steps.meta.outputs.version }}
           SHA256: ${{ steps.meta.outputs.sha256 }}
         run: |
-          git clone "https://x-access-token:${GH_TOKEN}@github.com/not-elm/homebrew-ozmux.git" tap
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/not-elm/homebrew-orzma.git" tap
           mkdir -p tap/Casks
           sed -e "s/__VERSION__/${VERSION}/g" -e "s/__SHA256__/${SHA256}/g" \
-            build/macos/homebrew/ozmux.rb.tmpl > tap/Casks/ozmux.rb
+            build/macos/homebrew/orzma.rb.tmpl > tap/Casks/orzma.rb
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/ozmux.rb
-          git commit -m "ozmux ${VERSION}"
+          git add Casks/orzma.rb
+          git commit -m "orzma ${VERSION}"
           git push

@@ -6,7 +6,7 @@ use crate::input::InputPhase;
 use crate::ui::tmux::window_bar::WindowEntry;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, PrimaryWindow, SystemCursorIcon};
-use ozmux_tmux::{SelectWindow, TmuxClient};
+use orzma_tmux::{SelectWindow, TmuxClient};
 
 /// Registers the window-bar click and hover-cursor systems.
 pub(super) struct WindowBarInputPlugin;

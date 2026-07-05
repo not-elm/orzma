@@ -5,13 +5,13 @@
 Input handling is split across three layers with no single owner of the
 gather → decide → trigger pipeline:
 
-- **`crates/ozma_terminal`** owns BOTH gather/decide AND apply for **Default**
+- **`crates/orzma_terminal`** owns BOTH gather/decide AND apply for **Default**
   mode: `dispatch_input` (`src/input.rs:96`), `dispatch_mouse_buttons`
   (`src/mouse.rs:430`), `dispatch_mouse_wheel` (`src/mouse.rs:613`) read raw
   Bevy input, run the pure deciders `decide_button` (`src/mouse.rs:292`) /
   `decide_wheel` (`src/mouse.rs:405`), and `commands.trigger(...)` the apply
   events. The library also owns the input policy types (`TerminalInputBindings`
-  `src/input.rs:52`, `OzmaMouseConfig` `src/mouse.rs:47`, `FineModifier`
+  `src/input.rs:52`, `OrzmaMouseConfig` `src/mouse.rs:47`, `FineModifier`
   `src/mouse.rs:32`) and the focus/gate marker components (`KeyboardFocused`,
   `KeyboardDisabled`, `MouseDisabled`).
 - **`src/input/`** holds cross-mode input infrastructure (`hyperlink.rs`,
@@ -20,15 +20,15 @@ gather → decide → trigger pipeline:
 - **`src/mode/{default,tmux}/`** holds host dispatch. `src/mode/tmux/` *fully
   re-implements* its own keyboard (`forward_keys_to_tmux`), mouse
   (`tmux_gesture` `src/mode/tmux/mouse.rs:187`), and wheel dispatch, and does
-  NOT use the library's dispatch — tmux panes are `OzmaTerminal` entities that
+  NOT use the library's dispatch — tmux panes are `OrzmaTerminal` entities that
   the host marks `KeyboardDisabled` / `MouseDisabled` (`src/mode/tmux/gate.rs`)
   to suppress the library systems.
 
 The result is **two parallel dispatch implementations** (library = Default,
 host = Tmux) gated by `AppMode` + marker components, with duplicated low-level
 logic. `ClickTracker` is defined twice with an identical signature
-(`crates/ozma_terminal/src/mouse.rs:143` and `src/mode/tmux/mouse/decide.rs:76`);
-`cell_at_local` exists twice (`crates/ozma_terminal/src/mouse.rs:165` and
+(`crates/orzma_terminal/src/mouse.rs:143` and `src/mode/tmux/mouse/decide.rs:76`);
+`cell_at_local` exists twice (`crates/orzma_terminal/src/mouse.rs:165` and
 `src/surface_geom.rs:31`). The decision of "what does this key / click / wheel
 mean" is scattered between the library and the host.
 
@@ -38,7 +38,7 @@ mean" is scattered between the library and the host.
 gathering, deciding, and event-triggering moves into `src/*`, organized by
 function under `src/input/`.**
 
-- `ozma_terminal` (and `ozma_tty_engine`) keep the apply observers + the event
+- `orzma_terminal` (and `orzma_tty_engine`) keep the apply observers + the event
   vocabulary they observe; they read no raw input and call no `commands.trigger`.
 - `src/*` owns gather → decide → trigger for both Default and Tmux.
 - Low-level primitives (multi-click tracking, cell geometry, wheel
@@ -58,7 +58,7 @@ function under `src/input/`.**
   geometry swapped for the shared ones — not redesigned.
 - **No behavior change.** Same routing, gating, ordering, and shortcuts.
   Verified by the relocated unit tests staying green.
-- **No change to `ozma_tty_engine`.** `TerminalKeyInput` + `on_terminal_key_input`
+- **No change to `orzma_tty_engine`.** `TerminalKeyInput` + `on_terminal_key_input`
   stay as-is; the host triggers `TerminalKeyInput` for PTY-backed surfaces.
 
 ## Decisions made during brainstorming
@@ -72,42 +72,42 @@ function under `src/input/`.**
    `window_bar_input.rs`). State/UI-coupled files (`copy_mode.rs`,
    `confirm_prompt.rs`, `rename_prompt.rs`, `pane_focus.rs`) stay in
    `src/mode/tmux/`.
-4. **`ozma_webview`** = decoupled from focus: `sync_focused_webview` moves to
-   the host so `ozma_webview` no longer reads `KeyboardFocused` /
-   `OzmaTerminalInputSet`, letting `KeyboardFocused` move fully to `src/*`.
+4. **`orzma_webview`** = decoupled from focus: `sync_focused_webview` moves to
+   the host so `orzma_webview` no longer reads `KeyboardFocused` /
+   `OrzmaTerminalInputSet`, letting `KeyboardFocused` move fully to `src/*`.
 
 ## Current architecture (reference)
 
 Apply layer (stays):
 
-- `ozma_tty_engine`: `TerminalKeyInput` (EntityEvent) + `on_terminal_key_input`
+- `orzma_tty_engine`: `TerminalKeyInput` (EntityEvent) + `on_terminal_key_input`
   observer (encodes a key, writes to the PTY). Defined under
-  `crates/ozma_tty_engine/src/` (`events.rs` / `plugin.rs`).
-- `ozma_terminal::action` (`src/action.rs`): `PasteAction` (`:12`) +
-  `on_paste` (`:27`), `OzmaActionPlugin` (`:19`).
-- `ozma_terminal::mouse` apply: `on_terminal_mouse_effects` (`src/mouse.rs:891`)
+  `crates/orzma_tty_engine/src/` (`events.rs` / `plugin.rs`).
+- `orzma_terminal::action` (`src/action.rs`): `PasteAction` (`:12`) +
+  `on_paste` (`:27`), `OrzmaActionPlugin` (`:19`).
+- `orzma_terminal::mouse` apply: `on_terminal_mouse_effects` (`src/mouse.rs:891`)
   applies `MouseEffect` (`:242`, currently `pub(crate)`) carried by
   `TerminalMouseEffects` (`:280`, `pub(crate)`); emits `TerminalForwardInput`
   (`:267`, `pub`) for PTY-less (tmux) surfaces.
 
 Cross-crate consumers of soon-to-move items:
 
-- `crates/ozma_webview/src/webview/render.rs` reads `KeyboardFocused`
+- `crates/orzma_webview/src/webview/render.rs` reads `KeyboardFocused`
   (`:115`) in `sync_focused_webview` (`:113`) and schedules it
-  `.after(OzmaTerminalInputSet)` (`:90`). `ozma_webview` depends on
-  `ozma_terminal` (path dep). A binary cannot be a dependency, so anything
-  `ozma_webview` consumes must otherwise live in a library crate — decision (4)
+  `.after(OrzmaTerminalInputSet)` (`:90`). `orzma_webview` depends on
+  `orzma_terminal` (path dep). A binary cannot be a dependency, so anything
+  `orzma_webview` consumes must otherwise live in a library crate — decision (4)
   removes this consumption instead.
 - `KeyboardFocused` is WRITTEN only by the host today
   (`src/mode/default.rs:87`, `src/mode/tmux/pane_focus.rs:100`,
-  `src/mode/tmux/adopt.rs`); the library and `ozma_webview` only READ it.
+  `src/mode/tmux/adopt.rs`); the library and `orzma_webview` only READ it.
 - `KeyboardDisabled` / `MouseDisabled` have no library-crate readers once the
   library dispatch is removed (host readers: `src/ui/copy_mode.rs`,
   `src/input/hyperlink.rs`, host gates).
 
 ## Target architecture
 
-### `ozma_terminal` surface — after
+### `orzma_terminal` surface — after
 
 Keeps (apply + spawn vocabulary):
 
@@ -115,12 +115,12 @@ Keeps (apply + spawn vocabulary):
 - `TerminalMouseEffects` (→ `pub`, constructed via `pub fn new(entity, effects)`
   — fields stay private per the visibility rule), `MouseEffect` (→ `pub`;
   variants inherit it), `TerminalForwardInput`, `on_terminal_mouse_effects`.
-- `OzmaTerminal` + spawn/config (`OzmaTerminalBundle`, `OzmaSpawnOptions`,
-  `OzmaTerminalConfig`, `cells_for`, `resolve_shell`), `Clipboard` /
+- `OrzmaTerminal` + spawn/config (`OrzmaTerminalBundle`, `OrzmaSpawnOptions`,
+  `OrzmaTerminalConfig`, `cells_for`, `resolve_shell`), `Clipboard` /
   `build_paste_bytes`, `ExitPlugin`, `LayoutPlugin`, `on_add_inject_render`.
-- `OzmaTerminalPlugin` adds only: `ExitPlugin`, `LayoutPlugin`, the apply
+- `OrzmaTerminalPlugin` adds only: `ExitPlugin`, `LayoutPlugin`, the apply
   observers (`on_paste`, `on_terminal_mouse_effects`), `on_add_inject_render`.
-  `OzmaInputPlugin` is deleted; `OzmaMousePlugin` is reduced to the apply
+  `OrzmaInputPlugin` is deleted; `OrzmaMousePlugin` is reduced to the apply
   observer registration.
 
 Removed (→ host):
@@ -130,20 +130,20 @@ Removed (→ host):
   `resolve_button_event`, `synthesize_drag`, and the wheel/modifier helpers
   (`protocol_mods`, `build_wheel_modifiers*`, `fine_held`, `map_button`,
   `wheel_delta_cells`).
-- State: `OzmaMouseGesture`, `DragGesture`, `HeldPointer`, `ClickTracker`,
+- State: `OrzmaMouseGesture`, `DragGesture`, `HeldPointer`, `ClickTracker`,
   `WheelAccumulator`, `accumulate_notches`.
 - Geometry: `cell_at_local`, `cell_at_cursor`, `to_viewport_point`,
   `CellContext` → `src/surface_geom.rs`. `topmost_terminal_at` is byte-identical
   to the host's existing `topmost_surface_at` (`src/webview_pointer.rs:207`) —
   delete it and reuse that, rather than relocating a duplicate.
-- Policy/config: `OzmaMouseConfig`, `FineModifier`, `TerminalInputBindings`,
+- Policy/config: `OrzmaMouseConfig`, `FineModifier`, `TerminalInputBindings`,
   `ReservedChord`.
 - Keyboard mapping: `bevy_key_to_terminal_key`, `chord_matches`,
   `current_terminal_modifiers`.
 - Markers / sets: `KeyboardFocused`, `KeyboardDisabled`, `MouseDisabled`,
-  `OzmaTerminalInputSet`, `OzmaTerminalMouseSet`.
+  `OrzmaTerminalInputSet`, `OrzmaTerminalMouseSet`.
 
-`ozma_tty_engine` is unchanged.
+`orzma_tty_engine` is unchanged.
 
 ### Host module layout — after
 
@@ -161,9 +161,9 @@ src/input/
   gesture.rs       (NEW) the single ClickTracker, WheelAccumulator,
                          accumulate_notches, drag gesture types
   bindings.rs      (NEW) InputBindings (paste + reserved), MouseConfig,
-                         FineModifier      [was TerminalInputBindings / OzmaMouseConfig]
+                         FineModifier      [was TerminalInputBindings / OrzmaMouseConfig]
   focus.rs         (NEW) KeyboardFocused, KeyboardDisabled, MouseDisabled markers
-                         + sync_focused_webview (moved from ozma_webview)
+                         + sync_focused_webview (moved from orzma_webview)
   default_mode.rs  (MOVED) was src/mode/default/input.rs — default-host glue only
                          (maintain_input_gates, app_shortcut_handler, IME-commit routing)
   tmux.rs + tmux/  (MOVED) was src/mode/tmux/{input, mouse, mouse/*, forward,
@@ -172,11 +172,11 @@ src/input/
 
 src/surface_geom.rs   (EXPANDED) absorbs cell_at_cursor, to_viewport_point.
                       NOTE: cannot simply "join" the existing cell_at_local — the
-                      library cell helpers return (CellCoord, ozma_tty_engine::Side),
+                      library cell helpers return (CellCoord, orzma_tty_engine::Side),
                       surface_geom returns (u32, u32, surface_geom::Side), and tmux
                       copy-mode wants zero-based (u16, u16). Keep distinct adapters
                       per coordinate/Side convention; the Default decider must emit
-                      ozma_tty_engine::Side (carried by MouseEffect::SelStart).
+                      orzma_tty_engine::Side (carried by MouseEffect::SelStart).
 
 src/mode/{default,tmux}/   non-dispatch mode behavior only (render, copy_mode
                       state, pane_focus, prompts, window_bar render, adopt,
@@ -185,12 +185,12 @@ src/mode/{default,tmux}/   non-dispatch mode behavior only (render, copy_mode
 
 `KeyboardFocused` / `KeyboardDisabled` / `MouseDisabled` move to
 `src/input/focus.rs`; their import sites across `src/*` switch from
-`ozma_terminal::…` to `crate::input::focus::…`. The host remains the sole
+`orzma_terminal::…` to `crate::input::focus::…`. The host remains the sole
 writer of `KeyboardFocused`.
 
-### `ozma_webview` decoupling
+### `orzma_webview` decoupling
 
-Production usage is one system in `crates/ozma_webview/src/webview/render.rs`,
+Production usage is one system in `crates/orzma_webview/src/webview/render.rs`,
 but a test in `control_plane.rs` also imports it, so the move touches two files:
 
 - Move `sync_focused_webview` to `src/input/focus.rs` (co-located with the
@@ -199,17 +199,17 @@ but a test in `control_plane.rs` also imports it, so the move touches two files:
   `bevy_cef`'s `FocusedWebview` exactly as today.
 - The moved system imports `WebviewSource` from `bevy_cef::prelude` — it is a
   `bevy_cef` type (the host already imports it at `src/input/hyperlink.rs:23`),
-  NOT an `ozma_webview` type, so no `ozma_webview` export is needed.
+  NOT an `orzma_webview` type, so no `orzma_webview` export is needed.
   (`Webview` / `NonInteractive` are already `pub` and host-used.)
-- Move/rewrite the `ozma_webview` tests that reference the system — the
+- Move/rewrite the `orzma_webview` tests that reference the system — the
   `render.rs` `#[cfg(test)]` cases and
   `sync_preserves_app_declared_focus_from_control_plane`
-  (`crates/ozma_webview/src/control_plane.rs:1911`) — into binary-side tests (or
+  (`crates/orzma_webview/src/control_plane.rs:1911`) — into binary-side tests (or
   replace the control-plane one with a crate-local `SetFocus` test), since a
   crate cannot import a binary module.
-- `ozma_webview` drops the `ozma_terminal::{KeyboardFocused, OzmaTerminalInputSet}`
+- `orzma_webview` drops the `orzma_terminal::{KeyboardFocused, OrzmaTerminalInputSet}`
   import; `RenderPlugin` no longer registers the system. The crate still depends
-  on `ozma_terminal` for `OzmaTerminal` (unchanged).
+  on `orzma_terminal` for `OrzmaTerminal` (unchanged).
 
 ## Data flow (apply layer unchanged)
 
@@ -238,10 +238,10 @@ but a test in `control_plane.rs` also imports it, so the move touches two files:
    Load-bearing: the mouse helpers `protocol_mods` / `build_wheel_modifiers` call
    `current_terminal_modifiers`, so the mouse move (Phase 3) cannot precede it —
    the original "mouse before keyboard" order would not compile.
-1. **Decouple `ozma_webview` from focus** — move `sync_focused_webview` →
+1. **Decouple `orzma_webview` from focus** — move `sync_focused_webview` →
    `src/input/focus.rs`; import `WebviewSource` from `bevy_cef::prelude`; move the
-   referencing `ozma_webview` tests (`render.rs` + `control_plane.rs:1911`) to the
-   binary; drop the `KeyboardFocused` / `OzmaTerminalInputSet` import.
+   referencing `orzma_webview` tests (`render.rs` + `control_plane.rs:1911`) to the
+   binary; drop the `KeyboardFocused` / `OrzmaTerminalInputSet` import.
    (`KeyboardFocused` is still defined in the library here; the host imports it.)
 2. **Publish the mouse apply API** — add `TerminalMouseEffects::new` and make it +
    `MouseEffect` `pub`. The library still owns dispatch, so this is an additive,
@@ -250,7 +250,7 @@ but a test in `control_plane.rs` also imports it, so the move touches two files:
    / `dispatch_mouse_wheel` + deciders + engine-Side geometry into the MODE-NEUTRAL
    `src/input/mouse.rs`, marker-gated by `Without<MouseDisabled>` (NOT AppMode-gated —
    it serves normal tmux panes too, ceded to via `forward_wheel_to_tmux`'s
-   `CededToOzma` branch). Emit `ozma_tty_engine::Side` via the adapters; point the tmux
+   `CededToOrzma` branch). Emit `orzma_tty_engine::Side` via the adapters; point the tmux
    mouse at the shared `ClickTracker` (delete its duplicate). THEN delete the library
    mouse dispatch systems/resources, leaving `on_terminal_mouse_effects`. Move
    `MouseDisabled` + the mouse config to `src/input/{focus,bindings}.rs` together with
@@ -259,10 +259,10 @@ but a test in `control_plane.rs` also imports it, so the move touches two files:
 4. **Move Default keyboard dispatch to the host** — relocate `dispatch_input`,
    `bindings` (keyboard half), and `KeyboardFocused` / `KeyboardDisabled` →
    `src/input/{keyboard,bindings,focus}.rs`; update all `KeyboardFocused` import
-   sites; delete `ozma_terminal::input` / `OzmaInputPlugin`.
-5. **Delete the library input system sets** — remove `OzmaTerminalInputSet` /
-   `OzmaTerminalMouseSet`; host ordering uses `InputPhase`; slim
-   `OzmaTerminalPlugin`.
+   sites; delete `orzma_terminal::input` / `OrzmaInputPlugin`.
+5. **Delete the library input system sets** — remove `OrzmaTerminalInputSet` /
+   `OrzmaTerminalMouseSet`; host ordering uses `InputPhase`; slim
+   `OrzmaTerminalPlugin`.
 6. **Final relocation** — move the dispatch files into `src/input/default_mode.rs`
    and `src/input/tmux/`; update `mod` declarations + imports. (Earlier phases may
    land code directly in the final paths to fold this in.)
@@ -274,7 +274,7 @@ but a test in `control_plane.rs` also imports it, so the move touches two files:
   `topmost_terminal_at`, the gesture truth-tables, and the `sync_focused_webview`
   tests. These run without a PTY/GPU/App and should pass unchanged.
 - Keep the Default-dispatch behavior tests (paste chord, reserved chord,
-  meta-drop, focus routing) — relocate from `crates/ozma_terminal/src/input.rs`
+  meta-drop, focus routing) — relocate from `crates/orzma_terminal/src/input.rs`
   to the host Default dispatcher module.
 - No new behavior tests required for a no-behavior-change refactor; green suite
   is the acceptance gate.
@@ -282,12 +282,12 @@ but a test in `control_plane.rs` also imports it, so the move touches two files:
 ## Risks
 
 - **Wide `KeyboardFocused` import churn** — many `src/*` files plus removal from
-  `ozma_webview`; mechanical but broad. Mitigated by doing it in one phase (4).
-- **System-set reordering** — `OzmaTerminalInputSet` (`.in_set` for library
+  `orzma_webview`; mechanical but broad. Mitigated by doing it in one phase (4).
+- **System-set reordering** — `OrzmaTerminalInputSet` (`.in_set` for library
   dispatch, `.before` for host gates, `.after` for the moved webview-focus
   system) collapses into the host `InputPhase` sets. Must preserve the
   Hover → Dispatch → FocusedKey order and the gates-before-dispatch invariant.
-- **`ozma_webview` decouple equivalence** — `sync_focused_webview` has subtle
+- **`orzma_webview` decouple equivalence** — `sync_focused_webview` has subtle
   "preserve inline webview focus" / GC-on-despawn behavior; move it verbatim and
   rely on its relocated tests.
 - **`MouseEffect` / `TerminalMouseEffects` visibility widening** — expose
@@ -301,5 +301,5 @@ but a test in `control_plane.rs` also imports it, so the move touches two files:
   subtree if it grows large after absorbing keyboard + mouse + wheel + gates +
   shortcuts (defer; split if the single file exceeds comfort).
 - Config-type rename — RESOLVED (spec review): keep `TerminalInputBindings` /
-  `OzmaMouseConfig` names on relocation; a no-behavior-change refactor should
+  `OrzmaMouseConfig` names on relocation; a no-behavior-change refactor should
   minimize import churn. A rename can be a separate follow-up.

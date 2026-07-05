@@ -31,7 +31,7 @@ pub struct RuntimeRoot {
 
 impl RuntimeRoot {
     /// Resolves a runtime root under `parent/<pid>/<name>/`, falling back to
-    /// `/tmp/ozmux-webview` when the socket path would overflow the `sun_path` limit.
+    /// `/tmp/orzma-webview` when the socket path would overflow the `sun_path` limit.
     pub fn resolve_in(parent: &Path, pid: u32, name: &str) -> Result<Self, RuntimeRootError> {
         // NOTE: measure the LONGEST socket filename a webview uses
         // (`<name>.handlers.sock`) so the sun_path fit check is not optimistic;
@@ -48,9 +48,9 @@ impl RuntimeRoot {
             return Self::new_in(parent, pid, name);
         }
         // NOTE: the shared fallback parent is created with the process umask (so
-        // it is world-listable, like the legacy /tmp/ozmux); only the per-handle
+        // it is world-listable, like the legacy /tmp/orzma); only the per-handle
         // subdir below is 0700, which is what protects the sockets.
-        let fallback = Path::new("/tmp/ozmux-webview");
+        let fallback = Path::new("/tmp/orzma-webview");
         std::fs::create_dir_all(fallback)?;
         if needed(fallback) <= SUN_PATH_MAX {
             return Self::new_in(fallback, pid, name);

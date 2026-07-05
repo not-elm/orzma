@@ -22,7 +22,7 @@ p.write_text(txt)
 VERSION_STR="$NEW" python3 -c "
 import re, pathlib, os
 new_ver = os.environ['VERSION_STR']
-p = pathlib.Path('sdk/ozma-web/package.json')
+p = pathlib.Path('sdk/orzma-web/package.json')
 txt = p.read_text()
 txt = re.sub(r'(\"version\"\s*:\s*)\"[^\"]+\"', rf'\g<1>\"{new_ver}\"', txt, count=1)
 p.write_text(txt)

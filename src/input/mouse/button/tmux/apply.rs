@@ -13,8 +13,8 @@ use crate::action::terminal::{
     TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
 };
 use bevy::prelude::*;
-use ozma_tty_engine::SelectionType;
-use ozmux_tmux::{ResizePaneX, ResizePaneY, SelectPane, TmuxClient};
+use orzma_tmux::{ResizePaneX, ResizePaneY, SelectPane, TmuxClient};
+use orzma_tty_engine::SelectionType;
 use tmux_control_parser::DividerAxis;
 
 /// Plugin that registers the tmux mouse-effects apply observer.
@@ -134,7 +134,7 @@ fn on_tmux_mouse_effects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ozmux_tmux::PaneId;
+    use orzma_tmux::PaneId;
 
     #[test]
     fn observer_applies_without_panic_when_no_client() {

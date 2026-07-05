@@ -7,8 +7,8 @@
 //! gives every pane shell the C/POSIX locale. zsh's line editor then re-renders
 //! each typed multibyte glyph using its per-byte C-locale notation — an orphaned
 //! UTF-8 lead byte (which renders as the replacement character) followed by
-//! `<0083>`-style placeholders for the continuation bytes — which ozmux
-//! faithfully displays as garbage. ozmux's own outgoing bytes are correct UTF-8;
+//! `<0083>`-style placeholders for the continuation bytes — which orzma
+//! faithfully displays as garbage. orzma's own outgoing bytes are correct UTF-8;
 //! the corruption is purely in zsh's echo of typed wide characters.
 //!
 //! The fix is a global `set-environment -g LC_CTYPE <utf8>`: tmux merges its
@@ -18,7 +18,7 @@
 //! `LC_CTYPE` exported) to pick up the locale.
 //!
 //! Only `LC_CTYPE` is set — the one category zsh's wide-character echo depends
-//! on, and the one `ensure_utf8_locale_env` already normalizes for ozmux's own
+//! on, and the one `ensure_utf8_locale_env` already normalizes for orzma's own
 //! control client. A non-UTF-8 `LC_ALL` deliberately exported
 //! into the adopted server's environment outranks `LC_CTYPE` and is left
 //! untouched (overriding it would clobber a deliberate UTF-8 `LC_ALL` and other
@@ -26,7 +26,7 @@
 
 use crate::{UTF8_CTYPE_FALLBACK, is_utf8_locale};
 use bevy::prelude::*;
-use ozmux_tmux::{SetEnvironmentGlobal, TmuxClient, TmuxClientMut};
+use orzma_tmux::{SetEnvironmentGlobal, TmuxClient, TmuxClientMut};
 
 /// Registers the attach-edge `LC_CTYPE` propagation system.
 pub(super) struct TmuxLocalePlugin;
@@ -57,7 +57,7 @@ fn propagate_utf8_ctype(mut client: TmuxClientMut<'_, '_>) {
     }
 }
 
-/// The UTF-8 `LC_CTYPE` ozmux advertises to tmux panes spawned after attach, so
+/// The UTF-8 `LC_CTYPE` orzma advertises to tmux panes spawned after attach, so
 /// their shells render typed wide characters correctly instead of as `<00xx>`
 /// placeholders (see this module's docs for the full failure mode).
 ///
@@ -66,7 +66,7 @@ fn propagate_utf8_ctype(mut client: TmuxClientMut<'_, '_>) {
 ///
 /// This deliberately differs from `utf8_locale_fallback` (in `src/main.rs`):
 /// that one honors tmux's first-non-empty-wins precedence to decide *whether*
-/// ozmux's own process needs the fallback, so a leading non-UTF-8 value (e.g.
+/// orzma's own process needs the fallback, so a leading non-UTF-8 value (e.g.
 /// `LC_ALL=C`) makes it return the fallback. Here we instead want a concrete
 /// UTF-8 *value* to advertise to panes, so a non-UTF-8 entry is skipped rather
 /// than allowed to win. Because `ensure_utf8_locale_env` runs first, on macOS

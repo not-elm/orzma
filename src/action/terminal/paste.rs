@@ -2,10 +2,10 @@
 //! terminal entity's PTY as (optionally bracketed) paste bytes.
 
 use crate::clipboard::{Clipboard, build_paste_bytes};
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
-use ozma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
-use ozmux_tmux::TmuxPane;
+use orzma_tmux::TmuxPane;
+use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
 /// Pastes the system clipboard into the target terminal entity's PTY.
 #[derive(EntityEvent, Debug, Clone)]
@@ -37,7 +37,7 @@ fn on_paste(
     // (src/action/tmux/paste.rs).
     mut terminals: Query<
         (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
-        (With<OzmaTerminal>, Without<TmuxPane>),
+        (With<OrzmaTerminal>, Without<TmuxPane>),
     >,
 ) {
     let Some(text) = clipboard.read() else {
@@ -55,7 +55,7 @@ fn on_paste(
     let bracketed = handle.bracketed_paste_enabled();
     let bytes = build_paste_bytes(&text, bracketed);
     if let Err(e) = handle.write(&mut pty, &bytes) {
-        tracing::warn!(?e, entity = ?ev.entity, "ozma paste write failed");
+        tracing::warn!(?e, entity = ?ev.entity, "orzma paste write failed");
     }
 }
 
@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn on_paste_is_noop_for_tmux_pane() {
-        use ozmux_tmux::PaneId;
+        use orzma_tmux::PaneId;
         use tmux_control_parser::CellDims;
 
         let mut app = App::new();
@@ -93,7 +93,7 @@ mod tests {
         let pane = app
             .world_mut()
             .spawn((
-                OzmaTerminal,
+                OrzmaTerminal,
                 TmuxPane {
                     id: PaneId(1),
                     dims: CellDims {

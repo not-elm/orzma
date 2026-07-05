@@ -1,4 +1,4 @@
-"""Structure checks for the ozmux app-icon master SVG."""
+"""Structure checks for the orzma app-icon master SVG."""
 
 import unittest
 import xml.etree.ElementTree as ET

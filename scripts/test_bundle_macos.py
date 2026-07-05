@@ -21,7 +21,7 @@ def _write_fake_macho(dest: Path) -> None:
 
 class PureHelpers(unittest.TestCase):
     def test_zip_name(self):
-        self.assertEqual(bm.zip_name("ozmux", "0.1.0", "arm64"), "ozmux-0.1.0-arm64.zip")
+        self.assertEqual(bm.zip_name("orzma", "0.1.0", "arm64"), "orzma-0.1.0-arm64.zip")
 
     def test_version_less_than(self):
         self.assertTrue(bm.version_less_than("10.15", "11.0"))
@@ -29,31 +29,31 @@ class PureHelpers(unittest.TestCase):
         self.assertFalse(bm.version_less_than("12.3", "11.0"))
 
     def test_helper_bundle_id_base(self):
-        self.assertEqual(bm.helper_bundle_id("not.elm.ozmux", ""), "not.elm.ozmux.helper")
+        self.assertEqual(bm.helper_bundle_id("not.elm.orzma", ""), "not.elm.orzma.helper")
 
     def test_helper_bundle_id_variants(self):
-        self.assertEqual(bm.helper_bundle_id("not.elm.ozmux", " (GPU)"), "not.elm.ozmux.helper.gpu")
-        self.assertEqual(bm.helper_bundle_id("not.elm.ozmux", " (Renderer)"), "not.elm.ozmux.helper.renderer")
-        self.assertEqual(bm.helper_bundle_id("not.elm.ozmux", " (Plugin)"), "not.elm.ozmux.helper.plugin")
+        self.assertEqual(bm.helper_bundle_id("not.elm.orzma", " (GPU)"), "not.elm.orzma.helper.gpu")
+        self.assertEqual(bm.helper_bundle_id("not.elm.orzma", " (Renderer)"), "not.elm.orzma.helper.renderer")
+        self.assertEqual(bm.helper_bundle_id("not.elm.orzma", " (Plugin)"), "not.elm.orzma.helper.plugin")
 
     def test_config_paths(self):
         cfg = bm.BundleConfig(
-            version="1.2.3", app_name="ozmux", bin_name="ozmux",
-            bundle_id_base="not.elm.ozmux", arch="arm64", target_triple="aarch64-apple-darwin",
-            bin_source=Path("/tmp/ozmux"), cef_framework=Path("/tmp/cef"),
+            version="1.2.3", app_name="orzma", bin_name="orzma",
+            bundle_id_base="not.elm.orzma", arch="arm64", target_triple="aarch64-apple-darwin",
+            bin_source=Path("/tmp/orzma"), cef_framework=Path("/tmp/cef"),
             helper_bin=Path("/tmp/helper"), out_dir=Path("/tmp/out"),
             sign_identity="-", no_sign=False, notarize=False,
         )
-        self.assertEqual(cfg.app_path, Path("/tmp/out/ozmux.app"))
-        self.assertEqual(cfg.zip_path, Path("/tmp/out/ozmux-1.2.3-arm64.zip"))
+        self.assertEqual(cfg.app_path, Path("/tmp/out/orzma.app"))
+        self.assertEqual(cfg.zip_path, Path("/tmp/out/orzma-1.2.3-arm64.zip"))
 
 
 class CaskTemplate(unittest.TestCase):
     def test_template_has_companion_binary_stanzas(self):
-        tmpl = (bm.REPO_ROOT / "build" / "macos" / "homebrew" / "ozmux.rb.tmpl").read_text()
-        self.assertIn('app "ozmux.app"', tmpl)
+        tmpl = (bm.REPO_ROOT / "build" / "macos" / "homebrew" / "orzma.rb.tmpl").read_text()
+        self.assertIn('app "orzma.app"', tmpl)
         for name in bm.COMPANION_BINS:
-            self.assertIn(f'binary "#{{appdir}}/ozmux.app/Contents/Resources/{name}"', tmpl)
+            self.assertIn(f'binary "#{{appdir}}/orzma.app/Contents/Resources/{name}"', tmpl)
 
 
 class PlistLogic(unittest.TestCase):
@@ -85,10 +85,10 @@ class PlistLogic(unittest.TestCase):
             bm.merge_cef_keys({"LSEnvironment": "not-a-dict"})
 
     def test_build_helper_plist(self):
-        p = bm.build_helper_plist("ozmux Helper (GPU)", "not.elm.ozmux.helper.gpu")
-        self.assertEqual(p["CFBundleExecutable"], "ozmux Helper (GPU)")
-        self.assertEqual(p["CFBundleName"], "ozmux Helper (GPU)")
-        self.assertEqual(p["CFBundleIdentifier"], "not.elm.ozmux.helper.gpu")
+        p = bm.build_helper_plist("orzma Helper (GPU)", "not.elm.orzma.helper.gpu")
+        self.assertEqual(p["CFBundleExecutable"], "orzma Helper (GPU)")
+        self.assertEqual(p["CFBundleName"], "orzma Helper (GPU)")
+        self.assertEqual(p["CFBundleIdentifier"], "not.elm.orzma.helper.gpu")
         self.assertEqual(p["CFBundlePackageType"], "APPL")
         self.assertEqual(p["LSEnvironment"]["MallocNanoZone"], "0")
         self.assertTrue(p["LSUIElement"])
@@ -146,13 +146,13 @@ class CommandBuilders(unittest.TestCase):
 
     def test_companion_cargo_build_argv(self):
         self.assertEqual(
-            bm.companion_cargo_build_argv("aarch64-apple-darwin", "dist", ("ozbrowser", "ozmd")),
+            bm.companion_cargo_build_argv("aarch64-apple-darwin", "dist", ("orzbrowser", "orzmd")),
             ["cargo", "build", "--profile", "dist", "--target", "aarch64-apple-darwin",
-             "--locked", "-p", "ozbrowser", "-p", "ozmd"],
+             "--locked", "-p", "orzbrowser", "-p", "orzmd"],
         )
 
     def test_companion_bins_constant(self):
-        self.assertEqual(bm.COMPANION_BINS, ("ozbrowser", "ozmd"))
+        self.assertEqual(bm.COMPANION_BINS, ("orzbrowser", "orzmd"))
 
     def test_compute_sha256(self):
         with tempfile.NamedTemporaryFile(delete=False) as f:
@@ -174,10 +174,10 @@ class ConfigResolution(unittest.TestCase):
     def test_resolve_defaults_with_explicit_version(self):
         cfg = bm.resolve_config(self._parse(["--version", "0.1.0", "--skip-build"]))
         self.assertEqual(cfg.version, "0.1.0")
-        self.assertEqual(cfg.bin_name, "ozmux")
+        self.assertEqual(cfg.bin_name, "orzma")
         self.assertEqual(cfg.sign_identity, "-")
         self.assertFalse(cfg.notarize)
-        self.assertEqual(cfg.bin_source.name, "ozmux")
+        self.assertEqual(cfg.bin_source.name, "orzma")
         self.assertIn("aarch64-apple-darwin", str(cfg.bin_source))
 
     def test_resolve_sign_identity_from_env(self):
@@ -204,7 +204,7 @@ class ConfigResolution(unittest.TestCase):
     def test_resolve_companion_defaults(self):
         cfg = bm.resolve_config(self._parse(["--version", "0.1.0", "--skip-build"]))
         names = list(cfg.companion_bins.keys())
-        self.assertEqual(names, ["ozbrowser", "ozmd"])
+        self.assertEqual(names, ["orzbrowser", "orzmd"])
         for p in cfg.companion_bins.values():
             self.assertIn("aarch64-apple-darwin", str(p))
             self.assertIn("dist", str(p))
@@ -212,29 +212,29 @@ class ConfigResolution(unittest.TestCase):
     def test_resolve_companion_overrides(self):
         cfg = bm.resolve_config(self._parse([
             "--version", "0.1.0", "--skip-build",
-            "--ozbrowser-bin", "/tmp/ob", "--ozmd-bin", "/tmp/om",
+            "--orzbrowser-bin", "/tmp/ob", "--orzmd-bin", "/tmp/om",
         ]))
-        self.assertEqual(cfg.companion_bins, {"ozbrowser": Path("/tmp/ob"), "ozmd": Path("/tmp/om")})
+        self.assertEqual(cfg.companion_bins, {"orzbrowser": Path("/tmp/ob"), "orzmd": Path("/tmp/om")})
 
     def test_resolve_companion_override_expands_user(self):
         cfg = bm.resolve_config(self._parse([
-            "--version", "0.1.0", "--skip-build", "--ozbrowser-bin", "~/bins/ozbrowser",
+            "--version", "0.1.0", "--skip-build", "--orzbrowser-bin", "~/bins/orzbrowser",
         ]))
-        self.assertFalse(str(cfg.companion_bins["ozbrowser"]).startswith("~"))
-        self.assertTrue(str(cfg.companion_bins["ozbrowser"]).endswith("/bins/ozbrowser"))
+        self.assertFalse(str(cfg.companion_bins["orzbrowser"]).startswith("~"))
+        self.assertTrue(str(cfg.companion_bins["orzbrowser"]).endswith("/bins/orzbrowser"))
 
     def test_verify_prerequisites_missing_companion(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             # main bin, cef dir, helper all present; only a companion is missing
-            (d / "ozmux").write_bytes(b"")
+            (d / "orzma").write_bytes(b"")
             (d / "helper").write_bytes(b"")
             cef = d / "cef"
             cef.mkdir()
             cfg = bm.resolve_config(bm.build_arg_parser().parse_args([
-                "--version", "0.1.0", "--bin", str(d / "ozmux"),
+                "--version", "0.1.0", "--bin", str(d / "orzma"),
                 "--cef-framework", str(cef), "--helper-bin", str(d / "helper"),
-                "--ozbrowser-bin", str(d / "missing-ob"), "--ozmd-bin", str(d / "missing-om"),
+                "--orzbrowser-bin", str(d / "missing-ob"), "--orzmd-bin", str(d / "missing-om"),
             ]))
             with self.assertRaises(SystemExit):
                 bm.verify_prerequisites(cfg)
@@ -252,13 +252,13 @@ class AssembleAndEmbed(unittest.TestCase):
         return fw
 
     def _cfg(self, d: Path) -> "bm.BundleConfig":
-        _write_fake_macho(d / "ozmux")
+        _write_fake_macho(d / "orzma")
         _write_fake_macho(d / "helper")
         fw = self._fake_cef(d)
         return bm.BundleConfig(
-            version="9.9.9", app_name="ozmux", bin_name="ozmux",
-            bundle_id_base="not.elm.ozmux", arch="arm64", target_triple="aarch64-apple-darwin",
-            bin_source=d / "ozmux", cef_framework=fw, helper_bin=d / "helper",
+            version="9.9.9", app_name="orzma", bin_name="orzma",
+            bundle_id_base="not.elm.orzma", arch="arm64", target_triple="aarch64-apple-darwin",
+            bin_source=d / "orzma", cef_framework=fw, helper_bin=d / "helper",
             out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
         )
 
@@ -276,7 +276,7 @@ class AssembleAndEmbed(unittest.TestCase):
         bm.assemble_app(self.cfg)
         bm.embed_cef(self.cfg)
         contents = self.cfg.app_path / "Contents"
-        self.assertTrue((contents / "MacOS" / "ozmux").is_file())
+        self.assertTrue((contents / "MacOS" / "orzma").is_file())
         with open(contents / "Info.plist", "rb") as f:
             plist = plistlib.load(f)
         self.assertEqual(plist["CFBundleShortVersionString"], "9.9.9")
@@ -286,11 +286,11 @@ class AssembleAndEmbed(unittest.TestCase):
         self.assertTrue((fw / "Chromium Embedded Framework").is_file())
         for suffix, idsfx in [("", "helper"), (" (GPU)", "helper.gpu"),
                               (" (Renderer)", "helper.renderer"), (" (Plugin)", "helper.plugin")]:
-            helper = contents / "Frameworks" / f"ozmux Helper{suffix}.app"
-            self.assertTrue((helper / "Contents" / "MacOS" / f"ozmux Helper{suffix}").is_file())
+            helper = contents / "Frameworks" / f"orzma Helper{suffix}.app"
+            self.assertTrue((helper / "Contents" / "MacOS" / f"orzma Helper{suffix}").is_file())
             with open(helper / "Contents" / "Info.plist", "rb") as f:
                 hp = plistlib.load(f)
-            self.assertEqual(hp["CFBundleIdentifier"], f"not.elm.ozmux.{idsfx}")
+            self.assertEqual(hp["CFBundleIdentifier"], f"not.elm.orzma.{idsfx}")
             self.assertTrue(hp["LSUIElement"])
 
 
@@ -299,20 +299,20 @@ class CopyCompanions(unittest.TestCase):
     def test_copy_companions_into_resources(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            _write_fake_macho(d / "ozbrowser")
-            _write_fake_macho(d / "ozmd")
+            _write_fake_macho(d / "orzbrowser")
+            _write_fake_macho(d / "orzmd")
             cfg = bm.BundleConfig(
-                version="9.9.9", app_name="ozmux", bin_name="ozmux",
-                bundle_id_base="not.elm.ozmux", arch="arm64",
+                version="9.9.9", app_name="orzma", bin_name="orzma",
+                bundle_id_base="not.elm.orzma", arch="arm64",
                 target_triple="aarch64-apple-darwin",
-                bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
+                bin_source=d / "orzma", cef_framework=d / "cef", helper_bin=d / "helper",
                 out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
-                companion_bins={"ozbrowser": d / "ozbrowser", "ozmd": d / "ozmd"},
+                companion_bins={"orzbrowser": d / "orzbrowser", "orzmd": d / "orzmd"},
             )
             resources = cfg.app_path / "Contents" / "Resources"
             resources.mkdir(parents=True)
             bm.copy_companions(cfg)
-            for name in ("ozbrowser", "ozmd"):
+            for name in ("orzbrowser", "orzmd"):
                 dest = resources / name
                 self.assertTrue(dest.is_file())
                 self.assertTrue(os.access(dest, os.X_OK))
@@ -320,22 +320,22 @@ class CopyCompanions(unittest.TestCase):
     def test_override_basename_embeds_under_canonical_name(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            _write_fake_macho(d / "ozbrowser-cli")
-            _write_fake_macho(d / "ozmd-v2")
+            _write_fake_macho(d / "orzbrowser-cli")
+            _write_fake_macho(d / "orzmd-v2")
             cfg = bm.BundleConfig(
-                version="9.9.9", app_name="ozmux", bin_name="ozmux",
-                bundle_id_base="not.elm.ozmux", arch="arm64",
+                version="9.9.9", app_name="orzma", bin_name="orzma",
+                bundle_id_base="not.elm.orzma", arch="arm64",
                 target_triple="aarch64-apple-darwin",
-                bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
+                bin_source=d / "orzma", cef_framework=d / "cef", helper_bin=d / "helper",
                 out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
-                companion_bins={"ozbrowser": d / "ozbrowser-cli", "ozmd": d / "ozmd-v2"},
+                companion_bins={"orzbrowser": d / "orzbrowser-cli", "orzmd": d / "orzmd-v2"},
             )
             (cfg.app_path / "Contents" / "Resources").mkdir(parents=True)
             bm.copy_companions(cfg)
             resources = cfg.app_path / "Contents" / "Resources"
-            self.assertTrue((resources / "ozbrowser").is_file())
-            self.assertTrue((resources / "ozmd").is_file())
-            self.assertFalse((resources / "ozbrowser-cli").exists())
+            self.assertTrue((resources / "orzbrowser").is_file())
+            self.assertTrue((resources / "orzmd").is_file())
+            self.assertFalse((resources / "orzbrowser-cli").exists())
 
 
 class CopyLicenses(unittest.TestCase):
@@ -343,10 +343,10 @@ class CopyLicenses(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             cfg = bm.BundleConfig(
-                version="9.9.9", app_name="ozmux", bin_name="ozmux",
-                bundle_id_base="not.elm.ozmux", arch="arm64",
+                version="9.9.9", app_name="orzma", bin_name="orzma",
+                bundle_id_base="not.elm.orzma", arch="arm64",
                 target_triple="aarch64-apple-darwin",
-                bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
+                bin_source=d / "orzma", cef_framework=d / "cef", helper_bin=d / "helper",
                 out_dir=d / "out", sign_identity="-", no_sign=True, notarize=False,
             )
             (cfg.app_path / "Contents" / "Resources").mkdir(parents=True)
@@ -372,40 +372,40 @@ class EndToEnd(unittest.TestCase):
     def test_main_adhoc_end_to_end(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            _write_fake_macho(d / "ozmux")
+            _write_fake_macho(d / "orzma")
             _write_fake_macho(d / "helper")
-            self._unsigned_macho(d / "ozbrowser")
-            self._unsigned_macho(d / "ozmd")
+            self._unsigned_macho(d / "orzbrowser")
+            self._unsigned_macho(d / "orzmd")
             fw = self._fake_cef(d)
             out = d / "out"
             bm.main([
                 "--skip-build", "--version", "9.9.9",
-                "--bin", str(d / "ozmux"),
+                "--bin", str(d / "orzma"),
                 "--cef-framework", str(fw),
                 "--helper-bin", str(d / "helper"),
-                "--ozbrowser-bin", str(d / "ozbrowser"),
-                "--ozmd-bin", str(d / "ozmd"),
+                "--orzbrowser-bin", str(d / "orzbrowser"),
+                "--orzmd-bin", str(d / "orzmd"),
                 "--out-dir", str(out),
             ])
-            zip_path = out / "ozmux-9.9.9-arm64.zip"
+            zip_path = out / "orzma-9.9.9-arm64.zip"
             self.assertTrue(zip_path.is_file())
-            sha_file = out / "ozmux-9.9.9-arm64.zip.sha256"
+            sha_file = out / "orzma-9.9.9-arm64.zip.sha256"
             self.assertTrue(sha_file.is_file())
             self.assertEqual(bm.compute_sha256(zip_path), sha_file.read_text().split()[0])
-            resources = out / "ozmux.app" / "Contents" / "Resources"
-            self.assertTrue((resources / "ozbrowser").is_file())
-            self.assertTrue((resources / "ozmd").is_file())
+            resources = out / "orzma.app" / "Contents" / "Resources"
+            self.assertTrue((resources / "orzbrowser").is_file())
+            self.assertTrue((resources / "orzmd").is_file())
             self.assertTrue((resources / "THIRD-PARTY-LICENSES.md").is_file())
             self.assertTrue((resources / "CREDITS.html").is_file())
             # ad-hoc signature must verify deep+strict on the outer bundle
             subprocess.run(
-                ["codesign", "--verify", "--deep", "--strict", str(out / "ozmux.app")],
+                ["codesign", "--verify", "--deep", "--strict", str(out / "orzma.app")],
                 check=True,
             )
             # NOTE: codesign --verify --deep --strict on the outer bundle does not descend into
             # plain executables inside Contents/Resources (only into sub-bundles). We must
             # explicitly verify each companion so the test fails if the signing loop is removed.
-            for name in ("ozbrowser", "ozmd"):
+            for name in ("orzbrowser", "orzmd"):
                 subprocess.run(
                     ["codesign", "--verify", str(resources / name)],
                     check=True,
@@ -421,18 +421,18 @@ class CompanionSigning(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
-            app = d / "out" / "ozmux.app"
+            app = d / "out" / "orzma.app"
             (app / "Contents" / "Resources").mkdir(parents=True)
             cef = app / "Contents" / "Frameworks" / "Chromium Embedded Framework.framework"
             (cef / "Libraries").mkdir(parents=True)
             cfg = bm.BundleConfig(
-                version="9.9.9", app_name="ozmux", bin_name="ozmux",
-                bundle_id_base="not.elm.ozmux", arch="arm64",
+                version="9.9.9", app_name="orzma", bin_name="orzma",
+                bundle_id_base="not.elm.orzma", arch="arm64",
                 target_triple="aarch64-apple-darwin",
-                bin_source=d / "ozmux", cef_framework=d / "cef", helper_bin=d / "helper",
+                bin_source=d / "orzma", cef_framework=d / "cef", helper_bin=d / "helper",
                 out_dir=d / "out",
                 sign_identity="Developer ID Application: TEST", no_sign=False, notarize=False,
-                companion_bins={"ozbrowser": d / "ozbrowser", "ozmd": d / "ozmd"},
+                companion_bins={"orzbrowser": d / "orzbrowser", "orzmd": d / "orzmd"},
             )
             orig = bm.run
             bm.run = fake_run
@@ -447,7 +447,7 @@ class CompanionSigning(unittest.TestCase):
         def argv_for(path):
             return next(a for a in sign_argvs if a[-1] == str(path))
 
-        for name in ("ozbrowser", "ozmd"):
+        for name in ("orzbrowser", "orzmd"):
             a = argv_for(resources / name)
             self.assertIn("--options", a)            # hardened runtime kept
             self.assertNotIn("--entitlements", a)    # least privilege: no CEF grants
@@ -455,25 +455,25 @@ class CompanionSigning(unittest.TestCase):
         self.assertIn("--entitlements", argv_for(app))
 
 
-class OzmdWebAssetsGuard(unittest.TestCase):
+class OrzmdWebAssetsGuard(unittest.TestCase):
     def test_missing_assets_raises(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             (d / ".gitkeep").write_text("")
             (d / ".gitignore").write_text("*\n")
             with self.assertRaises(SystemExit):
-                bm.verify_ozmd_web_assets(d)
+                bm.verify_orzmd_web_assets(d)
 
     def test_present_assets_ok(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             (d / "index.html").write_text("<html></html>")
-            bm.verify_ozmd_web_assets(d)
+            bm.verify_orzmd_web_assets(d)
 
     def test_missing_dir_raises(self):
         with tempfile.TemporaryDirectory() as d:
             with self.assertRaises(SystemExit):
-                bm.verify_ozmd_web_assets(Path(d) / "does-not-exist")
+                bm.verify_orzmd_web_assets(Path(d) / "does-not-exist")
 
 
 class NotarizeGuards(unittest.TestCase):

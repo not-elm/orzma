@@ -47,7 +47,7 @@ refactor removes. `forward_keys_to_tmux`'s 345-line body also violates the
 
 A third system, `dispatch_input` (`src/input/keyboard.rs:46`,
 `LeaderGate::Read`, no `in_state` gate), types plain keys into the single
-`KeyboardFocused` `OzmaTerminal` (via `TerminalKeyInput`) and **withholds**
+`KeyboardFocused` `OrzmaTerminal` (via `TerminalKeyInput`) and **withholds**
 leader-consumed keys from the PTY. In Default mode it owns typing; in Tmux
 mode it finds no `KeyboardFocused` terminal, clears its own reader cursor,
 and returns — so `forward_keys_to_tmux` owns typing there (to the pane).
@@ -90,7 +90,7 @@ per-file plugin), all under `src/action/`:
   surface; copy-mode nav via `trigger_copy_mode_action`
   (`src/action/vi/keymap.rs`) → the shared, mode-agnostic
   `src/action/vi/applier.rs`; `TerminalKeyInput`
-  (`crates/ozma_tty_engine`) → PTY-attached surface.
+  (`crates/orzma_tty_engine`) → PTY-attached surface.
 
 Only two actions are **not** yet events: `Quit` (writes `AppExit`) and
 `DetachSession` (calls `request_detach(client)`, `src/session/tmux.rs:51`).
@@ -223,7 +223,7 @@ and does gather → (pure decide) → trigger. Neither holds a `TmuxClient`,
 
 - Guards: IME composing / window unfocused → `clear_leader_phase` + drain.
 - Resolves `in_copy_mode` / `webview_focused` from its own queries
-  (`KeyboardFocused OzmaTerminal`, `CopyModeState`, `FocusedWebview`).
+  (`KeyboardFocused OrzmaTerminal`, `CopyModeState`, `FocusedWebview`).
 - `classify_key_batch(...)`, then for each effect in `Vec` order:
   - `Action(Quit)` → `exit.write(AppExit::Success)`.
   - `Action(EnterCopyMode)` → `commands.trigger(EnterCopyModeActionEvent { entity })`
@@ -338,12 +338,12 @@ above; Type encoding; the tmux forward batch) live in each applier.
   `Shortcuts::opens_repeat_window` (its only caller was `keyboard.rs:101`).
   The unified decider resolves reserved chords to `Action`/`Swallow` and paste
   to `Action(Paste)` directly from `Shortcuts`. **Do NOT touch the rest of
-  `src/input/bindings.rs`** — it also owns mouse policy (`OzmaMouseConfig`,
+  `src/input/bindings.rs`** — it also owns mouse policy (`OrzmaMouseConfig`,
   `FineModifier`) that the mouse path still uses. (Confirm no other consumer of
   `TerminalInputBindings` before deleting; it is currently read only by
   `dispatch_input` and produced by `populate_input_bindings`.)
 - **Verify before deleting `dispatch_input`:** it is mode-agnostic and types
-  to the `KeyboardFocused` `OzmaTerminal`. tmux mirrors `ActivePane` onto
+  to the `KeyboardFocused` `OrzmaTerminal`. tmux mirrors `ActivePane` onto
   `KeyboardFocused` (`src/ui/tmux/pane_focus.rs:90`), so a `KeyboardFocused`
   entity exists in tmux mode too. Confirm the active tmux pane is
   `KeyboardDisabled` (or otherwise not typed by `dispatch_input`) today, so

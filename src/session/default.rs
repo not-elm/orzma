@@ -31,10 +31,10 @@ mod tests {
     use super::*;
     use crate::app_mode::AppMode;
     use bevy::state::app::StatesPlugin;
-    use spawn::OzmaTerminalConfig;
+    use spawn::OrzmaTerminalConfig;
 
     #[test]
-    fn config_shell_forwards_to_ozma_terminal_config() {
+    fn config_shell_forwards_to_orzma_terminal_config() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Default);
@@ -43,11 +43,11 @@ mod tests {
         });
         assert_eq!(
             app.world()
-                .resource::<OzmaTerminalConfig>()
+                .resource::<OrzmaTerminalConfig>()
                 .shell
                 .as_deref(),
             Some("/bin/fish"),
-            "DefaultSessionPlugin must forward shell through DefaultSpawnPlugin into OzmaTerminalConfig",
+            "DefaultSessionPlugin must forward shell through DefaultSpawnPlugin into OrzmaTerminalConfig",
         );
     }
 }

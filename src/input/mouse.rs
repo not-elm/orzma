@@ -1,4 +1,4 @@
-//! Shared mouse-dispatch plumbing for every `OzmaTerminal` surface. Hosts the
+//! Shared mouse-dispatch plumbing for every `OrzmaTerminal` surface. Hosts the
 //! `MouseInputPlugin` aggregator, the hit-test primitives (`CellContext`,
 //! `cell_at_*`, `hit_candidates`, the `TerminalSurfaces` query alias) shared by
 //! the per-path dispatchers in `button` and `wheel`, and the `MouseEffect` IR +
@@ -10,19 +10,19 @@ use crate::action::terminal::{
     TerminalMouseWrite, TerminalOpenUri, TerminalSelectionClear, TerminalSelectionCopy,
     TerminalSelectionStart, TerminalSelectionUpdate,
 };
-use crate::input::bindings::OzmaMouseConfig;
+use crate::input::bindings::OrzmaMouseConfig;
 use crate::input::focus::MouseDisabled;
 use crate::input::mouse::button::MouseButtonInputPlugin;
 use crate::input::mouse::wheel::MouseWheelInputPlugin;
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::CursorMoved;
 pub(crate) use button::tmux::divider_at;
-use ozma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
-use ozma_tty_renderer::TerminalCellMetricsResource;
-use ozma_tty_renderer::schema::TerminalGrid;
+use orzma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
+use orzma_tty_renderer::TerminalCellMetricsResource;
+use orzma_tty_renderer::schema::TerminalGrid;
 
 mod button;
 mod gesture;
@@ -42,7 +42,7 @@ impl Plugin for MouseInputPlugin {
             MouseWheelInputPlugin,
             webview::MouseWebviewPlugin,
         ))
-        .init_resource::<OzmaMouseConfig>();
+        .init_resource::<OrzmaMouseConfig>();
     }
 }
 
@@ -154,7 +154,7 @@ type TerminalSurfaces<'w, 's> = Query<
         &'static UiGlobalTransform,
         &'static TerminalGrid,
     ),
-    (With<OzmaTerminal>, Without<MouseDisabled>),
+    (With<OrzmaTerminal>, Without<MouseDisabled>),
 >;
 
 /// The `(entity, node, transform)` candidates `topmost_surface_at` hit-tests,
@@ -226,7 +226,7 @@ fn cell_context_for<'a>(
 mod test_support {
     use super::*;
     use bevy::window::PrimaryWindow;
-    use ozma_tty_renderer::TerminalCellMetricsResource;
+    use orzma_tty_renderer::TerminalCellMetricsResource;
 
     #[derive(Resource, Default)]
     pub(super) struct CapturedEffects(pub(super) Vec<MouseEffect>);
@@ -286,7 +286,7 @@ mod test_support {
     }
 
     pub(super) fn test_metrics() -> TerminalCellMetricsResource {
-        use ozma_tty_renderer::CellMetrics;
+        use orzma_tty_renderer::CellMetrics;
         TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,

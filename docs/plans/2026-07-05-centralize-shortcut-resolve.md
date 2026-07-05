@@ -17,14 +17,14 @@
 - Systems/observers are registered by the `Plugin` in their own file; aggregators only `add_plugins`. Cross-file system ordering is expressed with a shared `SystemSet` (or `.before/.after` a set), NEVER `.after(some_fn)`.
 - **`resolve_shortcuts` has ~17 candidate params — over Bevy's 16-`SystemParam` tuple-arity limit — so it MUST tuple-bundle related params (as `apply_tmux_shortcuts` already does) or use `#[derive(SystemParam)]` structs.**
 - **Behaviour-preserving:** identical `classify_key_batch` output, identical triggered events, identical guards/suppressions. `classify_key_batch` / `KeyEffect` / `BatchContext` (`src/input/resolve.rs`) and all `src/action/*` observers are UNCHANGED.
-- Full gate every commit: `cargo test -p ozmux` (bin crate — NOT `--lib`), then `cargo clippy --workspace --all-targets -- -D warnings` (CLEAN), then `cargo fmt`.
+- Full gate every commit: `cargo test -p orzma` (bin crate — NOT `--lib`), then `cargo clippy --workspace --all-targets -- -D warnings` (CLEAN), then `cargo fmt`.
 
 ---
 
 ## File Structure
 
 - **Create** `src/input/dispatch.rs` — `ShortcutBatch` (Message), `ShortcutSet::{Resolve, Apply}` (SystemSet), `resolve_shortcuts` (System), `DispatchPlugin`; unit + ordering tests.
-- **Modify** `src/input.rs` — declare `mod dispatch;`; add `DispatchPlugin` to `OzmuxInputPlugin`.
+- **Modify** `src/input.rs` — declare `mod dispatch;`; add `DispatchPlugin` to `OrzmaInputPlugin`.
 - **Modify** `src/input/default_mode.rs` — replace `apply_default_shortcuts`'s body/params with a thin `MessageReader<ShortcutBatch>` consumer; drop the old read+decide + `LeaderPhase`/`FocusedWebview`/prompt/focused-query params; keep `Res<Shortcuts>` (release-chord drop). Update `DefaultHostInputPlugin` registration.
 - **Modify** `src/input/tmux/input.rs` — replace `apply_tmux_shortcuts`'s body/params likewise; keep `ActionTargets`; keep `dispatch_tmux_action`, `forward_wheel_to_tmux`, `TmuxWheelAccumulator`. Update `InputPlugin` registration.
 - **Modify** `src/ui/tmux/pane_focus.rs` — order `sync_keyboard_focus_to_active_pane` `.before(InputPhase::FocusedKey)` so the deferred `KeyboardFocused` mirror flush lands before `resolve_shortcuts` reads it.
@@ -41,7 +41,7 @@ This is a SINGLE atomic change: `resolve_shortcuts` and the old appliers cannot 
 - Modify: `src/input.rs`, `src/input/default_mode.rs`, `src/input/tmux/input.rs`, `src/ui/tmux/pane_focus.rs`
 
 **Interfaces:**
-- Consumes: `classify_key_batch(&mut LeaderPhase, &Shortcuts, &ResolvedCopyModeKeys, impl Iterator<Item=&KeyboardInput>, BatchContext) -> Vec<KeyEffect>`, `KeyEffect`, `BatchContext` (from `crate::input::resolve`, UNCHANGED); `clear_leader_phase`, `LeaderPhase`, `LeaderGate`, `Shortcuts` (`crate::input::shortcuts`); `current_modifiers` (`crate::input`); `KeyboardFocused` (`crate::input::focus`); `OzmaTerminal`, `CopyModeState`, `FocusedWebview`, `ForwardKeys`, `ImeState`, `Modifiers`, `CopyPrompt`/`ConfirmState`/`RenamePrompt`; the apply-side events (`TerminalKeyInput`, `PasteAction`, `EnterCopyModeActionEvent`, `trigger_copy_mode_action`, `DetachSessionRequest`, `ForwardPaneKeysRequest`, the tmux `*Request`), `ActionTargets`, `dispatch_tmux_action`, `bevy_key_to_terminal_key`, `bevy_key_to_tmux_name`. (NOT `current_terminal_modifiers` — the Default applier builds `TerminalModifiers` inline from `batch.mods`, so that helper is unused by this design.)
+- Consumes: `classify_key_batch(&mut LeaderPhase, &Shortcuts, &ResolvedCopyModeKeys, impl Iterator<Item=&KeyboardInput>, BatchContext) -> Vec<KeyEffect>`, `KeyEffect`, `BatchContext` (from `crate::input::resolve`, UNCHANGED); `clear_leader_phase`, `LeaderPhase`, `LeaderGate`, `Shortcuts` (`crate::input::shortcuts`); `current_modifiers` (`crate::input`); `KeyboardFocused` (`crate::input::focus`); `OrzmaTerminal`, `CopyModeState`, `FocusedWebview`, `ForwardKeys`, `ImeState`, `Modifiers`, `CopyPrompt`/`ConfirmState`/`RenamePrompt`; the apply-side events (`TerminalKeyInput`, `PasteAction`, `EnterCopyModeActionEvent`, `trigger_copy_mode_action`, `DetachSessionRequest`, `ForwardPaneKeysRequest`, the tmux `*Request`), `ActionTargets`, `dispatch_tmux_action`, `bevy_key_to_terminal_key`, `bevy_key_to_tmux_name`. (NOT `current_terminal_modifiers` — the Default applier builds `TerminalModifiers` inline from `batch.mods`, so that helper is unused by this design.)
 - Produces:
   ```rust
   // `pub(in crate::input)` — the narrowest visibility that still lets the two
@@ -50,18 +50,18 @@ This is a SINGLE atomic change: `resolve_shortcuts` and the old appliers cannot 
   #[derive(Message)]
   pub(in crate::input) struct ShortcutBatch {
       pub(in crate::input) effects: Vec<KeyEffect>,   // excludes Quit / ReleaseWebviewFocus (handled in resolve_shortcuts)
-      pub(in crate::input) focused: Option<Entity>,   // the KeyboardFocused OzmaTerminal (default term / active pane)
+      pub(in crate::input) focused: Option<Entity>,   // the KeyboardFocused OrzmaTerminal (default term / active pane)
       pub(in crate::input) in_copy_mode: bool,
       pub(in crate::input) mods: Modifiers,
   }
   #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
   pub(in crate::input) enum ShortcutSet { Resolve, Apply }
-  pub(super) struct DispatchPlugin;   // added by OzmuxInputPlugin in crate::input
+  pub(super) struct DispatchPlugin;   // added by OrzmaInputPlugin in crate::input
   ```
 
 - [ ] **Step 1: Write the `resolve_shortcuts` unit + ordering tests (RED)**
 
-Create `src/input/dispatch.rs` with the `//!` doc, the `ShortcutBatch`/`ShortcutSet`/`DispatchPlugin`/`resolve_shortcuts` declarations (body `todo!()`), and `#[cfg(test)] mod tests`. Cases (Bevy `App` with `MinimalPlugins`, spawn a `(OzmaTerminal, KeyboardFocused)` and drive one `Update`):
+Create `src/input/dispatch.rs` with the `//!` doc, the `ShortcutBatch`/`ShortcutSet`/`DispatchPlugin`/`resolve_shortcuts` declarations (body `todo!()`), and `#[cfg(test)] mod tests`. Cases (Bevy `App` with `MinimalPlugins`, spawn a `(OrzmaTerminal, KeyboardFocused)` and drive one `Update`):
 
 ```rust
 // resolve behaviour
@@ -69,7 +69,7 @@ guarded_frame_emits_no_batch            // ime composing OR window unfocused -> 
 normal_batch_carries_effects_focused_in_copy_mode // a plain key -> one ShortcutBatch{ effects:[Type..], focused:Some(term), in_copy_mode:false, mods }
 quit_writes_appexit_not_in_batch        // Cmd+Q -> AppExit written, ShortcutBatch has NO Action{Quit}
 release_clears_webview_not_in_batch     // webview focused + release chord -> FocusedWebview.0=None, batch has NO ReleaseWebviewFocus
-focused_resolves_for_tmux_pane          // a (OzmaTerminal, TmuxPane, KeyboardFocused) entity resolves as batch.focused
+focused_resolves_for_tmux_pane          // a (OrzmaTerminal, TmuxPane, KeyboardFocused) entity resolves as batch.focused
 in_copy_mode_flag_set                   // focused surface has CopyModeState -> batch.in_copy_mode==true
 // ordering (load-bearing schedule edges)
 batch_consumed_same_update              // register resolve_shortcuts + a capture applier under ShortcutSet chain; write KeyboardInput; ONE update; assert the applier saw the batch this frame (not next)
@@ -79,7 +79,7 @@ Use the existing `KeyboardInput` builder pattern from `resolve.rs`/`keyboard.rs`
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cargo test -p ozmux input::dispatch`
+Run: `cargo test -p orzma input::dispatch`
 Expected: FAIL (`todo!()` / missing items).
 
 - [ ] **Step 3: Implement `resolve_shortcuts` + `ShortcutBatch` + `DispatchPlugin`**
@@ -97,7 +97,7 @@ if copy_prompt.open.is_some()               // CopyPrompt is global (Res<CopyPro
     events.clear();
     return;                              // no ShortcutBatch -> appliers don't run
 }
-let focused = focused_surface.single().ok();          // Query<Entity, (With<OzmaTerminal>, With<KeyboardFocused>)>
+let focused = focused_surface.single().ok();          // Query<Entity, (With<OrzmaTerminal>, With<KeyboardFocused>)>
 let in_copy_mode = focused.is_some_and(|e| copy_modes.get(e).is_ok());
 let webview_focused = focused_webview.0.is_some();
 let forward_chords = focused_webview.0
@@ -115,7 +115,7 @@ for effect in all {
 }
 batch.write(ShortcutBatch { effects, focused, in_copy_mode, mods });
 ```
-`DispatchPlugin::build`: `app.add_message::<ShortcutBatch>().configure_sets(Update, (ShortcutSet::Resolve, ShortcutSet::Apply).chain().in_set(InputPhase::FocusedKey)).add_systems(Update, resolve_shortcuts.in_set(InputPhase::FocusedKey).in_set(ShortcutSet::Resolve).in_set(LeaderGate::Advance).run_if(on_message::<KeyboardInput>));`. Add `mod dispatch;` + `DispatchPlugin` to `OzmuxInputPlugin` in `src/input.rs`.
+`DispatchPlugin::build`: `app.add_message::<ShortcutBatch>().configure_sets(Update, (ShortcutSet::Resolve, ShortcutSet::Apply).chain().in_set(InputPhase::FocusedKey)).add_systems(Update, resolve_shortcuts.in_set(InputPhase::FocusedKey).in_set(ShortcutSet::Resolve).in_set(LeaderGate::Advance).run_if(on_message::<KeyboardInput>));`. Add `mod dispatch;` + `DispatchPlugin` to `OrzmaInputPlugin` in `src/input.rs`.
 
 - [ ] **Step 4: Rewrite `apply_default_shortcuts` as a `ShortcutBatch` consumer**
 
@@ -158,7 +158,7 @@ In `src/ui/tmux/pane_focus.rs`, order `sync_keyboard_focus_to_active_pane` `.aft
 
 - [ ] **Step 7: Run the full suite + ordering tests (GREEN)**
 
-Run: `cargo test -p ozmux` (whole suite, including the `input::dispatch` ordering tests and the reworked applier tests).
+Run: `cargo test -p orzma` (whole suite, including the `input::dispatch` ordering tests and the reworked applier tests).
 Expected: PASS. Then `cargo clippy --workspace --all-targets -- -D warnings` (CLEAN) and `cargo fmt`. Do NOT run the GUI (`cargo run` is interactive) — the reworked capturing tests + the two ordering regression tests are the behaviour verification.
 
 - [ ] **Step 8: Commit**
@@ -184,7 +184,7 @@ Expected: `MessageReader<KeyboardInput>` survives only in `resolve_shortcuts` (+
 
 - [ ] **Step 2: Full gate**
 
-Run: `cargo test -p ozmux`, then `cargo clippy --workspace --all-targets -- -D warnings`, then `cargo fmt --check`.
+Run: `cargo test -p orzma`, then `cargo clippy --workspace --all-targets -- -D warnings`, then `cargo fmt --check`.
 Expected: all green, zero warnings.
 
 - [ ] **Step 3: Commit (if the sweep changed anything; else skip)**

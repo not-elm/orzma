@@ -12,8 +12,8 @@ use crate::{
     ui::copy_mode::EnterCopyModeActionEvent,
 };
 use bevy::prelude::*;
-use ozma_tty_engine::{TerminalKeyInput, TerminalModifiers};
-use ozmux_configs::shortcuts::Shortcut;
+use orzma_configs::shortcuts::Shortcut;
+use orzma_tty_engine::{TerminalKeyInput, TerminalModifiers};
 
 pub(super) struct ShortcutsDefaultModePlugin;
 

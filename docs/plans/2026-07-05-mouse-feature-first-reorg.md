@@ -92,7 +92,7 @@ git add -A && git commit -m "refactor(mouse): move topmost_surface_at to surface
 
 - [ ] **Step 1: Create the module file.** Move the entire remaining body of `src/webview_pointer.rs` (everything except `topmost_surface_at`, already moved in Task 1) into a new `src/input/mouse/webview.rs`. Update its `//!` module doc to describe "shared CEF pointer routing helpers for both the default-mode router and the tmux gesture arbiter." Keep all seven items `pub(crate)` for now.
 
-- [ ] **Step 2: Fix the moved file's imports.** `src/input/mouse/webview.rs` still imports `crate::surface::OzmaTerminal`, `crate::surface::geometry::phys_to_pane_local`, etc. — these `crate::` paths are unchanged by the move. Confirm no `super::`-relative imports remain (the crate-root file had none). Leave imports as-is.
+- [ ] **Step 2: Fix the moved file's imports.** `src/input/mouse/webview.rs` still imports `crate::surface::OrzmaTerminal`, `crate::surface::geometry::phys_to_pane_local`, etc. — these `crate::` paths are unchanged by the move. Confirm no `super::`-relative imports remain (the crate-root file had none). Leave imports as-is.
 
 - [ ] **Step 3: Declare the module and delete the old one.** In `src/input/mouse.rs` add `pub(crate) mod webview;` to the module declarations (near `mod button;` / `mod wheel;`). In `src/main.rs` delete line 18 `mod webview_pointer;`. Delete the file `src/webview_pointer.rs` (now empty of items).
 
@@ -121,7 +121,7 @@ git add -A && git commit -m "refactor(mouse): relocate webview routing core to i
 - Modify importers: `src/input/mouse/button.rs:14`, `src/input/mouse/wheel.rs:12`, `src/input/tmux/mouse.rs:21`, `src/input/tmux/mouse/decide.rs:12`
 
 **Interfaces:**
-- Produces module `crate::input::mouse::gesture` (temporary `pub(in crate::input)`, narrowed to private in Task 7) re-exposing the existing `pub(crate)` items (`DragGesture`, `DragPhase`, `HeldPointer`, `OzmaMouseGesture`, `ClickTracker`, `WheelAccumulator`, `accumulate_notches`, `lock_dominant_axis`, `wheel_delta_cells`, …) unchanged.
+- Produces module `crate::input::mouse::gesture` (temporary `pub(in crate::input)`, narrowed to private in Task 7) re-exposing the existing `pub(crate)` items (`DragGesture`, `DragPhase`, `HeldPointer`, `OrzmaMouseGesture`, `ClickTracker`, `WheelAccumulator`, `accumulate_notches`, `lock_dominant_axis`, `wheel_delta_cells`, …) unchanged.
 
 - [ ] **Step 1: Move the file.** Run: `git mv src/input/gesture.rs src/input/mouse/gesture.rs`
 
@@ -175,7 +175,7 @@ Add `use bevy::prelude::*;` to `mouse/webview.rs` if not already present. The `W
 - [ ] **Step 5: Register under MouseInputPlugin.** In `src/input/mouse.rs`, change `MouseInputPlugin::build` to add the plugin:
 ```rust
 app.add_plugins((MouseButtonInputPlugin, MouseWheelInputPlugin, webview::MouseWebviewPlugin))
-    .init_resource::<OzmaMouseConfig>();
+    .init_resource::<OrzmaMouseConfig>();
 ```
 
 - [ ] **Step 6: Build & test.** Run: `cargo build` then `cargo test`  Expected: all green, including `src/input/mouse/webview/default_mode.rs`'s own tests (`default_press_over_inline_rect_focuses_child`, `default_off_rect_press_clears_focus_and_records_no_press`, `default_suppressed_frame_releases_in_flight_press`).

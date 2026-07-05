@@ -1,14 +1,14 @@
 //! Dynamic OS window-title sync: reflects the active context per `AppMode`
-//! into the primary window's title bar — `session:window — ozmux` in Tmux
-//! mode, the focused terminal's OSC title + ` — ozmux` in Default mode.
+//! into the primary window's title bar — `session:window — orzma` in Tmux
+//! mode, the focused terminal's OSC title + ` — orzma` in Default mode.
 
 use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
-use crate::surface::OzmaTerminal;
+use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, Window};
-use ozma_tty_engine::{TerminalTitle, sanitize_title};
-use ozmux_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow};
+use orzma_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow};
+use orzma_tty_engine::{TerminalTitle, sanitize_title};
 
 /// Keeps the primary OS window title in sync with the active `AppMode`
 /// context: the tmux `session:window` in Tmux mode, and the focused
@@ -31,14 +31,14 @@ impl Plugin for WindowTitlePlugin {
     }
 }
 
-const APP_NAME: &str = "ozmux";
+const APP_NAME: &str = "orzma";
 
-const SUFFIX: &str = " — ozmux";
+const SUFFIX: &str = " — orzma";
 
 fn update_default_window_title(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
-    focused: Query<&TerminalTitle, (With<OzmaTerminal>, With<KeyboardFocused>)>,
-    terminals: Query<(), With<OzmaTerminal>>,
+    focused: Query<&TerminalTitle, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
+    terminals: Query<(), With<OrzmaTerminal>>,
 ) {
     let Ok(mut window) = window.single_mut() else {
         return;
@@ -126,62 +126,62 @@ fn apply_title(window: &mut Window, desired: String) {
 mod tests {
     use super::*;
     use bevy::state::app::StatesPlugin;
-    use ozmux_tmux::{SessionId, WindowId};
+    use orzma_tmux::{SessionId, WindowId};
 
     #[test]
     fn default_some_title_gets_suffix() {
-        assert_eq!(format_default(Some("vim")), "vim — ozmux");
+        assert_eq!(format_default(Some("vim")), "vim — orzma");
     }
 
     #[test]
     fn default_empty_title_is_app_name() {
-        assert_eq!(format_default(Some("")), "ozmux");
+        assert_eq!(format_default(Some("")), "orzma");
     }
 
     #[test]
     fn default_none_title_is_app_name() {
-        assert_eq!(format_default(None), "ozmux");
+        assert_eq!(format_default(None), "orzma");
     }
 
     #[test]
     fn tmux_session_and_window() {
-        assert_eq!(format_tmux("main", Some("vim")), "main:vim — ozmux");
+        assert_eq!(format_tmux("main", Some("vim")), "main:vim — orzma");
     }
 
     #[test]
     fn tmux_session_only_when_window_absent() {
-        assert_eq!(format_tmux("main", None), "main — ozmux");
+        assert_eq!(format_tmux("main", None), "main — orzma");
     }
 
     #[test]
     fn tmux_session_only_when_window_empty() {
-        assert_eq!(format_tmux("main", Some("")), "main — ozmux");
+        assert_eq!(format_tmux("main", Some("")), "main — orzma");
     }
 
     #[test]
     fn tmux_empty_session_is_app_name() {
-        assert_eq!(format_tmux("", Some("vim")), "ozmux");
-        assert_eq!(format_tmux("", None), "ozmux");
+        assert_eq!(format_tmux("", Some("vim")), "orzma");
+        assert_eq!(format_tmux("", None), "orzma");
     }
 
     #[test]
     fn default_whitespace_only_title_is_app_name() {
-        assert_eq!(format_default(Some("   ")), "ozmux");
+        assert_eq!(format_default(Some("   ")), "orzma");
     }
 
     #[test]
     fn default_trims_surrounding_whitespace() {
-        assert_eq!(format_default(Some("  vim  ")), "vim — ozmux");
+        assert_eq!(format_default(Some("  vim  ")), "vim — orzma");
     }
 
     #[test]
     fn tmux_whitespace_session_is_app_name() {
-        assert_eq!(format_tmux("   ", Some("vim")), "ozmux");
+        assert_eq!(format_tmux("   ", Some("vim")), "orzma");
     }
 
     #[test]
     fn tmux_trims_session_and_window() {
-        assert_eq!(format_tmux("  main  ", Some("  vim  ")), "main:vim — ozmux");
+        assert_eq!(format_tmux("  main  ", Some("  vim  ")), "main:vim — orzma");
     }
 
     fn primary_window_title(app: &mut App) -> String {
@@ -203,14 +203,14 @@ mod tests {
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((Window::default(), PrimaryWindow));
         app.world_mut().spawn((
-            OzmaTerminal,
+            OrzmaTerminal,
             KeyboardFocused,
             TerminalTitle(Some("vim".to_string())),
         ));
 
         app.update();
 
-        assert_eq!(primary_window_title(&mut app), "vim — ozmux");
+        assert_eq!(primary_window_title(&mut app), "vim — orzma");
     }
 
     #[test]
@@ -235,7 +235,7 @@ mod tests {
 
         app.update();
 
-        assert_eq!(primary_window_title(&mut app), "main:vim — ozmux");
+        assert_eq!(primary_window_title(&mut app), "main:vim — orzma");
     }
 
     #[test]
@@ -246,7 +246,7 @@ mod tests {
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((
             Window {
-                title: "main:vim — ozmux".to_string(),
+                title: "main:vim — orzma".to_string(),
                 ..default()
             },
             PrimaryWindow,
@@ -254,7 +254,7 @@ mod tests {
 
         app.update();
 
-        assert_eq!(primary_window_title(&mut app), "ozmux");
+        assert_eq!(primary_window_title(&mut app), "orzma");
     }
 
     #[test]
@@ -265,17 +265,17 @@ mod tests {
         app.add_plugins(WindowTitlePlugin);
         app.world_mut().spawn((
             Window {
-                title: "held — ozmux".to_string(),
+                title: "held — orzma".to_string(),
                 ..default()
             },
             PrimaryWindow,
         ));
         app.world_mut()
-            .spawn((OzmaTerminal, TerminalTitle(Some("vim".to_string()))));
+            .spawn((OrzmaTerminal, TerminalTitle(Some("vim".to_string()))));
 
         app.update();
 
-        assert_eq!(primary_window_title(&mut app), "held — ozmux");
+        assert_eq!(primary_window_title(&mut app), "held — orzma");
     }
 
     #[test]
@@ -300,7 +300,7 @@ mod tests {
 
         app.update();
 
-        assert_eq!(primary_window_title(&mut app), "main:vim — ozmux");
+        assert_eq!(primary_window_title(&mut app), "main:vim — orzma");
     }
 
     #[test]
@@ -327,7 +327,7 @@ mod tests {
         ));
 
         app.update();
-        assert_eq!(primary_window_title(&mut app), "main:vim — ozmux");
+        assert_eq!(primary_window_title(&mut app), "main:vim — orzma");
 
         // An unchanged frame must not recompute the title: overwrite it out of
         // band, update with no tmux change, and confirm the gate suppressed the
@@ -347,6 +347,6 @@ mod tests {
             .unwrap()
             .name = "other".to_string();
         app.update();
-        assert_eq!(primary_window_title(&mut app), "other:vim — ozmux");
+        assert_eq!(primary_window_title(&mut app), "other:vim — orzma");
     }
 }

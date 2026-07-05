@@ -60,11 +60,11 @@ importers:
         specifier: 'catalog:'
         version: 24.12.2
 
-  apps/ozmd:
+  apps/orzmd:
     dependencies:
-      '@ozma/web':
+      '@orzma/web':
         specifier: workspace:*
-        version: link:../../sdk/ozma-web
+        version: link:../../sdk/orzma-web
       dompurify:
         specifier: 'catalog:'
         version: 3.4.10
@@ -106,7 +106,7 @@ importers:
         specifier: 'catalog:'
         version: 4.1.5(@types/node@24.12.2)(@vitest/ui@4.1.5)(jsdom@25.0.1)(vite@8.0.10(@types/node@24.12.2)(esbuild@0.27.7)(jiti@2.6.1)(tsx@4.21.0))
 
-  sdk/ozma-web:
+  sdk/orzma-web:
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

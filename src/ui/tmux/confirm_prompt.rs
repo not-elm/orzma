@@ -1,4 +1,4 @@
-//! ozmux-owned confirm prompt: the kill-pane / kill-window shortcut actions
+//! orzma-owned confirm prompt: the kill-pane / kill-window shortcut actions
 //! open this prompt. It renders a client-side modal y/n prompt and runs the
 //! inner command only on confirm.
 
@@ -13,7 +13,7 @@ use bevy::ecs::schedule::common_conditions::{
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
-use ozmux_tmux::TmuxClient;
+use orzma_tmux::TmuxClient;
 
 const CONFIRM_Z: i32 = 330;
 

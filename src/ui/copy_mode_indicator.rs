@@ -60,7 +60,7 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
 /// inserter on `TmuxPane` hosts.
 fn attach_indicator_to_surface_host(
     mut commands: Commands,
-    hosts: Query<Entity, Added<ozma_tty_engine::TerminalHandle>>,
+    hosts: Query<Entity, Added<orzma_tty_engine::TerminalHandle>>,
     ui_font: Option<Res<TerminalUiFont>>,
 ) {
     for host in hosts.iter() {
@@ -97,7 +97,7 @@ fn attach_indicator_to_surface_host(
 /// `any_with_component::<CopyModeState>` so the schedule short-circuits
 /// when nothing is in copy mode.
 fn refresh_indicator(
-    hosts: Query<(&ozma_tty_engine::TerminalHandle, &Children), With<CopyModeState>>,
+    hosts: Query<(&orzma_tty_engine::TerminalHandle, &Children), With<CopyModeState>>,
     mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<CopyModeIndicator>>,
 ) {
     for (handle, children) in hosts.iter() {
@@ -152,7 +152,7 @@ mod tests {
     use super::*;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
-    use ozma_tty_engine::{SpawnOptions, TerminalBundle};
+    use orzma_tty_engine::{SpawnOptions, TerminalBundle};
 
     #[test]
     fn format_indicator_matches_tmux_default() {
@@ -231,7 +231,7 @@ mod tests {
         assert_eq!(indicator_count, 1, "exactly one chip after 10 ticks");
     }
 
-    use ozma_tty_engine::{Coalescer, TerminalHandle};
+    use orzma_tty_engine::{Coalescer, TerminalHandle};
 
     #[test]
     fn refresh_shows_when_copy_mode_state_inserted() {
