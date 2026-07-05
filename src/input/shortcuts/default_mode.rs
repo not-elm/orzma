@@ -4,7 +4,7 @@ use crate::{
     input::{
         keyboard::bevy_key_to_terminal_key,
         resolve::KeyEffect,
-        shortcuts::{ShortcutBatch, ShortcutSet, Shortcuts},
+        shortcuts::{ShortcutBatch, ShortcutSet},
     },
     ui::copy_mode::EnterCopyModeActionEvent,
 };
@@ -38,7 +38,6 @@ impl Plugin for ShortcutsDefaultModePlugin {
 pub(in crate::input) fn apply_default_shortcuts(
     mut commands: Commands,
     mut batches: MessageReader<ShortcutBatch>,
-    shortcuts: Res<Shortcuts>,
 ) {
     for batch in batches.read() {
         let terminal_mods = TerminalModifiers {
@@ -90,14 +89,8 @@ pub(in crate::input) fn apply_default_shortcuts(
                         trigger_copy_mode_action(&mut commands, entity, *action);
                     }
                 }
-                KeyEffect::Type { logical, key_code } => {
-                    // NOTE: a chord withheld from the PTY must never be typed.
-                    // The release-webview-focus chord is the one direct chord the
-                    // decider emits as `Type` (all others resolve to `Action`),
-                    // so the applier drops it here rather than forward it to the
-                    // terminal; tmux forwards it instead.
+                KeyEffect::Type { logical, .. } => {
                     if let Some(entity) = batch.focused
-                        && !shortcuts.is_release_webview_focus(*key_code, batch.mods)
                         && let Some(key) = bevy_key_to_terminal_key(logical)
                     {
                         commands.trigger(TerminalKeyInput {
@@ -108,7 +101,6 @@ pub(in crate::input) fn apply_default_shortcuts(
                     }
                 }
                 KeyEffect::WebviewForward { .. } => {}
-                KeyEffect::ReleaseWebviewFocus => {}
             }
         }
     }

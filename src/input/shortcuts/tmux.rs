@@ -22,8 +22,8 @@ use ozmux_configs::shortcuts::{
     PaneDirection as CfgPaneDirection, SplitOrientation as CfgSplitOrientation,
 };
 use ozmux_tmux::{
-    ActiveWindow, KeyMods, PaneDirection, SplitDirection,
-    TmuxSession, TmuxWindow, bevy_key_to_tmux_name,
+    ActiveWindow, KeyMods, PaneDirection, SplitDirection, TmuxSession, TmuxWindow,
+    bevy_key_to_tmux_name,
 };
 
 pub(super) struct ShortcutsTmuxModePlugin;
@@ -116,7 +116,6 @@ pub(in crate::input) fn apply_tmux_shortcuts(
                         names.push(name);
                     }
                 }
-                KeyEffect::ReleaseWebviewFocus => {}
             }
         }
 

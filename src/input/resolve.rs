@@ -45,8 +45,6 @@ pub(crate) enum KeyEffect {
         /// The physical key, for named-key mapping.
         key_code: KeyCode,
     },
-    /// Release keyboard focus from the focused webview back to the terminal.
-    ReleaseWebviewFocus,
 }
 
 /// Per-batch context `classify_key_batch` needs beyond the leader/shortcut
@@ -118,8 +116,13 @@ pub(crate) fn classify_key_batch<'a>(
                     });
                 }
                 LeaderStep::Passthrough => {
-                    if shortcuts.is_release_webview_focus(ev.key_code, ctx.mods) {
-                        effects.push(KeyEffect::ReleaseWebviewFocus);
+                    if let Some(action @ ShortcutAction::ReleaseWebviewFocus) =
+                        shortcuts.match_gui_action(ev.key_code, ctx.mods)
+                    {
+                        effects.push(KeyEffect::Action {
+                            action,
+                            via_leader: false,
+                        });
                     } else if ctx
                         .forward_chords
                         .iter()
@@ -930,7 +933,7 @@ mod tests {
     }
 
     #[test]
-    fn webview_release_chord_emits_release() {
+    fn webview_release_chord_emits_action() {
         let sc = test_shortcuts_with_direct_chord(
             KeyCode::Escape,
             mods(true, true, false, false),
@@ -942,6 +945,35 @@ mod tests {
         let mut c = ctx(mods(true, true, false, false), ms(0));
         c.webview_focused = true;
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
-        assert_eq!(effects, vec![KeyEffect::ReleaseWebviewFocus]);
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Action {
+                action: ShortcutAction::ReleaseWebviewFocus,
+                via_leader: false,
+            }],
+            "with a webview focused the release chord resolves as a normal action"
+        );
+    }
+
+    #[test]
+    fn release_chord_without_webview_emits_action_not_type() {
+        let sc = test_shortcuts_with_direct_chord(
+            KeyCode::Escape,
+            mods(true, true, false, false),
+            ShortcutAction::ReleaseWebviewFocus,
+        );
+        let resolved_copy = ResolvedCopyModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let events = [press(KeyCode::Escape, Key::Escape)];
+        let c = ctx(mods(true, true, false, false), ms(0));
+        let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
+        assert_eq!(
+            effects,
+            vec![KeyEffect::Action {
+                action: ShortcutAction::ReleaseWebviewFocus,
+                via_leader: false,
+            }],
+            "with no webview focused the release chord still resolves as an action, never a Type"
+        );
     }
 }

@@ -151,7 +151,10 @@ fn resolve_key_effects(
             } => {
                 exit.write(AppExit::Success);
             }
-            KeyEffect::ReleaseWebviewFocus => focused_webview.0 = None,
+            KeyEffect::Action {
+                action: ShortcutAction::ReleaseWebviewFocus,
+                ..
+            } => focused_webview.0 = None,
             other => effects.push(other),
         }
     }
@@ -404,9 +407,13 @@ mod tests {
             "the release chord clears the focused webview inline"
         );
         assert!(
-            !cap.effects
-                .iter()
-                .any(|e| matches!(e, KeyEffect::ReleaseWebviewFocus)),
+            !cap.effects.iter().any(|e| matches!(
+                e,
+                KeyEffect::Action {
+                    action: ShortcutAction::ReleaseWebviewFocus,
+                    ..
+                }
+            )),
             "ReleaseWebviewFocus is handled inline and never reaches the batch"
         );
     }

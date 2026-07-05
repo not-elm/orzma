@@ -162,23 +162,13 @@ pub(crate) struct Shortcuts {
 
 impl Shortcuts {
     /// Returns the GUI action bound to `(keycode, mods)` in the direct table, if
-    /// any. Excludes `ReleaseWebviewFocus` (matched via `is_release_webview_focus`).
+    /// any.
     pub(crate) fn match_gui_action(
         &self,
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<ShortcutAction> {
         Self::find_entry(&self.direct, keycode, mods).map(|s| s.action)
-    }
-
-    /// True when `(keycode, mods)` matches the configured release-webview-focus
-    /// chord in the direct table.
-    pub(crate) fn is_release_webview_focus(&self, keycode: KeyCode, mods: Modifiers) -> bool {
-        self.direct.iter().any(|s| {
-            s.action == ShortcutAction::ReleaseWebviewFocus
-                && s.keycode == keycode
-                && s.modifiers == mods
-        })
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
@@ -202,28 +192,21 @@ impl Shortcuts {
         }
     }
 
-    /// Returns the prefix-table entry bound to `(keycode, mods)`, excluding
-    /// `ReleaseWebviewFocus` (mirrors `match_gui_action`): leader dispatch only
-    /// runs when no webview is focused, so a leader-scoped
-    /// release-webview-focus could never fire — resolving it to `Swallow`
-    /// avoids a dead `RunAction`.
+    /// Returns the prefix-table entry bound to `(keycode, mods)`, if any.
     fn match_prefix_entry(&self, keycode: KeyCode, mods: Modifiers) -> Option<&OzmuxShortcut> {
         Self::find_entry(&self.prefix, keycode, mods)
     }
 
-    /// Returns the first entry in `table` bound to `(keycode, mods)`, excluding
-    /// `ReleaseWebviewFocus` (matched separately via `is_release_webview_focus`).
-    /// The single exclusion predicate behind both the direct and prefix lookups.
+    /// Returns the first entry in `table` bound to `(keycode, mods)`. The single
+    /// lookup predicate behind both the direct and prefix tables.
     fn find_entry(
         table: &[OzmuxShortcut],
         keycode: KeyCode,
         mods: Modifiers,
     ) -> Option<&OzmuxShortcut> {
-        table.iter().find(|s| {
-            s.action != ShortcutAction::ReleaseWebviewFocus
-                && s.keycode == keycode
-                && s.modifiers == mods
-        })
+        table
+            .iter()
+            .find(|s| s.keycode == keycode && s.modifiers == mods)
     }
 }
 
@@ -972,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn match_prefix_entry_excludes_release_webview_focus() {
+    fn match_prefix_entry_resolves_release_webview_focus() {
         let s = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OzmuxShortcut {
@@ -991,8 +974,9 @@ mod tests {
         assert_eq!(
             s.match_prefix_entry(KeyCode::KeyR, mods(false, false, false, false))
                 .map(|s| s.action),
-            None,
-            "a leader-scoped release-webview-focus resolves to Swallow, not a dead RunAction",
+            Some(ShortcutAction::ReleaseWebviewFocus),
+            "release-webview-focus is a normal action; a leader-scoped binding resolves to it \
+             (leader dispatch runs under webview focus since #240)",
         );
     }
 
@@ -1191,15 +1175,6 @@ mod tests {
     }
 
     #[test]
-    fn match_gui_action_excludes_release_webview_focus() {
-        let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(
-            r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
-            None
-        );
-    }
-
-    #[test]
     fn unmatched_chord_is_none() {
         let r = direct_only(&ConfigShortcuts::default());
         assert_eq!(
@@ -1213,10 +1188,17 @@ mod tests {
     }
 
     #[test]
-    fn is_release_webview_focus_matches_default_chord() {
+    fn release_webview_focus_matches_default_chord() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert!(r.is_release_webview_focus(KeyCode::Escape, mods(true, true, false, false)));
-        assert!(!r.is_release_webview_focus(KeyCode::KeyV, mods(false, false, false, true)));
+        assert_eq!(
+            r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
+            Some(ShortcutAction::ReleaseWebviewFocus),
+            "the default release chord resolves through match_gui_action like any action",
+        );
+        assert_ne!(
+            r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
+            Some(ShortcutAction::ReleaseWebviewFocus),
+        );
     }
 
     #[test]

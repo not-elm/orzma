@@ -169,7 +169,6 @@ mod tests {
     use crate::action::terminal::PasteAction;
     use crate::input::resolve::KeyEffect;
     use crate::input::shortcuts::default_mode::apply_default_shortcuts;
-    use crate::input::shortcuts::test_shortcuts_with_direct_chord;
     use crate::input::shortcuts::{ShortcutBatch, Shortcuts};
     use crate::ui::copy_mode::EnterCopyModeActionEvent;
     use bevy::app::App;
@@ -513,35 +512,6 @@ mod tests {
             app.world().resource::<Captured>().paste,
             1,
             "a leader-scoped paste (via_leader=true) must fire even in copy mode"
-        );
-    }
-
-    #[test]
-    fn release_webview_chord_is_not_typed() {
-        let ctrl_shift = Modifiers {
-            ctrl: true,
-            shift: true,
-            alt: false,
-            meta: false,
-        };
-        let (mut app, term) = default_dispatch_app(test_shortcuts_with_direct_chord(
-            KeyCode::Escape,
-            ctrl_shift,
-            ShortcutAction::ReleaseWebviewFocus,
-        ));
-        dispatch(
-            &mut app,
-            vec![type_effect(Key::Escape, KeyCode::Escape)],
-            Some(term),
-            false,
-            ctrl_shift,
-        );
-        let c = app.world().resource::<Captured>();
-        assert_eq!(
-            (c.copy_mode, c.paste, c.keys.len()),
-            (0, 0, 0),
-            "with no webview focused the release chord (Ctrl+Shift+Escape) must be dropped by \
-             the applier, never typed into the PTY as Escape"
         );
     }
 
