@@ -22,7 +22,7 @@
   - `PromptKind::copy_command()` fn name and the `<copy-command>` placeholder in its doc comment (`crates/orzma_tmux/src/command/copymode.rs:43`) — the file it lives in IS renamed, but these name tmux's `-X` protocol command, so they stay
   - `copy-paste` comment in `crates/orzma_tty_renderer/src/material.rs`
   - In **docs prose**: tmux's own feature names `copy-mode`, `copy-mode-vi`, `mode-keys`, and "tmux's own copy-mode key tables" — these describe real tmux features and stay.
-  - In **code comments**: the one external-tool equivalence reference `crates/orzma_tty_renderer/src/schema/cursor.rs:12` ("= tmux copy mode") — names tmux's actual feature; stays.
+  - In **code comments**: explicit references to tmux's own feature stay — `crates/orzma_tty_renderer/src/schema/cursor.rs:12` ("= tmux copy mode"), `src/render/tmux.rs:1824` ("local tmux copy mode"), and `crates/orzma_tmux/src/command/vi_mode.rs:47` ("Which copy-mode command to run on submit", the tmux `-X` command).
 - **No back-compat:** old config names must fail at startup (both `OrzmaConfigs` and `[shortcuts]` carry `#[serde(deny_unknown_fields)]`). Do not add aliases.
 - **Scope of automated `sed`:** code tasks operate on `src` and `crates` ONLY (never `docs/`, `target/`, `node_modules/`, `.git/`). Docs and `.github` are a separate, hand-edited task.
 - **Comment language:** English only (repo rule). Any comment you touch stays English.
@@ -314,35 +314,43 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 ---
 
-### Task 4B: Rename spaced "copy mode" in code comments and test strings
+### Task 4B: Rename prose "copy mode" / "Copy-mode" in code comments and test strings
 
-Tasks 1–4 renamed only `copy_mode` / `copy-mode` / `CopyMode` (and the abbreviated `Copy*` types). None targeted the **spaced** "copy mode" that appears in ~68 code comments, doc-comments (`///`, `//!`), and test-assertion string literals across `src` and `crates`. These overwhelmingly describe orzma's *own* feature and must become "vi mode" for consistency with the renamed identifiers. None are user-visible runtime strings (verified: only comments and `#[cfg(test)]` assertion messages).
+Tasks 1–4 renamed the identifier forms (`copy_mode` / lowercase `copy-mode` / `CopyMode`). The case-sensitive seds left the **prose** variants that appear only in comments, doc-comments (`///`, `//!`), and test-assertion string literals: spaced `copy mode` (24) / `Copy mode` (2), and capitalized hyphenated `Copy-mode` (7). These overwhelmingly describe orzma's *own* feature and must become "vi mode" / "Vi-mode" for consistency with the renamed identifiers. None are user-visible runtime strings (verified: only comments and `#[cfg(test)]` assertion messages).
 
-**Files:** every `src`/`crates` file containing spaced "copy mode" / "Copy mode" — chiefly `src/render/tmux.rs`, `src/input/keyboard/key_effect.rs`, `src/ui/vi_mode.rs`, `src/input/default_mode.rs`, `crates/orzma_configs/src/vi_mode.rs`, and ~20 others.
+**Files:** every `src`/`crates` file with a prose match — chiefly `src/render/tmux.rs`, `src/input/keyboard/key_effect.rs`, `src/ui/vi_mode.rs`, `src/input/default_mode.rs`, `src/input/mouse/wheel/tmux.rs`, `src/ui/vi_search.rs`, `src/clipboard.rs`, `crates/orzma_configs/src/vi_mode.rs`, and ~20 others.
 
-**Keep (do NOT rename) — the one external-tool equivalence reference:** `crates/orzma_tty_renderer/src/schema/cursor.rs:12` — `/// When the user is in alacritty vi mode (= tmux copy mode), the server` — "tmux copy mode" names tmux's *actual* feature for the reader; renaming it to "tmux vi mode" would be factually wrong (tmux's mode is `copy-mode`).
+**Keep (do NOT rename) — explicit references to tmux's OWN feature:**
+- `crates/orzma_tty_renderer/src/schema/cursor.rs:12` — "= tmux copy mode" (external equivalence; tmux's mode is `copy-mode`, not vi mode).
+- `src/render/tmux.rs:1824` — "local tmux copy mode" (names the tmux feature orzma mirrors).
+- `crates/orzma_tmux/src/command/vi_mode.rs:47` — "Which copy-mode command to run on submit" (lowercase `copy-mode`; the tmux `-X` command vocabulary, already a deliberate Task-1 keep). This line is NOT matched by 4B's seds (they target spaced + capitalized forms), so it needs no protection — it simply stays.
 
 **Interfaces:** none (comments/strings only, zero behavior change, no new tests).
 
-- [ ] **Step 1: Protect the one keep, then sed the rest**
+- [ ] **Step 1: Protect the two "tmux copy mode" keeps, then sed all three prose variants**
 
 ```bash
-# Temporarily mark the external-tool reference so the sed skips it, then restore.
-sed -i '' 's/= tmux copy mode/= tmux KEEPCOPY mode/' crates/orzma_tty_renderer/src/schema/cursor.rs
-rg -l 'copy mode' src crates | xargs sed -i '' 's/copy mode/vi mode/g'
-rg -l 'Copy mode' src crates | xargs sed -i '' 's/Copy mode/Vi mode/g'
-sed -i '' 's/= tmux KEEPCOPY mode/= tmux copy mode/' crates/orzma_tty_renderer/src/schema/cursor.rs
+# Protect the two external-tool references so the lowercase-space sed skips them.
+sed -i '' 's/= tmux copy mode/= tmux KEEPQ mode/' crates/orzma_tty_renderer/src/schema/cursor.rs
+sed -i '' 's/local tmux copy mode/local tmux KEEPQ mode/' src/render/tmux.rs
+# Rename orzma's own feature prose in all three variants.
+rg -l 'copy mode'  src crates | xargs sed -i '' 's/copy mode/vi mode/g'
+rg -l 'Copy mode'  src crates | xargs sed -i '' 's/Copy mode/Vi mode/g'
+rg -l 'Copy-mode'  src crates | xargs sed -i '' 's/Copy-mode/Vi-mode/g'
+# Restore the protected references.
+sed -i '' 's/= tmux KEEPQ mode/= tmux copy mode/' crates/orzma_tty_renderer/src/schema/cursor.rs
+sed -i '' 's/local tmux KEEPQ mode/local tmux copy mode/' src/render/tmux.rs
 ```
 
-Expected: silent. (If `rg -l 'Copy mode'` matches nothing, `xargs` runs `sed` with no files and prints a usage error — harmless; or guard with `rg -l 'Copy mode' src crates | xargs -r sed …` where supported. On macOS without `-r`, skip the line if the prior `rg` shows no capital-C hits.)
+Expected: silent. (If any `rg -l` matches nothing, `xargs` may run `sed` with no file args and print a harmless usage error; ignore it. Lowercase hyphen `copy-mode` is intentionally NOT in this set — Task 1 handled it, and the one surviving `vi_mode.rs:47` occurrence is a deliberate keep.)
 
-- [ ] **Step 2: Verify the keep survived and the rest are renamed**
+- [ ] **Step 2: Verify — only the documented keeps remain**
 
 ```bash
-rg -n -i 'copy mode' src crates
+rg -n -i 'copy[- ]mode' src crates
 ```
 
-Expected: exactly ONE line — `crates/orzma_tty_renderer/src/schema/cursor.rs:12` (`= tmux copy mode`). No other "copy mode" remains.
+Expected: exactly THREE lines — `crates/orzma_tty_renderer/src/schema/cursor.rs:12` ("= tmux copy mode"), `src/render/tmux.rs:1824` ("local tmux copy mode"), and `crates/orzma_tmux/src/command/vi_mode.rs:47` ("Which copy-mode command to run on submit"). No other prose "copy mode" / "Copy-mode" remains.
 
 - [ ] **Step 3: Build, test, format**
 
@@ -447,7 +455,7 @@ rg -n -i 'copy[_ -]?mode' src crates .github docs/configs.md
 rg -n -e 'CopyMotion' -e 'CopyScroll' -e 'CopyPrompt' -e 'CopySearch' -e 'copymode' src crates
 ```
 
-Expected: The first command returns ONLY the documented keeps: the deliberate tmux-feature references in `docs/configs.md` (from Task 5 Step 1) AND the single code-comment keep `crates/orzma_tty_renderer/src/schema/cursor.rs:12` ("= tmux copy mode", from Task 4B). The second returns nothing. Everything else must be empty. Historical `docs/plans/` and `docs/specs/` (except the new design spec) are intentionally NOT swept — they are records of past work.
+Expected: The first command returns ONLY the documented keeps: the deliberate tmux-feature references in `docs/configs.md` (from Task 5 Step 1) AND the three code-comment keeps from Task 4B — `crates/orzma_tty_renderer/src/schema/cursor.rs:12` ("= tmux copy mode"), `src/render/tmux.rs:1824` ("local tmux copy mode"), and `crates/orzma_tmux/src/command/vi_mode.rs:47` ("copy-mode command"). The second returns nothing. Everything else must be empty. Historical `docs/plans/` and `docs/specs/` (except the new design spec) are intentionally NOT swept — they are records of past work.
 
 If Step 1 required a `cargo fmt` run, commit it:
 
