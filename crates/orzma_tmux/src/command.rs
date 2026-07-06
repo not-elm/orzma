@@ -1,7 +1,7 @@
 //! Typed tmux command structs. Each implements `tmux_control::TmuxCommand`,
 //! rendering to the same raw control-mode string its former builder produced.
 
-mod copymode;
+mod vi_mode;
 mod env;
 mod io;
 mod ops;
@@ -9,7 +9,7 @@ mod query;
 mod size;
 mod target;
 
-pub use copymode::{Prompt, PromptKind};
+pub use vi_mode::{Prompt, PromptKind};
 pub use env::{SetEnvironmentGlobal, SetEnvironmentInSession, UnsetEnvironmentGlobal};
 pub use io::{SendBytes, SendPaneKeys};
 pub use ops::{

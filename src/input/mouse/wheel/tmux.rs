@@ -416,7 +416,7 @@ mod tests {
     }
 
     #[test]
-    fn wheel_owned_by_orzma_outside_copymode_altscreen_inline() {
+    fn wheel_owned_by_orzma_outside_vi_mode_altscreen_inline() {
         // A normal pane (not vi-mode, not alt-screen, no mouse mode) is ceded
         // to the local terminal — forward_wheel_to_tmux emits no send-keys for it.
         assert_eq!(
