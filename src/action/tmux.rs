@@ -11,6 +11,7 @@ mod paste;
 mod previous_window;
 mod rename_session;
 mod rename_window;
+mod resize_pane;
 mod select_pane;
 mod select_window;
 mod split_pane;
@@ -26,6 +27,7 @@ pub(crate) use next_window::NextWindowRequest;
 pub(crate) use previous_window::PreviousWindowRequest;
 pub(crate) use rename_session::RenameSessionRequest;
 pub(crate) use rename_window::RenameWindowRequest;
+pub(crate) use resize_pane::ResizePaneRequest;
 pub(crate) use select_pane::SelectPaneRequest;
 pub(crate) use select_window::SelectWindowRequest;
 pub(crate) use split_pane::SplitPaneRequest;
@@ -46,6 +48,7 @@ impl Plugin for TmuxActionPlugin {
             previous_window::PreviousWindowPlugin,
             rename_session::RenameSessionPlugin,
             rename_window::RenameWindowPlugin,
+            resize_pane::ResizePanePlugin,
             select_pane::SelectPanePlugin,
             select_window::SelectWindowPlugin,
             split_pane::SplitPanePlugin,

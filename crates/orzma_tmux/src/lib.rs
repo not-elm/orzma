@@ -19,10 +19,10 @@ mod state_restore;
 
 pub use command::{
     KillPane, KillWindow, NewWindow, NextWindow, PaneDirection, PreviousWindow, Prompt, PromptKind,
-    RefreshClient, RenameSession, RenameWindow, ResizePaneX, ResizePaneY, ResizeWindow, SelectPane,
-    SelectPaneTowards, SelectWindow, SendBytes, SendPaneKeys, SetEnvironmentGlobal,
-    SetEnvironmentInSession, SplitDirection, SplitWindow, UnsetEnvironmentGlobal,
-    WindowRefreshClient, ZoomPane,
+    RefreshClient, RenameSession, RenameWindow, ResizePaneTowards, ResizePaneX, ResizePaneY,
+    ResizeWindow, SelectPane, SelectPaneTowards, SelectWindow, SendBytes, SendPaneKeys,
+    SetEnvironmentGlobal, SetEnvironmentInSession, SplitDirection, SplitWindow,
+    UnsetEnvironmentGlobal, WindowRefreshClient, ZoomPane,
 };
 pub use components::{
     ActivePane, ActiveWindow, TmuxPane, TmuxSession, TmuxWindow, TmuxWindowLayout, WindowFlags,

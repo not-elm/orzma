@@ -68,6 +68,7 @@ pub(in crate::input) fn apply_default_shortcuts(
             }
             Shortcut::DetachSession
             | Shortcut::SelectPane(_)
+            | Shortcut::ResizePane(_)
             | Shortcut::SplitPane(_)
             | Shortcut::KillPane
             | Shortcut::ZoomPane

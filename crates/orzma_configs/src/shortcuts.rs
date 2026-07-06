@@ -410,6 +410,30 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub zoom_pane: Option<Binding>,
+    /// Resize the active pane's border left by 5 cells, repeatable (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub resize_left_pane: Option<Binding>,
+    /// Resize the active pane's border down by 5 cells, repeatable (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub resize_down_pane: Option<Binding>,
+    /// Resize the active pane's border up by 5 cells, repeatable (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub resize_up_pane: Option<Binding>,
+    /// Resize the active pane's border right by 5 cells, repeatable (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub resize_right_pane: Option<Binding>,
     /// Open a new window (tmux mode only).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
@@ -536,6 +560,10 @@ impl Default for Shortcuts {
             split_horizontal_pane: Some(parse_default_binding("<Leader>o")),
             kill_pane: Some(parse_default_binding("<Leader>p")),
             zoom_pane: Some(parse_default_binding("<Leader>z")),
+            resize_left_pane: Some(parse_default_binding("<Leader:r>Shift+H")),
+            resize_down_pane: Some(parse_default_binding("<Leader:r>Shift+J")),
+            resize_up_pane: Some(parse_default_binding("<Leader:r>Shift+K")),
+            resize_right_pane: Some(parse_default_binding("<Leader:r>Shift+L")),
             new_window: Some(parse_default_binding("<Leader>c")),
             kill_window: Some(parse_default_binding("<Leader>Shift+X")),
             next_window: Some(parse_default_binding("<Leader>n")),
@@ -614,6 +642,26 @@ impl Shortcuts {
             ),
             ("kill-pane", &self.kill_pane, Shortcut::KillPane),
             ("zoom-pane", &self.zoom_pane, Shortcut::ZoomPane),
+            (
+                "resize-left-pane",
+                &self.resize_left_pane,
+                Shortcut::ResizePane(PaneDirection::Left),
+            ),
+            (
+                "resize-down-pane",
+                &self.resize_down_pane,
+                Shortcut::ResizePane(PaneDirection::Down),
+            ),
+            (
+                "resize-up-pane",
+                &self.resize_up_pane,
+                Shortcut::ResizePane(PaneDirection::Up),
+            ),
+            (
+                "resize-right-pane",
+                &self.resize_right_pane,
+                Shortcut::ResizePane(PaneDirection::Right),
+            ),
             ("new-window", &self.new_window, Shortcut::NewWindow),
             ("kill-window", &self.kill_window, Shortcut::KillWindow),
             ("next-window", &self.next_window, Shortcut::NextWindow),
@@ -769,6 +817,8 @@ pub enum Shortcut {
     KillPane,
     /// Toggles zoom on the active pane (tmux mode only).
     ZoomPane,
+    /// Resizes the active pane's border in the given direction (tmux mode only).
+    ResizePane(PaneDirection),
     /// Opens a new window in the current session (tmux mode only).
     NewWindow,
     /// Kills the active window after a confirm prompt (tmux mode only).
@@ -1284,16 +1334,35 @@ mod tests {
             s.quit,
             Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap()))
         );
-        assert_eq!(s.bindings_iter().count(), 29);
+        assert_eq!(s.bindings_iter().count(), 33);
         assert_eq!(s.direct_chords().count(), 5);
-        assert_eq!(s.leader_chords().count(), 24);
+        assert_eq!(s.leader_chords().count(), 28);
     }
 
     #[test]
     fn bindings_iter_count_is_pinned_to_field_count() {
         // NOTE: drift guard — adding a Shortcuts field without its
         // bindings_iter() entry silently unbinds the action.
-        assert_eq!(Shortcuts::default().bindings_iter().count(), 29);
+        assert_eq!(Shortcuts::default().bindings_iter().count(), 33);
+    }
+
+    #[test]
+    fn default_resize_bindings_are_repeatable_shift_leader() {
+        let s = Shortcuts::default();
+        assert_eq!(
+            s.resize_left_pane,
+            Some(Binding::Leader {
+                chord: parse_key_chord("Shift+H").unwrap(),
+                repeat: true
+            })
+        );
+        assert_eq!(
+            s.resize_right_pane,
+            Some(Binding::Leader {
+                chord: parse_key_chord("Shift+L").unwrap(),
+                repeat: true
+            })
+        );
     }
 
     #[test]
@@ -1399,7 +1468,7 @@ detach-session = "<Leader>d"
             s.paste,
             Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
         );
-        assert_eq!(s.leader_chords().count(), 26);
+        assert_eq!(s.leader_chords().count(), 30);
     }
 
     #[test]
@@ -1462,7 +1531,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 

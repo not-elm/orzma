@@ -61,6 +61,18 @@ impl TmuxCommand for SplitWindow {
     }
 }
 
+impl PaneDirection {
+    /// The tmux directional flag (`-L`/`-D`/`-U`/`-R`) for this direction.
+    fn tmux_flag(self) -> &'static str {
+        match self {
+            PaneDirection::Left => "-L",
+            PaneDirection::Down => "-D",
+            PaneDirection::Up => "-U",
+            PaneDirection::Right => "-R",
+        }
+    }
+}
+
 /// `select-pane -L|-D|-U|-R -t %<id>` — focuses the target pane's neighbor.
 pub struct SelectPaneTowards {
     /// The pane whose neighbor is selected.
@@ -70,13 +82,36 @@ pub struct SelectPaneTowards {
 }
 impl TmuxCommand for SelectPaneTowards {
     fn into_raw_command(self) -> String {
-        let flag = match self.direction {
-            PaneDirection::Left => "-L",
-            PaneDirection::Down => "-D",
-            PaneDirection::Up => "-U",
-            PaneDirection::Right => "-R",
-        };
-        format!("select-pane {flag} -t %{}", self.pane.0)
+        format!(
+            "select-pane {} -t %{}",
+            self.direction.tmux_flag(),
+            self.pane.0
+        )
+    }
+}
+
+/// `resize-pane -L|-R|-U|-D -t %<id> <amount>` — moves the target pane's border
+/// by `amount` cells in the given direction.
+pub struct ResizePaneTowards {
+    /// The pane to resize.
+    pub pane: PaneId,
+    /// Which border to move.
+    pub direction: PaneDirection,
+    /// Adjustment in cells.
+    pub amount: u32,
+}
+impl TmuxCommand for ResizePaneTowards {
+    fn into_raw_command(self) -> String {
+        // NOTE: the <amount> adjustment is a trailing positional operand and MUST
+        // follow every option, including -t. tmux stops option parsing at the
+        // first non-option token, so an amount placed before -t makes -t surplus
+        // and tmux rejects the whole command ("too many arguments").
+        format!(
+            "resize-pane {} -t %{} {}",
+            self.direction.tmux_flag(),
+            self.pane.0,
+            self.amount
+        )
     }
 }
 
@@ -238,6 +273,46 @@ mod tests {
         assert_eq!(
             ZoomPane { pane: PaneId(4) }.into_raw_command(),
             "resize-pane -Z -t %4"
+        );
+    }
+
+    #[test]
+    fn resize_pane_towards_renders_amount_as_trailing_operand() {
+        assert_eq!(
+            ResizePaneTowards {
+                pane: PaneId(9),
+                direction: PaneDirection::Left,
+                amount: 5
+            }
+            .into_raw_command(),
+            "resize-pane -L -t %9 5"
+        );
+        assert_eq!(
+            ResizePaneTowards {
+                pane: PaneId(3),
+                direction: PaneDirection::Down,
+                amount: 5
+            }
+            .into_raw_command(),
+            "resize-pane -D -t %3 5"
+        );
+        assert_eq!(
+            ResizePaneTowards {
+                pane: PaneId(3),
+                direction: PaneDirection::Up,
+                amount: 5
+            }
+            .into_raw_command(),
+            "resize-pane -U -t %3 5"
+        );
+        assert_eq!(
+            ResizePaneTowards {
+                pane: PaneId(3),
+                direction: PaneDirection::Right,
+                amount: 5
+            }
+            .into_raw_command(),
+            "resize-pane -R -t %3 5"
         );
     }
 }

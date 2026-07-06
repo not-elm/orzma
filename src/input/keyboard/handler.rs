@@ -17,8 +17,8 @@ use crate::input::keyboard::key_effect::{
     BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch,
 };
 use crate::input::shortcuts::{
-    CopyModeMessage, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
-    Shortcuts, TypeMessage, WebviewForwardMessage, clear_leader_phase,
+    CopyModeMessage, HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages,
+    ShortcutSet, Shortcuts, TypeMessage, WebviewForwardMessage, clear_leader_phase,
 };
 use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
@@ -88,6 +88,7 @@ fn resolve_key_effects(
     mut focused_webview: ResMut<FocusedWebview>,
     mut cef_filter: ResMut<CefKeyboardFilter>,
     mut leader_phase: ResMut<LeaderPhase>,
+    mut held_repeat: ResMut<HeldRepeatKey>,
     mut messages: ShortcutMessages,
     guards: ModalGuards,
     inputs: ClassifyInputs,
@@ -112,6 +113,9 @@ fn resolve_key_effects(
             || guards.rename_prompt.is_some());
     if prompt_open || guards.ime.is_composing() || !focused_window {
         clear_leader_phase(&mut leader_phase);
+        if held_repeat.0.is_some() {
+            held_repeat.0 = None;
+        }
         clear_cef_filter(&mut cef_filter);
         events.clear();
         return;
@@ -138,16 +142,21 @@ fn resolve_key_effects(
     // suppression tied to the webview the keys were classified against, rather
     // than leaning on bevy_cef's None-target delivery guard to cover the gap.
     let suppress_target = focused_webview.0;
+    let mut held = held_repeat.0;
     let ClassifiedKeys {
         effects: all,
         webview_suppressed,
     } = classify_key_batch(
         &mut leader_phase,
+        &mut held,
         &inputs.shortcuts,
         &inputs.resolved_copy,
         events.read(),
         ctx,
     );
+    if held_repeat.0 != held {
+        held_repeat.0 = held;
+    }
 
     for effect in all {
         match effect {
@@ -298,6 +307,7 @@ mod tests {
             .init_resource::<FocusedWebview>()
             .init_resource::<CefKeyboardFilter>()
             .init_resource::<LeaderPhase>()
+            .init_resource::<HeldRepeatKey>()
             .init_resource::<ResolvedCopyModeKeys>()
             .init_resource::<CopyPrompt>()
             .init_resource::<Captured>()
