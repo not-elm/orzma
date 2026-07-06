@@ -227,7 +227,7 @@ fn pending_pane_output_waiting(pending: Res<PendingPaneOutput>) -> bool {
 /// already answers the program's device queries (DSR/DA) itself. So this drains
 /// the handle's reply queue and discards it — see the `take_replies` `NOTE`.
 ///
-/// The live bytes are advanced and emitted unconditionally, in and out of copy
+/// The live bytes are advanced and emitted unconditionally, in and out of vi
 /// mode: the local vi applier (`crate::action::vi::applier`) scrolls and
 /// selects on this same `TerminalHandle`, so the handle's own scrolled view is
 /// what the rendered grid always shows — there is no separate capture-fed

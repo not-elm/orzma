@@ -85,7 +85,7 @@ fn apply_tmux_shortcuts(
     for msg in shortcuts.read() {
         match msg.action {
             Shortcut::EnterViMode => {
-                // NOTE: re-entry guard — re-triggering while already in copy
+                // NOTE: re-entry guard — re-triggering while already in vi
                 // mode would double-insert ViModeState and re-enter vi mode.
                 if let Some(entity) = msg.focused
                     && !msg.in_vi_mode

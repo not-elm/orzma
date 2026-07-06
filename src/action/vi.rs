@@ -1,4 +1,4 @@
-//! Shared VI (vi-mode) action events: one `EntityEvent` per operation kind,
+//! Shared vi-mode action events: one `EntityEvent` per operation kind,
 //! fired by the vi-mode key gather and applied by `vi/applier.rs`'s
 //! local terminal-engine observers, for every pane, tmux and non-tmux alike.
 

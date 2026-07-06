@@ -568,7 +568,7 @@ impl TerminalHandle {
     /// `Term::vi_goto_point` (`term/mod.rs:855`). No-op when not in
     /// vi mode.
     ///
-    /// Called by the Bevy glue during mouse interaction inside copy
+    /// Called by the Bevy glue during mouse interaction inside vi
     /// mode: BEFORE every `selection_update_to`, AND BEFORE every
     /// `scroll` in the autoscroll loop, so alacritty's vi-mode
     /// recompute on viewport changes (`scroll_display` →
