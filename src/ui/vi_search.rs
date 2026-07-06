@@ -167,7 +167,7 @@ fn sync_prompt_ui(
 }
 
 fn handle_prompt_input(
-    mut copy_prompt: ResMut<ViModePrompt>,
+    mut vi_mode_prompt: ResMut<ViModePrompt>,
     mut events: MessageReader<KeyboardInput>,
     mut armed: Local<bool>,
     mut client: Option<Single<&mut TmuxClient>>,
@@ -187,7 +187,7 @@ fn handle_prompt_input(
         if ev.state != ButtonState::Pressed {
             continue;
         }
-        let Some(state) = copy_prompt.open.as_mut() else {
+        let Some(state) = vi_mode_prompt.open.as_mut() else {
             continue;
         };
         let step = apply_prompt_key(state, &ev.logical_key);
@@ -203,12 +203,12 @@ fn handle_prompt_input(
                 {
                     tracing::warn!(?e, "vi-mode prompt submit failed");
                 }
-                copy_prompt.open = None;
+                vi_mode_prompt.open = None;
                 *armed = false;
                 break;
             }
             PromptStep::Cancel => {
-                copy_prompt.open = None;
+                vi_mode_prompt.open = None;
                 *armed = false;
                 break;
             }

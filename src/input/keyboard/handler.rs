@@ -20,10 +20,10 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, WebviewForwardMessage, clear_leader_phase,
 };
-use crate::ui::copy_search::ViModePrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::ui::vi_mode::ViModeState;
+use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -54,7 +54,7 @@ impl Plugin for KeyboardHandlerPlugin {
 /// guards.
 #[derive(SystemParam)]
 struct ModalGuards<'w> {
-    copy_prompt: Res<'w, ViModePrompt>,
+    vi_mode_prompt: Res<'w, ViModePrompt>,
     confirm_state: Option<Res<'w, ConfirmState>>,
     rename_prompt: Option<Res<'w, RenamePrompt>>,
     ime: Res<'w, ImeState>,
@@ -67,7 +67,7 @@ struct ModalGuards<'w> {
 #[derive(SystemParam)]
 struct ClassifyInputs<'w> {
     shortcuts: Res<'w, Shortcuts>,
-    resolved_copy: Res<'w, ResolvedViModeKeys>,
+    resolved_vi_mode: Res<'w, ResolvedViModeKeys>,
     bevy_keys: Res<'w, ButtonInput<KeyCode>>,
     time: Res<'w, Time<Real>>,
 }
@@ -108,7 +108,7 @@ fn resolve_key_effects(
     // frame's keys and write no messages, so no key leaks to the terminal,
     // tmux, or the prefix state machine (and no preedit key is double-sent).
     let prompt_open = mode == AppMode::Tmux
-        && (guards.copy_prompt.open.is_some()
+        && (guards.vi_mode_prompt.open.is_some()
             || guards.confirm_state.is_some()
             || guards.rename_prompt.is_some());
     if prompt_open || guards.ime.is_composing() || !focused_window {
@@ -150,7 +150,7 @@ fn resolve_key_effects(
         &mut leader_phase,
         &mut held,
         &inputs.shortcuts,
-        &inputs.resolved_copy,
+        &inputs.resolved_vi_mode,
         events.read(),
         ctx,
     );

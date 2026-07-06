@@ -40,8 +40,8 @@ use session::default::DefaultSessionPlugin;
 use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
-    OrzmaUiPlugin, copy_search::ViModePromptPlugin, vi_mode::ViModePlugin,
-    vi_mode_indicator::ViModeIndicatorPlugin,
+    OrzmaUiPlugin, vi_mode::ViModePlugin, vi_mode_indicator::ViModeIndicatorPlugin,
+    vi_search::ViModePromptPlugin,
 };
 
 fn main() {

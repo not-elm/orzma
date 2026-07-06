@@ -24,7 +24,7 @@ use crate::input::mouse::webview::{
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
-use crate::ui::copy_search::ViModePrompt;
+use crate::ui::vi_search::ViModePrompt;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -64,7 +64,7 @@ impl Plugin for MouseWebviewDefaultModePlugin {
 
 /// Forwards left press/release to the inline CEF child under the cursor on the
 /// Default shell. Runs every frame in `AppMode::Default`: a suppressed frame
-/// (window unfocused / copy-search prompt) drains the reader and releases an
+/// (window unfocused / vi-search prompt) drains the reader and releases an
 /// in-flight press so the focused page is not left logically pressed.
 fn default_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
@@ -72,7 +72,7 @@ fn default_webview_pointer(
     mut buttons: MessageReader<MouseButtonInput>,
     surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
     metrics: Res<TerminalCellMetricsResource>,
-    copy_prompt: Res<ViModePrompt>,
+    vi_mode_prompt: Res<ViModePrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else {
@@ -81,7 +81,7 @@ fn default_webview_pointer(
         return;
     };
     let frame = webview_pointer_frame(window, &metrics);
-    if !window.focused || copy_prompt.open.is_some() {
+    if !window.focused || vi_mode_prompt.open.is_some() {
         buttons.clear();
         release_webview_press(
             &mut webview_press,
@@ -125,7 +125,7 @@ fn default_webview_pointer(
 
 /// Forwards pointer motion over an interactive inline rect of the Default shell
 /// to the child's CEF browser via the shared `forward_webview_move_at`. Skipped
-/// while a copy-search prompt owns input.
+/// while a vi-search prompt owns input.
 fn forward_default_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
@@ -135,13 +135,13 @@ fn forward_default_webview_mouse_moves(
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    copy_prompt: Res<ViModePrompt>,
+    vi_mode_prompt: Res<ViModePrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
         return;
     };
-    if copy_prompt.open.is_some() {
+    if vi_mode_prompt.open.is_some() {
         return;
     }
     let Ok(window) = windows.single() else {
@@ -184,14 +184,14 @@ fn forward_default_webview_wheel(
     overlay_rects: Query<&TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
-    copy_prompt: Res<ViModePrompt>,
+    vi_mode_prompt: Res<ViModePrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Ok(window) = windows.single() else {
         wheel.clear();
         return;
     };
-    if !window.focused || copy_prompt.open.is_some() {
+    if !window.focused || vi_mode_prompt.open.is_some() {
         wheel.clear();
         return;
     }

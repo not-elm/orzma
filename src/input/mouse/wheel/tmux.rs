@@ -12,9 +12,9 @@ use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::mouse::webview::{webview_wheel_delta, webview_wheel_target};
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
-use crate::ui::copy_search::ViModePrompt;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::ui::vi_mode::ViModeState;
+use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -206,7 +206,7 @@ fn forward_wheel_to_tmux(
     mut client: Option<Single<&mut TmuxClient>>,
     mut handles: Query<(&mut TerminalHandle, &mut Coalescer)>,
     wheel_params: TmuxWebviewWheelParams,
-    copy_prompt: Res<ViModePrompt>,
+    vi_mode_prompt: Res<ViModePrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
     configs: Res<OrzmaConfigsResource>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -245,7 +245,7 @@ fn forward_wheel_to_tmux(
     // can't accumulate behind a modal / unfocused window and lurch on resume.
     // focused_webview is NOT a guard here — the pointer-gated target above owns
     // webview scrolling, so a focused webview must not steal terminal wheel.
-    if !window.focused || copy_prompt.open.is_some() || rename_prompt.is_some() {
+    if !window.focused || vi_mode_prompt.open.is_some() || rename_prompt.is_some() {
         accumulator.residual_cells = 0.0;
         return;
     }
@@ -514,7 +514,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         let cursor_pane = spawn_pane_node(&mut app, false, false, 200.0, 400.0);
-        let _active_copy_pane = spawn_pane_node(&mut app, true, true, 600.0, 400.0);
+        let _active_vi_pane = spawn_pane_node(&mut app, true, true, 600.0, 400.0);
 
         let (resolved, owner) = app
             .world_mut()
