@@ -177,6 +177,28 @@ impl TmuxCommand for PreviousWindow {
     }
 }
 
+/// `switch-client -n` — switches the attached client to the next session.
+///
+/// No target: like `detach-client`, it acts on the current client, and `-CC`
+/// control mode has exactly one client. tmux then emits `%session-changed`,
+/// which orzma's projection handles by re-enumerating the new session.
+pub struct SwitchClientNext;
+impl TmuxCommand for SwitchClientNext {
+    fn into_raw_command(self) -> String {
+        "switch-client -n".to_string()
+    }
+}
+
+/// `switch-client -p` — switches the attached client to the previous session.
+///
+/// Targetless for the same reason as `SwitchClientNext`.
+pub struct SwitchClientPrevious;
+impl TmuxCommand for SwitchClientPrevious {
+    fn into_raw_command(self) -> String {
+        "switch-client -p".to_string()
+    }
+}
+
 /// `resize-pane -Z -t %<id>` — toggles zoom on the target pane.
 pub struct ZoomPane {
     /// Target pane id.
@@ -266,6 +288,12 @@ mod tests {
             .into_raw_command(),
             "previous-window -t $1"
         );
+    }
+
+    #[test]
+    fn switch_client_commands_render() {
+        assert_eq!(SwitchClientNext.into_raw_command(), "switch-client -n");
+        assert_eq!(SwitchClientPrevious.into_raw_command(), "switch-client -p");
     }
 
     #[test]
