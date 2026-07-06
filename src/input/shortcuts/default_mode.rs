@@ -76,6 +76,8 @@ pub(in crate::input) fn apply_default_shortcuts(
             | Shortcut::KillWindow
             | Shortcut::NextWindow
             | Shortcut::PreviousWindow
+            | Shortcut::NextSession
+            | Shortcut::PreviousSession
             | Shortcut::SelectWindow(_)
             | Shortcut::RenameWindow
             | Shortcut::RenameSession
