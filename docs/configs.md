@@ -75,7 +75,7 @@ webview_desaturate = 0.6  # f32 0..=1. Desaturation for inactive webviews (0 = f
 # the chord, then the next key) OR a bare modifier to TAP ("Cmd"/"Ctrl"/"Alt":
 # tap the modifier with no other key, then the next key). Defaults to "Cmd", and
 # is active only when at least one action is bound to "<Leader>..." — the stock
-# defaults below already bind two dozen actions to "<Leader>...", so the Cmd tap
+# defaults below already bind more than two dozen actions to "<Leader>...", so the Cmd tap
 # is armed out of the box. Set "" to disable it. "Shift" is not allowed as a tap.
 # Choose a leader distinct from your tmux prefix.
 leader = "Cmd"
@@ -265,10 +265,11 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 
 Note: some actions only take effect in one mode. `enter-copy-mode` now works in
 **both** modes: Alacritty vi mode in Default (single-terminal) mode, tmux
-copy-mode under tmux. `detach-session` and all 24 pane/window/rename actions
-above (`select-*-pane`, `split-*-pane`, `kill-pane`, `zoom-pane`, `new-window`,
-`kill-window`, `next-window`, `previous-window`, `select-window-0`…`9`,
-`rename-window`, `rename-session`) are active under tmux mode only — they are
+copy-mode under tmux. `detach-session` and all 28 pane/window/rename actions
+above (`select-*-pane`, `split-*-pane`, `kill-pane`, `zoom-pane`,
+`resize-*-pane`, `new-window`, `kill-window`, `next-window`, `previous-window`,
+`select-window-0`…`9`, `rename-window`, `rename-session`) are active under tmux
+mode only — they are
 inert in Default mode. `paste`, `quit`, and `release-webview-focus` work in
 both modes. This applies whether an action is bound directly or as a
 leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is
@@ -284,8 +285,8 @@ orzma resolves every copy-mode key itself from the `[copy-mode]` table, so
 your `tmux.conf` copy-mode / copy-mode-vi customizations and the tmux
 `mode-keys` option have no effect inside orzma. See "Copy-mode keys" below.
 
-Note on the leader: because the stock defaults above bind two dozen actions to
-`<Leader>...`, the `Cmd` tap leader is armed by default — tapping and
+Note on the leader: because the stock defaults above bind more than two dozen
+actions to `<Leader>...`, the `Cmd` tap leader is armed by default — tapping and
 releasing `Cmd` (with no other key/mouse press in between) arms the leader,
 and the very next keystroke either fires a bound `<Leader>` action or is
 swallowed if nothing matches. `LeaderPending` has no expiry: after an
@@ -300,7 +301,7 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   actions. Unbind the stock default explicitly (`new-window = ""`) or pick a
   free chord.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes all 24 tmux actions, silently
+  stock defaults that includes all 28 tmux actions, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g. `next-window = "Cmd+]"`.
 

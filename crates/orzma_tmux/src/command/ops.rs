@@ -278,7 +278,6 @@ mod tests {
 
     #[test]
     fn resize_pane_towards_renders_amount_as_trailing_operand() {
-        // NOTE: the <amount> adjustment MUST come after -t, or tmux rejects the command.
         assert_eq!(
             ResizePaneTowards {
                 pane: PaneId(9),
