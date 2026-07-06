@@ -722,6 +722,8 @@ fn key_to_keycode(key: &ConfigKey) -> Option<KeyCode> {
             '7' => KeyCode::Digit7,
             '8' => KeyCode::Digit8,
             '9' => KeyCode::Digit9,
+            '[' => KeyCode::BracketLeft,
+            ']' => KeyCode::BracketRight,
             _ => return None,
         },
         ConfigKey::Escape => KeyCode::Escape,
@@ -1229,6 +1231,18 @@ mod tests {
     #[test]
     fn digit_maps_to_keycode() {
         assert_eq!(key_to_keycode(&ConfigKey::Char('1')), Some(KeyCode::Digit1));
+    }
+
+    #[test]
+    fn bracket_maps_to_keycode() {
+        assert_eq!(
+            key_to_keycode(&ConfigKey::Char('[')),
+            Some(KeyCode::BracketLeft)
+        );
+        assert_eq!(
+            key_to_keycode(&ConfigKey::Char(']')),
+            Some(KeyCode::BracketRight)
+        );
     }
 
     #[test]

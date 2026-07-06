@@ -119,10 +119,10 @@ resize-right-pane     = "<Leader:r>Shift+L"  # resize-pane -R 5 (repeatable)
 # --- window actions (tmux mode only) ---
 new-window            = "<Leader>c"        # new-window
 kill-window           = "<Leader>Shift+X"  # kill-window, after a confirm prompt
-next-window           = "<Leader>e"        # next-window
-previous-window       = "<Leader>q"        # previous-window
-next-session          = "<Leader>Shift+E"  # switch-client -n (next session)
-previous-session      = "<Leader>Shift+Q"  # switch-client -p (previous session)
+next-window           = "<Leader>]"        # next-window
+previous-window       = "<Leader>["        # previous-window
+next-session          = "<Leader>Shift+]"  # switch-client -n (next session)
+previous-session      = "<Leader>Shift+["  # switch-client -p (previous session)
 select-window-0       = "<Leader>0"        # select-window -t @<id at tmux index 0>
 select-window-1       = "<Leader>1"
 select-window-2       = "<Leader>2"
@@ -250,10 +250,10 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `zoom-pane` | `<Leader>z` | Toggle zoom on the active pane (tmux mode only). |
 | `new-window` | `<Leader>c` | Open a new window (tmux mode only). |
 | `kill-window` | `<Leader>Shift+X` | Kill the active window, after a confirm prompt (tmux mode only). |
-| `next-window` | `<Leader>e` | Switch to the next window (tmux mode only). |
-| `previous-window` | `<Leader>q` | Switch to the previous window (tmux mode only). |
-| `next-session` | `<Leader>Shift+E` | Switch to the next session (tmux mode only). |
-| `previous-session` | `<Leader>Shift+Q` | Switch to the previous session (tmux mode only). |
+| `next-window` | `<Leader>]` | Switch to the next window (tmux mode only). |
+| `previous-window` | `<Leader>[` | Switch to the previous window (tmux mode only). |
+| `next-session` | `<Leader>Shift+]` | Switch to the next session (tmux mode only). |
+| `previous-session` | `<Leader>Shift+[` | Switch to the previous session (tmux mode only). |
 | `select-window-0` | `<Leader>0` | Switch to the window at tmux index 0 (tmux mode only). |
 | `select-window-1` | `<Leader>1` | Switch to the window at tmux index 1 (tmux mode only). |
 | `select-window-2` | `<Leader>2` | Switch to the window at tmux index 2 (tmux mode only). |

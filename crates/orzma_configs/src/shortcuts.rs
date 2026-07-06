@@ -51,7 +51,7 @@ impl Key {
         // (src/input/shortcuts.rs); a divergence silently disables the prefix
         // table (see the invariant above).
         match self {
-            Key::Char(c) => c.is_ascii_alphanumeric(),
+            Key::Char(c) => c.is_ascii_alphanumeric() || matches!(c, '[' | ']'),
             Key::Escape
             | Key::Space
             | Key::Enter
@@ -578,10 +578,10 @@ impl Default for Shortcuts {
             resize_right_pane: Some(parse_default_binding("<Leader:r>Shift+L")),
             new_window: Some(parse_default_binding("<Leader>c")),
             kill_window: Some(parse_default_binding("<Leader>Shift+X")),
-            next_window: Some(parse_default_binding("<Leader>e")),
-            previous_window: Some(parse_default_binding("<Leader>q")),
-            next_session: Some(parse_default_binding("<Leader>Shift+E")),
-            previous_session: Some(parse_default_binding("<Leader>Shift+Q")),
+            next_window: Some(parse_default_binding("<Leader>]")),
+            previous_window: Some(parse_default_binding("<Leader>[")),
+            next_session: Some(parse_default_binding("<Leader>Shift+]")),
+            previous_session: Some(parse_default_binding("<Leader>Shift+[")),
             select_window_0: Some(parse_default_binding("<Leader>0")),
             select_window_1: Some(parse_default_binding("<Leader>1")),
             select_window_2: Some(parse_default_binding("<Leader>2")),
@@ -1057,6 +1057,8 @@ mod tests {
         assert!(Key::Char('a').maps_to_physical_key());
         assert!(Key::Char('Z').maps_to_physical_key());
         assert!(Key::Char('7').maps_to_physical_key());
+        assert!(Key::Char('[').maps_to_physical_key());
+        assert!(Key::Char(']').maps_to_physical_key());
         assert!(Key::Escape.maps_to_physical_key());
         assert!(Key::Space.maps_to_physical_key());
         assert!(Key::Enter.maps_to_physical_key());
@@ -1549,7 +1551,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","detach-session":"<Leader>X","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>E","previous-window":"<Leader>Q","next-session":"<Leader>Shift+E","previous-session":"<Leader>Shift+Q","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","detach-session":"<Leader>X","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","next-session":"<Leader>Shift+]","previous-session":"<Leader>Shift+[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
