@@ -19,9 +19,6 @@ where
     F: FnOnce(&mut Terminal<Backend>) -> Result<(), Box<dyn Error>>,
 {
     enable_raw_mode()?;
-    // NOTE: build the guard immediately after raw mode is enabled and before any
-    // other fallible step; placing it after EnterAlternateScreen would leak raw
-    // mode if that call fails.
     let _guard = TerminalGuard;
     execute!(stdout(), EnterAlternateScreen)?;
     let backend = OrzmaBackend::new(CrosstermBackend::new(stdout()), orzma);
