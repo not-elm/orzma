@@ -4,7 +4,9 @@
 //! fully unit-testable without a Bevy `App`.
 
 use crate::action::vi::ResolvedCopyModeKeys;
-use crate::input::shortcuts::{LeaderPhase, LeaderStep, Shortcuts, is_modifier_key, step_leader};
+use crate::input::shortcuts::{
+    LeaderPhase, LeaderStep, Shortcuts, is_modifier_key, refire_held_repeat, step_leader,
+};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
 use orzma_configs::copy_mode::CopyModeAction;
@@ -81,6 +83,7 @@ pub(crate) struct ClassifiedKeys {
 /// leader-scoped action.
 pub(crate) fn classify_key_batch<'a>(
     leader_phase: &mut LeaderPhase,
+    held_repeat: &mut Option<KeyCode>,
     shortcuts: &Shortcuts,
     resolved_copy: &ResolvedCopyModeKeys,
     events: impl Iterator<Item = &'a KeyboardInput>,
@@ -89,10 +92,13 @@ pub(crate) fn classify_key_batch<'a>(
     // NOTE: an open repeat window must not intercept copy-mode keys — a
     // repeat-marked key doubling as a copy-mode key would re-fire its bound
     // action into the hidden live terminal instead of being resolved as a
-    // copy-mode key below. Close the window before the batch is processed
-    // (tmux/Default parity).
-    if ctx.in_copy_mode && matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
-        *leader_phase = LeaderPhase::Idle;
+    // copy-mode key below. Close the window (and disarm hold-to-repeat) before
+    // the batch is processed (tmux/Default parity).
+    if ctx.in_copy_mode {
+        *held_repeat = None;
+        if matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
+            *leader_phase = LeaderPhase::Idle;
+        }
     }
     let mut effects = Vec::new();
     let mut webview_suppressed = Vec::new();
@@ -104,7 +110,7 @@ pub(crate) fn classify_key_batch<'a>(
             // fired binding) are recorded in `webview_suppressed` so the caller
             // withholds them from CEF; a key the leader does not claim
             // (`Passthrough`) still resolves to release / forward as before.
-            match step_with_repeat(leader_phase, shortcuts, ev, ctx.mods, ctx.now) {
+            match step_with_repeat(leader_phase, held_repeat, shortcuts, ev, ctx.mods, ctx.now) {
                 LeaderStep::Swallow => {
                     webview_suppressed.push(ev.key_code);
                 }
@@ -137,13 +143,14 @@ pub(crate) fn classify_key_batch<'a>(
             }
             continue;
         }
-        let action = match step_with_repeat(leader_phase, shortcuts, ev, ctx.mods, ctx.now) {
-            LeaderStep::Swallow => continue,
-            LeaderStep::RunAction(action) => Some((action, true)),
-            LeaderStep::Passthrough => shortcuts
-                .match_gui_action(ev.key_code, ctx.mods)
-                .map(|action| (action, false)),
-        };
+        let action =
+            match step_with_repeat(leader_phase, held_repeat, shortcuts, ev, ctx.mods, ctx.now) {
+                LeaderStep::Swallow => continue,
+                LeaderStep::RunAction(action) => Some((action, true)),
+                LeaderStep::Passthrough => shortcuts
+                    .match_gui_action(ev.key_code, ctx.mods)
+                    .map(|action| (action, false)),
+            };
         if let Some((action, via_leader)) = action {
             effects.push(KeyEffect::Shortcut { action, via_leader });
             continue;
@@ -173,26 +180,42 @@ pub(crate) fn classify_key_batch<'a>(
     }
 }
 
-/// Advances the leader machine for one pressed event, honoring OS auto-repeat:
-/// outside the repeat window a repeat event does NOT step the machine.
+/// Advances the leader machine for one pressed event, honoring OS auto-repeat.
+/// A key still held after firing a repeat-marked binding keeps re-firing on
+/// every OS auto-repeat via `held_repeat`, independent of the
+/// `LeaderPhase::Repeat` time window (which is too short to bridge the OS
+/// initial-repeat delay). A fresh press arms `held_repeat` when it opens or
+/// renews the window and clears it otherwise; outside both, a repeat event does
+/// NOT step the machine.
 fn step_with_repeat(
     leader_phase: &mut LeaderPhase,
+    held_repeat: &mut Option<KeyCode>,
     shortcuts: &Shortcuts,
     ev: &KeyboardInput,
     mods: Modifiers,
     now: Duration,
 ) -> LeaderStep {
     if ev.repeat {
-        match *leader_phase {
+        if *held_repeat == Some(ev.key_code)
+            && let Some(action) =
+                refire_held_repeat(leader_phase, shortcuts, ev.key_code, mods, now)
+        {
+            return LeaderStep::RunAction(action);
+        }
+        return match *leader_phase {
             LeaderPhase::Pending => LeaderStep::Swallow,
             LeaderPhase::Repeat { .. } => {
                 step_leader(leader_phase, shortcuts, ev.key_code, mods, now)
             }
             LeaderPhase::Idle => LeaderStep::Passthrough,
-        }
-    } else {
-        step_leader(leader_phase, shortcuts, ev.key_code, mods, now)
+        };
     }
+    let step = step_leader(leader_phase, shortcuts, ev.key_code, mods, now);
+    *held_repeat = match (&step, &*leader_phase) {
+        (LeaderStep::RunAction(_), LeaderPhase::Repeat { .. }) => Some(ev.key_code),
+        _ => None,
+    };
+    step
 }
 
 /// True when `chord` (a focused webview's declared forward-key entry) matches
@@ -265,7 +288,16 @@ mod tests {
         events: &'a [KeyboardInput],
         ctx: BatchContext<'a>,
     ) -> Vec<KeyEffect> {
-        classify_key_batch(leader_phase, shortcuts, resolved_copy, events.iter(), ctx).effects
+        let mut held = None;
+        classify_key_batch(
+            leader_phase,
+            &mut held,
+            shortcuts,
+            resolved_copy,
+            events.iter(),
+            ctx,
+        )
+        .effects
     }
 
     fn run_full<'a>(
@@ -275,7 +307,15 @@ mod tests {
         events: &'a [KeyboardInput],
         ctx: BatchContext<'a>,
     ) -> ClassifiedKeys {
-        classify_key_batch(leader_phase, shortcuts, resolved_copy, events.iter(), ctx)
+        let mut held = None;
+        classify_key_batch(
+            leader_phase,
+            &mut held,
+            shortcuts,
+            resolved_copy,
+            events.iter(),
+            ctx,
+        )
     }
 
     #[test]
@@ -432,6 +472,124 @@ mod tests {
             "an auto-repeat outside the window must not step the leader machine"
         );
         assert_eq!(phase, LeaderPhase::Idle);
+    }
+
+    #[test]
+    fn held_repeat_refires_after_time_window_expires() {
+        // Hold the key: the first press fires + arms the 500ms window AND
+        // hold-to-repeat. The OS's first auto-repeat lands well past the window
+        // (~1020ms), yet it must STILL re-fire the action — not leak to Type.
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
+        let rc = ResolvedCopyModeKeys::default();
+        let mut phase = LeaderPhase::Pending;
+        let mut held = None;
+        let first = [press(KeyCode::KeyH, Key::Character("h".into()))];
+        let out1 = classify_key_batch(
+            &mut phase,
+            &mut held,
+            &sc,
+            &rc,
+            first.iter(),
+            ctx(no_mods(), ms(0)),
+        );
+        assert_eq!(
+            out1.effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::EnterCopyMode,
+                via_leader: true,
+            }],
+            "the leader press fires the repeat binding"
+        );
+        assert_eq!(
+            held,
+            Some(KeyCode::KeyH),
+            "the held key arms hold-to-repeat"
+        );
+
+        let repeat = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
+        let out2 = classify_key_batch(
+            &mut phase,
+            &mut held,
+            &sc,
+            &rc,
+            repeat.iter(),
+            ctx(no_mods(), ms(1020)),
+        );
+        assert_eq!(
+            out2.effects,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::EnterCopyMode,
+                via_leader: true,
+            }],
+            "an OS auto-repeat of the held key re-fires even after the 500ms window closed"
+        );
+        assert!(
+            !out2
+                .effects
+                .iter()
+                .any(|e| matches!(e, KeyEffect::Type { .. })),
+            "the held key must not leak into the terminal"
+        );
+        assert_eq!(
+            held,
+            Some(KeyCode::KeyH),
+            "the held key stays armed across auto-repeats"
+        );
+    }
+
+    #[test]
+    fn fresh_press_without_leader_clears_stale_held_repeat() {
+        // A key armed by an earlier hold must NOT keep re-firing after it is
+        // released and re-pressed WITHOUT the leader: the fresh (repeat:false)
+        // press with no leader engaged disarms the stale hold, so it types.
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
+        let rc = ResolvedCopyModeKeys::default();
+        let mut phase = LeaderPhase::Idle;
+        let mut held = Some(KeyCode::KeyH);
+        let fresh = [press(KeyCode::KeyH, Key::Character("h".into()))];
+        let out = classify_key_batch(
+            &mut phase,
+            &mut held,
+            &sc,
+            &rc,
+            fresh.iter(),
+            ctx(no_mods(), ms(5000)),
+        );
+        assert_eq!(
+            held, None,
+            "a fresh press with no leader engaged disarms the stale hold"
+        );
+        assert_eq!(
+            out.effects,
+            vec![KeyEffect::Type {
+                logical: Key::Character("h".into()),
+                key_code: KeyCode::KeyH,
+            }],
+            "and the key types normally instead of re-firing the shortcut"
+        );
+    }
+
+    #[test]
+    fn copy_mode_disarms_held_repeat() {
+        // Copy mode must not let a held resize key re-fire into the hidden live
+        // terminal: the pre-loop guard disarms hold-to-repeat.
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
+        let rc = ResolvedCopyModeKeys::default();
+        let mut phase = LeaderPhase::Repeat {
+            deadline: ms(60_000),
+        };
+        let mut held = Some(KeyCode::KeyH);
+        let repeat = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
+        let mut c = ctx(no_mods(), ms(0));
+        c.in_copy_mode = true;
+        let out = classify_key_batch(&mut phase, &mut held, &sc, &rc, repeat.iter(), c);
+        assert_eq!(held, None, "copy mode disarms hold-to-repeat");
+        assert!(
+            !out.effects
+                .iter()
+                .any(|e| matches!(e, KeyEffect::Shortcut { .. })),
+            "a held repeat key must not re-fire its action in copy mode"
+        );
     }
 
     #[test]

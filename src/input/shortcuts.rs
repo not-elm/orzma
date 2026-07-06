@@ -45,6 +45,7 @@ impl Plugin for ShortcutsPlugin {
             .add_message::<WebviewForwardMessage>()
             .init_resource::<Shortcuts>()
             .init_resource::<LeaderPhase>()
+            .init_resource::<HeldRepeatKey>()
             .init_resource::<ModifierTapState>()
             .configure_sets(Update, (LeaderGate::Detect, LeaderGate::Advance).chain())
             .add_systems(Startup, (build_shortcuts, populate_mouse_config).chain())
@@ -162,6 +163,16 @@ pub(crate) enum LeaderPhase {
     },
 }
 
+/// The physical key currently held that fired a repeat-marked `<Leader:r>`
+/// binding. OS auto-repeats of this key re-fire the binding regardless of the
+/// `LeaderPhase::Repeat` time window: that window (`repeat_time_ms`) only
+/// bridges discrete re-presses and is far shorter than the OS initial
+/// key-repeat delay, so without this a held key would drop out of the repeat
+/// and leak into the terminal. Armed on a fresh press that opens or renews the
+/// repeat window; cleared on any fresh press that does not.
+#[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct HeldRepeatKey(pub(crate) Option<KeyCode>);
+
 /// In-progress modifier-tap state: the target's down-time while armed.
 #[derive(Resource, Default)]
 struct ModifierTapState {
@@ -218,8 +229,8 @@ impl Shortcuts {
     }
 
     /// Returns the leader-scoped action bound to `(keycode, mods)` when the
-    /// binding is repeat-marked (`<Leader:r>`). The single predicate
-    /// `step_leader` uses to decide which keys the repeat window consumes.
+    /// binding is repeat-marked (`<Leader:r>`). Drives the repeat-window
+    /// re-fire in `step_leader` and the held-key re-fire in `refire_held_repeat`.
     fn match_repeat_prefix(&self, keycode: KeyCode, mods: Modifiers) -> Option<Shortcut> {
         self.match_prefix_entry(keycode, mods)
             .filter(|s| s.repeat)
@@ -324,6 +335,26 @@ pub(crate) fn step_leader(
     LeaderStep::Passthrough
 }
 
+/// Re-fires a held repeat-marked binding on an OS auto-repeat and re-arms the
+/// repeat window. Returns the bound action when `(keycode, mods)` still
+/// resolves to a repeat-marked binding, so a physically-held key keeps firing
+/// past the `repeat_time` window (which is too short to bridge the OS
+/// initial-repeat delay); returns `None` without touching `phase` so the caller
+/// falls back to its normal `<Leader:r>`/typing handling.
+pub(crate) fn refire_held_repeat(
+    phase: &mut LeaderPhase,
+    shortcuts: &Shortcuts,
+    keycode: KeyCode,
+    mods: Modifiers,
+    now: Duration,
+) -> Option<Shortcut> {
+    let action = shortcuts.match_repeat_prefix(keycode, mods)?;
+    *phase = LeaderPhase::Repeat {
+        deadline: now + shortcuts.repeat_time,
+    };
+    Some(action)
+}
+
 /// Resets the shared leader phase to `Idle`, writing through the `ResMut` only
 /// on a real change so Bevy change detection fires exactly when the phase was
 /// engaged. The single reset idiom for every dispatcher drain/abort site.
@@ -387,11 +418,22 @@ pub(crate) fn test_shortcuts_with_direct_chord(
     }
 }
 
-/// Clears the leader phase (pending or repeat window) and any in-progress
-/// modifier tap on an `AppMode` transition or a webview focus change, so a
-/// leader engaged/armed in one context never fires in another.
-fn reset_leader_phase(mut leader_phase: ResMut<LeaderPhase>, mut tap: ResMut<ModifierTapState>) {
+/// Clears the leader phase (pending or repeat window), any armed hold-to-repeat,
+/// and any in-progress modifier tap on an `AppMode` transition or a webview
+/// focus change, so a leader engaged/armed in one context never fires in
+/// another.
+fn reset_leader_phase(
+    mut leader_phase: ResMut<LeaderPhase>,
+    mut held_repeat: ResMut<HeldRepeatKey>,
+    mut tap: ResMut<ModifierTapState>,
+) {
     clear_leader_phase(&mut leader_phase);
+    // NOTE: hold-to-repeat re-fires independently of `LeaderPhase`, so clearing
+    // only the phase would leave a physically-held resize key re-firing across
+    // the very transition this reset exists to fence off.
+    if held_repeat.0.is_some() {
+        held_repeat.0 = None;
+    }
     if tap.armed.is_some() {
         tap.armed = None;
     }
@@ -705,6 +747,28 @@ mod tests {
 
     fn ms(n: u64) -> Duration {
         Duration::from_millis(n)
+    }
+
+    #[test]
+    fn reset_leader_phase_clears_held_repeat() {
+        let mut app = App::new();
+        app.init_resource::<LeaderPhase>()
+            .init_resource::<HeldRepeatKey>()
+            .init_resource::<ModifierTapState>()
+            .add_systems(Update, reset_leader_phase);
+        *app.world_mut().resource_mut::<LeaderPhase>() = LeaderPhase::Pending;
+        app.world_mut().resource_mut::<HeldRepeatKey>().0 = Some(KeyCode::KeyH);
+        app.update();
+        assert_eq!(
+            *app.world().resource::<LeaderPhase>(),
+            LeaderPhase::Idle,
+            "the context reset clears the leader phase"
+        );
+        assert_eq!(
+            app.world().resource::<HeldRepeatKey>().0,
+            None,
+            "a context-transition reset must also disarm hold-to-repeat, not just the leader phase"
+        );
     }
 
     fn repeat_fixture() -> Shortcuts {
@@ -1492,10 +1556,11 @@ mod tests {
 
     #[test]
     fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
-        // NOTE: `ConfigShortcuts::default()` now ships 29 leader-scoped tmux
-        // actions, so `OrzmaConfigs::default()` alone no longer exercises the
-        // inert-leader path; every default `<Leader>`-bound field is explicitly
-        // unbound here to reproduce a config with no leader bindings at all.
+        // NOTE: `ConfigShortcuts::default()` ships 28 leader-scoped tmux actions
+        // (plus the direct `paste` chord), so `OrzmaConfigs::default()` alone no
+        // longer exercises the inert-leader path; every default binding is
+        // explicitly unbound here to reproduce a config with no leader bindings
+        // at all.
         let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
                 paste: None,
