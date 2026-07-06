@@ -24,7 +24,7 @@ use crate::input::mouse::webview::{
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
-use crate::ui::copy_search::CopyPrompt;
+use crate::ui::copy_search::ViModePrompt;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -72,7 +72,7 @@ fn default_webview_pointer(
     mut buttons: MessageReader<MouseButtonInput>,
     surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
     metrics: Res<TerminalCellMetricsResource>,
-    copy_prompt: Res<CopyPrompt>,
+    copy_prompt: Res<ViModePrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else {
@@ -135,7 +135,7 @@ fn forward_default_webview_mouse_moves(
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    copy_prompt: Res<CopyPrompt>,
+    copy_prompt: Res<ViModePrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
@@ -184,7 +184,7 @@ fn forward_default_webview_wheel(
     overlay_rects: Query<&TerminalOverlays>,
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
-    copy_prompt: Res<CopyPrompt>,
+    copy_prompt: Res<ViModePrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Ok(window) = windows.single() else {
@@ -260,7 +260,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseButtonInput>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<CopyPrompt>();
+        app.init_resource::<ViModePrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(Update, default_webview_pointer);

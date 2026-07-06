@@ -1838,7 +1838,7 @@ mod tests {
         use crate::ui::vi_mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
         use bevy::ecs::message::Messages;
         use orzma_configs::OrzmaConfigs;
-        use orzma_configs::vi_mode::CopyScroll;
+        use orzma_configs::vi_mode::ViModeScroll;
         use orzma_tty_engine::{SelectionType, TermMode, TerminalHandlePlugin, ViMotion};
         use std::time::Duration;
 
@@ -1931,7 +1931,7 @@ mod tests {
         // 2. Scroll into the pre-seeded history via the shared vi applier.
         app.world_mut().trigger(ViScrollRequest {
             entity,
-            kind: CopyScroll::PageUp,
+            kind: ViModeScroll::PageUp,
         });
         app.update();
         let scroll_offset = app

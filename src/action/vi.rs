@@ -7,7 +7,7 @@ mod keymap;
 
 use bevy::prelude::*;
 pub(crate) use keymap::{ResolvedViModeKeys, trigger_vi_mode_action};
-use orzma_configs::vi_mode::CopyScroll;
+use orzma_configs::vi_mode::ViModeScroll;
 use orzma_tmux::PromptKind;
 use orzma_tty_engine::{SelectionType, ViMotion};
 
@@ -28,7 +28,7 @@ pub(crate) struct ViScrollRequest {
     #[event_target]
     pub entity: Entity,
     /// The scroll to apply.
-    pub kind: CopyScroll,
+    pub kind: ViModeScroll,
 }
 
 /// Toggles a selection of kind `ty` on `entity`.

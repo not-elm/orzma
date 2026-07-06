@@ -10,7 +10,7 @@ use crate::input::InputPhase;
 use crate::input::focus::KeyboardDisabled;
 use crate::input::focus::MouseDisabled;
 use crate::input::ime::ImeState;
-use crate::ui::copy_search::CopyPrompt;
+use crate::ui::copy_search::ViModePrompt;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::ui::vi_mode::ViModeState;
 use bevy::prelude::*;
@@ -39,7 +39,7 @@ impl Plugin for GatePlugin {
 fn maintain_tmux_input_gates(
     mut commands: Commands,
     ime: Res<ImeState>,
-    copy_prompt: Res<CopyPrompt>,
+    copy_prompt: Res<ViModePrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
     focused_webview: Res<FocusedWebview>,
     metrics: Option<Res<TerminalCellMetricsResource>>,

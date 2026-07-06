@@ -188,7 +188,7 @@ pub fn parse_vi_mode_key(s: &str) -> Result<ViModeKey, ViModeKeyParseError> {
 /// A cursor motion, in mode-neutral vocabulary. The binary maps this to the
 /// engine's `ViMotion` (Default mode) or a tmux `-X` command (tmux mode).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CopyMotion {
+pub enum ViModeMotion {
     /// One cell left.
     Left,
     /// One cell down.
@@ -231,7 +231,7 @@ pub enum CopyMotion {
 
 /// A viewport scroll.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CopyScroll {
+pub enum ViModeScroll {
     /// Oldest history line.
     HistoryTop,
     /// Newest line (live tail).
@@ -252,7 +252,7 @@ pub enum CopyScroll {
 
 /// A selection kind to toggle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CopySelection {
+pub enum ViModeSelection {
     /// Character-wise selection.
     Simple,
     /// Line-wise selection.
@@ -263,7 +263,7 @@ pub enum CopySelection {
 
 /// A prompt-opening action (search regex or jump char).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CopyPromptDir {
+pub enum ViModePromptDir {
     /// `/` — search down.
     SearchForward,
     /// `?` — search up.
@@ -280,7 +280,7 @@ pub enum CopyPromptDir {
 
 /// A repeat of the previous search.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CopySearchStep {
+pub enum ViModeSearchStep {
     /// Repeat in the search direction (`n`).
     Next,
     /// Repeat against the search direction (`N`).
@@ -291,19 +291,19 @@ pub enum CopySearchStep {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViModeAction {
     /// Move the copy cursor.
-    Motion(CopyMotion),
+    Motion(ViModeMotion),
     /// Scroll the viewport.
-    Scroll(CopyScroll),
+    Scroll(ViModeScroll),
     /// Toggle a selection of the given kind.
-    Selection(CopySelection),
+    Selection(ViModeSelection),
     /// Copy the selection and leave copy mode.
     Yank,
     /// Leave copy mode.
     Exit,
     /// Open a search / jump prompt (tmux mode only for now).
-    Prompt(CopyPromptDir),
+    Prompt(ViModePromptDir),
     /// Repeat the previous search (tmux mode only for now).
-    SearchStep(CopySearchStep),
+    SearchStep(ViModeSearchStep),
 }
 
 /// One key with multiple bindings. Carried inside
@@ -359,85 +359,85 @@ macro_rules! vi_mode_fields {
 
 vi_mode_fields! {
     /// Move the cursor one cell left.
-    cursor_left => "cursor-left", ViModeAction::Motion(CopyMotion::Left), ["h", "ArrowLeft"];
+    cursor_left => "cursor-left", ViModeAction::Motion(ViModeMotion::Left), ["h", "ArrowLeft"];
     /// Move the cursor one cell down.
-    cursor_down => "cursor-down", ViModeAction::Motion(CopyMotion::Down), ["j", "ArrowDown"];
+    cursor_down => "cursor-down", ViModeAction::Motion(ViModeMotion::Down), ["j", "ArrowDown"];
     /// Move the cursor one cell up.
-    cursor_up => "cursor-up", ViModeAction::Motion(CopyMotion::Up), ["k", "ArrowUp"];
+    cursor_up => "cursor-up", ViModeAction::Motion(ViModeMotion::Up), ["k", "ArrowUp"];
     /// Move the cursor one cell right.
-    cursor_right => "cursor-right", ViModeAction::Motion(CopyMotion::Right), ["l", "ArrowRight"];
+    cursor_right => "cursor-right", ViModeAction::Motion(ViModeMotion::Right), ["l", "ArrowRight"];
     /// Jump to column 0.
-    line_start => "line-start", ViModeAction::Motion(CopyMotion::LineStart), ["0"];
+    line_start => "line-start", ViModeAction::Motion(ViModeMotion::LineStart), ["0"];
     /// Jump to the last column.
-    line_end => "line-end", ViModeAction::Motion(CopyMotion::LineEnd), ["$"];
+    line_end => "line-end", ViModeAction::Motion(ViModeMotion::LineEnd), ["$"];
     /// Jump to the first non-blank column.
-    line_first_char => "line-first-char", ViModeAction::Motion(CopyMotion::LineFirstChar), ["^"];
+    line_first_char => "line-first-char", ViModeAction::Motion(ViModeMotion::LineFirstChar), ["^"];
     /// Jump to the next word start.
-    next_word => "next-word", ViModeAction::Motion(CopyMotion::NextWord), ["w"];
+    next_word => "next-word", ViModeAction::Motion(ViModeMotion::NextWord), ["w"];
     /// Jump to the previous word start.
-    previous_word => "previous-word", ViModeAction::Motion(CopyMotion::PreviousWord), ["b"];
+    previous_word => "previous-word", ViModeAction::Motion(ViModeMotion::PreviousWord), ["b"];
     /// Jump to the next word end.
-    next_word_end => "next-word-end", ViModeAction::Motion(CopyMotion::NextWordEnd), ["e"];
+    next_word_end => "next-word-end", ViModeAction::Motion(ViModeMotion::NextWordEnd), ["e"];
     /// Jump to the next space-delimited word start.
-    next_space => "next-space", ViModeAction::Motion(CopyMotion::NextSpace), ["W"];
+    next_space => "next-space", ViModeAction::Motion(ViModeMotion::NextSpace), ["W"];
     /// Jump to the previous space-delimited word start.
-    previous_space => "previous-space", ViModeAction::Motion(CopyMotion::PreviousSpace), ["B"];
+    previous_space => "previous-space", ViModeAction::Motion(ViModeMotion::PreviousSpace), ["B"];
     /// Jump to the next space-delimited word end.
-    next_space_end => "next-space-end", ViModeAction::Motion(CopyMotion::NextSpaceEnd), ["E"];
+    next_space_end => "next-space-end", ViModeAction::Motion(ViModeMotion::NextSpaceEnd), ["E"];
     /// Jump to the top visible line.
-    screen_top => "screen-top", ViModeAction::Motion(CopyMotion::ScreenTop), ["H"];
+    screen_top => "screen-top", ViModeAction::Motion(ViModeMotion::ScreenTop), ["H"];
     /// Jump to the middle visible line.
-    screen_middle => "screen-middle", ViModeAction::Motion(CopyMotion::ScreenMiddle), ["M"];
+    screen_middle => "screen-middle", ViModeAction::Motion(ViModeMotion::ScreenMiddle), ["M"];
     /// Jump to the bottom visible line.
-    screen_bottom => "screen-bottom", ViModeAction::Motion(CopyMotion::ScreenBottom), ["L"];
+    screen_bottom => "screen-bottom", ViModeAction::Motion(ViModeMotion::ScreenBottom), ["L"];
     /// Jump to the previous paragraph boundary.
-    previous_paragraph => "previous-paragraph", ViModeAction::Motion(CopyMotion::PreviousParagraph), ["{"];
+    previous_paragraph => "previous-paragraph", ViModeAction::Motion(ViModeMotion::PreviousParagraph), ["{"];
     /// Jump to the next paragraph boundary.
-    next_paragraph => "next-paragraph", ViModeAction::Motion(CopyMotion::NextParagraph), ["}"];
+    next_paragraph => "next-paragraph", ViModeAction::Motion(ViModeMotion::NextParagraph), ["}"];
     /// Jump to the matching bracket.
-    matching_bracket => "matching-bracket", ViModeAction::Motion(CopyMotion::MatchingBracket), ["%"];
+    matching_bracket => "matching-bracket", ViModeAction::Motion(ViModeMotion::MatchingBracket), ["%"];
     /// Scroll to the oldest history line.
-    history_top => "history-top", ViModeAction::Scroll(CopyScroll::HistoryTop), ["g"];
+    history_top => "history-top", ViModeAction::Scroll(ViModeScroll::HistoryTop), ["g"];
     /// Scroll to the live tail.
-    history_bottom => "history-bottom", ViModeAction::Scroll(CopyScroll::HistoryBottom), ["G"];
+    history_bottom => "history-bottom", ViModeAction::Scroll(ViModeScroll::HistoryBottom), ["G"];
     /// Scroll one page up.
-    page_up => "page-up", ViModeAction::Scroll(CopyScroll::PageUp), ["Ctrl+B"];
+    page_up => "page-up", ViModeAction::Scroll(ViModeScroll::PageUp), ["Ctrl+B"];
     /// Scroll one page down.
-    page_down => "page-down", ViModeAction::Scroll(CopyScroll::PageDown), ["Ctrl+F"];
+    page_down => "page-down", ViModeAction::Scroll(ViModeScroll::PageDown), ["Ctrl+F"];
     /// Scroll half a page up.
-    half_page_up => "half-page-up", ViModeAction::Scroll(CopyScroll::HalfPageUp), ["Ctrl+U"];
+    half_page_up => "half-page-up", ViModeAction::Scroll(ViModeScroll::HalfPageUp), ["Ctrl+U"];
     /// Scroll half a page down.
-    half_page_down => "half-page-down", ViModeAction::Scroll(CopyScroll::HalfPageDown), ["Ctrl+D"];
+    half_page_down => "half-page-down", ViModeAction::Scroll(ViModeScroll::HalfPageDown), ["Ctrl+D"];
     /// Scroll one line up.
-    scroll_up => "scroll-up", ViModeAction::Scroll(CopyScroll::ScrollUp), ["Ctrl+Y"];
+    scroll_up => "scroll-up", ViModeAction::Scroll(ViModeScroll::ScrollUp), ["Ctrl+Y"];
     /// Scroll one line down.
-    scroll_down => "scroll-down", ViModeAction::Scroll(CopyScroll::ScrollDown), ["Ctrl+E"];
+    scroll_down => "scroll-down", ViModeAction::Scroll(ViModeScroll::ScrollDown), ["Ctrl+E"];
     /// Toggle a character-wise selection.
-    toggle_selection => "toggle-selection", ViModeAction::Selection(CopySelection::Simple), ["v", "Space"];
+    toggle_selection => "toggle-selection", ViModeAction::Selection(ViModeSelection::Simple), ["v", "Space"];
     /// Toggle a line-wise selection.
-    toggle_line_selection => "toggle-line-selection", ViModeAction::Selection(CopySelection::Lines), ["V"];
+    toggle_line_selection => "toggle-line-selection", ViModeAction::Selection(ViModeSelection::Lines), ["V"];
     /// Toggle a rectangular selection.
-    toggle_rect_selection => "toggle-rect-selection", ViModeAction::Selection(CopySelection::Rect), ["Ctrl+V"];
+    toggle_rect_selection => "toggle-rect-selection", ViModeAction::Selection(ViModeSelection::Rect), ["Ctrl+V"];
     /// Copy the selection to the clipboard and leave copy mode.
     yank => "yank", ViModeAction::Yank, ["y", "Enter"];
     /// Leave copy mode.
     exit => "exit", ViModeAction::Exit, ["q", "Escape", "Ctrl+C"];
     /// Open the search-down prompt (tmux mode only for now).
-    search_forward => "search-forward", ViModeAction::Prompt(CopyPromptDir::SearchForward), ["/"];
+    search_forward => "search-forward", ViModeAction::Prompt(ViModePromptDir::SearchForward), ["/"];
     /// Open the search-up prompt (tmux mode only for now).
-    search_backward => "search-backward", ViModeAction::Prompt(CopyPromptDir::SearchBackward), ["?"];
+    search_backward => "search-backward", ViModeAction::Prompt(ViModePromptDir::SearchBackward), ["?"];
     /// Repeat the previous search (tmux mode only for now).
-    search_next => "search-next", ViModeAction::SearchStep(CopySearchStep::Next), ["n"];
+    search_next => "search-next", ViModeAction::SearchStep(ViModeSearchStep::Next), ["n"];
     /// Repeat the previous search, reversed (tmux mode only for now).
-    search_previous => "search-previous", ViModeAction::SearchStep(CopySearchStep::Previous), ["N"];
+    search_previous => "search-previous", ViModeAction::SearchStep(ViModeSearchStep::Previous), ["N"];
     /// Open the jump-to-char-forward prompt (tmux mode only for now).
-    jump_forward => "jump-forward", ViModeAction::Prompt(CopyPromptDir::JumpForward), ["f"];
+    jump_forward => "jump-forward", ViModeAction::Prompt(ViModePromptDir::JumpForward), ["f"];
     /// Open the jump-to-char-backward prompt (tmux mode only for now).
-    jump_backward => "jump-backward", ViModeAction::Prompt(CopyPromptDir::JumpBackward), ["F"];
+    jump_backward => "jump-backward", ViModeAction::Prompt(ViModePromptDir::JumpBackward), ["F"];
     /// Open the jump-till-char-forward prompt (tmux mode only for now).
-    jump_to_forward => "jump-to-forward", ViModeAction::Prompt(CopyPromptDir::JumpToForward), ["t"];
+    jump_to_forward => "jump-to-forward", ViModeAction::Prompt(ViModePromptDir::JumpToForward), ["t"];
     /// Open the jump-till-char-backward prompt (tmux mode only for now).
-    jump_to_backward => "jump-to-backward", ViModeAction::Prompt(CopyPromptDir::JumpToBackward), ["T"];
+    jump_to_backward => "jump-to-backward", ViModeAction::Prompt(ViModePromptDir::JumpToBackward), ["T"];
 }
 
 impl ViModeConfig {

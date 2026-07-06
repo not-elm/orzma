@@ -11,8 +11,8 @@ use bevy::input::keyboard::{Key, KeyCode};
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Modifiers;
 use orzma_configs::vi_mode::{
-    CopyMotion, CopyPromptDir, CopySelection, ViModeAction, ViModeBaseKey, ViModeKey,
-    ViModeNamedKey,
+    ViModeAction, ViModeBaseKey, ViModeKey, ViModeMotion, ViModeNamedKey, ViModePromptDir,
+    ViModeSelection,
 };
 use orzma_tmux::PromptKind;
 use orzma_tty_engine::{SelectionType, ViMotion};
@@ -202,35 +202,35 @@ fn ctrl_char_keycode(c: char) -> Option<KeyCode> {
     })
 }
 
-fn vi_motion(motion: CopyMotion) -> ViMotion {
+fn vi_motion(motion: ViModeMotion) -> ViMotion {
     match motion {
-        CopyMotion::Left => ViMotion::Left,
-        CopyMotion::Down => ViMotion::Down,
-        CopyMotion::Up => ViMotion::Up,
-        CopyMotion::Right => ViMotion::Right,
-        CopyMotion::LineStart => ViMotion::First,
-        CopyMotion::LineEnd => ViMotion::Last,
-        CopyMotion::LineFirstChar => ViMotion::FirstOccupied,
-        CopyMotion::NextWord => ViMotion::SemanticRight,
-        CopyMotion::PreviousWord => ViMotion::SemanticLeft,
-        CopyMotion::NextWordEnd => ViMotion::SemanticRightEnd,
-        CopyMotion::NextSpace => ViMotion::WordRight,
-        CopyMotion::PreviousSpace => ViMotion::WordLeft,
-        CopyMotion::NextSpaceEnd => ViMotion::WordRightEnd,
-        CopyMotion::ScreenTop => ViMotion::High,
-        CopyMotion::ScreenMiddle => ViMotion::Middle,
-        CopyMotion::ScreenBottom => ViMotion::Low,
-        CopyMotion::PreviousParagraph => ViMotion::ParagraphUp,
-        CopyMotion::NextParagraph => ViMotion::ParagraphDown,
-        CopyMotion::MatchingBracket => ViMotion::Bracket,
+        ViModeMotion::Left => ViMotion::Left,
+        ViModeMotion::Down => ViMotion::Down,
+        ViModeMotion::Up => ViMotion::Up,
+        ViModeMotion::Right => ViMotion::Right,
+        ViModeMotion::LineStart => ViMotion::First,
+        ViModeMotion::LineEnd => ViMotion::Last,
+        ViModeMotion::LineFirstChar => ViMotion::FirstOccupied,
+        ViModeMotion::NextWord => ViMotion::SemanticRight,
+        ViModeMotion::PreviousWord => ViMotion::SemanticLeft,
+        ViModeMotion::NextWordEnd => ViMotion::SemanticRightEnd,
+        ViModeMotion::NextSpace => ViMotion::WordRight,
+        ViModeMotion::PreviousSpace => ViMotion::WordLeft,
+        ViModeMotion::NextSpaceEnd => ViMotion::WordRightEnd,
+        ViModeMotion::ScreenTop => ViMotion::High,
+        ViModeMotion::ScreenMiddle => ViMotion::Middle,
+        ViModeMotion::ScreenBottom => ViMotion::Low,
+        ViModeMotion::PreviousParagraph => ViMotion::ParagraphUp,
+        ViModeMotion::NextParagraph => ViMotion::ParagraphDown,
+        ViModeMotion::MatchingBracket => ViMotion::Bracket,
     }
 }
 
-fn selection_type(selection: CopySelection) -> SelectionType {
+fn selection_type(selection: ViModeSelection) -> SelectionType {
     match selection {
-        CopySelection::Simple => SelectionType::Simple,
-        CopySelection::Lines => SelectionType::Lines,
-        CopySelection::Rect => SelectionType::Block,
+        ViModeSelection::Simple => SelectionType::Simple,
+        ViModeSelection::Lines => SelectionType::Lines,
+        ViModeSelection::Rect => SelectionType::Block,
     }
 }
 
@@ -238,14 +238,14 @@ fn selection_type(selection: CopySelection) -> SelectionType {
     dead_code,
     reason = "wired again when local vi-mode search ships; kept so the conversion is ready for ViModeAction::Prompt's reconnection"
 )]
-fn prompt_kind(dir: CopyPromptDir) -> PromptKind {
+fn prompt_kind(dir: ViModePromptDir) -> PromptKind {
     match dir {
-        CopyPromptDir::SearchForward => PromptKind::SearchForward,
-        CopyPromptDir::SearchBackward => PromptKind::SearchBackward,
-        CopyPromptDir::JumpForward => PromptKind::JumpForward,
-        CopyPromptDir::JumpBackward => PromptKind::JumpBackward,
-        CopyPromptDir::JumpToForward => PromptKind::JumpToForward,
-        CopyPromptDir::JumpToBackward => PromptKind::JumpToBackward,
+        ViModePromptDir::SearchForward => PromptKind::SearchForward,
+        ViModePromptDir::SearchBackward => PromptKind::SearchBackward,
+        ViModePromptDir::JumpForward => PromptKind::JumpForward,
+        ViModePromptDir::JumpBackward => PromptKind::JumpBackward,
+        ViModePromptDir::JumpToForward => PromptKind::JumpToForward,
+        ViModePromptDir::JumpToBackward => PromptKind::JumpToBackward,
     }
 }
 
@@ -253,7 +253,7 @@ fn prompt_kind(dir: CopyPromptDir) -> PromptKind {
 mod tests {
     use super::*;
     use crate::action::vi::{ViPromptRequest, ViSearchStepRequest};
-    use orzma_configs::vi_mode::{CopyScroll, CopySearchStep, ViModeConfig};
+    use orzma_configs::vi_mode::{ViModeConfig, ViModeScroll, ViModeSearchStep};
 
     fn resolved_default() -> ResolvedViModeKeys {
         let cfg = ViModeConfig::default();
@@ -282,7 +282,7 @@ mod tests {
         let r = resolved_default();
         assert_eq!(
             r.resolve(&Key::Character("v".into()), KeyCode::KeyV, none_mods()),
-            Some(ViModeAction::Selection(CopySelection::Simple))
+            Some(ViModeAction::Selection(ViModeSelection::Simple))
         );
         assert_eq!(
             r.resolve(
@@ -293,7 +293,7 @@ mod tests {
                     ..Default::default()
                 }
             ),
-            Some(ViModeAction::Selection(CopySelection::Lines))
+            Some(ViModeAction::Selection(ViModeSelection::Lines))
         );
         assert_eq!(
             r.resolve(
@@ -304,7 +304,7 @@ mod tests {
                     ..Default::default()
                 }
             ),
-            Some(ViModeAction::Motion(CopyMotion::LineEnd))
+            Some(ViModeAction::Motion(ViModeMotion::LineEnd))
         );
     }
 
@@ -313,7 +313,7 @@ mod tests {
         let r = resolved_default();
         assert_eq!(
             r.resolve(&Key::Character("f".into()), KeyCode::KeyF, ctrl_mods()),
-            Some(ViModeAction::Scroll(CopyScroll::PageDown))
+            Some(ViModeAction::Scroll(ViModeScroll::PageDown))
         );
         assert_eq!(
             r.resolve(&Key::Escape, KeyCode::Escape, none_mods()),
@@ -350,7 +350,7 @@ mod tests {
         let r = resolved_default();
         assert_eq!(
             r.resolve(&Key::Character("n".into()), KeyCode::KeyN, none_mods()),
-            Some(ViModeAction::SearchStep(CopySearchStep::Next))
+            Some(ViModeAction::SearchStep(ViModeSearchStep::Next))
         );
         assert_eq!(
             r.resolve(
@@ -361,14 +361,14 @@ mod tests {
                     ..Default::default()
                 }
             ),
-            Some(ViModeAction::SearchStep(CopySearchStep::Previous))
+            Some(ViModeAction::SearchStep(ViModeSearchStep::Previous))
         );
     }
 
     #[test]
     fn prompt_action_is_inert_for_v1() {
         use bevy::ecs::system::RunSystemOnce;
-        use orzma_configs::vi_mode::{CopyPromptDir, ViModeAction};
+        use orzma_configs::vi_mode::{ViModeAction, ViModePromptDir};
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -385,7 +385,7 @@ mod tests {
                 trigger_vi_mode_action(
                     &mut commands,
                     entity,
-                    ViModeAction::Prompt(CopyPromptDir::SearchForward),
+                    ViModeAction::Prompt(ViModePromptDir::SearchForward),
                 );
             })
             .unwrap();
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn search_step_action_is_inert_for_v1() {
         use bevy::ecs::system::RunSystemOnce;
-        use orzma_configs::vi_mode::{CopySearchStep, ViModeAction};
+        use orzma_configs::vi_mode::{ViModeAction, ViModeSearchStep};
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -416,7 +416,7 @@ mod tests {
                 trigger_vi_mode_action(
                     &mut commands,
                     entity,
-                    ViModeAction::SearchStep(CopySearchStep::Next),
+                    ViModeAction::SearchStep(ViModeSearchStep::Next),
                 );
             })
             .unwrap();

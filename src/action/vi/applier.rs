@@ -8,7 +8,7 @@ use crate::action::vi::{
 use crate::clipboard::Clipboard;
 use crate::ui::vi_mode::ExitViMode;
 use bevy::prelude::*;
-use orzma_configs::vi_mode::CopyScroll;
+use orzma_configs::vi_mode::ViModeScroll;
 use orzma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
 
 /// Registers the local VI apply observers. `ViPromptRequest` /
@@ -102,22 +102,22 @@ fn on_vi_exit(ev: On<ViExitRequest>, mut commands: Commands, terminals: LocalTer
 
 /// Applies a scroll. Relative scrolls move the vi cursor with the viewport;
 /// `Top`/`Bottom` snap to the buffer extremes.
-fn apply_scroll(handle: &mut TerminalHandle, coalescer: &mut Coalescer, kind: CopyScroll) {
+fn apply_scroll(handle: &mut TerminalHandle, coalescer: &mut Coalescer, kind: ViModeScroll) {
     match kind {
-        CopyScroll::PageUp => handle.scroll_page_up(coalescer),
-        CopyScroll::PageDown => handle.scroll_page_down(coalescer),
-        CopyScroll::HalfPageUp => {
+        ViModeScroll::PageUp => handle.scroll_page_up(coalescer),
+        ViModeScroll::PageDown => handle.scroll_page_down(coalescer),
+        ViModeScroll::HalfPageUp => {
             let half = half_page(handle);
             handle.scroll(coalescer, half);
         }
-        CopyScroll::HalfPageDown => {
+        ViModeScroll::HalfPageDown => {
             let half = half_page(handle);
             handle.scroll(coalescer, -half);
         }
-        CopyScroll::ScrollUp => handle.scroll(coalescer, 1),
-        CopyScroll::ScrollDown => handle.scroll(coalescer, -1),
-        CopyScroll::HistoryTop => handle.scroll_to_top(coalescer),
-        CopyScroll::HistoryBottom => handle.scroll_to_bottom(coalescer),
+        ViModeScroll::ScrollUp => handle.scroll(coalescer, 1),
+        ViModeScroll::ScrollDown => handle.scroll(coalescer, -1),
+        ViModeScroll::HistoryTop => handle.scroll_to_top(coalescer),
+        ViModeScroll::HistoryBottom => handle.scroll_to_bottom(coalescer),
     }
 }
 
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn vi_scroll_applies_to_a_tmux_pane_entity() {
-        use orzma_configs::vi_mode::CopyScroll;
+        use orzma_configs::vi_mode::ViModeScroll;
         use orzma_tmux::TmuxPane;
         use orzma_tty_engine::{Coalescer, TerminalHandle};
         use tmux_control_parser::{CellDims, PaneId};
@@ -207,7 +207,7 @@ mod tests {
             .id();
         app.world_mut().trigger(ViScrollRequest {
             entity,
-            kind: CopyScroll::ScrollUp,
+            kind: ViModeScroll::ScrollUp,
         });
         let snapshot = app
             .world()

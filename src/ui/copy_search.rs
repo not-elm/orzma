@@ -1,6 +1,6 @@
 //! Copy-mode search and jump-char prompt overlay.
 //!
-//! Currently inert: nothing in the codebase sets `CopyPrompt.open`. This
+//! Currently inert: nothing in the codebase sets `ViModePrompt.open`. This
 //! module used to open in response to the tmux VI applier's `on_vi_prompt`
 //! observer handling a `ViPromptRequest`, but that applier (`tmux_mode.rs`)
 //! was deleted as part of the vi-mode-to-local migration, so the trigger
@@ -26,21 +26,21 @@ use orzma_tmux::{PaneId, Prompt, PromptKind, TmuxClient};
 const PROMPT_Z: i32 = 320;
 
 /// Registers the vi-mode prompt resource, input system, and render system.
-pub(crate) struct CopyPromptPlugin;
+pub(crate) struct ViModePromptPlugin;
 
-impl Plugin for CopyPromptPlugin {
+impl Plugin for ViModePromptPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<CopyPrompt>()
+        app.init_resource::<ViModePrompt>()
             .add_systems(Startup, spawn_prompt_ui)
             .add_systems(
                 Update,
                 handle_prompt_input
                     .after(InputPhase::FocusedKey)
-                    .run_if(|p: Res<CopyPrompt>| p.open.is_some()),
+                    .run_if(|p: Res<ViModePrompt>| p.open.is_some()),
             )
             .add_systems(
                 PostUpdate,
-                sync_prompt_ui.run_if(resource_exists_and_changed::<CopyPrompt>),
+                sync_prompt_ui.run_if(resource_exists_and_changed::<ViModePrompt>),
             );
     }
 }
@@ -48,13 +48,13 @@ impl Plugin for CopyPromptPlugin {
 /// The active vi-mode prompt (search regex or jump char). Present while the
 /// user is typing; owns the keyboard like the session picker.
 #[derive(Resource, Default)]
-pub(crate) struct CopyPrompt {
+pub(crate) struct ViModePrompt {
     /// The pending prompt, if open.
-    pub(crate) open: Option<CopyPromptState>,
+    pub(crate) open: Option<ViModePromptState>,
 }
 
 /// In-progress vi-mode prompt input.
-pub(crate) struct CopyPromptState {
+pub(crate) struct ViModePromptState {
     /// Which copy command to run on submit.
     pub(crate) kind: PromptKind,
     /// The pane the result targets.
@@ -74,7 +74,7 @@ enum PromptStep {
 /// Applies one key press to the prompt text, returning what to do. Jump prompts
 /// (single-char) submit on the first typed character; search prompts submit on
 /// Enter. Escape cancels; Backspace edits.
-fn apply_prompt_key(state: &mut CopyPromptState, key: &Key) -> PromptStep {
+fn apply_prompt_key(state: &mut ViModePromptState, key: &Key) -> PromptStep {
     match key {
         Key::Escape => PromptStep::Cancel,
         Key::Enter => PromptStep::Submit,
@@ -143,7 +143,7 @@ fn spawn_prompt_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>)
 fn sync_prompt_ui(
     mut bar: Query<&mut Node, With<PromptBar>>,
     mut texts: Query<&mut Text>,
-    prompt: Res<CopyPrompt>,
+    prompt: Res<ViModePrompt>,
     children_query: Query<&Children, With<PromptBar>>,
 ) {
     let Ok(mut node) = bar.single_mut() else {
@@ -167,7 +167,7 @@ fn sync_prompt_ui(
 }
 
 fn handle_prompt_input(
-    mut copy_prompt: ResMut<CopyPrompt>,
+    mut copy_prompt: ResMut<ViModePrompt>,
     mut events: MessageReader<KeyboardInput>,
     mut armed: Local<bool>,
     mut client: Option<Single<&mut TmuxClient>>,
@@ -221,8 +221,8 @@ mod tests {
     use super::*;
     use tmux_control_parser::PaneId;
 
-    fn state(kind: PromptKind) -> CopyPromptState {
-        CopyPromptState {
+    fn state(kind: PromptKind) -> ViModePromptState {
+        ViModePromptState {
             kind,
             pane: PaneId(0),
             text: String::new(),
@@ -353,10 +353,10 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<KeyboardInput>()
-            .init_resource::<CopyPrompt>()
+            .init_resource::<ViModePrompt>()
             .add_systems(
                 Update,
-                handle_prompt_input.run_if(|p: Res<CopyPrompt>| p.open.is_some()),
+                handle_prompt_input.run_if(|p: Res<ViModePrompt>| p.open.is_some()),
             );
         app
     }
@@ -364,7 +364,7 @@ mod tests {
     #[test]
     fn open_frame_skips_the_opening_key_for_a_jump_prompt() {
         let mut app = armed_skip_app();
-        app.world_mut().resource_mut::<CopyPrompt>().open = Some(CopyPromptState {
+        app.world_mut().resource_mut::<ViModePrompt>().open = Some(ViModePromptState {
             kind: PromptKind::JumpForward,
             pane: PaneId(0),
             text: String::new(),
@@ -375,7 +375,7 @@ mod tests {
             .write(key_event(char_key("f"), KeyCode::KeyF));
         app.update();
 
-        let prompt = app.world().resource::<CopyPrompt>();
+        let prompt = app.world().resource::<ViModePrompt>();
         assert!(
             prompt.open.is_some(),
             "single-char jump must NOT submit on the opening key (open frame is skipped)"
@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn target_key_after_open_frame_submits_a_jump_prompt() {
         let mut app = armed_skip_app();
-        app.world_mut().resource_mut::<CopyPrompt>().open = Some(CopyPromptState {
+        app.world_mut().resource_mut::<ViModePrompt>().open = Some(ViModePromptState {
             kind: PromptKind::JumpForward,
             pane: PaneId(0),
             text: String::new(),
@@ -400,7 +400,7 @@ mod tests {
             .resource_mut::<Messages<KeyboardInput>>()
             .write(key_event(char_key("f"), KeyCode::KeyF));
         app.update();
-        assert!(app.world().resource::<CopyPrompt>().open.is_some());
+        assert!(app.world().resource::<ViModePrompt>().open.is_some());
 
         // Next frame: the real target char submits (no client → just closes).
         app.world_mut()
@@ -408,7 +408,7 @@ mod tests {
             .write(key_event(char_key("x"), KeyCode::KeyX));
         app.update();
         assert!(
-            app.world().resource::<CopyPrompt>().open.is_none(),
+            app.world().resource::<ViModePrompt>().open.is_none(),
             "the first post-open char submits a single-char jump"
         );
     }

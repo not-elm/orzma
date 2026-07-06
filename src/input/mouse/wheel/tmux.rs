@@ -12,7 +12,7 @@ use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::mouse::webview::{webview_wheel_delta, webview_wheel_target};
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
-use crate::ui::copy_search::CopyPrompt;
+use crate::ui::copy_search::ViModePrompt;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::ui::vi_mode::ViModeState;
 use bevy::ecs::system::SystemParam;
@@ -206,7 +206,7 @@ fn forward_wheel_to_tmux(
     mut client: Option<Single<&mut TmuxClient>>,
     mut handles: Query<(&mut TerminalHandle, &mut Coalescer)>,
     wheel_params: TmuxWebviewWheelParams,
-    copy_prompt: Res<CopyPrompt>,
+    copy_prompt: Res<ViModePrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
     configs: Res<OrzmaConfigsResource>,
     metrics: Res<TerminalCellMetricsResource>,
@@ -549,7 +549,7 @@ mod tests {
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseWheel>();
         app.init_resource::<FocusedWebview>();
-        app.init_resource::<CopyPrompt>();
+        app.init_resource::<ViModePrompt>();
         app.init_resource::<TmuxWheelAccumulator>();
         app.insert_resource(OrzmaConfigsResource::default());
         app.insert_resource(TerminalCellMetricsResource {

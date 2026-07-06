@@ -20,7 +20,7 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, WebviewForwardMessage, clear_leader_phase,
 };
-use crate::ui::copy_search::CopyPrompt;
+use crate::ui::copy_search::ViModePrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::ui::vi_mode::ViModeState;
@@ -54,7 +54,7 @@ impl Plugin for KeyboardHandlerPlugin {
 /// guards.
 #[derive(SystemParam)]
 struct ModalGuards<'w> {
-    copy_prompt: Res<'w, CopyPrompt>,
+    copy_prompt: Res<'w, ViModePrompt>,
     confirm_state: Option<Res<'w, ConfirmState>>,
     rename_prompt: Option<Res<'w, RenamePrompt>>,
     ime: Res<'w, ImeState>,
@@ -307,7 +307,7 @@ mod tests {
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
             .init_resource::<ResolvedViModeKeys>()
-            .init_resource::<CopyPrompt>()
+            .init_resource::<ViModePrompt>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
             .insert_state(AppMode::Default)

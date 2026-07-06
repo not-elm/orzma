@@ -29,7 +29,7 @@ use crate::input::mouse::webview::{
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::surface::geometry::{Side as CellSide, cell_at_pane};
-use crate::ui::copy_search::CopyPrompt;
+use crate::ui::copy_search::ViModePrompt;
 use crate::ui::vi_mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
@@ -120,7 +120,7 @@ fn tmux_webview_pointer(
     mut buttons: MessageReader<MouseButtonInput>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
-    copy_prompt: Res<CopyPrompt>,
+    copy_prompt: Res<ViModePrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     buffer.0.clear();
@@ -193,7 +193,7 @@ fn forward_tmux_webview_mouse_moves(
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    copy_prompt: Res<CopyPrompt>,
+    copy_prompt: Res<ViModePrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
@@ -245,7 +245,7 @@ struct TmuxGestureButtons(Vec<MouseButtonInput>);
 /// suppressor here — the `tmux_webview_pointer` pre-step owns webview focus.
 fn pointer_active(
     windows: Query<&Window, With<PrimaryWindow>>,
-    copy_prompt: Res<CopyPrompt>,
+    copy_prompt: Res<ViModePrompt>,
 ) -> bool {
     windows.single().is_ok_and(|window| window.focused) && copy_prompt.open.is_none()
 }
@@ -638,10 +638,10 @@ mod tests {
     }
 
     fn set_modal_open(app: &mut App, open: bool) {
-        use crate::ui::copy_search::CopyPromptState;
+        use crate::ui::copy_search::ViModePromptState;
         use orzma_tmux::{PaneId, PromptKind};
 
-        app.world_mut().resource_mut::<CopyPrompt>().open = open.then(|| CopyPromptState {
+        app.world_mut().resource_mut::<ViModePrompt>().open = open.then(|| ViModePromptState {
             kind: PromptKind::SearchForward,
             pane: PaneId(0),
             text: String::new(),
@@ -656,7 +656,7 @@ mod tests {
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<CopyPrompt>();
+        app.init_resource::<ViModePrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(
@@ -694,7 +694,7 @@ mod tests {
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<CopyPrompt>();
+        app.init_resource::<ViModePrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(
