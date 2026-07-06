@@ -458,6 +458,18 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub previous_window: Option<Binding>,
+    /// Switch to the next session (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub next_session: Option<Binding>,
+    /// Switch to the previous session (tmux mode only).
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub previous_session: Option<Binding>,
     /// Switch to the window at tmux index 0 (tmux mode only).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
@@ -566,8 +578,10 @@ impl Default for Shortcuts {
             resize_right_pane: Some(parse_default_binding("<Leader:r>Shift+L")),
             new_window: Some(parse_default_binding("<Leader>c")),
             kill_window: Some(parse_default_binding("<Leader>Shift+X")),
-            next_window: Some(parse_default_binding("<Leader>w")),
+            next_window: Some(parse_default_binding("<Leader>e")),
             previous_window: Some(parse_default_binding("<Leader>q")),
+            next_session: Some(parse_default_binding("<Leader>Shift+E")),
+            previous_session: Some(parse_default_binding("<Leader>Shift+Q")),
             select_window_0: Some(parse_default_binding("<Leader>0")),
             select_window_1: Some(parse_default_binding("<Leader>1")),
             select_window_2: Some(parse_default_binding("<Leader>2")),
@@ -665,6 +679,12 @@ impl Shortcuts {
                 "previous-window",
                 &self.previous_window,
                 Shortcut::PreviousWindow,
+            ),
+            ("next-session", &self.next_session, Shortcut::NextSession),
+            (
+                "previous-session",
+                &self.previous_session,
+                Shortcut::PreviousSession,
             ),
             (
                 "select-window-0",
@@ -823,6 +843,10 @@ pub enum Shortcut {
     NextWindow,
     /// Switches to the previous window (tmux mode only).
     PreviousWindow,
+    /// Switches the tmux client to the next session (tmux mode only).
+    NextSession,
+    /// Switches the tmux client to the previous session (tmux mode only).
+    PreviousSession,
     /// Switches to the window with this tmux display index (tmux mode only).
     SelectWindow(u8),
     /// Opens the rename prompt for the active window (tmux mode only).
@@ -1330,16 +1354,16 @@ mod tests {
             s.quit,
             Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap()))
         );
-        assert_eq!(s.bindings_iter().count(), 33);
+        assert_eq!(s.bindings_iter().count(), 35);
         assert_eq!(s.direct_chords().count(), 5);
-        assert_eq!(s.leader_chords().count(), 28);
+        assert_eq!(s.leader_chords().count(), 30);
     }
 
     #[test]
     fn bindings_iter_count_is_pinned_to_field_count() {
         // NOTE: drift guard — adding a Shortcuts field without its
         // bindings_iter() entry silently unbinds the action.
-        assert_eq!(Shortcuts::default().bindings_iter().count(), 33);
+        assert_eq!(Shortcuts::default().bindings_iter().count(), 35);
     }
 
     #[test]
@@ -1464,7 +1488,7 @@ detach-session = "<Leader>d"
             s.paste,
             Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
         );
-        assert_eq!(s.leader_chords().count(), 30);
+        assert_eq!(s.leader_chords().count(), 32);
     }
 
     #[test]
@@ -1527,7 +1551,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-vi-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>W","previous-window":"<Leader>Q","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-vi-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>E","previous-window":"<Leader>Q","next-session":"<Leader>Shift+E","previous-session":"<Leader>Shift+Q","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 

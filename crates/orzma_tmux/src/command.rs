@@ -13,7 +13,8 @@ pub use env::{SetEnvironmentGlobal, SetEnvironmentInSession, UnsetEnvironmentGlo
 pub use io::{SendBytes, SendPaneKeys};
 pub use ops::{
     KillPane, KillWindow, NewWindow, NextWindow, PaneDirection, PreviousWindow, ResizePaneTowards,
-    SelectPaneTowards, SplitDirection, SplitWindow, ZoomPane,
+    SelectPaneTowards, SplitDirection, SplitWindow, SwitchClientNext, SwitchClientPrevious,
+    ZoomPane,
 };
 pub(crate) use query::{
     ActivePane, AggressiveResize, CapturePane, CapturePanePending, CapturePaneSavedPrimary,

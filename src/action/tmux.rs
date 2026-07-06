@@ -6,8 +6,10 @@ mod detach_session;
 mod kill_pane;
 mod kill_window;
 mod new_window;
+mod next_session;
 mod next_window;
 mod paste;
+mod previous_session;
 mod previous_window;
 mod rename_session;
 mod rename_window;
@@ -23,7 +25,9 @@ pub(crate) use detach_session::DetachSessionRequest;
 pub(crate) use kill_pane::KillPaneRequest;
 pub(crate) use kill_window::KillWindowRequest;
 pub(crate) use new_window::NewWindowRequest;
+pub(crate) use next_session::NextSessionRequest;
 pub(crate) use next_window::NextWindowRequest;
+pub(crate) use previous_session::PreviousSessionRequest;
 pub(crate) use previous_window::PreviousWindowRequest;
 pub(crate) use rename_session::RenameSessionRequest;
 pub(crate) use rename_window::RenameWindowRequest;
@@ -43,8 +47,12 @@ impl Plugin for TmuxActionPlugin {
             kill_pane::KillPanePlugin,
             kill_window::KillWindowPlugin,
             new_window::NewWindowPlugin,
+            next_session::NextSessionPlugin,
             next_window::NextWindowPlugin,
             paste::TmuxPastePlugin,
+            previous_session::PreviousSessionPlugin,
+        ))
+        .add_plugins((
             previous_window::PreviousWindowPlugin,
             rename_session::RenameSessionPlugin,
             rename_window::RenameWindowPlugin,

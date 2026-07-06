@@ -8,9 +8,9 @@ use crate::{
         terminal::PasteAction,
         tmux::{
             DetachSessionRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest,
-            NextWindowRequest, PreviousWindowRequest, RenameSessionRequest, RenameWindowRequest,
-            ResizePaneRequest, SelectPaneRequest, SelectWindowRequest, SplitPaneRequest,
-            ZoomPaneRequest,
+            NextSessionRequest, NextWindowRequest, PreviousSessionRequest, PreviousWindowRequest,
+            RenameSessionRequest, RenameWindowRequest, ResizePaneRequest, SelectPaneRequest,
+            SelectWindowRequest, SplitPaneRequest, ZoomPaneRequest,
         },
         vi::trigger_vi_mode_action,
     },
@@ -242,6 +242,16 @@ fn dispatch_tmux_action(
         Shortcut::PreviousWindow => {
             if let Ok(entity) = targets.session.single() {
                 commands.trigger(PreviousWindowRequest { entity });
+            }
+        }
+        Shortcut::NextSession => {
+            if let Ok(entity) = targets.session.single() {
+                commands.trigger(NextSessionRequest { entity });
+            }
+        }
+        Shortcut::PreviousSession => {
+            if let Ok(entity) = targets.session.single() {
+                commands.trigger(PreviousSessionRequest { entity });
             }
         }
         Shortcut::SelectWindow(index) => {
