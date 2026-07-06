@@ -42,4 +42,26 @@ describe('renderMarkdown', () => {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     expect(doc.querySelector('h1')?.id).toBe('h0');
   });
+
+  it('renders GFM tables', () => {
+    const html = renderMarkdown('| a | b |\n| - | - |\n| 1 | 2 |\n');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    expect(doc.querySelector('table')).not.toBeNull();
+    expect(doc.querySelectorAll('td')).toHaveLength(2);
+  });
+
+  it('renders GFM task-list checkboxes', () => {
+    const html = renderMarkdown('- [ ] todo\n- [x] done\n');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const boxes = doc.querySelectorAll('input[type="checkbox"]');
+    expect(boxes).toHaveLength(2);
+    expect(boxes[0].hasAttribute('checked')).toBe(false);
+    expect(boxes[1].hasAttribute('checked')).toBe(true);
+  });
+
+  it('renders GFM strikethrough', () => {
+    const html = renderMarkdown('~~struck~~\n');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    expect(doc.querySelector('del')).not.toBeNull();
+  });
 });
