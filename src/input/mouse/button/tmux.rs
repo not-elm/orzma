@@ -29,8 +29,8 @@ use crate::input::mouse::webview::{
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::surface::geometry::{Side as CellSide, cell_at_pane};
-use crate::ui::copy_mode::CopyModeState;
-use crate::ui::copy_search::CopyPrompt;
+use crate::ui::vi_mode::ViModeState;
+use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -91,7 +91,7 @@ impl Plugin for MouseButtonTmuxPlugin {
 /// This system owns the single `MouseButtonInput` reader for the tmux pointer
 /// pipeline and runs EVERY frame within `TmuxActiveSet` (it is NOT gated by
 /// `pointer_active`); it computes the suppressed/active decision in-body. On a
-/// suppressed frame (no focused primary window, or a copy-search prompt owns
+/// suppressed frame (no focused primary window, or a vi-search prompt owns
 /// input) it drains the reader and the buffer, resets the gesture to
 /// `Idle`, and resolves an in-flight inline press: with no window it drops
 /// `WebviewPress` WITHOUT a CEF mouse-up (there is no cursor/scale to place
@@ -120,7 +120,7 @@ fn tmux_webview_pointer(
     mut buttons: MessageReader<MouseButtonInput>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
-    copy_prompt: Res<CopyPrompt>,
+    vi_mode_prompt: Res<ViModePrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     buffer.0.clear();
@@ -131,7 +131,7 @@ fn tmux_webview_pointer(
         return;
     };
     let frame = webview_pointer_frame(window, &metrics);
-    if !window.focused || copy_prompt.open.is_some() {
+    if !window.focused || vi_mode_prompt.open.is_some() {
         buttons.clear();
         gesture.state = GestureState::Idle;
         release_webview_press(
@@ -182,7 +182,7 @@ fn tmux_webview_pointer(
 /// under the cursor to the child's CEF browser via the shared
 /// `forward_webview_move_at`. `CursorMoved`-driven (one forward per frame, latest
 /// position), so the one system serves both hover and an in-rect drag. Skipped
-/// while a copy-search prompt owns input. `Browsers` is optional so CEF-less
+/// while a vi-search prompt owns input. `Browsers` is optional so CEF-less
 /// tests construct it.
 fn forward_tmux_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
@@ -193,13 +193,13 @@ fn forward_tmux_webview_mouse_moves(
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    copy_prompt: Res<CopyPrompt>,
+    vi_mode_prompt: Res<ViModePrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
         return;
     };
-    if copy_prompt.open.is_some() {
+    if vi_mode_prompt.open.is_some() {
         return;
     }
     let Ok(window) = windows.single() else {
@@ -236,7 +236,7 @@ fn forward_tmux_webview_mouse_moves(
 struct TmuxGestureButtons(Vec<MouseButtonInput>);
 
 /// Run condition for the active tmux gesture pipeline: `true` iff a focused
-/// primary window exists AND no modal (copy-search prompt) owns input.
+/// primary window exists AND no modal (vi-search prompt) owns input.
 ///
 /// Gates `tmux_gesture` only (which reads the hand-off buffer, not
 /// `MouseButtonInput`). `tmux_webview_pointer` is NOT gated by this — it owns the
@@ -245,15 +245,15 @@ struct TmuxGestureButtons(Vec<MouseButtonInput>);
 /// suppressor here — the `tmux_webview_pointer` pre-step owns webview focus.
 fn pointer_active(
     windows: Query<&Window, With<PrimaryWindow>>,
-    copy_prompt: Res<CopyPrompt>,
+    vi_mode_prompt: Res<ViModePrompt>,
 ) -> bool {
-    windows.single().is_ok_and(|window| window.focused) && copy_prompt.open.is_none()
+    windows.single().is_ok_and(|window| window.focused) && vi_mode_prompt.open.is_none()
 }
 
-/// Bundles the immutable copy-mode query read used by `tmux_gesture`.
+/// Bundles the immutable vi-mode query read used by `tmux_gesture`.
 #[derive(SystemParam)]
-struct CopyModeGate<'w, 's> {
-    copy_modes: Query<'w, 's, (), With<CopyModeState>>,
+struct ViModeGate<'w, 's> {
+    vi_modes: Query<'w, 's, (), With<ViModeState>>,
 }
 
 /// The current phase of a left-button gesture over a tmux pane.
@@ -279,7 +279,7 @@ enum GestureState {
         cell: Point,
         kind: MultiSelectKind,
     },
-    /// Selecting text in a pane via tmux copy-mode (entered on drag-start).
+    /// Selecting text in a pane via tmux vi-mode (entered on drag-start).
     Selecting {
         pane: Entity,
         anchor: Point,
@@ -333,8 +333,8 @@ fn engine_side(side: CellSide) -> Side {
 /// `Resizing`; otherwise the pane under the cursor is focused (`select-pane`)
 /// and the state becomes `Pressed`. While `Pressed`, a pointer that drags past
 /// `drag_threshold_px` transitions to `Selecting` when the pane is already in
-/// copy mode (drag/selection for a pane NOT in copy mode is owned by
-/// the local terminal path). Multi-click (≥2) on a pane in copy mode enters
+/// vi mode (drag/selection for a pane NOT in vi mode is owned by
+/// the local terminal path). Multi-click (≥2) on a pane in vi mode enters
 /// `PendingMultiSelect`, which starts a word/line selection on the pane's
 /// local terminal handle on the very next continuation frame — this is
 /// local-only and needs no `TmuxClient`. Each frame while `Resizing` the
@@ -345,7 +345,7 @@ fn engine_side(side: CellSide) -> Side {
 /// as a fallback click.
 ///
 /// Gated by `run_if(pointer_active)`: this system runs only when a focused
-/// primary window exists and no modal (copy-search prompt) owns input.
+/// primary window exists and no modal (vi-search prompt) owns input.
 /// The suppressed path — clearing the buffer, resetting the gesture, and
 /// releasing or dropping an in-flight inline press — is owned by
 /// `tmux_webview_pointer`, which runs every frame upstream of this system.
@@ -364,7 +364,7 @@ fn tmux_gesture(
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OrzmaConfigsResource>>,
-    copy_gate: CopyModeGate,
+    vi_gate: ViModeGate,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -418,7 +418,7 @@ fn tmux_gesture(
                 let ctx = release_ctx(
                     &gesture.state,
                     &panes,
-                    &copy_gate,
+                    &vi_gate,
                     cursor_phys,
                     cell_w,
                     cell_h,
@@ -431,7 +431,7 @@ fn tmux_gesture(
     let ctx = continuation_ctx(
         &gesture.state,
         &panes,
-        &copy_gate,
+        &vi_gate,
         cursor_phys,
         drag_threshold_phys,
         cell_w,
@@ -489,12 +489,12 @@ fn press_hit(
 }
 
 /// Resolves the `ReleaseCtx` for the gesture's current (pre-release) state:
-/// copy-mode + a `Pressed` multi-click's origin point, and the pane under the
+/// vi-mode + a `Pressed` multi-click's origin point, and the pane under the
 /// cursor for a `Resizing`-click focus fallback.
 fn release_ctx(
     state: &GestureState,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    copy_gate: &CopyModeGate,
+    vi_gate: &ViModeGate,
     cursor_phys: Option<Vec2>,
     cell_w: f32,
     cell_h: f32,
@@ -503,7 +503,7 @@ fn release_ctx(
         GestureState::Pressed {
             pane, origin_phys, ..
         } => {
-            let copy_mode = copy_gate.copy_modes.get(pane).is_ok();
+            let vi_mode = vi_gate.vi_modes.get(pane).is_ok();
             let multi_cell = panes
                 .get(pane)
                 .ok()
@@ -514,18 +514,18 @@ fn release_ctx(
                 })
                 .map(|(col, row, _)| point_from_cell((col, row)));
             ReleaseCtx {
-                copy_mode,
+                vi_mode,
                 multi_cell,
                 pane_under: None,
             }
         }
         GestureState::Resizing { .. } => ReleaseCtx {
-            copy_mode: false,
+            vi_mode: false,
             multi_cell: None,
             pane_under: cursor_phys.and_then(|c| tmux_pane_at_phys(panes, c).map(|(_, id, _)| id)),
         },
         _ => ReleaseCtx {
-            copy_mode: false,
+            vi_mode: false,
             multi_cell: None,
             pane_under: None,
         },
@@ -533,7 +533,7 @@ fn release_ctx(
 }
 
 /// Resolves the per-frame `ContinuationCtx` for the gesture's current state,
-/// reading only the inputs the active arm needs (cursor + copy-mode + origin
+/// reading only the inputs the active arm needs (cursor + vi-mode + origin
 /// anchor point for `Pressed`; live selecting point for `Selecting`; pointer
 /// cell for `Resizing`). `side` is resolved from whichever point the active
 /// arm reads (the press origin for `Pressed`, the live cursor for
@@ -541,7 +541,7 @@ fn release_ctx(
 fn continuation_ctx(
     state: &GestureState,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    copy_gate: &CopyModeGate,
+    vi_gate: &ViModeGate,
     cursor_phys: Option<Vec2>,
     drag_threshold_phys: f32,
     cell_w: f32,
@@ -551,7 +551,7 @@ fn continuation_ctx(
         pane_alive: false,
         cursor_phys,
         drag_threshold_phys,
-        copy_mode: false,
+        vi_mode: false,
         anchor_point: None,
         selecting_point: None,
         side: Side::Left,
@@ -562,7 +562,7 @@ fn continuation_ctx(
         GestureState::Pressed {
             pane, origin_phys, ..
         } => {
-            ctx.copy_mode = copy_gate.copy_modes.get(pane).is_ok();
+            ctx.vi_mode = vi_gate.vi_modes.get(pane).is_ok();
             if let Ok((_, p, node, transform)) = panes.get(pane) {
                 ctx.pane_alive = true;
                 let cols = p.dims.width as u16;
@@ -638,10 +638,10 @@ mod tests {
     }
 
     fn set_modal_open(app: &mut App, open: bool) {
-        use crate::ui::copy_search::CopyPromptState;
+        use crate::ui::vi_search::ViModePromptState;
         use orzma_tmux::{PaneId, PromptKind};
 
-        app.world_mut().resource_mut::<CopyPrompt>().open = open.then(|| CopyPromptState {
+        app.world_mut().resource_mut::<ViModePrompt>().open = open.then(|| ViModePromptState {
             kind: PromptKind::SearchForward,
             pane: PaneId(0),
             text: String::new(),
@@ -656,7 +656,7 @@ mod tests {
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<CopyPrompt>();
+        app.init_resource::<ViModePrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(
@@ -694,7 +694,7 @@ mod tests {
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<CopyPrompt>();
+        app.init_resource::<ViModePrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(

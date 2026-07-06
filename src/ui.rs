@@ -4,14 +4,14 @@
 use crate::ui::root::OrzmaUiRootPlugin;
 use bevy::prelude::*;
 
-pub mod copy_mode;
-pub mod copy_mode_indicator;
-pub(crate) mod copy_search;
 pub(crate) mod default_mode;
 pub(crate) mod ime_overlay;
 pub mod palette;
 pub mod root;
 pub(crate) mod tmux;
+pub mod vi_mode;
+pub mod vi_mode_indicator;
+pub(crate) mod vi_search;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never
 /// despawned. Hosts each mode's UI subtree (`DefaultModeUi` / `TmuxModeUi`) as a

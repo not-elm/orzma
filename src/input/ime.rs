@@ -8,7 +8,7 @@
 
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
-use crate::ui::copy_mode::CopyModeState;
+use crate::ui::vi_mode::ViModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;
@@ -167,7 +167,7 @@ pub(crate) fn resolve_focused_surface(
 ///
 /// `ime_enabled` is `true` iff a CEF webview owns focus (it drives its own
 /// IME through bevy_cef's `Ime` → CEF bridge), OR a surface exists that does
-/// NOT have `CopyModeState`. The surface is the active tmux pane or the
+/// NOT have `ViModeState`. The surface is the active tmux pane or the
 /// Default `OrzmaTerminal`, both resolved uniformly via `KeyboardFocused`.
 ///
 /// `ime_position` is the logical-pixel anchor for the OS candidate
@@ -180,7 +180,7 @@ pub(crate) fn resolve_focused_surface(
 fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     focused: Query<Entity, With<KeyboardFocused>>,
-    copy_modes: Query<(), With<CopyModeState>>,
+    vi_modes: Query<(), With<ViModeState>>,
     anchors: Query<(&ComputedNode, &UiGlobalTransform, &TerminalGrid)>,
     metrics: Res<TerminalCellMetricsResource>,
     focused_webview: Res<FocusedWebview>,
@@ -243,8 +243,8 @@ fn ime_policy_system(
         return;
     };
 
-    let in_copy_mode = copy_modes.get(entity).is_ok();
-    let desired = !in_copy_mode;
+    let in_vi_mode = vi_modes.get(entity).is_ok();
+    let desired = !in_vi_mode;
 
     if window.ime_enabled != desired {
         window.ime_enabled = desired;
@@ -297,7 +297,7 @@ fn ime_policy_system(
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
 /// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
 /// state machine still runs, so `ImeState` stays consistent) when EITHER any
-/// webview owns keyboard focus OR the focused surface is in copy mode. The
+/// webview owns keyboard focus OR the focused surface is in vi mode. The
 /// commit transport is applied by per-backend observers
 /// (`src/input/tmux/forward.rs`, `src/input/default_mode.rs`).
 fn read_ime_events(
@@ -306,7 +306,7 @@ fn read_ime_events(
     mut state: ResMut<ImeState>,
     focused: Query<Entity, With<KeyboardFocused>>,
     focused_webview: Res<FocusedWebview>,
-    copy_modes: Query<(), With<CopyModeState>>,
+    vi_modes: Query<(), With<ViModeState>>,
 ) {
     let surface = resolve_focused_surface(&focused);
     for event in events.read() {
@@ -332,7 +332,7 @@ fn read_ime_events(
             );
             continue;
         };
-        if copy_modes.contains(entity) {
+        if vi_modes.contains(entity) {
             continue;
         }
         commands.trigger(ImeCommit {
@@ -704,7 +704,7 @@ mod tests {
         let enabled = q.single(app.world()).expect("primary window").ime_enabled;
         assert!(
             enabled,
-            "IME must be enabled while a tmux pane is active and not in copy mode"
+            "IME must be enabled while a tmux pane is active and not in vi mode"
         );
     }
 

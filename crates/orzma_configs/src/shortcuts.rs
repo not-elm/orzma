@@ -349,13 +349,13 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub quit: Option<Binding>,
-    /// Enter copy mode: Alacritty vi mode in `AppMode::Default`, tmux
-    /// copy-mode in `AppMode::Tmux`.
+    /// Enter vi mode: Alacritty vi mode in `AppMode::Default`, tmux
+    /// vi-mode in `AppMode::Tmux`.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
-    pub enter_copy_mode: Option<Binding>,
+    pub enter_vi_mode: Option<Binding>,
     /// Detach the current tmux session and switch to Default mode.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
@@ -550,7 +550,7 @@ impl Default for Shortcuts {
             paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
             release_webview_focus: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+Escape"))),
             quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
-            enter_copy_mode: Some(Binding::Direct(parse_default_chord("Cmd+S"))),
+            enter_vi_mode: Some(Binding::Direct(parse_default_chord("Cmd+S"))),
             detach_session: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+D"))),
             select_left_pane: Some(parse_default_binding("<Leader>h")),
             select_down_pane: Some(parse_default_binding("<Leader>j")),
@@ -600,11 +600,7 @@ impl Shortcuts {
                 Shortcut::ReleaseWebviewFocus,
             ),
             ("quit", &self.quit, Shortcut::Quit),
-            (
-                "enter-copy-mode",
-                &self.enter_copy_mode,
-                Shortcut::EnterCopyMode,
-            ),
+            ("enter-vi-mode", &self.enter_vi_mode, Shortcut::EnterViMode),
             (
                 "detach-session",
                 &self.detach_session,
@@ -806,9 +802,9 @@ pub enum Shortcut {
     Quit,
     /// Detaches from the tmux session and returns to Default single-terminal mode.
     DetachSession,
-    /// Enters copy mode: Alacritty vi mode in `AppMode::Default`, tmux
-    /// copy-mode in `AppMode::Tmux`.
-    EnterCopyMode,
+    /// Enters vi mode: Alacritty vi mode in `AppMode::Default`, tmux
+    /// vi-mode in `AppMode::Tmux`.
+    EnterViMode,
     /// Focuses the neighbor pane in the given direction (tmux mode only).
     SelectPane(PaneDirection),
     /// Splits the active pane (tmux mode only).
@@ -1442,7 +1438,7 @@ new-window = "Cmd+T"
     fn shortcuts_parses_flat_leader_and_bindings() {
         let toml = r#"
 leader = "Ctrl+A"
-enter-copy-mode = "<Leader>s"
+enter-vi-mode = "<Leader>s"
 detach-session = "<Leader>d"
 "#;
         let s: Shortcuts = toml::from_str(toml).unwrap();
@@ -1451,7 +1447,7 @@ detach-session = "<Leader>d"
             Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap()))
         );
         assert_eq!(
-            s.enter_copy_mode,
+            s.enter_vi_mode,
             Some(Binding::Leader {
                 chord: parse_key_chord("s").unwrap(),
                 repeat: false,
@@ -1493,7 +1489,7 @@ detach-session = "<Leader>d"
     #[test]
     fn leader_conflict_detected() {
         let s = Shortcuts {
-            enter_copy_mode: Some(Binding::Leader {
+            enter_vi_mode: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1505,14 +1501,14 @@ detach-session = "<Leader>d"
         };
         let err = s.validate_no_leader_conflicts().unwrap_err();
         assert_eq!(err.len(), 1);
-        assert!(err[0].actions.contains(&"enter-copy-mode"));
+        assert!(err[0].actions.contains(&"enter-vi-mode"));
         assert!(err[0].actions.contains(&"detach-session"));
     }
 
     #[test]
     fn leader_conflict_detected_across_repeat_flag() {
         let s = Shortcuts {
-            enter_copy_mode: Some(Binding::Leader {
+            enter_vi_mode: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: true,
             }),
@@ -1524,14 +1520,14 @@ detach-session = "<Leader>d"
         };
         let err = s.validate_no_leader_conflicts().unwrap_err();
         assert_eq!(err.len(), 1);
-        assert!(err[0].actions.contains(&"enter-copy-mode"));
+        assert!(err[0].actions.contains(&"enter-vi-mode"));
         assert!(err[0].actions.contains(&"detach-session"));
     }
 
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-copy-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-vi-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>N","previous-window":"<Leader>Shift+N","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
@@ -1679,7 +1675,7 @@ detach-session = "<Leader>d"
     #[test]
     fn leader_chords_carries_repeat_flag() {
         let s = Shortcuts {
-            enter_copy_mode: Some(Binding::Leader {
+            enter_vi_mode: Some(Binding::Leader {
                 chord: parse_key_chord("s").unwrap(),
                 repeat: true,
             }),
@@ -1693,7 +1689,7 @@ detach-session = "<Leader>d"
         assert!(
             entries
                 .iter()
-                .any(|(l, _, _, r)| *l == "enter-copy-mode" && *r)
+                .any(|(l, _, _, r)| *l == "enter-vi-mode" && *r)
         );
         assert!(
             entries

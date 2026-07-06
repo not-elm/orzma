@@ -1,6 +1,6 @@
 //! Per-pane input gating for `AppMode::Tmux`: every pane is `KeyboardDisabled`
 //! (keys pass through to tmux), and `MouseDisabled` whenever a modal owns input,
-//! the pane is in copy mode, the focused webview belongs to the pane, or
+//! the pane is in vi mode, the focused webview belongs to the pane, or
 //! an interactive webview under the cursor claims the press — so the
 //! `crate::input::mouse` shared systems yield to the tmux-specific gestures.
 
@@ -10,9 +10,9 @@ use crate::input::InputPhase;
 use crate::input::focus::KeyboardDisabled;
 use crate::input::focus::MouseDisabled;
 use crate::input::ime::ImeState;
-use crate::ui::copy_mode::CopyModeState;
-use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
+use crate::ui::vi_mode::ViModeState;
+use crate::ui::vi_search::ViModePrompt;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
@@ -39,7 +39,7 @@ impl Plugin for GatePlugin {
 fn maintain_tmux_input_gates(
     mut commands: Commands,
     ime: Res<ImeState>,
-    copy_prompt: Res<CopyPrompt>,
+    vi_mode_prompt: Res<ViModePrompt>,
     rename_prompt: Option<Res<RenamePrompt>>,
     focused_webview: Res<FocusedWebview>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
@@ -54,7 +54,7 @@ fn maintain_tmux_input_gates(
             Entity,
             Has<KeyboardDisabled>,
             Has<MouseDisabled>,
-            Has<CopyModeState>,
+            Has<ViModeState>,
         ),
         With<TmuxPane>,
     >,
@@ -63,7 +63,7 @@ fn maintain_tmux_input_gates(
     let window_focused = window.map(|w| w.focused).unwrap_or(false);
     let modal = ime.is_composing()
         || !window_focused
-        || copy_prompt.open.is_some()
+        || vi_mode_prompt.open.is_some()
         || rename_prompt.is_some();
     // NOTE: gate only the focused webview's OWNING pane, not all panes — a
     // global `focused_webview.0.is_some()` would kill scroll/selection on every
@@ -87,14 +87,14 @@ fn maintain_tmux_input_gates(
             &overlay_rects,
         )
     });
-    for (entity, has_keyboard, has_mouse, in_copy_mode) in panes.iter() {
+    for (entity, has_keyboard, has_mouse, in_vi_mode) in panes.iter() {
         if !has_keyboard {
             commands.entity(entity).insert(KeyboardDisabled);
         }
         let region_claimed = Some(entity) == claimed_pane;
         let disable_mouse = should_disable_pane_mouse(
             modal,
-            in_copy_mode,
+            in_vi_mode,
             Some(entity) == focused_webview_pane,
             region_claimed,
         );
@@ -108,11 +108,11 @@ fn maintain_tmux_input_gates(
 
 fn should_disable_pane_mouse(
     modal: bool,
-    in_copy_mode: bool,
+    in_vi_mode: bool,
     webview_focused_here: bool,
     region_claimed: bool,
 ) -> bool {
-    modal || in_copy_mode || webview_focused_here || region_claimed
+    modal || in_vi_mode || webview_focused_here || region_claimed
 }
 
 /// The parent `TmuxPane` entity of the interactive webview currently

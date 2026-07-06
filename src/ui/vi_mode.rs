@@ -1,7 +1,7 @@
-//! Copy mode state. The vi cursor lives in alacritty
+//! Vi mode state. The vi cursor lives in alacritty
 //! (`Term::vi_mode_cursor`) and the active selection lives in
 //! `Term::selection`. This component is a pure marker — its presence
-//! on a Surface entity means "copy mode is active". The v / V
+//! on a Surface entity means "vi mode is active". The v / V
 //! toggle predicate reads `TerminalHandle::selection_type()` to
 //! decide between "start new selection of kind X" and "clear existing".
 
@@ -16,40 +16,40 @@ use orzma_tty_engine::{Coalescer, TerminalHandle};
 
 /// Bevy Plugin: registers the two observers. The global `Clipboard`
 /// resource is provided by `crate::clipboard::ClipboardPlugin`.
-/// `CopyModeState` is inserted/removed per-entity by the observers
+/// `ViModeState` is inserted/removed per-entity by the observers
 /// themselves; no global system needed.
-pub struct CopyModePlugin;
+pub struct ViModePlugin;
 
-impl Plugin for CopyModePlugin {
+impl Plugin for ViModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(handle_enter_copy_mode_request)
-            .add_observer(handle_exit_copy_mode);
+        app.add_observer(handle_enter_vi_mode_request)
+            .add_observer(handle_exit_vi_mode);
     }
 }
 
-/// Marker: presence on a Surface entity means "copy mode is active".
+/// Marker: presence on a Surface entity means "vi mode is active".
 #[derive(Component, Debug, Default)]
-pub struct CopyModeState;
+pub struct ViModeState;
 
-/// Request to enter copy mode on a specific Surface entity.
+/// Request to enter vi mode on a specific Surface entity.
 #[derive(EntityEvent, Debug)]
-pub struct EnterCopyModeActionEvent {
-    /// The Surface entity to enter copy mode on.
+pub struct EnterViModeActionEvent {
+    /// The Surface entity to enter vi mode on.
     pub entity: Entity,
 }
 
-/// Request to exit copy mode. The observer calls `TerminalHandle::exit_vi_mode`,
-/// clears any selection, and removes `CopyModeState`.
+/// Request to exit vi mode. The observer calls `TerminalHandle::exit_vi_mode`,
+/// clears any selection, and removes `ViModeState`.
 #[derive(EntityEvent, Debug)]
-pub struct ExitCopyMode {
-    /// The Surface entity to exit copy mode on.
+pub struct ExitViMode {
+    /// The Surface entity to exit vi mode on.
     pub entity: Entity,
 }
 
-/// Observer for `EnterCopyModeActionEvent`. Inserts `CopyModeState` on the
+/// Observer for `EnterViModeActionEvent`. Inserts `ViModeState` on the
 /// target entity and calls `TerminalHandle::enter_vi_mode`.
-fn handle_enter_copy_mode_request(
-    ev: On<EnterCopyModeActionEvent>,
+fn handle_enter_vi_mode_request(
+    ev: On<EnterViModeActionEvent>,
     mut commands: Commands,
     mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,
 ) {
@@ -66,14 +66,14 @@ fn handle_enter_copy_mode_request(
     handle.enter_vi_mode(&mut coalescer);
     commands
         .entity(ev.entity)
-        .insert((CopyModeState, KeyboardDisabled, MouseDisabled));
+        .insert((ViModeState, KeyboardDisabled, MouseDisabled));
 }
 
-/// Observer for `ExitCopyMode`. Removes `CopyModeState`, clears any
+/// Observer for `ExitViMode`. Removes `ViModeState`, clears any
 /// selection, and calls `TerminalHandle::exit_vi_mode` (which snaps
 /// the viewport to the live tail).
-fn handle_exit_copy_mode(
-    ev: On<ExitCopyMode>,
+fn handle_exit_vi_mode(
+    ev: On<ExitViMode>,
     mut commands: Commands,
     mut q: Query<(&mut TerminalHandle, &mut Coalescer)>,
 ) {
@@ -84,7 +84,7 @@ fn handle_exit_copy_mode(
     handle.exit_vi_mode(&mut coalescer);
     commands
         .entity(ev.entity)
-        .remove::<CopyModeState>()
+        .remove::<ViModeState>()
         .remove::<KeyboardDisabled>()
         .remove::<MouseDisabled>();
 }
@@ -109,17 +109,17 @@ mod tests {
     }
 
     #[test]
-    fn enter_observer_inserts_copy_mode_state_and_does_not_create_selection() {
+    fn enter_observer_inserts_vi_mode_state_and_does_not_create_selection() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_copy_mode_request);
+        app.add_observer(handle_enter_vi_mode_request);
 
         let entity = spawn_terminal_entity(&mut app);
 
-        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
 
-        assert!(app.world().get::<CopyModeState>(entity).is_some());
+        assert!(app.world().get::<ViModeState>(entity).is_some());
         let h = app.world().get::<TerminalHandle>(entity).unwrap();
         assert!(
             h.selection_type().is_none(),
@@ -129,12 +129,12 @@ mod tests {
 
     #[test]
     fn enter_observer_clears_a_pre_existing_selection() {
-        // Regression: a leftover mouse-drag selection from before copy mode
+        // Regression: a leftover mouse-drag selection from before vi mode
         // was entered must not be misread by the v/V toggle predicate as an
         // already-started vi selection.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_copy_mode_request);
+        app.add_observer(handle_enter_vi_mode_request);
 
         let entity = spawn_terminal_entity(&mut app);
         {
@@ -147,13 +147,13 @@ mod tests {
             e.insert((h, coalescer));
         }
 
-        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
 
         let h = app.world().get::<TerminalHandle>(entity).unwrap();
         assert!(
             h.selection_type().is_none(),
-            "entering copy mode must clear a pre-existing selection",
+            "entering vi mode must clear a pre-existing selection",
         );
     }
 
@@ -161,9 +161,9 @@ mod tests {
     fn enter_observer_disables_keyboard_and_mouse() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_copy_mode_request);
+        app.add_observer(handle_enter_vi_mode_request);
         let entity = spawn_terminal_entity(&mut app);
-        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
         assert!(app.world().get::<KeyboardDisabled>(entity).is_some());
         assert!(app.world().get::<MouseDisabled>(entity).is_some());
@@ -173,26 +173,26 @@ mod tests {
     fn exit_observer_reenables_keyboard_and_mouse() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_copy_mode_request);
-        app.add_observer(handle_exit_copy_mode);
+        app.add_observer(handle_enter_vi_mode_request);
+        app.add_observer(handle_exit_vi_mode);
         let entity = spawn_terminal_entity(&mut app);
-        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
-        app.world_mut().trigger(ExitCopyMode { entity });
+        app.world_mut().trigger(ExitViMode { entity });
         app.update();
         assert!(app.world().get::<KeyboardDisabled>(entity).is_none());
         assert!(app.world().get::<MouseDisabled>(entity).is_none());
     }
 
     #[test]
-    fn exit_observer_removes_copy_mode_state_and_clears_selection() {
+    fn exit_observer_removes_vi_mode_state_and_clears_selection() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_observer(handle_enter_copy_mode_request);
-        app.add_observer(handle_exit_copy_mode);
+        app.add_observer(handle_enter_vi_mode_request);
+        app.add_observer(handle_exit_vi_mode);
 
         let entity = spawn_terminal_entity(&mut app);
-        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
         {
             let mut e = app.world_mut().entity_mut(entity);
@@ -204,10 +204,10 @@ mod tests {
             e.insert((h, coalescer));
         }
 
-        app.world_mut().trigger(ExitCopyMode { entity });
+        app.world_mut().trigger(ExitViMode { entity });
         app.update();
 
-        assert!(app.world().get::<CopyModeState>(entity).is_none());
+        assert!(app.world().get::<ViModeState>(entity).is_none());
         let h = app.world().get::<TerminalHandle>(entity).unwrap();
         assert!(
             h.selection_type().is_none(),

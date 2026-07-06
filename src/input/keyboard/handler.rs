@@ -2,13 +2,13 @@
 //! `crate::input::resolve::classify_key_batch` decider, handles the two
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
 //! clear `FocusedWebview`), and fans out the remaining effects as the four
-//! per-responsibility shortcut messages (`ShortcutMessage`, `CopyModeMessage`,
+//! per-responsibility shortcut messages (`ShortcutMessage`, `ViModeMessage`,
 //! `TypeMessage`, `WebviewForwardMessage`). The per-mode appliers
 //! (`crate::input::shortcuts::default_mode`, `crate::input::shortcuts::tmux`)
 //! consume those messages and apply the mode-specific events. This is the
 //! sole system that steps `LeaderPhase`.
 
-use crate::action::vi::ResolvedCopyModeKeys;
+use crate::action::vi::ResolvedViModeKeys;
 use crate::app_mode::AppMode;
 use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
@@ -17,13 +17,13 @@ use crate::input::keyboard::key_effect::{
     BatchContext, ClassifiedKeys, KeyEffect, classify_key_batch,
 };
 use crate::input::shortcuts::{
-    CopyModeMessage, HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages,
-    ShortcutSet, Shortcuts, TypeMessage, WebviewForwardMessage, clear_leader_phase,
+    HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
+    Shortcuts, TypeMessage, ViModeMessage, WebviewForwardMessage, clear_leader_phase,
 };
-use crate::ui::copy_mode::CopyModeState;
-use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
+use crate::ui::vi_mode::ViModeState;
+use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -54,7 +54,7 @@ impl Plugin for KeyboardHandlerPlugin {
 /// guards.
 #[derive(SystemParam)]
 struct ModalGuards<'w> {
-    copy_prompt: Res<'w, CopyPrompt>,
+    vi_mode_prompt: Res<'w, ViModePrompt>,
     confirm_state: Option<Res<'w, ConfirmState>>,
     rename_prompt: Option<Res<'w, RenamePrompt>>,
     ime: Res<'w, ImeState>,
@@ -62,12 +62,12 @@ struct ModalGuards<'w> {
 }
 
 /// The classifier inputs `resolve_key_effects` feeds to `classify_key_batch`: the
-/// shortcut table, resolved copy-mode keys, held modifier keys, and the
+/// shortcut table, resolved vi-mode keys, held modifier keys, and the
 /// real-time clock the leader timeout is measured against.
 #[derive(SystemParam)]
 struct ClassifyInputs<'w> {
     shortcuts: Res<'w, Shortcuts>,
-    resolved_copy: Res<'w, ResolvedCopyModeKeys>,
+    resolved_vi_mode: Res<'w, ResolvedViModeKeys>,
     bevy_keys: Res<'w, ButtonInput<KeyCode>>,
     time: Res<'w, Time<Real>>,
 }
@@ -80,7 +80,7 @@ struct ClassifyInputs<'w> {
 /// unfocused window) it clears the leader, drains the frame's keys, and writes no
 /// messages; otherwise it classifies the keys, applies `Quit` (`AppExit`) and
 /// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every other
-/// effect to its typed message (`ShortcutMessage`, `CopyModeMessage`,
+/// effect to its typed message (`ShortcutMessage`, `ViModeMessage`,
 /// `TypeMessage`, `WebviewForwardMessage`).
 fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
@@ -94,12 +94,12 @@ fn resolve_key_effects(
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
     focused_surface: Query<Entity, With<KeyboardFocused>>,
-    copy_modes: Query<(), With<CopyModeState>>,
+    vi_modes: Query<(), With<ViModeState>>,
     forward_keys: Query<&ForwardKeys>,
 ) {
     let mode = guards.app_mode.get().clone();
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    // NOTE: the prompt guards (copy-mode prompt, confirm-before, rename) are
+    // NOTE: the prompt guards (vi-mode prompt, confirm-before, rename) are
     // tmux-only by design. Those resources are set by tmux actions and cleared
     // only by their own handlers — never on a mode transition — so a prompt left
     // open when the tmux connection drops (falling back to Default) would
@@ -108,7 +108,7 @@ fn resolve_key_effects(
     // frame's keys and write no messages, so no key leaks to the terminal,
     // tmux, or the prefix state machine (and no preedit key is double-sent).
     let prompt_open = mode == AppMode::Tmux
-        && (guards.copy_prompt.open.is_some()
+        && (guards.vi_mode_prompt.open.is_some()
             || guards.confirm_state.is_some()
             || guards.rename_prompt.is_some());
     if prompt_open || guards.ime.is_composing() || !focused_window {
@@ -122,7 +122,7 @@ fn resolve_key_effects(
     }
 
     let focused = resolve_focused_surface(&focused_surface);
-    let in_copy_mode = focused.is_some_and(|entity| copy_modes.get(entity).is_ok());
+    let in_vi_mode = focused.is_some_and(|entity| vi_modes.get(entity).is_ok());
     let forward_chords = focused_webview
         .0
         .and_then(|entity| forward_keys.get(entity).ok())
@@ -132,7 +132,7 @@ fn resolve_key_effects(
     let ctx = BatchContext {
         mods,
         now: inputs.time.elapsed(),
-        in_copy_mode,
+        in_vi_mode,
         webview_focused: focused_webview.0.is_some(),
         forward_chords,
     };
@@ -150,7 +150,7 @@ fn resolve_key_effects(
         &mut leader_phase,
         &mut held,
         &inputs.shortcuts,
-        &inputs.resolved_copy,
+        &inputs.resolved_vi_mode,
         events.read(),
         ctx,
     );
@@ -175,13 +175,11 @@ fn resolve_key_effects(
                     action,
                     via_leader,
                     focused,
-                    in_copy_mode,
+                    in_vi_mode,
                 });
             }
-            KeyEffect::CopyMode(action) => {
-                messages
-                    .copy_mode
-                    .write(CopyModeMessage { action, focused });
+            KeyEffect::ViMode(action) => {
+                messages.vi_mode.write(ViModeMessage { action, focused });
             }
             KeyEffect::Type { logical, key_code } => {
                 messages.type_keys.write(TypeMessage {
@@ -243,35 +241,35 @@ mod tests {
     struct Captured {
         app_exit: usize,
         shortcuts: Vec<(Shortcut, bool)>,
-        copy_mode: usize,
+        vi_mode: usize,
         typed: usize,
         webview_forward: usize,
         focused: Option<Entity>,
-        in_copy_mode: Option<bool>,
+        in_vi_mode: Option<bool>,
         mods: Option<Modifiers>,
         last_typed: Option<(Key, KeyCode)>,
     }
 
     impl Captured {
         fn message_count(&self) -> usize {
-            self.shortcuts.len() + self.copy_mode + self.typed + self.webview_forward
+            self.shortcuts.len() + self.vi_mode + self.typed + self.webview_forward
         }
     }
 
     fn capture_messages(
         mut cap: ResMut<Captured>,
         mut shortcuts: MessageReader<ShortcutMessage>,
-        mut copy_mode: MessageReader<CopyModeMessage>,
+        mut vi_mode: MessageReader<ViModeMessage>,
         mut typed: MessageReader<TypeMessage>,
         mut webview_forward: MessageReader<WebviewForwardMessage>,
     ) {
         for m in shortcuts.read() {
             cap.shortcuts.push((m.action, m.via_leader));
             cap.focused = m.focused;
-            cap.in_copy_mode = Some(m.in_copy_mode);
+            cap.in_vi_mode = Some(m.in_vi_mode);
         }
-        for m in copy_mode.read() {
-            cap.copy_mode += 1;
+        for m in vi_mode.read() {
+            cap.vi_mode += 1;
             cap.focused = m.focused;
         }
         for m in typed.read() {
@@ -298,7 +296,7 @@ mod tests {
             .add_plugins(KeyboardHandlerPlugin)
             .add_message::<KeyboardInput>()
             .add_message::<ShortcutMessage>()
-            .add_message::<CopyModeMessage>()
+            .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
             .add_message::<WebviewForwardMessage>()
             .add_message::<AppExit>()
@@ -308,8 +306,8 @@ mod tests {
             .init_resource::<CefKeyboardFilter>()
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
-            .init_resource::<ResolvedCopyModeKeys>()
-            .init_resource::<CopyPrompt>()
+            .init_resource::<ResolvedViModeKeys>()
+            .init_resource::<ViModePrompt>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
             .insert_state(AppMode::Default)
@@ -493,37 +491,37 @@ mod tests {
     }
 
     #[test]
-    fn in_copy_mode_flag_set() {
+    fn in_vi_mode_flag_set() {
         let mut app = resolve_app(test_shortcuts_with_direct_chord(
             KeyCode::KeyA,
             Modifiers::default(),
-            Shortcut::EnterCopyMode,
+            Shortcut::EnterViMode,
         ));
         app.world_mut()
-            .spawn((OrzmaTerminal, KeyboardFocused, CopyModeState));
+            .spawn((OrzmaTerminal, KeyboardFocused, ViModeState));
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert_eq!(
-            app.world().resource::<Captured>().in_copy_mode,
+            app.world().resource::<Captured>().in_vi_mode,
             Some(true),
-            "a focused surface in copy mode sets ShortcutMessage.in_copy_mode"
+            "a focused surface in vi mode sets ShortcutMessage.in_vi_mode"
         );
     }
 
     #[test]
-    fn in_copy_mode_flag_clear_outside_copy_mode() {
+    fn in_vi_mode_flag_clear_outside_vi_mode() {
         let mut app = resolve_app(test_shortcuts_with_direct_chord(
             KeyCode::KeyA,
             Modifiers::default(),
-            Shortcut::EnterCopyMode,
+            Shortcut::EnterViMode,
         ));
         app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
         press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
         app.update();
         assert_eq!(
-            app.world().resource::<Captured>().in_copy_mode,
+            app.world().resource::<Captured>().in_vi_mode,
             Some(false),
-            "a focused surface NOT in copy mode sets ShortcutMessage.in_copy_mode to false"
+            "a focused surface NOT in vi mode sets ShortcutMessage.in_vi_mode to false"
         );
     }
 
@@ -567,7 +565,7 @@ mod tests {
     fn filter_holds_leader_claim_under_webview_focus() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            Shortcut::EnterCopyMode,
+            Shortcut::EnterViMode,
             Duration::ZERO,
         ));
         app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
@@ -590,7 +588,7 @@ mod tests {
     fn filter_cleared_on_guarded_frame() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            Shortcut::EnterCopyMode,
+            Shortcut::EnterViMode,
             Duration::ZERO,
         ));
         app.world_mut().spawn((OrzmaTerminal, KeyboardFocused));
@@ -665,7 +663,7 @@ mod tests {
     fn filter_is_populated_before_keyboard_deliver_set() {
         let mut app = resolve_app(test_shortcuts_with_repeat_prefix(
             KeyCode::KeyS,
-            Shortcut::EnterCopyMode,
+            Shortcut::EnterViMode,
             Duration::ZERO,
         ));
         app.init_resource::<DeliverProbe>()

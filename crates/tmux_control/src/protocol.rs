@@ -270,7 +270,7 @@ impl ProtocolClient {
                 // hook's `run-shell` output (e.g. `after-select-pane` in a
                 // multi-pane session). Those carry flags=0; popping `pending` for
                 // one would assign the next sent command's id to it and desync
-                // every later reply (which silently freezes the copy-mode refresh
+                // every later reply (which silently freezes the vi-mode refresh
                 // loop). Skipping without popping keeps FIFO correlation aligned.
                 if !is_client_command_reply(flags) {
                     return Ok(None);
@@ -554,7 +554,7 @@ mod tests {
         // A tmux hook's `run-shell` (e.g. `after-select-pane`) emits an
         // unsolicited %begin/%end block with flags=0; control-client command
         // replies carry flags=1. The unsolicited block must NOT consume a pending
-        // command's slot, or every later reply mis-correlates (the copy-mode
+        // command's slot, or every later reply mis-correlates (the vi-mode
         // refresh loop dies when this happens in a multi-pane session).
         let mut c = ProtocolClient::new();
         let id = c.send("display-message -p x").unwrap();

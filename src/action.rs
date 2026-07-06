@@ -1,5 +1,5 @@
 //! The action layer: per-command `EntityEvent`s and their apply observers,
-//! grouped by domain (tmux pane/window ops, shared VI copy-mode ops,
+//! grouped by domain (tmux pane/window ops, shared vi-mode ops,
 //! PTY-level terminal ops).
 
 pub(crate) mod terminal;

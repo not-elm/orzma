@@ -9,7 +9,7 @@
 
 use super::TmuxLayoutSet;
 use crate::app_mode::TmuxActiveSet;
-use crate::ui::copy_mode::CopyModeState;
+use crate::ui::vi_mode::ViModeState;
 use bevy::prelude::*;
 use orzma_tmux::{RequestPaneReseed, TmuxPane, TmuxProjectionSet};
 use orzma_tty_engine::TerminalHandle;
@@ -180,10 +180,10 @@ fn evaluate_blank_recovery(
     }
 }
 
-/// Requests a tmux re-seed for each non-copy-mode pane whose grid is
+/// Requests a tmux re-seed for each non-vi-mode pane whose grid is
 /// structurally unpainted (see [`grid_needs_full_seed`]) once the state has
 /// held for [`RESEED_DEBOUNCE_FRAMES`], then re-requests every
-/// [`RESEED_INFLIGHT_TIMEOUT`] frames until the grid paints. Copy-mode panes
+/// [`RESEED_INFLIGHT_TIMEOUT`] frames until the grid paints. Vi-mode panes
 /// are skipped — the local vi applier (`crate::action::vi::applier`) is
 /// already scrolling this same `TerminalHandle`/`TerminalGrid`, and a
 /// structural reseed's `capture-pane` would recapture the live tail and
@@ -205,7 +205,7 @@ fn rescue_unpainted_panes(
             &mut StructuralReseedState,
             &mut BlankRecoveryState,
         ),
-        Without<CopyModeState>,
+        Without<ViModeState>,
     >,
 ) {
     for (entity, pane, handle, grid, mut reseed_state, mut blank_state) in panes.iter_mut() {
@@ -664,7 +664,7 @@ mod tests {
                 .chain(),
         );
 
-        // A painted, non-copy-mode pane in steady state: grid has a glyph and the
+        // A painted, non-vi-mode pane in steady state: grid has a glyph and the
         // handle geometry matches the grid dims, so neither the structural reseed
         // nor the blank-recovery path mutates after it first settles.
         let mut handle = TerminalHandle::detached(4, 2);

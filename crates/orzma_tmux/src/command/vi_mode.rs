@@ -1,4 +1,4 @@
-//! Copy-mode prompt command: the orzma search/jump prompt submit.
+//! Vi-mode prompt command: the orzma search/jump prompt submit.
 
 use crate::input::quote;
 use tmux_control::TmuxCommand;

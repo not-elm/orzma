@@ -1,7 +1,7 @@
-//! Startup-resolved `[copy-mode]` key table: normalizes each configured key
+//! Startup-resolved `[vi-mode]` key table: normalizes each configured key
 //! into a lookup form (`Plain` logical char / `Named` / `Ctrl` physical key)
 //! and maps a matched action to the shared VI events. Used by both modes'
-//! copy-mode key gathers.
+//! vi-mode key gathers.
 
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
@@ -9,38 +9,38 @@ use crate::action::vi::{
 use crate::configs::OrzmaConfigsResource;
 use bevy::input::keyboard::{Key, KeyCode};
 use bevy::prelude::*;
-use orzma_configs::copy_mode::{
-    CopyModeAction, CopyModeBaseKey, CopyModeKey, CopyModeNamedKey, CopyMotion, CopyPromptDir,
-    CopySelection,
-};
 use orzma_configs::shortcuts::Modifiers;
+use orzma_configs::vi_mode::{
+    ViModeAction, ViModeBaseKey, ViModeKey, ViModeMotion, ViModeNamedKey, ViModePromptDir,
+    ViModeSelection,
+};
 use orzma_tmux::PromptKind;
 use orzma_tty_engine::{SelectionType, ViMotion};
 use std::collections::HashMap;
 
-/// Registers the `Startup` resolution of the `[copy-mode]` table.
-pub(super) struct CopyModeKeymapPlugin;
+/// Registers the `Startup` resolution of the `[vi-mode]` table.
+pub(super) struct ViModeKeymapPlugin;
 
-impl Plugin for CopyModeKeymapPlugin {
+impl Plugin for ViModeKeymapPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ResolvedCopyModeKeys>()
-            .add_systems(Startup, build_copy_mode_keys);
+        app.init_resource::<ResolvedViModeKeys>()
+            .add_systems(Startup, build_vi_mode_keys);
     }
 }
 
-/// The `[copy-mode]` table resolved to a lookup map. Built once at startup.
+/// The `[vi-mode]` table resolved to a lookup map. Built once at startup.
 #[derive(Resource, Default, Debug)]
-pub(crate) struct ResolvedCopyModeKeys(HashMap<ResolvedKey, CopyModeAction>);
+pub(crate) struct ResolvedViModeKeys(HashMap<ResolvedKey, ViModeAction>);
 
-impl ResolvedCopyModeKeys {
+impl ResolvedViModeKeys {
     /// Returns the action bound to one keypress, or `None` (unbound —
-    /// swallowed by copy mode). `Cmd`/`Alt` chords are never copy-mode keys.
+    /// swallowed by vi mode). `Cmd`/`Alt` chords are never vi-mode keys.
     pub(crate) fn resolve(
         &self,
         logical_key: &Key,
         key_code: KeyCode,
         mods: Modifiers,
-    ) -> Option<CopyModeAction> {
+    ) -> Option<ViModeAction> {
         if mods.meta || mods.alt {
             return None;
         }
@@ -56,15 +56,15 @@ impl ResolvedCopyModeKeys {
         }
         let key = match logical_key {
             Key::Character(s) => ResolvedKey::Plain(s.to_string()),
-            Key::Escape => ResolvedKey::Named(CopyModeNamedKey::Escape),
-            Key::Enter => ResolvedKey::Named(CopyModeNamedKey::Enter),
-            Key::Space => ResolvedKey::Named(CopyModeNamedKey::Space),
-            Key::Tab => ResolvedKey::Named(CopyModeNamedKey::Tab),
-            Key::Backspace => ResolvedKey::Named(CopyModeNamedKey::Backspace),
-            Key::ArrowUp => ResolvedKey::Named(CopyModeNamedKey::ArrowUp),
-            Key::ArrowDown => ResolvedKey::Named(CopyModeNamedKey::ArrowDown),
-            Key::ArrowLeft => ResolvedKey::Named(CopyModeNamedKey::ArrowLeft),
-            Key::ArrowRight => ResolvedKey::Named(CopyModeNamedKey::ArrowRight),
+            Key::Escape => ResolvedKey::Named(ViModeNamedKey::Escape),
+            Key::Enter => ResolvedKey::Named(ViModeNamedKey::Enter),
+            Key::Space => ResolvedKey::Named(ViModeNamedKey::Space),
+            Key::Tab => ResolvedKey::Named(ViModeNamedKey::Tab),
+            Key::Backspace => ResolvedKey::Named(ViModeNamedKey::Backspace),
+            Key::ArrowUp => ResolvedKey::Named(ViModeNamedKey::ArrowUp),
+            Key::ArrowDown => ResolvedKey::Named(ViModeNamedKey::ArrowDown),
+            Key::ArrowLeft => ResolvedKey::Named(ViModeNamedKey::ArrowLeft),
+            Key::ArrowRight => ResolvedKey::Named(ViModeNamedKey::ArrowRight),
             _ => return None,
         };
         self.0.get(&key).copied()
@@ -73,27 +73,27 @@ impl ResolvedCopyModeKeys {
 
 /// Fires the VI event for a matched action on `entity`, converting the
 /// config-crate vocabulary to engine types. Shared by both modes' gathers.
-pub(crate) fn trigger_copy_mode_action(
+pub(crate) fn trigger_vi_mode_action(
     commands: &mut Commands,
     entity: Entity,
-    action: CopyModeAction,
+    action: ViModeAction,
 ) {
     match action {
-        CopyModeAction::Motion(m) => commands.trigger(ViMotionRequest {
+        ViModeAction::Motion(m) => commands.trigger(ViMotionRequest {
             entity,
             motion: vi_motion(m),
         }),
-        CopyModeAction::Scroll(s) => commands.trigger(ViScrollRequest { entity, kind: s }),
-        CopyModeAction::Selection(s) => commands.trigger(ViSelectionToggleRequest {
+        ViModeAction::Scroll(s) => commands.trigger(ViScrollRequest { entity, kind: s }),
+        ViModeAction::Selection(s) => commands.trigger(ViSelectionToggleRequest {
             entity,
             ty: selection_type(s),
         }),
-        CopyModeAction::Yank => commands.trigger(ViYankRequest { entity }),
-        CopyModeAction::Exit => commands.trigger(ViExitRequest { entity }),
+        ViModeAction::Yank => commands.trigger(ViYankRequest { entity }),
+        ViModeAction::Exit => commands.trigger(ViExitRequest { entity }),
         // TODO: wire to the local search applier once it exists (v1 defers
-        // local copy-mode search); until then these actions are swallowed.
-        CopyModeAction::Prompt(_) => {}
-        CopyModeAction::SearchStep(_) => {}
+        // local vi-mode search); until then these actions are swallowed.
+        ViModeAction::Prompt(_) => {}
+        ViModeAction::SearchStep(_) => {}
     }
 }
 
@@ -103,19 +103,19 @@ enum ResolvedKey {
     /// Exact logical character (case-sensitive).
     Plain(String),
     /// A named logical key.
-    Named(CopyModeNamedKey),
+    Named(ViModeNamedKey),
     /// `Ctrl+` entry, matched on the physical key.
     Ctrl(KeyCode),
 }
 
-/// `Startup` system: resolves `[copy-mode]` into the lookup map. Config
+/// `Startup` system: resolves `[vi-mode]` into the lookup map. Config
 /// validation already rejected duplicates, so plain inserts are safe.
-fn build_copy_mode_keys(
-    mut resolved: ResMut<ResolvedCopyModeKeys>,
+fn build_vi_mode_keys(
+    mut resolved: ResMut<ResolvedViModeKeys>,
     configs: Res<OrzmaConfigsResource>,
 ) {
     let mut map = HashMap::new();
-    for (label, keys, action) in configs.copy_mode.bindings_iter() {
+    for (label, keys, action) in configs.vi_mode.bindings_iter() {
         for key in keys {
             match normalize(key) {
                 Some(rk) => {
@@ -124,7 +124,7 @@ fn build_copy_mode_keys(
                 None => tracing::warn!(
                     label,
                     key = %key,
-                    "copy-mode key has no physical mapping; ignoring binding"
+                    "vi-mode key has no physical mapping; ignoring binding"
                 ),
             }
         }
@@ -135,28 +135,28 @@ fn build_copy_mode_keys(
 /// Normalizes a config key to its lookup form. `None` only for `Ctrl+` chars
 /// outside the a-z/0-9 physical map (config validation already restricts to
 /// ASCII alphanumerics, so this is defensive).
-fn normalize(key: &CopyModeKey) -> Option<ResolvedKey> {
+fn normalize(key: &ViModeKey) -> Option<ResolvedKey> {
     match (&key.key, key.ctrl) {
-        (CopyModeBaseKey::Char(c), false) => Some(ResolvedKey::Plain(c.clone())),
-        (CopyModeBaseKey::Named(n), false) => Some(ResolvedKey::Named(*n)),
-        (CopyModeBaseKey::Char(c), true) => {
+        (ViModeBaseKey::Char(c), false) => Some(ResolvedKey::Plain(c.clone())),
+        (ViModeBaseKey::Named(n), false) => Some(ResolvedKey::Named(*n)),
+        (ViModeBaseKey::Char(c), true) => {
             ctrl_char_keycode(c.chars().next()?).map(ResolvedKey::Ctrl)
         }
-        (CopyModeBaseKey::Named(n), true) => Some(ResolvedKey::Ctrl(named_keycode(*n))),
+        (ViModeBaseKey::Named(n), true) => Some(ResolvedKey::Ctrl(named_keycode(*n))),
     }
 }
 
-fn named_keycode(named: CopyModeNamedKey) -> KeyCode {
+fn named_keycode(named: ViModeNamedKey) -> KeyCode {
     match named {
-        CopyModeNamedKey::Escape => KeyCode::Escape,
-        CopyModeNamedKey::Enter => KeyCode::Enter,
-        CopyModeNamedKey::Space => KeyCode::Space,
-        CopyModeNamedKey::Tab => KeyCode::Tab,
-        CopyModeNamedKey::Backspace => KeyCode::Backspace,
-        CopyModeNamedKey::ArrowUp => KeyCode::ArrowUp,
-        CopyModeNamedKey::ArrowDown => KeyCode::ArrowDown,
-        CopyModeNamedKey::ArrowLeft => KeyCode::ArrowLeft,
-        CopyModeNamedKey::ArrowRight => KeyCode::ArrowRight,
+        ViModeNamedKey::Escape => KeyCode::Escape,
+        ViModeNamedKey::Enter => KeyCode::Enter,
+        ViModeNamedKey::Space => KeyCode::Space,
+        ViModeNamedKey::Tab => KeyCode::Tab,
+        ViModeNamedKey::Backspace => KeyCode::Backspace,
+        ViModeNamedKey::ArrowUp => KeyCode::ArrowUp,
+        ViModeNamedKey::ArrowDown => KeyCode::ArrowDown,
+        ViModeNamedKey::ArrowLeft => KeyCode::ArrowLeft,
+        ViModeNamedKey::ArrowRight => KeyCode::ArrowRight,
     }
 }
 
@@ -202,50 +202,50 @@ fn ctrl_char_keycode(c: char) -> Option<KeyCode> {
     })
 }
 
-fn vi_motion(motion: CopyMotion) -> ViMotion {
+fn vi_motion(motion: ViModeMotion) -> ViMotion {
     match motion {
-        CopyMotion::Left => ViMotion::Left,
-        CopyMotion::Down => ViMotion::Down,
-        CopyMotion::Up => ViMotion::Up,
-        CopyMotion::Right => ViMotion::Right,
-        CopyMotion::LineStart => ViMotion::First,
-        CopyMotion::LineEnd => ViMotion::Last,
-        CopyMotion::LineFirstChar => ViMotion::FirstOccupied,
-        CopyMotion::NextWord => ViMotion::SemanticRight,
-        CopyMotion::PreviousWord => ViMotion::SemanticLeft,
-        CopyMotion::NextWordEnd => ViMotion::SemanticRightEnd,
-        CopyMotion::NextSpace => ViMotion::WordRight,
-        CopyMotion::PreviousSpace => ViMotion::WordLeft,
-        CopyMotion::NextSpaceEnd => ViMotion::WordRightEnd,
-        CopyMotion::ScreenTop => ViMotion::High,
-        CopyMotion::ScreenMiddle => ViMotion::Middle,
-        CopyMotion::ScreenBottom => ViMotion::Low,
-        CopyMotion::PreviousParagraph => ViMotion::ParagraphUp,
-        CopyMotion::NextParagraph => ViMotion::ParagraphDown,
-        CopyMotion::MatchingBracket => ViMotion::Bracket,
+        ViModeMotion::Left => ViMotion::Left,
+        ViModeMotion::Down => ViMotion::Down,
+        ViModeMotion::Up => ViMotion::Up,
+        ViModeMotion::Right => ViMotion::Right,
+        ViModeMotion::LineStart => ViMotion::First,
+        ViModeMotion::LineEnd => ViMotion::Last,
+        ViModeMotion::LineFirstChar => ViMotion::FirstOccupied,
+        ViModeMotion::NextWord => ViMotion::SemanticRight,
+        ViModeMotion::PreviousWord => ViMotion::SemanticLeft,
+        ViModeMotion::NextWordEnd => ViMotion::SemanticRightEnd,
+        ViModeMotion::NextSpace => ViMotion::WordRight,
+        ViModeMotion::PreviousSpace => ViMotion::WordLeft,
+        ViModeMotion::NextSpaceEnd => ViMotion::WordRightEnd,
+        ViModeMotion::ScreenTop => ViMotion::High,
+        ViModeMotion::ScreenMiddle => ViMotion::Middle,
+        ViModeMotion::ScreenBottom => ViMotion::Low,
+        ViModeMotion::PreviousParagraph => ViMotion::ParagraphUp,
+        ViModeMotion::NextParagraph => ViMotion::ParagraphDown,
+        ViModeMotion::MatchingBracket => ViMotion::Bracket,
     }
 }
 
-fn selection_type(selection: CopySelection) -> SelectionType {
+fn selection_type(selection: ViModeSelection) -> SelectionType {
     match selection {
-        CopySelection::Simple => SelectionType::Simple,
-        CopySelection::Lines => SelectionType::Lines,
-        CopySelection::Rect => SelectionType::Block,
+        ViModeSelection::Simple => SelectionType::Simple,
+        ViModeSelection::Lines => SelectionType::Lines,
+        ViModeSelection::Rect => SelectionType::Block,
     }
 }
 
 #[expect(
     dead_code,
-    reason = "wired again when local copy-mode search ships; kept so the conversion is ready for CopyModeAction::Prompt's reconnection"
+    reason = "wired again when local vi-mode search ships; kept so the conversion is ready for ViModeAction::Prompt's reconnection"
 )]
-fn prompt_kind(dir: CopyPromptDir) -> PromptKind {
+fn prompt_kind(dir: ViModePromptDir) -> PromptKind {
     match dir {
-        CopyPromptDir::SearchForward => PromptKind::SearchForward,
-        CopyPromptDir::SearchBackward => PromptKind::SearchBackward,
-        CopyPromptDir::JumpForward => PromptKind::JumpForward,
-        CopyPromptDir::JumpBackward => PromptKind::JumpBackward,
-        CopyPromptDir::JumpToForward => PromptKind::JumpToForward,
-        CopyPromptDir::JumpToBackward => PromptKind::JumpToBackward,
+        ViModePromptDir::SearchForward => PromptKind::SearchForward,
+        ViModePromptDir::SearchBackward => PromptKind::SearchBackward,
+        ViModePromptDir::JumpForward => PromptKind::JumpForward,
+        ViModePromptDir::JumpBackward => PromptKind::JumpBackward,
+        ViModePromptDir::JumpToForward => PromptKind::JumpToForward,
+        ViModePromptDir::JumpToBackward => PromptKind::JumpToBackward,
     }
 }
 
@@ -253,17 +253,17 @@ fn prompt_kind(dir: CopyPromptDir) -> PromptKind {
 mod tests {
     use super::*;
     use crate::action::vi::{ViPromptRequest, ViSearchStepRequest};
-    use orzma_configs::copy_mode::{CopyModeConfig, CopyScroll, CopySearchStep};
+    use orzma_configs::vi_mode::{ViModeConfig, ViModeScroll, ViModeSearchStep};
 
-    fn resolved_default() -> ResolvedCopyModeKeys {
-        let cfg = CopyModeConfig::default();
+    fn resolved_default() -> ResolvedViModeKeys {
+        let cfg = ViModeConfig::default();
         let mut map = HashMap::new();
         for (_, keys, action) in cfg.bindings_iter() {
             for key in keys {
                 map.insert(normalize(key).unwrap(), action);
             }
         }
-        ResolvedCopyModeKeys(map)
+        ResolvedViModeKeys(map)
     }
 
     fn none_mods() -> Modifiers {
@@ -282,7 +282,7 @@ mod tests {
         let r = resolved_default();
         assert_eq!(
             r.resolve(&Key::Character("v".into()), KeyCode::KeyV, none_mods()),
-            Some(CopyModeAction::Selection(CopySelection::Simple))
+            Some(ViModeAction::Selection(ViModeSelection::Simple))
         );
         assert_eq!(
             r.resolve(
@@ -293,7 +293,7 @@ mod tests {
                     ..Default::default()
                 }
             ),
-            Some(CopyModeAction::Selection(CopySelection::Lines))
+            Some(ViModeAction::Selection(ViModeSelection::Lines))
         );
         assert_eq!(
             r.resolve(
@@ -304,7 +304,7 @@ mod tests {
                     ..Default::default()
                 }
             ),
-            Some(CopyModeAction::Motion(CopyMotion::LineEnd))
+            Some(ViModeAction::Motion(ViModeMotion::LineEnd))
         );
     }
 
@@ -313,15 +313,15 @@ mod tests {
         let r = resolved_default();
         assert_eq!(
             r.resolve(&Key::Character("f".into()), KeyCode::KeyF, ctrl_mods()),
-            Some(CopyModeAction::Scroll(CopyScroll::PageDown))
+            Some(ViModeAction::Scroll(ViModeScroll::PageDown))
         );
         assert_eq!(
             r.resolve(&Key::Escape, KeyCode::Escape, none_mods()),
-            Some(CopyModeAction::Exit)
+            Some(ViModeAction::Exit)
         );
         assert_eq!(
             r.resolve(&Key::Enter, KeyCode::Enter, none_mods()),
-            Some(CopyModeAction::Yank)
+            Some(ViModeAction::Yank)
         );
     }
 
@@ -350,7 +350,7 @@ mod tests {
         let r = resolved_default();
         assert_eq!(
             r.resolve(&Key::Character("n".into()), KeyCode::KeyN, none_mods()),
-            Some(CopyModeAction::SearchStep(CopySearchStep::Next))
+            Some(ViModeAction::SearchStep(ViModeSearchStep::Next))
         );
         assert_eq!(
             r.resolve(
@@ -361,14 +361,14 @@ mod tests {
                     ..Default::default()
                 }
             ),
-            Some(CopyModeAction::SearchStep(CopySearchStep::Previous))
+            Some(ViModeAction::SearchStep(ViModeSearchStep::Previous))
         );
     }
 
     #[test]
     fn prompt_action_is_inert_for_v1() {
         use bevy::ecs::system::RunSystemOnce;
-        use orzma_configs::copy_mode::{CopyModeAction, CopyPromptDir};
+        use orzma_configs::vi_mode::{ViModeAction, ViModePromptDir};
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -382,10 +382,10 @@ mod tests {
         let entity = app.world_mut().spawn_empty().id();
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
-                trigger_copy_mode_action(
+                trigger_vi_mode_action(
                     &mut commands,
                     entity,
-                    CopyModeAction::Prompt(CopyPromptDir::SearchForward),
+                    ViModeAction::Prompt(ViModePromptDir::SearchForward),
                 );
             })
             .unwrap();
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn search_step_action_is_inert_for_v1() {
         use bevy::ecs::system::RunSystemOnce;
-        use orzma_configs::copy_mode::{CopyModeAction, CopySearchStep};
+        use orzma_configs::vi_mode::{ViModeAction, ViModeSearchStep};
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -413,10 +413,10 @@ mod tests {
         let entity = app.world_mut().spawn_empty().id();
         app.world_mut()
             .run_system_once(move |mut commands: Commands| {
-                trigger_copy_mode_action(
+                trigger_vi_mode_action(
                     &mut commands,
                     entity,
-                    CopyModeAction::SearchStep(CopySearchStep::Next),
+                    ViModeAction::SearchStep(ViModeSearchStep::Next),
                 );
             })
             .unwrap();

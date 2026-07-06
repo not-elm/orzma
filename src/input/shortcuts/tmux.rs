@@ -1,6 +1,6 @@
 //! `AppMode::Tmux`'s shortcut appliers: reads `ShortcutMessage`,
-//! `CopyModeMessage`, `TypeMessage`, and `WebviewForwardMessage` from
-//! `resolve_key_effects` and applies them as tmux action requests, copy-mode
+//! `ViModeMessage`, `TypeMessage`, and `WebviewForwardMessage` from
+//! `resolve_key_effects` and applies them as tmux action requests, vi-mode
 //! keys, and forwarded pane keystrokes.
 
 use crate::{
@@ -12,16 +12,16 @@ use crate::{
             ResizePaneRequest, SelectPaneRequest, SelectWindowRequest, SplitPaneRequest,
             ZoomPaneRequest,
         },
-        vi::trigger_copy_mode_action,
+        vi::trigger_vi_mode_action,
     },
     app_mode::{AppMode, TmuxActiveSet},
     input::{
         shortcuts::{
-            CopyModeMessage, ShortcutMessage, ShortcutSet, TypeMessage, WebviewForwardMessage,
+            ShortcutMessage, ShortcutSet, TypeMessage, ViModeMessage, WebviewForwardMessage,
         },
         tmux::forward::ForwardPaneKeysRequest,
     },
-    ui::copy_mode::EnterCopyModeActionEvent,
+    ui::vi_mode::EnterViModeActionEvent,
 };
 use bevy::input::keyboard::Key;
 use bevy::{ecs::system::SystemParam, prelude::*};
@@ -45,17 +45,17 @@ impl Plugin for ShortcutsTmuxModePlugin {
                     .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Tmux))
                     .run_if(on_message::<ShortcutMessage>),
-                apply_tmux_copy_mode
+                apply_tmux_vi_mode
                     .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Tmux))
-                    .run_if(on_message::<CopyModeMessage>)
+                    .run_if(on_message::<ViModeMessage>)
                     .after(apply_tmux_shortcuts),
                 apply_tmux_forward
                     .in_set(ShortcutSet::Apply)
                     .run_if(in_state(AppMode::Tmux))
                     .run_if(on_tmux_forward_message())
                     .after(apply_tmux_shortcuts)
-                    .after(apply_tmux_copy_mode),
+                    .after(apply_tmux_vi_mode),
             )
                 .in_set(TmuxActiveSet),
         );
@@ -71,7 +71,7 @@ pub(in crate::input) struct ActionTargets<'w, 's> {
     windows: Query<'w, 's, (Entity, &'static TmuxWindow)>,
 }
 
-/// Applies tmux keyboard shortcuts from `ShortcutMessage`: copy-mode entry,
+/// Applies tmux keyboard shortcuts from `ShortcutMessage`: vi-mode entry,
 /// paste (`PasteAction`), detach (`DetachSessionRequest`), and the pane/window
 /// action requests. `Quit` / `ReleaseWebviewFocus` are handled upstream in
 /// `resolve_key_effects`. Registered in `ShortcutSet::Apply`, gated on
@@ -84,13 +84,13 @@ fn apply_tmux_shortcuts(
 ) {
     for msg in shortcuts.read() {
         match msg.action {
-            Shortcut::EnterCopyMode => {
-                // NOTE: re-entry guard — re-triggering while already in copy
-                // mode would double-insert CopyModeState and re-enter vi mode.
+            Shortcut::EnterViMode => {
+                // NOTE: re-entry guard — re-triggering while already in vi
+                // mode would double-insert ViModeState and re-enter vi mode.
                 if let Some(entity) = msg.focused
-                    && !msg.in_copy_mode
+                    && !msg.in_vi_mode
                 {
-                    commands.trigger(EnterCopyModeActionEvent { entity });
+                    commands.trigger(EnterViModeActionEvent { entity });
                 }
             }
             Shortcut::Paste => {
@@ -108,13 +108,13 @@ fn apply_tmux_shortcuts(
     }
 }
 
-/// Applies matched `[copy-mode]` keys from `CopyModeMessage` on the focused
+/// Applies matched `[vi-mode]` keys from `ViModeMessage` on the focused
 /// pane. Registered in `ShortcutSet::Apply`, gated on `in_state(AppMode::Tmux)`
-/// + `on_message::<CopyModeMessage>`.
-fn apply_tmux_copy_mode(mut commands: Commands, mut copy_mode: MessageReader<CopyModeMessage>) {
-    for msg in copy_mode.read() {
+/// + `on_message::<ViModeMessage>`.
+fn apply_tmux_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessage>) {
+    for msg in vi_mode.read() {
         if let Some(entity) = msg.focused {
-            trigger_copy_mode_action(&mut commands, entity, msg.action);
+            trigger_vi_mode_action(&mut commands, entity, msg.action);
         }
     }
 }
@@ -270,7 +270,7 @@ fn dispatch_tmux_action(
             }
         }
         Shortcut::Quit
-        | Shortcut::EnterCopyMode
+        | Shortcut::EnterViMode
         | Shortcut::Paste
         | Shortcut::DetachSession
         | Shortcut::ReleaseWebviewFocus => {}
@@ -319,7 +319,7 @@ mod tests {
     }
 
     /// Builds an app running the three tmux appliers (`apply_tmux_shortcuts`,
-    /// `apply_tmux_copy_mode`, `apply_tmux_forward`, ordered as the real
+    /// `apply_tmux_vi_mode`, `apply_tmux_forward`, ordered as the real
     /// plugin orders them) with one tmux pane (the active pane / the
     /// dispatched messages' `focused`), capturing the action requests they
     /// trigger.
@@ -329,7 +329,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<ShortcutMessage>()
-            .add_message::<CopyModeMessage>()
+            .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
             .add_message::<WebviewForwardMessage>()
             .init_resource::<TmuxCaptured>()
@@ -337,10 +337,10 @@ mod tests {
                 Update,
                 (
                     apply_tmux_shortcuts,
-                    apply_tmux_copy_mode.after(apply_tmux_shortcuts),
+                    apply_tmux_vi_mode.after(apply_tmux_shortcuts),
                     apply_tmux_forward
                         .after(apply_tmux_shortcuts)
-                        .after(apply_tmux_copy_mode),
+                        .after(apply_tmux_vi_mode),
                 ),
             )
             .add_observer(|ev: On<SelectPaneRequest>, mut c: ResMut<TmuxCaptured>| {
@@ -386,12 +386,12 @@ mod tests {
                         action,
                         via_leader,
                         focused,
-                        in_copy_mode: false,
+                        in_vi_mode: false,
                     });
                 }
-                KeyEffect::CopyMode(action) => {
+                KeyEffect::ViMode(action) => {
                     app.world_mut()
-                        .write_message(CopyModeMessage { action, focused });
+                        .write_message(ViModeMessage { action, focused });
                 }
                 KeyEffect::Type { logical, key_code } => {
                     app.world_mut().write_message(TypeMessage {

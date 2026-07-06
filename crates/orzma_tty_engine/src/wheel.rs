@@ -187,7 +187,7 @@ impl WheelAction {
         // keeps without scrollback history, so the gesture would silently
         // no-op. wezterm / foot / kitty all route alt-screen wheel
         // straight to arrow keys; we match that convention. To view host
-        // scrollback while inside an alt-screen app, use copy mode or
+        // scrollback while inside an alt-screen app, use vi mode or
         // exit the app.
         if modes.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL) {
             let lines_per = if mods.fine {

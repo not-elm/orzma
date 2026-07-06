@@ -9,7 +9,7 @@ use bevy::prelude::*;
 /// (e.g. headless CI). In that case the backend is unavailable and every
 /// `write` call becomes a no-op (logged at debug level once at init, then
 /// silently dropped).
-/// Copy-mode UI keeps working — the user can still see the selection —
+/// Vi-mode UI keeps working — the user can still see the selection —
 /// but `y` does not modify the host clipboard. `Clipboard::in_memory`
 /// swaps in a process-local backend for deterministic, headless-safe tests.
 #[derive(Resource)]
@@ -42,7 +42,7 @@ impl Clipboard {
     }
 
     /// Writes `text` to the clipboard. No-op when the backend is unavailable.
-    /// Failures are logged at warn but never propagated — copy mode must not
+    /// Failures are logged at warn but never propagated — vi mode must not
     /// panic on a clipboard failure.
     pub(crate) fn write(&mut self, text: String) {
         match &mut self.0 {
@@ -125,7 +125,7 @@ impl Clipboard {
 }
 
 /// Registers the shared `Clipboard` resource consumed by the action layer,
-/// copy-mode UIs, and tmux paste.
+/// vi-mode UIs, and tmux paste.
 pub(crate) struct ClipboardPlugin;
 
 impl Plugin for ClipboardPlugin {
