@@ -1,9 +1,9 @@
 //! Minimal orzma webview render. Run inside an orzma pane:
 //! `cargo run -p ratatui-orzma --example simple`.
 //!
-//! Registers a tiny inline HTML page and renders it as a ratatui widget filling
-//! the pane below a one-line hint. This is the whole render path: connect →
-//! register → draw. Press `q` to quit.
+//! Registers a tiny HTML page (`simple.html`, embedded via `include_str!`) and
+//! renders it as a ratatui widget filling the pane below a one-line hint. This is
+//! the whole render path: connect → register → draw. Press `q` to quit.
 
 #[path = "common/terminal.rs"]
 mod common;
@@ -15,7 +15,7 @@ use ratatui_orzma::{Orzma, Webview, WebviewWidget};
 use std::error::Error;
 use std::time::Duration;
 
-const HTML: &str = "<body style='margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#13131a;color:#8be9fd;font:20px sans-serif'>Hello from an orzma webview</body>";
+const HTML: &str = include_str!("simple.html");
 
 fn main() -> Result<(), Box<dyn Error>> {
     let orzma = Orzma::connect()?;

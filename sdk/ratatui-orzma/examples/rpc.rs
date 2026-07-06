@@ -28,14 +28,7 @@ struct Hello {
     message: String,
 }
 
-const HTML: &str = concat!(
-    "<body style='margin:0;padding:10px;background:#13131a;color:#8be9fd;font:14px sans-serif'>",
-    "<div id='tick'>waiting for tick…</div>",
-    "<script>",
-    "window.orzma.on('tick', function(n){document.getElementById('tick').textContent='tick #'+n;});",
-    "var i=0;setInterval(function(){window.orzma.emit('hello',{message:'from page #'+(++i)});},1000);",
-    "</script></body>",
-);
+const HTML: &str = include_str!("rpc.html");
 
 fn main() -> Result<(), Box<dyn Error>> {
     let orzma = Orzma::connect()?;

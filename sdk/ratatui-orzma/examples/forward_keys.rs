@@ -27,16 +27,7 @@ use ratatui_orzma::{KeyChord, Orzma, Webview, WebviewWidget};
 use std::error::Error;
 use std::time::Duration;
 
-const HTML: &str = concat!(
-    "<body style='margin:0;height:100vh;box-sizing:border-box;background:#10121a;",
-    "color:#8be9fd;font:14px sans-serif;display:flex;flex-direction:column;gap:8px;padding:10px'>",
-    "<div>type here — bare keys reach the focused webview:</div>",
-    "<input id='in' placeholder='...' style='font:14px monospace;padding:6px;",
-    "background:#1b1e2b;color:#e7e7ef;border:1px solid #8be9fd;border-radius:4px'>",
-    "<div style='opacity:.7'>Alt+h returns focus to the app</div>",
-    "<script>var i=document.getElementById('in');i.focus();",
-    "window.addEventListener('focus',function(){i.focus();});</script></body>",
-);
+const HTML: &str = include_str!("forward_keys.html");
 
 fn main() -> Result<(), Box<dyn Error>> {
     let orzma = Orzma::connect()?;
