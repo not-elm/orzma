@@ -22,6 +22,7 @@
   - `PromptKind::copy_command()` fn name and the `<copy-command>` placeholder in its doc comment (`crates/orzma_tmux/src/command/copymode.rs:43`) — the file it lives in IS renamed, but these name tmux's `-X` protocol command, so they stay
   - `copy-paste` comment in `crates/orzma_tty_renderer/src/material.rs`
   - In **docs prose**: tmux's own feature names `copy-mode`, `copy-mode-vi`, `mode-keys`, and "tmux's own copy-mode key tables" — these describe real tmux features and stay.
+  - In **code comments**: the one external-tool equivalence reference `crates/orzma_tty_renderer/src/schema/cursor.rs:12` ("= tmux copy mode") — names tmux's actual feature; stays.
 - **No back-compat:** old config names must fail at startup (both `OrzmaConfigs` and `[shortcuts]` carry `#[serde(deny_unknown_fields)]`). Do not add aliases.
 - **Scope of automated `sed`:** code tasks operate on `src` and `crates` ONLY (never `docs/`, `target/`, `node_modules/`, `.git/`). Docs and `.github` are a separate, hand-edited task.
 - **Comment language:** English only (repo rule). Any comment you touch stays English.
@@ -298,7 +299,7 @@ rg -n -e 'CopyMotion' -e 'CopyScroll' -e 'CopyPrompt' -e 'CopySearchStep' \
       -e 'copy_key' -e '_active_copy_pane' -e 'copy-search' -e 'copymode' src crates
 ```
 
-Expected: no output from either command. Any hit means a straggler — fix it before committing.
+Expected: no output from the SECOND command. The FIRST command (`copy[_ -]?mode`) also matches spaced **"copy mode"** in code comments/test-strings — those are handled by Task 4B, not here, so the first command will still show ~68 comment hits at this point. Confirm (via `git stash` if unsure) that Task 4 did not *add* any; the pre-existing spaced-comment set is Task 4B's job.
 
 Note the deliberate NON-matches (these are the keep-list and must NOT be searched for / must NOT be renamed): `copy-drag` comments, `TmuxMouseEffect::{BeginCopyDrag, ExtendCopyDrag, CopySelection}`, `Clipboard*`, `TerminalSelectionCopy`, `MouseEffect::Copy`, `on_terminal_selection_copy`, `*_does_not_copy` test names, `copy_command`, the tmux `-X` literals, and the `material.rs` `copy-paste` comment. None of them match the patterns above, so a clean sweep is expected.
 
@@ -307,6 +308,55 @@ Note the deliberate NON-matches (these are the keep-list and must NOT be searche
 ```bash
 git add -A
 git commit -m "refactor: rename remaining copy-mode snake/kebab identifiers to vi_* (copy_search/copy_prompt/resolved_copy/copy_gate/copy_action/copy-drag)
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
+### Task 4B: Rename spaced "copy mode" in code comments and test strings
+
+Tasks 1–4 renamed only `copy_mode` / `copy-mode` / `CopyMode` (and the abbreviated `Copy*` types). None targeted the **spaced** "copy mode" that appears in ~68 code comments, doc-comments (`///`, `//!`), and test-assertion string literals across `src` and `crates`. These overwhelmingly describe orzma's *own* feature and must become "vi mode" for consistency with the renamed identifiers. None are user-visible runtime strings (verified: only comments and `#[cfg(test)]` assertion messages).
+
+**Files:** every `src`/`crates` file containing spaced "copy mode" / "Copy mode" — chiefly `src/render/tmux.rs`, `src/input/keyboard/key_effect.rs`, `src/ui/vi_mode.rs`, `src/input/default_mode.rs`, `crates/orzma_configs/src/vi_mode.rs`, and ~20 others.
+
+**Keep (do NOT rename) — the one external-tool equivalence reference:** `crates/orzma_tty_renderer/src/schema/cursor.rs:12` — `/// When the user is in alacritty vi mode (= tmux copy mode), the server` — "tmux copy mode" names tmux's *actual* feature for the reader; renaming it to "tmux vi mode" would be factually wrong (tmux's mode is `copy-mode`).
+
+**Interfaces:** none (comments/strings only, zero behavior change, no new tests).
+
+- [ ] **Step 1: Protect the one keep, then sed the rest**
+
+```bash
+# Temporarily mark the external-tool reference so the sed skips it, then restore.
+sed -i '' 's/= tmux copy mode/= tmux KEEPCOPY mode/' crates/orzma_tty_renderer/src/schema/cursor.rs
+rg -l 'copy mode' src crates | xargs sed -i '' 's/copy mode/vi mode/g'
+rg -l 'Copy mode' src crates | xargs sed -i '' 's/Copy mode/Vi mode/g'
+sed -i '' 's/= tmux KEEPCOPY mode/= tmux copy mode/' crates/orzma_tty_renderer/src/schema/cursor.rs
+```
+
+Expected: silent. (If `rg -l 'Copy mode'` matches nothing, `xargs` runs `sed` with no files and prints a usage error — harmless; or guard with `rg -l 'Copy mode' src crates | xargs -r sed …` where supported. On macOS without `-r`, skip the line if the prior `rg` shows no capital-C hits.)
+
+- [ ] **Step 2: Verify the keep survived and the rest are renamed**
+
+```bash
+rg -n -i 'copy mode' src crates
+```
+
+Expected: exactly ONE line — `crates/orzma_tty_renderer/src/schema/cursor.rs:12` (`= tmux copy mode`). No other "copy mode" remains.
+
+- [ ] **Step 3: Build, test, format**
+
+Run: `cargo build` → PASS (comments/strings only; cannot break compilation, but test-assertion *string* edits are inside test code, so build must still pass).
+Run: `cargo test` → PASS (renamed assertion messages still assert the same conditions).
+Run: `cargo fmt` (comment-length changes may shift rustfmt's wrapping of doc-comments).
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add -A
+git commit -m "refactor: rename spaced 'copy mode' -> 'vi mode' in code comments and test strings
+
+Keeps the one external-tool equivalence reference (cursor.rs: '= tmux copy mode').
 
 Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ```
@@ -397,7 +447,7 @@ rg -n -i 'copy[_ -]?mode' src crates .github docs/configs.md
 rg -n -e 'CopyMotion' -e 'CopyScroll' -e 'CopyPrompt' -e 'CopySearch' -e 'copymode' src crates
 ```
 
-Expected: The first command returns ONLY lines that are deliberate tmux-feature references in `docs/configs.md` (from Task 5 Step 1). The second returns nothing. Everything else must be empty. Historical `docs/plans/` and `docs/specs/` (except the new design spec) are intentionally NOT swept — they are records of past work.
+Expected: The first command returns ONLY the documented keeps: the deliberate tmux-feature references in `docs/configs.md` (from Task 5 Step 1) AND the single code-comment keep `crates/orzma_tty_renderer/src/schema/cursor.rs:12` ("= tmux copy mode", from Task 4B). The second returns nothing. Everything else must be empty. Historical `docs/plans/` and `docs/specs/` (except the new design spec) are intentionally NOT swept — they are records of past work.
 
 If Step 1 required a `cargo fmt` run, commit it:
 
