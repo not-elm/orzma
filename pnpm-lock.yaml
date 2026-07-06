@@ -30,6 +30,9 @@ catalogs:
     marked:
       specifier: ^12.0.0
       version: 12.0.2
+    marked-alert:
+      specifier: ^2.1.2
+      version: 2.1.2
     marked-highlight:
       specifier: ^2.1.4
       version: 2.2.4
@@ -80,6 +83,9 @@ importers:
       marked:
         specifier: 'catalog:'
         version: 12.0.2
+      marked-alert:
+        specifier: 'catalog:'
+        version: 2.1.2(marked@12.0.2)
       marked-highlight:
         specifier: 'catalog:'
         version: 2.2.4(marked@12.0.2)
@@ -1432,6 +1438,11 @@ packages:
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
+
+  marked-alert@2.1.2:
+    resolution: {integrity: sha512-EFNRZ08d8L/iEIPLTlQMDjvwIsj03gxWCczYTht6DCiHJIZhMk4NK5gtPY9UqAYb09eV5VGT+jD4lp396E0I+w==}
+    peerDependencies:
+      marked: '>=7.0.0'
 
   marked-highlight@2.2.4:
     resolution: {integrity: sha512-PZxisNMJDduSjc0q6uvjsnqqHCXc9s0eyzxDO9sB1eNGJnd/H1/Fu+z6g/liC1dfJdFW4SftMwMlLvsBhUPrqQ==}
@@ -3083,6 +3094,10 @@ snapshots:
   magic-string@0.30.21:
     dependencies:
       '@jridgewell/sourcemap-codec': 1.5.5
+
+  marked-alert@2.1.2(marked@12.0.2):
+    dependencies:
+      marked: 12.0.2
 
   marked-highlight@2.2.4(marked@12.0.2):
     dependencies:

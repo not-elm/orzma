@@ -111,4 +111,22 @@ mod tests {
     fn empty_source_has_no_headings() {
         assert!(parse("").is_empty());
     }
+
+    #[test]
+    fn counts_headings_nested_in_blockquote_alerts() {
+        let md = "> [!NOTE]\n> # Inside alert\n\n# Top level\n";
+        assert_eq!(
+            parse(md),
+            vec![
+                Heading {
+                    level: 1,
+                    text: "Inside alert".into()
+                },
+                Heading {
+                    level: 1,
+                    text: "Top level".into()
+                },
+            ]
+        );
+    }
 }

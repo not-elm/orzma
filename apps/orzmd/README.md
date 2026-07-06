@@ -18,6 +18,8 @@ handles rich rendering — diagrams, math, and highlighted code.
   highlight.js.
 - **Math** — LaTeX rendered with KaTeX (`$inline$` and `$$block$$`).
 - **Mermaid diagrams** — ` ```mermaid ` fences render as diagrams.
+- **GitHub alerts** — `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, and
+  `[!CAUTION]` blockquotes render as colored callout boxes with icons.
 - **Outline panel** — jump between the document's headings.
 - **In-page search** — highlight matches and step through them.
 
