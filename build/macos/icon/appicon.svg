@@ -6,9 +6,8 @@
     </linearGradient>
   </defs>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
-  <text x="452" y="512"
-        font-family="JetBrainsMono Nerd Font Mono" font-weight="700" font-size="392"
-        fill="#ffffff" text-anchor="middle" dominant-baseline="central"
-        letter-spacing="-6">oz</text>
-  <rect x="706" y="520" width="92" height="104" rx="12" fill="#22d3ee"/>
+  <text x="512" y="600"
+        font-family="JetBrainsMono Nerd Font Mono" font-weight="700" font-size="340"
+        fill="#ffffff" text-anchor="middle"
+        letter-spacing="-6">orz</text>
 </svg>

@@ -23,12 +23,12 @@ class TestMasterSvg(unittest.TestCase):
         self.assertIn('stop-color="#7c3aed"', self.text)
         self.assertIn('stop-color="#2563eb"', self.text)
 
-    def test_glyphs_white_oz(self):
+    def test_glyphs_white_orz(self):
         self.assertIn('fill="#ffffff"', self.text)
-        self.assertIn(">oz<", self.text)
+        self.assertIn(">orz<", self.text)
 
-    def test_cursor_cyan(self):
-        self.assertIn('fill="#22d3ee"', self.text)
+    def test_no_cursor_cyan(self):
+        self.assertNotIn("#22d3ee", self.text)
 
     def test_font_family_is_internal_name(self):
         self.assertIn('font-family="JetBrainsMono Nerd Font Mono"', self.text)
