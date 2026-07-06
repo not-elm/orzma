@@ -603,7 +603,7 @@ Append to `docs/orzma_webview_protocol.md`:
 
 Prefer a ready-made client over implementing the wire protocol directly:
 
-- [`ratatui-orzma`](../sdk/ratatui-orzma) — Rust SDK for the program side (a
+- [`ratatui_orzma`](../sdk/ratatui_orzma) — Rust SDK for the program side (a
   ratatui widget plus a back-channel RPC handler).
 - [`@orzma/web`](../sdk/orzma-web) — TypeScript client for the page-side
   `window.orzma` bridge.
@@ -613,7 +613,7 @@ Prefer a ready-made client over implementing the wire protocol directly:
 
 - unregister/disconnect teardown + `owner_disconnected` rejection: `crates/orzma_webview/src/control_plane.rs:483-509`.
 - reqId ownership guarantee: `take_for_connection` doc + invariant at `control_plane.rs:201-223`.
-- SDK names/paths match README: `grep -n "ratatui-orzma\|@orzma/web" README.md` (expect `README.md:47,49`).
+- SDK names/paths match README: `grep -n "ratatui_orzma\|@orzma/web" README.md` (expect `README.md:47,49`).
 - Confirm the in-doc anchor: the Overview link `[SDKs](#sdks)` resolves to this `## SDKs` heading (GitHub lowercases/​hyphenates → `#sdks`).
 
 Expected: confirmed.
@@ -701,10 +701,10 @@ Run: `grep -nc '^## ' docs/orzma_webview_protocol.md` (expect 9 section headings
 - `rows` 1–200 / `cols` 1–400 consistent between the OSC section and any
   mention elsewhere.
 - 4 MiB inline cap and 64 MiB asset cap each stated once, not swapped.
-- Every relative link resolves: `../sdk/orzma-web`, `../sdk/ratatui-orzma`, and
+- Every relative link resolves: `../sdk/orzma-web`, `../sdk/ratatui_orzma`, and
   the in-page `#sdks` anchor.
 
-Run: `ls sdk/orzma-web sdk/ratatui-orzma >/dev/null && echo OK`
+Run: `ls sdk/orzma-web sdk/ratatui_orzma >/dev/null && echo OK`
 Expected: `OK`.
 
 - [ ] **Step 3: Fix and commit any corrections**

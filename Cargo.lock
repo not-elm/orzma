@@ -4859,7 +4859,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "ratatui",
- "ratatui-orzma",
+ "ratatui_orzma",
  "serde_json",
 ]
 
@@ -4995,7 +4995,7 @@ dependencies = [
  "notify-debouncer-full",
  "pulldown-cmark",
  "ratatui",
- "ratatui-orzma",
+ "ratatui_orzma",
  "rust-embed",
  "serde",
  "serde_json",
@@ -5409,7 +5409,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ratatui-orzma"
+name = "ratatui_orzma"
 version = "0.1.0"
 dependencies = [
  "crossbeam-channel",

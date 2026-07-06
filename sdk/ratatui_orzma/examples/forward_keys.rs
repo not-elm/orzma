@@ -1,5 +1,5 @@
 //! Forwarding keys out of a focused webview. Run inside an orzma pane:
-//! `cargo run -p ratatui-orzma --example forward_keys`.
+//! `cargo run -p ratatui_orzma --example forward_keys`.
 //!
 //! A webview plus a native status line, with app-owned focus in a `web_focused`
 //! bool. `Alt+l` focuses the webview (bare keys then type into its input); `Alt+h`

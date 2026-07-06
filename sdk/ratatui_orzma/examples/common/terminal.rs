@@ -1,4 +1,4 @@
-//! Shared terminal setup/teardown for the ratatui-orzma examples.
+//! Shared terminal setup/teardown for the ratatui_orzma examples.
 
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;

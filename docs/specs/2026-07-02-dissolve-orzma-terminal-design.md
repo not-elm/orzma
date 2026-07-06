@@ -132,6 +132,6 @@ file; parents aggregate":
 
 - Renaming `OrzmaTerminal` or any event types.
 - Behavior changes to layout/exit/paste/mouse semantics.
-- Publishing implications: only `ratatui-orzma` is published to crates.io;
+- Publishing implications: only `ratatui_orzma` is published to crates.io;
   `orzma_terminal` is internal, so deleting it is not a breaking external
   change.

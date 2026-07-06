@@ -23,7 +23,7 @@ and pulls in `tmux` as a dependency. Upgrade later with:
 brew upgrade --cask orzma
 ```
 
-The companion apps `orzmd` and `orzbrowser` (built with the `ratatui-orzma` SDK)
+The companion apps `orzmd` and `orzbrowser` (built with the `ratatui_orzma` SDK)
 are installed from source with `just install-apps`.
 
 ## Features
@@ -53,7 +53,7 @@ tmux windows and panes are rendered natively.
 
 ## SDK
 
-- [ratatui-orzma](sdk/ratatui-orzma) — Rust SDK: a ratatui widget and RPC
+- [ratatui_orzma](sdk/ratatui_orzma) — Rust SDK: a ratatui widget and RPC
   handler for embedding orzma webviews from a TUI app.
 - [@orzma/web](sdk/orzma-web) — TypeScript client for the in-page `window.orzma`
   bridge.

@@ -29,7 +29,7 @@ it from `README.md`.
 - Inline code in backticks for message names, fields, escape sequences, env
   vars (`$ORZMA_SOCK`, `OSC 5379;mount;<handle>;<rows>;<cols>`, `window.orzma`).
 - Relative links to SDKs: `[@orzma/web](../sdk/orzma-web)`,
-  `[ratatui-orzma](../sdk/ratatui-orzma)` (the doc lives in `docs/`, so SDK paths
+  `[ratatui_orzma](../sdk/ratatui_orzma)` (the doc lives in `docs/`, so SDK paths
   are `../sdk/...`).
 - Fenced code blocks: `json` for NDJSON lines, `ts` for `window.orzma` snippets,
   a literal block for the OSC byte grammar.
@@ -241,7 +241,7 @@ A literal NDJSON exchange: `hello` → `register inline` → `{"ok":true,...}` �
 
 ### 9. SDKs
 
-- `[ratatui-orzma](../sdk/ratatui-orzma)` — Rust client (the program side).
+- `[ratatui_orzma](../sdk/ratatui_orzma)` — Rust client (the program side).
 - `[@orzma/web](../sdk/orzma-web)` — TypeScript client for `window.orzma` (the page
   side).
 - Recommend the SDKs as the supported path; the wire spec above is for those

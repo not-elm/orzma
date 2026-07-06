@@ -1,5 +1,5 @@
 //! Minimal orzma webview render. Run inside an orzma pane:
-//! `cargo run -p ratatui-orzma --example simple`.
+//! `cargo run -p ratatui_orzma --example simple`.
 //!
 //! Registers a tiny HTML page (`simple.html`, embedded via `include_str!`) and
 //! renders it as a ratatui widget filling the pane below a one-line hint. This is

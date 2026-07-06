@@ -1,4 +1,4 @@
-// NOTE: preload ordering — orzbrowser supplies this script via the ratatui-orzma
+// NOTE: preload ordering — orzbrowser supplies this script via the ratatui_orzma
 // `Webview::url(...).preload([...])` API, so it runs AFTER the host's
 // orzma_bridge.js (always preload entry 0). window.orzma is therefore already
 // defined and frozen; injected before the bridge it would throw on the

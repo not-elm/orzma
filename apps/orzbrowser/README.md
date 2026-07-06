@@ -1,7 +1,7 @@
 # orzbrowser
 
 A keyboard-driven TUI browser for orzma panes — a companion app built with the
-[`ratatui-orzma`](../../sdk/ratatui-orzma) SDK.
+[`ratatui_orzma`](../../sdk/ratatui_orzma) SDK.
 
 ## Overview
 

@@ -1,5 +1,5 @@
 [package]
-name = "ratatui-orzma"
+name = "ratatui_orzma"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -357,7 +357,7 @@ if (isOrzmaAvailable()) {
 
 Prefer a ready-made client over implementing the wire protocol directly:
 
-- [`ratatui-orzma`](../sdk/ratatui-orzma) — Rust SDK for the program side (a
+- [`ratatui_orzma`](../sdk/ratatui_orzma) — Rust SDK for the program side (a
   ratatui widget plus a back-channel RPC handler).
 - [`@orzma/web`](../sdk/orzma-web) — TypeScript client for the page-side
   `window.orzma` bridge.

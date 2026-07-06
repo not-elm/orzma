@@ -1,5 +1,5 @@
 //! Event round-trip between the app and a webview (no call/reply RPC, no focus).
-//! Run inside an orzma pane: `cargo run -p ratatui-orzma --example rpc`.
+//! Run inside an orzma pane: `cargo run -p ratatui_orzma --example rpc`.
 //!
 //! Two one-way event channels form a loop:
 //! - app → page: the app emits a `tick` counter each second; the page's

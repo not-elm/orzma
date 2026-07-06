@@ -15,7 +15,7 @@
 //!   session — including a pane that forked before the global set (the adopted
 //!   control-mode pane, and any pane attached to a pre-existing session). A
 //!   global-scope variable is invisible to session-scope `show-environment`, so
-//!   the per-session set is what makes the ratatui-orzma SDK's tmux recovery path
+//!   the per-session set is what makes the ratatui_orzma SDK's tmux recovery path
 //!   work in the first pane.
 //!
 //! On app exit the global is unset and the runtime dir is removed.
@@ -111,7 +111,7 @@ fn refresh_orzma_sock(mut client: TmuxClientMut<'_, '_>, control: Res<ControlPla
 /// *after* it and is invisible to session-scope `show-environment`; a pane that
 /// forked earlier (the adopted control-mode pane, or any pane of a pre-existing
 /// session switched into) therefore cannot see it. tmux injects `$TMUX` into
-/// every pane, so the ratatui-orzma SDK recovers the value with
+/// every pane, so the ratatui_orzma SDK recovers the value with
 /// `tmux show-environment ORZMA_SOCK` — but only when it is set at session scope,
 /// which this system does. The session is targeted by id (`$N`), which is stable
 /// and unique, rather than name, which may be empty or duplicated.

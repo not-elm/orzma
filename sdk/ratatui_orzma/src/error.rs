@@ -1,11 +1,11 @@
-//! Error types for the ratatui-orzma SDK.
+//! Error types for the ratatui_orzma SDK.
 
 use std::sync::PoisonError;
 
 /// A `Result` whose error is [`OrzmaError`].
 pub type OrzmaResult<T> = Result<T, OrzmaError>;
 
-/// An error from the ratatui-orzma SDK.
+/// An error from the ratatui_orzma SDK.
 #[derive(Debug, thiserror::Error)]
 pub enum OrzmaError {
     /// `$ORZMA_SOCK`, or both `$ORZMA_TOKEN` and `$TMUX_PANE`, were unset — not

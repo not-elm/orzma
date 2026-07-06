@@ -1,4 +1,4 @@
-# ratatui-orzma
+# ratatui_orzma
 
 Ratatui backend for the orzma in-process webview bridge.
 
@@ -12,7 +12,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ratatui-orzma = "0.1"
+ratatui_orzma = "0.1"
 ```
 
 ## License

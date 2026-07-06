@@ -59,7 +59,7 @@ workspace = true
 [workspace]
 resolver = "2"
 members = [
-  "crates/*", "sdk/ratatui-orzma", "apps/orzmd", "apps/orzbrowser",
+  "crates/*", "sdk/ratatui_orzma", "apps/orzmd", "apps/orzbrowser",
 ]
 
 [workspace.package]
