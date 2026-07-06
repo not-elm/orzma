@@ -1,7 +1,7 @@
-//! Copy mode state. The vi cursor lives in alacritty
+//! Vi mode state. The vi cursor lives in alacritty
 //! (`Term::vi_mode_cursor`) and the active selection lives in
 //! `Term::selection`. This component is a pure marker — its presence
-//! on a Surface entity means "copy mode is active". The v / V
+//! on a Surface entity means "vi mode is active". The v / V
 //! toggle predicate reads `TerminalHandle::selection_type()` to
 //! decide between "start new selection of kind X" and "clear existing".
 
@@ -27,22 +27,22 @@ impl Plugin for ViModePlugin {
     }
 }
 
-/// Marker: presence on a Surface entity means "copy mode is active".
+/// Marker: presence on a Surface entity means "vi mode is active".
 #[derive(Component, Debug, Default)]
 pub struct ViModeState;
 
-/// Request to enter copy mode on a specific Surface entity.
+/// Request to enter vi mode on a specific Surface entity.
 #[derive(EntityEvent, Debug)]
 pub struct EnterViModeActionEvent {
-    /// The Surface entity to enter copy mode on.
+    /// The Surface entity to enter vi mode on.
     pub entity: Entity,
 }
 
-/// Request to exit copy mode. The observer calls `TerminalHandle::exit_vi_mode`,
+/// Request to exit vi mode. The observer calls `TerminalHandle::exit_vi_mode`,
 /// clears any selection, and removes `ViModeState`.
 #[derive(EntityEvent, Debug)]
 pub struct ExitViMode {
-    /// The Surface entity to exit copy mode on.
+    /// The Surface entity to exit vi mode on.
     pub entity: Entity,
 }
 
@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn enter_observer_clears_a_pre_existing_selection() {
-        // Regression: a leftover mouse-drag selection from before copy mode
+        // Regression: a leftover mouse-drag selection from before vi mode
         // was entered must not be misread by the v/V toggle predicate as an
         // already-started vi selection.
         let mut app = App::new();
@@ -153,7 +153,7 @@ mod tests {
         let h = app.world().get::<TerminalHandle>(entity).unwrap();
         assert!(
             h.selection_type().is_none(),
-            "entering copy mode must clear a pre-existing selection",
+            "entering vi mode must clear a pre-existing selection",
         );
     }
 

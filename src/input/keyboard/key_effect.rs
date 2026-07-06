@@ -21,7 +21,7 @@ use std::time::Duration;
 pub(crate) enum KeyEffect {
     /// Run a bound `Shortcut`. `via_leader` distinguishes a leader-scoped
     /// firing from a direct GUI chord — appliers suppress a different subset
-    /// of each (e.g. a direct `Paste` fires in copy mode, a leader `Paste`
+    /// of each (e.g. a direct `Paste` fires in vi mode, a leader `Paste`
     /// does not).
     Shortcut {
         /// The action to run.
@@ -56,7 +56,7 @@ pub(crate) struct BatchContext<'a> {
     pub(crate) mods: Modifiers,
     /// The caller's `Time<Real>::elapsed()`, for the repeat-window deadline.
     pub(crate) now: Duration,
-    /// Whether the focused terminal is currently in copy mode.
+    /// Whether the focused terminal is currently in vi mode.
     pub(crate) in_vi_mode: bool,
     /// Whether a webview currently owns the keyboard.
     pub(crate) webview_focused: bool,
@@ -157,7 +157,7 @@ pub(crate) fn classify_key_batch<'a>(
         }
         // NOTE: vi-mode keys resolve only after leader and GUI-shortcut
         // dispatch declined the key, and a vi-mode key never falls through
-        // to Type — an unmatched key in copy mode is swallowed, not typed
+        // to Type — an unmatched key in vi mode is swallowed, not typed
         // (tmux/Default parity).
         if ctx.in_vi_mode {
             if let Some(vi_action) =
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn vi_mode_disarms_held_repeat() {
-        // Copy mode must not let a held resize key re-fire into the hidden live
+        // Vi mode must not let a held resize key re-fire into the hidden live
         // terminal: the pre-loop guard disarms hold-to-repeat.
         let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
         let rc = ResolvedViModeKeys::default();
@@ -581,12 +581,12 @@ mod tests {
         let mut c = ctx(no_mods(), ms(0));
         c.in_vi_mode = true;
         let out = classify_key_batch(&mut phase, &mut held, &sc, &rc, repeat.iter(), c);
-        assert_eq!(held, None, "copy mode disarms hold-to-repeat");
+        assert_eq!(held, None, "vi mode disarms hold-to-repeat");
         assert!(
             !out.effects
                 .iter()
                 .any(|e| matches!(e, KeyEffect::Shortcut { .. })),
-            "a held repeat key must not re-fire its action in copy mode"
+            "a held repeat key must not re-fire its action in vi mode"
         );
     }
 
@@ -801,7 +801,7 @@ mod tests {
         let effects = run(&mut phase, &sc, &resolved_vi_mode, &events, c);
         assert!(
             !effects.iter().any(|e| matches!(e, KeyEffect::Type { .. })),
-            "an unmatched key in copy mode must never fall through to Type"
+            "an unmatched key in vi mode must never fall through to Type"
         );
     }
 
@@ -860,8 +860,8 @@ mod tests {
                 via_leader: false,
             }],
             "the decider still emits the direct paste action; the Default \
-             applier is what suppresses it in copy mode (via `via_leader || \
-             !in_vi_mode`), so a direct paste never fires while copy mode is \
+             applier is what suppresses it in vi mode (via `via_leader || \
+             !in_vi_mode`), so a direct paste never fires while vi mode is \
              active"
         );
     }
@@ -908,7 +908,7 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, KeyEffect::Shortcut { .. })),
             "the stale repeat window must be closed before dispatch, so a \
-             repeat-marked key in copy mode must NOT re-fire its bound action"
+             repeat-marked key in vi mode must NOT re-fire its bound action"
         );
         assert_eq!(
             phase,

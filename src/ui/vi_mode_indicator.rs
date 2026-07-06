@@ -95,7 +95,7 @@ fn attach_indicator_to_surface_host(
 /// Updates each visible chip's `Text` and `IndicatorCache` from the
 /// host's `TerminalHandle::vi_indicator_snapshot()`. Gated by
 /// `any_with_component::<ViModeState>` so the schedule short-circuits
-/// when nothing is in copy mode.
+/// when nothing is in vi mode.
 fn refresh_indicator(
     hosts: Query<(&orzma_tty_engine::TerminalHandle, &Children), With<ViModeState>>,
     mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<ViModeIndicator>>,
@@ -268,7 +268,7 @@ mod tests {
         let host = spawn_terminal_entity(&mut app);
         app.update();
 
-        // Enter copy mode then PageUp via direct handle mutation.
+        // Enter vi mode then PageUp via direct handle mutation.
         {
             let mut entity = app.world_mut().entity_mut(host);
             let mut handle = entity

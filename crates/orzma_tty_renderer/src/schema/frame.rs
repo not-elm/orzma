@@ -35,7 +35,7 @@ pub struct FrameSnapshot {
     /// advances only on history-destroying folds — spec §3).
     #[serde(default)]
     pub history_base: u64,
-    /// Vi-mode cursor (active only in copy mode). Absent in normal mode.
+    /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.
@@ -73,7 +73,7 @@ pub struct FrameDelta {
     /// advances only on history-destroying folds — spec §3).
     #[serde(default)]
     pub history_base: u64,
-    /// Vi-mode cursor (active only in copy mode). Absent in normal mode.
+    /// Vi-mode cursor (active only in vi mode). Absent in normal mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range. Independent of vi cursor — survives motion.

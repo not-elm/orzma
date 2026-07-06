@@ -5,7 +5,7 @@
 //! cursor becomes a pointer while the platform activation modifier
 //! (`link_modifier_held`) is held, and text otherwise; over a webview host the
 //! cursor is left to `bevy_cef`'s `SystemCursorIconPlugin`. Surfaces with input
-//! suppressed (`MouseDisabled`: copy mode, IME, focused webview, unfocused
+//! suppressed (`MouseDisabled`: vi mode, IME, focused webview, unfocused
 //! window) are skipped, so hover never advertises a link the mouse dispatcher
 //! would refuse to open. Hyperlink activation (Cmd/Ctrl-click → `OpenUri`) now lives in
 //! `crate::input::mouse` (deciders `decide_button`/`resolve_button_event`);

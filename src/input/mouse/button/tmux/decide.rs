@@ -38,7 +38,7 @@ pub(super) enum PressHit {
 /// Pre-resolved inputs for `decide_release` (the released gesture is read from
 /// the state itself, which the decider then replaces with `Idle`).
 pub(super) struct ReleaseCtx {
-    /// Whether the `Pressed` pane is in copy mode (multi-click promotion gate).
+    /// Whether the `Pressed` pane is in vi mode (multi-click promotion gate).
     pub vi_mode: bool,
     /// Resolved click point for a `click_count >= 2` release, when available.
     pub multi_cell: Option<Point>,
@@ -55,7 +55,7 @@ pub(super) struct ContinuationCtx {
     pub cursor_phys: Option<Vec2>,
     /// Drag-promotion threshold in physical pixels.
     pub drag_threshold_phys: f32,
-    /// Whether the `Pressed` pane is in copy mode (drag promotion gate).
+    /// Whether the `Pressed` pane is in vi mode (drag promotion gate).
     pub vi_mode: bool,
     /// Anchor point resolved from the press origin (`Pressed` → `Selecting`).
     pub anchor_point: Option<Point>,
@@ -116,7 +116,7 @@ pub(super) fn decide_press(
 /// Resolves a left release: takes the prior state to `Idle` (via `mem::replace`),
 /// then decides the transition + effects from that prior state.
 ///
-/// A begun `Selecting` copies the selection; a multi-click (>=2) in copy mode
+/// A begun `Selecting` copies the selection; a multi-click (>=2) in vi mode
 /// with a resolved cell enters `PendingMultiSelect` (otherwise stays `Idle`); a
 /// `Resizing` that never dragged focuses the pane under the cursor as a fallback
 /// click.

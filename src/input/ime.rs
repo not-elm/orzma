@@ -297,7 +297,7 @@ fn ime_policy_system(
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
 /// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
 /// state machine still runs, so `ImeState` stays consistent) when EITHER any
-/// webview owns keyboard focus OR the focused surface is in copy mode. The
+/// webview owns keyboard focus OR the focused surface is in vi mode. The
 /// commit transport is applied by per-backend observers
 /// (`src/input/tmux/forward.rs`, `src/input/default_mode.rs`).
 fn read_ime_events(
@@ -704,7 +704,7 @@ mod tests {
         let enabled = q.single(app.world()).expect("primary window").ime_enabled;
         assert!(
             enabled,
-            "IME must be enabled while a tmux pane is active and not in copy mode"
+            "IME must be enabled while a tmux pane is active and not in vi mode"
         );
     }
 

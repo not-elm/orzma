@@ -944,7 +944,7 @@ mod tests {
             .collect();
         assert!(baseline.starts_with("hi"), "baseline grid painted 'hi'");
 
-        // Enter copy mode, then deliver more output: the emit is no longer
+        // Enter vi mode, then deliver more output: the emit is no longer
         // gated on ViModeState, so the new content reaches the grid in the
         // SAME frame it arrives — the local vi applier scrolls this same
         // handle, so its own view is what must render.
@@ -967,7 +967,7 @@ mod tests {
         assert!(row0.starts_with("hi"), "row 0 is untouched, got {row0:?}");
         assert!(
             row1.starts_with("XY"),
-            "row 1 reflects the new output immediately, while still in copy mode, got {row1:?}",
+            "row 1 reflects the new output immediately, while still in vi mode, got {row1:?}",
         );
     }
 
@@ -1673,7 +1673,7 @@ mod tests {
 
     /// Composed regression test for the bootstrap-rescue exposure the Task 1
     /// code review flagged: once a tmux pane carries `Coalescer` (needed for
-    /// shared local copy mode), it also matches
+    /// shared local vi mode), it also matches
     /// `orzma_tty_engine::flush_due_terminals`'s bootstrap rescue, which has no
     /// `PtyHandle` filter. That rescue can now fire on a tmux pane before
     /// tmux's `capture-pane` seed lands, flipping `first_emit` to `false` on a
@@ -1823,7 +1823,7 @@ mod tests {
 
     /// End-to-end proof that local tmux copy mode is fully wired, on a real
     /// tmux-pane entity carrying the exact bundle `attach_tmux_pane_terminal`
-    /// gives every projected pane: enter copy mode, scroll into pre-seeded
+    /// gives every projected pane: enter vi mode, scroll into pre-seeded
     /// history, toggle + extend a selection, yank to the clipboard, and land
     /// back on the live tail. Drives the shared `crate::action::vi` events
     /// directly (the applier pipeline), not the keymap/key-gather layer.
@@ -1910,12 +1910,12 @@ mod tests {
             "pre-vi-mode grid must show the seeded live tail, got {tail_row0:?}"
         );
 
-        // 1. Enter copy mode.
+        // 1. Enter vi mode.
         app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
         assert!(
             app.world().get::<ViModeState>(entity).is_some(),
-            "entering copy mode must insert ViModeState"
+            "entering vi mode must insert ViModeState"
         );
         let entered_vi = app
             .world()
@@ -1925,7 +1925,7 @@ mod tests {
             .contains(TermMode::VI);
         assert!(
             entered_vi,
-            "entering copy mode must flip the handle into vi mode"
+            "entering vi mode must flip the handle into vi mode"
         );
 
         // 2. Scroll into the pre-seeded history via the shared vi applier.
@@ -2000,7 +2000,7 @@ mod tests {
 
         assert!(
             app.world().get::<ViModeState>(entity).is_none(),
-            "yank must exit copy mode"
+            "yank must exit vi mode"
         );
         let clipboard_text = app.world_mut().resource_mut::<Clipboard>().read();
         assert_eq!(
@@ -2008,16 +2008,16 @@ mod tests {
             "yank must write exactly the selected text to the clipboard"
         );
 
-        // 4. Exiting copy mode (via yank) snaps the handle back to the live
+        // 4. Exiting vi mode (via yank) snaps the handle back to the live
         // tail and leaves vi mode.
         let handle = app.world().get::<TerminalHandle>(entity).unwrap();
         assert!(
             handle.is_at_bottom(),
-            "exiting copy mode via yank must snap the viewport back to the live tail"
+            "exiting vi mode via yank must snap the viewport back to the live tail"
         );
         assert!(
             !handle.current_modes().contains(TermMode::VI),
-            "exiting copy mode must leave vi mode"
+            "exiting vi mode must leave vi mode"
         );
     }
 }

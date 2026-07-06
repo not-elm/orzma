@@ -333,8 +333,8 @@ fn engine_side(side: CellSide) -> Side {
 /// `Resizing`; otherwise the pane under the cursor is focused (`select-pane`)
 /// and the state becomes `Pressed`. While `Pressed`, a pointer that drags past
 /// `drag_threshold_px` transitions to `Selecting` when the pane is already in
-/// copy mode (drag/selection for a pane NOT in copy mode is owned by
-/// the local terminal path). Multi-click (≥2) on a pane in copy mode enters
+/// vi mode (drag/selection for a pane NOT in vi mode is owned by
+/// the local terminal path). Multi-click (≥2) on a pane in vi mode enters
 /// `PendingMultiSelect`, which starts a word/line selection on the pane's
 /// local terminal handle on the very next continuation frame — this is
 /// local-only and needs no `TmuxClient`. Each frame while `Resizing` the

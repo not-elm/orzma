@@ -43,7 +43,7 @@ impl Plugin for ShortcutsDefaultModePlugin {
 }
 
 /// Applies `AppMode::Default` keyboard shortcuts from `ShortcutMessage`:
-/// vi-mode entry and paste (direct paste fires outside copy mode; a leader
+/// vi-mode entry and paste (direct paste fires outside vi mode; a leader
 /// paste fires unconditionally). `Quit` / `ReleaseWebviewFocus` are handled
 /// upstream in `resolve_key_effects`; pane/window actions are no-ops in Default.
 /// Registered in `ShortcutSet::Apply`, gated on `in_state(AppMode::Default)` +

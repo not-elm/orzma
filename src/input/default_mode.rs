@@ -3,7 +3,7 @@
 //! focus, webview). The frame's shortcut messages (resolved by
 //! `crate::input::keyboard::key_effect::classify_key_batch`) are applied by
 //! `crate::input::shortcuts::default_mode`'s per-message systems — vi-mode
-//! entry, the shared `[vi-mode]` key table (while copy mode is active),
+//! entry, the shared `[vi-mode]` key table (while vi mode is active),
 //! direct-chord and leader paste, and raw-key typing
 //! (`crate::action::terminal::PasteAction`, `TerminalKeyInput`). Quit and
 //! release-webview-focus are handled upstream; the pane/window actions are
@@ -505,7 +505,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().paste,
             1,
-            "a direct paste (via_leader=false) outside copy mode must fire PasteAction"
+            "a direct paste (via_leader=false) outside vi mode must fire PasteAction"
         );
     }
 
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().paste,
             0,
-            "a direct paste in copy mode must be suppressed (via_leader || !in_vi_mode)"
+            "a direct paste in vi mode must be suppressed (via_leader || !in_vi_mode)"
         );
     }
 
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().paste,
             1,
-            "a leader-scoped paste (via_leader=true) must fire even in copy mode"
+            "a leader-scoped paste (via_leader=true) must fire even in vi mode"
         );
     }
 
@@ -556,7 +556,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().vi_mode,
             1,
-            "EnterViMode must fire unconditionally in Default mode, even when copy mode is \
+            "EnterViMode must fire unconditionally in Default mode, even when vi mode is \
              already active"
         );
     }

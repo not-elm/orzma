@@ -1,15 +1,14 @@
 //! Typed tmux command structs. Each implements `tmux_control::TmuxCommand`,
 //! rendering to the same raw control-mode string its former builder produced.
 
-mod vi_mode;
 mod env;
 mod io;
 mod ops;
 mod query;
 mod size;
 mod target;
+mod vi_mode;
 
-pub use vi_mode::{Prompt, PromptKind};
 pub use env::{SetEnvironmentGlobal, SetEnvironmentInSession, UnsetEnvironmentGlobal};
 pub use io::{SendBytes, SendPaneKeys};
 pub use ops::{
@@ -22,3 +21,4 @@ pub(crate) use query::{
 };
 pub use size::{RefreshClient, ResizeWindow, WindowRefreshClient};
 pub use target::{RenameSession, RenameWindow, ResizePaneX, ResizePaneY, SelectPane, SelectWindow};
+pub use vi_mode::{Prompt, PromptKind};

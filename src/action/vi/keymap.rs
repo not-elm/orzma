@@ -34,7 +34,7 @@ pub(crate) struct ResolvedViModeKeys(HashMap<ResolvedKey, ViModeAction>);
 
 impl ResolvedViModeKeys {
     /// Returns the action bound to one keypress, or `None` (unbound —
-    /// swallowed by copy mode). `Cmd`/`Alt` chords are never vi-mode keys.
+    /// swallowed by vi mode). `Cmd`/`Alt` chords are never vi-mode keys.
     pub(crate) fn resolve(
         &self,
         logical_key: &Key,

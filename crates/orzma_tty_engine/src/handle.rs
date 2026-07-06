@@ -695,7 +695,7 @@ impl TerminalHandle {
     /// original anchor (captured at `selection_start`). The new
     /// selection spans from the stored anchor to the current vi
     /// cursor, mirroring tmux's behaviour when the user switches
-    /// between `v` (Char) and `V` (Line) without exiting copy mode.
+    /// between `v` (Char) and `V` (Line) without exiting vi mode.
     ///
     /// Returns `false` when no selection anchor is stored (i.e. no
     /// selection is currently active). In that case callers should

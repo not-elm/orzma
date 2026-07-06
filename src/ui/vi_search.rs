@@ -1,4 +1,4 @@
-//! Copy-mode search and jump-char prompt overlay.
+//! Vi-mode search and jump-char prompt overlay.
 //!
 //! Currently inert: nothing in the codebase sets `ViModePrompt.open`. This
 //! module used to open in response to the tmux VI applier's `on_vi_prompt`

@@ -41,7 +41,7 @@ pub(crate) struct ViSelectionToggleRequest {
     pub ty: SelectionType,
 }
 
-/// Copies `entity`'s selection to the clipboard and leaves copy mode.
+/// Copies `entity`'s selection to the clipboard and leaves vi mode.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ViYankRequest {
     /// The vi-mode surface entity.
@@ -49,7 +49,7 @@ pub(crate) struct ViYankRequest {
     pub entity: Entity,
 }
 
-/// Leaves copy mode on `entity`.
+/// Leaves vi mode on `entity`.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ViExitRequest {
     /// The vi-mode surface entity.

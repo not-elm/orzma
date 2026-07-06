@@ -296,9 +296,9 @@ pub enum ViModeAction {
     Scroll(ViModeScroll),
     /// Toggle a selection of the given kind.
     Selection(ViModeSelection),
-    /// Copy the selection and leave copy mode.
+    /// Copy the selection and leave vi mode.
     Yank,
-    /// Leave copy mode.
+    /// Leave vi mode.
     Exit,
     /// Open a search / jump prompt (tmux mode only for now).
     Prompt(ViModePromptDir),
@@ -418,9 +418,9 @@ vi_mode_fields! {
     toggle_line_selection => "toggle-line-selection", ViModeAction::Selection(ViModeSelection::Lines), ["V"];
     /// Toggle a rectangular selection.
     toggle_rect_selection => "toggle-rect-selection", ViModeAction::Selection(ViModeSelection::Rect), ["Ctrl+V"];
-    /// Copy the selection to the clipboard and leave copy mode.
+    /// Copy the selection to the clipboard and leave vi mode.
     yank => "yank", ViModeAction::Yank, ["y", "Enter"];
-    /// Leave copy mode.
+    /// Leave vi mode.
     exit => "exit", ViModeAction::Exit, ["q", "Escape", "Ctrl+C"];
     /// Open the search-down prompt (tmux mode only for now).
     search_forward => "search-forward", ViModeAction::Prompt(ViModePromptDir::SearchForward), ["/"];

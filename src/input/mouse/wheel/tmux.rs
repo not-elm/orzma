@@ -138,7 +138,7 @@ fn resolve_tmux_webview_wheel_target(
 /// runs on the same pane (gated off only by `MouseDisabled`) and owns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WheelOwner {
-    /// Copy-mode pane: `forward_wheel_to_tmux` scrolls the local
+    /// Vi-mode pane: `forward_wheel_to_tmux` scrolls the local
     /// `TerminalHandle` directly. These panes carry `MouseDisabled`, so orzma
     /// never acts on them.
     ViMode,
@@ -158,7 +158,7 @@ enum WheelOwner {
 /// mouse mode (`MOUSE_MODE` → SGR/X10), or in alt-screen with `ALTERNATE_SCROLL`
 /// (→ SS3 arrows), or in a normal screen (→ real scrollback). The only case its
 /// `ScrollViewport` is a no-op is alt-screen WITHOUT `ALTERNATE_SCROLL` and
-/// WITHOUT a mouse mode — that residual is what tmux owns here. Copy-mode panes
+/// WITHOUT a mouse mode — that residual is what tmux owns here. Vi-mode panes
 /// never reach `route` (they carry `MouseDisabled`), so this system scrolls
 /// them locally instead.
 fn decide_wheel_owner(in_vi_mode: bool, in_alt_screen: bool, modes: TermMode) -> WheelOwner {
@@ -403,7 +403,7 @@ mod tests {
 
     #[test]
     fn wheel_vi_mode_pane_owner_ignores_screen_and_mode_bits() {
-        // Copy-mode panes carry MouseDisabled (orzma never runs), so the
+        // Vi-mode panes carry MouseDisabled (orzma never runs), so the
         // wheel path scrolls the local handle regardless of screen / mode bits.
         assert_eq!(
             decide_wheel_owner(true, false, TermMode::empty()),
@@ -536,7 +536,7 @@ mod tests {
         assert_eq!(
             owner,
             WheelOwner::CededToOrzma,
-            "cursor pane is normal → ceded to orzma, despite the active pane being in copy mode"
+            "cursor pane is normal → ceded to orzma, despite the active pane being in vi mode"
         );
     }
 

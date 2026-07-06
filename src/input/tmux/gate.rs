@@ -1,6 +1,6 @@
 //! Per-pane input gating for `AppMode::Tmux`: every pane is `KeyboardDisabled`
 //! (keys pass through to tmux), and `MouseDisabled` whenever a modal owns input,
-//! the pane is in copy mode, the focused webview belongs to the pane, or
+//! the pane is in vi mode, the focused webview belongs to the pane, or
 //! an interactive webview under the cursor claims the press — so the
 //! `crate::input::mouse` shared systems yield to the tmux-specific gestures.
 

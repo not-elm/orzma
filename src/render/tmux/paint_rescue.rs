@@ -183,7 +183,7 @@ fn evaluate_blank_recovery(
 /// Requests a tmux re-seed for each non-vi-mode pane whose grid is
 /// structurally unpainted (see [`grid_needs_full_seed`]) once the state has
 /// held for [`RESEED_DEBOUNCE_FRAMES`], then re-requests every
-/// [`RESEED_INFLIGHT_TIMEOUT`] frames until the grid paints. Copy-mode panes
+/// [`RESEED_INFLIGHT_TIMEOUT`] frames until the grid paints. Vi-mode panes
 /// are skipped — the local vi applier (`crate::action::vi::applier`) is
 /// already scrolling this same `TerminalHandle`/`TerminalGrid`, and a
 /// structural reseed's `capture-pane` would recapture the live tail and

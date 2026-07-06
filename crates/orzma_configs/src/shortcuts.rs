@@ -349,7 +349,7 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub quit: Option<Binding>,
-    /// Enter copy mode: Alacritty vi mode in `AppMode::Default`, tmux
+    /// Enter vi mode: Alacritty vi mode in `AppMode::Default`, tmux
     /// vi-mode in `AppMode::Tmux`.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
@@ -802,7 +802,7 @@ pub enum Shortcut {
     Quit,
     /// Detaches from the tmux session and returns to Default single-terminal mode.
     DetachSession,
-    /// Enters copy mode: Alacritty vi mode in `AppMode::Default`, tmux
+    /// Enters vi mode: Alacritty vi mode in `AppMode::Default`, tmux
     /// vi-mode in `AppMode::Tmux`.
     EnterViMode,
     /// Focuses the neighbor pane in the given direction (tmux mode only).

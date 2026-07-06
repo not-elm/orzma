@@ -504,7 +504,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().in_vi_mode,
             Some(true),
-            "a focused surface in copy mode sets ShortcutMessage.in_vi_mode"
+            "a focused surface in vi mode sets ShortcutMessage.in_vi_mode"
         );
     }
 
@@ -521,7 +521,7 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().in_vi_mode,
             Some(false),
-            "a focused surface NOT in copy mode sets ShortcutMessage.in_vi_mode to false"
+            "a focused surface NOT in vi mode sets ShortcutMessage.in_vi_mode to false"
         );
     }
 

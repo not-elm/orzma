@@ -24,7 +24,7 @@ pub struct TerminalGrid {
     pub last_seq: u32,
     /// Active terminal modes from the last snapshot (e.g. "mouse-sgr-1006").
     pub modes: Vec<String>,
-    /// Vi-mode cursor when the server is in copy mode; `None` otherwise.
+    /// Vi-mode cursor when the server is in vi mode; `None` otherwise.
     /// `ViModePlugin` reads this every frame to drive `ViModeState::active`.
     pub vi_cursor: Option<ViCursor>,
     /// Active selection range emitted alongside `vi_cursor`. Independent of

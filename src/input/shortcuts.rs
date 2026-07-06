@@ -84,7 +84,7 @@ pub(in crate::input) struct ShortcutMessage {
     pub via_leader: bool,
     /// The `KeyboardFocused` surface, or `None` when none is focused.
     pub focused: Option<Entity>,
-    /// Whether the focused surface is in copy mode.
+    /// Whether the focused surface is in vi mode.
     pub in_vi_mode: bool,
 }
 
