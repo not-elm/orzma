@@ -560,10 +560,10 @@ impl Default for Shortcuts {
         Shortcuts {
             leader: Some(Leader::ModifierTap(TapModifier::Meta)),
             paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
-            release_webview_focus: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+Escape"))),
+            release_webview_focus: Some(parse_default_binding("<Leader>u")),
             quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
-            enter_vi_mode: Some(Binding::Direct(parse_default_chord("Cmd+S"))),
-            detach_session: Some(Binding::Direct(parse_default_chord("Ctrl+Shift+D"))),
+            enter_vi_mode: Some(parse_default_binding("<Leader>s")),
+            detach_session: Some(parse_default_binding("<Leader>x")),
             select_left_pane: Some(parse_default_binding("<Leader>h")),
             select_down_pane: Some(parse_default_binding("<Leader>j")),
             select_up_pane: Some(parse_default_binding("<Leader>k")),
@@ -1355,8 +1355,8 @@ mod tests {
             Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap()))
         );
         assert_eq!(s.bindings_iter().count(), 35);
-        assert_eq!(s.direct_chords().count(), 5);
-        assert_eq!(s.leader_chords().count(), 30);
+        assert_eq!(s.direct_chords().count(), 2);
+        assert_eq!(s.leader_chords().count(), 33);
     }
 
     #[test]
@@ -1488,7 +1488,7 @@ detach-session = "<Leader>d"
             s.paste,
             Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
         );
-        assert_eq!(s.leader_chords().count(), 32);
+        assert_eq!(s.leader_chords().count(), 33);
     }
 
     #[test]
@@ -1499,15 +1499,13 @@ detach-session = "<Leader>d"
     #[test]
     fn direct_conflict_detected() {
         let s = Shortcuts {
-            paste: Some(Binding::Direct(
-                parse_key_chord("Ctrl+Shift+Escape").unwrap(),
-            )),
+            paste: Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap())),
             ..Default::default()
         };
         let err = s.validate_no_direct_conflicts().unwrap_err();
         assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"paste"));
-        assert!(err[0].actions.contains(&"release-webview-focus"));
+        assert!(err[0].actions.contains(&"quit"));
     }
 
     #[test]
@@ -1551,7 +1549,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"Ctrl+Shift+Escape","quit":"Cmd+Q","enter-vi-mode":"Cmd+S","detach-session":"Ctrl+Shift+D","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>E","previous-window":"<Leader>Q","next-session":"<Leader>Shift+E","previous-session":"<Leader>Shift+Q","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","detach-session":"<Leader>X","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>E","previous-window":"<Leader>Q","next-session":"<Leader>Shift+E","previous-session":"<Leader>Shift+Q","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 

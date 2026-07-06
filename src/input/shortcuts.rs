@@ -1244,9 +1244,9 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_resolve_to_five() {
+    fn default_bindings_resolve_to_two_direct() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(r.direct.len(), 5);
+        assert_eq!(r.direct.len(), 2);
     }
 
     #[test]
@@ -1255,10 +1255,6 @@ mod tests {
         assert_eq!(
             r.match_gui_action(KeyCode::KeyQ, mods(false, false, false, true)),
             Some(Shortcut::Quit)
-        );
-        assert_eq!(
-            r.match_gui_action(KeyCode::KeyS, mods(false, false, false, true)),
-            Some(Shortcut::EnterViMode)
         );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
@@ -1294,17 +1290,18 @@ mod tests {
     }
 
     #[test]
-    fn release_webview_focus_matches_default_chord() {
-        let r = direct_only(&ConfigShortcuts::default());
+    fn release_webview_focus_matches_default_leader_chord() {
+        let resolved = resolve_from_chords(ConfigShortcuts::default().leader_chords());
+        let entry = resolved
+            .iter()
+            .find(|s| s.action == Shortcut::ReleaseWebviewFocus)
+            .expect("release-webview-focus resolves as a leader chord by default");
         assert_eq!(
-            r.match_gui_action(KeyCode::Escape, mods(true, true, false, false)),
-            Some(Shortcut::ReleaseWebviewFocus),
-            "the default release chord resolves through match_gui_action like any action",
+            entry.keycode,
+            KeyCode::KeyU,
+            "the default release-webview-focus binding is <Leader>u",
         );
-        assert_ne!(
-            r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
-            Some(Shortcut::ReleaseWebviewFocus),
-        );
+        assert_eq!(entry.modifiers, mods(false, false, false, false));
     }
 
     #[test]
@@ -1553,14 +1550,17 @@ mod tests {
 
     #[test]
     fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
-        // NOTE: `ConfigShortcuts::default()` ships 30 leader-scoped tmux actions
-        // (plus the direct `paste` chord), so `OrzmaConfigs::default()` alone no
-        // longer exercises the inert-leader path; every default binding is
-        // explicitly unbound here to reproduce a config with no leader bindings
-        // at all.
+        // NOTE: `ConfigShortcuts::default()` ships 33 leader-scoped actions
+        // (plus the direct `paste`/`quit` chords), so `OrzmaConfigs::default()`
+        // alone no longer exercises the inert-leader path; every leader binding
+        // is explicitly unbound here to reproduce a config with no leader
+        // bindings at all.
         let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
                 paste: None,
+                release_webview_focus: None,
+                enter_vi_mode: None,
+                detach_session: None,
                 select_left_pane: None,
                 select_down_pane: None,
                 select_up_pane: None,

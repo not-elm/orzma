@@ -767,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn release_webview_chord_emits_type_no_webview() {
+    fn unbound_ctrl_shift_escape_emits_type() {
         let sc = Shortcuts::default();
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
@@ -785,8 +785,8 @@ mod tests {
                 logical: Key::Escape,
                 key_code: KeyCode::Escape,
             }],
-            "the decider must not special-case the release-webview-focus chord when \
-             no webview is focused; the Default applier drops it, tmux forwards it"
+            "a chord bound to no action falls through to Type; the decider never \
+             swallows on its own — the applier decides"
         );
     }
 

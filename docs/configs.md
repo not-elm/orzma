@@ -97,10 +97,10 @@ repeat-time-ms = 500
 
 # --- existing actions ---
 paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for the tmux-style leader binding.
-release-webview-focus = "Ctrl+Shift+Escape"
+release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"
-enter-vi-mode         = "Cmd+S"        # Both modes: Alacritty vi mode in Default, tmux copy-mode under tmux.
-detach-session        = "Ctrl+Shift+D" # tmux mode only.
+enter-vi-mode         = "<Leader>s"    # Both modes: Alacritty vi mode in Default, tmux copy-mode under tmux.
+detach-session        = "<Leader>x"    # tmux mode only.
 
 # --- pane actions (tmux mode only) ---
 select-left-pane      = "<Leader>h"    # select-pane -L
@@ -232,10 +232,10 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | Action | Default | What it does |
 | --- | --- | --- |
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
-| `release-webview-focus` | `Ctrl+Shift+Escape` | Return keyboard focus from a focused webview to the terminal. |
+| `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
-| `enter-vi-mode` | `Cmd+S` | Enter vi mode. |
-| `detach-session` | `Ctrl+Shift+D` | Detach the current tmux session (tmux mode only). |
+| `enter-vi-mode` | `<Leader>s` | Enter vi mode. |
+| `detach-session` | `<Leader>x` | Detach the current tmux session (tmux mode only). |
 | `select-left-pane` | `<Leader>h` | Focus the pane to the left (tmux mode only). |
 | `select-down-pane` | `<Leader>j` | Focus the pane below (tmux mode only). |
 | `select-up-pane` | `<Leader>k` | Focus the pane above (tmux mode only). |
