@@ -20,6 +20,7 @@ catalog:
   rehype-highlight: ^7.0.0
   highlight.js: ^11.0.0
   marked: ^12.0.0
+  marked-alert: ^2.1.2
   marked-highlight: ^2.1.4
   marked-katex-extension: ^5.1.1
   katex: ^0.16.11

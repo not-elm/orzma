@@ -64,4 +64,31 @@ describe('renderMarkdown', () => {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     expect(doc.querySelector('del')).not.toBeNull();
   });
+
+  it.each([
+    'note',
+    'tip',
+    'important',
+    'warning',
+    'caution',
+  ])('renders a [!%s] blockquote as a styled alert callout', (type) => {
+    const html = renderMarkdown(`> [!${type.toUpperCase()}]\n> body text\n`);
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const alert = doc.querySelector(`div.markdown-alert.markdown-alert-${type}`);
+    expect(alert).not.toBeNull();
+    expect(alert?.querySelector('.markdown-alert-title')).not.toBeNull();
+  });
+
+  it('leaves a plain blockquote unstyled', () => {
+    const html = renderMarkdown('> just a quote\n');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    expect(doc.querySelector('blockquote')).not.toBeNull();
+    expect(doc.querySelector('.markdown-alert')).toBeNull();
+  });
+
+  it('keeps the octicon svg in the alert title after sanitization', () => {
+    const html = renderMarkdown('> [!NOTE]\n> body\n');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    expect(doc.querySelector('.markdown-alert-title svg')).not.toBeNull();
+  });
 });

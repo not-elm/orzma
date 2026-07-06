@@ -1,6 +1,7 @@
 import DOMPurify from 'dompurify';
 import hljs from 'highlight.js';
 import { Marked } from 'marked';
+import markedAlert from 'marked-alert';
 import { markedHighlight } from 'marked-highlight';
 import markedKatex from 'marked-katex-extension';
 
@@ -17,6 +18,8 @@ const marked = new Marked(
   }),
   markedKatex({ throwOnError: false, output: 'html' }),
 );
+
+marked.use(markedAlert());
 
 marked.use({
   renderer: {
