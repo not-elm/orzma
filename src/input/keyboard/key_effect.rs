@@ -3,14 +3,14 @@
 //! that the Default and tmux keyboard dispatchers wire into. No ECS handles —
 //! fully unit-testable without a Bevy `App`.
 
-use crate::action::vi::ResolvedCopyModeKeys;
+use crate::action::vi::ResolvedViModeKeys;
 use crate::input::shortcuts::{
     LeaderPhase, LeaderStep, Shortcuts, is_modifier_key, refire_held_repeat, step_leader,
 };
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyCode, KeyboardInput};
-use orzma_configs::copy_mode::CopyModeAction;
 use orzma_configs::shortcuts::{Modifiers, Shortcut};
+use orzma_configs::vi_mode::ViModeAction;
 use orzma_webview::NormalizedChord;
 use std::time::Duration;
 
@@ -30,8 +30,8 @@ pub(crate) enum KeyEffect {
         /// rather than a direct chord.
         via_leader: bool,
     },
-    /// Run a matched `[copy-mode]` key.
-    CopyMode(CopyModeAction),
+    /// Run a matched `[vi-mode]` key.
+    ViMode(ViModeAction),
     /// Type the key into the focused terminal (Default: the PTY directly;
     /// tmux: forwarded as a `send-keys`).
     Type {
@@ -57,7 +57,7 @@ pub(crate) struct BatchContext<'a> {
     /// The caller's `Time<Real>::elapsed()`, for the repeat-window deadline.
     pub(crate) now: Duration,
     /// Whether the focused terminal is currently in copy mode.
-    pub(crate) in_copy_mode: bool,
+    pub(crate) in_vi_mode: bool,
     /// Whether a webview currently owns the keyboard.
     pub(crate) webview_focused: bool,
     /// The focused webview's declared forward-key chords (empty when none).
@@ -78,23 +78,23 @@ pub(crate) struct ClassifiedKeys {
 /// handles, so callers can drive it in a unit test with no `App`.
 ///
 /// A stale repeat window is closed before the batch is processed whenever
-/// `ctx.in_copy_mode` is set, so a repeat-marked key that doubles as a
-/// copy-mode key resolves against `resolved_copy` instead of re-firing its
+/// `ctx.in_vi_mode` is set, so a repeat-marked key that doubles as a
+/// vi-mode key resolves against `resolved_copy` instead of re-firing its
 /// leader-scoped action.
 pub(crate) fn classify_key_batch<'a>(
     leader_phase: &mut LeaderPhase,
     held_repeat: &mut Option<KeyCode>,
     shortcuts: &Shortcuts,
-    resolved_copy: &ResolvedCopyModeKeys,
+    resolved_copy: &ResolvedViModeKeys,
     events: impl Iterator<Item = &'a KeyboardInput>,
     ctx: BatchContext<'a>,
 ) -> ClassifiedKeys {
-    // NOTE: an open repeat window must not intercept copy-mode keys — a
-    // repeat-marked key doubling as a copy-mode key would re-fire its bound
+    // NOTE: an open repeat window must not intercept vi-mode keys — a
+    // repeat-marked key doubling as a vi-mode key would re-fire its bound
     // action into the hidden live terminal instead of being resolved as a
-    // copy-mode key below. Close the window (and disarm hold-to-repeat) before
+    // vi-mode key below. Close the window (and disarm hold-to-repeat) before
     // the batch is processed (tmux/Default parity).
-    if ctx.in_copy_mode {
+    if ctx.in_vi_mode {
         *held_repeat = None;
         if matches!(*leader_phase, LeaderPhase::Repeat { .. }) {
             *leader_phase = LeaderPhase::Idle;
@@ -155,14 +155,14 @@ pub(crate) fn classify_key_batch<'a>(
             effects.push(KeyEffect::Shortcut { action, via_leader });
             continue;
         }
-        // NOTE: copy-mode keys resolve only after leader and GUI-shortcut
-        // dispatch declined the key, and a copy-mode key never falls through
+        // NOTE: vi-mode keys resolve only after leader and GUI-shortcut
+        // dispatch declined the key, and a vi-mode key never falls through
         // to Type — an unmatched key in copy mode is swallowed, not typed
         // (tmux/Default parity).
-        if ctx.in_copy_mode {
+        if ctx.in_vi_mode {
             if let Some(copy_action) = resolved_copy.resolve(&ev.logical_key, ev.key_code, ctx.mods)
             {
-                effects.push(KeyEffect::CopyMode(copy_action));
+                effects.push(KeyEffect::ViMode(copy_action));
             }
             continue;
         }
@@ -275,7 +275,7 @@ mod tests {
         BatchContext {
             mods,
             now,
-            in_copy_mode: false,
+            in_vi_mode: false,
             webview_focused: false,
             forward_chords: &[],
         }
@@ -284,7 +284,7 @@ mod tests {
     fn run<'a>(
         leader_phase: &mut LeaderPhase,
         shortcuts: &Shortcuts,
-        resolved_copy: &ResolvedCopyModeKeys,
+        resolved_copy: &ResolvedViModeKeys,
         events: &'a [KeyboardInput],
         ctx: BatchContext<'a>,
     ) -> Vec<KeyEffect> {
@@ -303,7 +303,7 @@ mod tests {
     fn run_full<'a>(
         leader_phase: &mut LeaderPhase,
         shortcuts: &Shortcuts,
-        resolved_copy: &ResolvedCopyModeKeys,
+        resolved_copy: &ResolvedViModeKeys,
         events: &'a [KeyboardInput],
         ctx: BatchContext<'a>,
     ) -> ClassifiedKeys {
@@ -320,8 +320,8 @@ mod tests {
 
     #[test]
     fn leader_press_swallows_and_no_type() {
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterCopyMode, ms(500));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterViMode, ms(500));
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
         let effects = run(
@@ -345,12 +345,9 @@ mod tests {
 
     #[test]
     fn leader_then_bound_key_emits_action() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyS,
-            Shortcut::EnterCopyMode,
-            Duration::ZERO,
-        );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterViMode, Duration::ZERO);
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyS, Key::Character("s".into()))];
         let effects = run(
@@ -363,7 +360,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 via_leader: true,
             }]
         );
@@ -377,7 +374,7 @@ mod tests {
             mods(false, false, false, true),
             Shortcut::Quit,
         );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyQ, Key::Character("q".into()))];
         let effects = run(
@@ -404,7 +401,7 @@ mod tests {
     #[test]
     fn plain_key_emits_type() {
         let sc = Shortcuts::default();
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
         let effects = run(
@@ -425,8 +422,8 @@ mod tests {
 
     #[test]
     fn repeat_window_refires_on_os_repeat() {
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
         let events = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
         let effects = run(
@@ -439,7 +436,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 via_leader: true,
             }]
         );
@@ -452,8 +449,8 @@ mod tests {
 
     #[test]
     fn repeat_outside_window_passthrough_no_step() {
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
         let effects = run(
@@ -479,8 +476,8 @@ mod tests {
         // Hold the key: the first press fires + arms the 500ms window AND
         // hold-to-repeat. The OS's first auto-repeat lands well past the window
         // (~1020ms), yet it must STILL re-fire the action — not leak to Type.
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
-        let rc = ResolvedCopyModeKeys::default();
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
+        let rc = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let mut held = None;
         let first = [press(KeyCode::KeyH, Key::Character("h".into()))];
@@ -495,7 +492,7 @@ mod tests {
         assert_eq!(
             out1.effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 via_leader: true,
             }],
             "the leader press fires the repeat binding"
@@ -518,7 +515,7 @@ mod tests {
         assert_eq!(
             out2.effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 via_leader: true,
             }],
             "an OS auto-repeat of the held key re-fires even after the 500ms window closed"
@@ -542,8 +539,8 @@ mod tests {
         // A key armed by an earlier hold must NOT keep re-firing after it is
         // released and re-pressed WITHOUT the leader: the fresh (repeat:false)
         // press with no leader engaged disarms the stale hold, so it types.
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
-        let rc = ResolvedCopyModeKeys::default();
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
+        let rc = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let mut held = Some(KeyCode::KeyH);
         let fresh = [press(KeyCode::KeyH, Key::Character("h".into()))];
@@ -570,18 +567,18 @@ mod tests {
     }
 
     #[test]
-    fn copy_mode_disarms_held_repeat() {
+    fn vi_mode_disarms_held_repeat() {
         // Copy mode must not let a held resize key re-fire into the hidden live
         // terminal: the pre-loop guard disarms hold-to-repeat.
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
-        let rc = ResolvedCopyModeKeys::default();
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
+        let rc = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
         };
         let mut held = Some(KeyCode::KeyH);
         let repeat = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
         let mut c = ctx(no_mods(), ms(0));
-        c.in_copy_mode = true;
+        c.in_vi_mode = true;
         let out = classify_key_batch(&mut phase, &mut held, &sc, &rc, repeat.iter(), c);
         assert_eq!(held, None, "copy mode disarms hold-to-repeat");
         assert!(
@@ -599,7 +596,7 @@ mod tests {
             Shortcut::DetachSession,
             Duration::ZERO,
         );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [
             press(KeyCode::ControlLeft, Key::Control),
@@ -627,7 +624,7 @@ mod tests {
     #[test]
     fn pending_suppresses_type_for_second_key() {
         let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::DetachSession, ms(500));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
         let effects = run(
@@ -648,7 +645,7 @@ mod tests {
     #[test]
     fn pending_types_trailing_same_frame_key() {
         let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::DetachSession, ms(500));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [
             press(KeyCode::KeyA, Key::Character("a".into())),
@@ -674,8 +671,8 @@ mod tests {
     #[test]
     fn repeat_window_withholds_matching_key() {
         let sc =
-            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(60_000));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(60_000));
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
         };
@@ -694,7 +691,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 via_leader: true,
             }],
             "the action must fire — this is not an empty Vec"
@@ -704,8 +701,8 @@ mod tests {
     #[test]
     fn repeat_window_types_non_matching_key() {
         let sc =
-            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(60_000));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(60_000));
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
         };
@@ -735,8 +732,8 @@ mod tests {
     #[test]
     fn window_closing_key_stops_withholding_same_frame() {
         let sc =
-            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(60_000));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(60_000));
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
         };
@@ -771,7 +768,7 @@ mod tests {
     #[test]
     fn release_webview_chord_emits_type_no_webview() {
         let sc = Shortcuts::default();
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::Escape, Key::Escape)];
         let effects = run(
@@ -793,13 +790,13 @@ mod tests {
     }
 
     #[test]
-    fn no_type_while_in_copy_mode() {
+    fn no_type_while_in_vi_mode() {
         let sc = Shortcuts::default();
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyX, Key::Character("x".into()))];
         let mut c = ctx(no_mods(), ms(0));
-        c.in_copy_mode = true;
+        c.in_vi_mode = true;
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert!(
             !effects.iter().any(|e| matches!(e, KeyEffect::Type { .. })),
@@ -809,28 +806,27 @@ mod tests {
 
     #[test]
     fn copy_key_shadowed_by_gui() {
-        let sc =
-            test_shortcuts_with_direct_chord(KeyCode::KeyV, no_mods(), Shortcut::EnterCopyMode);
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let sc = test_shortcuts_with_direct_chord(KeyCode::KeyV, no_mods(), Shortcut::EnterViMode);
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyV, Key::Character("v".into()))];
         let mut c = ctx(no_mods(), ms(0));
-        c.in_copy_mode = true;
+        c.in_vi_mode = true;
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 via_leader: false,
             }],
-            "a bound GUI chord must shadow a copy-mode key, not resolve as CopyMode"
+            "a bound GUI chord must shadow a vi-mode key, not resolve as ViMode"
         );
     }
 
     #[test]
     fn meta_unmatched_dropped() {
         let sc = Shortcuts::default();
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyJ, Key::Character("j".into()))];
         let effects = run(
@@ -844,17 +840,17 @@ mod tests {
     }
 
     #[test]
-    fn direct_paste_suppressed_in_copy_mode() {
+    fn direct_paste_suppressed_in_vi_mode() {
         let sc = test_shortcuts_with_direct_chord(
             KeyCode::KeyV,
             mods(false, false, false, true),
             Shortcut::Paste,
         );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyV, Key::Character("v".into()))];
         let mut c = ctx(mods(false, false, false, true), ms(0));
-        c.in_copy_mode = true;
+        c.in_vi_mode = true;
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             effects,
@@ -864,19 +860,19 @@ mod tests {
             }],
             "the decider still emits the direct paste action; the Default \
              applier is what suppresses it in copy mode (via `via_leader || \
-             !in_copy_mode`), so a direct paste never fires while copy mode is \
+             !in_vi_mode`), so a direct paste never fires while copy mode is \
              active"
         );
     }
 
     #[test]
-    fn leader_paste_fires_in_copy_mode() {
+    fn leader_paste_fires_in_vi_mode() {
         let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyP, Shortcut::Paste, Duration::ZERO);
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyP, Key::Character("p".into()))];
         let mut c = ctx(no_mods(), ms(0));
-        c.in_copy_mode = true;
+        c.in_vi_mode = true;
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert_eq!(
             effects,
@@ -888,23 +884,23 @@ mod tests {
     }
 
     #[test]
-    fn in_copy_mode_closes_stale_repeat_window_before_dispatch() {
+    fn in_vi_mode_closes_stale_repeat_window_before_dispatch() {
         // Discriminates the pre-loop guard specifically: an AUTO-REPEAT of the
         // repeat-bound key (KeyH) inside an open window. Without the guard,
         // `step_with_repeat` sees `ev.repeat && LeaderPhase::Repeat` and calls
-        // `step_leader`, which re-fires `Shortcut{EnterCopyMode}` — `step_leader`'s
+        // `step_leader`, which re-fires `Shortcut{EnterViMode}` — `step_leader`'s
         // own Repeat arm does NOT close the window here because the key MATCHES.
         // The pre-loop guard is the only thing that forces the phase to Idle so
-        // the same key resolves to copy-mode (unbound → nothing) instead.
+        // the same key resolves to vi-mode (unbound → nothing) instead.
         let sc =
-            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(60_000));
-        let resolved_copy = ResolvedCopyModeKeys::default();
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(60_000));
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Repeat {
             deadline: ms(60_000),
         };
         let events = [press_repeat(KeyCode::KeyH, Key::Character("h".into()))];
         let mut c = ctx(no_mods(), ms(0));
-        c.in_copy_mode = true;
+        c.in_vi_mode = true;
         let effects = run(&mut phase, &sc, &resolved_copy, &events, c);
         assert!(
             !effects
@@ -922,12 +918,9 @@ mod tests {
 
     #[test]
     fn webview_pending_leader_fires_action_and_suppresses() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyS,
-            Shortcut::EnterCopyMode,
-            Duration::ZERO,
-        );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterViMode, Duration::ZERO);
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyS, Key::Character("s".into()))];
         let mut c = ctx(no_mods(), ms(0));
@@ -936,7 +929,7 @@ mod tests {
         assert_eq!(
             out.effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 via_leader: true,
             }],
             "a bound second key fires its leader action even while a webview is focused"
@@ -951,12 +944,9 @@ mod tests {
 
     #[test]
     fn webview_idle_leader_chord_engages_and_suppresses() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyS,
-            Shortcut::EnterCopyMode,
-            Duration::ZERO,
-        );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterViMode, Duration::ZERO);
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
         let mut c = ctx(mods(true, false, false, false), ms(0));
@@ -981,12 +971,9 @@ mod tests {
 
     #[test]
     fn webview_pending_unbound_key_swallowed_and_suppressed() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyS,
-            Shortcut::EnterCopyMode,
-            Duration::ZERO,
-        );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyS, Shortcut::EnterViMode, Duration::ZERO);
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyZ, Key::Character("z".into()))];
         let mut c = ctx(no_mods(), ms(0));
@@ -1004,7 +991,7 @@ mod tests {
     #[test]
     fn webview_idle_plain_key_not_suppressed() {
         let sc = Shortcuts::default();
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::KeyB, Key::Character("b".into()))];
         let mut c = ctx(no_mods(), ms(0));
@@ -1025,7 +1012,7 @@ mod tests {
     #[test]
     fn webview_idle_forward_chord_forwards_and_not_suppressed() {
         let sc = Shortcuts::default();
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let chords = [NormalizedChord {
             code: KeyCode::KeyK,
@@ -1061,7 +1048,7 @@ mod tests {
             mods(true, true, false, false),
             Shortcut::ReleaseWebviewFocus,
         );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::Escape, Key::Escape)];
         let mut c = ctx(mods(true, true, false, false), ms(0));
@@ -1084,7 +1071,7 @@ mod tests {
             mods(true, true, false, false),
             Shortcut::ReleaseWebviewFocus,
         );
-        let resolved_copy = ResolvedCopyModeKeys::default();
+        let resolved_copy = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Idle;
         let events = [press(KeyCode::Escape, Key::Escape)];
         let c = ctx(mods(true, true, false, false), ms(0));

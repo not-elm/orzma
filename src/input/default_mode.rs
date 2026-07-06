@@ -2,8 +2,8 @@
 //! `KeyboardDisabled` / `MouseDisabled` markers from the coarse guards (IME,
 //! focus, webview). The frame's shortcut messages (resolved by
 //! `crate::input::keyboard::key_effect::classify_key_batch`) are applied by
-//! `crate::input::shortcuts::default_mode`'s per-message systems — copy-mode
-//! entry, the shared `[copy-mode]` key table (while copy mode is active),
+//! `crate::input::shortcuts::default_mode`'s per-message systems — vi-mode
+//! entry, the shared `[vi-mode]` key table (while copy mode is active),
 //! direct-chord and leader paste, and raw-key typing
 //! (`crate::action::terminal::PasteAction`, `TerminalKeyInput`). Quit and
 //! release-webview-focus are handled upstream; the pane/window actions are
@@ -16,7 +16,7 @@ use crate::input::ime::{ImeCommit, ImeState};
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
-use crate::ui::copy_mode::CopyModeState;
+use crate::ui::vi_mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
@@ -80,7 +80,7 @@ fn maintain_input_gates(
             Entity,
             Has<KeyboardDisabled>,
             Has<MouseDisabled>,
-            Has<CopyModeState>,
+            Has<ViModeState>,
         ),
         With<OrzmaTerminal>,
     >,
@@ -97,9 +97,9 @@ fn maintain_input_gates(
     // click, stranding the user on a focused webview.
     let mouse_modal = ime.is_composing() || !focused;
     let claimed = window.and_then(|w| cursor_claims_webview(w, &claim));
-    for (entity, has_keyboard, has_mouse, in_copy_mode) in terminals.iter() {
-        let disable_keyboard = keyboard_disable || in_copy_mode;
-        let disable_mouse = mouse_modal || in_copy_mode || Some(entity) == claimed;
+    for (entity, has_keyboard, has_mouse, in_vi_mode) in terminals.iter() {
+        let disable_keyboard = keyboard_disable || in_vi_mode;
+        let disable_mouse = mouse_modal || in_vi_mode || Some(entity) == claimed;
         if disable_keyboard && !has_keyboard {
             commands.entity(entity).insert(KeyboardDisabled);
         } else if !disable_keyboard && has_keyboard {
@@ -167,10 +167,10 @@ mod tests {
     use crate::action::terminal::PasteAction;
     use crate::input::keyboard::key_effect::KeyEffect;
     use crate::input::shortcuts::default_mode::{
-        apply_default_copy_mode, apply_default_shortcuts, apply_default_type,
+        apply_default_shortcuts, apply_default_type, apply_default_vi_mode,
     };
-    use crate::input::shortcuts::{CopyModeMessage, ShortcutMessage, Shortcuts, TypeMessage};
-    use crate::ui::copy_mode::EnterCopyModeActionEvent;
+    use crate::input::shortcuts::{ShortcutMessage, Shortcuts, TypeMessage, ViModeMessage};
+    use crate::ui::vi_mode::EnterViModeActionEvent;
     use bevy::app::App;
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};
@@ -362,7 +362,7 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct Captured {
-        copy_mode: u32,
+        vi_mode: u32,
         paste: u32,
         keys: Vec<TerminalKey>,
     }
@@ -373,7 +373,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_message::<ShortcutMessage>()
-            .add_message::<CopyModeMessage>()
+            .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
@@ -381,17 +381,15 @@ mod tests {
                 Update,
                 (
                     apply_default_shortcuts,
-                    apply_default_copy_mode.after(apply_default_shortcuts),
+                    apply_default_vi_mode.after(apply_default_shortcuts),
                     apply_default_type
                         .after(apply_default_shortcuts)
-                        .after(apply_default_copy_mode),
+                        .after(apply_default_vi_mode),
                 ),
             )
-            .add_observer(
-                |_ev: On<EnterCopyModeActionEvent>, mut c: ResMut<Captured>| {
-                    c.copy_mode += 1;
-                },
-            )
+            .add_observer(|_ev: On<EnterViModeActionEvent>, mut c: ResMut<Captured>| {
+                c.vi_mode += 1;
+            })
             .add_observer(|_ev: On<PasteAction>, mut c: ResMut<Captured>| {
                 c.paste += 1;
             })
@@ -420,7 +418,7 @@ mod tests {
         app: &mut App,
         effects: Vec<KeyEffect>,
         focused: Option<Entity>,
-        in_copy_mode: bool,
+        in_vi_mode: bool,
         mods: Modifiers,
     ) {
         for effect in effects {
@@ -430,12 +428,12 @@ mod tests {
                         action,
                         via_leader,
                         focused,
-                        in_copy_mode,
+                        in_vi_mode,
                     });
                 }
-                KeyEffect::CopyMode(action) => {
+                KeyEffect::ViMode(action) => {
                     app.world_mut()
-                        .write_message(CopyModeMessage { action, focused });
+                        .write_message(ViModeMessage { action, focused });
                 }
                 KeyEffect::Type { logical, key_code } => {
                     app.world_mut().write_message(TypeMessage {
@@ -488,14 +486,14 @@ mod tests {
         );
         let c = app.world().resource::<Captured>();
         assert_eq!(
-            (c.copy_mode, c.paste, c.keys.len()),
+            (c.vi_mode, c.paste, c.keys.len()),
             (0, 0, 0),
             "a Default-mode pane action resolves to a no-op: no event, no typing"
         );
     }
 
     #[test]
-    fn direct_paste_outside_copy_mode_pastes() {
+    fn direct_paste_outside_vi_mode_pastes() {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
@@ -512,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_paste_in_copy_mode_suppressed() {
+    fn direct_paste_in_vi_mode_suppressed() {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
@@ -524,12 +522,12 @@ mod tests {
         assert_eq!(
             app.world().resource::<Captured>().paste,
             0,
-            "a direct paste in copy mode must be suppressed (via_leader || !in_copy_mode)"
+            "a direct paste in copy mode must be suppressed (via_leader || !in_vi_mode)"
         );
     }
 
     #[test]
-    fn leader_paste_in_copy_mode_pastes() {
+    fn leader_paste_in_vi_mode_pastes() {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
@@ -546,19 +544,19 @@ mod tests {
     }
 
     #[test]
-    fn enter_copy_mode_fires_even_when_already_in_copy_mode() {
+    fn enter_vi_mode_fires_even_when_already_in_vi_mode() {
         let (mut app, term) = default_dispatch_app(Shortcuts::default());
         dispatch(
             &mut app,
-            vec![action_effect(Shortcut::EnterCopyMode, false)],
+            vec![action_effect(Shortcut::EnterViMode, false)],
             Some(term),
             true,
             Modifiers::default(),
         );
         assert_eq!(
-            app.world().resource::<Captured>().copy_mode,
+            app.world().resource::<Captured>().vi_mode,
             1,
-            "EnterCopyMode must fire unconditionally in Default mode, even when copy mode is \
+            "EnterViMode must fire unconditionally in Default mode, even when copy mode is \
              already active"
         );
     }

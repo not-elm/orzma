@@ -1,6 +1,6 @@
-use orzma_configs::copy_mode::{CopyModeBaseKey, CopyModeConfig, CopyModeKey};
 use orzma_configs::shortcuts::{Binding, Key, parse_key_chord};
 use orzma_configs::test_support::load_with_overrides;
+use orzma_configs::vi_mode::{ViModeBaseKey, ViModeConfig, ViModeKey};
 use orzma_configs::{OrzmaConfigs, OrzmaConfigsError};
 use std::path::PathBuf;
 
@@ -103,35 +103,35 @@ fn tmux_action_rebind_and_unbind() {
 }
 
 #[test]
-fn copy_mode_rebind_and_unbind() {
-    let configs = load_with_overrides(Some(fixture("copy_mode_binding.toml")), None, None).unwrap();
+fn vi_mode_rebind_and_unbind() {
+    let configs = load_with_overrides(Some(fixture("vi_mode_binding.toml")), None, None).unwrap();
     assert_eq!(
-        configs.copy_mode.yank,
-        vec![CopyModeKey {
+        configs.vi_mode.yank,
+        vec![ViModeKey {
             ctrl: false,
-            key: CopyModeBaseKey::Char("Y".to_string()),
+            key: ViModeBaseKey::Char("Y".to_string()),
         }]
     );
-    assert!(configs.copy_mode.search_forward.is_empty());
+    assert!(configs.vi_mode.search_forward.is_empty());
     assert_eq!(
-        configs.copy_mode.cursor_left,
-        CopyModeConfig::default().cursor_left
+        configs.vi_mode.cursor_left,
+        ViModeConfig::default().cursor_left
     );
 }
 
 #[test]
-fn duplicate_copy_mode_key_rejected() {
+fn duplicate_vi_mode_key_rejected() {
     let err =
-        load_with_overrides(Some(fixture("duplicate_copy_mode_key.toml")), None, None).unwrap_err();
+        load_with_overrides(Some(fixture("duplicate_vi_mode_key.toml")), None, None).unwrap_err();
     match err {
-        OrzmaConfigsError::DuplicateCopyModeKeys(dupes) => {
+        OrzmaConfigsError::DuplicateViModeKeys(dupes) => {
             assert!(
                 dupes
                     .iter()
                     .any(|d| d.actions.contains(&"yank") && d.actions.contains(&"exit"))
             );
         }
-        other => panic!("expected DuplicateCopyModeKeys, got {other:?}"),
+        other => panic!("expected DuplicateViModeKeys, got {other:?}"),
     }
 }
 

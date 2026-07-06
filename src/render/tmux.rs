@@ -900,8 +900,8 @@ mod tests {
     }
 
     #[test]
-    fn copy_mode_pane_output_still_reaches_the_grid() {
-        use crate::ui::copy_mode::CopyModeState;
+    fn vi_mode_pane_output_still_reaches_the_grid() {
+        use crate::ui::vi_mode::ViModeState;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -945,12 +945,10 @@ mod tests {
         assert!(baseline.starts_with("hi"), "baseline grid painted 'hi'");
 
         // Enter copy mode, then deliver more output: the emit is no longer
-        // gated on CopyModeState, so the new content reaches the grid in the
+        // gated on ViModeState, so the new content reaches the grid in the
         // SAME frame it arrives — the local vi applier scrolls this same
         // handle, so its own view is what must render.
-        app.world_mut()
-            .entity_mut(pane_entity)
-            .insert(CopyModeState);
+        app.world_mut().entity_mut(pane_entity).insert(ViModeState);
         app.world_mut()
             .resource_mut::<bevy::ecs::message::Messages<PaneOutput>>()
             .write(PaneOutput {
@@ -1830,17 +1828,17 @@ mod tests {
     /// back on the live tail. Drives the shared `crate::action::vi` events
     /// directly (the applier pipeline), not the keymap/key-gather layer.
     #[test]
-    fn tmux_copy_mode_is_fully_local() {
+    fn tmux_vi_mode_is_fully_local() {
         use crate::action::vi::{
             ViActionPlugin, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest,
             ViYankRequest,
         };
         use crate::clipboard::Clipboard;
         use crate::configs::OrzmaConfigsResource;
-        use crate::ui::copy_mode::{CopyModePlugin, CopyModeState, EnterCopyModeActionEvent};
+        use crate::ui::vi_mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
         use bevy::ecs::message::Messages;
         use orzma_configs::OrzmaConfigs;
-        use orzma_configs::copy_mode::CopyScroll;
+        use orzma_configs::vi_mode::CopyScroll;
         use orzma_tty_engine::{SelectionType, TermMode, TerminalHandlePlugin, ViMotion};
         use std::time::Duration;
 
@@ -1849,7 +1847,7 @@ mod tests {
         app.add_plugins(TerminalGridPlugin);
         app.add_plugins(SurfacePlugin);
         app.add_plugins(TerminalHandlePlugin);
-        app.add_plugins(CopyModePlugin);
+        app.add_plugins(ViModePlugin);
         app.add_plugins(ViActionPlugin);
         app.init_resource::<Assets<TerminalUiMaterial>>();
         app.init_resource::<PendingPaneOutput>();
@@ -1879,7 +1877,7 @@ mod tests {
                 .chain(),
         );
 
-        // Frame 1: `[copy-mode]` key table resolution (Startup) plus the real
+        // Frame 1: `[vi-mode]` key table resolution (Startup) plus the real
         // tmux-pane attach bundle (TerminalHandle, Coalescer, TerminalTitle,
         // OrzmaTerminal, Node) — the same bundle a projected tmux pane gets.
         // No output has arrived yet.
@@ -1909,15 +1907,15 @@ mod tests {
             .collect();
         assert!(
             tail_row0.contains("SEEDLINE-"),
-            "pre-copy-mode grid must show the seeded live tail, got {tail_row0:?}"
+            "pre-vi-mode grid must show the seeded live tail, got {tail_row0:?}"
         );
 
         // 1. Enter copy mode.
-        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
         assert!(
-            app.world().get::<CopyModeState>(entity).is_some(),
-            "entering copy mode must insert CopyModeState"
+            app.world().get::<ViModeState>(entity).is_some(),
+            "entering copy mode must insert ViModeState"
         );
         let entered_vi = app
             .world()
@@ -2001,7 +1999,7 @@ mod tests {
         app.update();
 
         assert!(
-            app.world().get::<CopyModeState>(entity).is_none(),
+            app.world().get::<ViModeState>(entity).is_none(),
             "yank must exit copy mode"
         );
         let clipboard_text = app.world_mut().resource_mut::<Clipboard>().read();

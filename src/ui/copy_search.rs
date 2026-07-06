@@ -3,7 +3,7 @@
 //! Currently inert: nothing in the codebase sets `CopyPrompt.open`. This
 //! module used to open in response to the tmux VI applier's `on_vi_prompt`
 //! observer handling a `ViPromptRequest`, but that applier (`tmux_mode.rs`)
-//! was deleted as part of the copy-mode-to-local migration, so the trigger
+//! was deleted as part of the vi-mode-to-local migration, so the trigger
 //! no longer exists. Reconnecting this prompt to a local search applier is
 //! expected in a future change.
 //!
@@ -25,7 +25,7 @@ use orzma_tmux::{PaneId, Prompt, PromptKind, TmuxClient};
 
 const PROMPT_Z: i32 = 320;
 
-/// Registers the copy-mode prompt resource, input system, and render system.
+/// Registers the vi-mode prompt resource, input system, and render system.
 pub(crate) struct CopyPromptPlugin;
 
 impl Plugin for CopyPromptPlugin {
@@ -45,7 +45,7 @@ impl Plugin for CopyPromptPlugin {
     }
 }
 
-/// The active copy-mode prompt (search regex or jump char). Present while the
+/// The active vi-mode prompt (search regex or jump char). Present while the
 /// user is typing; owns the keyboard like the session picker.
 #[derive(Resource, Default)]
 pub(crate) struct CopyPrompt {
@@ -53,7 +53,7 @@ pub(crate) struct CopyPrompt {
     pub(crate) open: Option<CopyPromptState>,
 }
 
-/// In-progress copy-mode prompt input.
+/// In-progress vi-mode prompt input.
 pub(crate) struct CopyPromptState {
     /// Which copy command to run on submit.
     pub(crate) kind: PromptKind,
@@ -201,7 +201,7 @@ fn handle_prompt_input(
                         text: &state.text,
                     })
                 {
-                    tracing::warn!(?e, "copy-mode prompt submit failed");
+                    tracing::warn!(?e, "vi-mode prompt submit failed");
                 }
                 copy_prompt.open = None;
                 *armed = false;

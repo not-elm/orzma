@@ -1,7 +1,7 @@
 //! Forwards the mouse wheel to the active tmux pane for the cases the host
 //! `crate::input::mouse::wheel::dispatch_mouse_wheel` does not own (it now runs
 //! on every tmux pane, gated off solely by `MouseDisabled`): an inline webview
-//! under the pointer (forwarded to CEF), a copy-mode pane (scrolled directly
+//! under the pointer (forwarded to CEF), a vi-mode pane (scrolled directly
 //! via `TerminalHandle::scroll`), and the alt-screen residual where orzma's
 //! viewport scroll would no-op (cursor-key `send-keys`). Events accumulate
 //! into cell-deltas (so trackpad / high-resolution `Pixel` scrolling
@@ -12,9 +12,9 @@ use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::mouse::webview::{webview_wheel_delta, webview_wheel_target};
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
-use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
 use crate::ui::tmux::rename_prompt::RenamePrompt;
+use crate::ui::vi_mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
@@ -41,7 +41,7 @@ impl Plugin for MouseWheelTmuxPlugin {
         );
     }
 }
-/// `send-keys -t %<id> -N <lines> Up|Down` — scrolls an alt-screen (non-copy-mode) pane.
+/// `send-keys -t %<id> -N <lines> Up|Down` — scrolls an alt-screen (non-vi-mode) pane.
 struct AltScreenScroll<'a> {
     target: &'a str,
     up: bool,
@@ -133,7 +133,7 @@ fn resolve_tmux_webview_wheel_target(
 /// `Pixel` unchanged, NO sign flip) — identical to native `inline_wheel_delta`.
 /// Which layer owns a wheel gesture over a tmux pane.
 ///
-/// `forward_wheel_to_tmux` handles only `CopyMode` and `AltScreenResidual`;
+/// `forward_wheel_to_tmux` handles only `ViMode` and `AltScreenResidual`;
 /// every other case is `CededToOrzma` — `crate::input::mouse::wheel::dispatch_mouse_wheel`
 /// runs on the same pane (gated off only by `MouseDisabled`) and owns it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,7 +141,7 @@ enum WheelOwner {
     /// Copy-mode pane: `forward_wheel_to_tmux` scrolls the local
     /// `TerminalHandle` directly. These panes carry `MouseDisabled`, so orzma
     /// never acts on them.
-    CopyMode,
+    ViMode,
     /// Alt-screen pane with neither `ALTERNATE_SCROLL` nor any `MOUSE_MODE` bit:
     /// the host's `WheelAction` resolves to a `ScrollViewport` that is a
     /// no-op on the alt buffer, so tmux forwards cursor keys instead.
@@ -161,9 +161,9 @@ enum WheelOwner {
 /// WITHOUT a mouse mode — that residual is what tmux owns here. Copy-mode panes
 /// never reach `route` (they carry `MouseDisabled`), so this system scrolls
 /// them locally instead.
-fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) -> WheelOwner {
-    if in_copy_mode {
-        return WheelOwner::CopyMode;
+fn decide_wheel_owner(in_vi_mode: bool, in_alt_screen: bool, modes: TermMode) -> WheelOwner {
+    if in_vi_mode {
+        return WheelOwner::ViMode;
     }
     if in_alt_screen
         && !modes.contains(TermMode::ALTERNATE_SCROLL)
@@ -184,7 +184,7 @@ fn decide_wheel_owner(in_copy_mode: bool, in_alt_screen: bool, modes: TermMode) 
 /// Otherwise the owner is decided for the CURSOR pane (resolved via
 /// `tmux_pane_at_phys`) as the exact complement of
 /// `orzma_tty_engine::wheel::WheelAction::route` (see `decide_wheel_owner`):
-/// a copy-mode pane (`CopyModeState`, always `MouseDisabled`) scrolls the
+/// a vi-mode pane (`ViModeState`, always `MouseDisabled`) scrolls the
 /// local `TerminalHandle` directly via `TerminalHandle::scroll`; an
 /// alt-screen pane with neither `ALTERNATE_SCROLL` nor a `MOUSE_MODE` bit —
 /// where orzma's `ScrollViewport` would no-op on the alt buffer — gets
@@ -210,7 +210,7 @@ fn forward_wheel_to_tmux(
     rename_prompt: Option<Res<RenamePrompt>>,
     configs: Res<OrzmaConfigsResource>,
     metrics: Res<TerminalCellMetricsResource>,
-    copy_modes: Query<(), With<CopyModeState>>,
+    vi_modes: Query<(), With<ViModeState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     let Ok(window) = windows.single() else {
@@ -260,16 +260,16 @@ fn forward_wheel_to_tmux(
 
     // NOTE: decide the owner BEFORE touching the accumulator. A ceded frame must
     // leave the residual untouched for this pane — advancing then dropping it
-    // would bleed a stale notch into the next copy-mode / alt-fallback gesture,
+    // would bleed a stale notch into the next vi-mode / alt-fallback gesture,
     // and resetting it would fight the accumulation orzma performs independently.
-    let in_copy_mode = copy_modes.get(entity).is_ok();
+    let in_vi_mode = vi_modes.get(entity).is_ok();
     let owner = match handles.get(entity) {
         Ok((handle, _)) => decide_wheel_owner(
-            in_copy_mode,
+            in_vi_mode,
             handle.is_in_alt_screen(),
             handle.current_modes(),
         ),
-        Err(_) => decide_wheel_owner(in_copy_mode, false, TermMode::empty()),
+        Err(_) => decide_wheel_owner(in_vi_mode, false, TermMode::empty()),
     };
     if owner == WheelOwner::CededToOrzma {
         return;
@@ -296,7 +296,7 @@ fn forward_wheel_to_tmux(
         -(total_lines as i32)
     };
     match owner {
-        WheelOwner::CopyMode => {
+        WheelOwner::ViMode => {
             if let Ok((mut handle, mut coalescer)) = handles.get_mut(entity) {
                 handle.scroll(&mut coalescer, signed);
             }
@@ -402,22 +402,22 @@ mod tests {
     use orzma_tmux::{ActivePane, PaneDirection, PaneId, SplitDirection};
 
     #[test]
-    fn wheel_copy_mode_pane_owner_ignores_screen_and_mode_bits() {
+    fn wheel_vi_mode_pane_owner_ignores_screen_and_mode_bits() {
         // Copy-mode panes carry MouseDisabled (orzma never runs), so the
         // wheel path scrolls the local handle regardless of screen / mode bits.
         assert_eq!(
             decide_wheel_owner(true, false, TermMode::empty()),
-            WheelOwner::CopyMode
+            WheelOwner::ViMode
         );
         assert_eq!(
             decide_wheel_owner(true, true, TermMode::ALTERNATE_SCROLL),
-            WheelOwner::CopyMode
+            WheelOwner::ViMode
         );
     }
 
     #[test]
     fn wheel_owned_by_orzma_outside_copymode_altscreen_inline() {
-        // A normal pane (not copy-mode, not alt-screen, no mouse mode) is ceded
+        // A normal pane (not vi-mode, not alt-screen, no mouse mode) is ceded
         // to the local terminal — forward_wheel_to_tmux emits no send-keys for it.
         assert_eq!(
             decide_wheel_owner(false, false, TermMode::empty()),
@@ -471,7 +471,7 @@ mod tests {
 
     fn spawn_pane_node(
         app: &mut App,
-        copy_mode: bool,
+        vi_mode: bool,
         active: bool,
         center_x: f32,
         size_x: f32,
@@ -495,8 +495,8 @@ mod tests {
             UiGlobalTransform::from_xy(center_x, 300.0),
             TerminalOverlays::default(),
         ));
-        if copy_mode {
-            e.insert(CopyModeState);
+        if vi_mode {
+            e.insert(ViModeState);
         }
         if active {
             e.insert(ActivePane);
@@ -507,9 +507,9 @@ mod tests {
     #[test]
     fn wheel_owner_is_decided_from_cursor_pane_not_active_pane() {
         // Two non-overlapping panes: the cursor is over a NORMAL pane (left half),
-        // while the ActivePane is a copy-mode pane (right half). The wheel owner
+        // while the ActivePane is a vi-mode pane (right half). The wheel owner
         // MUST be decided from the cursor pane (→ CededToOrzma), not the active
-        // pane (which would give CopyMode). This pins the cursor-pane targeting
+        // pane (which would give ViMode). This pins the cursor-pane targeting
         // that keeps the complement aligned with orzma + the gate.
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -520,13 +520,13 @@ mod tests {
             .world_mut()
             .run_system_once(
                 move |panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-                      copy_modes: Query<(), With<CopyModeState>>| {
+                      vi_modes: Query<(), With<ViModeState>>| {
                     let (entity, _id, _local) =
                         tmux_pane_at_phys(&panes, Vec2::new(200.0, 300.0)).unwrap();
-                    let in_copy_mode = copy_modes.get(entity).is_ok();
+                    let in_vi_mode = vi_modes.get(entity).is_ok();
                     // No TerminalHandle in this harness → the Err arm: a normal,
                     // non-alt cursor pane resolves to CededToOrzma.
-                    let owner = decide_wheel_owner(in_copy_mode, false, TermMode::empty());
+                    let owner = decide_wheel_owner(in_vi_mode, false, TermMode::empty());
                     (entity, owner)
                 },
             )
@@ -541,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn wheel_copy_mode_scrolls_local_handle() {
+    fn wheel_vi_mode_scrolls_local_handle() {
         use bevy::window::WindowResolution;
         use orzma_tty_renderer::CellMetrics;
 
@@ -586,7 +586,7 @@ mod tests {
             .resource_mut::<bevy::ecs::message::Messages<MouseWheel>>()
             .write(make_wheel_event(MouseScrollUnit::Line, 2.0));
 
-        // No TmuxClient anywhere in this world — proves the copy-mode scroll
+        // No TmuxClient anywhere in this world — proves the vi-mode scroll
         // does not depend on a tmux send.
         app.world_mut()
             .run_system_once(forward_wheel_to_tmux)
@@ -599,7 +599,7 @@ mod tests {
             .vi_indicator_snapshot();
         assert!(
             snapshot.scroll_offset > 0,
-            "copy-mode wheel scroll did not move the local handle"
+            "vi-mode wheel scroll did not move the local handle"
         );
     }
 

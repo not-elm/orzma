@@ -6,9 +6,9 @@ use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
 use crate::clipboard::Clipboard;
-use crate::ui::copy_mode::ExitCopyMode;
+use crate::ui::vi_mode::ExitViMode;
 use bevy::prelude::*;
-use orzma_configs::copy_mode::CopyScroll;
+use orzma_configs::vi_mode::CopyScroll;
 use orzma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
 
 /// Registers the local VI apply observers. `ViPromptRequest` /
@@ -90,14 +90,14 @@ fn on_vi_yank(
     if let Some(text) = handle.selection_to_string() {
         clipboard.write(text);
     }
-    commands.trigger(ExitCopyMode { entity: ev.entity });
+    commands.trigger(ExitViMode { entity: ev.entity });
 }
 
 fn on_vi_exit(ev: On<ViExitRequest>, mut commands: Commands, terminals: LocalTerminal) {
     if terminals.get(ev.entity).is_err() {
         return;
     }
-    commands.trigger(ExitCopyMode { entity: ev.entity });
+    commands.trigger(ExitViMode { entity: ev.entity });
 }
 
 /// Applies a scroll. Relative scrolls move the vi cursor with the viewport;
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn vi_scroll_applies_to_a_tmux_pane_entity() {
-        use orzma_configs::copy_mode::CopyScroll;
+        use orzma_configs::vi_mode::CopyScroll;
         use orzma_tmux::TmuxPane;
         use orzma_tty_engine::{Coalescer, TerminalHandle};
         use tmux_control_parser::{CellDims, PaneId};
@@ -225,13 +225,13 @@ mod tests {
 
     #[test]
     fn yank_writes_selection_to_clipboard_and_exits() {
-        use crate::ui::copy_mode::{CopyModePlugin, CopyModeState, EnterCopyModeActionEvent};
+        use crate::ui::vi_mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
         use bevy::ecs::system::RunSystemOnce;
         use orzma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(CopyModePlugin);
+        app.add_plugins(ViModePlugin);
         app.add_observer(on_vi_yank);
         // Use a process-local clipboard so the assertion holds on headless CI
         // (where `arboard` is unavailable) without clobbering the real clipboard.
@@ -247,7 +247,7 @@ mod tests {
         let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
         let entity = app.world_mut().spawn(bundle).id();
 
-        app.world_mut().trigger(EnterCopyModeActionEvent { entity });
+        app.world_mut().trigger(EnterViModeActionEvent { entity });
         app.update();
         app.world_mut()
             .run_system_once(move |mut q: Query<(&mut TerminalHandle, &mut Coalescer)>| {
@@ -261,7 +261,7 @@ mod tests {
         app.world_mut().trigger(ViYankRequest { entity });
         app.update();
 
-        assert!(app.world().get::<CopyModeState>(entity).is_none());
+        assert!(app.world().get::<ViModeState>(entity).is_none());
         let text = app.world_mut().resource_mut::<Clipboard>().read();
         assert!(
             text.is_some_and(|t| !t.is_empty()),

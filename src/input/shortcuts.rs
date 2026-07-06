@@ -17,11 +17,11 @@ use bevy::prelude::*;
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 use bevy_cef::prelude::FocusedWebview;
-use orzma_configs::copy_mode::CopyModeAction;
 use orzma_configs::mouse::{FineModifier as CfgFineModifier, MouseConfig};
 use orzma_configs::shortcuts::{
     Key as ConfigKey, KeyChord, Leader, Modifiers, Shortcut, TapModifier,
 };
+use orzma_configs::vi_mode::ViModeAction;
 use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
@@ -40,7 +40,7 @@ impl Plugin for ShortcutsPlugin {
                     .in_set(InputPhase::FocusedKey),
             )
             .add_message::<ShortcutMessage>()
-            .add_message::<CopyModeMessage>()
+            .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
             .add_message::<WebviewForwardMessage>()
             .init_resource::<Shortcuts>()
@@ -75,7 +75,7 @@ impl Plugin for ShortcutsPlugin {
 /// One resolved keyboard shortcut action, fanned out from `resolve_key_effects`
 /// to the per-mode appliers. Excludes `Quit` / `ReleaseWebviewFocus` (handled
 /// inline in `resolve_key_effects`). `focused` is the `KeyboardFocused` surface;
-/// `in_copy_mode` gates the copy-mode re-entry and paste-suppression rules.
+/// `in_vi_mode` gates the vi-mode re-entry and paste-suppression rules.
 #[derive(Message)]
 pub(in crate::input) struct ShortcutMessage {
     /// The action to run.
@@ -85,14 +85,14 @@ pub(in crate::input) struct ShortcutMessage {
     /// The `KeyboardFocused` surface, or `None` when none is focused.
     pub focused: Option<Entity>,
     /// Whether the focused surface is in copy mode.
-    pub in_copy_mode: bool,
+    pub in_vi_mode: bool,
 }
 
-/// One matched `[copy-mode]` key, fanned out to the per-mode appliers.
+/// One matched `[vi-mode]` key, fanned out to the per-mode appliers.
 #[derive(Message)]
-pub(in crate::input) struct CopyModeMessage {
-    /// The copy-mode action to run.
-    pub action: CopyModeAction,
+pub(in crate::input) struct ViModeMessage {
+    /// The vi-mode action to run.
+    pub action: ViModeAction,
     /// The `KeyboardFocused` surface, or `None` when none is focused.
     pub focused: Option<Entity>,
 }
@@ -128,7 +128,7 @@ pub(in crate::input) struct WebviewForwardMessage {
 #[derive(SystemParam)]
 pub(in crate::input) struct ShortcutMessages<'w> {
     pub shortcut: MessageWriter<'w, ShortcutMessage>,
-    pub copy_mode: MessageWriter<'w, CopyModeMessage>,
+    pub vi_mode: MessageWriter<'w, ViModeMessage>,
     pub type_keys: MessageWriter<'w, TypeMessage>,
     pub webview_forward: MessageWriter<'w, WebviewForwardMessage>,
 }
@@ -778,7 +778,7 @@ mod tests {
                 OrzmaShortcut {
                     keycode: KeyCode::KeyS,
                     modifiers: mods(false, false, false, false),
-                    action: Shortcut::EnterCopyMode,
+                    action: Shortcut::EnterViMode,
                     repeat: true,
                 },
                 OrzmaShortcut {
@@ -813,12 +813,12 @@ mod tests {
         let mut phase = LeaderPhase::Pending;
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(0)),
-            LeaderStep::RunAction(Shortcut::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterViMode)
         ));
         assert_eq!(phase, LeaderPhase::Repeat { deadline: ms(500) });
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(100)),
-            LeaderStep::RunAction(Shortcut::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterViMode)
         ));
         assert_eq!(
             phase,
@@ -901,7 +901,7 @@ mod tests {
         let mut phase = LeaderPhase::Pending;
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyS, no_mods(), ms(0)),
-            LeaderStep::RunAction(Shortcut::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterViMode)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }
@@ -936,10 +936,10 @@ mod tests {
 
     #[test]
     fn test_constructor_builds_repeat_prefix() {
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterCopyMode, ms(500));
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyH, Shortcut::EnterViMode, ms(500));
         assert_eq!(
             sc.match_repeat_prefix(KeyCode::KeyH, mods(false, false, false, false)),
-            Some(Shortcut::EnterCopyMode)
+            Some(Shortcut::EnterViMode)
         );
         assert!(sc.is_leader(KeyCode::KeyA, mods(true, false, false, false)));
     }
@@ -1172,7 +1172,7 @@ mod tests {
             prefix: vec![OrzmaShortcut {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
@@ -1185,7 +1185,7 @@ mod tests {
         assert_eq!(
             s.match_prefix_entry(KeyCode::KeyS, mods(false, false, false, false))
                 .map(|s| s.action),
-            Some(Shortcut::EnterCopyMode)
+            Some(Shortcut::EnterViMode)
         );
         assert_eq!(
             s.match_prefix_entry(KeyCode::KeyS, mods(false, true, false, false))
@@ -1258,7 +1258,7 @@ mod tests {
         );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyS, mods(false, false, false, true)),
-            Some(Shortcut::EnterCopyMode)
+            Some(Shortcut::EnterViMode)
         );
         assert_eq!(
             r.match_gui_action(KeyCode::KeyV, mods(false, false, false, true)),
@@ -1340,7 +1340,7 @@ mod tests {
             prefix: vec![OrzmaShortcut {
                 keycode: KeyCode::KeyS,
                 modifiers: mods(false, false, false, false),
-                action: Shortcut::EnterCopyMode,
+                action: Shortcut::EnterViMode,
                 repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
@@ -1378,10 +1378,7 @@ mod tests {
             mods(false, false, false, false),
             ms(0),
         );
-        assert!(matches!(
-            step,
-            LeaderStep::RunAction(Shortcut::EnterCopyMode)
-        ));
+        assert!(matches!(step, LeaderStep::RunAction(Shortcut::EnterViMode)));
         assert_eq!(phase, LeaderPhase::Idle);
     }
 
@@ -1439,7 +1436,7 @@ mod tests {
         );
         assert!(matches!(
             second,
-            LeaderStep::RunAction(Shortcut::EnterCopyMode)
+            LeaderStep::RunAction(Shortcut::EnterViMode)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }

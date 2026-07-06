@@ -29,8 +29,8 @@ use crate::input::mouse::webview::{
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::surface::geometry::{Side as CellSide, cell_at_pane};
-use crate::ui::copy_mode::CopyModeState;
 use crate::ui::copy_search::CopyPrompt;
+use crate::ui::vi_mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -250,10 +250,10 @@ fn pointer_active(
     windows.single().is_ok_and(|window| window.focused) && copy_prompt.open.is_none()
 }
 
-/// Bundles the immutable copy-mode query read used by `tmux_gesture`.
+/// Bundles the immutable vi-mode query read used by `tmux_gesture`.
 #[derive(SystemParam)]
-struct CopyModeGate<'w, 's> {
-    copy_modes: Query<'w, 's, (), With<CopyModeState>>,
+struct ViModeGate<'w, 's> {
+    vi_modes: Query<'w, 's, (), With<ViModeState>>,
 }
 
 /// The current phase of a left-button gesture over a tmux pane.
@@ -279,7 +279,7 @@ enum GestureState {
         cell: Point,
         kind: MultiSelectKind,
     },
-    /// Selecting text in a pane via tmux copy-mode (entered on drag-start).
+    /// Selecting text in a pane via tmux vi-mode (entered on drag-start).
     Selecting {
         pane: Entity,
         anchor: Point,
@@ -364,7 +364,7 @@ fn tmux_gesture(
     packed_q: Query<&PackedTmuxLayout, With<ActiveWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     configs: Option<Res<OrzmaConfigsResource>>,
-    copy_gate: CopyModeGate,
+    copy_gate: ViModeGate,
     time: Res<Time<Real>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -489,12 +489,12 @@ fn press_hit(
 }
 
 /// Resolves the `ReleaseCtx` for the gesture's current (pre-release) state:
-/// copy-mode + a `Pressed` multi-click's origin point, and the pane under the
+/// vi-mode + a `Pressed` multi-click's origin point, and the pane under the
 /// cursor for a `Resizing`-click focus fallback.
 fn release_ctx(
     state: &GestureState,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    copy_gate: &CopyModeGate,
+    copy_gate: &ViModeGate,
     cursor_phys: Option<Vec2>,
     cell_w: f32,
     cell_h: f32,
@@ -503,7 +503,7 @@ fn release_ctx(
         GestureState::Pressed {
             pane, origin_phys, ..
         } => {
-            let copy_mode = copy_gate.copy_modes.get(pane).is_ok();
+            let vi_mode = copy_gate.vi_modes.get(pane).is_ok();
             let multi_cell = panes
                 .get(pane)
                 .ok()
@@ -514,18 +514,18 @@ fn release_ctx(
                 })
                 .map(|(col, row, _)| point_from_cell((col, row)));
             ReleaseCtx {
-                copy_mode,
+                vi_mode,
                 multi_cell,
                 pane_under: None,
             }
         }
         GestureState::Resizing { .. } => ReleaseCtx {
-            copy_mode: false,
+            vi_mode: false,
             multi_cell: None,
             pane_under: cursor_phys.and_then(|c| tmux_pane_at_phys(panes, c).map(|(_, id, _)| id)),
         },
         _ => ReleaseCtx {
-            copy_mode: false,
+            vi_mode: false,
             multi_cell: None,
             pane_under: None,
         },
@@ -533,7 +533,7 @@ fn release_ctx(
 }
 
 /// Resolves the per-frame `ContinuationCtx` for the gesture's current state,
-/// reading only the inputs the active arm needs (cursor + copy-mode + origin
+/// reading only the inputs the active arm needs (cursor + vi-mode + origin
 /// anchor point for `Pressed`; live selecting point for `Selecting`; pointer
 /// cell for `Resizing`). `side` is resolved from whichever point the active
 /// arm reads (the press origin for `Pressed`, the live cursor for
@@ -541,7 +541,7 @@ fn release_ctx(
 fn continuation_ctx(
     state: &GestureState,
     panes: &Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
-    copy_gate: &CopyModeGate,
+    copy_gate: &ViModeGate,
     cursor_phys: Option<Vec2>,
     drag_threshold_phys: f32,
     cell_w: f32,
@@ -551,7 +551,7 @@ fn continuation_ctx(
         pane_alive: false,
         cursor_phys,
         drag_threshold_phys,
-        copy_mode: false,
+        vi_mode: false,
         anchor_point: None,
         selecting_point: None,
         side: Side::Left,
@@ -562,7 +562,7 @@ fn continuation_ctx(
         GestureState::Pressed {
             pane, origin_phys, ..
         } => {
-            ctx.copy_mode = copy_gate.copy_modes.get(pane).is_ok();
+            ctx.vi_mode = copy_gate.vi_modes.get(pane).is_ok();
             if let Ok((_, p, node, transform)) = panes.get(pane) {
                 ctx.pane_alive = true;
                 let cols = p.dims.width as u16;

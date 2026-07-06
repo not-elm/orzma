@@ -10,11 +10,10 @@ use crate::mouse::MouseConfig;
 use crate::orzma::OrzmaConfig;
 use crate::scrollback::ScrollbackConfig;
 use crate::shortcuts::Shortcuts;
-use crate::{copy_mode::CopyModeConfig, font::FontConfig};
+use crate::{font::FontConfig, vi_mode::ViModeConfig};
 pub use error::{OrzmaConfigsError, OrzmaConfigsResult};
 use serde::Deserialize;
 
-pub mod copy_mode;
 pub mod error;
 pub mod font;
 pub mod inactive_pane;
@@ -24,6 +23,7 @@ pub mod orzma;
 pub mod path;
 pub mod scrollback;
 pub mod shortcuts;
+pub mod vi_mode;
 
 /// Fully-resolved orzma configuration.
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -31,9 +31,9 @@ pub mod shortcuts;
 pub struct OrzmaConfigs {
     /// Shortcut configuration.
     pub shortcuts: Shortcuts,
-    /// `[copy-mode]` table: copy-mode key bindings shared by both modes.
-    #[serde(rename = "copy-mode")]
-    pub copy_mode: CopyModeConfig,
+    /// `[vi-mode]` table: vi-mode key bindings shared by both modes.
+    #[serde(rename = "vi-mode")]
+    pub vi_mode: ViModeConfig,
     /// Font configuration.
     pub font: FontConfig,
     /// Mouse-input configuration.
@@ -105,8 +105,8 @@ impl OrzmaConfigs {
         if let Err(dupes) = sc.validate_no_leader_conflicts() {
             return Err(OrzmaConfigsError::DuplicatePrefixChords(dupes));
         }
-        if let Err(dupes) = self.copy_mode.validate_no_duplicate_keys() {
-            return Err(OrzmaConfigsError::DuplicateCopyModeKeys(dupes));
+        if let Err(dupes) = self.vi_mode.validate_no_duplicate_keys() {
+            return Err(OrzmaConfigsError::DuplicateViModeKeys(dupes));
         }
         if let Some(shortcuts::Leader::Chord(leader)) = sc.leader.as_ref() {
             if let Some((action, _, _)) = sc.direct_chords().find(|(_, chord, _)| *chord == leader)
@@ -221,14 +221,14 @@ mod validate_tests {
 
     #[test]
     fn validate_rejects_leader_table_internal_dupe() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\ndetach-session = \"<Leader>d\"\nenter-copy-mode = \"<Leader>d\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\ndetach-session = \"<Leader>d\"\nenter-vi-mode = \"<Leader>d\"\n";
         let err = parse_validated(toml_str).unwrap_err();
         assert!(matches!(err, OrzmaConfigsError::DuplicatePrefixChords(_)));
     }
 
     #[test]
     fn validate_allows_cross_keyspace_same_key() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-copy-mode = \"s\"\ndetach-session = \"<Leader>s\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-vi-mode = \"s\"\ndetach-session = \"<Leader>s\"\n";
         assert!(
             parse_validated(toml_str).is_ok(),
             "direct `s` and leader-scoped `s` occupy different key-spaces"
@@ -250,7 +250,7 @@ mod validate_tests {
 
     #[test]
     fn validate_accepts_mappable_leader() {
-        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-copy-mode = \"<Leader>s\"\n";
+        let toml_str = "[shortcuts]\nleader = \"Ctrl+A\"\nenter-vi-mode = \"<Leader>s\"\n";
         assert!(parse_validated(toml_str).is_ok());
     }
 

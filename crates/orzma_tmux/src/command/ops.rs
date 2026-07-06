@@ -1,5 +1,5 @@
 //! Pane / window operation commands driven by orzma-native shortcuts:
-//! split, kill, zoom, copy-mode entry, directional pane selection, and
+//! split, kill, zoom, vi-mode entry, directional pane selection, and
 //! window cycling.
 
 use tmux_control::TmuxCommand;

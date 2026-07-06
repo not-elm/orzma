@@ -40,8 +40,8 @@ use session::default::DefaultSessionPlugin;
 use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
 use ui::{
-    OrzmaUiPlugin, copy_mode::CopyModePlugin, copy_mode_indicator::CopyModeIndicatorPlugin,
-    copy_search::CopyPromptPlugin,
+    OrzmaUiPlugin, copy_search::CopyPromptPlugin, vi_mode::ViModePlugin,
+    vi_mode_indicator::ViModeIndicatorPlugin,
 };
 
 fn main() {
@@ -83,8 +83,8 @@ fn main() {
             OrzmaWebviewPlugin {
                 orzma_assets: orzma_registry,
             },
-            CopyModePlugin,
-            CopyModeIndicatorPlugin,
+            ViModePlugin,
+            ViModeIndicatorPlugin,
             CopyPromptPlugin,
             WindowTitlePlugin,
             FocusSyncPlugin,

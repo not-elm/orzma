@@ -39,7 +39,7 @@ pub(super) enum PressHit {
 /// the state itself, which the decider then replaces with `Idle`).
 pub(super) struct ReleaseCtx {
     /// Whether the `Pressed` pane is in copy mode (multi-click promotion gate).
-    pub copy_mode: bool,
+    pub vi_mode: bool,
     /// Resolved click point for a `click_count >= 2` release, when available.
     pub multi_cell: Option<Point>,
     /// Pane under the cursor for a divider-click focus fallback.
@@ -56,7 +56,7 @@ pub(super) struct ContinuationCtx {
     /// Drag-promotion threshold in physical pixels.
     pub drag_threshold_phys: f32,
     /// Whether the `Pressed` pane is in copy mode (drag promotion gate).
-    pub copy_mode: bool,
+    pub vi_mode: bool,
     /// Anchor point resolved from the press origin (`Pressed` → `Selecting`).
     pub anchor_point: Option<Point>,
     /// Point resolved from the live cursor (`Selecting` extend).
@@ -128,7 +128,7 @@ pub(super) fn decide_release(state: &mut GestureState, ctx: ReleaseCtx) -> Vec<T
         }
         GestureState::Pressed {
             pane, click_count, ..
-        } if click_count >= 2 && ctx.copy_mode => {
+        } if click_count >= 2 && ctx.vi_mode => {
             let Some(cell) = ctx.multi_cell else {
                 return Vec::new();
             };
@@ -177,7 +177,7 @@ pub(super) fn decide_continuation(
                 *state = GestureState::Idle;
                 return Vec::new();
             }
-            if ctx.copy_mode {
+            if ctx.vi_mode {
                 let Some(anchor) = ctx.anchor_point else {
                     return Vec::new();
                 };
@@ -316,7 +316,7 @@ mod tests {
                 pane_alive: false,
                 cursor_phys: None,
                 drag_threshold_phys: 0.0,
-                copy_mode: false,
+                vi_mode: false,
                 anchor_point: None,
                 selecting_point: None,
                 side: Side::Left,
@@ -487,7 +487,7 @@ mod tests {
         let fx = decide_release(
             &mut st,
             ReleaseCtx {
-                copy_mode: false,
+                vi_mode: false,
                 multi_cell: None,
                 pane_under: None,
             },
@@ -512,7 +512,7 @@ mod tests {
         let fx = decide_release(
             &mut st,
             ReleaseCtx {
-                copy_mode: false,
+                vi_mode: false,
                 multi_cell: None,
                 pane_under: None,
             },
@@ -522,7 +522,7 @@ mod tests {
     }
 
     #[test]
-    fn release_double_click_in_copy_mode_enters_pending_word() {
+    fn release_double_click_in_vi_mode_enters_pending_word() {
         let mut st = GestureState::Pressed {
             pane: Entity::from_bits(1),
             pane_id: PaneId(7),
@@ -532,7 +532,7 @@ mod tests {
         let fx = decide_release(
             &mut st,
             ReleaseCtx {
-                copy_mode: true,
+                vi_mode: true,
                 multi_cell: Some(pt(6, 2)),
                 pane_under: None,
             },
@@ -549,7 +549,7 @@ mod tests {
     }
 
     #[test]
-    fn release_triple_click_in_copy_mode_enters_pending_line() {
+    fn release_triple_click_in_vi_mode_enters_pending_line() {
         let mut st = GestureState::Pressed {
             pane: Entity::from_bits(1),
             pane_id: PaneId(7),
@@ -559,7 +559,7 @@ mod tests {
         let fx = decide_release(
             &mut st,
             ReleaseCtx {
-                copy_mode: true,
+                vi_mode: true,
                 multi_cell: Some(pt(6, 2)),
                 pane_under: None,
             },
@@ -575,7 +575,7 @@ mod tests {
     }
 
     #[test]
-    fn release_double_click_not_in_copy_mode_goes_idle() {
+    fn release_double_click_not_in_vi_mode_goes_idle() {
         let mut st = GestureState::Pressed {
             pane: Entity::from_bits(1),
             pane_id: PaneId(7),
@@ -585,7 +585,7 @@ mod tests {
         let fx = decide_release(
             &mut st,
             ReleaseCtx {
-                copy_mode: false,
+                vi_mode: false,
                 multi_cell: Some(pt(6, 2)),
                 pane_under: None,
             },
@@ -605,7 +605,7 @@ mod tests {
         let fx = decide_release(
             &mut st,
             ReleaseCtx {
-                copy_mode: true,
+                vi_mode: true,
                 multi_cell: None,
                 pane_under: None,
             },
@@ -626,7 +626,7 @@ mod tests {
         let fx = decide_release(
             &mut st,
             ReleaseCtx {
-                copy_mode: false,
+                vi_mode: false,
                 multi_cell: None,
                 pane_under: Some(PaneId(9)),
             },
@@ -647,7 +647,7 @@ mod tests {
         let fx = decide_release(
             &mut st,
             ReleaseCtx {
-                copy_mode: false,
+                vi_mode: false,
                 multi_cell: None,
                 pane_under: Some(PaneId(9)),
             },
@@ -677,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_pressed_drag_in_copy_mode_enters_selecting() {
+    fn continuation_pressed_drag_in_vi_mode_enters_selecting() {
         let mut st = GestureState::Pressed {
             pane: Entity::from_bits(1),
             pane_id: PaneId(7),
@@ -689,7 +689,7 @@ mod tests {
             ContinuationCtx {
                 cursor_phys: Some(Vec2::new(200.0, 200.0)),
                 drag_threshold_phys: 4.0,
-                copy_mode: true,
+                vi_mode: true,
                 anchor_point: Some(pt(3, 4)),
                 ..base_ctx()
             },
@@ -707,7 +707,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_pressed_drag_not_copy_mode_goes_idle() {
+    fn continuation_pressed_drag_not_vi_mode_goes_idle() {
         let mut st = GestureState::Pressed {
             pane: Entity::from_bits(1),
             pane_id: PaneId(7),
@@ -719,7 +719,7 @@ mod tests {
             ContinuationCtx {
                 cursor_phys: Some(Vec2::new(200.0, 200.0)),
                 drag_threshold_phys: 4.0,
-                copy_mode: false,
+                vi_mode: false,
                 ..base_ctx()
             },
         );
@@ -728,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_pressed_drag_copy_mode_without_anchor_stays() {
+    fn continuation_pressed_drag_vi_mode_without_anchor_stays() {
         let mut st = GestureState::Pressed {
             pane: Entity::from_bits(1),
             pane_id: PaneId(7),
@@ -740,7 +740,7 @@ mod tests {
             ContinuationCtx {
                 cursor_phys: Some(Vec2::new(200.0, 200.0)),
                 drag_threshold_phys: 4.0,
-                copy_mode: true,
+                vi_mode: true,
                 anchor_point: None,
                 ..base_ctx()
             },
@@ -782,7 +782,7 @@ mod tests {
             pane_alive: true,
             cursor_phys: Some(Vec2::splat(99.0)),
             drag_threshold_phys: 4.0,
-            copy_mode: true,
+            vi_mode: true,
             anchor_point: None,
             selecting_point: Some(pt(5, 4)),
             side: Side::Left,

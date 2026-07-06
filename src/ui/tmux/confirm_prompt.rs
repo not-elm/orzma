@@ -41,7 +41,7 @@ impl Plugin for ConfirmPromptPlugin {
 
 /// The active `confirm-before` prompt: the message to show and the tmux command
 /// to run on confirm. Present as a resource only while awaiting y/n; its
-/// existence owns the keyboard like the copy-mode prompt and the session picker.
+/// existence owns the keyboard like the vi-mode prompt and the session picker.
 #[derive(Resource)]
 pub(crate) struct ConfirmState {
     /// Prompt text shown to the user (from `-p`, or a default).

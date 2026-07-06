@@ -1,7 +1,7 @@
 //! Error type for orzma config loading.
 
-use crate::copy_mode::DuplicateCopyModeKey;
 use crate::shortcuts::{DuplicateChord, KeyChord};
+use crate::vi_mode::DuplicateViModeKey;
 use std::path::PathBuf;
 
 /// Result alias used throughout the `orzma_configs` crate.
@@ -40,9 +40,9 @@ pub enum OrzmaConfigsError {
     #[error("duplicate chord(s) among <Leader> bindings: {}", format_dupes(.0))]
     DuplicatePrefixChords(Vec<DuplicateChord>),
 
-    /// The same key is bound to more than one `[copy-mode]` action.
-    #[error("duplicate key(s) among [copy-mode] bindings: {}", format_copy_mode_dupes(.0))]
-    DuplicateCopyModeKeys(Vec<DuplicateCopyModeKey>),
+    /// The same key is bound to more than one `[vi-mode]` action.
+    #[error("duplicate key(s) among [vi-mode] bindings: {}", format_vi_mode_dupes(.0))]
+    DuplicateViModeKeys(Vec<DuplicateViModeKey>),
 
     /// The configured leader chord duplicates a direct `[shortcuts]` binding's
     /// chord. The leader is matched first, so that direct binding would be
@@ -85,7 +85,7 @@ fn format_dupes(dupes: &[DuplicateChord]) -> String {
         .join("; ")
 }
 
-fn format_copy_mode_dupes(dupes: &[DuplicateCopyModeKey]) -> String {
+fn format_vi_mode_dupes(dupes: &[DuplicateViModeKey]) -> String {
     dupes
         .iter()
         .map(|d| format!("{} -> [{}]", d.key, d.actions.join(", ")))

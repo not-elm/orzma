@@ -125,7 +125,7 @@ impl Clipboard {
 }
 
 /// Registers the shared `Clipboard` resource consumed by the action layer,
-/// copy-mode UIs, and tmux paste.
+/// vi-mode UIs, and tmux paste.
 pub(crate) struct ClipboardPlugin;
 
 impl Plugin for ClipboardPlugin {

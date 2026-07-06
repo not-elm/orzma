@@ -64,7 +64,7 @@ impl Dimensions for LocalDim {
     }
 }
 
-/// Snapshot of the data the copy-mode indicator needs.
+/// Snapshot of the data the vi-mode indicator needs.
 ///
 /// Reading `Term` directly (rather than the renderer-side `TerminalGrid`
 /// component) keeps the indicator exact under sustained PTY output:
@@ -315,7 +315,7 @@ impl TerminalHandle {
     /// so `decide_frame_kind` selects `Snapshot` and the renderer replaces the
     /// whole grid. Used when the rendered grid holds foreign content the next
     /// delta would paint over — e.g. switching a tmux pane back from the
-    /// capture-fed copy-mode view to its live handle on copy-mode exit: the live
+    /// capture-fed vi-mode view to its live handle on vi-mode exit: the live
     /// `Term` is current (it was `advance`d throughout), but the grid still shows
     /// the captured scrolled view, so a partial delta would garble it.
     pub fn repaint_full(&mut self, commands: &mut Commands, entity: Entity) {
@@ -766,7 +766,7 @@ impl TerminalHandle {
     }
 
     /// Returns the current scroll offset and history length for the
-    /// copy-mode indicator's `[offset/total]` chip.
+    /// vi-mode indicator's `[offset/total]` chip.
     pub fn vi_indicator_snapshot(&self) -> ViIndicatorSnapshot {
         ViIndicatorSnapshot {
             scroll_offset: self.term.grid().display_offset(),

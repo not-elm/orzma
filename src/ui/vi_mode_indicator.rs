@@ -1,13 +1,13 @@
-//! tmux-style copy-mode indicator chip. A `Display::None` chip Node is
+//! tmux-style vi-mode indicator chip. A `Display::None` chip Node is
 //! attached as a child of each Surface host the first frame
 //! `TerminalHandle` is observed there; it becomes visible while the
-//! host carries `CopyModeState` and shows `[offset/total]` over the
+//! host carries `ViModeState` and shows `[offset/total]` over the
 //! pane's top-right corner.
 
 use crate::font::TerminalUiFont;
 use crate::theme;
-use crate::ui::copy_mode::CopyModeState;
 use crate::ui::palette;
+use crate::ui::vi_mode::ViModeState;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
 use bevy::ecs::lifecycle::Remove;
@@ -15,11 +15,11 @@ use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 
-/// Bevy Plugin: wires the copy-mode indicator's attach + refresh systems
+/// Bevy Plugin: wires the vi-mode indicator's attach + refresh systems
 /// and the exit observer.
-pub struct CopyModeIndicatorPlugin;
+pub struct ViModeIndicatorPlugin;
 
-impl Plugin for CopyModeIndicatorPlugin {
+impl Plugin for ViModeIndicatorPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
@@ -27,10 +27,10 @@ impl Plugin for CopyModeIndicatorPlugin {
                 attach_indicator_to_surface_host,
                 refresh_indicator
                     .after(attach_indicator_to_surface_host)
-                    .run_if(any_with_component::<CopyModeState>),
+                    .run_if(any_with_component::<ViModeState>),
             ),
         )
-        .add_observer(hide_indicator_on_copy_mode_exit);
+        .add_observer(hide_indicator_on_vi_mode_exit);
     }
 }
 
@@ -38,7 +38,7 @@ impl Plugin for CopyModeIndicatorPlugin {
 /// per host; created on `Added<TerminalHandle>` and never despawned
 /// (visibility toggled via `Node.display`).
 #[derive(Component)]
-pub struct CopyModeIndicator;
+pub struct ViModeIndicator;
 
 /// Last `(offset, total)` pair this chip rendered. Compared numerically
 /// each frame so `format!` only runs when the pair changed.
@@ -53,7 +53,7 @@ pub(crate) fn format_indicator(offset: u32, total: u32) -> String {
     format!("[{offset}/{total}]")
 }
 
-/// Spawns a `CopyModeIndicator` chip as a child of every pane host
+/// Spawns a `ViModeIndicator` chip as a child of every pane host
 /// the first frame `TerminalHandle` is observed there. The
 /// `Added<TerminalHandle>` filter fires exactly once per host because
 /// `crate::render::tmux::attach_tmux_pane_terminal` is the only `TerminalHandle`
@@ -66,22 +66,22 @@ fn attach_indicator_to_surface_host(
     for host in hosts.iter() {
         commands.entity(host).with_children(|parent| {
             parent.spawn((
-                CopyModeIndicator,
+                ViModeIndicator,
                 IndicatorCache::default(),
                 Text::new(""),
                 TextFont {
                     font: ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default(),
-                    font_size: theme::COPY_MODE_INDICATOR_FONT_SIZE_PX,
+                    font_size: theme::VI_MODE_INDICATOR_FONT_SIZE_PX,
                     ..default()
                 },
-                BackgroundColor(palette::COPY_MODE_INDICATOR_BG),
-                TextColor(palette::COPY_MODE_INDICATOR_FG),
+                BackgroundColor(palette::VI_MODE_INDICATOR_BG),
+                TextColor(palette::VI_MODE_INDICATOR_FG),
                 Node {
                     position_type: PositionType::Absolute,
                     top: Val::Px(0.0),
                     right: Val::Px(0.0),
                     padding: UiRect::axes(
-                        Val::Px(theme::COPY_MODE_INDICATOR_PADDING_X_PX),
+                        Val::Px(theme::VI_MODE_INDICATOR_PADDING_X_PX),
                         Val::Px(0.0),
                     ),
                     display: Display::None,
@@ -94,11 +94,11 @@ fn attach_indicator_to_surface_host(
 
 /// Updates each visible chip's `Text` and `IndicatorCache` from the
 /// host's `TerminalHandle::vi_indicator_snapshot()`. Gated by
-/// `any_with_component::<CopyModeState>` so the schedule short-circuits
+/// `any_with_component::<ViModeState>` so the schedule short-circuits
 /// when nothing is in copy mode.
 fn refresh_indicator(
-    hosts: Query<(&orzma_tty_engine::TerminalHandle, &Children), With<CopyModeState>>,
-    mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<CopyModeIndicator>>,
+    hosts: Query<(&orzma_tty_engine::TerminalHandle, &Children), With<ViModeState>>,
+    mut chips: Query<(&mut Text, &mut Node, &mut IndicatorCache), With<ViModeIndicator>>,
 ) {
     for (handle, children) in hosts.iter() {
         let Some(chip) = children.iter().find(|c| chips.get(*c).is_ok()) else {
@@ -125,14 +125,14 @@ fn refresh_indicator(
     }
 }
 
-/// Observer for `On<Remove, CopyModeState>`. Hides the indicator chip
-/// belonging to the entity whose `CopyModeState` was just removed.
+/// Observer for `On<Remove, ViModeState>`. Hides the indicator chip
+/// belonging to the entity whose `ViModeState` was just removed.
 /// Runs at the sync point that applies the remove, so the chip flips
 /// to `Display::None` before the next render — no per-frame poll needed.
-fn hide_indicator_on_copy_mode_exit(
-    ev: On<Remove, CopyModeState>,
+fn hide_indicator_on_vi_mode_exit(
+    ev: On<Remove, ViModeState>,
     hosts: Query<&Children>,
-    mut chips: Query<&mut Node, With<CopyModeIndicator>>,
+    mut chips: Query<&mut Node, With<ViModeIndicator>>,
 ) {
     let Ok(children) = hosts.get(ev.entity) else {
         return;
@@ -164,7 +164,7 @@ mod tests {
     fn make_app_with_plugin() -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.add_plugins(CopyModeIndicatorPlugin);
+        app.add_plugins(ViModeIndicatorPlugin);
         app
     }
 
@@ -185,7 +185,7 @@ mod tests {
         let children = world.get::<Children>(host)?;
         children
             .iter()
-            .find(|child| world.get::<CopyModeIndicator>(*child).is_some())
+            .find(|child| world.get::<ViModeIndicator>(*child).is_some())
     }
 
     #[test]
@@ -226,7 +226,7 @@ mod tests {
             .expect("host must have children");
         let indicator_count = children
             .iter()
-            .filter(|c| world.get::<CopyModeIndicator>(*c).is_some())
+            .filter(|c| world.get::<ViModeIndicator>(*c).is_some())
             .count();
         assert_eq!(indicator_count, 1, "exactly one chip after 10 ticks");
     }
@@ -234,14 +234,14 @@ mod tests {
     use orzma_tty_engine::{Coalescer, TerminalHandle};
 
     #[test]
-    fn refresh_shows_when_copy_mode_state_inserted() {
+    fn refresh_shows_when_vi_mode_state_inserted() {
         let mut app = make_app_with_plugin();
         let host = spawn_terminal_entity(&mut app);
         app.update();
 
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::copy_mode::CopyModeState);
+            .insert(crate::ui::vi_mode::ViModeState);
         app.update();
 
         let chip = find_indicator_child(&app, host).expect("chip");
@@ -249,7 +249,7 @@ mod tests {
         assert_eq!(
             chip_node.display,
             Display::Flex,
-            "chip becomes visible while CopyModeState is on the host"
+            "chip becomes visible while ViModeState is on the host"
         );
         let text = app.world().get::<Text>(chip).expect("Text");
         // Fresh /bin/sh: offset = 0, history may be 0.
@@ -278,7 +278,7 @@ mod tests {
             handle.enter_vi_mode(&mut coalescer);
             handle.scroll_page_up(&mut coalescer);
             entity.insert((handle, coalescer));
-            entity.insert(crate::ui::copy_mode::CopyModeState);
+            entity.insert(crate::ui::vi_mode::ViModeState);
         }
         app.update();
 
@@ -303,8 +303,8 @@ mod tests {
         app.update();
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::copy_mode::CopyModeState);
-        // First tick after CopyModeState insertion: chip becomes visible and
+            .insert(crate::ui::vi_mode::ViModeState);
+        // First tick after ViModeState insertion: chip becomes visible and
         // Text is written from "" to "[0/0]" (becoming_visible path).
         app.update();
         // Capture the change tick of Text after the first reveal.
@@ -335,13 +335,13 @@ mod tests {
     }
 
     #[test]
-    fn exit_observer_hides_chip_when_copy_mode_state_removed() {
+    fn exit_observer_hides_chip_when_vi_mode_state_removed() {
         let mut app = make_app_with_plugin();
         let host = spawn_terminal_entity(&mut app);
         app.update();
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::copy_mode::CopyModeState);
+            .insert(crate::ui::vi_mode::ViModeState);
         app.update();
 
         // Sanity: chip is visible.
@@ -356,7 +356,7 @@ mod tests {
         // immediately (within the same Bevy command queue).
         app.world_mut()
             .entity_mut(host)
-            .remove::<crate::ui::copy_mode::CopyModeState>();
+            .remove::<crate::ui::vi_mode::ViModeState>();
         // Flush observers — observers run at the command queue sync point;
         // call update() to be conservative.
         app.update();
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(
             chip_node.display,
             Display::None,
-            "chip hides as soon as CopyModeState is removed"
+            "chip hides as soon as ViModeState is removed"
         );
     }
 }

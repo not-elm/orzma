@@ -1,6 +1,6 @@
 //! Loads `OrzmaConfigs` synchronously at app build time and exposes it as
 //! a Bevy Resource. Config validation errors (duplicate direct or prefix
-//! chords, duplicate `[copy-mode]` keys, a leader that shadows a direct
+//! chords, duplicate `[vi-mode]` keys, a leader that shadows a direct
 //! binding, prefix bindings with no leader, an unmappable leader key, an
 //! out-of-range font size) are fatal (exit 2) so a mistake in one field
 //! never silently discards the whole config. Parse / IO errors warn and
@@ -34,7 +34,7 @@ impl Plugin for OrzmaConfigsPlugin {
             // just the offending field. Only parse / IO errors warn+default.
             orzma_configs::OrzmaConfigsError::DuplicateChords(_)
             | orzma_configs::OrzmaConfigsError::DuplicatePrefixChords(_)
-            | orzma_configs::OrzmaConfigsError::DuplicateCopyModeKeys(_)
+            | orzma_configs::OrzmaConfigsError::DuplicateViModeKeys(_)
             | orzma_configs::OrzmaConfigsError::LeaderShadowsDirectBinding { .. }
             | orzma_configs::OrzmaConfigsError::UnmappableLeader { .. }
             | orzma_configs::OrzmaConfigsError::InvalidFontSize { .. } => {
