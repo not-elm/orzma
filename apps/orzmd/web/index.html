@@ -15,6 +15,19 @@
       .orzmd-anchor { display: inline; scroll-margin-top: 8px; }
       table { border-collapse: collapse; }
       th, td { border: 1px solid #30363d; padding: 6px 12px; }
+      .markdown-alert { border-left: 4px solid var(--alert-accent);
+             background: color-mix(in srgb, var(--alert-accent) 8%, transparent);
+             padding: 8px 16px; margin: 16px 0; border-radius: 6px; }
+      .markdown-alert > :first-child { margin-top: 0; }
+      .markdown-alert > :last-child { margin-bottom: 0; }
+      .markdown-alert-title { display: flex; align-items: center; gap: 8px;
+             font-weight: 600; color: var(--alert-accent); }
+      .markdown-alert-title svg { fill: currentColor; }
+      .markdown-alert-note { --alert-accent: #58a6ff; }
+      .markdown-alert-tip { --alert-accent: #3fb950; }
+      .markdown-alert-important { --alert-accent: #a371f7; }
+      .markdown-alert-warning { --alert-accent: #d29922; }
+      .markdown-alert-caution { --alert-accent: #f85149; }
     </style>
   </head>
   <body>
