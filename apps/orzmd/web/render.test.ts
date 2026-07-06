@@ -91,4 +91,14 @@ describe('renderMarkdown', () => {
     const doc = new DOMParser().parseFromString(html, 'text/html');
     expect(doc.querySelector('.markdown-alert-title svg')).not.toBeNull();
   });
+
+  it('numbers headings inside and outside an alert in document order', () => {
+    const html = renderMarkdown('> [!NOTE]\n> # Inside alert\n\n# Top level\n');
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    const inside = doc.querySelector('.markdown-alert h1');
+    expect(inside).not.toBeNull();
+    expect(inside?.id).toBe('h0');
+    const ids = Array.from(doc.querySelectorAll('h1')).map((h) => h.id);
+    expect(ids).toEqual(['h0', 'h1']);
+  });
 });
