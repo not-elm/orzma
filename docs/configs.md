@@ -12,7 +12,7 @@ orzma resolves the config path in this order:
 3. `~/.config/orzma/config.toml` — the default.
 
 Unknown sections are rejected at startup, as are unknown keys in `[orzma]`,
-`[keyboard]`, `[shortcuts]`, and `[copy-mode]`. Unknown keys in `[font]`,
+`[keyboard]`, `[shortcuts]`, and `[vi-mode]`. Unknown keys in `[font]`,
 `[mouse]`, and `[inactive_pane]` are silently ignored. Most invalid values are
 startup errors too; the few that are silently clamped or reverted are noted
 inline below.
@@ -99,7 +99,7 @@ repeat-time-ms = 500
 paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for the tmux-style leader binding.
 release-webview-focus = "Ctrl+Shift+Escape"
 quit                  = "Cmd+Q"
-enter-copy-mode       = "Cmd+S"        # Both modes: Alacritty vi mode in Default, tmux copy-mode under tmux.
+enter-vi-mode         = "Cmd+S"        # Both modes: Alacritty vi mode in Default, tmux copy-mode under tmux.
 detach-session        = "Ctrl+Shift+D" # tmux mode only.
 
 # --- pane actions (tmux mode only) ---
@@ -136,9 +136,9 @@ select-window-9       = "<Leader>9"
 rename-window         = "<Leader>r"        # opens the rename prompt for the active window
 rename-session        = "<Leader>Shift+R"  # opens the rename prompt for the session
 
-[copy-mode]
-# Shared copy-mode key bindings, used in BOTH modes: Default mode's Alacritty
-# vi mode and tmux mode's copy-mode. See "Copy-mode keys" below for the key
+[vi-mode]
+# Shared vi-mode key bindings, used in BOTH modes: Default mode's Alacritty
+# vi mode and tmux mode's copy-mode. See "Vi-mode keys" below for the key
 # syntax, duplicate-key rule, and mode-coverage caveats.
 
 # --- cursor motion (Default: ViMotion / tmux: send-keys -X) ---
@@ -178,8 +178,8 @@ toggle-line-selection = ["V"]               # Lines  / select-line
 toggle-rect-selection = ["Ctrl+V"]          # Block  / rectangle-toggle (works in both modes)
 
 # --- copy / exit ---
-yank = ["y", "Enter"]                       # copy the selection, then leave copy mode
-exit = ["q", "Escape", "Ctrl+C"]            # leave copy mode
+yank = ["y", "Enter"]                       # copy the selection, then leave vi mode
+exit = ["q", "Escape", "Ctrl+C"]            # leave vi mode
 
 # --- search / jump (tmux mode only — see "Mode coverage" below) ---
 search-forward     = ["/"]                  # opens a prompt -> -X search-forward
@@ -232,7 +232,7 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
 | `release-webview-focus` | `Ctrl+Shift+Escape` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
-| `enter-copy-mode` | `Cmd+S` | Enter copy mode. |
+| `enter-vi-mode` | `Cmd+S` | Enter vi mode. |
 | `detach-session` | `Ctrl+Shift+D` | Detach the current tmux session (tmux mode only). |
 | `select-left-pane` | `<Leader>h` | Focus the pane to the left (tmux mode only). |
 | `select-down-pane` | `<Leader>j` | Focus the pane below (tmux mode only). |
@@ -263,7 +263,7 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | `rename-window` | `<Leader>r` | Open the rename prompt for the active window (tmux mode only). |
 | `rename-session` | `<Leader>Shift+R` | Open the rename prompt for the session (tmux mode only). |
 
-Note: some actions only take effect in one mode. `enter-copy-mode` now works in
+Note: some actions only take effect in one mode. `enter-vi-mode` now works in
 **both** modes: Alacritty vi mode in Default (single-terminal) mode, tmux
 copy-mode under tmux. `detach-session` and all 28 pane/window/rename actions
 above (`select-*-pane`, `split-*-pane`, `kill-pane`, `zoom-pane`,
@@ -279,11 +279,11 @@ Note on tmux.conf bindings: with the tmux prefix key no longer intercepted by
 orzma, root-table and prefix-table bindings from your `tmux.conf` do not fire
 inside orzma — the tmux prefix key passes straight through to the pane like
 any other keystroke. Use the `[shortcuts]` actions above instead. Keys pressed
-**inside copy mode** (Default mode's Alacritty vi mode and tmux mode's
+**inside vi mode** (Default mode's Alacritty vi mode and tmux mode's
 copy-mode alike) no longer follow tmux's own copy-mode key tables at all:
-orzma resolves every copy-mode key itself from the `[copy-mode]` table, so
+orzma resolves every vi-mode key itself from the `[vi-mode]` table, so
 your `tmux.conf` copy-mode / copy-mode-vi customizations and the tmux
-`mode-keys` option have no effect inside orzma. See "Copy-mode keys" below.
+`mode-keys` option have no effect inside orzma. See "Vi-mode keys" below.
 
 Note on the leader: because the stock defaults above bind more than two dozen
 actions to `<Leader>...`, the `Cmd` tap leader is armed by default — tapping and
@@ -296,7 +296,7 @@ not time out on its own.
 Two consequences of the stock `<Leader>` defaults worth knowing:
 
 - **Rebinding a `<Leader>` chord that a stock default already uses** (e.g.
-  `enter-copy-mode = "<Leader>c"`, which collides with the default
+  `enter-vi-mode = "<Leader>c"`, which collides with the default
   `new-window = "<Leader>c"`) is a startup validation error naming both
   actions. Unbind the stock default explicitly (`new-window = ""`) or pick a
   free chord.
@@ -305,18 +305,18 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g. `next-window = "Cmd+]"`.
 
-## Copy-mode keys
+## Vi-mode keys
 
-`enter-copy-mode` (see the table above) drops the active pane into copy mode:
+`enter-vi-mode` (see the table above) drops the active pane into vi mode:
 Alacritty vi mode in Default (single-terminal) mode, tmux copy-mode under
-tmux. What each keystroke does **once inside copy mode** is a separate key
-grammar from `[shortcuts]`, driven entirely by the `[copy-mode]` table shown
-in the example config above — a flat table of 40 copy actions, each bound to
+tmux. What each keystroke does **once inside vi mode** is a separate key
+grammar from `[shortcuts]`, driven entirely by the `[vi-mode]` table shown
+in the example config above — a flat table of 40 vi-mode actions, each bound to
 zero or more keys.
 
 ### Key grammar
 
-A `[copy-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
+A `[vi-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
 
 - **Keys** are either a single character, matched **case-sensitively**
   (`"w"` and `"W"` are different bindings — Shift is expressed through the
@@ -324,9 +324,9 @@ A `[copy-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
   named keys `Escape` `Enter` `Space` `Tab` `Backspace` `ArrowUp` `ArrowDown`
   `ArrowLeft` `ArrowRight`.
 - **`Ctrl+` is the only modifier prefix accepted.** `Cmd+`, `Alt+`, `Shift+`
-  (and their aliases) are parse errors inside `[copy-mode]` — Shift is
+  (and their aliases) are parse errors inside `[vi-mode]` — Shift is
   expressed via character case as above, and Cmd/Alt chords are reserved for
-  application shortcuts (`[shortcuts]`); copy-mode gather does not match
+  application shortcuts (`[shortcuts]`); vi-mode gather does not match
   keystrokes with Cmd or Alt held.
 - After `Ctrl+`, the key must be an ASCII alphanumeric character or a named
   key — `Ctrl+$` is a parse error. `Ctrl+` entries match on the physical key
@@ -338,18 +338,18 @@ A `[copy-mode]` entry is an optional `Ctrl+` prefix plus exactly one key.
 - **`""` or `[]` unbinds** an action (see `search-forward = ""` in the
   fixture-style examples below).
 - **Duplicate keys are a startup error**: if the same key string is bound to
-  more than one `[copy-mode]` action, orzma fails at startup naming every
+  more than one `[vi-mode]` action, orzma fails at startup naming every
   colliding action (analogous to `[shortcuts]`'s `DuplicateChords`). Unknown
   action names are rejected the same way unknown `[shortcuts]` actions are.
 
 Shadowing note: `[shortcuts]` chords (both leader-scoped and direct) are
-matched **before** `[copy-mode]` keys. If the same keystroke is bound in both
-tables, the `[shortcuts]` action always fires and the `[copy-mode]` binding
+matched **before** `[vi-mode]` keys. If the same keystroke is bound in both
+tables, the `[shortcuts]` action always fires and the `[vi-mode]` binding
 never sees it — e.g. setting `leader = "Ctrl+B"` shadows the default
-`page-up = "Ctrl+B"` binding while copy mode is active. orzma does not
+`page-up = "Ctrl+B"` binding while vi mode is active. orzma does not
 validate across the two tables; check your own bindings for overlap.
 
-### Copy-mode actions
+### Vi-mode actions
 
 | Action | Default | Mode | What it does |
 | --- | --- | --- | --- |
@@ -383,8 +383,8 @@ validate across the two tables; check your own bindings for overlap.
 | `toggle-selection` | `v`, `Space` | both | Toggle a character-wise selection. |
 | `toggle-line-selection` | `V` | both | Toggle a line-wise selection. |
 | `toggle-rect-selection` | `Ctrl+V` | both | Toggle a rectangular (block) selection. |
-| `yank` | `y`, `Enter` | both | Copy the selection to the clipboard and leave copy mode. |
-| `exit` | `q`, `Escape`, `Ctrl+C` | both | Leave copy mode. |
+| `yank` | `y`, `Enter` | both | Copy the selection to the clipboard and leave vi mode. |
+| `exit` | `q`, `Escape`, `Ctrl+C` | both | Leave vi mode. |
 | `search-forward` | `/` | tmux only | Open the search-down prompt. |
 | `search-backward` | `?` | tmux only | Open the search-up prompt. |
 | `search-next` | `n` | tmux only | Repeat the previous search. |
@@ -407,16 +407,16 @@ and tmux copy-mode.
 
 ### Escape semantics
 
-By default, `Escape` is bound to the `exit` action, which leaves copy mode
+By default, `Escape` is bound to the `exit` action, which leaves vi mode
 entirely. Note that stock tmux binds `Escape` to clear-selection only
 (deselecting the current selection without exiting copy mode). To deselect a
-selection in orzma without leaving copy mode, press `v` (toggle-selection is a
+selection in orzma without leaving vi mode, press `v` (toggle-selection is a
 toggle: with a selection active, it clears it).
 
-Keys not bound to any `[copy-mode]` action are swallowed while copy mode is
+Keys not bound to any `[vi-mode]` action are swallowed while vi mode is
 active (they never reach the pane) — this includes stock `copy-mode-vi` keys
 that orzma does not carry over by default, such as `:` (goto-line), digit
 repeat prefixes, `o` (other-end), `A` (append-and-cancel), `X` / `M-x`
 (mark), `;` / `,` (jump repeat), `z` (scroll-middle), and `D`
-(copy-end-of-line-and-cancel). Bind them to a `[copy-mode]` action yourself
+(copy-end-of-line-and-cancel). Bind them to a `[vi-mode]` action yourself
 if you need them; more built-in actions may be added later.

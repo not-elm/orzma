@@ -37,7 +37,7 @@ body:
         - Terminal rendering
         - Input
         - IME
-        - Copy mode
+        - Vi mode
         - tmux integration
         - Webview
         - Configuration
