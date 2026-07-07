@@ -105,6 +105,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.meta.outputs.zip }}
+          generate_release_notes: true
 
       - name: Bump Homebrew cask
         if: github.ref_type == 'tag' && env.HOMEBREW_TAP_TOKEN != ''
