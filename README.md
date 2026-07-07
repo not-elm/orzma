@@ -24,7 +24,8 @@ brew upgrade --cask orzma
 ```
 
 The companion apps `orzmd` and `orzbrowser` (built with the `ratatui_orzma` SDK)
-are installed from source with `just install-apps`.
+ship bundled inside `orzma.app`, so the Homebrew Cask install already includes
+them. To build and install them from source instead, run `just install-apps`.
 
 ## Features
 
@@ -39,10 +40,12 @@ possibilities for TUI applications. For example:
 
 ### Tmux Integration
 
-orzma supports tmux through its control mode (`tmux -CC`), so your existing
-`tmux.conf` keybindings work as-is. orzma starts as a plain single-pane
-terminal; running `tmux -CC` inside it switches to integration mode, where
-tmux windows and panes are rendered natively.
+orzma supports tmux through its control mode (`tmux -CC`). orzma starts as a
+plain single-pane terminal; running `tmux -CC` inside it switches to
+integration mode, where tmux windows and panes are rendered natively. Window
+and pane management is driven by orzma's own configurable keybindings — defined
+under `[shortcuts]` with a leader kept distinct from your tmux prefix — rather
+than your `tmux.conf` bindings. See [Configuration](#configuration).
 
 ## CLI Tools
 
