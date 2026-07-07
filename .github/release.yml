@@ -1,0 +1,28 @@
+# Configures GitHub's automatically generated release notes.
+# Merged PRs are grouped into the categories below by their LABELS — labels,
+# not commit-message prefixes, drive this. Categories are first-match: a PR
+# with several labels lands in the first category it matches (so a breaking
+# enhancement appears under Breaking Changes, not Features). The release-macos
+# workflow passes generate_release_notes: true; GitHub loads this file from the
+# tree of the released tag's commit (for tags cut from main, that is main).
+changelog:
+  exclude:
+    labels:
+      - skip-changelog
+    authors:
+      - github-actions[bot]
+  categories:
+    - title: ⚠️ Breaking Changes
+      labels: [breaking-change]
+    - title: 🚀 Features
+      labels: [enhancement]
+    - title: ⚡ Performance
+      labels: [performance]
+    - title: 🐛 Fixes
+      labels: [bug]
+    - title: 📚 Documentation
+      labels: [documentation]
+    - title: 📦 Dependencies
+      labels: [dependencies]
+    - title: 🧹 Other Changes
+      labels: ["*"]
