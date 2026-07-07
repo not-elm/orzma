@@ -4854,7 +4854,7 @@ dependencies = [
 
 [[package]]
 name = "orzbrowser"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -4865,7 +4865,7 @@ dependencies = [
 
 [[package]]
 name = "orzma"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -4899,7 +4899,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_configs"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "dirs",
  "serde",
@@ -4912,7 +4912,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_tmux"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bitflags 2.13.0",
@@ -4924,7 +4924,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_tty_engine"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
@@ -4941,7 +4941,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_tty_renderer"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "ab_glyph",
  "bevy",
@@ -4957,7 +4957,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_webview"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bevy_cef",
@@ -4978,7 +4978,7 @@ dependencies = [
 
 [[package]]
 name = "orzma_webview_host"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bevy_cef_core",
@@ -4988,7 +4988,7 @@ dependencies = [
 
 [[package]]
 name = "orzmd"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "anyhow",
  "blake3",
@@ -5410,7 +5410,7 @@ dependencies = [
 
 [[package]]
 name = "ratatui_orzma"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "crossbeam-channel",
  "ratatui",
@@ -6414,7 +6414,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tmux_control"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "thiserror 2.0.18",
  "tmux_control_parser",
@@ -6423,7 +6423,7 @@ dependencies = [
 
 [[package]]
 name = "tmux_control_parser"
-version = "0.1.0"
+version = "0.2.0-dev"
 dependencies = [
  "thiserror 2.0.18",
 ]
