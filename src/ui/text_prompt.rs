@@ -176,7 +176,8 @@ fn on_prompt_key(
     mut active: ResMut<ActiveTextPrompt>,
     prompts: Query<(&TextPrompt, &EditableText)>,
 ) {
-    // Fire only at the editable's own hop, not at each bubble ancestor.
+    // NOTE: without this guard the observer fires once per bubble hop
+    // (editable → bar → window), submitting three times for one Enter.
     if key.event_target() != key.focused_entity {
         return;
     }
