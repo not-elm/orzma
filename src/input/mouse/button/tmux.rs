@@ -29,8 +29,8 @@ use crate::input::mouse::webview::{
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
 use crate::render::tmux::{DividerPixelRect, PackedTmuxLayout};
 use crate::surface::geometry::{Side as CellSide, cell_at_pane};
+use crate::ui::text_prompt::ActiveTextPrompt;
 use crate::ui::vi_mode::ViModeState;
-use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::mouse::{MouseButton, MouseButtonInput};
@@ -91,7 +91,7 @@ impl Plugin for MouseButtonTmuxPlugin {
 /// This system owns the single `MouseButtonInput` reader for the tmux pointer
 /// pipeline and runs EVERY frame within `TmuxActiveSet` (it is NOT gated by
 /// `pointer_active`); it computes the suppressed/active decision in-body. On a
-/// suppressed frame (no focused primary window, or a vi-search prompt owns
+/// suppressed frame (no focused primary window, or a text prompt owns
 /// input) it drains the reader and the buffer, resets the gesture to
 /// `Idle`, and resolves an in-flight inline press: with no window it drops
 /// `WebviewPress` WITHOUT a CEF mouse-up (there is no cursor/scale to place
@@ -120,7 +120,7 @@ fn tmux_webview_pointer(
     mut buttons: MessageReader<MouseButtonInput>,
     panes: Query<(Entity, &TmuxPane, &ComputedNode, &UiGlobalTransform)>,
     metrics: Res<TerminalCellMetricsResource>,
-    vi_mode_prompt: Res<ViModePrompt>,
+    active_text_prompt: Res<ActiveTextPrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     buffer.0.clear();
@@ -131,7 +131,7 @@ fn tmux_webview_pointer(
         return;
     };
     let frame = webview_pointer_frame(window, &metrics);
-    if !window.focused || vi_mode_prompt.open.is_some() {
+    if !window.focused || active_text_prompt.0.is_some() {
         buttons.clear();
         gesture.state = GestureState::Idle;
         release_webview_press(
@@ -182,7 +182,7 @@ fn tmux_webview_pointer(
 /// under the cursor to the child's CEF browser via the shared
 /// `forward_webview_move_at`. `CursorMoved`-driven (one forward per frame, latest
 /// position), so the one system serves both hover and an in-rect drag. Skipped
-/// while a vi-search prompt owns input. `Browsers` is optional so CEF-less
+/// while a text prompt owns input. `Browsers` is optional so CEF-less
 /// tests construct it.
 fn forward_tmux_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
@@ -193,13 +193,13 @@ fn forward_tmux_webview_mouse_moves(
     windows: Query<&Window, With<PrimaryWindow>>,
     metrics: Res<TerminalCellMetricsResource>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
-    vi_mode_prompt: Res<ViModePrompt>,
+    active_text_prompt: Res<ActiveTextPrompt>,
     browsers: Option<NonSend<Browsers>>,
 ) {
     let Some(moved) = cursor_msg.read().last() else {
         return;
     };
-    if vi_mode_prompt.open.is_some() {
+    if active_text_prompt.0.is_some() {
         return;
     }
     let Ok(window) = windows.single() else {
@@ -236,7 +236,7 @@ fn forward_tmux_webview_mouse_moves(
 struct TmuxGestureButtons(Vec<MouseButtonInput>);
 
 /// Run condition for the active tmux gesture pipeline: `true` iff a focused
-/// primary window exists AND no modal (vi-search prompt) owns input.
+/// primary window exists AND no modal (text prompt) owns input.
 ///
 /// Gates `tmux_gesture` only (which reads the hand-off buffer, not
 /// `MouseButtonInput`). `tmux_webview_pointer` is NOT gated by this — it owns the
@@ -245,9 +245,9 @@ struct TmuxGestureButtons(Vec<MouseButtonInput>);
 /// suppressor here — the `tmux_webview_pointer` pre-step owns webview focus.
 fn pointer_active(
     windows: Query<&Window, With<PrimaryWindow>>,
-    vi_mode_prompt: Res<ViModePrompt>,
+    active_text_prompt: Res<ActiveTextPrompt>,
 ) -> bool {
-    windows.single().is_ok_and(|window| window.focused) && vi_mode_prompt.open.is_none()
+    windows.single().is_ok_and(|window| window.focused) && active_text_prompt.0.is_none()
 }
 
 /// Bundles the immutable vi-mode query read used by `tmux_gesture`.
@@ -345,7 +345,7 @@ fn engine_side(side: CellSide) -> Side {
 /// as a fallback click.
 ///
 /// Gated by `run_if(pointer_active)`: this system runs only when a focused
-/// primary window exists and no modal (vi-search prompt) owns input.
+/// primary window exists and no modal (text prompt) owns input.
 /// The suppressed path — clearing the buffer, resetting the gesture, and
 /// releasing or dropping an in-flight inline press — is owned by
 /// `tmux_webview_pointer`, which runs every frame upstream of this system.
@@ -638,14 +638,12 @@ mod tests {
     }
 
     fn set_modal_open(app: &mut App, open: bool) {
-        use crate::ui::vi_search::ViModePromptState;
-        use orzma_tmux::{PaneId, PromptKind};
-
-        app.world_mut().resource_mut::<ViModePrompt>().open = open.then(|| ViModePromptState {
-            kind: PromptKind::SearchForward,
-            pane: PaneId(0),
-            text: String::new(),
-        });
+        let target = if open {
+            Some(app.world_mut().spawn_empty().id())
+        } else {
+            None
+        };
+        app.world_mut().resource_mut::<ActiveTextPrompt>().0 = target;
     }
 
     #[test]
@@ -656,7 +654,7 @@ mod tests {
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<ViModePrompt>();
+        app.init_resource::<ActiveTextPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(
@@ -694,7 +692,7 @@ mod tests {
         app.init_resource::<TmuxMouseGesture>();
         app.init_resource::<TmuxGestureButtons>();
         app.init_resource::<WebviewPress>();
-        app.init_resource::<ViModePrompt>();
+        app.init_resource::<ActiveTextPrompt>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
         app.add_systems(

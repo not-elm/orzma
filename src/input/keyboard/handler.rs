@@ -23,7 +23,6 @@ use crate::input::shortcuts::{
 use crate::ui::text_prompt::ActiveTextPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
 use crate::ui::vi_mode::ViModeState;
-use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -54,7 +53,6 @@ impl Plugin for KeyboardHandlerPlugin {
 /// guards.
 #[derive(SystemParam)]
 struct ModalGuards<'w> {
-    vi_mode_prompt: Res<'w, ViModePrompt>,
     confirm_state: Option<Res<'w, ConfirmState>>,
     active_text_prompt: Res<'w, ActiveTextPrompt>,
     ime: Res<'w, ImeState>,
@@ -99,7 +97,7 @@ fn resolve_key_effects(
 ) {
     let mode = guards.app_mode.get().clone();
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    // NOTE: the prompt guards (vi-mode prompt, confirm-before, rename) are
+    // NOTE: the prompt guards (confirm-before, rename) are
     // tmux-only by design. Those resources are set by tmux actions and cleared
     // only by their own handlers — never on a mode transition — so a prompt left
     // open when the tmux connection drops (falling back to Default) would
@@ -108,9 +106,7 @@ fn resolve_key_effects(
     // frame's keys and write no messages, so no key leaks to the terminal,
     // tmux, or the prefix state machine (and no preedit key is double-sent).
     let prompt_open = mode == AppMode::Tmux
-        && (guards.vi_mode_prompt.open.is_some()
-            || guards.confirm_state.is_some()
-            || guards.active_text_prompt.0.is_some());
+        && (guards.confirm_state.is_some() || guards.active_text_prompt.0.is_some());
     if prompt_open || guards.ime.is_composing() || !focused_window {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {
@@ -307,7 +303,6 @@ mod tests {
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
             .init_resource::<ResolvedViModeKeys>()
-            .init_resource::<ViModePrompt>()
             .init_resource::<ActiveTextPrompt>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
