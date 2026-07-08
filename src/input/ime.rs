@@ -8,6 +8,7 @@
 
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
+use crate::ui::text_prompt::ActiveTextPrompt;
 use crate::ui::vi_mode::ViModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::entity::Entity;
@@ -49,7 +50,10 @@ impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ImeState>().add_systems(
             Update,
-            (ime_policy_system, read_ime_events)
+            (
+                ime_policy_system.run_if(no_text_prompt_focused),
+                read_ime_events,
+            )
                 .chain()
                 .in_set(InputPhase::Dispatch),
         );
@@ -160,6 +164,11 @@ pub(crate) fn resolve_focused_surface(
     focused: &Query<Entity, With<KeyboardFocused>>,
 ) -> Option<Entity> {
     focused.single().ok()
+}
+
+/// True when no text prompt owns focus — the terminal IME policy should run.
+fn no_text_prompt_focused(active_text_prompt: Res<ActiveTextPrompt>) -> bool {
+    active_text_prompt.0.is_none()
 }
 
 /// Derives whether IME should be on this tick and writes
@@ -296,9 +305,9 @@ fn ime_policy_system(
 
 /// Drains `Ime` events, updates `ImeState`, and on `Ime::Commit` triggers
 /// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
-/// state machine still runs, so `ImeState` stays consistent) when EITHER any
-/// webview owns keyboard focus OR the focused surface is in vi mode. The
-/// commit transport is applied by per-backend observers
+/// state machine still runs, so `ImeState` stays consistent) when a webview
+/// or a text prompt owns keyboard focus, or the focused surface is in vi
+/// mode. The commit transport is applied by per-backend observers
 /// (`src/input/tmux/forward.rs`, `src/input/default_mode.rs`).
 fn read_ime_events(
     mut commands: Commands,
@@ -306,6 +315,7 @@ fn read_ime_events(
     mut state: ResMut<ImeState>,
     focused: Query<Entity, With<KeyboardFocused>>,
     focused_webview: Res<FocusedWebview>,
+    active_text_prompt: Res<ActiveTextPrompt>,
     vi_modes: Query<(), With<ViModeState>>,
 ) {
     let surface = resolve_focused_surface(&focused);
@@ -318,8 +328,11 @@ fn read_ime_events(
         // bevy_cef, and `sync_focused_webview` deliberately keeps focus on an
         // inline webview even when its pane is no longer the active surface — a
         // surface-relative check would miss it and inject the commit into the
-        // newly-active pane's shell.
-        if focused_webview.0.is_some() {
+        // newly-active pane's shell. A focused text prompt is suppressed the same
+        // way: the EditableText widget consumes the winit `Ime` events itself, so
+        // `apply_event` still ran above (ImeState stays consistent, the reader is
+        // drained) but the commit must not replay into the terminal.
+        if focused_webview.0.is_some() || active_text_prompt.0.is_some() {
             continue;
         }
         if commit_text.is_empty() {
@@ -570,6 +583,7 @@ mod tests {
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
+        app.init_resource::<ActiveTextPrompt>();
         app.add_message::<Ime>();
 
         let pane_entity = app
@@ -889,6 +903,40 @@ mod tests {
     }
 
     #[test]
+    fn ime_commit_suppressed_to_terminal_while_text_prompt_focused() {
+        use bevy::prelude::On;
+
+        #[derive(Resource, Default)]
+        struct Hits(usize);
+
+        let (mut app, _pane) = build_app_with_active_pane();
+        app.init_resource::<Hits>();
+        app.add_observer(|_ev: On<ImeCommit>, mut hits: ResMut<Hits>| hits.0 += 1);
+
+        // A text prompt owns focus.
+        let prompt = app.world_mut().spawn_empty().id();
+        app.world_mut().resource_mut::<ActiveTextPrompt>().0 = Some(prompt);
+
+        app.world_mut()
+            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .write(Ime::Commit {
+                window: Entity::PLACEHOLDER,
+                value: "あ".into(),
+            });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<Hits>().0,
+            0,
+            "IME commit must not route to the terminal while a text prompt is focused"
+        );
+        assert!(
+            !app.world().resource::<ImeState>().is_composing(),
+            "read_ime_events must still drain and run apply_event so ImeState stays consistent"
+        );
+    }
+
+    #[test]
     fn ime_commit_triggers_imecommit_for_focused_surface() {
         use bevy::prelude::On;
 
@@ -900,6 +948,7 @@ mod tests {
             .add_systems(Update, read_ime_events);
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
+        app.init_resource::<ActiveTextPrompt>();
         app.init_resource::<Hits>();
         app.add_message::<Ime>();
         app.add_observer(|ev: On<ImeCommit>, mut hits: ResMut<Hits>| {
