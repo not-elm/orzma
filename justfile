@@ -2,12 +2,12 @@
 # docs/superpowers/specs/2026-06-21-makefile-to-just-migration-design.md.
 # https://just.systems/
 
-cef_version := "145.6.1+145.0.28"
+cef_version := "149.3.0+149.0.6"
 cef_dir := home_directory() / ".local/share/cef"
 cef_framework_lib := cef_dir / "Chromium Embedded Framework.framework" / "Libraries"
 cef_debug_render_process := "bevy_cef_debug_render_process"
 bevy_cef_render_process := "bevy_cef_render_process"
-bevy_cef_version := "0.11.0"
+bevy_cef_version := "0.12.0"
 cargo_about_version := "0.9.0"
 pnpm_licenses_version := "2.4.2"
 

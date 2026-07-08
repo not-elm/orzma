@@ -972,8 +972,9 @@ mod tests {
             MessageWriter<PaneOutput>,
         )> = SystemState::new(app.world_mut());
         {
-            let (mut commands, mut client_q, mut pane_output) =
-                system_state.get_mut(app.world_mut());
+            let (mut commands, mut client_q, mut pane_output) = system_state
+                .get_mut(app.world_mut())
+                .expect("SystemState params must be valid for the test world");
             let (mut client, mut enumeration) = client_q
                 .single_mut()
                 .expect("gateway entity must carry TmuxClient + EnumerationState");
@@ -1047,8 +1048,9 @@ mod tests {
             MessageWriter<PaneOutput>,
         )> = SystemState::new(app.world_mut());
         {
-            let (mut commands, mut client_q, mut pane_output) =
-                system_state.get_mut(app.world_mut());
+            let (mut commands, mut client_q, mut pane_output) = system_state
+                .get_mut(app.world_mut())
+                .expect("SystemState params must be valid for the test world");
             let (mut client, mut enumeration) = client_q
                 .single_mut()
                 .expect("gateway entity must carry TmuxClient + EnumerationState");

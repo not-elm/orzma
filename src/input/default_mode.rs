@@ -19,7 +19,7 @@ use crate::surface::geometry::topmost_surface_at;
 use crate::ui::vi_mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
 use bevy_cef::prelude::FocusedWebview;
 use orzma_tmux::TmuxPane;
@@ -62,7 +62,12 @@ struct WebviewClaimParams<'w, 's> {
     surfaces: Query<
         'w,
         's,
-        (Entity, &'static ComputedNode, &'static UiGlobalTransform),
+        (
+            Entity,
+            &'static ComputedNode,
+            &'static ComputedStackIndex,
+            &'static UiGlobalTransform,
+        ),
         With<OrzmaTerminal>,
     >,
     children: Query<'w, 's, &'static Children>,
@@ -126,7 +131,7 @@ fn cursor_claims_webview(window: &Window, claim: &WebviewClaimParams) -> Option<
     let cell_h = metrics.metrics.line_height_phys.floor().max(1.0);
     let cursor_phys = window.cursor_position()? * scale;
     let terminal = topmost_surface_at(cursor_phys, claim.surfaces.iter())?;
-    let (_, node, transform) = claim.surfaces.get(terminal).ok()?;
+    let (_, node, _, transform) = claim.surfaces.get(terminal).ok()?;
     let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
     let overlays = claim.overlay_rects.get(terminal).ok()?;
     webview_hit_at(

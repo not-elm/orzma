@@ -276,6 +276,7 @@ mod tests {
     };
     use crate::surface::OrzmaTerminal;
     use bevy::input::mouse::MouseScrollUnit;
+    use bevy::input::touch::TouchPhase;
     use bevy::ui::{ComputedNode, UiGlobalTransform};
     use orzma_tty_engine::TerminalHandle;
     use orzma_tty_renderer::schema::TerminalGrid;
@@ -330,6 +331,7 @@ mod tests {
                 x,
                 y,
                 window: Entity::PLACEHOLDER,
+                phase: TouchPhase::Moved,
             });
     }
 
@@ -548,6 +550,7 @@ mod tests {
                 x: 16.0 * phys_right_sign(),
                 y: 16.0,
                 window: Entity::PLACEHOLDER,
+                phase: TouchPhase::Moved,
             });
         app.update();
         let cap = app.world().resource::<CapturedEffects>();

@@ -67,7 +67,7 @@ impl Plugin for TerminalFontPlugin {
 }
 
 /// Inserts `TerminalCellMetricsResource` at Startup based on the
-/// PrimaryWindow's current scale_factor. Bevy 0.18's winit runner writes
+/// PrimaryWindow's current scale_factor. Bevy 0.19's winit runner writes
 /// the OS-reported scale_factor into the Window during `create_windows()`
 /// (in `resumed()`), which runs before the first `App::update()` — so this
 /// Startup system sees the correct DPR on its very first invocation,

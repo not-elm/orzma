@@ -17,7 +17,7 @@ use crate::input::mouse::wheel::MouseWheelInputPlugin;
 use crate::surface::OrzmaTerminal;
 use bevy::input::mouse::{MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
-use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::CursorMoved;
 pub(crate) use button::tmux::divider_at;
 use orzma_tty_engine::{CellCoord, Point, SelectionType, Side, TermMode, TerminalHandle};
@@ -52,8 +52,8 @@ impl Plugin for MouseInputPlugin {
 /// two per-file plugins' gating in lockstep.
 fn on_any_mouse_message() -> impl SystemCondition<()> {
     on_message::<MouseButtonInput>
-        .or(on_message::<CursorMoved>)
-        .or(on_message::<MouseWheel>)
+        .or_else(on_message::<CursorMoved>)
+        .or_else(on_message::<MouseWheel>)
 }
 
 /// Host-private decision IR for the button path: `decide_button` returns an
@@ -151,20 +151,29 @@ type TerminalSurfaces<'w, 's> = Query<
         Entity,
         &'static TerminalHandle,
         &'static ComputedNode,
+        &'static ComputedStackIndex,
         &'static UiGlobalTransform,
         &'static TerminalGrid,
     ),
     (With<OrzmaTerminal>, Without<MouseDisabled>),
 >;
 
-/// The `(entity, node, transform)` candidates `topmost_surface_at` hit-tests,
-/// projected from the surface query — one adapter shared by both dispatchers.
+/// The `(entity, node, stack, transform)` candidates `topmost_surface_at`
+/// hit-tests, projected from the surface query — one adapter shared by both
+/// dispatchers.
 fn hit_candidates<'a>(
     terminals: &'a TerminalSurfaces<'_, '_>,
-) -> impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)> {
+) -> impl Iterator<
+    Item = (
+        Entity,
+        &'a ComputedNode,
+        &'a ComputedStackIndex,
+        &'a UiGlobalTransform,
+    ),
+> {
     terminals
         .iter()
-        .map(|(e, _, node, transform, _)| (e, node, transform))
+        .map(|(e, _, node, stack, transform, _)| (e, node, stack, transform))
 }
 
 /// The `(cell_w, cell_h)` pitch in physical px, floored and clamped to `>= 1` so
@@ -211,7 +220,7 @@ fn cell_context_for<'a>(
     cell_w: f32,
     cell_h: f32,
 ) -> Option<(CellContext<'a>, TermMode)> {
-    let (_, handle, node, transform, grid) = terminals.get(target).ok()?;
+    let (_, handle, node, _, transform, grid) = terminals.get(target).ok()?;
     let ctx = CellContext {
         node,
         transform,

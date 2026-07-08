@@ -61,7 +61,7 @@ impl Plugin for AdoptPlugin {
                 Update,
                 sync_gateway_size.before(TeardownOnExitSet).run_if(
                     any_with_component::<TmuxClient>
-                        .and(resource_exists::<TerminalCellMetricsResource>),
+                        .and_then(resource_exists::<TerminalCellMetricsResource>),
                 ),
             );
     }

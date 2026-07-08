@@ -40,7 +40,7 @@ mod macos {
         let Ok(entity) = primary.single() else {
             return;
         };
-        // NOTE: Bevy 0.18 keeps WinitWindows in a main-thread thread-local, not a world
+        // NOTE: Bevy 0.19 keeps WinitWindows in a main-thread thread-local, not a world
         // non-send resource (bevy ECS #17667 workaround). NonSendMarker pins this system
         // to the main thread so the borrow sees the populated instance, not an empty one.
         WINIT_WINDOWS.with_borrow(|winit_windows| {
