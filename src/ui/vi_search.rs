@@ -16,9 +16,9 @@ use orzma_tmux::{PaneId, Prompt, PromptKind, TmuxClient};
 /// Attached to a vi prompt's `EditableText` entity so the submit observer can
 /// target the right pane and copy-mode command.
 #[derive(Component)]
-pub(crate) struct ViPromptIntent {
-    pub(crate) pane: PaneId,
-    pub(crate) kind: PromptKind,
+struct ViPromptIntent {
+    pane: PaneId,
+    kind: PromptKind,
 }
 
 /// Registers the vi-mode prompt submit observer.
@@ -34,7 +34,7 @@ impl Plugin for ViModePromptPlugin {
 // NOTE: `#[expect]` is impractical here — dead in the non-test build (inert
 // until a local search applier reconnects this prompt) but live under tests.
 #[allow(dead_code)]
-pub(crate) fn prompt_label(kind: PromptKind) -> &'static str {
+fn prompt_label(kind: PromptKind) -> &'static str {
     match kind {
         PromptKind::SearchForward => "/",
         PromptKind::SearchBackward => "?",

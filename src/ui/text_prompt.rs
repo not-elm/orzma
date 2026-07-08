@@ -7,11 +7,12 @@
 //! submit/cancel, and teardown; per-prompt modules observe `TextPromptSubmit`
 //! and run the tmux command.
 
+use crate::app_mode::AppMode;
 use crate::theme;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input_focus::{FocusCause, FocusedInput, InputFocus};
 use bevy::prelude::*;
-use bevy::text::{EditableText, TextEditChange};
+use bevy::text::{EditableText, EditableTextSystems, TextEditChange};
 use bevy::ui_widgets::SelectAllOnFocus;
 
 const TEXT_PROMPT_Z: i32 = 340;
@@ -58,6 +59,10 @@ pub(crate) struct TextPromptSpec {
 /// `ActiveTextPrompt` at the field, and returns the `EditableText` entity so the
 /// caller can attach a per-prompt intent component. Focus is set with
 /// `FocusCause::Navigated` so a `SelectAllOnFocus` field selects its text.
+///
+/// The bar carries `DespawnOnExit(AppMode::Tmux)`: both callers open the prompt
+/// only in tmux mode, so a prompt still open when the tmux connection drops is
+/// torn down with the mode instead of surviving to freeze Default-mode input.
 pub(crate) fn spawn_text_prompt(
     commands: &mut Commands,
     input_focus: &mut InputFocus,
@@ -79,6 +84,7 @@ pub(crate) fn spawn_text_prompt(
             },
             BackgroundColor(spec.bg),
             GlobalZIndex(TEXT_PROMPT_Z),
+            DespawnOnExit(AppMode::Tmux),
         ))
         .id();
     commands.entity(bar).with_children(|parent| {
@@ -124,7 +130,7 @@ impl Plugin for TextPromptPlugin {
             .add_observer(on_prompt_key)
             .add_observer(on_prompt_edit)
             .add_systems(Update, reconcile_active_text_prompt)
-            .add_systems(PostUpdate, apply_prompt_close);
+            .add_systems(PostUpdate, apply_prompt_close.after(EditableTextSystems));
     }
 }
 
@@ -136,13 +142,20 @@ enum PromptAction {
     Continue,
 }
 
-/// Marks a prompt whose submit/cancel has been decided; `apply_prompt_close`
-/// tears it down in `PostUpdate`. Teardown is deferred (not done in the
-/// `FocusedInput` observer, which runs in `PreUpdate`) so `ActiveTextPrompt`
-/// stays set through the Update-phase input gates on the close frame — otherwise
-/// the terminating Enter/Escape leaks past the drain guard into the focused pane.
+/// Marks a prompt whose submit/cancel has been decided. `apply_prompt_close`
+/// (`PostUpdate`, after `EditableTextSystems`) reads the field's final value and,
+/// when `submit` is set, fires `TextPromptSubmit` — after the same-frame
+/// keystrokes have been applied — then tears the prompt down. Teardown is
+/// deferred (not done in the `FocusedInput` observer, which runs in `PreUpdate`)
+/// so `ActiveTextPrompt` stays set through the Update-phase input gates on the
+/// close frame — otherwise the terminating Enter/Escape leaks past the drain
+/// guard into the focused pane. Because each entity carries exactly one
+/// `PromptClosing` and is processed once, submit fires exactly once even if two
+/// Enter events land in the same frame.
 #[derive(Component)]
-struct PromptClosing;
+struct PromptClosing {
+    submit: bool,
+}
 
 /// Maps a key press to a prompt action. Enter submits (unless the IME is
 /// composing, so a conversion-confirming Enter is not mistaken for submit);
@@ -155,17 +168,28 @@ fn decide_prompt_key(key: &Key, composing: bool) -> PromptAction {
     }
 }
 
-/// Tears down prompts marked `PromptClosing` (despawns the bar, clears focus and
-/// the active signal). Runs in `PostUpdate`, after the Update-phase input gates,
-/// so the closing frame's terminating key is still drained while the prompt was
+/// Applies submit and tears down prompts marked `PromptClosing`: for each closing
+/// entity, fires `TextPromptSubmit` with the post-edit value when `submit` is set,
+/// then despawns the bar and clears focus and the active signal. Runs in
+/// `PostUpdate` after `EditableTextSystems`, so `value()` already reflects the
+/// same-frame keystrokes (no stale read) and, because each entity carries one
+/// `PromptClosing` processed once here, submit fires exactly once (no double
+/// submit from two Enter events). Running after the Update-phase input gates also
+/// keeps the closing frame's terminating key drained while the prompt was
 /// nominally open. Idempotent and tolerant of an already-cleared prompt.
 fn apply_prompt_close(
     mut commands: Commands,
     mut input_focus: ResMut<InputFocus>,
     mut active: ResMut<ActiveTextPrompt>,
-    closing: Query<(Entity, &TextPrompt), With<PromptClosing>>,
+    closing: Query<(Entity, &TextPrompt, &EditableText, &PromptClosing)>,
 ) {
-    for (entity, prompt) in &closing {
+    for (entity, prompt, editable, closing) in &closing {
+        if closing.submit {
+            commands.trigger(TextPromptSubmit {
+                entity,
+                text: editable.value().to_string(),
+            });
+        }
         commands.entity(prompt.bar).despawn();
         if active.0 == Some(entity) {
             active.0 = None;
@@ -176,15 +200,20 @@ fn apply_prompt_close(
     }
 }
 
-/// Decides submit/cancel for a focused `TextPrompt`: emits `TextPromptSubmit`
-/// (with the current value) on Enter, or marks cancel on Escape. Either way the
-/// entity is marked `PromptClosing` for `apply_prompt_close` to tear down in
-/// `PostUpdate`, rather than tearing down synchronously here.
+/// Decides submit/cancel for a focused `TextPrompt` and marks it
+/// `PromptClosing { submit }` — Enter marks `submit: true`, Escape marks
+/// `submit: false`, every other key is left to the widget. It does NOT read the
+/// value or fire `TextPromptSubmit` itself: `apply_prompt_close` (PostUpdate,
+/// after `EditableTextSystems`) reads the post-edit value and fires submit once
+/// per closing entity, which avoids both a stale same-frame value read and a
+/// double submit from two Enter events in one frame. The `Without<PromptClosing>`
+/// filter skips an already-closing entity as belt-and-suspenders. The only
+/// `EditableText` read left is `is_composing()`.
 ///
 /// This is a GLOBAL observer for a bubbling event: `FocusedInput` auto-propagates
 /// editable → bar → window, and the widget does NOT consume `Enter`
 /// (`allow_newlines == false`), so without a guard this observer fires once per
-/// bubble hop — submitting three times for one Enter. `event_target()` is
+/// bubble hop — closing three times for one Enter. `event_target()` is
 /// `focused_entity`, which Bevy mutates in place at each hop, so it always
 /// equals `event_target()`; the `original_event_target()` guard below compares
 /// against the propagation-invariant original target instead, firing exactly
@@ -193,7 +222,7 @@ fn apply_prompt_close(
 fn on_prompt_key(
     key: On<FocusedInput<KeyboardInput>>,
     mut commands: Commands,
-    prompts: Query<(&TextPrompt, &EditableText)>,
+    prompts: Query<(&TextPrompt, &EditableText), Without<PromptClosing>>,
 ) {
     if key.event_target() != key.original_event_target() {
         return;
@@ -207,28 +236,28 @@ fn on_prompt_key(
     match decide_prompt_key(&key.input.logical_key, editable.is_composing()) {
         PromptAction::Continue => {}
         PromptAction::Submit => {
-            let text = editable.value().to_string();
-            commands.trigger(TextPromptSubmit {
-                entity: key.focused_entity,
-                text,
-            });
-            commands.entity(key.focused_entity).insert(PromptClosing);
+            commands
+                .entity(key.focused_entity)
+                .insert(PromptClosing { submit: true });
         }
         PromptAction::Cancel => {
-            commands.entity(key.focused_entity).insert(PromptClosing);
+            commands
+                .entity(key.focused_entity)
+                .insert(PromptClosing { submit: false });
         }
     }
 }
 
-/// Submits a vi jump prompt (`submit_on_first_char`) the moment its value
-/// becomes non-empty. `EditableText::new("")` queues an empty-value edit whose
-/// `TextEditChange` is ignored here; the first inserted char triggers submit.
-/// Marks the entity `PromptClosing` for `apply_prompt_close` rather than tearing
-/// down synchronously.
+/// Marks a vi jump prompt (`submit_on_first_char`) `PromptClosing { submit: true }`
+/// the moment its value becomes non-empty. `EditableText::new("")` queues an
+/// empty-value edit whose `TextEditChange` is ignored here; the first inserted
+/// char marks the prompt. The actual submitted text is re-read by
+/// `apply_prompt_close` (which runs after `EditableTextSystems`, so `value()` is
+/// current); the non-empty check here only decides whether to submit at all.
 fn on_prompt_edit(
     change: On<TextEditChange>,
     mut commands: Commands,
-    prompts: Query<(&TextPrompt, &EditableText)>,
+    prompts: Query<(&TextPrompt, &EditableText), Without<PromptClosing>>,
 ) {
     let entity = change.event_target();
     let Ok((prompt, editable)) = prompts.get(entity) else {
@@ -237,12 +266,12 @@ fn on_prompt_edit(
     if !prompt.submit_on_first_char {
         return;
     }
-    let text = editable.value().to_string();
-    if text.is_empty() {
+    if editable.value() == "" {
         return;
     }
-    commands.trigger(TextPromptSubmit { entity, text });
-    commands.entity(entity).insert(PromptClosing);
+    commands
+        .entity(entity)
+        .insert(PromptClosing { submit: true });
 }
 
 /// Clears `ActiveTextPrompt` when its entity was despawned by something other
@@ -340,7 +369,8 @@ mod tests {
             .init_resource::<ActiveTextPrompt>()
             .init_resource::<SubmitCount>()
             .add_observer(on_prompt_key)
-            .add_observer(count_submits);
+            .add_observer(count_submits)
+            .add_systems(PostUpdate, apply_prompt_close.after(EditableTextSystems));
 
         let window = app
             .world_mut()
@@ -392,6 +422,66 @@ mod tests {
     }
 
     #[test]
+    fn two_enter_events_in_one_frame_submit_exactly_once() {
+        #[derive(Resource, Default)]
+        struct SubmitCount(u32);
+
+        fn count_submits(_submit: On<TextPromptSubmit>, mut count: ResMut<SubmitCount>) {
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.add_plugins((InputPlugin, InputFocusPlugin, InputDispatchPlugin))
+            .init_resource::<ActiveTextPrompt>()
+            .init_resource::<SubmitCount>()
+            .add_observer(on_prompt_key)
+            .add_observer(count_submits)
+            .add_systems(PostUpdate, apply_prompt_close.after(EditableTextSystems));
+
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.update();
+
+        let bar = app.world_mut().spawn_empty().id();
+        let editable = app
+            .world_mut()
+            .spawn((
+                EditableText::new("x"),
+                TextPrompt {
+                    submit_on_first_char: false,
+                    bar,
+                },
+                ChildOf(bar),
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(editable, FocusCause::Navigated);
+
+        for _ in 0..2 {
+            app.world_mut().write_message(KeyboardInput {
+                key_code: KeyCode::Enter,
+                logical_key: Key::Enter,
+                state: ButtonState::Pressed,
+                text: None,
+                repeat: false,
+                window,
+            });
+        }
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SubmitCount>().0,
+            1,
+            "two Enter events buffered in one frame (auto-repeat) must submit exactly once: \
+             submit is applied once per PromptClosing entity in PostUpdate, not once per \
+             FocusedInput event in PreUpdate"
+        );
+    }
+
+    #[test]
     fn active_text_prompt_stays_some_through_update_on_close_frame() {
         #[derive(Resource, Default)]
         struct SawActiveDuringUpdate(bool);
@@ -411,7 +501,7 @@ mod tests {
             .init_resource::<SawActiveDuringUpdate>()
             .add_observer(on_prompt_key)
             .add_systems(Update, probe_active_during_update)
-            .add_systems(PostUpdate, apply_prompt_close);
+            .add_systems(PostUpdate, apply_prompt_close.after(EditableTextSystems));
 
         let window = app
             .world_mut()
@@ -458,6 +548,52 @@ mod tests {
         assert!(
             app.world().get_entity(bar).is_err(),
             "PostUpdate teardown must despawn the prompt bar"
+        );
+    }
+
+    #[test]
+    fn open_prompt_despawns_and_active_clears_on_tmux_exit() {
+        use bevy::state::app::StatesPlugin;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .init_resource::<ActiveTextPrompt>()
+            .init_resource::<InputFocus>()
+            .add_systems(Update, reconcile_active_text_prompt);
+        app.insert_state(AppMode::Tmux);
+
+        let bar = app
+            .world_mut()
+            .spawn((Node::default(), DespawnOnExit(AppMode::Tmux)))
+            .id();
+        let editable = app
+            .world_mut()
+            .spawn((
+                EditableText::new("x"),
+                TextPrompt {
+                    submit_on_first_char: false,
+                    bar,
+                },
+                ChildOf(bar),
+            ))
+            .id();
+        app.world_mut().resource_mut::<ActiveTextPrompt>().0 = Some(editable);
+        app.update();
+
+        app.world_mut()
+            .resource_mut::<NextState<AppMode>>()
+            .set(AppMode::Default);
+        app.update();
+        app.update();
+
+        assert!(
+            app.world().get_entity(bar).is_err(),
+            "leaving Tmux mode must despawn the DespawnOnExit-scoped prompt bar"
+        );
+        assert!(
+            app.world().resource::<ActiveTextPrompt>().0.is_none(),
+            "reconcile must clear ActiveTextPrompt after the tmux-scoped prompt despawns, \
+             else Default-mode mouse/IME gates keep suppressing input (frozen keyboard)"
         );
     }
 }
