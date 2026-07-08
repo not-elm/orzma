@@ -223,8 +223,7 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         use orzma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
 
-        #[derive(Resource, Default)]
-        struct CapturedCopies(Vec<String>);
+        use crate::clipboard::test_support::{CapturedClipboardWrites, capture_clipboard_writes};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -232,12 +231,7 @@ mod tests {
         app.add_observer(on_vi_yank);
         // Capture the write-seam request instead of round-tripping a real
         // clipboard: headless-safe and never clobbers the developer's clipboard.
-        app.init_resource::<CapturedCopies>();
-        app.add_observer(
-            |ev: On<ClipboardWriteRequest>, mut captured: ResMut<CapturedCopies>| {
-                captured.0.push(ev.text.clone());
-            },
-        );
+        capture_clipboard_writes(&mut app);
 
         let opts = SpawnOptions {
             cols: 20,
@@ -264,7 +258,7 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<ViModeState>(entity).is_none());
-        let captured = &app.world().resource::<CapturedCopies>().0;
+        let captured = &app.world().resource::<CapturedClipboardWrites>().0;
         assert!(
             captured.iter().any(|t| !t.is_empty()),
             "yank must emit a non-empty ClipboardWriteRequest"

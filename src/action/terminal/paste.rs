@@ -48,8 +48,7 @@ fn read_clipboard_for_paste(
     if targets.get(ev.entity).is_err() {
         return;
     }
-    let mut read = clipboard.fetch_text();
-    let text = match read.poll_result() {
+    let text = match clipboard.fetch_text().poll_result() {
         Some(Ok(text)) => text,
         Some(Err(ClipboardError::ContentNotAvailable | ClipboardError::ClipboardNotSupported)) => {
             // NOTE: keep ClipboardNotSupported (headless / no backend) at debug,

@@ -1833,7 +1833,7 @@ mod tests {
             ViActionPlugin, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest,
             ViYankRequest,
         };
-        use crate::clipboard::ClipboardWriteRequest;
+        use crate::clipboard::test_support::{CapturedClipboardWrites, capture_clipboard_writes};
         use crate::configs::OrzmaConfigsResource;
         use crate::ui::vi_mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
         use bevy::ecs::message::Messages;
@@ -1853,14 +1853,7 @@ mod tests {
         app.init_resource::<PendingPaneOutput>();
         app.add_message::<PaneOutput>();
         app.insert_resource(OrzmaConfigsResource(OrzmaConfigs::default()));
-        #[derive(Resource, Default)]
-        struct CapturedCopies(Vec<String>);
-        app.init_resource::<CapturedCopies>();
-        app.add_observer(
-            |ev: On<ClipboardWriteRequest>, mut captured: ResMut<CapturedCopies>| {
-                captured.0.push(ev.text.clone());
-            },
-        );
+        capture_clipboard_writes(&mut app);
 
         let pane_id = PaneId(99);
         let entity = app
@@ -2009,7 +2002,7 @@ mod tests {
             app.world().get::<ViModeState>(entity).is_none(),
             "yank must exit vi mode"
         );
-        let captured = &app.world().resource::<CapturedCopies>().0;
+        let captured = &app.world().resource::<CapturedClipboardWrites>().0;
         assert_eq!(
             captured.len(),
             1,

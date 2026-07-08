@@ -107,6 +107,27 @@ fn apply_clipboard_write(ev: On<ClipboardWriteRequest>, mut clipboard: ResMut<Cl
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+
+    /// Test-only sink recording every `ClipboardWriteRequest`'s text, so copy /
+    /// yank observers can be verified without round-tripping a real OS clipboard
+    /// (unavailable when headless, and clobbering the developer's clipboard).
+    #[derive(Resource, Default)]
+    pub(crate) struct CapturedClipboardWrites(pub(crate) Vec<String>);
+
+    /// Registers `CapturedClipboardWrites` plus an observer that appends each
+    /// triggered `ClipboardWriteRequest`'s text to it.
+    pub(crate) fn capture_clipboard_writes(app: &mut App) {
+        app.init_resource::<CapturedClipboardWrites>().add_observer(
+            |ev: On<ClipboardWriteRequest>, mut captured: ResMut<CapturedClipboardWrites>| {
+                captured.0.push(ev.text.clone());
+            },
+        );
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
