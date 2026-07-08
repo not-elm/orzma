@@ -20,8 +20,8 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, WebviewForwardMessage, clear_leader_phase,
 };
+use crate::ui::text_prompt::ActiveTextPrompt;
 use crate::ui::tmux::confirm_prompt::ConfirmState;
-use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::ui::vi_mode::ViModeState;
 use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
@@ -56,7 +56,7 @@ impl Plugin for KeyboardHandlerPlugin {
 struct ModalGuards<'w> {
     vi_mode_prompt: Res<'w, ViModePrompt>,
     confirm_state: Option<Res<'w, ConfirmState>>,
-    rename_prompt: Option<Res<'w, RenamePrompt>>,
+    active_text_prompt: Res<'w, ActiveTextPrompt>,
     ime: Res<'w, ImeState>,
     app_mode: Res<'w, State<AppMode>>,
 }
@@ -110,7 +110,7 @@ fn resolve_key_effects(
     let prompt_open = mode == AppMode::Tmux
         && (guards.vi_mode_prompt.open.is_some()
             || guards.confirm_state.is_some()
-            || guards.rename_prompt.is_some());
+            || guards.active_text_prompt.0.is_some());
     if prompt_open || guards.ime.is_composing() || !focused_window {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {
@@ -308,6 +308,7 @@ mod tests {
             .init_resource::<HeldRepeatKey>()
             .init_resource::<ResolvedViModeKeys>()
             .init_resource::<ViModePrompt>()
+            .init_resource::<ActiveTextPrompt>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
             .insert_state(AppMode::Default)

@@ -12,7 +12,7 @@ use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::mouse::webview::{webview_wheel_delta, webview_wheel_target};
 use crate::input::tmux::pane_hit::tmux_pane_at_phys;
-use crate::ui::tmux::rename_prompt::RenamePrompt;
+use crate::ui::text_prompt::ActiveTextPrompt;
 use crate::ui::vi_mode::ViModeState;
 use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
@@ -207,7 +207,7 @@ fn forward_wheel_to_tmux(
     mut handles: Query<(&mut TerminalHandle, &mut Coalescer)>,
     wheel_params: TmuxWebviewWheelParams,
     vi_mode_prompt: Res<ViModePrompt>,
-    rename_prompt: Option<Res<RenamePrompt>>,
+    active_text_prompt: Res<ActiveTextPrompt>,
     configs: Res<OrzmaConfigsResource>,
     metrics: Res<TerminalCellMetricsResource>,
     vi_modes: Query<(), With<ViModeState>>,
@@ -245,7 +245,7 @@ fn forward_wheel_to_tmux(
     // can't accumulate behind a modal / unfocused window and lurch on resume.
     // focused_webview is NOT a guard here — the pointer-gated target above owns
     // webview scrolling, so a focused webview must not steal terminal wheel.
-    if !window.focused || vi_mode_prompt.open.is_some() || rename_prompt.is_some() {
+    if !window.focused || vi_mode_prompt.open.is_some() || active_text_prompt.0.is_some() {
         accumulator.residual_cells = 0.0;
         return;
     }
@@ -551,6 +551,7 @@ mod tests {
         app.add_message::<MouseWheel>();
         app.init_resource::<FocusedWebview>();
         app.init_resource::<ViModePrompt>();
+        app.init_resource::<ActiveTextPrompt>();
         app.init_resource::<TmuxWheelAccumulator>();
         app.insert_resource(OrzmaConfigsResource::default());
         app.insert_resource(TerminalCellMetricsResource {
