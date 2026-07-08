@@ -1,5 +1,5 @@
-//! Tmux paste: applies `PasteAction` for a tmux pane by chunking the
-//! clipboard into `SendBytes`, relocated from an inline match arm in the
+//! Tmux paste: applies `PasteText` for a tmux pane by chunking the
+//! clipboard text into `SendBytes`, relocated from an inline match arm in the
 //! tmux keyboard-input dispatcher.
 
 use crate::action::terminal::PasteText;
@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use orzma_tmux::{SendBytes, TmuxClient, TmuxPane};
 use orzma_tty_engine::TerminalHandle;
 
-/// Registers the tmux `PasteAction` apply observer.
+/// Registers the tmux `PasteText` apply observer.
 pub(super) struct TmuxPastePlugin;
 
 impl Plugin for TmuxPastePlugin {
