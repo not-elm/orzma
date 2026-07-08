@@ -115,34 +115,25 @@ fn bridge_font_config(
     // borrow as disjoint places. Going through `DerefMut` on `font_cx` per call
     // instead would borrow all of FontCx twice and fail to compile.
     let cx = &mut **font_cx;
-    let regular = resolve_or_bundled(
-        &mut cx.collection,
-        &mut cx.source_cache,
-        regular_family,
-        FontFace::Regular,
-        bundled::REGULAR,
-    );
-    let bold = resolve_or_bundled(
-        &mut cx.collection,
-        &mut cx.source_cache,
-        bold_family,
-        FontFace::Bold,
-        bundled::BOLD,
-    );
-    let italic = resolve_or_bundled(
-        &mut cx.collection,
-        &mut cx.source_cache,
-        italic_family,
-        FontFace::Italic,
-        bundled::ITALIC,
-    );
-    let bold_italic = resolve_or_bundled(
-        &mut cx.collection,
-        &mut cx.source_cache,
-        bold_italic_family,
-        FontFace::BoldItalic,
-        bundled::BOLD_ITALIC,
-    );
+    let [regular, bold, italic, bold_italic] = [
+        (regular_family, FontFace::Regular, bundled::REGULAR),
+        (bold_family, FontFace::Bold, bundled::BOLD),
+        (italic_family, FontFace::Italic, bundled::ITALIC),
+        (
+            bold_italic_family,
+            FontFace::BoldItalic,
+            bundled::BOLD_ITALIC,
+        ),
+    ]
+    .map(|(family, face, bundled)| {
+        resolve_or_bundled(
+            &mut cx.collection,
+            &mut cx.source_cache,
+            family,
+            face,
+            bundled,
+        )
+    });
 
     let regular_from_family = regular.from_family;
     let new_fonts = TerminalFonts::from_faces(
