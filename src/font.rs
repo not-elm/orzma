@@ -11,7 +11,8 @@
 
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
-use bevy::text::{CosmicFontSystem, Font};
+use bevy::text::{Font, FontCx};
+use fontique::{Blob, Script};
 use orzma_configs::font::FontConfig;
 use orzma_configs::path::{SystemEnv, expand_user_path};
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
@@ -39,7 +40,7 @@ impl Plugin for FontBridgePlugin {
             Startup,
             (
                 bridge_font_config.before(TerminalFontInitSet::InitCellMetrics),
-                register_cjk_fallback_with_cosmic,
+                register_cjk_fallback,
             ),
         );
     }
@@ -86,26 +87,39 @@ fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -
     }
 }
 
-/// Registers the bundled CJK fallback font directly into cosmic-text's
-/// fontdb, making it discoverable as a script-fallback for spans whose
+/// Registers the bundled CJK fallback font into parley's fontique
+/// collection and appends its family to the Han / Hiragana / Katakana
+/// script-fallback chains, making it discoverable for spans whose
 /// primary `TextFont` lacks CJK coverage.
 ///
 /// NOTE: Bevy's `Assets<Font>::add(...)` is NOT sufficient here —
-/// `bevy_text::load_font_to_fontdb` only runs when a `TextFont`
-/// handle pointing at the asset reaches the text pipeline
-/// (`bevy_text-0.18.1/src/pipeline.rs:597-620`). For a fallback that
-/// is never referenced as a primary `TextFont`, call
-/// `db_mut().load_font_source(...)` explicitly so cosmic-text's
-/// `FontFallbackIter::other_i` last-resort loop sees it.
-fn register_cjk_fallback_with_cosmic(mut font_system: ResMut<CosmicFontSystem>) {
-    let source = cosmic_text::fontdb::Source::Binary(std::sync::Arc::new(
-        orzma_tty_renderer::bundled::FALLBACK_REGULAR,
-    )
-        as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>);
-    font_system.db_mut().load_font_source(source);
+/// `bevy_text::load_font_assets_into_font_collection` registers every
+/// `Font` asset in the collection, but fontique resolves missing glyphs
+/// only through per-script fallback chains, which stay empty without
+/// system font discovery. `append_fallbacks` is what makes the family
+/// reachable. Conversely, that same bevy_text system CLEARS the
+/// collection (dropping this registration and its fallback chains) if
+/// any `Font` asset is ever removed — orzma never removes font assets
+/// after Startup; re-run this registration if that changes.
+fn register_cjk_fallback(mut font_cx: ResMut<FontCx>) {
+    let blob = Blob::new(
+        std::sync::Arc::new(orzma_tty_renderer::bundled::FALLBACK_REGULAR)
+            as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>,
+    );
+    let registered = font_cx.collection.register_fonts(blob, None);
+    let family_ids: Vec<_> = registered.iter().map(|(id, _)| *id).collect();
+    for script in [
+        Script::from_str_unchecked("Hani"),
+        Script::from_str_unchecked("Hira"),
+        Script::from_str_unchecked("Kana"),
+    ] {
+        font_cx
+            .collection
+            .append_fallbacks(script, family_ids.iter().copied());
+    }
     tracing::info!(
         target: "orzma::font",
-        "registered UDEVGothic35-Regular into cosmic-text fontdb",
+        "registered UDEVGothic35-Regular into the parley font collection as CJK fallback",
     );
 }
 
@@ -176,29 +190,12 @@ fn bridge_font_config(
     commands.insert_resource(TerminalUiFont(handle));
 }
 
-/// Builds the UI-side `Handle<Font>` from the regular face bytes. On
-/// `Font::try_from_bytes` rejection (rare; ab_glyph and bevy_text use
-/// different parser families, so a font accepted by one may be rejected
-/// by the other), falls back to Bevy's default FiraMono via
-/// `Handle::<Font>::default()`.
+/// Builds the UI-side `Handle<Font>` from the regular face bytes.
+/// `Font::from_bytes` is infallible in Bevy 0.19 (parsing happens later,
+/// at fontique registration); the bytes reaching this point were already
+/// validated per-face by `validate_or_bundled`.
 fn make_ui_font_handle(regular_bytes: Vec<u8>, fonts_assets: &mut Assets<Font>) -> Handle<Font> {
-    match Font::try_from_bytes(regular_bytes) {
-        Ok(font_asset) => fonts_assets.add(font_asset),
-        Err(err) => {
-            // ERROR not warn: the user's terminal and UI overlay will now
-            // render in different typefaces (terminal: user-supplied or
-            // bundled JetBrains Mono; UI: Bevy's FiraMono), a visible
-            // inconsistency that operators should know about.
-            tracing::error!(
-                %err,
-                "bevy_text::Font::try_from_bytes rejected the regular face; \
-                 the terminal grid will render in the resolved JetBrains Mono or user override \
-                 while the UI overlay falls back to Bevy's bundled FiraMono — \
-                 expect a visible typeface mismatch between the grid and chrome"
-            );
-            Handle::<Font>::default()
-        }
-    }
+    fonts_assets.add(Font::from_bytes(regular_bytes))
 }
 
 #[cfg(test)]
@@ -437,18 +434,27 @@ mod tests {
     }
 
     #[test]
-    fn cjk_fallback_registered_in_cosmic_fontdb() {
+    fn cjk_fallback_registered_in_font_collection() {
         let (mut app, _guard, _env) = make_test_app();
         app.update();
 
-        let font_system = app.world().resource::<bevy::text::CosmicFontSystem>();
-        let has_udev_face = font_system
-            .db()
-            .faces()
-            .any(|face| face.families.iter().any(|(name, _)| name.contains("UDEV")));
+        let mut font_cx = app.world_mut().resource_mut::<FontCx>();
+        let has_udev_family = font_cx
+            .collection
+            .family_names()
+            .any(|name| name.contains("UDEV"));
         assert!(
-            has_udev_face,
-            "UDEVGothic35 must be registered in cosmic-text fontdb after Startup",
+            has_udev_family,
+            "UDEVGothic35 must be registered in the parley font collection after Startup",
+        );
+        let hira_chain_nonempty = font_cx
+            .collection
+            .fallback_families(Script::from_str_unchecked("Hira"))
+            .next()
+            .is_some();
+        assert!(
+            hira_chain_nonempty,
+            "the Hiragana script-fallback chain must contain the bundled CJK family",
         );
     }
 

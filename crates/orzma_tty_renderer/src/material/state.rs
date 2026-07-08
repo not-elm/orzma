@@ -9,7 +9,7 @@ use bevy::{
     ecs::{lifecycle::HookContext, world::DeferredWorld},
     platform::collections::HashMap,
     prelude::*,
-    render::storage::ShaderStorageBuffer,
+    render::storage::ShaderBuffer,
 };
 
 /// Registers a `MaterialNode<TerminalUiMaterial>` on-add hook that seeds the SSBO buffers, attaches the glyph atlas image, and inserts the per-entity [`TerminalMaterialState`] cache.
@@ -80,17 +80,17 @@ fn on_add_material_node(mut world: DeferredWorld, ctx: HookContext) {
     //       zero-sized storage buffers at bind time, so the bind group would
     //       fail to materialize before the first wire snapshot arrived and
     //       the whole material would silently drop out of the UI pass.
-    let mut cells_seed = ShaderStorageBuffer::default();
+    let mut cells_seed = ShaderBuffer::default();
     cells_seed.set_data(vec![GpuCell::default()]);
-    let mut glyphs_seed = ShaderStorageBuffer::default();
+    let mut glyphs_seed = ShaderBuffer::default();
     glyphs_seed.set_data(vec![GpuGlyph::default()]);
 
     let (cells_buffer, glyphs_buffer) = {
-        let mut buffers = world.resource_mut::<Assets<ShaderStorageBuffer>>();
+        let mut buffers = world.resource_mut::<Assets<ShaderBuffer>>();
         (buffers.add(cells_seed), buffers.add(glyphs_seed))
     };
 
-    if let Some(material) = world
+    if let Some(mut material) = world
         .resource_mut::<Assets<TerminalUiMaterial>>()
         .get_mut(&material_handle)
     {

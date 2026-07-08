@@ -24,14 +24,17 @@ ab_glyph = "0.2"
 anyhow = { workspace = true }
 arboard = { version = "3", features = ["wayland-data-control"] }
 bevy = { workspace = true }
-bevy_cef = "0.11"
+bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
 orzma_tty_renderer = { path = "crates/orzma_tty_renderer" }
 orzma_tty_engine = { path = "crates/orzma_tty_engine" }
 orzma_webview = { path = "crates/orzma_webview" }
-cosmic-text = "0.16"
 crossbeam-channel = "0.5"
 data-encoding = "2"
+# NOTE: default-features = false keeps fontique's `system` backend off,
+# matching bevy_text's parley configuration — enabling it here would turn on
+# system font discovery for the whole dependency graph via feature unification.
+fontique = { version = "0.9", default-features = false, features = ["std"] }
 getrandom = "0.2"
 libc = "0.2"
 open = { workspace = true }
@@ -72,13 +75,13 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
-# NOTE: default_font is load-bearing for src/font.rs::make_ui_font_handle —
-# the fallback when bevy_text rejects a font (e.g., parser divergence between
-# ab_glyph and cosmic-text/skrifa) uses Handle::<Font>::default() which only
-# resolves to FiraMono when default_font is enabled. The feature is currently
-# part of bevy's default set via 2d/3d/ui → default_platform → default_font,
-# but listing it explicitly here protects against future "default-features = false".
-bevy = { version = "0.18", features = ["default_font"] }
+# NOTE: default_font is load-bearing for every `Handle::<Font>::default()`
+# consumer (e.g. src/ui/vi_mode_indicator.rs before TerminalUiFont exists, and
+# the font.rs / ime_overlay.rs tests) — the default handle only resolves to
+# FiraMono when default_font is enabled. The feature is currently part of
+# bevy's default set via default_platform → default_font, but listing it
+# explicitly here protects against future "default-features = false".
+bevy = { version = "0.19", features = ["default_font"] }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
@@ -92,7 +95,8 @@ dirs = "5"
 unicode-width = "0.2"
 unicode-segmentation = "1"
 open = "5"
-bevy_cef_core = "0.11"
+bevy_cef = "0.12"
+bevy_cef_core = "0.12"
 
 [workspace.lints.clippy]
 too_many_arguments = "allow"

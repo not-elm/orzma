@@ -396,6 +396,7 @@ mod tests {
     use crate::input::shortcuts::tmux::{tmux_pane_direction, tmux_split_direction};
     use bevy::ecs::system::RunSystemOnce;
     use bevy::input::mouse::MouseScrollUnit;
+    use bevy::input::touch::TouchPhase;
     use orzma_configs::shortcuts::{
         PaneDirection as CfgPaneDirection, SplitOrientation as CfgSplitOrientation,
     };
@@ -609,6 +610,7 @@ mod tests {
             x: 0.0,
             y,
             window: Entity::PLACEHOLDER,
+            phase: TouchPhase::Moved,
         }
     }
 

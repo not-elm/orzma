@@ -104,7 +104,7 @@ impl Plugin for RenderPlugin {
                     attach_tmux_window_container,
                     attach_tmux_pane_terminal,
                     route_tmux_output
-                        .run_if(on_message::<PaneOutput>.or(pending_pane_output_waiting)),
+                        .run_if(on_message::<PaneOutput>.or_else(pending_pane_output_waiting)),
                     sync_active_window,
                     layout_tmux_panes.in_set(TmuxLayoutSet),
                 )

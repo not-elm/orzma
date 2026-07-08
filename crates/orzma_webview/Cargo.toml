@@ -14,8 +14,7 @@ debug = ["bevy_cef/debug"]
 
 [dependencies]
 bevy = { workspace = true }
-bevy_cef = "0.11"
-bevy_cef_core = { workspace = true }
+bevy_cef = { workspace = true }
 orzma_tty_engine = { path = "../orzma_tty_engine" }
 orzma_tty_renderer = { path = "../orzma_tty_renderer" }
 orzma_webview_host = { path = "../webview_host", features = ["cef"] }

@@ -19,7 +19,7 @@ use bevy::{
             TextureViewDimension, UnpreparedBindGroup, encase::UniformBuffer,
         },
         renderer::RenderDevice,
-        storage::{GpuShaderStorageBuffer, ShaderStorageBuffer},
+        storage::{GpuShaderBuffer, ShaderBuffer},
         texture::{FallbackImage, GpuImage},
     },
     shader::ShaderRef,
@@ -77,8 +77,8 @@ impl Plugin for TerminalMaterialPlugin {
 #[derive(Asset, TypePath, Clone)]
 pub struct TerminalUiMaterial {
     params: TerminalParams,
-    cells: Handle<ShaderStorageBuffer>,
-    glyphs: Handle<ShaderStorageBuffer>,
+    cells: Handle<ShaderBuffer>,
+    glyphs: Handle<ShaderBuffer>,
     atlas: Handle<Image>,
     overlays: [Option<Handle<Image>>; OVERLAY_SLOTS],
 }
@@ -105,7 +105,7 @@ impl AsBindGroup for TerminalUiMaterial {
     type Param = (
         SRes<RenderAssets<GpuImage>>,
         SRes<FallbackImage>,
-        SRes<RenderAssets<GpuShaderStorageBuffer>>,
+        SRes<RenderAssets<GpuShaderBuffer>>,
     );
 
     fn label() -> &'static str {
@@ -637,7 +637,7 @@ fn padding_color(default_bg: [u8; 3], fallback: [u8; 3]) -> Vec4 {
 fn update_terminal_material(
     mut atlas: ResMut<GlyphAtlas>,
     mut materials: ResMut<Assets<TerminalUiMaterial>>,
-    mut buffers: ResMut<Assets<ShaderStorageBuffer>>,
+    mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut terminals: Query<(
         Entity,
         &MaterialNode<TerminalUiMaterial>,
@@ -659,7 +659,7 @@ fn update_terminal_material(
     // load-bearing for rendering correctness: it forces `AssetEvent::Modified`
     // on the material every frame so `PreparedUiMaterial::prepare_asset` runs
     // and rebuilds the bind group against the latest `GpuImage` /
-    // `GpuShaderStorageBuffer`. Without this, the bind group keeps a stale
+    // `GpuShaderBuffer`. Without this, the bind group keeps a stale
     // reference to the initial (empty) atlas texture even after
     // `sync_atlas_image` re-uploads pixels — the glyphs are present on GPU
     // but the shader's `textureSampleLevel` returns 0. The actual GPU upload
@@ -759,10 +759,10 @@ fn update_terminal_material(
                 state.cpu_glyphs.push(GpuGlyph::default());
             }
 
-            if let Some(buf) = buffers.get_mut(&cells_handle) {
+            if let Some(mut buf) = buffers.get_mut(&cells_handle) {
                 buf.set_data(std::mem::take(&mut state.cpu_cells));
             }
-            if let Some(buf) = buffers.get_mut(&glyphs_handle) {
+            if let Some(mut buf) = buffers.get_mut(&glyphs_handle) {
                 buf.set_data(state.cpu_glyphs.clone());
             }
 
@@ -788,7 +788,7 @@ fn update_terminal_material(
                     s.overlay_desaturate.clamp(0.0, 1.0),
                 )
             });
-        if let Some(mat) = materials.get_mut(&handle.0) {
+        if let Some(mut mat) = materials.get_mut(&handle.0) {
             let mut params = TerminalParams::new(
                 grid,
                 cell_size_phys,

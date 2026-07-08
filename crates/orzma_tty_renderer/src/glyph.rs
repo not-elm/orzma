@@ -74,7 +74,7 @@ fn sync_atlas_image(
     if atlas.generation == atlas_image.last_generation {
         return;
     }
-    if let Some(image) = images.get_mut(&atlas_image.handle) {
+    if let Some(mut image) = images.get_mut(&atlas_image.handle) {
         image.data = Some(expand_r8_to_rgba8(&atlas.pixels));
     }
     atlas_image.last_generation = atlas.generation;

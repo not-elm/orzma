@@ -131,8 +131,8 @@ fn spawn_prompt_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>)
             parent.spawn((
                 Text::new(""),
                 TextFont {
-                    font,
-                    font_size: theme::UI_FONT_SIZE,
+                    font: font.into(),
+                    font_size: FontSize::Px(theme::UI_FONT_SIZE),
                     ..default()
                 },
                 TextColor(theme::FOREGROUND),

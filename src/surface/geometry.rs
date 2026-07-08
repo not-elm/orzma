@@ -5,7 +5,7 @@
 
 use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;
-use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 
 /// Which half of a cell the pointer fell in (left vs. right of the midline).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,18 +94,25 @@ pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16,
 
 /// Returns the topmost `OrzmaTerminal` surface whose node contains `cursor_phys`,
 /// or `None` when the cursor is over none. "Topmost" is the highest
-/// `ComputedNode::stack_index` (Bevy's resolved front-to-back UI order); ties
+/// `ComputedStackIndex` (Bevy's resolved front-to-back UI order); ties
 /// break by `Entity` for determinism. The Default-mode pointer/gate path uses
 /// this to pick the single shell (or the frontmost surface) under the cursor;
 /// tmux keeps its own multi-pane `tmux_pane_at_phys` resolution.
 pub(crate) fn topmost_surface_at<'a>(
     cursor_phys: Vec2,
-    candidates: impl Iterator<Item = (Entity, &'a ComputedNode, &'a UiGlobalTransform)>,
+    candidates: impl Iterator<
+        Item = (
+            Entity,
+            &'a ComputedNode,
+            &'a ComputedStackIndex,
+            &'a UiGlobalTransform,
+        ),
+    >,
 ) -> Option<Entity> {
     candidates
-        .filter(|&(_, node, transform)| node.contains_point(*transform, cursor_phys))
-        .max_by_key(|&(entity, node, _)| (node.stack_index(), entity))
-        .map(|(entity, _, _)| entity)
+        .filter(|&(_, node, _, transform)| node.contains_point(*transform, cursor_phys))
+        .max_by_key(|&(entity, _, stack, _)| (stack.0, entity))
+        .map(|(entity, _, _, _)| entity)
 }
 
 #[cfg(test)]
@@ -211,26 +218,26 @@ mod tests {
         // C: left half, stack 9 — overlaps A and sits on top.
         let node_a = ComputedNode {
             size: Vec2::new(400.0, 600.0),
-            stack_index: 5,
             ..ComputedNode::DEFAULT
         };
+        let stack_a = ComputedStackIndex(5);
         let tf_a = UiGlobalTransform::from_xy(200.0, 300.0);
         let node_b = ComputedNode {
             size: Vec2::new(400.0, 600.0),
-            stack_index: 3,
             ..ComputedNode::DEFAULT
         };
+        let stack_b = ComputedStackIndex(3);
         let tf_b = UiGlobalTransform::from_xy(600.0, 300.0);
         let node_c = ComputedNode {
             size: Vec2::new(400.0, 600.0),
-            stack_index: 9,
             ..ComputedNode::DEFAULT
         };
+        let stack_c = ComputedStackIndex(9);
         let tf_c = UiGlobalTransform::from_xy(200.0, 300.0);
         let candidates = [
-            (a, &node_a, &tf_a),
-            (b, &node_b, &tf_b),
-            (c, &node_c, &tf_c),
+            (a, &node_a, &stack_a, &tf_a),
+            (b, &node_b, &stack_b, &tf_b),
+            (c, &node_c, &stack_c, &tf_c),
         ];
 
         assert_eq!(
@@ -260,12 +267,12 @@ mod tests {
         // depend on candidate iteration order.
         let node = ComputedNode {
             size: Vec2::new(400.0, 600.0),
-            stack_index: 0,
             ..ComputedNode::DEFAULT
         };
+        let stack = ComputedStackIndex(0);
         let tf = UiGlobalTransform::from_xy(200.0, 300.0);
-        let forward = [(lower, &node, &tf), (higher, &node, &tf)];
-        let reversed = [(higher, &node, &tf), (lower, &node, &tf)];
+        let forward = [(lower, &node, &stack, &tf), (higher, &node, &stack, &tf)];
+        let reversed = [(higher, &node, &stack, &tf), (lower, &node, &stack, &tf)];
         let winner = topmost_surface_at(Vec2::new(100.0, 300.0), forward.iter().copied());
         assert_eq!(
             winner,

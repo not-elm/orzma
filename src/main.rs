@@ -99,7 +99,7 @@ fn main() {
 ///
 /// `ime_enabled` starts `false` deliberately: bevy_winit applies the IME state
 /// to the OS window only on a live `false -> true` change of `Window::ime_enabled`
-/// (`bevy_winit-0.18.1/src/system.rs:503-504`) and never at window creation, so
+/// (`bevy_winit-0.19.0/src/system.rs:539-540`) and never at window creation, so
 /// starting `true` would leave the OS IME un-armed. `ime_policy_system` flips it
 /// to `true` on the first focused-surface tick, producing the arming transition.
 fn primary_window() -> Window {

@@ -310,7 +310,7 @@ pub(in crate::input) fn tmux_split_direction(orientation: CfgSplitOrientation) -
 /// Run condition for `apply_tmux_forward`: true on any frame carrying a key to
 /// forward (typed or webview-forwarded). The two never coexist in a frame.
 fn on_tmux_forward_message() -> impl SystemCondition<()> {
-    on_message::<TypeMessage>.or(on_message::<WebviewForwardMessage>)
+    on_message::<TypeMessage>.or_else(on_message::<WebviewForwardMessage>)
 }
 
 #[cfg(test)]

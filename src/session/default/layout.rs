@@ -24,8 +24,8 @@ impl Plugin for DefaultLayoutPlugin {
                     .run_if(resource_exists::<TerminalCellMetricsResource>)
                     .run_if(
                         resource_exists_and_changed::<OrzmaLastSize>
-                            .or(resource_exists_and_changed::<TerminalCellMetricsResource>)
-                            .or(on_message::<WindowResized>),
+                            .or_else(resource_exists_and_changed::<TerminalCellMetricsResource>)
+                            .or_else(on_message::<WindowResized>),
                     ),
             );
     }

@@ -27,7 +27,7 @@ use crate::surface::geometry::topmost_surface_at;
 use crate::ui::vi_search::ViModePrompt;
 use bevy::input::mouse::{MouseButton, MouseButtonInput, MouseWheel};
 use bevy::prelude::*;
-use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorMoved, PrimaryWindow};
 use bevy_cef::prelude::FocusedWebview;
 use bevy_cef_core::prelude::Browsers;
@@ -51,13 +51,13 @@ impl Plugin for MouseWebviewDefaultModePlugin {
             Update,
             forward_default_webview_mouse_moves
                 .in_set(InputPhase::Hover)
-                .run_if(in_state(AppMode::Default).and(on_message::<CursorMoved>)),
+                .run_if(in_state(AppMode::Default).and_then(on_message::<CursorMoved>)),
         )
         .add_systems(
             Update,
             forward_default_webview_wheel
                 .in_set(InputPhase::Dispatch)
-                .run_if(in_state(AppMode::Default).and(on_message::<MouseWheel>)),
+                .run_if(in_state(AppMode::Default).and_then(on_message::<MouseWheel>)),
         );
     }
 }
@@ -70,7 +70,15 @@ fn default_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
     mut buttons: MessageReader<MouseButtonInput>,
-    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
+    surfaces: Query<
+        (
+            Entity,
+            &ComputedNode,
+            &ComputedStackIndex,
+            &UiGlobalTransform,
+        ),
+        With<OrzmaTerminal>,
+    >,
     metrics: Res<TerminalCellMetricsResource>,
     vi_mode_prompt: Res<ViModePrompt>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -103,7 +111,7 @@ fn default_webview_pointer(
         let Some(terminal) = topmost_surface_at(cursor_phys, surfaces.iter()) else {
             continue;
         };
-        let Ok((_, node, transform)) = surfaces.get(terminal) else {
+        let Ok((_, node, _, transform)) = surfaces.get(terminal) else {
             continue;
         };
         let Some(local_phys) = phys_to_pane_local(node, transform, cursor_phys) else {
@@ -128,7 +136,15 @@ fn default_webview_pointer(
 /// while a vi-search prompt owns input.
 fn forward_default_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
-    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
+    surfaces: Query<
+        (
+            Entity,
+            &ComputedNode,
+            &ComputedStackIndex,
+            &UiGlobalTransform,
+        ),
+        With<OrzmaTerminal>,
+    >,
     children: Query<'_, '_, &'static Children>,
     webviews: Query<'_, '_, (&'static Webview, Has<NonInteractive>)>,
     overlay_rects: Query<'_, '_, &'static TerminalOverlays>,
@@ -160,7 +176,7 @@ fn forward_default_webview_mouse_moves(
         &deps,
         |c| {
             let t = topmost_surface_at(c, surfaces.iter())?;
-            let (_, node, transform) = surfaces.get(t).ok()?;
+            let (_, node, _, transform) = surfaces.get(t).ok()?;
             Some((t, phys_to_pane_local(node, transform, c)?))
         },
         cursor_phys,
@@ -178,7 +194,15 @@ fn forward_default_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,
     webview_parents: Query<&ChildOf, With<Webview>>,
-    surfaces: Query<(Entity, &ComputedNode, &UiGlobalTransform), With<OrzmaTerminal>>,
+    surfaces: Query<
+        (
+            Entity,
+            &ComputedNode,
+            &ComputedStackIndex,
+            &UiGlobalTransform,
+        ),
+        With<OrzmaTerminal>,
+    >,
     children: Query<&Children>,
     webviews: Query<(&Webview, Has<NonInteractive>)>,
     overlay_rects: Query<&TerminalOverlays>,
@@ -200,7 +224,7 @@ fn forward_default_webview_wheel(
     let target = window.cursor_position().and_then(|c| {
         let cursor_phys = c * scale;
         let terminal = topmost_surface_at(cursor_phys, surfaces.iter())?;
-        let (_, node, transform) = surfaces.get(terminal).ok()?;
+        let (_, node, _, transform) = surfaces.get(terminal).ok()?;
         let local_phys = phys_to_pane_local(node, transform, cursor_phys)?;
         webview_wheel_target(
             &focused_webview,

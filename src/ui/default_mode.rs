@@ -27,8 +27,9 @@ impl Plugin for DefaultModeUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            ensure_default_mode_ui
-                .run_if(in_state(AppMode::Default).and(not(any_with_component::<DefaultModeUi>))),
+            ensure_default_mode_ui.run_if(
+                in_state(AppMode::Default).and_then(not(any_with_component::<DefaultModeUi>)),
+            ),
         );
     }
 }

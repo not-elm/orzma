@@ -27,7 +27,7 @@ impl Plugin for TmuxModeUiPlugin {
         app.add_systems(
             Update,
             ensure_tmux_mode_ui
-                .run_if(in_state(AppMode::Tmux).and(not(any_with_component::<TmuxModeUi>))),
+                .run_if(in_state(AppMode::Tmux).and_then(not(any_with_component::<TmuxModeUi>))),
         );
     }
 }

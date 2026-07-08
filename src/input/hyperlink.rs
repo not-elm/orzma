@@ -22,7 +22,7 @@ use bevy::input::ButtonInput;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::input::mouse::MouseMotion;
 use bevy::prelude::*;
-use bevy::ui::{ComputedNode, UiGlobalTransform};
+use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
 use bevy::window::{CursorIcon, CursorMoved, PrimaryWindow, SystemCursorIcon, Window};
 use bevy_cef::prelude::WebviewSource;
 use orzma_configs::shortcuts::Modifiers;
@@ -39,8 +39,8 @@ impl Plugin for HyperlinkInputPlugin {
             hyperlink_hover_and_cursor
                 .run_if(
                     on_message::<MouseMotion>
-                        .or(on_message::<CursorMoved>)
-                        .or(on_message::<KeyboardInput>),
+                        .or_else(on_message::<CursorMoved>)
+                        .or_else(on_message::<KeyboardInput>),
                 )
                 .in_set(InputPhase::Hover),
         );
@@ -62,7 +62,12 @@ fn hyperlink_hover_and_cursor(
     mut cursor_icons: Query<&mut CursorIcon, With<PrimaryWindow>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     surfaces: Query<
-        (Entity, &ComputedNode, &UiGlobalTransform),
+        (
+            Entity,
+            &ComputedNode,
+            &ComputedStackIndex,
+            &UiGlobalTransform,
+        ),
         (With<OrzmaTerminal>, Without<MouseDisabled>),
     >,
     grids: Query<&TerminalGrid>,
@@ -99,7 +104,7 @@ fn hyperlink_hover_and_cursor(
                 let id = surfaces
                     .get(entity)
                     .ok()
-                    .and_then(|(_, node, transform)| {
+                    .and_then(|(_, node, _, transform)| {
                         phys_to_pane_local(node, transform, cursor_phys)
                     })
                     .map(|local| {

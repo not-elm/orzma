@@ -211,8 +211,8 @@ fn build_session_block(
         Text::new(session_name.to_string()),
         TextColor(palette::FOREGROUND),
         TextFont {
-            font: font.clone(),
-            font_size: theme::UI_FONT_SIZE,
+            font: font.clone().into(),
+            font_size: FontSize::Px(theme::UI_FONT_SIZE),
             ..default()
         },
         ChildOf(block),
@@ -221,8 +221,8 @@ fn build_session_block(
         Text::new(theme::POWERLINE_RIGHT.to_string()),
         TextColor(palette::SESSION_BG),
         TextFont {
-            font: pl_font.clone(),
-            font_size: theme::UI_FONT_SIZE,
+            font: pl_font.clone().into(),
+            font_size: FontSize::Px(theme::UI_FONT_SIZE),
             ..default()
         },
         ChildOf(bar),
@@ -318,8 +318,8 @@ fn build_window_entry(
         Text::new(theme::POWERLINE_RIGHT.to_string()),
         TextColor(chevron_color),
         TextFont {
-            font: pl_font.clone(),
-            font_size: theme::UI_FONT_SIZE,
+            font: pl_font.clone().into(),
+            font_size: FontSize::Px(theme::UI_FONT_SIZE),
             ..default()
         },
         ChildOf(entry),
@@ -341,8 +341,8 @@ fn spawn_entry_label(
         Text::new(label.to_string()),
         TextColor(label_color),
         TextFont {
-            font: font.clone(),
-            font_size: theme::UI_FONT_SIZE,
+            font: font.clone().into(),
+            font_size: FontSize::Px(theme::UI_FONT_SIZE),
             ..default()
         },
         ChildOf(parent),
@@ -352,8 +352,8 @@ fn spawn_entry_label(
             Text::new(suffix.to_string()),
             TextColor(flag_color),
             TextFont {
-                font: font.clone(),
-                font_size: theme::UI_FONT_SIZE,
+                font: font.clone().into(),
+                font_size: FontSize::Px(theme::UI_FONT_SIZE),
                 ..default()
             },
             ChildOf(parent),

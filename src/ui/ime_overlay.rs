@@ -22,7 +22,7 @@ use bevy::ecs::schedule::SystemCondition;
 use bevy::ecs::schedule::common_conditions::{not, resource_exists_and_changed};
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::prelude::default;
-use bevy::text::{LineBreak, TextColor, TextFont, TextLayout};
+use bevy::text::{FontSize, LineBreak, TextColor, TextFont, TextLayout};
 use bevy::ui::widget::Text;
 use bevy::ui::{
     BackgroundColor, BorderColor, ComputedNode, Display, GlobalZIndex, Node, PositionType,
@@ -48,15 +48,15 @@ impl Plugin for ImeOverlayPlugin {
                 spawn_ime_overlay_once.after(TerminalFontInitSet::InitCellMetrics),
             )
             // NOTE: must run BEFORE `UiSystems::Content`. Bevy's
-            // `detect_text_needs_rerender::<Text>` and `measure_text_system`
-            // run in `UiSystems::Content` (`bevy_ui-0.18.1/src/lib.rs:226-243`)
-            // and that's where `ComputedTextBlock` is refreshed from
-            // ECS `TextSpan`s (`bevy_text-0.18.1/src/pipeline.rs:245-272`).
-            // If we mutate `TextSpan.0` after `Content`, detection sees no
-            // change this frame, `text_system` in `PostLayout` is gated off
-            // (`bevy_ui-0.18.1/src/widget/text.rs:343-393`), the root's
+            // `detect_text_needs_rerender` and `measure_text_system`
+            // run in `UiSystems::Content` (`bevy_ui-0.19.0/src/lib.rs:236-252`)
+            // and that's where changed ECS `TextSpan`s are detected
+            // (`bevy_text-0.19.0/src/text.rs:1223`). If we mutate
+            // `TextSpan.0` after `Content`, detection sees no change
+            // this frame, `text_system` in `PostLayout` is gated off
+            // (`bevy_ui-0.19.0/src/widget/text.rs:357`), the root's
             // `ComputedNode` stays at 0×0, and `bevy_ui_render` skips empty
-            // nodes (`bevy_ui_render-0.18.1/src/lib.rs:1044-1046`) —
+            // nodes (`bevy_ui_render-0.19.0/src/lib.rs:997`) —
             // explaining why the inline preedit was invisible.
             //
             // Side effect of running before `Layout`: the anchor's
@@ -73,10 +73,12 @@ impl Plugin for ImeOverlayPlugin {
                         .run_if(ime_is_composing)
                         .before(UiSystems::Content),
                     hide_ime_overlay
-                        .run_if(resource_exists_and_changed::<ImeState>.and(not(ime_is_composing)))
+                        .run_if(
+                            resource_exists_and_changed::<ImeState>.and_then(not(ime_is_composing)),
+                        )
                         .before(UiSystems::Content),
                     suppress_terminal_cursor_during_ime
-                        .run_if(resource_exists_and_changed::<ImeState>.or(ime_is_composing))
+                        .run_if(resource_exists_and_changed::<ImeState>.or_else(ime_is_composing))
                         .before(TerminalMaterialSystems::UpdateMaterial),
                 ),
             );
@@ -130,7 +132,7 @@ const INITIAL_POOL_CAP: usize = 16;
 
 /// Run condition: true while an IME preedit composition is active. Takes
 /// `Option<Res<ImeState>>` so it returns `false` rather than panicking when
-/// `ImeState` is absent, keeping the `.or()` / `.and()` gates safe.
+/// `ImeState` is absent, keeping the `.or_else()` / `.and_then()` gates safe.
 fn ime_is_composing(state: Option<Res<ImeState>>) -> bool {
     state.is_some_and(|state| state.is_composing())
 }
@@ -462,14 +464,14 @@ const IME_OVERLAY_BG_Z: i32 = IME_OVERLAY_Z - 1;
 ///
 /// NOTE: `Text` root and caret bar are spawned as INDEPENDENT
 /// top-level UI entities (no `ChildOf` between them). Required by
-/// Bevy 0.18 + Taffy 0.9.2: `NodeMeasure::Text` is only consulted by
+/// Bevy 0.19 + Taffy 0.10.1: `NodeMeasure::Text` is only consulted by
 /// `compute_leaf_layout`, dispatched at `(_, has_children == false)`
-/// in `taffy-0.9.2/src/tree/taffy_tree.rs:364-394`. Adding any UI
+/// in `taffy-0.10.1/src/tree/taffy_tree.rs:304-330`. Adding any UI
 /// child (even an absolute-positioned one that contributes 0 to flex
 /// container size) puts the Text node on the `compute_flexbox_layout`
 /// branch, which ignores the measure function — `ComputedNode.size`
 /// becomes (0, 0), `bevy_ui_render` then skips text + underline at
-/// `uinode.is_empty()` (`bevy_ui_render-0.18.1/src/lib.rs:939, 1197`),
+/// `uinode.is_empty()` (`bevy_ui_render-0.19.0/src/lib.rs:997, 1308`),
 /// while the child caret bar still renders because its own
 /// `ComputedNode` is non-empty (explicit width/height). Both
 /// entities are positioned in window-absolute coords each frame in
@@ -477,8 +479,8 @@ const IME_OVERLAY_BG_Z: i32 = IME_OVERLAY_Z - 1;
 ///
 /// `LineBreak::NoWrap` is set as defense-in-depth: with it,
 /// `measure_text_system` uses `FixedMeasure { size: measure.max }`
-/// (`bevy_ui-0.18.1/src/widget/text.rs:292-295`) and `text_system`
-/// uses `TextBounds::UNBOUNDED` (`:351-353`) — bypassing any residual
+/// (`bevy_ui-0.19.0/src/widget/text.rs:301-302`) and `text_system`
+/// uses `TextBounds::UNBOUNDED` (`:363-365`) — bypassing any residual
 /// zero-bound shaping. Single-line preedit text never needs wrapping
 /// anyway.
 ///
@@ -648,8 +650,8 @@ fn spawn_grapheme_cell(
         .spawn((
             Text::new(text),
             TextFont {
-                font: ui_font.0.clone(),
-                font_size: font_size.0,
+                font: ui_font.0.clone().into(),
+                font_size: FontSize::Px(font_size.0),
                 ..default()
             },
             TextColor(Color::WHITE),
@@ -807,7 +809,7 @@ mod tests {
         let mut query = app.world_mut().query::<&TextFont>();
         let matched = query
             .iter(app.world())
-            .any(|tf| (tf.font_size - 9.0).abs() < f32::EPSILON);
+            .any(|tf| tf.font_size == FontSize::Px(9.0));
         assert!(
             matched,
             "IME overlay TextFont must use TerminalFontSize (9.0), not the constant"
@@ -1181,8 +1183,9 @@ mod tests {
             PostUpdate,
             (
                 position_ime_overlay.run_if(ime_is_composing),
-                hide_ime_overlay
-                    .run_if(resource_exists_and_changed::<ImeState>.and(not(ime_is_composing))),
+                hide_ime_overlay.run_if(
+                    resource_exists_and_changed::<ImeState>.and_then(not(ime_is_composing)),
+                ),
             ),
         );
         app.world_mut().spawn((
