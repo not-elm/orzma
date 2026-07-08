@@ -27,8 +27,8 @@ pub(crate) struct ActiveTextPrompt(pub(crate) Option<Entity>);
 /// prompts, which submit as soon as one character is inserted.
 #[derive(Component)]
 pub(crate) struct TextPrompt {
-    pub(crate) submit_on_first_char: bool,
-    pub(crate) bar: Entity,
+    submit_on_first_char: bool,
+    bar: Entity,
 }
 
 /// Emitted (targeted at the prompt's `EditableText` entity) when the user
@@ -123,7 +123,8 @@ impl Plugin for TextPromptPlugin {
         app.init_resource::<ActiveTextPrompt>()
             .add_observer(on_prompt_key)
             .add_observer(on_prompt_edit)
-            .add_systems(Update, reconcile_active_text_prompt);
+            .add_systems(Update, reconcile_active_text_prompt)
+            .add_systems(PostUpdate, apply_prompt_close);
     }
 }
 
@@ -134,6 +135,14 @@ enum PromptAction {
     Cancel,
     Continue,
 }
+
+/// Marks a prompt whose submit/cancel has been decided; `apply_prompt_close`
+/// tears it down in `PostUpdate`. Teardown is deferred (not done in the
+/// `FocusedInput` observer, which runs in `PreUpdate`) so `ActiveTextPrompt`
+/// stays set through the Update-phase input gates on the close frame — otherwise
+/// the terminating Enter/Escape leaks past the drain guard into the focused pane.
+#[derive(Component)]
+struct PromptClosing;
 
 /// Maps a key press to a prompt action. Enter submits (unless the IME is
 /// composing, so a conversion-confirming Enter is not mistaken for submit);
@@ -146,21 +155,31 @@ fn decide_prompt_key(key: &Key, composing: bool) -> PromptAction {
     }
 }
 
-/// Tears the prompt down: despawns the overlay bar (and its children), clears
-/// the focus and the active-prompt signal. Idempotent.
-fn close_prompt(
-    commands: &mut Commands,
-    input_focus: &mut InputFocus,
-    active: &mut ActiveTextPrompt,
-    bar: Entity,
+/// Tears down prompts marked `PromptClosing` (despawns the bar, clears focus and
+/// the active signal). Runs in `PostUpdate`, after the Update-phase input gates,
+/// so the closing frame's terminating key is still drained while the prompt was
+/// nominally open. Idempotent and tolerant of an already-cleared prompt.
+fn apply_prompt_close(
+    mut commands: Commands,
+    mut input_focus: ResMut<InputFocus>,
+    mut active: ResMut<ActiveTextPrompt>,
+    closing: Query<(Entity, &TextPrompt), With<PromptClosing>>,
 ) {
-    commands.entity(bar).despawn();
-    input_focus.clear();
-    active.0 = None;
+    for (entity, prompt) in &closing {
+        commands.entity(prompt.bar).despawn();
+        if active.0 == Some(entity) {
+            active.0 = None;
+        }
+        if input_focus.get() == Some(entity) {
+            input_focus.clear();
+        }
+    }
 }
 
-/// Handles Enter/Escape for a focused `TextPrompt`: emits `TextPromptSubmit`
-/// (with the current value) on Enter, or tears the prompt down on Escape.
+/// Decides submit/cancel for a focused `TextPrompt`: emits `TextPromptSubmit`
+/// (with the current value) on Enter, or marks cancel on Escape. Either way the
+/// entity is marked `PromptClosing` for `apply_prompt_close` to tear down in
+/// `PostUpdate`, rather than tearing down synchronously here.
 ///
 /// This is a GLOBAL observer for a bubbling event: `FocusedInput` auto-propagates
 /// editable → bar → window, and the widget does NOT consume `Enter`
@@ -174,18 +193,15 @@ fn close_prompt(
 fn on_prompt_key(
     key: On<FocusedInput<KeyboardInput>>,
     mut commands: Commands,
-    mut input_focus: ResMut<InputFocus>,
-    mut active: ResMut<ActiveTextPrompt>,
     prompts: Query<(&TextPrompt, &EditableText)>,
 ) {
-    // Fire only at the original target (the editable), not each bubble ancestor.
     if key.event_target() != key.original_event_target() {
         return;
     }
     if !key.input.state.is_pressed() {
         return;
     }
-    let Ok((prompt, editable)) = prompts.get(key.focused_entity) else {
+    let Ok((_prompt, editable)) = prompts.get(key.focused_entity) else {
         return;
     };
     match decide_prompt_key(&key.input.logical_key, editable.is_composing()) {
@@ -196,10 +212,10 @@ fn on_prompt_key(
                 entity: key.focused_entity,
                 text,
             });
-            close_prompt(&mut commands, &mut input_focus, &mut active, prompt.bar);
+            commands.entity(key.focused_entity).insert(PromptClosing);
         }
         PromptAction::Cancel => {
-            close_prompt(&mut commands, &mut input_focus, &mut active, prompt.bar);
+            commands.entity(key.focused_entity).insert(PromptClosing);
         }
     }
 }
@@ -207,11 +223,11 @@ fn on_prompt_key(
 /// Submits a vi jump prompt (`submit_on_first_char`) the moment its value
 /// becomes non-empty. `EditableText::new("")` queues an empty-value edit whose
 /// `TextEditChange` is ignored here; the first inserted char triggers submit.
+/// Marks the entity `PromptClosing` for `apply_prompt_close` rather than tearing
+/// down synchronously.
 fn on_prompt_edit(
     change: On<TextEditChange>,
     mut commands: Commands,
-    mut input_focus: ResMut<InputFocus>,
-    mut active: ResMut<ActiveTextPrompt>,
     prompts: Query<(&TextPrompt, &EditableText)>,
 ) {
     let entity = change.event_target();
@@ -226,11 +242,11 @@ fn on_prompt_edit(
         return;
     }
     commands.trigger(TextPromptSubmit { entity, text });
-    close_prompt(&mut commands, &mut input_focus, &mut active, prompt.bar);
+    commands.entity(entity).insert(PromptClosing);
 }
 
 /// Clears `ActiveTextPrompt` when its entity was despawned by something other
-/// than `close_prompt` (e.g. surface teardown). `InputFocus` self-heals on
+/// than `apply_prompt_close` (e.g. surface teardown). `InputFocus` self-heals on
 /// despawn but `ActiveTextPrompt` does not; without this every input gate keeps
 /// draining keys → keyboard freeze.
 fn reconcile_active_text_prompt(
@@ -372,6 +388,76 @@ mod tests {
             1,
             "on_prompt_key must fire exactly once, at the editable's own hop, not at every \
              bubble ancestor that also matches the (TextPrompt, EditableText) query"
+        );
+    }
+
+    #[test]
+    fn active_text_prompt_stays_some_through_update_on_close_frame() {
+        #[derive(Resource, Default)]
+        struct SawActiveDuringUpdate(bool);
+
+        fn probe_active_during_update(
+            mut saw: ResMut<SawActiveDuringUpdate>,
+            active: Res<ActiveTextPrompt>,
+        ) {
+            if active.0.is_some() {
+                saw.0 = true;
+            }
+        }
+
+        let mut app = App::new();
+        app.add_plugins((InputPlugin, InputFocusPlugin, InputDispatchPlugin))
+            .init_resource::<ActiveTextPrompt>()
+            .init_resource::<SawActiveDuringUpdate>()
+            .add_observer(on_prompt_key)
+            .add_systems(Update, probe_active_during_update)
+            .add_systems(PostUpdate, apply_prompt_close);
+
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.update();
+
+        let bar = app.world_mut().spawn_empty().id();
+        let editable = app
+            .world_mut()
+            .spawn((
+                EditableText::new("x"),
+                TextPrompt {
+                    submit_on_first_char: false,
+                    bar,
+                },
+                ChildOf(bar),
+            ))
+            .id();
+        app.world_mut().resource_mut::<ActiveTextPrompt>().0 = Some(editable);
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(editable, FocusCause::Navigated);
+
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window,
+        });
+        app.update();
+
+        assert!(
+            app.world().resource::<SawActiveDuringUpdate>().0,
+            "ActiveTextPrompt must remain Some through Update on the close frame so the \
+             terminating key is still drained — else it leaks to the pane"
+        );
+        assert!(
+            app.world().resource::<ActiveTextPrompt>().0.is_none(),
+            "PostUpdate teardown must clear ActiveTextPrompt after the close frame"
+        );
+        assert!(
+            app.world().get_entity(bar).is_err(),
+            "PostUpdate teardown must despawn the prompt bar"
         );
     }
 }

@@ -97,7 +97,7 @@ fn resolve_key_effects(
 ) {
     let mode = guards.app_mode.get().clone();
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    // NOTE: the prompt guards (confirm-before, rename) are
+    // NOTE: the prompt guards (vi prompt, confirm-before, rename) are
     // tmux-only by design. Those resources are set by tmux actions and cleared
     // only by their own handlers — never on a mode transition — so a prompt left
     // open when the tmux connection drops (falling back to Default) would
