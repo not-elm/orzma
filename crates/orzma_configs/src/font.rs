@@ -75,8 +75,6 @@ mod tests {
 
     #[test]
     fn old_path_keys_are_ignored_not_families() {
-        // Clean break: the removed `normal`/`bold` path keys no longer populate
-        // any face — they are unknown keys and silently ignored.
         let f: FontConfig = toml::from_str("normal = \"/x.ttf\"\nbold = \"/y.ttf\"").unwrap();
         assert_eq!(f.family, None);
         assert_eq!(f.bold_family, None);

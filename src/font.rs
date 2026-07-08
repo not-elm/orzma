@@ -94,7 +94,7 @@ fn bridge_font_config(
     font_size.0 = configs.font.size;
     let font = &configs.font;
 
-    let powerline = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
+    let powerline = fonts_assets.add(Font::from_bytes(bundled::REGULAR.to_vec()));
     commands.insert_resource(PowerlineFont(powerline.clone()));
 
     let no_family = font.family.is_none()
@@ -165,20 +165,24 @@ fn bridge_font_config(
     commands.insert_resource(TerminalUiFont(ui_font));
 }
 
-/// Builds the UI-side `Handle<Font>` from the regular face bytes.
-/// `Font::from_bytes` is infallible in Bevy 0.19 (parsing happens later,
-/// at fontique registration); the bytes reaching this point were already
-/// validated per-face by `resolve_or_bundled`.
-fn make_ui_font_handle(regular_bytes: Vec<u8>, fonts_assets: &mut Assets<Font>) -> Handle<Font> {
-    fonts_assets.add(Font::from_bytes(regular_bytes))
-}
-
 /// One primary face resolved for the terminal grid: its bytes, `.ttc` index,
 /// and whether it came from a system family (vs a bundled fallback).
 struct ResolvedFace {
     bytes: Vec<u8>,
     index: u32,
     from_family: bool,
+}
+
+impl ResolvedFace {
+    /// Bundled fallback for one face: the bundled bytes at index 0, marked as not
+    /// resolved from a family.
+    fn bundled(bundled: &[u8]) -> Self {
+        Self {
+            bytes: bundled.to_vec(),
+            index: 0,
+            from_family: false,
+        }
+    }
 }
 
 /// Resolves `family` for `face`, validating the result at its index. Falls back
@@ -192,11 +196,7 @@ fn resolve_or_bundled(
     bundled: &'static [u8],
 ) -> ResolvedFace {
     let Some(family) = family else {
-        return ResolvedFace {
-            bytes: bundled.to_vec(),
-            index: 0,
-            from_family: false,
-        };
+        return ResolvedFace::bundled(bundled);
     };
     let attributes = resolve::face_attributes(face);
     match resolve::resolve_face_bytes(collection, source_cache, family, attributes) {
@@ -213,19 +213,11 @@ fn resolve_or_bundled(
                 family,
                 "resolved font failed to parse; using bundled"
             );
-            ResolvedFace {
-                bytes: bundled.to_vec(),
-                index: 0,
-                from_family: false,
-            }
+            ResolvedFace::bundled(bundled)
         }
         None => {
             tracing::warn!(?face, family, "font family not found; using bundled");
-            ResolvedFace {
-                bytes: bundled.to_vec(),
-                index: 0,
-                from_family: false,
-            }
+            ResolvedFace::bundled(bundled)
         }
     }
 }
