@@ -650,7 +650,7 @@ fn spawn_grapheme_cell(
         .spawn((
             Text::new(text),
             TextFont {
-                font: ui_font.0.clone().into(),
+                font: ui_font.0.clone(),
                 font_size: FontSize::Px(font_size.0),
                 ..default()
             },
@@ -795,12 +795,13 @@ mod tests {
 
     #[test]
     fn ime_overlay_uses_terminal_font_size() {
-        use bevy::asset::Handle;
         use bevy::text::TextFont;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(crate::font::TerminalUiFont(
+            bevy::text::FontSource::default(),
+        ));
         app.insert_resource(TerminalFontSize(9.0));
         app.init_resource::<ImeGraphemePool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
@@ -819,13 +820,14 @@ mod tests {
     #[test]
     fn overlay_background_matches_pane_default_bg_while_composing() {
         use crate::surface::OrzmaTerminal;
-        use bevy::asset::Handle;
         use bevy::window::WindowResolution;
         use orzma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(crate::font::TerminalUiFont(
+            bevy::text::FontSource::default(),
+        ));
         app.insert_resource(TerminalFontSize(12.0));
         app.insert_resource(TerminalCellMetricsResource {
             metrics: metrics(8.0, 16.0),
@@ -895,13 +897,14 @@ mod tests {
 
     fn run_overlay_with_composition(value: &str, caret: Option<(usize, usize)>) -> App {
         use crate::surface::OrzmaTerminal;
-        use bevy::asset::Handle;
         use bevy::window::WindowResolution;
         use orzma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(crate::font::TerminalUiFont(
+            bevy::text::FontSource::default(),
+        ));
         app.insert_resource(TerminalFontSize(12.0));
         // advance 10, line height 16 → cell pitch 10×16 logical px at scale 1.
         app.insert_resource(TerminalCellMetricsResource {
@@ -986,11 +989,11 @@ mod tests {
 
     #[test]
     fn spawn_creates_grapheme_pool_and_underline() {
-        use bevy::asset::Handle;
-
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(crate::font::TerminalUiFont(
+            bevy::text::FontSource::default(),
+        ));
         app.insert_resource(TerminalFontSize(12.0));
         app.init_resource::<ImeGraphemePool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
@@ -1015,7 +1018,6 @@ mod tests {
     fn overlay_geometry_not_rechanged_on_unchanged_composition() {
         use crate::surface::OrzmaTerminal;
         use bevy::app::Update;
-        use bevy::asset::Handle;
         use bevy::ecs::query::{Changed, Or};
         use bevy::window::WindowResolution;
         use orzma_tty_renderer::prelude::Cursor;
@@ -1044,7 +1046,9 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(crate::font::TerminalUiFont(
+            bevy::text::FontSource::default(),
+        ));
         app.insert_resource(TerminalFontSize(12.0));
         app.insert_resource(TerminalCellMetricsResource {
             metrics: metrics(10.0, 16.0),
@@ -1163,13 +1167,14 @@ mod tests {
     fn overlay_hidden_and_idle_after_composition_ends() {
         use crate::surface::OrzmaTerminal;
         use bevy::app::PostUpdate;
-        use bevy::asset::Handle;
         use bevy::window::WindowResolution;
         use orzma_tty_renderer::prelude::Cursor;
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(Handle::default()));
+        app.insert_resource(crate::font::TerminalUiFont(
+            bevy::text::FontSource::default(),
+        ));
         app.insert_resource(TerminalFontSize(12.0));
         app.insert_resource(TerminalCellMetricsResource {
             metrics: metrics(10.0, 16.0),

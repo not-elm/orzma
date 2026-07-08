@@ -7,6 +7,7 @@ use crate::font::{PowerlineFont, TerminalUiFont};
 use crate::theme;
 use crate::ui::palette;
 use bevy::prelude::*;
+use bevy::text::FontSource;
 use bevy::ui::{AlignItems, FlexDirection, UiRect, Val};
 use orzma_tmux::{ActiveWindow, TmuxProjectionSet, TmuxSession, TmuxWindow, WindowFlags, WindowId};
 use orzma_tty_renderer::TerminalCellMetricsResource;
@@ -152,7 +153,7 @@ fn rebuild_window_bar(
     let pl_font = powerline_font
         .as_deref()
         .map(|f| f.0.clone())
-        .unwrap_or_else(|| font.clone());
+        .unwrap_or_default();
 
     let session_name = session.iter().next().map(|s| s.name.as_str()).unwrap_or("");
     build_session_block(&mut commands, bar, session_name, &font, &pl_font);
@@ -192,7 +193,7 @@ fn build_session_block(
     commands: &mut Commands,
     bar: Entity,
     session_name: &str,
-    font: &Handle<Font>,
+    font: &FontSource,
     pl_font: &Handle<Font>,
 ) {
     let block = commands
@@ -211,7 +212,7 @@ fn build_session_block(
         Text::new(session_name.to_string()),
         TextColor(palette::FOREGROUND),
         TextFont {
-            font: font.clone().into(),
+            font: font.clone(),
             font_size: FontSize::Px(theme::UI_FONT_SIZE),
             ..default()
         },
@@ -245,7 +246,7 @@ fn build_window_entry(
     name: &str,
     active: bool,
     flags: WindowFlags,
-    font: &Handle<Font>,
+    font: &FontSource,
     pl_font: &Handle<Font>,
 ) {
     let (label_color, flag_color) = entry_colors(active, flags);
@@ -335,13 +336,13 @@ fn spawn_entry_label(
     suffix: &str,
     label_color: Color,
     flag_color: Color,
-    font: &Handle<Font>,
+    font: &FontSource,
 ) {
     commands.spawn((
         Text::new(label.to_string()),
         TextColor(label_color),
         TextFont {
-            font: font.clone().into(),
+            font: font.clone(),
             font_size: FontSize::Px(theme::UI_FONT_SIZE),
             ..default()
         },
@@ -352,7 +353,7 @@ fn spawn_entry_label(
             Text::new(suffix.to_string()),
             TextColor(flag_color),
             TextFont {
-                font: font.clone().into(),
+                font: font.clone(),
                 font_size: FontSize::Px(theme::UI_FONT_SIZE),
                 ..default()
             },

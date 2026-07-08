@@ -11,18 +11,19 @@
 
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
-use bevy::text::{Font, FontCx};
+use bevy::text::{Font, FontCx, FontSource};
 use fontique::{Blob, Script};
 use orzma_configs::font::FontConfig;
 use orzma_configs::path::{SystemEnv, expand_user_path};
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
 use std::path::Path;
 
-/// Strong handle to the UI font asset (regular face). Inserted by
-/// `bridge_font_config`. UI builders read this resource to set
-/// `TextFont { font, ... }`.
+/// UI font source (regular face) consumed by UI text builders as
+/// `TextFont { font: ui_font.0.clone(), ... }`. Either a `FontSource::Family`
+/// (when a system family resolved) or a `FontSource::Handle` to the bundled
+/// regular face. Inserted by `bridge_font_config`.
 #[derive(Resource, Clone)]
-pub struct TerminalUiFont(pub Handle<Font>);
+pub struct TerminalUiFont(pub FontSource);
 
 /// Strong handle to the bundled Nerd Font, used only for the window-bar
 /// powerline separator glyphs (U+E0B0 / U+E0B2). Independent of
@@ -145,7 +146,7 @@ fn bridge_font_config(
         && font.italic.is_none()
         && font.bold_italic.is_none();
     if no_override {
-        commands.insert_resource(TerminalUiFont(powerline));
+        commands.insert_resource(TerminalUiFont(FontSource::Handle(powerline)));
         return;
     }
 
@@ -187,7 +188,7 @@ fn bridge_font_config(
     *terminal_fonts = new_fonts;
 
     let handle = make_ui_font_handle(ui_regular_bytes, &mut fonts_assets);
-    commands.insert_resource(TerminalUiFont(handle));
+    commands.insert_resource(TerminalUiFont(FontSource::Handle(handle)));
 }
 
 /// Builds the UI-side `Handle<Font>` from the regular face bytes.
@@ -297,11 +298,17 @@ mod tests {
             .world()
             .get_resource::<TerminalUiFont>()
             .expect("TerminalUiFont must be inserted on the cold path");
+        let FontSource::Handle(handle) = &ui_font.0 else {
+            panic!(
+                "cold path must insert a FontSource::Handle, got {:?}",
+                ui_font.0
+            );
+        };
         // A strong handle from Assets::add stores the asset under the
         // returned handle. Look it up to verify it resolves.
         let assets = app.world().resource::<Assets<Font>>();
         assert!(
-            assets.get(&ui_font.0).is_some(),
+            assets.get(handle).is_some(),
             "TerminalUiFont handle must resolve to an asset stored in Assets<Font>"
         );
     }

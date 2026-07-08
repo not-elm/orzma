@@ -97,7 +97,7 @@ fn spawn_confirm_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>
             parent.spawn((
                 Text::new(""),
                 TextFont {
-                    font: font.into(),
+                    font,
                     font_size: FontSize::Px(theme::UI_FONT_SIZE),
                     ..default()
                 },
