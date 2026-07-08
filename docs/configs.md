@@ -32,12 +32,15 @@ change — omitted keys fall back to these defaults.
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.
-# Optional font-file overrides for the GUI (absolute path or ~/...).
-# Omit to use the bundled JetBrains Mono.
-# normal      = "~/Library/Fonts/MyMono-Regular.ttf"
-# bold        = "~/Library/Fonts/MyMono-Bold.ttf"
-# italic      = "~/Library/Fonts/MyMono-Italic.ttf"
-# bold_italic = "~/Library/Fonts/MyMono-BoldItalic.ttf"
+# Font family resolved against installed system fonts. Omit to use the bundled
+# JetBrains Mono Nerd Font. An unknown family falls back to the bundled face; a
+# present family missing a requested weight/style uses that family's closest
+# available face.
+# family = "JetBrains Mono"
+# Optional per-face family overrides (each omitted → derived from `family`):
+# bold_family        = "JetBrains Mono"
+# italic_family      = "Cascadia Code"
+# bold_italic_family = "Cascadia Code"
 
 [keyboard]
 # macOS only. Which Option key sends Meta instead of composing.
