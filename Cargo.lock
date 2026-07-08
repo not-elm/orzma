@@ -5083,7 +5083,6 @@ version = "0.2.0-dev"
 dependencies = [
  "bevy",
  "bevy_cef",
- "bevy_cef_core",
  "crossbeam-channel",
  "data-encoding",
  "getrandom 0.2.17",
