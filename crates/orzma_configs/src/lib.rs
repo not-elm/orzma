@@ -309,11 +309,12 @@ mod integration_tests {
     }
 
     #[test]
-    fn old_nested_font_table_fails_at_top_level() {
-        assert!(
-            toml::from_str::<OrzmaConfigs>("[font.normal]\npath = \"/x.ttf\"").is_err(),
-            "old nested font schema must fail to load through OrzmaConfigs, not be shimmed"
-        );
+    fn old_nested_font_table_is_ignored_not_shimmed() {
+        // Clean break: `FontConfig` has no `deny_unknown_fields`, so the old
+        // nested `[font.normal]` path table is an unknown field within `font`
+        // and is silently dropped rather than populating any family.
+        let c = parse("[font.normal]\npath = \"/x.ttf\"");
+        assert_eq!(c.font, OrzmaConfigs::default().font);
     }
 
     #[test]

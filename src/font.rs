@@ -10,13 +10,13 @@
 //! metrics + invalidate the glyph atlas — see the renderer crate).
 
 use crate::configs::OrzmaConfigsResource;
+use ab_glyph::FontRef;
 use bevy::prelude::*;
 use bevy::text::{Font, FontCx, FontSource};
-use fontique::{Blob, Script};
-use orzma_configs::font::FontConfig;
-use orzma_configs::path::{SystemEnv, expand_user_path};
+use fontique::{Blob, Collection, Script, SourceCache};
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
-use std::path::Path;
+
+mod resolve;
 
 /// UI font source (regular face) consumed by UI text builders as
 /// `TextFont { font: ui_font.0.clone(), ... }`. Either a `FontSource::Family`
@@ -44,47 +44,6 @@ impl Plugin for FontBridgePlugin {
                 register_cjk_fallback,
             ),
         );
-    }
-}
-
-/// Loads bytes for one face. Returns the file contents if `path` is set
-/// AND expansion succeeds AND read succeeds; otherwise returns the
-/// bundled bytes. Failures are warned, not propagated — partial override
-/// is a feature.
-fn load_face_bytes(path: Option<&Path>, bundled: &'static [u8], face: FontFace) -> Vec<u8> {
-    let Some(p) = path else {
-        return bundled.to_vec();
-    };
-    let Some(expanded) = expand_user_path(p, &SystemEnv) else {
-        tracing::warn!(?face, path = %p.display(), "font path expansion failed; using bundled");
-        return bundled.to_vec();
-    };
-    match std::fs::read(&expanded) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            tracing::warn!(?face, path = %expanded.display(), %err, "font path read failed; using bundled");
-            bundled.to_vec()
-        }
-    }
-}
-
-/// Validates one face's bytes by attempting to parse them as a font.
-/// Returns the original bytes on success; on failure (parse error), warns
-/// and returns the bundled bytes for that face.
-fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -> Vec<u8> {
-    // Zero-copy validation: FontRef borrows the slice instead of consuming
-    // a Vec, so we don't clone 13 MB of font data just to throw away the
-    // parsed FontArc immediately after.
-    match ab_glyph::FontRef::try_from_slice(&bytes) {
-        Ok(_) => bytes,
-        Err(err) => {
-            tracing::warn!(
-                ?face,
-                %err,
-                "font face failed to parse; substituting bundled bytes for THAT face only"
-            );
-            bundled.to_vec()
-        }
     }
 }
 
@@ -129,74 +88,150 @@ fn bridge_font_config(
     mut fonts_assets: ResMut<Assets<Font>>,
     mut terminal_fonts: ResMut<TerminalFonts>,
     mut font_size: ResMut<TerminalFontSize>,
+    mut font_cx: ResMut<FontCx>,
     configs: Res<OrzmaConfigsResource>,
 ) {
     font_size.0 = configs.font.size;
-    let font: &FontConfig = &configs.font;
+    let font = &configs.font;
 
     let powerline = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
     commands.insert_resource(PowerlineFont(powerline.clone()));
 
-    // Fast path: no override → use the renderer's default TerminalFonts
-    // (already inserted by TerminalFontPlugin) and feed the same bundled
-    // regular bytes to Assets<Font>. Skips ~52 MB of needless allocations
-    // and ~5 redundant ab_glyph / bevy_text parses on the common cold path.
-    let no_override = font.normal.is_none()
-        && font.bold.is_none()
-        && font.italic.is_none()
-        && font.bold_italic.is_none();
-    if no_override {
+    // Fast path: no family configured at all -> bundled TerminalFonts (already
+    // present) + bundled UI handle.
+    let no_family = font.family.is_none()
+        && font.bold_family.is_none()
+        && font.italic_family.is_none()
+        && font.bold_italic_family.is_none();
+    if no_family {
         commands.insert_resource(TerminalUiFont(FontSource::Handle(powerline)));
         return;
     }
 
-    let regular_bytes =
-        load_face_bytes(font.normal.as_deref(), bundled::REGULAR, FontFace::Regular);
-    let bold_bytes = load_face_bytes(font.bold.as_deref(), bundled::BOLD, FontFace::Bold);
-    let italic_bytes = load_face_bytes(font.italic.as_deref(), bundled::ITALIC, FontFace::Italic);
-    let bold_italic_bytes = load_face_bytes(
-        font.bold_italic.as_deref(),
-        bundled::BOLD_ITALIC,
+    let regular_family = font.family.as_deref();
+    let bold_family = font.bold_family.as_deref().or(regular_family);
+    let italic_family = font.italic_family.as_deref().or(regular_family);
+    let bold_italic_family = font.bold_italic_family.as_deref().or(regular_family);
+
+    // Materialize &mut FontContext once so its `collection` and `source_cache`
+    // fields can be borrowed as disjoint places (going through DerefMut per call
+    // would borrow all of FontCx twice and fail to compile).
+    let cx = &mut **font_cx;
+    let regular = resolve_or_bundled(
+        &mut cx.collection,
+        &mut cx.source_cache,
+        regular_family,
+        FontFace::Regular,
+        bundled::REGULAR,
+    );
+    let bold = resolve_or_bundled(
+        &mut cx.collection,
+        &mut cx.source_cache,
+        bold_family,
+        FontFace::Bold,
+        bundled::BOLD,
+    );
+    let italic = resolve_or_bundled(
+        &mut cx.collection,
+        &mut cx.source_cache,
+        italic_family,
+        FontFace::Italic,
+        bundled::ITALIC,
+    );
+    let bold_italic = resolve_or_bundled(
+        &mut cx.collection,
+        &mut cx.source_cache,
+        bold_italic_family,
         FontFace::BoldItalic,
+        bundled::BOLD_ITALIC,
     );
 
-    // NOTE: validate-per-face is load-bearing. Without it, a corrupt
-    // override on ANY face drops ALL overrides — the all-or-nothing
-    // regression that commit 09213e7 fixed.
-    let regular_bytes = validate_or_bundled(regular_bytes, bundled::REGULAR, FontFace::Regular);
-    let bold_bytes = validate_or_bundled(bold_bytes, bundled::BOLD, FontFace::Bold);
-    let italic_bytes = validate_or_bundled(italic_bytes, bundled::ITALIC, FontFace::Italic);
-    let bold_italic_bytes = validate_or_bundled(
-        bold_italic_bytes,
-        bundled::BOLD_ITALIC,
-        FontFace::BoldItalic,
-    );
-
-    let ui_regular_bytes = regular_bytes.clone();
-
-    let new_fonts = TerminalFonts::from_bytes(
-        regular_bytes,
-        bold_bytes,
-        italic_bytes,
-        bold_italic_bytes,
-        orzma_tty_renderer::bundled::FALLBACK_REGULAR.to_vec(),
-        orzma_tty_renderer::bundled::FALLBACK_BOLD.to_vec(),
-        orzma_tty_renderer::bundled::FALLBACK_ITALIC.to_vec(),
-        orzma_tty_renderer::bundled::FALLBACK_BOLD_ITALIC.to_vec(),
+    let regular_from_family = regular.from_family;
+    let new_fonts = TerminalFonts::from_faces(
+        (regular.bytes, regular.index),
+        (bold.bytes, bold.index),
+        (italic.bytes, italic.index),
+        (bold_italic.bytes, bold_italic.index),
+        bundled::FALLBACK_REGULAR.to_vec(),
+        bundled::FALLBACK_BOLD.to_vec(),
+        bundled::FALLBACK_ITALIC.to_vec(),
+        bundled::FALLBACK_BOLD_ITALIC.to_vec(),
     )
     .expect("validated bytes must parse");
     *terminal_fonts = new_fonts;
 
-    let handle = make_ui_font_handle(ui_regular_bytes, &mut fonts_assets);
-    commands.insert_resource(TerminalUiFont(FontSource::Handle(handle)));
+    // UI: FontSource::Family only when the regular face actually resolved from a
+    // system family; otherwise the bundled handle.
+    let ui_font = match (regular_from_family, regular_family) {
+        (true, Some(family)) => FontSource::Family(family.into()),
+        _ => FontSource::Handle(powerline),
+    };
+    commands.insert_resource(TerminalUiFont(ui_font));
 }
 
 /// Builds the UI-side `Handle<Font>` from the regular face bytes.
 /// `Font::from_bytes` is infallible in Bevy 0.19 (parsing happens later,
 /// at fontique registration); the bytes reaching this point were already
-/// validated per-face by `validate_or_bundled`.
+/// validated per-face by `resolve_or_bundled`.
 fn make_ui_font_handle(regular_bytes: Vec<u8>, fonts_assets: &mut Assets<Font>) -> Handle<Font> {
     fonts_assets.add(Font::from_bytes(regular_bytes))
+}
+
+/// One primary face resolved for the terminal grid: its bytes, `.ttc` index,
+/// and whether it came from a system family (vs a bundled fallback).
+struct ResolvedFace {
+    bytes: Vec<u8>,
+    index: u32,
+    from_family: bool,
+}
+
+/// Resolves `family` for `face`, validating the result at its index. Falls back
+/// to `bundled` (index 0) — with a warning — when `family` is `None`, the family
+/// name is absent, or the resolved bytes fail to parse.
+fn resolve_or_bundled(
+    collection: &mut Collection,
+    source_cache: &mut SourceCache,
+    family: Option<&str>,
+    face: FontFace,
+    bundled: &'static [u8],
+) -> ResolvedFace {
+    let Some(family) = family else {
+        return ResolvedFace {
+            bytes: bundled.to_vec(),
+            index: 0,
+            from_family: false,
+        };
+    };
+    let attributes = resolve::face_attributes(face);
+    match resolve::resolve_face_bytes(collection, source_cache, family, attributes) {
+        Some((bytes, index)) if FontRef::try_from_slice_and_index(&bytes, index).is_ok() => {
+            ResolvedFace {
+                bytes,
+                index,
+                from_family: true,
+            }
+        }
+        Some(_) => {
+            tracing::warn!(
+                ?face,
+                family,
+                "resolved font failed to parse; using bundled"
+            );
+            ResolvedFace {
+                bytes: bundled.to_vec(),
+                index: 0,
+                from_family: false,
+            }
+        }
+        None => {
+            tracing::warn!(?face, family, "font family not found; using bundled");
+            ResolvedFace {
+                bytes: bundled.to_vec(),
+                index: 0,
+                from_family: false,
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -209,7 +244,6 @@ mod tests {
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
     use orzma_tty_renderer::TerminalFontPlugin;
     use orzma_tty_renderer::bundled;
-    use std::io::Write;
 
     /// RAII guard for a process-environment variable. Constructing it via
     /// `EnvVarGuard::set(...)` sets the variable; dropping it removes
@@ -314,133 +348,6 @@ mod tests {
     }
 
     #[test]
-    fn configured_normal_path_overrides_regular_face() {
-        // Use the bundled JetBrains Mono regular bytes as the "override" — the
-        // test verifies the bytes flow through std::fs::read, not that
-        // they differ from bundled. Write to a temp file and point
-        // ORZMA_CONFIG at a TOML that uses it.
-        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_normal");
-        let _ = std::fs::create_dir_all(&tmp_dir);
-        let ttf_path = tmp_dir.join("regular.ttf");
-        std::fs::write(&ttf_path, bundled::REGULAR).expect("write temp ttf");
-
-        let toml_path = tmp_dir.join("config.toml");
-        let mut f = std::fs::File::create(&toml_path).expect("create toml");
-        writeln!(f, "[font]\nnormal = \"{}\"\n", ttf_path.to_string_lossy()).expect("write toml");
-        drop(f);
-
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml_path);
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
-        app.update();
-
-        let fonts = app.world().resource::<TerminalFonts>();
-        assert_eq!(
-            fonts.regular.font_data(),
-            bundled::REGULAR,
-            "regular face bytes equal the override file (which happens to contain bundled bytes)"
-        );
-
-        let _ = std::fs::remove_file(&ttf_path);
-        let _ = std::fs::remove_file(&toml_path);
-    }
-
-    #[test]
-    fn missing_normal_path_falls_back_to_bundled() {
-        let nonexistent = std::env::temp_dir().join("orzma_font_bridge_test_missing.ttf");
-        let _ = std::fs::remove_file(&nonexistent);
-        let toml = std::env::temp_dir().join("orzma_font_bridge_test_missing.toml");
-        std::fs::write(
-            &toml,
-            format!("[font]\nnormal = \"{}\"\n", nonexistent.to_string_lossy()),
-        )
-        .expect("write toml");
-
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
-        app.update();
-
-        let fonts = app.world().resource::<TerminalFonts>();
-        assert_eq!(
-            fonts.regular.font_data(),
-            bundled::REGULAR,
-            "regular face falls back to bundled when configured path does not exist"
-        );
-
-        let _ = std::fs::remove_file(&toml);
-    }
-
-    #[test]
-    fn normal_path_set_does_not_inherit_to_bold() {
-        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_no_inherit");
-        let _ = std::fs::create_dir_all(&tmp_dir);
-        let normal_path = tmp_dir.join("only-regular.ttf");
-        std::fs::write(&normal_path, bundled::REGULAR).expect("write");
-        let toml = tmp_dir.join("config.toml");
-        std::fs::write(
-            &toml,
-            format!("[font]\nnormal = \"{}\"\n", normal_path.to_string_lossy()),
-        )
-        .expect("write toml");
-
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
-        app.update();
-
-        let fonts = app.world().resource::<TerminalFonts>();
-        assert_eq!(
-            fonts.bold.font_data(),
-            bundled::BOLD,
-            "bold face must NOT inherit from normal_path; it stays bundled bold"
-        );
-
-        let _ = std::fs::remove_file(&normal_path);
-        let _ = std::fs::remove_file(&toml);
-    }
-
-    #[test]
     fn cjk_fallback_registered_in_font_collection() {
         let (mut app, _guard, _env) = make_test_app();
         app.update();
@@ -529,30 +436,12 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_bold_path_falls_back_per_face_without_dropping_normal_override() {
-        // Write a corrupt "bold" TTF (just random bytes that won't parse)
-        // and a valid "normal" TTF (bundled JetBrains Mono regular). Verify
-        // bridge_font_config keeps the normal override AND replaces only
-        // the corrupt bold with bundled bold.
-        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_corrupt_bold");
-        let _ = std::fs::create_dir_all(&tmp_dir);
-        let normal_path = tmp_dir.join("regular.ttf");
-        std::fs::write(&normal_path, bundled::REGULAR).expect("write regular");
-        let bold_path = tmp_dir.join("bold.ttf");
-        std::fs::write(&bold_path, b"this is not a valid TTF").expect("write corrupt bold");
-        let toml = tmp_dir.join("config.toml");
-        std::fs::write(
-            &toml,
-            format!(
-                "[font]\nnormal = \"{}\"\nbold = \"{}\"\n",
-                normal_path.to_string_lossy(),
-                bold_path.to_string_lossy(),
-            ),
-        )
-        .expect("write toml");
+    fn unknown_family_falls_back_to_bundled_and_ui_handle() {
+        let tmp = std::env::temp_dir().join("orzma_font_family_unknown.toml");
+        std::fs::write(&tmp, "[font]\nfamily = \"no-such-family-8b3d2\"\n").expect("write toml");
 
         let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
+        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -570,23 +459,17 @@ mod tests {
         app.update();
 
         let fonts = app.world().resource::<TerminalFonts>();
-        // Regular must remain the user-supplied (= bundled-regular bytes
-        // here, but reached via the override path).
         assert_eq!(
             fonts.regular.font_data(),
             bundled::REGULAR,
-            "normal override must survive a corrupt bold override"
+            "unknown family must fall back to bundled regular"
         );
-        // Bold must fall back to bundled because the user-supplied bold
-        // is corrupt.
-        assert_eq!(
-            fonts.bold.font_data(),
-            bundled::BOLD,
-            "corrupt bold override must fall back to bundled bold"
+        let ui = app.world().resource::<TerminalUiFont>();
+        assert!(
+            matches!(ui.0, bevy::text::FontSource::Handle(_)),
+            "unknown family must leave the UI on the bundled handle, not a Family"
         );
 
-        let _ = std::fs::remove_file(&normal_path);
-        let _ = std::fs::remove_file(&bold_path);
-        let _ = std::fs::remove_file(&toml);
+        let _ = std::fs::remove_file(&tmp);
     }
 }

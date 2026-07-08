@@ -1,7 +1,6 @@
 //! Font configuration: the `[font]` section.
 
 use serde::Deserialize;
-use std::path::PathBuf;
 
 const DEFAULT_SIZE: f32 = 11.25;
 
@@ -13,24 +12,28 @@ pub struct FontConfig {
     /// `scale_factor` to device pixels — Alacritty's model (not literal
     /// typographic points; no 96/72 conversion is applied).
     pub size: f32,
-    /// Absolute or `~`-prefixed path to the regular-face TTF (Bevy GUI only).
-    pub normal: Option<PathBuf>,
-    /// Absolute or `~`-prefixed path to the bold-face TTF (Bevy GUI only).
-    pub bold: Option<PathBuf>,
-    /// Absolute or `~`-prefixed path to the italic-face TTF (Bevy GUI only).
-    pub italic: Option<PathBuf>,
-    /// Absolute or `~`-prefixed path to the bold-italic-face TTF (Bevy GUI only).
-    pub bold_italic: Option<PathBuf>,
+    /// Base font-family name resolved against the system font database. `None`
+    /// uses the bundled JetBrains Mono Nerd Font.
+    pub family: Option<String>,
+    /// Optional family-name override for the bold face; `None` derives it from
+    /// `family`.
+    pub bold_family: Option<String>,
+    /// Optional family-name override for the italic face; `None` derives it from
+    /// `family`.
+    pub italic_family: Option<String>,
+    /// Optional family-name override for the bold-italic face; `None` derives it
+    /// from `family`.
+    pub bold_italic_family: Option<String>,
 }
 
 impl Default for FontConfig {
     fn default() -> Self {
         Self {
             size: DEFAULT_SIZE,
-            normal: None,
-            bold: None,
-            italic: None,
-            bold_italic: None,
+            family: None,
+            bold_family: None,
+            italic_family: None,
+            bold_italic_family: None,
         }
     }
 }
@@ -51,36 +54,31 @@ mod tests {
     }
 
     #[test]
-    fn parses_flat_paths() {
-        let f: FontConfig =
-            toml::from_str("size = 14.0\nnormal = \"/abs/Regular.ttf\"\nbold = \"/abs/Bold.ttf\"")
-                .unwrap();
+    fn parses_family_and_per_face_overrides() {
+        let f: FontConfig = toml::from_str(
+            "size = 14.0\nfamily = \"JetBrains Mono\"\nitalic_family = \"Cascadia Code\"",
+        )
+        .unwrap();
         assert_eq!(f.size, 14.0);
-        assert_eq!(
-            f.normal.as_deref(),
-            Some(std::path::Path::new("/abs/Regular.ttf"))
-        );
-        assert_eq!(
-            f.bold.as_deref(),
-            Some(std::path::Path::new("/abs/Bold.ttf"))
-        );
-        assert_eq!(f.italic, None);
-        assert_eq!(f.bold_italic, None);
+        assert_eq!(f.family.as_deref(), Some("JetBrains Mono"));
+        assert_eq!(f.italic_family.as_deref(), Some("Cascadia Code"));
+        assert_eq!(f.bold_family, None);
+        assert_eq!(f.bold_italic_family, None);
     }
 
     #[test]
-    fn size_override_keeps_paths_none() {
+    fn size_only_leaves_families_none() {
         let f: FontConfig = toml::from_str("size = 18.0").unwrap();
         assert_eq!(f.size, 18.0);
-        assert_eq!(f.normal, None);
+        assert_eq!(f.family, None);
     }
 
     #[test]
-    fn old_nested_table_form_is_rejected() {
-        let err = toml::from_str::<FontConfig>("[normal]\npath = \"/x.ttf\"").is_err();
-        assert!(
-            err,
-            "old nested [font.normal] path= form must fail to parse"
-        );
+    fn old_path_keys_are_ignored_not_families() {
+        // Clean break: the removed `normal`/`bold` path keys no longer populate
+        // any face — they are unknown keys and silently ignored.
+        let f: FontConfig = toml::from_str("normal = \"/x.ttf\"\nbold = \"/y.ttf\"").unwrap();
+        assert_eq!(f.family, None);
+        assert_eq!(f.bold_family, None);
     }
 }
