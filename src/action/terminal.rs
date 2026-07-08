@@ -23,7 +23,7 @@ use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 pub(crate) use forward_input::TerminalForwardInput;
 pub(crate) use mouse_write::TerminalMouseWrite;
 pub(crate) use open_uri::TerminalOpenUri;
-pub(crate) use paste::PasteAction;
+pub(crate) use paste::{PasteAction, PasteText};
 pub(crate) use selection::{
     TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
 };
