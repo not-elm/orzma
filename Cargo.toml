@@ -35,9 +35,12 @@ orzma_tty_engine = { path = "crates/orzma_tty_engine" }
 orzma_webview = { path = "crates/orzma_webview" }
 crossbeam-channel = "0.5"
 data-encoding = "2"
-# NOTE: default-features = false keeps fontique's `system` backend off,
-# matching bevy_text's parley configuration — enabling it here would turn on
-# system font discovery for the whole dependency graph via feature unification.
+# NOTE: system font discovery is enabled via bevy's public
+# `system_font_discovery` feature (workspace dep), which pulls
+# parley/system -> fontique/system. Feature unification turns `system` on for
+# THIS direct fontique dep too, so family resolution sees OS fonts. Keep
+# default-features off + std here; the crate is used for Blob/Script/Query/
+# Attributes types.
 fontique = { version = "0.9", default-features = false, features = ["std"] }
 getrandom = "0.2"
 libc = "0.2"
@@ -85,7 +88,7 @@ publish = false
 # FiraMono when default_font is enabled. The feature is currently part of
 # bevy's default set via default_platform → default_font, but listing it
 # explicitly here protects against future "default-features = false".
-bevy = { version = "0.19", features = ["default_font", "system_clipboard"] }
+bevy = { version = "0.19", features = ["default_font", "system_clipboard", "system_font_discovery"] }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
