@@ -1,136 +1,32 @@
-//! Clipboard Bevy Resource wrapping `arboard::Clipboard`, plus `build_paste_bytes`,
-//! the pure helper that turns clipboard text into the PTY byte stream.
+//! Clipboard write seam and paste-byte construction. `ClipboardWriteRequest`
+//! carries copied text from the copy/yank observers to `apply_clipboard_write`,
+//! the one system that writes Bevy's `Clipboard` resource; `build_paste_bytes`
+//! turns clipboard text into the PTY byte stream. The clipboard resource itself
+//! is `bevy::clipboard::Clipboard`, provided by `DefaultPlugins`.
 
+use bevy::clipboard::{Clipboard, ClipboardError};
 use bevy::prelude::*;
 
-/// Resource wrapping a clipboard backend.
+/// Requests that `text` be written to the system clipboard.
 ///
-/// `arboard::Clipboard::new()` can fail when no display is available
-/// (e.g. headless CI). In that case the backend is unavailable and every
-/// `write` call becomes a no-op (logged at debug level once at init, then
-/// silently dropped).
-/// Vi-mode UI keeps working — the user can still see the selection —
-/// but `y` does not modify the host clipboard. `Clipboard::in_memory`
-/// swaps in a process-local backend for deterministic, headless-safe tests.
-#[derive(Resource)]
-pub(crate) struct Clipboard(ClipboardBackend);
-
-/// The concrete clipboard backend behind a [`Clipboard`] resource.
-enum ClipboardBackend {
-    System(arboard::Clipboard),
-    #[cfg(test)]
-    Memory(Option<String>),
-    Unavailable,
+/// A global (non-entity) event: the clipboard is process-global, so copy/yank
+/// observers `commands.trigger` this and `apply_clipboard_write` performs the
+/// single `Clipboard::set_text`. Decoupling this way keeps the copy observers
+/// testable by capturing the request instead of round-tripping a real clipboard.
+#[derive(Event, Debug, Clone)]
+pub(crate) struct ClipboardWriteRequest {
+    /// The text to place on the system clipboard.
+    pub text: String,
 }
 
-impl Default for Clipboard {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Clipboard {
-    /// Returns a clipboard backed by a process-local in-memory buffer.
-    ///
-    /// Reads observe exactly what was last written, with no dependency on a
-    /// display server — used by tests to exercise copy/paste wiring on
-    /// headless hosts where `arboard` is unavailable, without clobbering the
-    /// developer's real clipboard.
-    #[cfg(test)]
-    pub(crate) fn in_memory() -> Self {
-        Self(ClipboardBackend::Memory(None))
-    }
-
-    /// Writes `text` to the clipboard. No-op when the backend is unavailable.
-    /// Failures are logged at warn but never propagated — vi mode must not
-    /// panic on a clipboard failure.
-    pub(crate) fn write(&mut self, text: String) {
-        match &mut self.0 {
-            ClipboardBackend::System(cb) => {
-                if let Err(e) = cb.set_text(text) {
-                    tracing::warn!(
-                        target: "orzma::clipboard",
-                        error = ?e,
-                        "clipboard write failed",
-                    );
-                }
-            }
-            #[cfg(test)]
-            ClipboardBackend::Memory(slot) => *slot = Some(text),
-            ClipboardBackend::Unavailable => {
-                tracing::debug!(
-                    target: "orzma::clipboard",
-                    "clipboard write skipped: arboard unavailable",
-                );
-            }
-        }
-    }
-
-    /// Reads text from the clipboard. Returns `None` when the backend is
-    /// unavailable (headless) or when the clipboard does not currently hold
-    /// UTF-8 text. Empty strings are passed through as `Some(String::new())`;
-    /// the caller is responsible for treating empty as a no-op.
-    ///
-    /// arboard's behavior on an empty clipboard is platform-dependent —
-    /// some backends return `Err(ContentNotAvailable)`, others return
-    /// `Ok("")`. Both shapes are handled here (the `Err` path returns
-    /// `None`, the `Ok("")` path returns `Some("")`); either way the
-    /// caller's `text.is_empty()` check at the dispatcher swallows it
-    /// without reaching the PTY.
-    pub(crate) fn read(&mut self) -> Option<String> {
-        match &mut self.0 {
-            ClipboardBackend::System(cb) => match cb.get_text() {
-                Ok(text) => Some(text),
-                Err(arboard::Error::ContentNotAvailable) => {
-                    tracing::debug!(
-                        target: "orzma::clipboard",
-                        "clipboard read: nothing available (empty / non-text)",
-                    );
-                    None
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        target: "orzma::clipboard",
-                        error = ?err,
-                        "clipboard read failed",
-                    );
-                    None
-                }
-            },
-            #[cfg(test)]
-            ClipboardBackend::Memory(slot) => slot.clone(),
-            ClipboardBackend::Unavailable => {
-                tracing::debug!(
-                    target: "orzma::clipboard",
-                    "clipboard read skipped: arboard unavailable",
-                );
-                None
-            }
-        }
-    }
-
-    fn new() -> Self {
-        match arboard::Clipboard::new() {
-            Ok(cb) => Self(ClipboardBackend::System(cb)),
-            Err(e) => {
-                tracing::warn!(
-                    target: "orzma::clipboard",
-                    error = ?e,
-                    "arboard init failed; clipboard writes will no-op",
-                );
-                Self(ClipboardBackend::Unavailable)
-            }
-        }
-    }
-}
-
-/// Registers the shared `Clipboard` resource consumed by the action layer,
-/// vi-mode UIs, and tmux paste.
+/// Registers the clipboard write-seam observer. Bevy's `Clipboard` resource
+/// and `bevy_clipboard::ClipboardPlugin` come from `DefaultPlugins`; this
+/// plugin only adds orzma's write path on top.
 pub(crate) struct ClipboardPlugin;
 
 impl Plugin for ClipboardPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Clipboard>();
+        app.add_observer(apply_clipboard_write);
     }
 }
 
@@ -191,25 +87,28 @@ pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     }
 }
 
+fn apply_clipboard_write(ev: On<ClipboardWriteRequest>, mut clipboard: ResMut<Clipboard>) {
+    match clipboard.set_text(ev.text.as_str()) {
+        Ok(()) => {}
+        Err(ClipboardError::ClipboardNotSupported) => {
+            tracing::debug!(
+                target: "orzma::clipboard",
+                "clipboard write skipped: no system clipboard backend (headless)",
+            );
+        }
+        Err(err) => {
+            tracing::warn!(
+                target: "orzma::clipboard",
+                error = ?err,
+                "clipboard write failed",
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn read_returns_none_when_inner_is_unavailable() {
-        // Mirrors what `Clipboard::new` produces on a headless host where
-        // `arboard::Clipboard::new()` fails: the unavailable backend.
-        let mut cb = Clipboard(ClipboardBackend::Unavailable);
-        assert!(cb.read().is_none(), "headless backend must yield None");
-    }
-
-    #[test]
-    fn in_memory_backend_round_trips_writes() {
-        let mut cb = Clipboard::in_memory();
-        assert!(cb.read().is_none(), "empty in-memory backend yields None");
-        cb.write("hello world".to_string());
-        assert_eq!(cb.read().as_deref(), Some("hello world"));
-    }
 
     #[test]
     fn build_paste_bytes_unbracketed_normalizes_crlf_to_cr() {

@@ -1833,7 +1833,7 @@ mod tests {
             ViActionPlugin, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest,
             ViYankRequest,
         };
-        use crate::clipboard::Clipboard;
+        use crate::clipboard::ClipboardWriteRequest;
         use crate::configs::OrzmaConfigsResource;
         use crate::ui::vi_mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
         use bevy::ecs::message::Messages;
@@ -1853,7 +1853,14 @@ mod tests {
         app.init_resource::<PendingPaneOutput>();
         app.add_message::<PaneOutput>();
         app.insert_resource(OrzmaConfigsResource(OrzmaConfigs::default()));
-        app.insert_resource(Clipboard::in_memory());
+        #[derive(Resource, Default)]
+        struct CapturedCopies(Vec<String>);
+        app.init_resource::<CapturedCopies>();
+        app.add_observer(
+            |ev: On<ClipboardWriteRequest>, mut captured: ResMut<CapturedCopies>| {
+                captured.0.push(ev.text.clone());
+            },
+        );
 
         let pane_id = PaneId(99);
         let entity = app
@@ -2002,10 +2009,16 @@ mod tests {
             app.world().get::<ViModeState>(entity).is_none(),
             "yank must exit vi mode"
         );
-        let clipboard_text = app.world_mut().resource_mut::<Clipboard>().read();
+        let captured = &app.world().resource::<CapturedCopies>().0;
         assert_eq!(
-            clipboard_text, expected_yank,
-            "yank must write exactly the selected text to the clipboard"
+            captured.len(),
+            1,
+            "yank must emit exactly one ClipboardWriteRequest"
+        );
+        assert_eq!(
+            Some(captured[0].as_str()),
+            expected_yank.as_deref(),
+            "yank must emit exactly the selected text as a ClipboardWriteRequest"
         );
 
         // 4. Exiting vi mode (via yank) snaps the handle back to the live

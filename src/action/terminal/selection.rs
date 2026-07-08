@@ -2,7 +2,7 @@
 //! surface, and copy the current selection to the clipboard.
 
 use crate::action::terminal::{TerminalBackendQuery, apply_to_terminal};
-use crate::clipboard::Clipboard;
+use crate::clipboard::ClipboardWriteRequest;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use orzma_tty_engine::{Point, SelectionType, Side, TerminalHandle};
@@ -134,14 +134,14 @@ fn on_terminal_selection_clear(
 /// the clipboard. Needs only read access to the handle.
 fn on_terminal_selection_copy(
     ev: On<TerminalSelectionCopy>,
-    mut clipboard: ResMut<Clipboard>,
+    mut commands: Commands,
     terminals: Query<&TerminalHandle, With<OrzmaTerminal>>,
 ) {
     let Ok(handle) = terminals.get(ev.entity) else {
         return;
     };
     if let Some(text) = handle.selection_to_string() {
-        clipboard.write(text);
+        commands.trigger(ClipboardWriteRequest { text });
     }
 }
 

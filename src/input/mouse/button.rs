@@ -488,7 +488,6 @@ fn button_kind(state: ButtonState) -> ButtonEventKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clipboard::Clipboard;
     use crate::input::focus::MouseDisabled;
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
@@ -509,7 +508,6 @@ mod tests {
             .init_resource::<OrzmaMouseConfig>()
             .init_resource::<OrzmaMouseGesture>()
             .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<Clipboard>()
             .init_resource::<CapturedEffects>()
             .insert_resource(test_metrics())
             .add_systems(Update, dispatch_mouse_buttons);
@@ -713,7 +711,6 @@ mod tests {
             .init_resource::<OrzmaMouseConfig>()
             .init_resource::<OrzmaMouseGesture>()
             .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<Clipboard>()
             .insert_resource(test_metrics())
             .add_systems(Update, dispatch_mouse_buttons);
         app.world_mut().spawn((OrzmaTerminal, MouseDisabled));

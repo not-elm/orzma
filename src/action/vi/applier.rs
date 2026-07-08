@@ -5,7 +5,7 @@
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
-use crate::clipboard::Clipboard;
+use crate::clipboard::ClipboardWriteRequest;
 use crate::ui::vi_mode::ExitViMode;
 use bevy::prelude::*;
 use orzma_configs::vi_mode::ViModeScroll;
@@ -78,17 +78,12 @@ fn on_vi_selection_toggle(ev: On<ViSelectionToggleRequest>, mut terminals: Local
     }
 }
 
-fn on_vi_yank(
-    ev: On<ViYankRequest>,
-    mut commands: Commands,
-    mut clipboard: ResMut<Clipboard>,
-    mut terminals: LocalTerminal,
-) {
+fn on_vi_yank(ev: On<ViYankRequest>, mut commands: Commands, mut terminals: LocalTerminal) {
     let Ok((handle, _)) = terminals.get_mut(ev.entity) else {
         return;
     };
     if let Some(text) = handle.selection_to_string() {
-        clipboard.write(text);
+        commands.trigger(ClipboardWriteRequest { text });
     }
     commands.trigger(ExitViMode { entity: ev.entity });
 }
@@ -153,7 +148,6 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.init_resource::<Clipboard>();
         app.add_observer(on_vi_exit);
         app.add_observer(on_vi_yank);
         let pane = app
@@ -229,13 +223,22 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         use orzma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
 
+        #[derive(Resource, Default)]
+        struct CapturedCopies(Vec<String>);
+
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(ViModePlugin);
         app.add_observer(on_vi_yank);
-        // Use a process-local clipboard so the assertion holds on headless CI
-        // (where `arboard` is unavailable) without clobbering the real clipboard.
-        app.insert_resource(Clipboard::in_memory());
+        // Capture the write-seam request instead of round-tripping a real
+        // clipboard: headless-safe and never clobbers the developer's clipboard.
+        app.init_resource::<CapturedCopies>();
+        use crate::clipboard::ClipboardWriteRequest;
+        app.add_observer(
+            |ev: On<ClipboardWriteRequest>, mut captured: ResMut<CapturedCopies>| {
+                captured.0.push(ev.text.clone());
+            },
+        );
 
         let opts = SpawnOptions {
             cols: 20,
@@ -262,10 +265,10 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<ViModeState>(entity).is_none());
-        let text = app.world_mut().resource_mut::<Clipboard>().read();
+        let captured = &app.world().resource::<CapturedCopies>().0;
         assert!(
-            text.is_some_and(|t| !t.is_empty()),
-            "yank must populate the clipboard"
+            captured.iter().any(|t| !t.is_empty()),
+            "yank must emit a non-empty ClipboardWriteRequest"
         );
     }
 }
