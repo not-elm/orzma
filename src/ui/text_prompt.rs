@@ -165,10 +165,12 @@ fn close_prompt(
 /// This is a GLOBAL observer for a bubbling event: `FocusedInput` auto-propagates
 /// editable → bar → window, and the widget does NOT consume `Enter`
 /// (`allow_newlines == false`), so without a guard this observer fires once per
-/// bubble hop — submitting three times for one Enter. The
-/// `event_target() != focused_entity` guard fires it exactly once, at the
-/// editable's own hop. (`propagate(false)` alone is unreliable: observer order
-/// lets the widget re-set propagation.)
+/// bubble hop — submitting three times for one Enter. `event_target()` is
+/// `focused_entity`, which Bevy mutates in place at each hop, so it always
+/// equals `event_target()`; the `original_event_target()` guard below compares
+/// against the propagation-invariant original target instead, firing exactly
+/// once, at the editable's own hop. (`propagate(false)` alone is unreliable:
+/// observer order lets the widget re-set propagation.)
 fn on_prompt_key(
     key: On<FocusedInput<KeyboardInput>>,
     mut commands: Commands,
@@ -176,9 +178,8 @@ fn on_prompt_key(
     mut active: ResMut<ActiveTextPrompt>,
     prompts: Query<(&TextPrompt, &EditableText)>,
 ) {
-    // NOTE: without this guard the observer fires once per bubble hop
-    // (editable → bar → window), submitting three times for one Enter.
-    if key.event_target() != key.focused_entity {
+    // Fire only at the original target (the editable), not each bubble ancestor.
+    if key.event_target() != key.original_event_target() {
         return;
     }
     if !key.input.state.is_pressed() {
@@ -246,6 +247,10 @@ fn reconcile_active_text_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::input::keyboard::KeyCode;
+    use bevy::input::{ButtonState, InputPlugin};
+    use bevy::input_focus::{InputDispatchPlugin, InputFocusPlugin};
+    use bevy::window::{PrimaryWindow, Window};
 
     fn char_key(s: &str) -> Key {
         Key::Character(s.into())
@@ -286,7 +291,6 @@ mod tests {
             .init_resource::<InputFocus>()
             .add_systems(Update, reconcile_active_text_prompt);
 
-        // A prompt entity carrying TextPrompt, pointed to by ActiveTextPrompt.
         let bar = app.world_mut().spawn_empty().id();
         let editable = app
             .world_mut()
@@ -297,13 +301,77 @@ mod tests {
             .id();
         app.world_mut().resource_mut::<ActiveTextPrompt>().0 = Some(editable);
 
-        // External teardown despawns the prompt entity without going through close_prompt.
         app.world_mut().entity_mut(editable).despawn();
         app.update();
 
         assert!(
             app.world().resource::<ActiveTextPrompt>().0.is_none(),
             "self-heal must clear ActiveTextPrompt when its entity no longer exists, or the keyboard freezes"
+        );
+    }
+
+    #[test]
+    fn on_prompt_key_fires_once_even_when_ancestor_also_matches_query() {
+        #[derive(Resource, Default)]
+        struct SubmitCount(u32);
+
+        fn count_submits(_submit: On<TextPromptSubmit>, mut count: ResMut<SubmitCount>) {
+            count.0 += 1;
+        }
+
+        let mut app = App::new();
+        app.add_plugins((InputPlugin, InputFocusPlugin, InputDispatchPlugin))
+            .init_resource::<ActiveTextPrompt>()
+            .init_resource::<SubmitCount>()
+            .add_observer(on_prompt_key)
+            .add_observer(count_submits);
+
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.update();
+
+        let bar = app
+            .world_mut()
+            .spawn((
+                EditableText::new(""),
+                TextPrompt {
+                    submit_on_first_char: false,
+                    bar: Entity::PLACEHOLDER,
+                },
+            ))
+            .id();
+        let editable = app
+            .world_mut()
+            .spawn((
+                EditableText::new("x"),
+                TextPrompt {
+                    submit_on_first_char: false,
+                    bar,
+                },
+                ChildOf(bar),
+            ))
+            .id();
+
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(editable, FocusCause::Navigated);
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window,
+        });
+        app.update();
+
+        assert_eq!(
+            app.world().resource::<SubmitCount>().0,
+            1,
+            "on_prompt_key must fire exactly once, at the editable's own hop, not at every \
+             bubble ancestor that also matches the (TextPrompt, EditableText) query"
         );
     }
 }
