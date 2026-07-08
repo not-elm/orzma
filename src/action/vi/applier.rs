@@ -233,7 +233,6 @@ mod tests {
         // Capture the write-seam request instead of round-tripping a real
         // clipboard: headless-safe and never clobbers the developer's clipboard.
         app.init_resource::<CapturedCopies>();
-        use crate::clipboard::ClipboardWriteRequest;
         app.add_observer(
             |ev: On<ClipboardWriteRequest>, mut captured: ResMut<CapturedCopies>| {
                 captured.0.push(ev.text.clone());

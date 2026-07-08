@@ -51,10 +51,14 @@ fn read_clipboard_for_paste(
     let mut read = clipboard.fetch_text();
     let text = match read.poll_result() {
         Some(Ok(text)) => text,
-        Some(Err(ClipboardError::ContentNotAvailable)) => {
+        Some(Err(ClipboardError::ContentNotAvailable | ClipboardError::ClipboardNotSupported)) => {
+            // NOTE: keep ClipboardNotSupported (headless / no backend) at debug,
+            // matching apply_clipboard_write and the pre-migration Clipboard::read;
+            // routing it through the warn arm below spams a warning on every paste
+            // keystroke on a clipboard-less host.
             tracing::debug!(
                 target: "orzma::clipboard",
-                "paste clipboard read: nothing available (empty / non-text)",
+                "paste clipboard read: no content or no backend (empty / non-text / headless)",
             );
             return;
         }
@@ -164,11 +168,11 @@ mod tests {
             .add_plugins(PastePlugin)
             .init_resource::<Clipboard>();
         let entity = app.world_mut().spawn(OrzmaTerminal).id();
-        // Drives the reader against whatever backend Default produced (arboard
-        // `None` on headless CI → returns early; a real clipboard on a dev box
-        // → may emit PasteText, which on_paste drops for lack of a PtyHandle).
-        // Either way it must not panic. Do NOT assert on emitted PasteText —
-        // that would be flaky against a real, non-empty developer clipboard.
+        // NOTE: assert only "does not panic" — do NOT assert on emitted PasteText.
+        // With system_clipboard on, a dev box's arboard is available and the reader
+        // emits PasteText from the real (possibly non-empty) clipboard (on_paste then
+        // drops it for lack of a PtyHandle); asserting "no PasteText" would be flaky.
+        // On headless CI the backend is unavailable and nothing is emitted.
         app.world_mut().trigger(PasteAction { entity });
         app.update();
     }
