@@ -186,6 +186,10 @@ fn no_text_prompt_focused(active_text_prompt: Res<ActiveTextPrompt>) -> bool {
 /// the active pane, the anchor instead comes from that child's overlay
 /// rect origin (`webview_ime_position`), since inline entities carry no UI
 /// node for `webview_anchors` to read (spec §7).
+///
+/// Gated off (`run_if(no_text_prompt_focused)`) while a text prompt owns
+/// focus, so the widget's IME systems own `ime_enabled`/`ime_position` for
+/// the prompt.
 fn ime_policy_system(
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
     focused: Query<Entity, With<KeyboardFocused>>,
@@ -904,6 +908,7 @@ mod tests {
 
     #[test]
     fn ime_commit_suppressed_to_terminal_while_text_prompt_focused() {
+        use bevy::ecs::message::Messages;
         use bevy::prelude::On;
 
         #[derive(Resource, Default)]
@@ -913,18 +918,34 @@ mod tests {
         app.init_resource::<Hits>();
         app.add_observer(|_ev: On<ImeCommit>, mut hits: ResMut<Hits>| hits.0 += 1);
 
-        // A text prompt owns focus.
+        // A text prompt owns focus for the whole suppressed phase.
         let prompt = app.world_mut().spawn_empty().id();
         app.world_mut().resource_mut::<ActiveTextPrompt>().0 = Some(prompt);
 
+        // A preedit while suppressed: apply_event must STILL run (drain), so the
+        // composition is set. If read_ime_events were skipped, this would stay None.
         app.world_mut()
-            .resource_mut::<bevy::ecs::message::Messages<Ime>>()
+            .resource_mut::<Messages<Ime>>()
+            .write(Ime::Preedit {
+                window: Entity::PLACEHOLDER,
+                value: "あ".into(),
+                cursor: Some((3, 3)),
+            });
+        app.update();
+        assert!(
+            app.world().resource::<ImeState>().is_composing(),
+            "preedit must set composition even while suppressed — proves apply_event ran (drain, not skip)"
+        );
+
+        // A commit while suppressed: no terminal ImeCommit, and the composition is
+        // cleared (apply_event consumed it) rather than left buffered.
+        app.world_mut()
+            .resource_mut::<Messages<Ime>>()
             .write(Ime::Commit {
                 window: Entity::PLACEHOLDER,
                 value: "あ".into(),
             });
         app.update();
-
         assert_eq!(
             app.world().resource::<Hits>().0,
             0,
@@ -932,7 +953,16 @@ mod tests {
         );
         assert!(
             !app.world().resource::<ImeState>().is_composing(),
-            "read_ime_events must still drain and run apply_event so ImeState stays consistent"
+            "the commit must be drained/applied (composition cleared), not left buffered"
+        );
+
+        // Close the prompt: the already-drained commit must NOT replay to the terminal.
+        app.world_mut().resource_mut::<ActiveTextPrompt>().0 = None;
+        app.update();
+        assert_eq!(
+            app.world().resource::<Hits>().0,
+            0,
+            "a drained commit must not replay to the terminal after the prompt closes"
         );
     }
 
