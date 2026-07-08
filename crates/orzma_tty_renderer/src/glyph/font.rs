@@ -7,8 +7,10 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ttf_parser::Face as TtfFace;
 
-/// Error returned by `TerminalFonts::from_bytes` when one of the supplied
-/// per-face byte buffers fails `ab_glyph::FontArc::try_from_vec`.
+/// Error returned by `TerminalFonts::from_faces` (the actual producer;
+/// `from_bytes` delegates to it) when a face's bytes fail to parse — primary
+/// faces via `ab_glyph::FontVec::try_from_vec_and_index`, fallback faces via
+/// `FontArc::try_from_vec`.
 #[derive(Debug, thiserror::Error)]
 pub enum FontLoadError {
     /// `FontArc::try_from_vec` rejected the bytes for this face.
@@ -173,7 +175,7 @@ pub struct TerminalFonts {
     /// `.ttc` face index of the regular face. Every ttf-parser reparse of the
     /// regular face (cell metrics, em-scale) MUST use this index — parsing a
     /// collection face at index 0 reads a different face and yields wrong metrics.
-    pub regular_index: u32,
+    regular_index: u32,
 }
 
 /// Computes the worst-case rightward overflow (in physical px) over ASCII

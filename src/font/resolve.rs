@@ -52,9 +52,7 @@ mod tests {
     use orzma_tty_renderer::bundled;
     use std::sync::Arc;
 
-    fn collection() -> (Collection, SourceCache) {
-        // Deterministic + fast: skip the host font scan. After Task 2,
-        // CollectionOptions::default() has system_fonts: true.
+    fn deterministic_collection() -> (Collection, SourceCache) {
         (
             Collection::new(CollectionOptions {
                 system_fonts: false,
@@ -66,7 +64,7 @@ mod tests {
 
     #[test]
     fn registered_family_resolves_to_bytes() {
-        let (mut collection, mut source_cache) = collection();
+        let (mut collection, mut source_cache) = deterministic_collection();
         let blob = Blob::new(Arc::new(bundled::REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
         let registered = collection.register_fonts(blob, None);
         let family_id = registered.first().expect("at least one family").0;
@@ -87,7 +85,7 @@ mod tests {
 
     #[test]
     fn absent_family_returns_none() {
-        let (mut collection, mut source_cache) = collection();
+        let (mut collection, mut source_cache) = deterministic_collection();
         let resolved = resolve_face_bytes(
             &mut collection,
             &mut source_cache,

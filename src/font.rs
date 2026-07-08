@@ -97,8 +97,6 @@ fn bridge_font_config(
     let powerline = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
     commands.insert_resource(PowerlineFont(powerline.clone()));
 
-    // Fast path: no family configured at all -> bundled TerminalFonts (already
-    // present) + bundled UI handle.
     let no_family = font.family.is_none()
         && font.bold_family.is_none()
         && font.italic_family.is_none()
@@ -113,9 +111,9 @@ fn bridge_font_config(
     let italic_family = font.italic_family.as_deref().or(regular_family);
     let bold_italic_family = font.bold_italic_family.as_deref().or(regular_family);
 
-    // Materialize &mut FontContext once so its `collection` and `source_cache`
-    // fields can be borrowed as disjoint places (going through DerefMut per call
-    // would borrow all of FontCx twice and fail to compile).
+    // NOTE: materialize &mut FontContext once so `collection` and `source_cache`
+    // borrow as disjoint places. Going through `DerefMut` on `font_cx` per call
+    // instead would borrow all of FontCx twice and fail to compile.
     let cx = &mut **font_cx;
     let regular = resolve_or_bundled(
         &mut cx.collection,
@@ -160,8 +158,6 @@ fn bridge_font_config(
     .expect("validated bytes must parse");
     *terminal_fonts = new_fonts;
 
-    // UI: FontSource::Family only when the regular face actually resolved from a
-    // system family; otherwise the bundled handle.
     let ui_font = match (regular_from_family, regular_family) {
         (true, Some(family)) => FontSource::Family(family.into()),
         _ => FontSource::Handle(powerline),
@@ -242,8 +238,10 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
+    use fontique::FontInfoOverride;
     use orzma_tty_renderer::TerminalFontPlugin;
     use orzma_tty_renderer::bundled;
+    use std::sync::Arc;
 
     /// RAII guard for a process-environment variable. Constructing it via
     /// `EnvVarGuard::set(...)` sets the variable; dropping it removes
@@ -468,6 +466,90 @@ mod tests {
         assert!(
             matches!(ui.0, bevy::text::FontSource::Handle(_)),
             "unknown family must leave the UI on the bundled handle, not a Family"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Registers the bundled JBM regular/bold faces into the test app's
+    /// `FontCx` collection under known family names BEFORE `app.update()`
+    /// runs `bridge_font_config`, so the resolution is deterministic and
+    /// does not depend on any host-installed font.
+    #[test]
+    fn configured_family_resolves_terminal_fonts_ui_font_and_bold_override() {
+        let tmp = std::env::temp_dir().join("orzma_font_family_success_path.toml");
+        std::fs::write(
+            &tmp,
+            "[font]\nfamily = \"OrzmaTestMono\"\nbold_family = \"OrzmaTestMonoBold\"\n",
+        )
+        .expect("write toml");
+
+        let _guard = crate::configs::env_guard();
+        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .add_plugins(TextPlugin)
+            .init_asset::<Font>();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.add_plugins(TerminalFontPlugin);
+        app.add_plugins(OrzmaConfigsPlugin);
+        app.add_plugins(FontBridgePlugin);
+
+        {
+            let mut font_cx = app.world_mut().resource_mut::<FontCx>();
+            let regular_blob =
+                Blob::new(Arc::new(bundled::REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+            font_cx.collection.register_fonts(
+                regular_blob,
+                Some(FontInfoOverride {
+                    family_name: Some("OrzmaTestMono"),
+                    ..Default::default()
+                }),
+            );
+            let bold_blob =
+                Blob::new(Arc::new(bundled::BOLD) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+            font_cx.collection.register_fonts(
+                bold_blob,
+                Some(FontInfoOverride {
+                    family_name: Some("OrzmaTestMonoBold"),
+                    ..Default::default()
+                }),
+            );
+        }
+
+        app.update();
+
+        let ui_font = app
+            .world()
+            .get_resource::<TerminalUiFont>()
+            .expect("TerminalUiFont must be inserted when the configured family resolves");
+        assert_eq!(
+            ui_font.0,
+            FontSource::Family("OrzmaTestMono".into()),
+            "a family that resolves must produce FontSource::Family, not the bundled handle"
+        );
+
+        let fonts = app.world().resource::<TerminalFonts>();
+        assert_eq!(
+            fonts.regular.font_data(),
+            bundled::REGULAR,
+            "regular face must resolve to the bytes registered under `family`"
+        );
+        assert_eq!(
+            fonts.bold.font_data(),
+            bundled::BOLD,
+            "bold face must resolve via `bold_family`, not fall back to `family`'s bytes"
+        );
+        assert_eq!(
+            fonts.italic.font_data(),
+            bundled::REGULAR,
+            "italic face (no italic_family override) must fall back to `family` via .or()"
         );
 
         let _ = std::fs::remove_file(&tmp);
