@@ -222,7 +222,7 @@ fn apply_prompt_close(
 fn on_prompt_key(
     key: On<FocusedInput<KeyboardInput>>,
     mut commands: Commands,
-    prompts: Query<(&TextPrompt, &EditableText), Without<PromptClosing>>,
+    prompts: Query<&EditableText, (With<TextPrompt>, Without<PromptClosing>)>,
 ) {
     if key.event_target() != key.original_event_target() {
         return;
@@ -230,7 +230,7 @@ fn on_prompt_key(
     if !key.input.state.is_pressed() {
         return;
     }
-    let Ok((_prompt, editable)) = prompts.get(key.focused_entity) else {
+    let Ok(editable) = prompts.get(key.focused_entity) else {
         return;
     };
     match decide_prompt_key(&key.input.logical_key, editable.is_composing()) {

@@ -2,9 +2,8 @@
 //! target window's current name.
 
 use crate::font::TerminalUiFont;
-use crate::theme;
-use crate::ui::text_prompt::{ActiveTextPrompt, TextPromptSpec, spawn_text_prompt};
-use crate::ui::tmux::rename_prompt::{RenameIntent, RenameSubject};
+use crate::ui::text_prompt::ActiveTextPrompt;
+use crate::ui::tmux::rename_prompt::{RenameSubject, open_rename_prompt};
 use bevy::input_focus::InputFocus;
 use bevy::prelude::*;
 use orzma_tmux::TmuxWindow;
@@ -37,32 +36,22 @@ fn on_rename_window(
     let Ok(window) = windows.get(ev.entity) else {
         return;
     };
-    let subject = RenameSubject::Window {
-        id: window.id,
-        current_name: window.name.clone(),
-    };
     let font = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
-    let editable = spawn_text_prompt(
+    open_rename_prompt(
         &mut commands,
         &mut input_focus,
         &mut active,
         font,
-        TextPromptSpec {
-            label: subject.label().to_string(),
-            initial: subject.current_name().to_string(),
-            submit_on_first_char: false,
-            select_all: true,
-            bg: theme::SELECTION,
-            fg: theme::SELECTION_FG,
-        },
+        RenameSubject::Window { id: window.id },
+        window.name.clone(),
     );
-    commands.entity(editable).insert(RenameIntent(subject));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ui::text_prompt::TextPrompt;
+    use crate::ui::tmux::rename_prompt::RenameIntent;
     use tmux_control_parser::WindowId;
 
     #[test]
