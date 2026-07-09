@@ -6,14 +6,13 @@
 mod forward_input;
 mod mouse_write;
 mod open_uri;
-mod paste;
 mod selection;
 mod viewport_scroll;
 
 use crate::{
     action::terminal::{
-        mouse_write::MouseWritePlugin, open_uri::OpenUriPlugin, paste::PastePlugin,
-        selection::SelectionPlugin, viewport_scroll::ViewportScrollPlugin,
+        mouse_write::MouseWritePlugin, open_uri::OpenUriPlugin, selection::SelectionPlugin,
+        viewport_scroll::ViewportScrollPlugin,
     },
     surface::OrzmaTerminal,
 };
@@ -23,7 +22,6 @@ use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 pub(crate) use forward_input::TerminalForwardInput;
 pub(crate) use mouse_write::TerminalMouseWrite;
 pub(crate) use open_uri::TerminalOpenUri;
-pub(crate) use paste::{PasteAction, PasteText};
 pub(crate) use selection::{
     TerminalSelectionClear, TerminalSelectionCopy, TerminalSelectionStart, TerminalSelectionUpdate,
 };
@@ -37,7 +35,6 @@ impl Plugin for TerminalActionPlugin {
         app.add_plugins((
             MouseWritePlugin,
             OpenUriPlugin,
-            PastePlugin,
             SelectionPlugin,
             ViewportScrollPlugin,
         ));

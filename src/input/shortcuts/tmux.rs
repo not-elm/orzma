@@ -5,7 +5,8 @@
 
 use crate::{
     action::{
-        terminal::{PasteAction, TerminalSelectionCopy},
+        clipboard::PasteAction,
+        terminal::TerminalSelectionCopy,
         tmux::{
             DetachSessionRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest,
             NextSessionRequest, NextWindowRequest, PreviousSessionRequest, PreviousWindowRequest,

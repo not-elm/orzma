@@ -5,7 +5,7 @@
 //! `crate::input::shortcuts::default_mode`'s per-message systems — vi-mode
 //! entry, the shared `[vi-mode]` key table (while vi mode is active),
 //! direct-chord and leader paste, and raw-key typing
-//! (`crate::action::terminal::PasteAction`, `TerminalKeyInput`). Quit and
+//! (`crate::action::clipboard::PasteAction`, `TerminalKeyInput`). Quit and
 //! release-webview-focus are handled upstream; the pane/window actions are
 //! no-ops in Default mode.
 
@@ -169,7 +169,8 @@ fn apply_ime_commit_to_terminal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::terminal::{PasteAction, TerminalSelectionCopy};
+    use crate::action::clipboard::PasteAction;
+    use crate::action::terminal::TerminalSelectionCopy;
     use crate::input::keyboard::key_effect::KeyEffect;
     use crate::input::shortcuts::default_mode::{
         apply_default_shortcuts, apply_default_type, apply_default_vi_mode,

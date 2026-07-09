@@ -11,7 +11,7 @@ mod paste;
 pub(crate) use copy::CopyAction;
 #[cfg(test)]
 pub(crate) use copy::test_support;
-pub(crate) use paste::build_paste_bytes;
+pub(crate) use paste::PasteAction;
 
 /// Aggregates the per-feature clipboard action plugins.
 pub(super) struct ClipboardActionsPlugin;

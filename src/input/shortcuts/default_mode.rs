@@ -3,10 +3,7 @@
 //! vi-mode entry, paste, copy, and raw-key typing to the focused terminal.
 
 use crate::{
-    action::{
-        terminal::{PasteAction, TerminalSelectionCopy},
-        vi::trigger_vi_mode_action,
-    },
+    action::{clipboard::PasteAction, terminal::TerminalSelectionCopy, vi::trigger_vi_mode_action},
     app_mode::AppMode,
     input::{
         keyboard::bevy_key_to_terminal_key,

@@ -45,7 +45,7 @@ impl Plugin for ClipboardPasteActionPlugin {
 ///   endings so shells receive a `\r` for each line. `\r\n` collapses
 ///   to `\r`, lone `\n` becomes `\r`, and existing `\r` bytes pass
 ///   through unchanged. Matches the xterm / iTerm2 paste convention.
-pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
+fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
         let mut body = text.to_owned();
         loop {
