@@ -14,7 +14,7 @@ use bevy::prelude::*;
 /// single `Clipboard::set_text`. Decoupling this way keeps the copy observers
 /// testable by capturing the request instead of round-tripping a real clipboard.
 #[derive(Event, Debug, Clone)]
-pub(crate) struct ClipboardWriteRequest {
+pub struct ClipboardWriteRequest {
     /// The text to place on the system clipboard.
     pub text: String,
 }

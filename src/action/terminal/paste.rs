@@ -82,14 +82,6 @@ fn read_clipboard_for_paste(
 
 fn on_paste(
     ev: On<PasteText>,
-    // NOTE: Without<TmuxPane> is defensive, mirroring the IME-commit split
-    // (`apply_ime_commit_to_terminal` in src/input/default_mode.rs) — tmux
-    // panes never carry a PtyHandle (src/render/tmux.rs attaches them via
-    // `TerminalHandle::detached`), so the `&mut PtyHandle` term below
-    // already excludes them from this query. Keep the filter anyway so
-    // this observer's tmux-exclusion doesn't rest solely on that
-    // PtyHandle invariant; tmux paste is applied by `on_paste_tmux`
-    // (src/action/tmux/paste.rs).
     mut terminals: Query<
         (&mut TerminalHandle, &mut PtyHandle, &mut Coalescer),
         (With<OrzmaTerminal>, Without<TmuxPane>),
