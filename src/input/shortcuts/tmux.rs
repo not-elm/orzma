@@ -6,7 +6,7 @@
 use crate::{
     action::{
         clipboard::PasteAction,
-        terminal::TerminalSelectionCopy,
+        terminal::trigger_selection_copy,
         tmux::{
             DetachSessionRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest,
             NextSessionRequest, NextWindowRequest, PreviousSessionRequest, PreviousWindowRequest,
@@ -99,11 +99,7 @@ fn apply_tmux_shortcuts(
                     commands.trigger(PasteAction { entity });
                 }
             }
-            Shortcut::Copy => {
-                if let Some(entity) = msg.focused {
-                    commands.trigger(TerminalSelectionCopy { entity });
-                }
-            }
+            Shortcut::Copy => trigger_selection_copy(&mut commands, msg.focused),
             Shortcut::DetachSession => {
                 if let Ok(entity) = targets.session.single() {
                     commands.trigger(DetachSessionRequest { entity });
@@ -323,6 +319,7 @@ fn on_tmux_forward_message() -> impl SystemCondition<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::terminal::TerminalSelectionCopy;
     use crate::input::keyboard::key_effect::KeyEffect;
     use orzma_tmux::{PaneId, TmuxPane};
 

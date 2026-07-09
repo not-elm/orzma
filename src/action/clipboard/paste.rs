@@ -3,7 +3,12 @@
 //! `PasteToTerminal`; also hosts `build_paste_bytes`, the shared paste-byte
 //! construction.
 
-use crate::surface::OrzmaTerminal;
+use crate::{
+    action::clipboard::paste::{
+        default_mode::PasteDefaultModePlugin, tmux_mode::PasteTmuxModePlugin,
+    },
+    surface::OrzmaTerminal,
+};
 use bevy::{clipboard::ClipboardError, prelude::*};
 use orzma_tmux::TmuxPane;
 
@@ -23,10 +28,8 @@ pub(super) struct ClipboardPasteActionPlugin;
 
 impl Plugin for ClipboardPasteActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_paste).add_plugins((
-            default_mode::PasteDefaultModePlugin,
-            tmux_mode::PasteTmuxModePlugin,
-        ));
+        app.add_observer(on_paste)
+            .add_plugins((PasteDefaultModePlugin, PasteTmuxModePlugin));
     }
 }
 
@@ -100,6 +103,39 @@ struct PasteToTerminal {
     text: String,
 }
 
+/// The decision `on_paste` derives from a clipboard read poll. Keeping the
+/// branch logic a pure function of the poll result lets every arm be
+/// unit-tested without a real clipboard backend (bevy's `Clipboard` exposes no
+/// in-memory seam).
+enum PasteRead {
+    /// Non-empty clipboard text ready to paste.
+    Ready(String),
+    /// Nothing to paste — empty clipboard or a fetch not yet resolved.
+    Nothing,
+    /// No content or no clipboard backend (headless); logged at debug.
+    Unavailable,
+    /// The clipboard read failed; logged at warn with the error.
+    Failed(ClipboardError),
+}
+
+impl PasteRead {
+    fn classify(read: Option<Result<String, ClipboardError>>) -> Self {
+        match read {
+            Some(Ok(text)) if !text.is_empty() => Self::Ready(text),
+            Some(Ok(_)) | None => Self::Nothing,
+            // NOTE: ClipboardNotSupported (headless / no backend) is grouped
+            // with ContentNotAvailable into the debug-logged Unavailable
+            // outcome on purpose — a later edit must not let it fall through to
+            // Failed. Failed logs at warn, so a clipboard-less host would then
+            // emit a warning on every paste keystroke, masking real warnings.
+            Some(Err(
+                ClipboardError::ContentNotAvailable | ClipboardError::ClipboardNotSupported,
+            )) => Self::Unavailable,
+            Some(Err(err)) => Self::Failed(err),
+        }
+    }
+}
+
 fn on_paste(
     ev: On<PasteAction>,
     mut commands: Commands,
@@ -109,36 +145,28 @@ fn on_paste(
     if targets.get(ev.entity).is_err() {
         return;
     }
-    let text = match clipboard.fetch_text().poll_result() {
-        Some(Ok(text)) => text,
-        Some(Err(ClipboardError::ContentNotAvailable | ClipboardError::ClipboardNotSupported)) => {
-            // NOTE: keep ClipboardNotSupported (headless / no backend) at debug,
-            // matching on_copy and the pre-migration Clipboard::read; routing it
-            // through the warn arm below spams a warning on every paste
-            // keystroke on a clipboard-less host.
+    match PasteRead::classify(clipboard.fetch_text().poll_result()) {
+        PasteRead::Ready(text) => {
+            commands.trigger(PasteToTerminal {
+                terminal: ev.entity,
+                text,
+            });
+        }
+        PasteRead::Nothing => {}
+        PasteRead::Unavailable => {
             tracing::debug!(
                 target: "orzma::clipboard",
                 "paste clipboard read: no content or no backend (empty / non-text / headless)",
             );
-            return;
         }
-        Some(Err(err)) => {
+        PasteRead::Failed(err) => {
             tracing::warn!(
                 target: "orzma::clipboard",
                 error = ?err,
                 "paste clipboard read failed",
             );
-            return;
         }
-        None => return,
-    };
-    if text.is_empty() {
-        return;
     }
-    commands.trigger(PasteToTerminal {
-        terminal: ev.entity,
-        text,
-    });
 }
 
 #[cfg(test)]
@@ -231,19 +259,45 @@ mod tests {
     }
 
     #[test]
-    fn on_paste_does_not_panic_for_terminal_target() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_observer(on_paste)
-            .init_resource::<Clipboard>();
-        let entity = app.world_mut().spawn(OrzmaTerminal).id();
-        // NOTE: assert only "does not panic" — do NOT assert on emitted
-        // PasteToTerminal. With system_clipboard on, a dev box's arboard is
-        // available and the reader emits PasteToTerminal from the real
-        // (possibly non-empty) clipboard; asserting "no PasteToTerminal"
-        // would be flaky. On headless CI the backend is unavailable and
-        // nothing is emitted.
-        app.world_mut().trigger(PasteAction { entity });
-        app.update();
+    fn classify_paste_read_ready_on_nonempty_text() {
+        assert!(matches!(
+            PasteRead::classify(Some(Ok("hi".to_string()))),
+            PasteRead::Ready(text) if text == "hi"
+        ));
+    }
+
+    #[test]
+    fn classify_paste_read_nothing_on_empty_text() {
+        assert!(matches!(
+            PasteRead::classify(Some(Ok(String::new()))),
+            PasteRead::Nothing
+        ));
+    }
+
+    #[test]
+    fn classify_paste_read_nothing_on_pending_fetch() {
+        assert!(matches!(PasteRead::classify(None), PasteRead::Nothing));
+    }
+
+    #[test]
+    fn classify_paste_read_unavailable_on_no_content_or_backend() {
+        assert!(matches!(
+            PasteRead::classify(Some(Err(ClipboardError::ContentNotAvailable))),
+            PasteRead::Unavailable
+        ));
+        assert!(matches!(
+            PasteRead::classify(Some(Err(ClipboardError::ClipboardNotSupported))),
+            PasteRead::Unavailable
+        ));
+    }
+
+    #[test]
+    fn classify_paste_read_failed_on_other_error() {
+        assert!(matches!(
+            PasteRead::classify(Some(Err(ClipboardError::Unknown {
+                description: "boom".to_string(),
+            }))),
+            PasteRead::Failed(_)
+        ));
     }
 }

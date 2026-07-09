@@ -3,7 +3,9 @@
 //! vi-mode entry, paste, copy, and raw-key typing to the focused terminal.
 
 use crate::{
-    action::{clipboard::PasteAction, terminal::TerminalSelectionCopy, vi::trigger_vi_mode_action},
+    action::{
+        clipboard::PasteAction, terminal::trigger_selection_copy, vi::trigger_vi_mode_action,
+    },
     app_mode::AppMode,
     input::{
         keyboard::bevy_key_to_terminal_key,
@@ -68,11 +70,7 @@ pub(in crate::input) fn apply_default_shortcuts(
                     commands.trigger(PasteAction { entity });
                 }
             }
-            Shortcut::Copy => {
-                if let Some(entity) = msg.focused {
-                    commands.trigger(TerminalSelectionCopy { entity });
-                }
-            }
+            Shortcut::Copy => trigger_selection_copy(&mut commands, msg.focused),
             Shortcut::DetachSession
             | Shortcut::SelectPane(_)
             | Shortcut::ResizePane(_)
