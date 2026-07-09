@@ -55,16 +55,22 @@ impl FontConfig {
     /// `style` is silently ignored (D5/D9). Used to emit a load-time warning.
     pub fn faces_with_ignored_style(&self) -> Vec<&'static str> {
         let base_present = self.normal.family.is_some();
+        self.faces()
+            .into_iter()
+            .filter(|(_, face)| face.style.is_some() && face.family.is_none() && !base_present)
+            .map(|(label, _)| label)
+            .collect()
+    }
+
+    /// The four terminal faces paired with their `[font]` key labels, in fixed
+    /// order — the single source of truth for the face set.
+    pub(crate) fn faces(&self) -> [(&'static str, &FontFaceConfig); 4] {
         [
             ("normal", &self.normal),
             ("bold", &self.bold),
             ("italic", &self.italic),
             ("bold_italic", &self.bold_italic),
         ]
-        .into_iter()
-        .filter(|(_, face)| face.style.is_some() && face.family.is_none() && !base_present)
-        .map(|(label, _)| label)
-        .collect()
     }
 }
 

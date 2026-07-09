@@ -128,12 +128,7 @@ impl OrzmaConfigs {
         if !(size > 0.0 && size <= 200.0) {
             return Err(OrzmaConfigsError::InvalidFontSize { size });
         }
-        for (face, cfg) in [
-            ("normal", &self.font.normal),
-            ("bold", &self.font.bold),
-            ("italic", &self.font.italic),
-            ("bold_italic", &self.font.bold_italic),
-        ] {
+        for (face, cfg) in self.font.faces() {
             if let Some(style) = cfg.style.as_deref()
                 && FontStyleSpec::from_str(style).is_err()
             {

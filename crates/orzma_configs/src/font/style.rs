@@ -37,11 +37,7 @@ impl FromStr for FontStyleSpec {
         let mut weight = None;
         let mut slant = None;
         for raw in s.split_whitespace() {
-            let word: String = raw
-                .chars()
-                .filter(|c| *c != '-')
-                .flat_map(char::to_lowercase)
-                .collect();
+            let word = raw.replace('-', "").to_lowercase();
             if let Some(w) = weight_name(&word) {
                 weight = Some(w);
             } else if let Some(sl) = FontSlant::parse(&word) {

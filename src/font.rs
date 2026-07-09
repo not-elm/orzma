@@ -12,7 +12,7 @@
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
 use bevy::text::{Font, FontCx, FontSource};
-use fontique::{Blob, Script};
+use fontique::{Blob, Collection, Script, SourceCache};
 use orzma_configs::font::FontStyleSpec;
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
 use std::str::FromStr;
@@ -142,35 +142,15 @@ fn bridge_font_config(
             bundled::BOLD_ITALIC,
         ),
     ]
-    .map(|(family, style, face, bundled)| match family {
-        None => ResolvedFace::bundled(bundled),
-        Some(family) => {
-            // NOTE: style was validated at config load; a parse here cannot
-            // fail. If a future change loosens `validate()`'s style check,
-            // this `.expect()` starts panicking at Startup instead of
-            // returning InvalidFontStyle before the app ever gets here.
-            let attributes = match style {
-                Some(s) => resolve::attributes_of(
-                    FontStyleSpec::from_str(s).expect("style validated at config load"),
-                ),
-                None => resolve::face_attributes(face),
-            };
-            match resolve::resolve_configured_face(
-                &mut cx.collection,
-                &mut cx.source_cache,
-                family,
-                attributes,
-            ) {
-                Ok((bytes, index)) => ResolvedFace {
-                    bytes,
-                    index,
-                    from_family: true,
-                },
-                Err(resolve::FamilyNotFound) => panic!(
-                    "orzma: font family {family:?} configured for the {face:?} face was not found; install it or fix [font] in your config",
-                ),
-            }
-        }
+    .map(|(family, style, face, bundled)| {
+        ResolvedFace::resolve(
+            &mut cx.collection,
+            &mut cx.source_cache,
+            family,
+            style,
+            face,
+            bundled,
+        )
     });
 
     let regular_from_family = regular.from_family;
@@ -203,6 +183,43 @@ struct ResolvedFace {
 }
 
 impl ResolvedFace {
+    /// Resolves one face: a configured `family` at its `style` (or the face's
+    /// default attributes when `style` is omitted) through the system font
+    /// collection. A face with no configured family uses `bundled`; a configured
+    /// family that cannot be resolved aborts startup (no silent fallback).
+    fn resolve(
+        collection: &mut Collection,
+        source_cache: &mut SourceCache,
+        family: Option<&str>,
+        style: Option<&str>,
+        face: FontFace,
+        bundled: &'static [u8],
+    ) -> Self {
+        let Some(family) = family else {
+            return Self::bundled(bundled);
+        };
+        // NOTE: style was validated at config load; a parse here cannot fail. If
+        // a future change loosens `validate()`'s style check, this `.expect()`
+        // starts panicking at Startup instead of returning InvalidFontStyle
+        // before the app ever gets here.
+        let attributes = match style {
+            Some(s) => resolve::attributes_of(
+                FontStyleSpec::from_str(s).expect("style validated at config load"),
+            ),
+            None => resolve::face_attributes(face),
+        };
+        match resolve::resolve_configured_face(collection, source_cache, family, attributes) {
+            Ok((bytes, index)) => Self {
+                bytes,
+                index,
+                from_family: true,
+            },
+            Err(resolve::FamilyNotFound) => panic!(
+                "orzma: font family {family:?} configured for the {face:?} face was not found; install it or fix [font] in your config",
+            ),
+        }
+    }
+
     /// Bundled fallback for one face: the bundled bytes at index 0, marked as not
     /// resolved from a family.
     fn bundled(bundled: &[u8]) -> Self {
