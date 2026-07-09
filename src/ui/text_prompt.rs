@@ -100,6 +100,15 @@ pub(crate) fn spawn_text_prompt(
     });
     let mut editable = commands.spawn((
         EditableText::new(&spec.initial),
+        // NOTE: EditableText defaults to `visible_width: None`, whose content-size
+        // measure reports width 0; in the bar's Row layout that collapses the node
+        // to zero width, and `ComputedNode::is_empty()` makes the UI render
+        // extractors skip it entirely — no glyphs or cursor draw. `flex_grow`
+        // fills the bar's remaining width so the field is visible.
+        Node {
+            flex_grow: 1.0,
+            ..default()
+        },
         TextFont {
             font: font.into(),
             font_size: FontSize::Px(theme::UI_FONT_SIZE),
@@ -329,6 +338,89 @@ mod tests {
     }
 
     #[test]
+    fn editable_value_populates_prefill_and_typed_char() {
+        use bevy::asset::AssetPlugin;
+        use bevy::picking::events::{Pointer, Release};
+        use bevy::text::{Font, FontSize, TextFont, TextPlugin};
+        use bevy::ui::UiScale;
+        use bevy::ui_widgets::{EditableTextInputPlugin, SelectAllOnFocus};
+        use bevy::window::Ime;
+
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            AssetPlugin::default(),
+            InputPlugin,
+            InputFocusPlugin,
+            InputDispatchPlugin,
+            TextPlugin,
+            EditableTextInputPlugin,
+        ))
+        .add_message::<Ime>()
+        .add_message::<Pointer<Release>>()
+        .init_resource::<UiScale>();
+
+        let window = app
+            .world_mut()
+            .spawn((Window::default(), PrimaryWindow))
+            .id();
+        app.update();
+
+        let editable = app
+            .world_mut()
+            .spawn((
+                EditableText::new("nvim"),
+                TextFont {
+                    font: Handle::<Font>::default().into(),
+                    font_size: FontSize::Px(theme::UI_FONT_SIZE),
+                    ..default()
+                },
+                SelectAllOnFocus,
+            ))
+            .id();
+
+        let prefill = app
+            .world()
+            .get::<EditableText>(editable)
+            .unwrap()
+            .value()
+            .to_string();
+        assert_eq!(
+            prefill, "nvim",
+            "EditableText::new must store the prefill in value() synchronously, before any update"
+        );
+
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(editable, FocusCause::Navigated);
+        app.update();
+
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::KeyX,
+            logical_key: Key::Character("x".into()),
+            state: ButtonState::Pressed,
+            text: Some("x".into()),
+            repeat: false,
+            window,
+        });
+        app.update();
+        app.update();
+
+        let typed = app
+            .world()
+            .get::<EditableText>(editable)
+            .unwrap()
+            .value()
+            .to_string();
+        assert!(
+            typed.contains('x'),
+            "the widget's on_focused_keyboard_input + apply_text_edits must insert the typed \
+             char into value() (got {typed:?}); if this holds, the empty-display bug is a RENDER \
+             bug (Case A), not a widget-insert bug (Case B)"
+        );
+    }
+
+    #[test]
     fn self_heal_clears_active_when_prompt_entity_despawned() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -418,6 +510,49 @@ mod tests {
             1,
             "on_prompt_key must fire exactly once, at the editable's own hop, not at every \
              bubble ancestor that also matches the (TextPrompt, EditableText) query"
+        );
+    }
+
+    #[test]
+    fn spawn_text_prompt_gives_the_field_an_explicit_width() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<InputFocus>()
+            .init_resource::<ActiveTextPrompt>();
+        let editable = app
+            .world_mut()
+            .run_system_once(
+                |mut commands: Commands,
+                 mut input_focus: ResMut<InputFocus>,
+                 mut active: ResMut<ActiveTextPrompt>| {
+                    spawn_text_prompt(
+                        &mut commands,
+                        &mut input_focus,
+                        &mut active,
+                        Handle::default(),
+                        TextPromptSpec {
+                            label: "Rename: ".into(),
+                            initial: "nvim".into(),
+                            submit_on_first_char: false,
+                            select_all: true,
+                            bg: Color::BLACK,
+                            fg: Color::WHITE,
+                        },
+                    )
+                },
+            )
+            .unwrap();
+        let node = app
+            .world()
+            .get::<Node>(editable)
+            .expect("the EditableText field must have a Node");
+        assert!(
+            node.flex_grow > 0.0,
+            "the EditableText field needs an explicit width source (flex_grow): EditableText's \
+             visible_width defaults to None, whose measure reports width 0, which collapses the \
+             node and makes the UI render extractors skip it — no glyphs draw (the empty-field bug)"
         );
     }
 
