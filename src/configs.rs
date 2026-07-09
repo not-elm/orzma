@@ -2,10 +2,10 @@
 //! a Bevy Resource. Config validation errors (duplicate direct or prefix
 //! chords, duplicate `[vi-mode]` keys, a leader that shadows a direct
 //! binding, prefix bindings with no leader, an unmappable leader key, an
-//! out-of-range font size) are fatal (exit 2) so a mistake in one field
-//! never silently discards the whole config. Parse / IO errors warn and
-//! fall back to defaults so the GUI remains startable for users with stale
-//! or invalid config files.
+//! out-of-range font size, an unparseable `[font]` face `style`) are fatal
+//! (exit 2) so a mistake in one field never silently discards the whole
+//! config. Parse / IO errors warn and fall back to defaults so the GUI
+//! remains startable for users with stale or invalid config files.
 
 use bevy::prelude::*;
 use orzma_configs::OrzmaConfigs;
@@ -37,7 +37,8 @@ impl Plugin for OrzmaConfigsPlugin {
             | orzma_configs::OrzmaConfigsError::DuplicateViModeKeys(_)
             | orzma_configs::OrzmaConfigsError::LeaderShadowsDirectBinding { .. }
             | orzma_configs::OrzmaConfigsError::UnmappableLeader { .. }
-            | orzma_configs::OrzmaConfigsError::InvalidFontSize { .. } => {
+            | orzma_configs::OrzmaConfigsError::InvalidFontSize { .. }
+            | orzma_configs::OrzmaConfigsError::InvalidFontStyle { .. } => {
                 eprintln!("orzma: config is invalid:\n  {err}");
                 std::process::exit(2);
             }

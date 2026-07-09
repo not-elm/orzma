@@ -13,8 +13,10 @@ use crate::configs::OrzmaConfigsResource;
 use ab_glyph::FontRef;
 use bevy::prelude::*;
 use bevy::text::{Font, FontCx, FontSource};
-use fontique::{Blob, Collection, Script, SourceCache};
+use fontique::{Attributes, Blob, Collection, Script, SourceCache};
+use orzma_configs::font::FontStyleSpec;
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
+use std::str::FromStr;
 
 mod resolve;
 
@@ -116,21 +118,47 @@ fn bridge_font_config(
     // instead would borrow all of FontCx twice and fail to compile.
     let cx = &mut **font_cx;
     let [regular, bold, italic, bold_italic] = [
-        (regular_family, FontFace::Regular, bundled::REGULAR),
-        (bold_family, FontFace::Bold, bundled::BOLD),
-        (italic_family, FontFace::Italic, bundled::ITALIC),
+        (
+            regular_family,
+            font.normal.style.as_deref(),
+            FontFace::Regular,
+            bundled::REGULAR,
+        ),
+        (
+            bold_family,
+            font.bold.style.as_deref(),
+            FontFace::Bold,
+            bundled::BOLD,
+        ),
+        (
+            italic_family,
+            font.italic.style.as_deref(),
+            FontFace::Italic,
+            bundled::ITALIC,
+        ),
         (
             bold_italic_family,
+            font.bold_italic.style.as_deref(),
             FontFace::BoldItalic,
             bundled::BOLD_ITALIC,
         ),
     ]
-    .map(|(family, face, bundled)| {
+    .map(|(family, style, face, bundled)| {
+        // NOTE: style was validated at config load; a parse here cannot fail.
+        // If a future change loosens `validate()`'s style check, this
+        // `.expect()` starts panicking at Startup instead of returning
+        // InvalidFontStyle before the app ever gets here.
+        let attributes = match style {
+            Some(s) => resolve::attributes_of(
+                FontStyleSpec::from_str(s).expect("style validated at config load"),
+            ),
+            None => resolve::face_attributes(face),
+        };
         resolve_or_bundled(
             &mut cx.collection,
             &mut cx.source_cache,
             family,
-            face,
+            attributes,
             bundled,
         )
     });
@@ -176,20 +204,19 @@ impl ResolvedFace {
     }
 }
 
-/// Resolves `family` for `face`, validating the result at its index. Falls back
-/// to `bundled` (index 0) — with a warning — when `family` is `None`, the family
-/// name is absent, or the resolved bytes fail to parse.
+/// Resolves `family` at `attributes`, validating the result at its index. Falls
+/// back to `bundled` (index 0) — with a warning — when `family` is `None`, the
+/// family name is absent, or the resolved bytes fail to parse.
 fn resolve_or_bundled(
     collection: &mut Collection,
     source_cache: &mut SourceCache,
     family: Option<&str>,
-    face: FontFace,
+    attributes: Attributes,
     bundled: &'static [u8],
 ) -> ResolvedFace {
     let Some(family) = family else {
         return ResolvedFace::bundled(bundled);
     };
-    let attributes = resolve::face_attributes(face);
     match resolve::resolve_face_bytes(collection, source_cache, family, attributes) {
         Some((bytes, index)) if FontRef::try_from_slice_and_index(&bytes, index).is_ok() => {
             ResolvedFace {
@@ -199,15 +226,11 @@ fn resolve_or_bundled(
             }
         }
         Some(_) => {
-            tracing::warn!(
-                ?face,
-                family,
-                "resolved font failed to parse; using bundled"
-            );
+            tracing::warn!(family, "resolved font failed to parse; using bundled");
             ResolvedFace::bundled(bundled)
         }
         None => {
-            tracing::warn!(?face, family, "font family not found; using bundled");
+            tracing::warn!(family, "font family not found; using bundled");
             ResolvedFace::bundled(bundled)
         }
     }
@@ -221,7 +244,7 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
-    use fontique::FontInfoOverride;
+    use fontique::{FontInfoOverride, FontWeight};
     use orzma_tty_renderer::TerminalFontPlugin;
     use orzma_tty_renderer::bundled;
     use std::sync::Arc;
@@ -534,6 +557,74 @@ mod tests {
             fonts.italic.font_data(),
             bundled::REGULAR,
             "italic face (no italic override) must fall back to `normal` via .or()"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Registers TWO faces (weight 400 and weight 700) under the SAME family
+    /// name, then configures `normal.style = "Bold"`. A single-face family
+    /// would resolve regardless of style, so this proves the style-derived
+    /// attributes actually drove weight selection: the `normal` slot must
+    /// pick the weight-700 face, not the family's first-registered weight-400
+    /// face.
+    #[test]
+    fn configured_style_selects_weight_within_same_family() {
+        let tmp = std::env::temp_dir().join("orzma_font_style_selects_weight.toml");
+        std::fs::write(
+            &tmp,
+            "[font.normal]\nfamily = \"OrzmaWeighted\"\nstyle = \"Bold\"\n",
+        )
+        .expect("write toml");
+
+        let _guard = crate::configs::env_guard();
+        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_plugins(AssetPlugin::default())
+            .add_plugins(TextPlugin)
+            .init_asset::<Font>();
+        let mut window = Window {
+            resolution: WindowResolution::new(800, 600),
+            ..default()
+        };
+        window.resolution.set_scale_factor(1.0);
+        app.world_mut().spawn((window, PrimaryWindow));
+        app.add_plugins(TerminalFontPlugin);
+        app.add_plugins(OrzmaConfigsPlugin);
+        app.add_plugins(FontBridgePlugin);
+
+        {
+            let mut font_cx = app.world_mut().resource_mut::<FontCx>();
+            let regular_blob =
+                Blob::new(Arc::new(bundled::REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+            font_cx.collection.register_fonts(
+                regular_blob,
+                Some(FontInfoOverride {
+                    family_name: Some("OrzmaWeighted"),
+                    weight: Some(FontWeight::new(400.0)),
+                    ..Default::default()
+                }),
+            );
+            let bold_blob =
+                Blob::new(Arc::new(bundled::BOLD) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+            font_cx.collection.register_fonts(
+                bold_blob,
+                Some(FontInfoOverride {
+                    family_name: Some("OrzmaWeighted"),
+                    weight: Some(FontWeight::new(700.0)),
+                    ..Default::default()
+                }),
+            );
+        }
+
+        app.update();
+
+        let fonts = app.world().resource::<TerminalFonts>();
+        assert_eq!(
+            fonts.regular.font_data(),
+            bundled::BOLD,
+            "style = \"Bold\" must select the weight-700 face, not the family's weight-400 face"
         );
 
         let _ = std::fs::remove_file(&tmp);

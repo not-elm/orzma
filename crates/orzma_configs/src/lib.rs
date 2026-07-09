@@ -4,6 +4,7 @@
 
 #![warn(missing_docs)]
 
+use crate::font::FontStyleSpec;
 use crate::inactive_pane::InactivePaneConfig;
 use crate::keyboard::KeyboardConfig;
 use crate::mouse::MouseConfig;
@@ -13,6 +14,7 @@ use crate::shortcuts::Shortcuts;
 use crate::{font::FontConfig, vi_mode::ViModeConfig};
 pub use error::{OrzmaConfigsError, OrzmaConfigsResult};
 use serde::Deserialize;
+use std::str::FromStr;
 
 pub mod error;
 pub mod font;
@@ -126,6 +128,27 @@ impl OrzmaConfigs {
         if !(size > 0.0 && size <= 200.0) {
             return Err(OrzmaConfigsError::InvalidFontSize { size });
         }
+        for (face, cfg) in [
+            ("normal", &self.font.normal),
+            ("bold", &self.font.bold),
+            ("italic", &self.font.italic),
+            ("bold_italic", &self.font.bold_italic),
+        ] {
+            if let Some(style) = cfg.style.as_deref()
+                && FontStyleSpec::from_str(style).is_err()
+            {
+                return Err(OrzmaConfigsError::InvalidFontStyle {
+                    face,
+                    value: style.to_string(),
+                });
+            }
+        }
+        for face in self.font.faces_with_ignored_style() {
+            tracing::warn!(
+                face,
+                "[font].{face}.style is set but no family is configured for it; using the bundled font and ignoring style"
+            );
+        }
         Ok(())
     }
 }
@@ -189,6 +212,25 @@ mod validate_tests {
         assert!(configs.validate().is_err(), "size 0.0 must fail validation");
         configs.font.size = 11.25;
         assert!(configs.validate().is_ok(), "in-range size validates");
+    }
+
+    #[test]
+    fn validate_rejects_unparseable_font_style() {
+        let mut configs = OrzmaConfigs::default();
+        configs.font.normal.style = Some("Blod".into());
+        let err = configs.validate().unwrap_err();
+        assert!(matches!(
+            err,
+            OrzmaConfigsError::InvalidFontStyle { face: "normal", .. }
+        ));
+    }
+
+    #[test]
+    fn validate_accepts_valid_font_style() {
+        let mut configs = OrzmaConfigs::default();
+        configs.font.bold.style = Some("SemiBold Italic".into());
+        configs.font.bold.family = Some("Iosevka".into());
+        assert!(configs.validate().is_ok());
     }
 
     #[test]

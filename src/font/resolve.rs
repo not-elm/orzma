@@ -6,6 +6,7 @@
 use fontique::{
     Attributes, Collection, FontStyle, FontWeight, FontWidth, QueryFamily, QueryStatus, SourceCache,
 };
+use orzma_configs::font::{FontSlant, FontStyleSpec};
 use orzma_tty_renderer::FontFace;
 
 /// Returns the fontique query attributes (weight + style, normal width) for
@@ -21,6 +22,20 @@ pub(super) fn face_attributes(face: FontFace) -> Attributes {
         width: FontWidth::NORMAL,
         style,
         weight,
+    }
+}
+
+/// Maps a parsed `FontStyleSpec` to fontique query attributes (normal width).
+pub(super) fn attributes_of(spec: FontStyleSpec) -> Attributes {
+    let style = match spec.slant {
+        FontSlant::Normal => FontStyle::Normal,
+        FontSlant::Italic => FontStyle::Italic,
+        FontSlant::Oblique => FontStyle::Oblique(None),
+    };
+    Attributes {
+        width: FontWidth::NORMAL,
+        style,
+        weight: FontWeight::new(f32::from(spec.weight)),
     }
 }
 
@@ -104,5 +119,16 @@ mod tests {
         assert_eq!(face_attributes(FontFace::Bold).weight, FontWeight::BOLD);
         assert_eq!(face_attributes(FontFace::Italic).style, FontStyle::Italic);
         assert_eq!(face_attributes(FontFace::Regular).style, FontStyle::Normal);
+    }
+
+    #[test]
+    fn attributes_of_maps_weight_and_slant() {
+        let a = attributes_of(FontStyleSpec {
+            weight: 600,
+            slant: FontSlant::Italic,
+        });
+        assert_eq!(a.weight, FontWeight::new(600.0));
+        assert_eq!(a.style, FontStyle::Italic);
+        assert_eq!(a.width, FontWidth::NORMAL);
     }
 }
