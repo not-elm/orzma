@@ -1,9 +1,12 @@
 //! `AppMode::Default`'s shortcut appliers: reads `ShortcutMessage`,
 //! `ViModeMessage`, and `TypeMessage` from `resolve_key_effects` and applies
-//! vi-mode entry, paste, and raw-key typing to the focused terminal.
+//! vi-mode entry, paste, copy, and raw-key typing to the focused terminal.
 
 use crate::{
-    action::{terminal::PasteAction, vi::trigger_vi_mode_action},
+    action::{
+        terminal::{PasteAction, TerminalSelectionCopy},
+        vi::trigger_vi_mode_action,
+    },
     app_mode::AppMode,
     input::{
         keyboard::bevy_key_to_terminal_key,
@@ -43,9 +46,11 @@ impl Plugin for ShortcutsDefaultModePlugin {
 }
 
 /// Applies `AppMode::Default` keyboard shortcuts from `ShortcutMessage`:
-/// vi-mode entry and paste (direct paste fires outside vi mode; a leader
-/// paste fires unconditionally). `Quit` / `ReleaseWebviewFocus` are handled
-/// upstream in `resolve_key_effects`; pane/window actions are no-ops in Default.
+/// vi-mode entry, paste (direct paste fires outside vi mode; a leader paste
+/// fires unconditionally), and copy (fires unconditionally — vi mode
+/// included; no-selection is a no-op downstream). `Quit` / `ReleaseWebviewFocus`
+/// are handled upstream in `resolve_key_effects`; pane/window actions are
+/// no-ops in Default.
 /// Registered in `ShortcutSet::Apply`, gated on `in_state(AppMode::Default)` +
 /// `on_message::<ShortcutMessage>`.
 pub(in crate::input) fn apply_default_shortcuts(
@@ -64,6 +69,11 @@ pub(in crate::input) fn apply_default_shortcuts(
                     && (msg.via_leader || !msg.in_vi_mode)
                 {
                     commands.trigger(PasteAction { entity });
+                }
+            }
+            Shortcut::Copy => {
+                if let Some(entity) = msg.focused {
+                    commands.trigger(TerminalSelectionCopy { entity });
                 }
             }
             Shortcut::DetachSession

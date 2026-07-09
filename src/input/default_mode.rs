@@ -169,7 +169,7 @@ fn apply_ime_commit_to_terminal(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::terminal::PasteAction;
+    use crate::action::terminal::{PasteAction, TerminalSelectionCopy};
     use crate::input::keyboard::key_effect::KeyEffect;
     use crate::input::shortcuts::default_mode::{
         apply_default_shortcuts, apply_default_type, apply_default_vi_mode,
@@ -369,6 +369,7 @@ mod tests {
     struct Captured {
         vi_mode: u32,
         paste: u32,
+        copy: u32,
         keys: Vec<TerminalKey>,
     }
 
@@ -397,6 +398,9 @@ mod tests {
             })
             .add_observer(|_ev: On<PasteAction>, mut c: ResMut<Captured>| {
                 c.paste += 1;
+            })
+            .add_observer(|_ev: On<TerminalSelectionCopy>, mut c: ResMut<Captured>| {
+                c.copy += 1;
             })
             .add_observer(|ev: On<TerminalKeyInput>, mut c: ResMut<Captured>| {
                 c.keys.push(ev.key.clone());
@@ -511,6 +515,40 @@ mod tests {
             app.world().resource::<Captured>().paste,
             1,
             "a direct paste (via_leader=false) outside vi mode must fire PasteAction"
+        );
+    }
+
+    #[test]
+    fn direct_copy_outside_vi_mode_fires_selection_copy() {
+        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(Shortcut::Copy, false)],
+            Some(term),
+            false,
+            meta_mods(),
+        );
+        assert_eq!(
+            app.world().resource::<Captured>().copy,
+            1,
+            "a direct copy must fire TerminalSelectionCopy on the focused terminal"
+        );
+    }
+
+    #[test]
+    fn direct_copy_in_vi_mode_also_fires_selection_copy() {
+        let (mut app, term) = default_dispatch_app(Shortcuts::default());
+        dispatch(
+            &mut app,
+            vec![action_effect(Shortcut::Copy, false)],
+            Some(term),
+            true,
+            meta_mods(),
+        );
+        assert_eq!(
+            app.world().resource::<Captured>().copy,
+            1,
+            "copy fires unconditionally: vi mode must not suppress it (unlike paste)"
         );
     }
 

@@ -1258,9 +1258,9 @@ mod tests {
     }
 
     #[test]
-    fn default_bindings_resolve_to_two_direct() {
+    fn default_bindings_resolve_to_three_direct() {
         let r = direct_only(&ConfigShortcuts::default());
-        assert_eq!(r.direct.len(), 2);
+        assert_eq!(r.direct.len(), 3);
     }
 
     #[test]

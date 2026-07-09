@@ -5,7 +5,7 @@
 
 use crate::{
     action::{
-        terminal::PasteAction,
+        terminal::{PasteAction, TerminalSelectionCopy},
         tmux::{
             DetachSessionRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest,
             NextSessionRequest, NextWindowRequest, PreviousSessionRequest, PreviousWindowRequest,
@@ -96,6 +96,11 @@ fn apply_tmux_shortcuts(
             Shortcut::Paste => {
                 if let Some(entity) = msg.focused {
                     commands.trigger(PasteAction { entity });
+                }
+            }
+            Shortcut::Copy => {
+                if let Some(entity) = msg.focused {
+                    commands.trigger(TerminalSelectionCopy { entity });
                 }
             }
             Shortcut::DetachSession => {
@@ -282,6 +287,7 @@ fn dispatch_tmux_action(
         Shortcut::Quit
         | Shortcut::EnterViMode
         | Shortcut::Paste
+        | Shortcut::Copy
         | Shortcut::DetachSession
         | Shortcut::ReleaseWebviewFocus => {}
     }
@@ -326,6 +332,7 @@ mod tests {
         detach: Vec<Entity>,
         forward: Vec<(Entity, Vec<String>)>,
         resize_pane: Vec<(Entity, PaneDirection)>,
+        selection_copy: Vec<Entity>,
     }
 
     /// Builds an app running the three tmux appliers (`apply_tmux_shortcuts`,
@@ -370,6 +377,11 @@ mod tests {
             .add_observer(
                 |ev: On<ForwardPaneKeysRequest>, mut c: ResMut<TmuxCaptured>| {
                     c.forward.push((ev.entity, ev.names.clone()));
+                },
+            )
+            .add_observer(
+                |ev: On<TerminalSelectionCopy>, mut c: ResMut<TmuxCaptured>| {
+                    c.selection_copy.push(ev.entity);
                 },
             );
         let pane = app
@@ -439,6 +451,24 @@ mod tests {
             app.world().resource::<TmuxCaptured>().select_pane,
             vec![(pane, PaneDirection::Left)],
             "a SelectPane(Left) effect must trigger SelectPaneRequest on batch.focused (active pane)"
+        );
+    }
+
+    #[test]
+    fn copy_triggers_selection_copy_on_focused_pane() {
+        let (mut app, pane) = tmux_dispatch_app();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::Copy,
+                via_leader: false,
+            }],
+            Some(pane),
+        );
+        assert_eq!(
+            app.world().resource::<TmuxCaptured>().selection_copy,
+            vec![pane],
+            "a Copy effect must trigger TerminalSelectionCopy on the focused pane"
         );
     }
 
