@@ -35,12 +35,6 @@ orzma_tty_engine = { path = "crates/orzma_tty_engine" }
 orzma_webview = { path = "crates/orzma_webview" }
 crossbeam-channel = "0.5"
 data-encoding = "2"
-# NOTE: system font discovery is enabled via bevy's public
-# `system_font_discovery` feature (workspace dep), which pulls
-# parley/system -> fontique/system. Feature unification turns `system` on for
-# THIS direct fontique dep too, so family resolution sees OS fonts. Keep
-# default-features off + std here; the crate is used for Blob/Script/Query/
-# Attributes types.
 fontique = { version = "0.9", default-features = false, features = ["std"] }
 getrandom = "0.2"
 libc = "0.2"
