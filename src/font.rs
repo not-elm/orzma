@@ -10,10 +10,9 @@
 //! metrics + invalidate the glyph atlas — see the renderer crate).
 
 use crate::configs::OrzmaConfigsResource;
-use ab_glyph::FontRef;
 use bevy::prelude::*;
 use bevy::text::{Font, FontCx, FontSource};
-use fontique::{Attributes, Blob, Collection, Script, SourceCache};
+use fontique::{Blob, Script};
 use orzma_configs::font::FontStyleSpec;
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
 use std::str::FromStr;
@@ -143,24 +142,35 @@ fn bridge_font_config(
             bundled::BOLD_ITALIC,
         ),
     ]
-    .map(|(family, style, face, bundled)| {
-        // NOTE: style was validated at config load; a parse here cannot fail.
-        // If a future change loosens `validate()`'s style check, this
-        // `.expect()` starts panicking at Startup instead of returning
-        // InvalidFontStyle before the app ever gets here.
-        let attributes = match style {
-            Some(s) => resolve::attributes_of(
-                FontStyleSpec::from_str(s).expect("style validated at config load"),
-            ),
-            None => resolve::face_attributes(face),
-        };
-        resolve_or_bundled(
-            &mut cx.collection,
-            &mut cx.source_cache,
-            family,
-            attributes,
-            bundled,
-        )
+    .map(|(family, style, face, bundled)| match family {
+        None => ResolvedFace::bundled(bundled),
+        Some(family) => {
+            // NOTE: style was validated at config load; a parse here cannot
+            // fail. If a future change loosens `validate()`'s style check,
+            // this `.expect()` starts panicking at Startup instead of
+            // returning InvalidFontStyle before the app ever gets here.
+            let attributes = match style {
+                Some(s) => resolve::attributes_of(
+                    FontStyleSpec::from_str(s).expect("style validated at config load"),
+                ),
+                None => resolve::face_attributes(face),
+            };
+            match resolve::resolve_configured_face(
+                &mut cx.collection,
+                &mut cx.source_cache,
+                family,
+                attributes,
+            ) {
+                Ok((bytes, index)) => ResolvedFace {
+                    bytes,
+                    index,
+                    from_family: true,
+                },
+                Err(resolve::FamilyNotFound) => panic!(
+                    "orzma: font family {family:?} configured for the {face:?} face was not found; install it or fix [font] in your config",
+                ),
+            }
+        }
     });
 
     let regular_from_family = regular.from_family;
@@ -200,38 +210,6 @@ impl ResolvedFace {
             bytes: bundled.to_vec(),
             index: 0,
             from_family: false,
-        }
-    }
-}
-
-/// Resolves `family` at `attributes`, validating the result at its index. Falls
-/// back to `bundled` (index 0) — with a warning — when `family` is `None`, the
-/// family name is absent, or the resolved bytes fail to parse.
-fn resolve_or_bundled(
-    collection: &mut Collection,
-    source_cache: &mut SourceCache,
-    family: Option<&str>,
-    attributes: Attributes,
-    bundled: &'static [u8],
-) -> ResolvedFace {
-    let Some(family) = family else {
-        return ResolvedFace::bundled(bundled);
-    };
-    match resolve::resolve_face_bytes(collection, source_cache, family, attributes) {
-        Some((bytes, index)) if FontRef::try_from_slice_and_index(&bytes, index).is_ok() => {
-            ResolvedFace {
-                bytes,
-                index,
-                from_family: true,
-            }
-        }
-        Some(_) => {
-            tracing::warn!(family, "resolved font failed to parse; using bundled");
-            ResolvedFace::bundled(bundled)
-        }
-        None => {
-            tracing::warn!(family, "font family not found; using bundled");
-            ResolvedFace::bundled(bundled)
         }
     }
 }
@@ -440,11 +418,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_family_falls_back_to_bundled_and_ui_handle() {
-        let tmp = std::env::temp_dir().join("orzma_font_family_unknown.toml");
+    #[should_panic(expected = "was not found")]
+    fn configured_absent_family_aborts_startup() {
+        let tmp = std::env::temp_dir().join("orzma_font_absent_family.toml");
         std::fs::write(&tmp, "[font.normal]\nfamily = \"no-such-family-8b3d2\"\n")
             .expect("write toml");
-
         let _guard = crate::configs::env_guard();
         let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
         let mut app = App::new();
@@ -462,19 +440,6 @@ mod tests {
         app.add_plugins(OrzmaConfigsPlugin);
         app.add_plugins(FontBridgePlugin);
         app.update();
-
-        let fonts = app.world().resource::<TerminalFonts>();
-        assert_eq!(
-            fonts.regular.font_data(),
-            bundled::REGULAR,
-            "unknown family must fall back to bundled regular"
-        );
-        let ui = app.world().resource::<TerminalUiFont>();
-        assert!(
-            matches!(ui.0, bevy::text::FontSource::Handle(_)),
-            "unknown family must leave the UI on the bundled handle, not a Family"
-        );
-
         let _ = std::fs::remove_file(&tmp);
     }
 

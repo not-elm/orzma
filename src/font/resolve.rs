@@ -60,6 +60,26 @@ pub(super) fn resolve_face_bytes(
     resolved
 }
 
+/// The configured family name is absent from the collection (system font DB).
+#[derive(Debug)]
+pub(super) struct FamilyNotFound;
+
+/// Resolves a *configured* face, distinguishing an absent family (`Err`) from a
+/// present family (fontique returns its closest match for the attributes). Looks
+/// up `family_id` first because `Query::set_families` silently skips unknown
+/// names, which `resolve_face_bytes` alone reports only as `None`.
+pub(super) fn resolve_configured_face(
+    collection: &mut Collection,
+    source_cache: &mut SourceCache,
+    family: &str,
+    attributes: Attributes,
+) -> Result<(Vec<u8>, u32), FamilyNotFound> {
+    if collection.family_id(family).is_none() {
+        return Err(FamilyNotFound);
+    }
+    resolve_face_bytes(collection, source_cache, family, attributes).ok_or(FamilyNotFound)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -130,5 +150,39 @@ mod tests {
         assert_eq!(a.weight, FontWeight::new(600.0));
         assert_eq!(a.style, FontStyle::Italic);
         assert_eq!(a.width, FontWidth::NORMAL);
+    }
+
+    #[test]
+    fn resolve_configured_face_errors_on_absent_family() {
+        let (mut collection, mut source_cache) = deterministic_collection();
+        let r = resolve_configured_face(
+            &mut collection,
+            &mut source_cache,
+            "no-such-family-4d1",
+            attributes_of(FontStyleSpec {
+                weight: 400,
+                slant: FontSlant::Normal,
+            }),
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn resolve_configured_face_returns_bytes_for_registered_family() {
+        let (mut collection, mut source_cache) = deterministic_collection();
+        let blob = Blob::new(Arc::new(bundled::REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+        let registered = collection.register_fonts(blob, None);
+        let family = collection.family_name(registered[0].0).unwrap().to_string();
+        let (bytes, _index) = resolve_configured_face(
+            &mut collection,
+            &mut source_cache,
+            &family,
+            attributes_of(FontStyleSpec {
+                weight: 400,
+                slant: FontSlant::Normal,
+            }),
+        )
+        .expect("registered family resolves");
+        assert!(!bytes.is_empty());
     }
 }
