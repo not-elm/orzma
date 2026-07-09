@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
     paths:
-      - "sdk/**"
+      - "sdk/orzma-web/**"
+      - "apps/*/web/**"
       - "extensions/**"
       - "pnpm-workspace.yaml"
       - "package.json"
@@ -14,7 +15,8 @@ on:
       - ".github/workflows/ci-ts.yml"
   pull_request:
     paths:
-      - "sdk/**"
+      - "sdk/orzma-web/**"
+      - "apps/*/web/**"
       - "extensions/**"
       - "pnpm-workspace.yaml"
       - "package.json"
