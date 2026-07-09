@@ -97,19 +97,19 @@ fn bridge_font_config(
     let powerline = fonts_assets.add(Font::from_bytes(bundled::REGULAR.to_vec()));
     commands.insert_resource(PowerlineFont(powerline.clone()));
 
-    let no_family = font.normal.is_none()
-        && font.bold.is_none()
-        && font.italic.is_none()
-        && font.bold_italic.is_none();
+    let no_family = font.normal.family.is_none()
+        && font.bold.family.is_none()
+        && font.italic.family.is_none()
+        && font.bold_italic.family.is_none();
     if no_family {
         commands.insert_resource(TerminalUiFont(FontSource::Handle(powerline)));
         return;
     }
 
-    let regular_family = font.normal.as_deref();
-    let bold_family = font.bold.as_deref().or(regular_family);
-    let italic_family = font.italic.as_deref().or(regular_family);
-    let bold_italic_family = font.bold_italic.as_deref().or(regular_family);
+    let regular_family = font.normal.family.as_deref();
+    let bold_family = font.bold.family.as_deref().or(regular_family);
+    let italic_family = font.italic.family.as_deref().or(regular_family);
+    let bold_italic_family = font.bold_italic.family.as_deref().or(regular_family);
 
     // NOTE: materialize &mut FontContext once so `collection` and `source_cache`
     // borrow as disjoint places. Going through `DerefMut` on `font_cx` per call
@@ -419,7 +419,8 @@ mod tests {
     #[test]
     fn unknown_family_falls_back_to_bundled_and_ui_handle() {
         let tmp = std::env::temp_dir().join("orzma_font_family_unknown.toml");
-        std::fs::write(&tmp, "[font]\nnormal = \"no-such-family-8b3d2\"\n").expect("write toml");
+        std::fs::write(&tmp, "[font.normal]\nfamily = \"no-such-family-8b3d2\"\n")
+            .expect("write toml");
 
         let _guard = crate::configs::env_guard();
         let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
@@ -463,7 +464,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("orzma_font_family_success_path.toml");
         std::fs::write(
             &tmp,
-            "[font]\nnormal = \"OrzmaTestMono\"\nbold = \"OrzmaTestMonoBold\"\n",
+            "[font.normal]\nfamily = \"OrzmaTestMono\"\n[font.bold]\nfamily = \"OrzmaTestMonoBold\"\n",
         )
         .expect("write toml");
 
