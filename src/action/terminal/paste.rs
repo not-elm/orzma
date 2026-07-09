@@ -1,7 +1,7 @@
 //! Paste action: reads the system clipboard and writes it to the target
 //! terminal entity's PTY as (optionally bracketed) paste bytes.
 
-use crate::clipboard::build_paste_bytes;
+use crate::action::clipboard::build_paste_bytes;
 use crate::surface::OrzmaTerminal;
 use bevy::clipboard::{Clipboard, ClipboardError};
 use bevy::prelude::*;

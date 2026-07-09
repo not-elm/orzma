@@ -4,7 +4,6 @@ mod action;
 mod app_mode;
 mod bootstrap;
 mod cef_profile;
-mod clipboard;
 mod configs;
 mod error;
 mod font;

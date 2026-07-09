@@ -2,8 +2,8 @@
 //! clipboard text into `SendBytes`, relocated from an inline match arm in the
 //! tmux keyboard-input dispatcher.
 
+use crate::action::clipboard::build_paste_bytes;
 use crate::action::terminal::PasteText;
-use crate::clipboard::build_paste_bytes;
 use crate::input::tmux::forward::{pane_target, snap_pane_to_bottom};
 use bevy::prelude::*;
 use orzma_tmux::{SendBytes, TmuxClient, TmuxPane};
