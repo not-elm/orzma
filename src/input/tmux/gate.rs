@@ -10,9 +10,8 @@ use crate::input::InputPhase;
 use crate::input::focus::KeyboardDisabled;
 use crate::input::focus::MouseDisabled;
 use crate::input::ime::ImeState;
-use crate::ui::tmux::rename_prompt::RenamePrompt;
+use crate::ui::text_prompt::ActiveTextPrompt;
 use crate::ui::vi_mode::ViModeState;
-use crate::ui::vi_search::ViModePrompt;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, UiGlobalTransform};
 use bevy::window::{PrimaryWindow, Window};
@@ -39,8 +38,7 @@ impl Plugin for GatePlugin {
 fn maintain_tmux_input_gates(
     mut commands: Commands,
     ime: Res<ImeState>,
-    vi_mode_prompt: Res<ViModePrompt>,
-    rename_prompt: Option<Res<RenamePrompt>>,
+    active_text_prompt: Res<ActiveTextPrompt>,
     focused_webview: Res<FocusedWebview>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -61,10 +59,7 @@ fn maintain_tmux_input_gates(
 ) {
     let window = windows.single().ok();
     let window_focused = window.map(|w| w.focused).unwrap_or(false);
-    let modal = ime.is_composing()
-        || !window_focused
-        || vi_mode_prompt.open.is_some()
-        || rename_prompt.is_some();
+    let modal = ime.is_composing() || !window_focused || active_text_prompt.0.is_some();
     // NOTE: gate only the focused webview's OWNING pane, not all panes — a
     // global `focused_webview.0.is_some()` would kill scroll/selection on every
     // other pane while any webview is focused.

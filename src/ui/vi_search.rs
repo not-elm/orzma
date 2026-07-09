@@ -1,100 +1,39 @@
-//! Vi-mode search and jump-char prompt overlay.
+//! Vi-mode search / jump prompt.
 //!
-//! Currently inert: nothing in the codebase sets `ViModePrompt.open`. This
-//! module used to open in response to the tmux VI applier's `on_vi_prompt`
-//! observer handling a `ViPromptRequest`, but that applier (`tmux_mode.rs`)
-//! was deleted as part of the vi-mode-to-local migration, so the trigger
-//! no longer exists. Reconnecting this prompt to a local search applier is
-//! expected in a future change.
-//!
-//! When active, it owns the keyboard until the user submits (Enter / first
-//! char for jump kinds) or cancels (Escape). On submit, it sends
-//! `send-keys -X -t %N <kind> -- '<text>'` to tmux via the active
-//! connection.
+//! Inert: nothing opens this prompt yet (the tmux VI applier that used to
+//! trigger it was removed in the vi-mode-to-local migration). This module now
+//! provides the EditableText-based submit path and `ViPromptIntent` so a future
+//! local search applier can open a shared `text_prompt` (with
+//! `submit_on_first_char = kind.is_single_char()`, label `prompt_label(kind)`,
+//! and colors `bg: theme::PANEL` / `fg: theme::FOREGROUND`) and attach
+//! `ViPromptIntent`. On submit, this observer runs
+//! `send-keys -X -t %N <kind> -- '<text>'` against the active tmux connection.
 
-use crate::font::TerminalUiFont;
-use crate::input::InputPhase;
-use crate::theme;
-use bevy::app::{App, Plugin};
-use bevy::ecs::message::MessageReader;
-use bevy::ecs::schedule::common_conditions::resource_exists_and_changed;
-use bevy::input::ButtonState;
-use bevy::input::keyboard::{Key, KeyboardInput};
+use crate::ui::text_prompt::TextPromptSubmit;
 use bevy::prelude::*;
 use orzma_tmux::{PaneId, Prompt, PromptKind, TmuxClient};
 
-const PROMPT_Z: i32 = 320;
+/// Attached to a vi prompt's `EditableText` entity so the submit observer can
+/// target the right pane and copy-mode command.
+#[derive(Component)]
+struct ViPromptIntent {
+    pane: PaneId,
+    kind: PromptKind,
+}
 
-/// Registers the vi-mode prompt resource, input system, and render system.
+/// Registers the vi-mode prompt submit observer.
 pub(crate) struct ViModePromptPlugin;
 
 impl Plugin for ViModePromptPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ViModePrompt>()
-            .add_systems(Startup, spawn_prompt_ui)
-            .add_systems(
-                Update,
-                handle_prompt_input
-                    .after(InputPhase::FocusedKey)
-                    .run_if(|p: Res<ViModePrompt>| p.open.is_some()),
-            )
-            .add_systems(
-                PostUpdate,
-                sync_prompt_ui.run_if(resource_exists_and_changed::<ViModePrompt>),
-            );
+        app.add_observer(on_vi_prompt_submit);
     }
 }
 
-/// The active vi-mode prompt (search regex or jump char). Present while the
-/// user is typing; owns the keyboard like the session picker.
-#[derive(Resource, Default)]
-pub(crate) struct ViModePrompt {
-    /// The pending prompt, if open.
-    pub(crate) open: Option<ViModePromptState>,
-}
-
-/// In-progress vi-mode prompt input.
-pub(crate) struct ViModePromptState {
-    /// Which copy command to run on submit.
-    pub(crate) kind: PromptKind,
-    /// The pane the result targets.
-    pub(crate) pane: PaneId,
-    /// Text typed so far.
-    pub(crate) text: String,
-}
-
-/// The effect of one key on an open prompt.
-#[derive(Debug, PartialEq)]
-enum PromptStep {
-    Continue,
-    Submit,
-    Cancel,
-}
-
-/// Applies one key press to the prompt text, returning what to do. Jump prompts
-/// (single-char) submit on the first typed character; search prompts submit on
-/// Enter. Escape cancels; Backspace edits.
-fn apply_prompt_key(state: &mut ViModePromptState, key: &Key) -> PromptStep {
-    match key {
-        Key::Escape => PromptStep::Cancel,
-        Key::Enter => PromptStep::Submit,
-        Key::Backspace => {
-            state.text.pop();
-            PromptStep::Continue
-        }
-        Key::Character(s) => {
-            state.text.push_str(s);
-            if state.kind.is_single_char() {
-                PromptStep::Submit
-            } else {
-                PromptStep::Continue
-            }
-        }
-        _ => PromptStep::Continue,
-    }
-}
-
-/// Returns the prompt label character (shown before the typed text).
+/// The prompt label glyph shown before the typed text (`/`, `?`, `f`, …).
+// NOTE: `#[expect]` is impractical here — dead in the non-test build (inert
+// until a local search applier reconnects this prompt) but live under tests.
+#[allow(dead_code)]
 fn prompt_label(kind: PromptKind) -> &'static str {
     match kind {
         PromptKind::SearchForward => "/",
@@ -106,312 +45,28 @@ fn prompt_label(kind: PromptKind) -> &'static str {
     }
 }
 
-#[derive(Component)]
-struct PromptBar;
-
-fn spawn_prompt_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>) {
-    let font = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: Val::Px(0.0),
-                bottom: Val::Px(0.0),
-                width: Val::Percent(100.0),
-                height: Val::Auto,
-                display: Display::None,
-                padding: UiRect::axes(Val::Px(4.0), Val::Px(2.0)),
-                ..default()
-            },
-            BackgroundColor(theme::PANEL),
-            GlobalZIndex(PROMPT_Z),
-            PromptBar,
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                Text::new(""),
-                TextFont {
-                    font: font.into(),
-                    font_size: FontSize::Px(theme::UI_FONT_SIZE),
-                    ..default()
-                },
-                TextColor(theme::FOREGROUND),
-            ));
-        });
-}
-
-fn sync_prompt_ui(
-    mut bar: Query<&mut Node, With<PromptBar>>,
-    mut texts: Query<&mut Text>,
-    prompt: Res<ViModePrompt>,
-    children_query: Query<&Children, With<PromptBar>>,
+fn on_vi_prompt_submit(
+    submit: On<TextPromptSubmit>,
+    mut client: Option<Single<&mut TmuxClient>>,
+    intents: Query<&ViPromptIntent>,
 ) {
-    let Ok(mut node) = bar.single_mut() else {
+    let Ok(intent) = intents.get(submit.entity) else {
         return;
     };
-    match &prompt.open {
-        None => {
-            node.display = Display::None;
-        }
-        Some(state) => {
-            node.display = Display::Flex;
-            if let Ok(children) = children_query.single() {
-                for child in children.iter() {
-                    if let Ok(mut text) = texts.get_mut(child) {
-                        text.0 = format!("{}{}", prompt_label(state.kind), state.text);
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn handle_prompt_input(
-    mut vi_mode_prompt: ResMut<ViModePrompt>,
-    mut events: MessageReader<KeyboardInput>,
-    mut armed: Local<bool>,
-    mut client: Option<Single<&mut TmuxClient>>,
-) {
-    // NOTE: the keystroke that opened the prompt (e.g. `/`, or `f` for a jump)
-    // is still in the shared KeyboardInput buffer; each reader has its own
-    // cursor, so `apply_tmux_shortcuts` clearing it does not advance ours. Skip
-    // the open frame — drain past the opening key without processing it — or the
-    // opening char leaks into the prompt text (and single-char jumps submit on
-    // it immediately).
-    if !*armed {
-        events.clear();
-        *armed = true;
-        return;
-    }
-    for ev in events.read() {
-        if ev.state != ButtonState::Pressed {
-            continue;
-        }
-        let Some(state) = vi_mode_prompt.open.as_mut() else {
-            continue;
-        };
-        let step = apply_prompt_key(state, &ev.logical_key);
-        match step {
-            PromptStep::Continue => {}
-            PromptStep::Submit => {
-                if let Some(client) = client.as_deref_mut()
-                    && let Err(e) = client.send(Prompt {
-                        pane: state.pane,
-                        kind: state.kind,
-                        text: &state.text,
-                    })
-                {
-                    tracing::warn!(?e, "vi-mode prompt submit failed");
-                }
-                vi_mode_prompt.open = None;
-                *armed = false;
-                break;
-            }
-            PromptStep::Cancel => {
-                vi_mode_prompt.open = None;
-                *armed = false;
-                break;
-            }
-        }
+    if let Some(client) = client.as_deref_mut()
+        && let Err(e) = client.send(Prompt {
+            pane: intent.pane,
+            kind: intent.kind,
+            text: &submit.text,
+        })
+    {
+        tracing::warn!(?e, "vi-mode prompt submit failed");
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tmux_control_parser::PaneId;
-
-    fn state(kind: PromptKind) -> ViModePromptState {
-        ViModePromptState {
-            kind,
-            pane: PaneId(0),
-            text: String::new(),
-        }
-    }
-
-    fn char_key(s: &str) -> Key {
-        Key::Character(s.into())
-    }
-
-    #[test]
-    fn escape_cancels() {
-        let mut s = state(PromptKind::SearchForward);
-        assert_eq!(apply_prompt_key(&mut s, &Key::Escape), PromptStep::Cancel);
-    }
-
-    #[test]
-    fn enter_submits_search() {
-        let mut s = state(PromptKind::SearchForward);
-        s.text = "foo".into();
-        assert_eq!(apply_prompt_key(&mut s, &Key::Enter), PromptStep::Submit);
-    }
-
-    #[test]
-    fn backspace_pops_last_char() {
-        let mut s = state(PromptKind::SearchForward);
-        s.text = "ab".into();
-        assert_eq!(
-            apply_prompt_key(&mut s, &Key::Backspace),
-            PromptStep::Continue
-        );
-        assert_eq!(s.text, "a");
-    }
-
-    #[test]
-    fn backspace_on_empty_continues() {
-        let mut s = state(PromptKind::SearchForward);
-        assert_eq!(
-            apply_prompt_key(&mut s, &Key::Backspace),
-            PromptStep::Continue
-        );
-        assert_eq!(s.text, "");
-    }
-
-    #[test]
-    fn search_accumulates_chars_and_waits_for_enter() {
-        let mut s = state(PromptKind::SearchForward);
-        assert_eq!(
-            apply_prompt_key(&mut s, &char_key("h")),
-            PromptStep::Continue
-        );
-        assert_eq!(
-            apply_prompt_key(&mut s, &char_key("i")),
-            PromptStep::Continue
-        );
-        assert_eq!(s.text, "hi");
-        assert_eq!(apply_prompt_key(&mut s, &Key::Enter), PromptStep::Submit);
-    }
-
-    #[test]
-    fn backward_search_also_multi_char() {
-        let mut s = state(PromptKind::SearchBackward);
-        assert_eq!(
-            apply_prompt_key(&mut s, &char_key("x")),
-            PromptStep::Continue
-        );
-        assert_eq!(
-            apply_prompt_key(&mut s, &char_key("y")),
-            PromptStep::Continue
-        );
-        assert_eq!(s.text, "xy");
-        assert_eq!(apply_prompt_key(&mut s, &Key::Enter), PromptStep::Submit);
-    }
-
-    #[test]
-    fn jump_forward_submits_on_first_char() {
-        let mut s = state(PromptKind::JumpForward);
-        assert_eq!(apply_prompt_key(&mut s, &char_key("w")), PromptStep::Submit);
-        assert_eq!(s.text, "w");
-    }
-
-    #[test]
-    fn jump_backward_submits_on_first_char() {
-        let mut s = state(PromptKind::JumpBackward);
-        assert_eq!(apply_prompt_key(&mut s, &char_key("a")), PromptStep::Submit);
-        assert_eq!(s.text, "a");
-    }
-
-    #[test]
-    fn jump_to_forward_submits_on_first_char() {
-        let mut s = state(PromptKind::JumpToForward);
-        assert_eq!(apply_prompt_key(&mut s, &char_key("e")), PromptStep::Submit);
-        assert_eq!(s.text, "e");
-    }
-
-    #[test]
-    fn jump_to_backward_submits_on_first_char() {
-        let mut s = state(PromptKind::JumpToBackward);
-        assert_eq!(apply_prompt_key(&mut s, &char_key("b")), PromptStep::Submit);
-        assert_eq!(s.text, "b");
-    }
-
-    #[test]
-    fn unknown_key_continues() {
-        let mut s = state(PromptKind::SearchForward);
-        assert_eq!(
-            apply_prompt_key(&mut s, &Key::ArrowUp),
-            PromptStep::Continue
-        );
-        assert_eq!(s.text, "");
-    }
-
-    use bevy::input::ButtonState;
-    use bevy::input::keyboard::KeyCode;
-
-    fn key_event(logical: Key, code: KeyCode) -> KeyboardInput {
-        KeyboardInput {
-            key_code: code,
-            logical_key: logical,
-            state: ButtonState::Pressed,
-            text: None,
-            repeat: false,
-            window: Entity::PLACEHOLDER,
-        }
-    }
-
-    fn armed_skip_app() -> App {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_message::<KeyboardInput>()
-            .init_resource::<ViModePrompt>()
-            .add_systems(
-                Update,
-                handle_prompt_input.run_if(|p: Res<ViModePrompt>| p.open.is_some()),
-            );
-        app
-    }
-
-    #[test]
-    fn open_frame_skips_the_opening_key_for_a_jump_prompt() {
-        let mut app = armed_skip_app();
-        app.world_mut().resource_mut::<ViModePrompt>().open = Some(ViModePromptState {
-            kind: PromptKind::JumpForward,
-            pane: PaneId(0),
-            text: String::new(),
-        });
-        // The opening `f` is still in the shared buffer when the prompt opens.
-        app.world_mut()
-            .resource_mut::<Messages<KeyboardInput>>()
-            .write(key_event(char_key("f"), KeyCode::KeyF));
-        app.update();
-
-        let prompt = app.world().resource::<ViModePrompt>();
-        assert!(
-            prompt.open.is_some(),
-            "single-char jump must NOT submit on the opening key (open frame is skipped)"
-        );
-        assert_eq!(
-            prompt.open.as_ref().unwrap().text,
-            "",
-            "the opening key must not leak into the prompt text"
-        );
-    }
-
-    #[test]
-    fn target_key_after_open_frame_submits_a_jump_prompt() {
-        let mut app = armed_skip_app();
-        app.world_mut().resource_mut::<ViModePrompt>().open = Some(ViModePromptState {
-            kind: PromptKind::JumpForward,
-            pane: PaneId(0),
-            text: String::new(),
-        });
-        // Open frame: the opening `f` is drained, prompt stays open.
-        app.world_mut()
-            .resource_mut::<Messages<KeyboardInput>>()
-            .write(key_event(char_key("f"), KeyCode::KeyF));
-        app.update();
-        assert!(app.world().resource::<ViModePrompt>().open.is_some());
-
-        // Next frame: the real target char submits (no client → just closes).
-        app.world_mut()
-            .resource_mut::<Messages<KeyboardInput>>()
-            .write(key_event(char_key("x"), KeyCode::KeyX));
-        app.update();
-        assert!(
-            app.world().resource::<ViModePrompt>().open.is_none(),
-            "the first post-open char submits a single-char jump"
-        );
-    }
 
     #[test]
     fn prompt_label_returns_correct_glyphs() {
@@ -421,5 +76,11 @@ mod tests {
         assert_eq!(prompt_label(PromptKind::JumpBackward), "F");
         assert_eq!(prompt_label(PromptKind::JumpToForward), "t");
         assert_eq!(prompt_label(PromptKind::JumpToBackward), "T");
+    }
+
+    #[test]
+    fn jump_kinds_submit_on_first_char() {
+        assert!(PromptKind::JumpForward.is_single_char());
+        assert!(!PromptKind::SearchForward.is_single_char());
     }
 }

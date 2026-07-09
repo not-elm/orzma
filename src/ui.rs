@@ -2,12 +2,14 @@
 //! (via `OrzmaUiRootPlugin`) that each mode's UI subtree attaches under.
 
 use crate::ui::root::OrzmaUiRootPlugin;
+use crate::ui::text_prompt::TextPromptPlugin;
 use bevy::prelude::*;
 
 pub(crate) mod default_mode;
 pub(crate) mod ime_overlay;
 pub mod palette;
 pub mod root;
+pub(crate) mod text_prompt;
 pub(crate) mod tmux;
 pub mod vi_mode;
 pub mod vi_mode_indicator;
@@ -26,6 +28,7 @@ impl Plugin for OrzmaUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
             OrzmaUiRootPlugin,
+            TextPromptPlugin,
             default_mode::DefaultModeUiPlugin,
             tmux::TmuxUiPlugin,
         ));
