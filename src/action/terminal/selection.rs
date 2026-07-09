@@ -1,8 +1,8 @@
 //! Local-selection actions: start / update / clear a selection on a terminal
 //! surface, and copy the current selection to the clipboard.
 
+use crate::action::clipboard::CopyAction;
 use crate::action::terminal::{TerminalBackendQuery, apply_to_terminal};
-use crate::clipboard::ClipboardWriteRequest;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use orzma_tty_engine::{Point, SelectionType, Side, TerminalHandle};
@@ -141,7 +141,7 @@ fn on_terminal_selection_copy(
         return;
     };
     if let Some(text) = handle.selection_to_string() {
-        commands.trigger(ClipboardWriteRequest { text });
+        commands.trigger(CopyAction { text });
     }
 }
 

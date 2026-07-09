@@ -2,10 +2,10 @@
 //! terminal engine (`TerminalHandle` vi/selection/scroll APIs) for every
 //! pane, tmux and non-tmux alike.
 
+use crate::action::clipboard::CopyAction;
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
-use crate::clipboard::ClipboardWriteRequest;
 use crate::ui::vi_mode::ExitViMode;
 use bevy::prelude::*;
 use orzma_configs::vi_mode::ViModeScroll;
@@ -83,7 +83,7 @@ fn on_vi_yank(ev: On<ViYankRequest>, mut commands: Commands, mut terminals: Loca
         return;
     };
     if let Some(text) = handle.selection_to_string() {
-        commands.trigger(ClipboardWriteRequest { text });
+        commands.trigger(CopyAction { text });
     }
     commands.trigger(ExitViMode { entity: ev.entity });
 }
@@ -223,7 +223,7 @@ mod tests {
         use bevy::ecs::system::RunSystemOnce;
         use orzma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
 
-        use crate::clipboard::test_support::{CapturedClipboardWrites, capture_clipboard_writes};
+        use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
@@ -231,7 +231,7 @@ mod tests {
         app.add_observer(on_vi_yank);
         // Capture the write-seam request instead of round-tripping a real
         // clipboard: headless-safe and never clobbers the developer's clipboard.
-        capture_clipboard_writes(&mut app);
+        capture_copy_actions(&mut app);
 
         let opts = SpawnOptions {
             cols: 20,
@@ -258,10 +258,10 @@ mod tests {
         app.update();
 
         assert!(app.world().get::<ViModeState>(entity).is_none());
-        let captured = &app.world().resource::<CapturedClipboardWrites>().0;
+        let captured = &app.world().resource::<CapturedCopyActions>().0;
         assert!(
             captured.iter().any(|t| !t.is_empty()),
-            "yank must emit a non-empty ClipboardWriteRequest"
+            "yank must emit a non-empty CopyAction"
         );
     }
 }

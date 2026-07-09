@@ -2,7 +2,7 @@
 //! grouped by domain (tmux pane/window ops, shared vi-mode ops,
 //! PTY-level terminal ops).
 
-pub mod clipboard;
+pub(crate) mod clipboard;
 pub(crate) mod terminal;
 pub(crate) mod tmux;
 pub(crate) mod vi;

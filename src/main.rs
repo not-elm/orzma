@@ -20,7 +20,6 @@ mod window_title;
 use crate::action::ActionPlugin;
 use crate::app_mode::AppModePlugin;
 use crate::cef_profile::CefProfileDir;
-use crate::clipboard::ClipboardPlugin;
 use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::surface::SurfacePlugin;
@@ -67,7 +66,6 @@ fn main() {
             DefaultSessionPlugin {
                 shell: pre_configs.orzma.shell.clone(),
             },
-            ClipboardPlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             RenderPlugin,

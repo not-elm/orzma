@@ -16,7 +16,7 @@ use orzma_tty_engine::{Coalescer, TerminalHandle};
 
 /// Bevy Plugin: registers the two observers. The `Clipboard` resource is
 /// provided by `DefaultPlugins` (`bevy_clipboard::ClipboardPlugin`); orzma's
-/// `crate::clipboard::ClipboardPlugin` adds the write-seam observer.
+/// `crate::action::clipboard` copy plugin adds the write-seam observer.
 /// `ViModeState` is inserted/removed per-entity by the observers
 /// themselves; no global system needed.
 pub struct ViModePlugin;

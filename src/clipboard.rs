@@ -1,34 +1,4 @@
-//! Clipboard write seam and paste-byte construction. `ClipboardWriteRequest`
-//! carries copied text from the copy/yank observers to `apply_clipboard_write`,
-//! the one system that writes Bevy's `Clipboard` resource; `build_paste_bytes`
-//! turns clipboard text into the PTY byte stream. The clipboard resource itself
-//! is `bevy::clipboard::Clipboard`, provided by `DefaultPlugins`.
-
-use bevy::clipboard::{Clipboard, ClipboardError};
-use bevy::prelude::*;
-
-/// Requests that `text` be written to the system clipboard.
-///
-/// A global (non-entity) event: the clipboard is process-global, so copy/yank
-/// observers `commands.trigger` this and `apply_clipboard_write` performs the
-/// single `Clipboard::set_text`. Decoupling this way keeps the copy observers
-/// testable by capturing the request instead of round-tripping a real clipboard.
-#[derive(Event, Debug, Clone)]
-pub struct ClipboardWriteRequest {
-    /// The text to place on the system clipboard.
-    pub text: String,
-}
-
-/// Registers the clipboard write-seam observer. Bevy's `Clipboard` resource
-/// and `bevy_clipboard::ClipboardPlugin` come from `DefaultPlugins`; this
-/// plugin only adds orzma's write path on top.
-pub(crate) struct ClipboardPlugin;
-
-impl Plugin for ClipboardPlugin {
-    fn build(&self, app: &mut App) {
-        app.add_observer(apply_clipboard_write);
-    }
-}
+//! Paste-byte construction shared by the terminal and tmux paste appliers.
 
 /// Constructs the byte sequence that `TerminalHandle::write` should
 /// send to the PTY for a paste of `text`.
@@ -84,46 +54,6 @@ pub(crate) fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
             i += 1;
         }
         out
-    }
-}
-
-fn apply_clipboard_write(ev: On<ClipboardWriteRequest>, mut clipboard: ResMut<Clipboard>) {
-    match clipboard.set_text(ev.text.as_str()) {
-        Ok(()) => {}
-        Err(ClipboardError::ClipboardNotSupported) => {
-            tracing::debug!(
-                target: "orzma::clipboard",
-                "clipboard write skipped: no system clipboard backend (headless)",
-            );
-        }
-        Err(err) => {
-            tracing::warn!(
-                target: "orzma::clipboard",
-                error = ?err,
-                "clipboard write failed",
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-pub(crate) mod test_support {
-    use super::*;
-
-    /// Test-only sink recording every `ClipboardWriteRequest`'s text, so copy /
-    /// yank observers can be verified without round-tripping a real OS clipboard
-    /// (unavailable when headless, and clobbering the developer's clipboard).
-    #[derive(Resource, Default)]
-    pub(crate) struct CapturedClipboardWrites(pub(crate) Vec<String>);
-
-    /// Registers `CapturedClipboardWrites` plus an observer that appends each
-    /// triggered `ClipboardWriteRequest`'s text to it.
-    pub(crate) fn capture_clipboard_writes(app: &mut App) {
-        app.init_resource::<CapturedClipboardWrites>().add_observer(
-            |ev: On<ClipboardWriteRequest>, mut captured: ResMut<CapturedClipboardWrites>| {
-                captured.0.push(ev.text.clone());
-            },
-        );
     }
 }
 
