@@ -97,6 +97,7 @@ repeat-time-ms = 500
 
 # --- existing actions ---
 paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for the tmux-style leader binding.
+copy                  = "Cmd+C"        # Copy the focused terminal's selection to the system clipboard.
 release-webview-focus = "<Leader>u"
 quit                  = "Cmd+Q"
 enter-vi-mode         = "<Leader>s"    # Both modes: Alacritty vi mode in Default, tmux copy-mode under tmux.
@@ -232,6 +233,7 @@ If that bites, set `repeat-time-ms = 0` (disables repeat globally) or drop the
 | Action | Default | What it does |
 | --- | --- | --- |
 | `paste` | `Cmd+V` | Paste from the system clipboard. |
+| `copy` | `Cmd+C` | Copy the focused terminal's selection to the system clipboard. |
 | `release-webview-focus` | `<Leader>u` | Return keyboard focus from a focused webview to the terminal. |
 | `quit` | `Cmd+Q` | Quit orzma. |
 | `enter-vi-mode` | `<Leader>s` | Enter vi mode. |
@@ -274,7 +276,7 @@ above (`select-*-pane`, `split-*-pane`, `kill-pane`, `zoom-pane`,
 `resize-*-pane`, `new-window`, `kill-window`, `next-window`, `previous-window`,
 `next-session`, `previous-session`, `select-window-0`…`9`, `rename-window`, `rename-session`) are active under tmux
 mode only — they are
-inert in Default mode. `paste`, `quit`, and `release-webview-focus` work in
+inert in Default mode. `paste`, `copy`, `quit`, and `release-webview-focus` work in
 both modes. This applies whether an action is bound directly or as a
 leader-scoped key (e.g. `<Leader>s`), and regardless of whether the leader is
 a chord or a modifier tap.

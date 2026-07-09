@@ -73,11 +73,11 @@ pub(in crate::input) struct ActionTargets<'w, 's> {
 }
 
 /// Applies tmux keyboard shortcuts from `ShortcutMessage`: vi-mode entry,
-/// paste (`PasteAction`), detach (`DetachSessionRequest`), and the pane/window
-/// action requests. `Quit` / `ReleaseWebviewFocus` are handled upstream in
-/// `resolve_key_effects`. Registered in `ShortcutSet::Apply`, gated on
-/// `in_state(AppMode::Tmux)` + `on_message::<ShortcutMessage>`, ordered before
-/// `apply_tmux_forward`.
+/// paste (`PasteAction`), copy (`TerminalSelectionCopy`), detach
+/// (`DetachSessionRequest`), and the pane/window action requests. `Quit` /
+/// `ReleaseWebviewFocus` are handled upstream in `resolve_key_effects`.
+/// Registered in `ShortcutSet::Apply`, gated on `in_state(AppMode::Tmux)` +
+/// `on_message::<ShortcutMessage>`, ordered before `apply_tmux_forward`.
 fn apply_tmux_shortcuts(
     mut commands: Commands,
     mut shortcuts: MessageReader<ShortcutMessage>,
