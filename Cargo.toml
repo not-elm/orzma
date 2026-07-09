@@ -12,10 +12,6 @@ name = "orzma"
 path = "src/main.rs"
 
 [features]
-# Default-on for development: `cargo run` / `just run` load CEF from
-# ~/.local/share/cef via bevy_cef's debug loader. Distribution builds MUST
-# drop this — the bundler builds with `--no-default-features` so the release
-# binary loads CEF from the app's bundled Contents/Frameworks instead.
 default = ["debug"]
 debug = ["orzma_webview/debug"]
 
@@ -76,12 +72,6 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
-# NOTE: default_font is load-bearing for every `Handle::<Font>::default()`
-# consumer (e.g. src/ui/vi_mode_indicator.rs before TerminalUiFont exists, and
-# the font.rs / ime_overlay.rs tests) — the default handle only resolves to
-# FiraMono when default_font is enabled. The feature is currently part of
-# bevy's default set via default_platform → default_font, but listing it
-# explicitly here protects against future "default-features = false".
 bevy = { version = "0.19", features = ["default_font", "system_clipboard", "system_font_discovery"] }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
