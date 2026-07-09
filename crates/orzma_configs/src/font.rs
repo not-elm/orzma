@@ -14,26 +14,26 @@ pub struct FontConfig {
     pub size: f32,
     /// Base font-family name resolved against the system font database. `None`
     /// uses the bundled JetBrains Mono Nerd Font.
-    pub family: Option<String>,
+    pub normal: Option<String>,
     /// Optional family-name override for the bold face; `None` derives it from
-    /// `family`.
-    pub bold_family: Option<String>,
+    /// `normal`.
+    pub bold: Option<String>,
     /// Optional family-name override for the italic face; `None` derives it from
-    /// `family`.
-    pub italic_family: Option<String>,
+    /// `normal`.
+    pub italic: Option<String>,
     /// Optional family-name override for the bold-italic face; `None` derives it
-    /// from `family`.
-    pub bold_italic_family: Option<String>,
+    /// from `normal`.
+    pub bold_italic: Option<String>,
 }
 
 impl Default for FontConfig {
     fn default() -> Self {
         Self {
             size: DEFAULT_SIZE,
-            family: None,
-            bold_family: None,
-            italic_family: None,
-            bold_italic_family: None,
+            normal: None,
+            bold: None,
+            italic: None,
+            bold_italic: None,
         }
     }
 }
@@ -54,29 +54,21 @@ mod tests {
     }
 
     #[test]
-    fn parses_family_and_per_face_overrides() {
-        let f: FontConfig = toml::from_str(
-            "size = 14.0\nfamily = \"JetBrains Mono\"\nitalic_family = \"Cascadia Code\"",
-        )
-        .unwrap();
+    fn parses_normal_and_per_face_overrides() {
+        let f: FontConfig =
+            toml::from_str("size = 14.0\nnormal = \"JetBrains Mono\"\nitalic = \"Cascadia Code\"")
+                .unwrap();
         assert_eq!(f.size, 14.0);
-        assert_eq!(f.family.as_deref(), Some("JetBrains Mono"));
-        assert_eq!(f.italic_family.as_deref(), Some("Cascadia Code"));
-        assert_eq!(f.bold_family, None);
-        assert_eq!(f.bold_italic_family, None);
+        assert_eq!(f.normal.as_deref(), Some("JetBrains Mono"));
+        assert_eq!(f.italic.as_deref(), Some("Cascadia Code"));
+        assert_eq!(f.bold, None);
+        assert_eq!(f.bold_italic, None);
     }
 
     #[test]
     fn size_only_leaves_families_none() {
         let f: FontConfig = toml::from_str("size = 18.0").unwrap();
         assert_eq!(f.size, 18.0);
-        assert_eq!(f.family, None);
-    }
-
-    #[test]
-    fn old_path_keys_are_ignored_not_families() {
-        let f: FontConfig = toml::from_str("normal = \"/x.ttf\"\nbold = \"/y.ttf\"").unwrap();
-        assert_eq!(f.family, None);
-        assert_eq!(f.bold_family, None);
+        assert_eq!(f.normal, None);
     }
 }

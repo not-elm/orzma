@@ -309,12 +309,6 @@ mod integration_tests {
     }
 
     #[test]
-    fn old_nested_font_table_is_ignored_not_shimmed() {
-        let c = parse("[font.normal]\npath = \"/x.ttf\"");
-        assert_eq!(c.font, OrzmaConfigs::default().font);
-    }
-
-    #[test]
     fn inactive_pane_section_merges_and_clamps() {
         let c = parse("[inactive_pane]\nenabled = false\ntint = 2.0\ntint_color = \"#102030\"\n");
         assert!(!c.inactive_pane.enabled);

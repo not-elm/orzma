@@ -97,19 +97,19 @@ fn bridge_font_config(
     let powerline = fonts_assets.add(Font::from_bytes(bundled::REGULAR.to_vec()));
     commands.insert_resource(PowerlineFont(powerline.clone()));
 
-    let no_family = font.family.is_none()
-        && font.bold_family.is_none()
-        && font.italic_family.is_none()
-        && font.bold_italic_family.is_none();
+    let no_family = font.normal.is_none()
+        && font.bold.is_none()
+        && font.italic.is_none()
+        && font.bold_italic.is_none();
     if no_family {
         commands.insert_resource(TerminalUiFont(FontSource::Handle(powerline)));
         return;
     }
 
-    let regular_family = font.family.as_deref();
-    let bold_family = font.bold_family.as_deref().or(regular_family);
-    let italic_family = font.italic_family.as_deref().or(regular_family);
-    let bold_italic_family = font.bold_italic_family.as_deref().or(regular_family);
+    let regular_family = font.normal.as_deref();
+    let bold_family = font.bold.as_deref().or(regular_family);
+    let italic_family = font.italic.as_deref().or(regular_family);
+    let bold_italic_family = font.bold_italic.as_deref().or(regular_family);
 
     // NOTE: materialize &mut FontContext once so `collection` and `source_cache`
     // borrow as disjoint places. Going through `DerefMut` on `font_cx` per call
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn unknown_family_falls_back_to_bundled_and_ui_handle() {
         let tmp = std::env::temp_dir().join("orzma_font_family_unknown.toml");
-        std::fs::write(&tmp, "[font]\nfamily = \"no-such-family-8b3d2\"\n").expect("write toml");
+        std::fs::write(&tmp, "[font]\nnormal = \"no-such-family-8b3d2\"\n").expect("write toml");
 
         let _guard = crate::configs::env_guard();
         let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
@@ -463,7 +463,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("orzma_font_family_success_path.toml");
         std::fs::write(
             &tmp,
-            "[font]\nfamily = \"OrzmaTestMono\"\nbold_family = \"OrzmaTestMonoBold\"\n",
+            "[font]\nnormal = \"OrzmaTestMono\"\nbold = \"OrzmaTestMonoBold\"\n",
         )
         .expect("write toml");
 
@@ -522,17 +522,17 @@ mod tests {
         assert_eq!(
             fonts.regular.font_data(),
             bundled::REGULAR,
-            "regular face must resolve to the bytes registered under `family`"
+            "regular face must resolve to the bytes registered under `normal`"
         );
         assert_eq!(
             fonts.bold.font_data(),
             bundled::BOLD,
-            "bold face must resolve via `bold_family`, not fall back to `family`'s bytes"
+            "bold face must resolve via `bold`, not fall back to `normal`'s bytes"
         );
         assert_eq!(
             fonts.italic.font_data(),
             bundled::REGULAR,
-            "italic face (no italic_family override) must fall back to `family` via .or()"
+            "italic face (no italic override) must fall back to `normal` via .or()"
         );
 
         let _ = std::fs::remove_file(&tmp);

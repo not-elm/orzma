@@ -36,11 +36,11 @@ size = 11.25              # f32, logical px. Must be 0 < size <= 200, else start
 # JetBrains Mono Nerd Font. An unknown family falls back to the bundled face; a
 # present family missing a requested weight/style uses that family's closest
 # available face.
-# family = "JetBrains Mono"
-# Optional per-face family overrides (each omitted → derived from `family`):
-# bold_family        = "JetBrains Mono"
-# italic_family      = "Cascadia Code"
-# bold_italic_family = "Cascadia Code"
+# normal = "JetBrains Mono"
+# Optional per-face family overrides (each omitted → derived from `normal`):
+# bold        = "JetBrains Mono"
+# italic      = "Cascadia Code"
+# bold_italic = "Cascadia Code"
 
 [keyboard]
 # macOS only. Which Option key sends Meta instead of composing.
