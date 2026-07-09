@@ -23,27 +23,6 @@ body:
     validations:
       required: true
   - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives considered
-      description: Other approaches or workarounds you've considered.
-  - type: dropdown
-    id: area
-    attributes:
-      label: Affected area
-      description: Select all that apply.
-      multiple: true
-      options:
-        - Terminal rendering
-        - Input
-        - IME
-        - Vi mode
-        - tmux integration
-        - Webview
-        - Configuration
-        - Other
-        - Not sure
-  - type: textarea
     id: context
     attributes:
       label: Additional context
