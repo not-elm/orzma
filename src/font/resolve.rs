@@ -40,10 +40,11 @@ pub(super) fn attributes_of(spec: FontStyleSpec) -> Attributes {
 }
 
 /// Resolves `family` at `attributes` to `(font-file bytes, .ttc face index)`,
-/// or `None` when the family name is absent from the collection. A family that
-/// is present but lacks the requested weight/style still returns `Some` (the
-/// closest match) — the caller substitutes bundled bytes only on `None`.
-pub(super) fn resolve_face_bytes(
+/// or `None` when no face resolves — either the family name is absent from the
+/// collection, or it is present but the query returns no match. A present family
+/// that merely lacks the exact requested weight/style still returns `Some` (the
+/// closest match). `resolve_configured_face` maps a `None` here to `FamilyNotFound`.
+fn resolve_face_bytes(
     collection: &mut Collection,
     source_cache: &mut SourceCache,
     family: &str,
@@ -60,7 +61,9 @@ pub(super) fn resolve_face_bytes(
     resolved
 }
 
-/// The configured family name is absent from the collection (system font DB).
+/// The configured family did not resolve to a usable face — either its name is
+/// absent from the collection (system font DB), or it is present but no face
+/// matched the query.
 #[derive(Debug)]
 pub(super) struct FamilyNotFound;
 

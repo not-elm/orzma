@@ -44,7 +44,7 @@ impl FromStr for FontStyleSpec {
                 .collect();
             if let Some(w) = weight_name(&word) {
                 weight = Some(w);
-            } else if let Some(sl) = slant_name(&word) {
+            } else if let Some(sl) = FontSlant::parse(&word) {
                 slant = Some(sl);
             } else {
                 return Err(InvalidFontStyleToken {
@@ -74,12 +74,14 @@ fn weight_name(word: &str) -> Option<u16> {
     })
 }
 
-fn slant_name(word: &str) -> Option<FontSlant> {
-    Some(match word {
-        "italic" => FontSlant::Italic,
-        "oblique" => FontSlant::Oblique,
-        _ => return None,
-    })
+impl FontSlant {
+    fn parse(word: &str) -> Option<Self> {
+        Some(match word {
+            "italic" => Self::Italic,
+            "oblique" => Self::Oblique,
+            _ => return None,
+        })
+    }
 }
 
 #[cfg(test)]
