@@ -7,6 +7,9 @@ use crate::surface::OrzmaTerminal;
 use bevy::{clipboard::ClipboardError, prelude::*};
 use orzma_tmux::TmuxPane;
 
+mod default_mode;
+mod tmux_mode;
+
 /// Pastes the system clipboard into the target terminal entity.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct PasteAction {
@@ -20,7 +23,10 @@ pub(super) struct ClipboardPasteActionPlugin;
 
 impl Plugin for ClipboardPasteActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_paste);
+        app.add_observer(on_paste).add_plugins((
+            default_mode::PasteDefaultModePlugin,
+            tmux_mode::PasteTmuxModePlugin,
+        ));
     }
 }
 
