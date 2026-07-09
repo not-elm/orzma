@@ -1,6 +1,9 @@
 //! Font configuration: the `[font]` section.
 
+mod style;
+
 use serde::Deserialize;
+pub use style::{FontSlant, FontStyleSpec, InvalidFontStyleToken};
 
 const DEFAULT_SIZE: f32 = 11.25;
 
