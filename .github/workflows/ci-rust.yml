@@ -3,7 +3,29 @@ name: ci-rust
 on:
   push:
     branches: [main]
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "sdk/ratatui_orzma/**"
+      - "apps/**"
+      - "!apps/*/web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "deny.toml"
+      - ".github/workflows/ci-rust.yml"
   pull_request:
+    paths:
+      - "src/**"
+      - "crates/**"
+      - "sdk/ratatui_orzma/**"
+      - "apps/**"
+      - "!apps/*/web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "deny.toml"
+      - ".github/workflows/ci-rust.yml"
 
 concurrency:
   group: ci-rust-${{ github.ref }}
