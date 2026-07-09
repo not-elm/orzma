@@ -12,8 +12,8 @@ orzma resolves the config path in this order:
 3. `~/.config/orzma/config.toml` — the default.
 
 Unknown sections are rejected at startup, as are unknown keys in `[orzma]`,
-`[keyboard]`, `[shortcuts]`, and `[vi-mode]`. Unknown keys in `[font]`,
-`[mouse]`, and `[inactive_pane]` are silently ignored. Most invalid values are
+`[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
+`[mouse]` and `[inactive_pane]` are silently ignored. Most invalid values are
 startup errors too; the few that are silently clamped or reverted are noted
 inline below.
 
@@ -32,15 +32,28 @@ change — omitted keys fall back to these defaults.
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.
-# Font family resolved against installed system fonts. Omit to use the bundled
-# JetBrains Mono Nerd Font. An unknown family falls back to the bundled face; a
-# present family missing a requested weight/style uses that family's closest
-# available face.
-# normal = "JetBrains Mono"
-# Optional per-face family overrides (each omitted → derived from `normal`):
-# bold        = "JetBrains Mono"
-# italic      = "Cascadia Code"
-# bold_italic = "Cascadia Code"
+# Each face is a table of { family, style }. Omit [font] entirely to use the
+# bundled JetBrains Mono Nerd Font. A face's `family`, when omitted, inherits
+# `normal.family`; its `style`, when omitted, uses the face's default
+# (Regular / Bold / Italic / Bold Italic).
+#
+# `family` is resolved against installed system fonts; a configured family that
+# is not installed is a STARTUP ERROR (no silent fallback). `style` selects a
+# weight + slant: standard names (Regular/Bold/Italic/Bold Italic) plus common
+# weights (Thin, Light, Medium, SemiBold, ExtraBold, Black, ...) optionally with
+# Italic/Oblique. An unknown style token is a config error. (Unlike Alacritty,
+# `style` is matched by weight+slant attributes, not by exact subfamily name.)
+#
+# [font.normal]
+# family = "JetBrains Mono"
+# style  = "Regular"
+# [font.bold]
+# style  = "Bold"                 # inherits family = "JetBrains Mono"
+# [font.italic]
+# family = "Cascadia Code"
+# style  = "Italic"
+# [font.bold_italic]
+# style  = "Bold Italic"
 
 [keyboard]
 # macOS only. Which Option key sends Meta instead of composing.
