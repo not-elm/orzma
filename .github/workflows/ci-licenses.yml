@@ -3,7 +3,31 @@ name: ci-licenses
 on:
   push:
     branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - "about.toml"
+      - "about.hbs"
+      - "scripts/generate_licenses.py"
+      - "justfile"
+      - "licenses/**"
+      - ".github/workflows/ci-licenses.yml"
   pull_request:
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "package.json"
+      - "pnpm-workspace.yaml"
+      - "pnpm-lock.yaml"
+      - "about.toml"
+      - "about.hbs"
+      - "scripts/generate_licenses.py"
+      - "justfile"
+      - "licenses/**"
+      - ".github/workflows/ci-licenses.yml"
 
 permissions:
   contents: read

@@ -4,7 +4,12 @@ on:
   push:
     branches: [main]
     paths:
-      - "sdk/**"
+      - "sdk/orzma-web/**"
+      - "apps/*/web/**"
+      - "apps/*/package.json"
+      - "apps/*/tsconfig.json"
+      - "apps/*/build.mjs"
+      - "apps/*/vitest.config.ts"
       - "extensions/**"
       - "pnpm-workspace.yaml"
       - "package.json"
@@ -14,7 +19,12 @@ on:
       - ".github/workflows/ci-ts.yml"
   pull_request:
     paths:
-      - "sdk/**"
+      - "sdk/orzma-web/**"
+      - "apps/*/web/**"
+      - "apps/*/package.json"
+      - "apps/*/tsconfig.json"
+      - "apps/*/build.mjs"
+      - "apps/*/vitest.config.ts"
       - "extensions/**"
       - "pnpm-workspace.yaml"
       - "package.json"
