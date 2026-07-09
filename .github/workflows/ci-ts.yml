@@ -6,6 +6,10 @@ on:
     paths:
       - "sdk/orzma-web/**"
       - "apps/*/web/**"
+      - "apps/*/package.json"
+      - "apps/*/tsconfig.json"
+      - "apps/*/build.mjs"
+      - "apps/*/vitest.config.ts"
       - "extensions/**"
       - "pnpm-workspace.yaml"
       - "package.json"
@@ -17,6 +21,10 @@ on:
     paths:
       - "sdk/orzma-web/**"
       - "apps/*/web/**"
+      - "apps/*/package.json"
+      - "apps/*/tsconfig.json"
+      - "apps/*/build.mjs"
+      - "apps/*/vitest.config.ts"
       - "extensions/**"
       - "pnpm-workspace.yaml"
       - "package.json"
