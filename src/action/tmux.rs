@@ -8,7 +8,6 @@ mod kill_window;
 mod new_window;
 mod next_session;
 mod next_window;
-mod paste;
 mod previous_session;
 mod previous_window;
 mod rename_session;
@@ -49,7 +48,6 @@ impl Plugin for TmuxActionPlugin {
             new_window::NewWindowPlugin,
             next_session::NextSessionPlugin,
             next_window::NextWindowPlugin,
-            paste::TmuxPastePlugin,
             previous_session::PreviousSessionPlugin,
         ))
         .add_plugins((

@@ -5,7 +5,8 @@
 
 use crate::{
     action::{
-        terminal::PasteAction,
+        clipboard::PasteAction,
+        terminal::trigger_selection_copy,
         tmux::{
             DetachSessionRequest, KillPaneRequest, KillWindowRequest, NewWindowRequest,
             NextSessionRequest, NextWindowRequest, PreviousSessionRequest, PreviousWindowRequest,
@@ -72,11 +73,11 @@ pub(in crate::input) struct ActionTargets<'w, 's> {
 }
 
 /// Applies tmux keyboard shortcuts from `ShortcutMessage`: vi-mode entry,
-/// paste (`PasteAction`), detach (`DetachSessionRequest`), and the pane/window
-/// action requests. `Quit` / `ReleaseWebviewFocus` are handled upstream in
-/// `resolve_key_effects`. Registered in `ShortcutSet::Apply`, gated on
-/// `in_state(AppMode::Tmux)` + `on_message::<ShortcutMessage>`, ordered before
-/// `apply_tmux_forward`.
+/// paste (`PasteAction`), copy (`TerminalSelectionCopy`), detach
+/// (`DetachSessionRequest`), and the pane/window action requests. `Quit` /
+/// `ReleaseWebviewFocus` are handled upstream in `resolve_key_effects`.
+/// Registered in `ShortcutSet::Apply`, gated on `in_state(AppMode::Tmux)` +
+/// `on_message::<ShortcutMessage>`, ordered before `apply_tmux_forward`.
 fn apply_tmux_shortcuts(
     mut commands: Commands,
     mut shortcuts: MessageReader<ShortcutMessage>,
@@ -98,6 +99,7 @@ fn apply_tmux_shortcuts(
                     commands.trigger(PasteAction { entity });
                 }
             }
+            Shortcut::Copy => trigger_selection_copy(&mut commands, msg.focused),
             Shortcut::DetachSession => {
                 if let Ok(entity) = targets.session.single() {
                     commands.trigger(DetachSessionRequest { entity });
@@ -282,6 +284,7 @@ fn dispatch_tmux_action(
         Shortcut::Quit
         | Shortcut::EnterViMode
         | Shortcut::Paste
+        | Shortcut::Copy
         | Shortcut::DetachSession
         | Shortcut::ReleaseWebviewFocus => {}
     }
@@ -316,6 +319,7 @@ fn on_tmux_forward_message() -> impl SystemCondition<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::terminal::TerminalSelectionCopy;
     use crate::input::keyboard::key_effect::KeyEffect;
     use orzma_tmux::{PaneId, TmuxPane};
 
@@ -326,6 +330,7 @@ mod tests {
         detach: Vec<Entity>,
         forward: Vec<(Entity, Vec<String>)>,
         resize_pane: Vec<(Entity, PaneDirection)>,
+        selection_copy: Vec<Entity>,
     }
 
     /// Builds an app running the three tmux appliers (`apply_tmux_shortcuts`,
@@ -370,6 +375,11 @@ mod tests {
             .add_observer(
                 |ev: On<ForwardPaneKeysRequest>, mut c: ResMut<TmuxCaptured>| {
                     c.forward.push((ev.entity, ev.names.clone()));
+                },
+            )
+            .add_observer(
+                |ev: On<TerminalSelectionCopy>, mut c: ResMut<TmuxCaptured>| {
+                    c.selection_copy.push(ev.entity);
                 },
             );
         let pane = app
@@ -439,6 +449,24 @@ mod tests {
             app.world().resource::<TmuxCaptured>().select_pane,
             vec![(pane, PaneDirection::Left)],
             "a SelectPane(Left) effect must trigger SelectPaneRequest on batch.focused (active pane)"
+        );
+    }
+
+    #[test]
+    fn copy_triggers_selection_copy_on_focused_pane() {
+        let (mut app, pane) = tmux_dispatch_app();
+        dispatch(
+            &mut app,
+            vec![KeyEffect::Shortcut {
+                action: Shortcut::Copy,
+                via_leader: false,
+            }],
+            Some(pane),
+        );
+        assert_eq!(
+            app.world().resource::<TmuxCaptured>().selection_copy,
+            vec![pane],
+            "a Copy effect must trigger TerminalSelectionCopy on the focused pane"
         );
     }
 

@@ -269,7 +269,6 @@ fn fine_held(modifier: FineModifier, m: &TerminalModifiers) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::clipboard::Clipboard;
     use crate::input::mouse::MouseEffect;
     use crate::input::mouse::test_support::{
         CapturedEffects, add_effect_capture_observers, set_phys_cursor, test_metrics,
@@ -290,7 +289,6 @@ mod tests {
             .init_resource::<OrzmaMouseConfig>()
             .init_resource::<WheelAccumulator>()
             .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<Clipboard>()
             .init_resource::<CapturedEffects>()
             .insert_resource(test_metrics())
             .add_systems(Update, dispatch_mouse_wheel);

@@ -121,6 +121,60 @@ Forbidden:
 | ------------------------------------ | ----------------------------- | --------------------------- |
 | `_q` suffix on any `Query` parameter | `window_q: Query<&Window, …>` | `window: Query<&Window, …>` |
 
+## Constructors — type-building functions are associated functions
+
+A function whose job is to build a value of a struct or enum defined in
+this crate belongs on that type as an associated function
+(`impl T { fn … -> Self }`), called as `T::build(…)`, not as a free
+`fn build_t(…) -> T`. Co-locating the constructor with its type keeps
+every way to produce a `T` reachable from `T` itself, and reads as
+`PasteRead::classify(…)` at the call site rather than a bare
+`classify_paste_read(…)` whose return type you have to infer from the
+name.
+
+This covers factory / parser / classifier / decoder helpers — any
+function that assembles a fresh value of a local type from its inputs —
+whether it returns `T`, `Option<T>`, or `Result<T, _>`.
+
+Required:
+
+| Instead of (free function)                     | Use (associated function)                                |
+| ---------------------------------------------- | -------------------------------------------------------- |
+| `fn classify_paste_read(r: …) -> PasteRead`    | `impl PasteRead { fn classify(r: …) -> Self }`           |
+| `fn parse_chord(s: &str) -> Option<KeyChord>`  | `impl KeyChord { fn parse(s: &str) -> Option<Self> }`    |
+| `fn build_grid(w, h) -> Grid`                  | `impl Grid { fn build(w, h) -> Self }`                   |
+
+- Return `-> Self` (not the spelled-out type name) and build variants
+  with `Self::Variant` inside the `impl`.
+- Name the method for what it does, dropping the type name the `T::`
+  prefix already carries: `classify_paste_read` → `PasteRead::classify`,
+  `build_grid` → `Grid::build`.
+
+Forbidden:
+
+| Pattern                                                | Why                                                        |
+| ------------------------------------------------------ | ---------------------------------------------------------- |
+| Free `fn` returning a locally-defined `T` it constructs | The constructor is discoverable only by grep, not from `T` |
+
+Exceptions:
+
+- **Foreign return type.** You cannot add an inherent method to a type
+  defined in another crate. Prefer a `From` / `TryFrom` / `FromStr`
+  trait `impl` (those satisfy this rule — they are associated
+  functions); fall back to a free `fn` only when no conversion trait
+  fits.
+- **Standard conversion traits.** `From` / `TryFrom` / `FromStr` /
+  `Default` impls already are the idiomatic constructors — a free `fn`
+  that should be one of these is converted to the trait, not to an
+  inherent method.
+- **Bevy systems / observers.** A system or observer is not a
+  constructor even when it `commands.trigger`s an event: its return is
+  `()` and the ECS requires a free `fn`. This rule targets functions
+  whose returned value **is** the constructed `T`.
+- **Lookups / getters.** A function that returns an already-existing
+  value (e.g. an `Option<Entity>` from a query, an accessor returning a
+  borrow) is not building a new `T` and is out of scope.
+
 ## Visibility — minimize scope
 
 Every item (functions, types, fields, modules, constants, traits) starts
@@ -551,6 +605,7 @@ Not tool-enforced — review-time check required. The following rules cannot cur
 - Change detection — no manual `set_changed()` / `bypass_change_detection()`-then-`set_changed()` notification; mutate conditionally so normal `DerefMut` drives change detection (see "Change detection — let mutation drive it, don't force it manually")
 - Imports — no inline fully-qualified paths in signatures, bodies, or type parameters; add a `use` at the top instead (see "Imports — import, don't inline")
 - Naming — `Query` parameters must not use a `_q` suffix; use a descriptive singular or plural noun (see "Naming — Query parameters")
+- Constructors — a function that builds a value of a local struct/enum must be an associated function on that type (`T::build`), not a free `fn build_t(…) -> T` (see "Constructors — type-building functions are associated functions")
 - System composition — long systems that interleave gather/decide/apply must be split: pure decision helpers returning effect values, hand off across the seam via an `EntityEvent`+observer or a `Message` (`MessageWriter`/`MessageReader`) — never inline sequencing — bulky inline blocks extracted to helpers, and each system body kept within ~150 lines (see "System composition — keep systems focused; split by responsibility")
 
 If you add a tool or script that detects any of these, move the corresponding entry into the tool-enforced list above.

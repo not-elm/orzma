@@ -22,7 +22,11 @@ debug = ["orzma_webview/debug"]
 [dependencies]
 ab_glyph = "0.2"
 anyhow = { workspace = true }
-arboard = { version = "3", features = ["wayland-data-control"] }
+# Code-less dependency: orzma has no `use arboard` after the clipboard migration.
+# It exists only so Cargo feature-unification keeps arboard's `wayland-data-control`
+# (wl-clipboard-rs) enabled on the single arboard build that `bevy_clipboard` pulls in.
+# Pin to match Bevy's arboard pin; if a future Bevy bump changes it, update this in lockstep.
+arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
 bevy = { workspace = true }
 bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
@@ -81,7 +85,7 @@ publish = false
 # FiraMono when default_font is enabled. The feature is currently part of
 # bevy's default set via default_platform → default_font, but listing it
 # explicitly here protects against future "default-features = false".
-bevy = { version = "0.19", features = ["default_font"] }
+bevy = { version = "0.19", features = ["default_font", "system_clipboard"] }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }

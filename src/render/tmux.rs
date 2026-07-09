@@ -1829,11 +1829,11 @@ mod tests {
     /// directly (the applier pipeline), not the keymap/key-gather layer.
     #[test]
     fn tmux_vi_mode_is_fully_local() {
+        use crate::action::clipboard::test_support::{CapturedCopyActions, capture_copy_actions};
         use crate::action::vi::{
             ViActionPlugin, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest,
             ViYankRequest,
         };
-        use crate::clipboard::Clipboard;
         use crate::configs::OrzmaConfigsResource;
         use crate::ui::vi_mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
         use bevy::ecs::message::Messages;
@@ -1853,7 +1853,7 @@ mod tests {
         app.init_resource::<PendingPaneOutput>();
         app.add_message::<PaneOutput>();
         app.insert_resource(OrzmaConfigsResource(OrzmaConfigs::default()));
-        app.insert_resource(Clipboard::in_memory());
+        capture_copy_actions(&mut app);
 
         let pane_id = PaneId(99);
         let entity = app
@@ -2002,10 +2002,12 @@ mod tests {
             app.world().get::<ViModeState>(entity).is_none(),
             "yank must exit vi mode"
         );
-        let clipboard_text = app.world_mut().resource_mut::<Clipboard>().read();
+        let captured = &app.world().resource::<CapturedCopyActions>().0;
+        assert_eq!(captured.len(), 1, "yank must emit exactly one CopyAction");
         assert_eq!(
-            clipboard_text, expected_yank,
-            "yank must write exactly the selected text to the clipboard"
+            Some(captured[0].as_str()),
+            expected_yank.as_deref(),
+            "yank must emit exactly the selected text as a CopyAction"
         );
 
         // 4. Exiting vi mode (via yank) snaps the handle back to the live

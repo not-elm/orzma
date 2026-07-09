@@ -1,20 +1,20 @@
-//! Tmux paste: applies `PasteAction` for a tmux pane by chunking the
-//! clipboard into `SendBytes`, relocated from an inline match arm in the
-//! tmux keyboard-input dispatcher.
+//! Tmux-mode paste applier: chunks `PasteToTerminal` text into tmux
+//! `send-keys -H` commands for the target pane. Gated on `AppMode::Tmux`
+//! at registration.
 
-use crate::action::terminal::PasteAction;
-use crate::clipboard::{Clipboard, build_paste_bytes};
+use super::{PasteToTerminal, build_paste_bytes};
+use crate::app_mode::AppMode;
 use crate::input::tmux::forward::{pane_target, snap_pane_to_bottom};
 use bevy::prelude::*;
 use orzma_tmux::{SendBytes, TmuxClient, TmuxPane};
 use orzma_tty_engine::TerminalHandle;
 
-/// Registers the tmux `PasteAction` apply observer.
-pub(super) struct TmuxPastePlugin;
+/// Registers the Tmux-mode paste applier, gated on `AppMode::Tmux`.
+pub(super) struct PasteTmuxModePlugin;
 
-impl Plugin for TmuxPastePlugin {
+impl Plugin for PasteTmuxModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_paste_tmux);
+        app.add_observer(on_paste_tmux_mode.run_if(in_state(AppMode::Tmux)));
     }
 }
 
@@ -22,31 +22,24 @@ impl Plugin for TmuxPastePlugin {
 /// fixed-size chunks so a large clipboard doesn't overflow one command.
 const PASTE_CHUNK_BYTES: usize = 256;
 
-fn on_paste_tmux(
-    ev: On<PasteAction>,
+fn on_paste_tmux_mode(
+    ev: On<PasteToTerminal>,
     mut commands: Commands,
-    mut clipboard: ResMut<Clipboard>,
     mut handles: Query<&mut TerminalHandle>,
     mut client: Option<Single<&mut TmuxClient>>,
     panes: Query<&TmuxPane>,
 ) {
-    let Ok(pane) = panes.get(ev.entity) else {
+    let Ok(pane) = panes.get(ev.terminal) else {
         return;
     };
-    let Some(text) = clipboard.read() else {
-        return;
-    };
-    if text.is_empty() {
-        return;
-    }
     // NOTE: gate on a live client BEFORE snap/flush — a scrolled-back pane
     // with no client must not snap-to-bottom + repaint while pasting nothing.
     let Some(client) = client.as_deref_mut() else {
         return;
     };
     let target = pane_target(pane.id);
-    snap_pane_to_bottom(&mut commands, &mut handles, ev.entity);
-    let bytes = build_paste_bytes(&text, false);
+    snap_pane_to_bottom(&mut commands, &mut handles, ev.terminal);
+    let bytes = build_paste_bytes(&ev.text, false);
     for chunk in bytes.chunks(PASTE_CHUNK_BYTES) {
         if let Err(e) = client.send(SendBytes {
             pane: &target,
@@ -61,8 +54,17 @@ fn on_paste_tmux(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::state::app::StatesPlugin;
     use orzma_tmux::PaneId;
     use tmux_control_parser::CellDims;
+
+    fn tmux_mode_app(mode: AppMode) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin));
+        app.insert_state(mode);
+        app.add_plugins(PasteTmuxModePlugin);
+        app
+    }
 
     fn spawn_pane(app: &mut App, id: u32) -> Entity {
         app.world_mut()
@@ -83,13 +85,7 @@ mod tests {
 
     #[test]
     fn on_paste_tmux_without_client_does_not_snap_scrolled_back_pane() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(TmuxPastePlugin)
-            .insert_resource(Clipboard::in_memory());
-        app.world_mut()
-            .resource_mut::<Clipboard>()
-            .write("hello".to_string());
+        let mut app = tmux_mode_app(AppMode::Tmux);
 
         // Build a pane scrolled back into history: feed more lines than the
         // viewport holds, then scroll one line up so display_offset > 0.
@@ -121,7 +117,10 @@ mod tests {
         // No live tmux client: the early `else { return }` runs BEFORE
         // snap/flush, so the scrolled-back viewport is left untouched (no
         // repaint of a paste that never happened) — and no panic.
-        app.world_mut().trigger(PasteAction { entity: pane });
+        app.world_mut().trigger(PasteToTerminal {
+            terminal: pane,
+            text: "hello".to_string(),
+        });
         app.update();
 
         let handle = app.world().get::<TerminalHandle>(pane).unwrap();
@@ -133,16 +132,15 @@ mod tests {
 
     #[test]
     fn on_paste_tmux_chunks_large_clipboard_into_multiple_send_bytes() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(TmuxPastePlugin)
-            .insert_resource(Clipboard::in_memory());
+        let mut app = tmux_mode_app(AppMode::Tmux);
         let text = "a".repeat(PASTE_CHUNK_BYTES * 2 + 10);
-        app.world_mut().resource_mut::<Clipboard>().write(text);
         let client = app.world_mut().spawn(TmuxClient::new_adopted()).id();
         let pane = spawn_pane(&mut app, 5);
 
-        app.world_mut().trigger(PasteAction { entity: pane });
+        app.world_mut().trigger(PasteToTerminal {
+            terminal: pane,
+            text,
+        });
         app.update();
 
         let mut client = app.world_mut().get_mut::<TmuxClient>(client).unwrap();
@@ -154,6 +152,25 @@ mod tests {
         assert_eq!(
             sends, 3,
             "a clipboard spanning two full chunks plus a remainder must be sent as three send-keys commands"
+        );
+    }
+
+    #[test]
+    fn paste_to_terminal_in_default_mode_sends_nothing() {
+        let mut app = tmux_mode_app(AppMode::Default);
+        let client = app.world_mut().spawn(TmuxClient::new_adopted()).id();
+        let pane = spawn_pane(&mut app, 7);
+
+        app.world_mut().trigger(PasteToTerminal {
+            terminal: pane,
+            text: "hello".to_string(),
+        });
+        app.update();
+
+        let mut client = app.world_mut().get_mut::<TmuxClient>(client).unwrap();
+        assert!(
+            client.take_outgoing().is_empty(),
+            "the tmux paste applier is run_if-gated on AppMode::Tmux and must not run in Default"
         );
     }
 }

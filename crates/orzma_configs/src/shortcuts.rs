@@ -337,6 +337,12 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub paste: Option<Binding>,
+    /// Copy the focused terminal's selection to the system clipboard.
+    #[serde(
+        deserialize_with = "deser_binding_or_unbind",
+        serialize_with = "ser_binding_or_unbind"
+    )]
+    pub copy: Option<Binding>,
     /// Release keyboard focus from a focused webview back to the terminal.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
@@ -560,6 +566,7 @@ impl Default for Shortcuts {
         Shortcuts {
             leader: Some(Leader::ModifierTap(TapModifier::Meta)),
             paste: Some(Binding::Direct(parse_default_chord("Cmd+V"))),
+            copy: Some(Binding::Direct(parse_default_chord("Cmd+C"))),
             release_webview_focus: Some(parse_default_binding("<Leader>u")),
             quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
             enter_vi_mode: Some(parse_default_binding("<Leader>s")),
@@ -608,6 +615,7 @@ impl Shortcuts {
     ) -> impl Iterator<Item = (&'static str, &Option<Binding>, Shortcut)> + '_ {
         [
             ("paste", &self.paste, Shortcut::Paste),
+            ("copy", &self.copy, Shortcut::Copy),
             (
                 "release-webview-focus",
                 &self.release_webview_focus,
@@ -816,6 +824,8 @@ pub enum SplitOrientation {
 pub enum Shortcut {
     /// Paste the system clipboard into the active terminal.
     Paste,
+    /// Copies the focused terminal's selection to the system clipboard.
+    Copy,
     /// Releases keyboard focus from a focused webview back to the terminal.
     ReleaseWebviewFocus,
     /// Quits the orzma application.
@@ -1356,8 +1366,12 @@ mod tests {
             s.quit,
             Some(Binding::Direct(parse_key_chord("Cmd+Q").unwrap()))
         );
-        assert_eq!(s.bindings_iter().count(), 35);
-        assert_eq!(s.direct_chords().count(), 2);
+        assert_eq!(
+            s.copy,
+            Some(Binding::Direct(parse_key_chord("Cmd+C").unwrap()))
+        );
+        assert_eq!(s.bindings_iter().count(), 36);
+        assert_eq!(s.direct_chords().count(), 3);
         assert_eq!(s.leader_chords().count(), 33);
     }
 
@@ -1365,7 +1379,7 @@ mod tests {
     fn bindings_iter_count_is_pinned_to_field_count() {
         // NOTE: drift guard — adding a Shortcuts field without its
         // bindings_iter() entry silently unbinds the action.
-        assert_eq!(Shortcuts::default().bindings_iter().count(), 35);
+        assert_eq!(Shortcuts::default().bindings_iter().count(), 36);
     }
 
     #[test]
@@ -1551,7 +1565,7 @@ detach-session = "<Leader>d"
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","detach-session":"<Leader>X","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","next-session":"<Leader>Shift+]","previous-session":"<Leader>Shift+[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","detach-session":"<Leader>X","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","next-session":"<Leader>Shift+]","previous-session":"<Leader>Shift+[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
