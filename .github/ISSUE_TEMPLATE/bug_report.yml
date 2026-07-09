@@ -35,22 +35,6 @@ body:
         - Not sure
     validations:
       required: true
-  - type: dropdown
-    id: area
-    attributes:
-      label: Affected area
-      description: Select all that apply.
-      multiple: true
-      options:
-        - Terminal rendering
-        - Input
-        - IME
-        - Vi mode
-        - tmux integration
-        - Webview
-        - Configuration
-        - Other
-        - Not sure
   - type: input
     id: tmux_version
     attributes:
