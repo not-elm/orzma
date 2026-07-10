@@ -13,6 +13,8 @@ use crate::scrollback::ScrollbackConfig;
 use crate::shortcuts::Shortcuts;
 use crate::{font::FontConfig, vi_mode::ViModeConfig};
 pub use error::{OrzmaConfigsError, OrzmaConfigsResult};
+pub use raw::RawSettings;
+pub use resolve::{Diagnostic, Severity};
 use serde::Deserialize;
 use std::str::FromStr;
 
@@ -23,6 +25,8 @@ pub mod keyboard;
 pub mod mouse;
 pub mod orzma;
 pub mod path;
+pub mod raw;
+pub mod resolve;
 pub mod scrollback;
 pub mod shortcuts;
 pub mod vi_mode;
