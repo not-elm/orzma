@@ -12,6 +12,8 @@ mod render;
 mod session;
 mod surface;
 mod system_set;
+#[cfg(test)]
+mod test_support;
 mod theme;
 mod ui;
 mod window_title;

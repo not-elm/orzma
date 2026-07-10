@@ -232,6 +232,7 @@ impl ResolvedFace {
 mod tests {
     use super::*;
     use crate::configs::OrzmaConfigsPlugin;
+    use crate::test_support::EnvVarGuard;
     use ab_glyph::Font as AbFont;
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
@@ -241,23 +242,6 @@ mod tests {
     use orzma_tty_renderer::bundled;
     use std::sync::Arc;
     use tempfile::TempDir;
-
-    /// RAII guard for a process-environment variable. Constructing it via
-    /// `EnvVarGuard::set(...)` sets the variable; dropping it restores
-    /// whatever value the variable held before construction (or removes it,
-    /// if it was unset). The Drop runs even on panic, so a test that panics
-    /// inside `app.update()` no longer leaks a stale-set or stale-unset env
-    /// var into the next test (which would then run against a
-    /// misconfigured `ORZMA_CONFIG` / `$HOME` after recovering from the
-    /// poisoned `env_guard` mutex).
-    ///
-    /// The caller MUST hold `crate::configs::env_guard()` for the full
-    /// lifetime of every `EnvVarGuard` to keep env mutations serialized
-    /// across tests.
-    struct EnvVarGuard {
-        key: &'static str,
-        prior: Option<std::ffi::OsString>,
-    }
 
     /// Bundles every env override `make_test_app` needs, plus the backing
     /// `TempDir`, so a single value keeps them all alive for the test.
@@ -298,40 +282,6 @@ mod tests {
                 _home: home,
                 _xdg_config_home: xdg_config_home,
                 _orzma_config: orzma_config,
-            }
-        }
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            let prior = std::env::var_os(key);
-            // SAFETY: caller holds env_guard for the duration of this guard.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, prior }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let prior = std::env::var_os(key);
-            // SAFETY: caller holds env_guard for the duration of this guard.
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, prior }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            // SAFETY: caller still holds env_guard (drop runs before the
-            // env_guard MutexGuard because of LIFO drop order within
-            // each test scope).
-            unsafe {
-                match self.prior.take() {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
             }
         }
     }

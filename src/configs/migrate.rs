@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use bevy::settings::SaveSettingsSync;
 use orzma_configs::RawSettings;
 use orzma_configs::path::{SystemEnv, resolve_config_path};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Runs the legacy-config migration once, if needed.
 ///
@@ -29,6 +29,13 @@ use std::path::PathBuf;
 /// group `Resource`s in `world` — so the very next `resolve_and_insert`
 /// call reflects the migrated values. A one-shot `Startup` system is then
 /// registered to flush those groups to disk and write the marker.
+///
+/// When there is NO legacy config to migrate (the legacy path does not
+/// exist), the marker is still written immediately — see
+/// [`mark_migrated_without_legacy_config`] — so a legacy config file that
+/// appears later (dotfiles sync, an old build reinstalled) can never
+/// silently clobber `settings.toml` the user has since edited through the
+/// new UI.
 ///
 /// Never fatal: an unresolvable preferences directory, an unreadable legacy
 /// file (other than simply not existing), or an unwritable marker are all
@@ -65,7 +72,10 @@ pub(super) fn migrate_if_needed(world: &mut World) {
     };
     let text = match std::fs::read_to_string(&legacy_path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            mark_migrated_without_legacy_config(&settings_dir);
+            return;
+        }
         Err(source) => {
             tracing::warn!(
                 path = %legacy_path.display(),
@@ -76,8 +86,8 @@ pub(super) fn migrate_if_needed(world: &mut World) {
         }
     };
 
-    let raw = match RawSettings::from_legacy_toml(&text) {
-        Ok(raw) => raw,
+    let (raw, diags) = match RawSettings::from_legacy_toml(&text) {
+        Ok(parsed) => parsed,
         Err(source) => {
             tracing::warn!(
                 path = %legacy_path.display(),
@@ -87,10 +97,13 @@ pub(super) fn migrate_if_needed(world: &mut World) {
             return;
         }
     };
+    for d in &diags {
+        tracing::warn!(target: "orzma::config::migrate", "{}", d.message);
+    }
     apply_migrated_groups(world, &raw);
     tracing::info!(
         from = %legacy_path.display(),
-        to = %settings_dir.join("settings.toml").display(),
+        to = %settings_dir.join(SETTINGS_FILE_NAME).display(),
         "migrated legacy orzma config to the new settings location"
     );
 
@@ -100,9 +113,41 @@ pub(super) fn migrate_if_needed(world: &mut World) {
         .add_systems(Startup, save_and_mark_migrated);
 }
 
+/// Marks migration as done with NOTHING to migrate: creates `settings_dir`
+/// if needed and writes an empty `.migrated` marker inside it directly
+/// (no `Startup` system, no save to wait for — there are no groups to
+/// flush). Called from `migrate_if_needed`'s "no legacy config" path so a
+/// legacy config file that appears later cannot be mistaken for "not yet
+/// migrated" and clobber a `settings.toml` the user may have since written
+/// through the new UI. Never fatal: an I/O failure just means migration
+/// retries on the next launch, exactly like the pre-existing no-op-on-error
+/// paths elsewhere in this module.
+fn mark_migrated_without_legacy_config(settings_dir: &Path) {
+    if let Err(source) = std::fs::create_dir_all(settings_dir) {
+        tracing::warn!(
+            path = %settings_dir.display(),
+            %source,
+            "failed to create the settings directory for the migration marker; migration will retry on next launch"
+        );
+        return;
+    }
+    let marker_path = settings_dir.join(MARKER_FILE_NAME);
+    if let Err(source) = std::fs::write(&marker_path, "") {
+        tracing::warn!(
+            path = %marker_path.display(),
+            %source,
+            "failed to write the migration marker; migration will retry on next launch"
+        );
+    }
+}
+
 /// File name of the migration marker, a sibling of `settings.toml` under the
 /// app's `bevy::settings` preferences directory.
 const MARKER_FILE_NAME: &str = ".migrated";
+
+/// File name `bevy::settings` writes the persisted settings under, a sibling
+/// of the migration marker.
+const SETTINGS_FILE_NAME: &str = "settings.toml";
 
 /// Resource carrying the migration marker path, consumed by the one-shot
 /// `Startup` system [`save_and_mark_migrated`] registered from
@@ -126,9 +171,20 @@ fn apply_migrated_groups(world: &mut World, raw: &RawSettings) {
 }
 
 /// One-shot `Startup` system: synchronously flushes the migrated settings
-/// groups to disk, then writes the migration marker.
+/// groups to disk, then writes the migration marker — but ONLY once the
+/// settings file the flush was supposed to produce is actually confirmed
+/// present on disk (see [`migrated_settings_exists`]).
 ///
 /// # Invariants
+///
+/// `bevy::settings`'s save is best-effort: a write failure is logged and
+/// swallowed inside the crate, with no `Result` or error signal reaching
+/// this caller. Without the existence check below, a failed save would
+/// still be followed by an unconditional marker write, so the very next
+/// launch would see `.migrated` present, skip migration entirely, and the
+/// user's legacy config would be gone for good with nothing on disk to
+/// show for it. The existence check makes that failure observable and
+/// keeps migration armed to retry instead.
 ///
 /// The marker is written only after `SaveSettingsSync::Always` has actually
 /// applied (not merely queued) — `world.flush()` drives the queued command
@@ -158,6 +214,14 @@ fn save_and_mark_migrated(world: &mut World) {
     let Some(marker) = world.remove_resource::<MigrationMarker>() else {
         return;
     };
+    if !migrated_settings_exists(&marker.0) {
+        tracing::warn!(
+            path = %marker.0.display(),
+            "the migrated settings file was not found on disk after the save; the save likely \
+             failed; migration will retry on next launch"
+        );
+        return;
+    }
     if let Some(dir) = marker.0.parent()
         && let Err(source) = std::fs::create_dir_all(dir)
     {
@@ -174,5 +238,73 @@ fn save_and_mark_migrated(world: &mut World) {
             %source,
             "failed to write the migration marker; migration will retry on next launch"
         );
+    }
+}
+
+/// True when `<marker_path's parent>/settings.toml` exists on disk — i.e.
+/// the `SaveSettingsSync::Always` write in [`save_and_mark_migrated`]
+/// actually landed. `bevy_settings`'s save is best-effort with no failure
+/// signal back to the caller, so this existence check is the only way to
+/// detect a failed save before committing to the `.migrated` marker.
+fn migrated_settings_exists(marker_path: &Path) -> bool {
+    marker_path
+        .parent()
+        .is_some_and(|dir| dir.join(SETTINGS_FILE_NAME).exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn migrated_settings_exists_true_when_settings_toml_present() {
+        let tempdir = TempDir::new().expect("create tempdir");
+        let settings_dir = tempdir.path().join("orzma");
+        std::fs::create_dir_all(&settings_dir).expect("create settings dir");
+        std::fs::write(settings_dir.join(SETTINGS_FILE_NAME), "").expect("write settings.toml");
+        let marker_path = settings_dir.join(MARKER_FILE_NAME);
+        assert!(migrated_settings_exists(&marker_path));
+    }
+
+    #[test]
+    fn migrated_settings_exists_false_when_settings_toml_missing() {
+        let tempdir = TempDir::new().expect("create tempdir");
+        let settings_dir = tempdir.path().join("orzma");
+        std::fs::create_dir_all(&settings_dir).expect("create settings dir");
+        let marker_path = settings_dir.join(MARKER_FILE_NAME);
+        assert!(
+            !migrated_settings_exists(&marker_path),
+            "a failed save must not be mistaken for success"
+        );
+    }
+
+    #[test]
+    fn migrated_settings_exists_false_when_settings_dir_itself_is_missing() {
+        let tempdir = TempDir::new().expect("create tempdir");
+        let settings_dir = tempdir.path().join("orzma");
+        let marker_path = settings_dir.join(MARKER_FILE_NAME);
+        assert!(!migrated_settings_exists(&marker_path));
+    }
+
+    #[test]
+    fn mark_migrated_without_legacy_config_creates_dir_and_marker() {
+        let tempdir = TempDir::new().expect("create tempdir");
+        let settings_dir = tempdir.path().join("orzma");
+        mark_migrated_without_legacy_config(&settings_dir);
+        assert!(
+            settings_dir.join(MARKER_FILE_NAME).exists(),
+            "the marker must be written even with nothing to migrate, so a legacy config \
+             appearing later cannot clobber settings.toml"
+        );
+    }
+
+    #[test]
+    fn mark_migrated_without_legacy_config_is_idempotent_on_existing_dir() {
+        let tempdir = TempDir::new().expect("create tempdir");
+        let settings_dir = tempdir.path().join("orzma");
+        std::fs::create_dir_all(&settings_dir).expect("pre-create settings dir");
+        mark_migrated_without_legacy_config(&settings_dir);
+        assert!(settings_dir.join(MARKER_FILE_NAME).exists());
     }
 }

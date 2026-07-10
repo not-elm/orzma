@@ -450,46 +450,31 @@ impl From<&RawScrollback> for ScrollbackSettings {
 /// directly by this file's tests.
 pub(crate) fn collect_raw(world: &World) -> RawSettings {
     RawSettings {
-        shortcuts: (&world
-            .get_resource::<ShortcutSettings>()
-            .cloned()
-            .unwrap_or_default())
-            .into(),
-        vi_mode: (&world
-            .get_resource::<ViModeSettings>()
-            .cloned()
-            .unwrap_or_default())
-            .into(),
-        font: (&world
-            .get_resource::<FontSettings>()
-            .cloned()
-            .unwrap_or_default())
-            .into(),
-        mouse: (&world
-            .get_resource::<MouseSettings>()
-            .cloned()
-            .unwrap_or_default())
-            .into(),
-        keyboard: (&world
-            .get_resource::<KeyboardSettings>()
-            .cloned()
-            .unwrap_or_default())
-            .into(),
-        inactive_pane: (&world
-            .get_resource::<InactivePaneSettings>()
-            .cloned()
-            .unwrap_or_default())
-            .into(),
-        orzma: (&world
-            .get_resource::<OrzmaSettings>()
-            .cloned()
-            .unwrap_or_default())
-            .into(),
-        scrollback: (&world
-            .get_resource::<ScrollbackSettings>()
-            .cloned()
-            .unwrap_or_default())
-            .into(),
+        shortcuts: group_raw::<ShortcutSettings, RawShortcuts>(world),
+        vi_mode: group_raw::<ViModeSettings, RawViMode>(world),
+        font: group_raw::<FontSettings, RawFont>(world),
+        mouse: group_raw::<MouseSettings, RawMouse>(world),
+        keyboard: group_raw::<KeyboardSettings, RawKeyboard>(world),
+        inactive_pane: group_raw::<InactivePaneSettings, RawInactivePane>(world),
+        orzma: group_raw::<OrzmaSettings, RawOrzma>(world),
+        scrollback: group_raw::<ScrollbackSettings, RawScrollback>(world),
+    }
+}
+
+/// Reads settings-group `Resource` `G` from `world` (falling back to
+/// `G::default()` when absent) and converts it to its raw counterpart `R`
+/// via `R: From<&G>`. Only borrows `G` — never clones the whole resource —
+/// so the sole clones that happen are the individual fields each `From`
+/// impl actually needs. Shared by every arm of `collect_raw` to avoid
+/// repeating the same `.cloned().unwrap_or_default()` dance eight times.
+fn group_raw<G, R>(world: &World) -> R
+where
+    G: Resource + Default,
+    for<'a> R: From<&'a G>,
+{
+    match world.get_resource::<G>() {
+        Some(g) => R::from(g),
+        None => R::from(&G::default()),
     }
 }
 

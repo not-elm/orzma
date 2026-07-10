@@ -10,24 +10,131 @@ use crate::raw::{
     RawFace, RawFont, RawInactivePane, RawKeyboard, RawMouse, RawOrzma, RawScrollback, RawSettings,
     RawShortcuts, RawViMode,
 };
+use crate::resolve::{Diagnostic, Severity};
+use crate::shortcuts::SHORTCUT_ACTION_KEYS;
 use toml::Value;
 use toml::value::Table;
+
+/// Top-level section names the legacy loader understood. Diffed against the
+/// document's actual top-level keys so a misspelled section (e.g.
+/// `[shortucts]`) warns instead of being silently ignored.
+const TOP_LEVEL_SECTIONS: &[&str] = &[
+    "shortcuts",
+    "vi-mode",
+    "font",
+    "mouse",
+    "keyboard",
+    "inactive_pane",
+    "orzma",
+    "scrollback",
+];
+
+/// `[shortcuts]` keys that are NOT action bindings.
+const SHORTCUTS_SCALAR_KEYS: &[&str] = &["leader", "leader-tap-timeout-ms", "repeat-time-ms"];
+
+/// `[font]` top-level keys.
+const FONT_KEYS: &[&str] = &["size", "normal", "bold", "italic", "bold_italic"];
+
+/// `[font.<face>]` keys.
+const FONT_FACE_KEYS: &[&str] = &["family", "style"];
+
+/// `[mouse]` keys.
+const MOUSE_KEYS: &[&str] = &[
+    "lines_per_notch",
+    "fine_modifier",
+    "fine_lines",
+    "max_protocol_events_per_frame",
+    "cells_per_notch",
+    "axis_lock_ratio",
+    "double_click_timeout_ms",
+    "click_drift_px",
+    "autoscroll_base_period_ms",
+    "autoscroll_min_period_ms",
+    "autoscroll_step_ms",
+    "drag_threshold_px",
+    "divider_grab_tolerance_px",
+];
+
+/// `[keyboard]` keys.
+const KEYBOARD_KEYS: &[&str] = &["option_as_alt"];
+
+/// `[inactive_pane]` keys.
+const INACTIVE_PANE_KEYS: &[&str] = &[
+    "enabled",
+    "dim",
+    "tint_color",
+    "tint",
+    "webview_dim",
+    "webview_desaturate",
+];
+
+/// `[orzma]` keys.
+const ORZMA_KEYS: &[&str] = &["shell"];
+
+/// `[scrollback]` keys.
+const SCROLLBACK_KEYS: &[&str] = &["seed-lines"];
 
 impl RawSettings {
     /// Converts legacy config TOML text into a [`RawSettings`] at the
     /// presence level: a section is parsed field-by-field from a raw
     /// `toml::Table` (not the typed, `deny_unknown_fields` legacy structs),
     /// so unknown or malformed entries within an otherwise-valid document are
-    /// skipped rather than rejecting the whole file.
+    /// skipped rather than rejecting the whole file. Alongside the
+    /// `RawSettings`, returns one `Warn` diagnostic per unrecognized
+    /// top-level section or fixed-schema section key (e.g. a misspelled
+    /// `[shortucts]` section or a `[mouse]` `lines_pernotch` typo) — the old
+    /// `deny_unknown_fields` legacy loader rejected the whole file for a
+    /// single typo like this; this reproduces that same signal as a
+    /// non-fatal warning instead of silently dropping it.
     ///
     /// Returns `Err` only when `text` itself is not valid TOML. Callers MUST
     /// treat an `Err` as "migration skipped, retry later" — never persist
     /// `RawSettings::default()` in its place, since that would silently and
     /// permanently discard the user's real (just currently unparseable)
     /// config.
-    pub fn from_legacy_toml(text: &str) -> Result<RawSettings, toml::de::Error> {
+    pub fn from_legacy_toml(text: &str) -> Result<(RawSettings, Vec<Diagnostic>), toml::de::Error> {
         let table: Table = toml::from_str(text)?;
-        Ok(RawSettings {
+        let mut diags = Vec::new();
+        warn_unknown_top_level_sections(&mut diags, &table);
+        if let Some(t) = section(&table, "shortcuts") {
+            // `[shortcuts]` mixes fixed scalar keys with an open set of
+            // action-name keys (an action typo is separately caught
+            // downstream, in `RawSettings::resolve`'s
+            // `SHORTCUT_ACTION_KEYS.contains` check) — a real action key
+            // like `quit` must not be flagged as unknown here, so the known
+            // set is the union of both.
+            let known: Vec<&str> = SHORTCUTS_SCALAR_KEYS
+                .iter()
+                .chain(SHORTCUT_ACTION_KEYS.iter())
+                .copied()
+                .collect();
+            warn_unknown_section_keys(&mut diags, "shortcuts", t, &known);
+        }
+        if let Some(t) = section(&table, "font") {
+            warn_unknown_section_keys(&mut diags, "font", t, FONT_KEYS);
+            for face_label in ["normal", "bold", "italic", "bold_italic"] {
+                if let Some(face) = t.get(face_label).and_then(Value::as_table) {
+                    let label = format!("font.{face_label}");
+                    warn_unknown_section_keys(&mut diags, &label, face, FONT_FACE_KEYS);
+                }
+            }
+        }
+        if let Some(t) = section(&table, "mouse") {
+            warn_unknown_section_keys(&mut diags, "mouse", t, MOUSE_KEYS);
+        }
+        if let Some(t) = section(&table, "keyboard") {
+            warn_unknown_section_keys(&mut diags, "keyboard", t, KEYBOARD_KEYS);
+        }
+        if let Some(t) = section(&table, "inactive_pane") {
+            warn_unknown_section_keys(&mut diags, "inactive_pane", t, INACTIVE_PANE_KEYS);
+        }
+        if let Some(t) = section(&table, "orzma") {
+            warn_unknown_section_keys(&mut diags, "orzma", t, ORZMA_KEYS);
+        }
+        if let Some(t) = section(&table, "scrollback") {
+            warn_unknown_section_keys(&mut diags, "scrollback", t, SCROLLBACK_KEYS);
+        }
+        let settings = RawSettings {
             shortcuts: RawShortcuts::from_legacy_section(section(&table, "shortcuts")),
             vi_mode: RawViMode::from_legacy_section(section(&table, "vi-mode")),
             font: RawFont::from_legacy_section(section(&table, "font")),
@@ -36,7 +143,41 @@ impl RawSettings {
             inactive_pane: RawInactivePane::from_legacy_section(section(&table, "inactive_pane")),
             orzma: RawOrzma::from_legacy_section(section(&table, "orzma")),
             scrollback: RawScrollback::from_legacy_section(section(&table, "scrollback")),
-        })
+        };
+        Ok((settings, diags))
+    }
+}
+
+/// Pushes one `Warn` diagnostic per key in `table`'s top level that is not a
+/// known section name.
+fn warn_unknown_top_level_sections(diags: &mut Vec<Diagnostic>, table: &Table) {
+    for key in table.keys() {
+        if !TOP_LEVEL_SECTIONS.contains(&key.as_str()) {
+            diags.push(Diagnostic {
+                severity: Severity::Warn,
+                message: format!("unknown top-level section `[{key}]`; ignored"),
+            });
+        }
+    }
+}
+
+/// Pushes one `Warn` diagnostic per key in `table` that is not listed in
+/// `known` — `table` is one section's raw TOML table and `known` is the
+/// fixed set of field names that section's typed `Raw*::from_legacy_section`
+/// actually reads.
+fn warn_unknown_section_keys(
+    diags: &mut Vec<Diagnostic>,
+    section_label: &str,
+    table: &Table,
+    known: &[&str],
+) {
+    for key in table.keys() {
+        if !known.contains(&key.as_str()) {
+            diags.push(Diagnostic {
+                severity: Severity::Warn,
+                message: format!("unknown `[{section_label}]` key `{key}`; ignored"),
+            });
+        }
     }
 }
 
@@ -308,7 +449,7 @@ mod tests {
     #[test]
     fn only_user_set_bindings_migrate() {
         let legacy = "[shortcuts]\nquit = \"Cmd+Shift+Q\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(
             raw.shortcuts.bindings.get("quit").map(String::as_str),
             Some("Cmd+Shift+Q")
@@ -322,14 +463,14 @@ mod tests {
     #[test]
     fn vi_mode_single_string_becomes_array() {
         let legacy = "[vi-mode]\nup = \"k\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.vi_mode.bindings.get("up"), Some(&vec!["k".to_string()]));
     }
 
     #[test]
     fn vi_mode_array_stays_array() {
         let legacy = "[vi-mode]\ndown = [\"j\", \"ArrowDown\"]\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(
             raw.vi_mode.bindings.get("down"),
             Some(&vec!["j".to_string(), "ArrowDown".to_string()])
@@ -339,14 +480,14 @@ mod tests {
     #[test]
     fn vi_mode_unset_actions_are_not_frozen() {
         let legacy = "[vi-mode]\nup = \"k\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert!(!raw.vi_mode.bindings.contains_key("down"));
     }
 
     #[test]
     fn shortcuts_kebab_timeout_keys_map_to_snake_case_fields() {
         let legacy = "[shortcuts]\nleader-tap-timeout-ms = 900\nrepeat-time-ms = 42\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.shortcuts.leader_tap_timeout_ms, 900);
         assert_eq!(raw.shortcuts.repeat_time_ms, 42);
     }
@@ -354,14 +495,14 @@ mod tests {
     #[test]
     fn shortcuts_leader_copies_through_unchanged() {
         let legacy = "[shortcuts]\nleader = \"Ctrl+A\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.shortcuts.leader.as_deref(), Some("Ctrl+A"));
     }
 
     #[test]
     fn shortcuts_empty_string_unbind_is_preserved() {
         let legacy = "[shortcuts]\nquit = \"\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(
             raw.shortcuts.bindings.get("quit").map(String::as_str),
             Some("")
@@ -371,13 +512,13 @@ mod tests {
     #[test]
     fn scrollback_seed_lines_kebab_maps_to_snake_case() {
         let legacy = "[scrollback]\nseed-lines = 5000\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.scrollback.seed_lines, 5000);
     }
 
     #[test]
     fn scrollback_omitted_keeps_default() {
-        let raw = RawSettings::from_legacy_toml("").expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml("").expect("valid legacy toml");
         assert_eq!(
             raw.scrollback.seed_lines,
             RawScrollback::default().seed_lines
@@ -387,7 +528,7 @@ mod tests {
     #[test]
     fn font_section_copies_present_fields_keeps_omitted_defaults() {
         let legacy = "[font]\nsize = 14.0\n[font.normal]\nfamily = \"Iosevka\"\nstyle = \"Bold\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.font.size, 14.0);
         assert_eq!(raw.font.normal.family.as_deref(), Some("Iosevka"));
         assert_eq!(raw.font.normal.style.as_deref(), Some("Bold"));
@@ -398,14 +539,14 @@ mod tests {
     #[test]
     fn font_inline_face_table_is_accepted() {
         let legacy = "[font]\nnormal = { family = \"Iosevka\" }\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.font.normal.family.as_deref(), Some("Iosevka"));
     }
 
     #[test]
     fn mouse_section_copies_present_fields_keeps_omitted_defaults() {
         let legacy = "[mouse]\nlines_per_notch = 5\nfine_modifier = \"ctrl\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.mouse.lines_per_notch, 5);
         assert_eq!(raw.mouse.fine_modifier, "ctrl");
         assert_eq!(raw.mouse.fine_lines, RawMouse::default().fine_lines);
@@ -414,14 +555,14 @@ mod tests {
     #[test]
     fn keyboard_option_as_alt_copied_as_string() {
         let legacy = "[keyboard]\noption_as_alt = \"both\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.keyboard.option_as_alt, "both");
     }
 
     #[test]
     fn inactive_pane_section_copies_present_fields() {
         let legacy = "[inactive_pane]\nenabled = false\ntint = 0.3\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert!(!raw.inactive_pane.enabled);
         assert_eq!(raw.inactive_pane.tint, 0.3);
         assert_eq!(raw.inactive_pane.dim, RawInactivePane::default().dim);
@@ -430,13 +571,14 @@ mod tests {
     #[test]
     fn orzma_shell_copied_when_present() {
         let legacy = "[orzma]\nshell = \"/usr/bin/fish\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.orzma.shell.as_deref(), Some("/usr/bin/fish"));
     }
 
     #[test]
     fn empty_legacy_config_yields_full_defaults() {
-        let raw = RawSettings::from_legacy_toml("").expect("empty text is valid (empty) toml");
+        let (raw, _diags) =
+            RawSettings::from_legacy_toml("").expect("empty text is valid (empty) toml");
         assert_eq!(raw, RawSettings::default());
     }
 
@@ -449,7 +591,7 @@ mod tests {
 
     #[test]
     fn valid_minimal_toml_is_ok() {
-        let raw = RawSettings::from_legacy_toml("[shortcuts]\n")
+        let (raw, _diags) = RawSettings::from_legacy_toml("[shortcuts]\n")
             .expect("a valid-but-minimal document must parse, even though it sets nothing");
         assert_eq!(raw, RawSettings::default());
     }
@@ -457,21 +599,66 @@ mod tests {
     #[test]
     fn unknown_top_level_section_does_not_panic_or_fail() {
         let legacy = "[not-a-real-section]\nfoo = \"bar\"\n[shortcuts]\nquit = \"Cmd+Q\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(
             raw.shortcuts.bindings.get("quit").map(String::as_str),
             Some("Cmd+Q")
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("not-a-real-section")),
+            "an unknown top-level section must warn, not silently vanish: {diags:?}"
         );
     }
 
     #[test]
     fn wrong_typed_binding_value_is_skipped_not_fatal() {
         let legacy = "[shortcuts]\nquit = 5\npaste = \"Cmd+Shift+V\"\n";
-        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        let (raw, _diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert!(!raw.shortcuts.bindings.contains_key("quit"));
         assert_eq!(
             raw.shortcuts.bindings.get("paste").map(String::as_str),
             Some("Cmd+Shift+V")
         );
+    }
+
+    #[test]
+    fn unknown_mouse_key_and_misspelled_section_both_warn() {
+        let legacy = "[mouse]\nlines_pernotch = 10\n[shortucts]\nquit = \"Cmd+Q\"\n";
+        let (raw, diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        assert!(
+            diags.iter().any(|d| d.message.contains("lines_pernotch")),
+            "a misspelled [mouse] key must warn: {diags:?}"
+        );
+        assert!(
+            diags.iter().any(|d| d.message.contains("shortucts")),
+            "a misspelled top-level section must warn: {diags:?}"
+        );
+        assert_eq!(
+            raw.mouse.lines_per_notch,
+            RawMouse::default().lines_per_notch,
+            "the typo'd key must be ignored, not crash or corrupt the rest of [mouse]"
+        );
+    }
+
+    #[test]
+    fn unknown_font_face_key_warns() {
+        let legacy = "[font.normal]\nfamilly = \"Iosevka\"\n";
+        let (_raw, diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("familly") && d.message.contains("font.normal")),
+            "a misspelled [font.normal] key must warn: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn known_keys_do_not_warn() {
+        let legacy = "[shortcuts]\nleader = \"Ctrl+A\"\nquit = \"Cmd+Q\"\n[font]\nsize = 14.0\n\
+             [font.normal]\nfamily = \"Iosevka\"\n[mouse]\nlines_per_notch = 5\n";
+        let (_raw, diags) = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
+        assert!(diags.is_empty(), "no known key should ever warn: {diags:?}");
     }
 }

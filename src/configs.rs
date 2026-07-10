@@ -2,10 +2,10 @@
 //! (`configs::groups`) into `OrzmaConfigs` at `Plugin::build` and exposes
 //! the result as a Bevy Resource. Resolution diagnostics (duplicate direct
 //! or prefix chords, duplicate `[vi-mode]` keys, a leader that shadows a
-//! direct binding, prefix bindings with no leader, an unmappable leader
-//! key, an out-of-range font size, an unparseable `[font]` face `style`)
-//! are logged via `tracing::warn!` and the offending entries fall back to
-//! defaults — nothing here is fatal, so the GUI always starts.
+//! direct binding, an unmappable leader key, an out-of-range font size, an
+//! unparseable `[font]` face `style`) are logged via `tracing::warn!` and
+//! the offending entries fall back to defaults — nothing here is fatal, so
+//! the GUI always starts.
 
 use bevy::prelude::*;
 use bevy::settings::SettingsPlugin;
@@ -55,10 +55,12 @@ pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
     ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner())
 }
 
-/// Reads the settings groups (or `$ORZMA_CONFIG`, Task 8), resolves them,
-/// logs diagnostics, and inserts [`OrzmaConfigsResource`]. Extracted from
-/// `build` so tests can exercise it without adding `SettingsPlugin` (which
-/// reads the real OS prefs dir).
+/// Reads the settings groups, resolves them, logs diagnostics, and inserts
+/// [`OrzmaConfigsResource`]. Extracted from `build` so tests can exercise
+/// it without adding `SettingsPlugin` (which reads the real OS prefs dir).
+/// `$ORZMA_CONFIG` plays no part here — it is honored only by the one-time
+/// legacy-config migration (`src/configs/migrate.rs`), which runs earlier
+/// in `Plugin::build`.
 fn resolve_and_insert(world: &mut World) {
     let raw = groups::collect_raw(world);
     let (cfg, diags) = raw.resolve();
@@ -71,8 +73,7 @@ fn resolve_and_insert(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::ffi::OsStr;
-    use std::ffi::OsString;
+    use crate::test_support::EnvVarGuard;
     use tempfile::TempDir;
 
     #[test]
@@ -86,52 +87,6 @@ mod tests {
             .get_resource::<OrzmaConfigsResource>()
             .expect("resource inserted");
         assert_eq!(res.0, OrzmaConfigs::default());
-    }
-
-    /// RAII guard for a process-environment variable. `EnvVarGuard::set` /
-    /// `::unset` snapshot the prior value and restore it (or remove the var,
-    /// if it was previously unset) on drop, even on panic. Duplicated from
-    /// `src/font.rs`'s test-only `EnvVarGuard` rather than shared: that one
-    /// is private to `font.rs`'s own test module.
-    ///
-    /// The caller MUST hold [`env_guard`] for the full lifetime of every
-    /// `EnvVarGuard` to keep env mutations serialized across tests.
-    struct EnvVarGuard {
-        key: &'static str,
-        prior: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
-            let prior = std::env::var_os(key);
-            // SAFETY: caller holds env_guard() for the duration of this guard.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key, prior }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let prior = std::env::var_os(key);
-            // SAFETY: caller holds env_guard() for the duration of this guard.
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, prior }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            // SAFETY: caller still holds env_guard() (LIFO drop order keeps
-            // this ahead of the MutexGuard's own drop within each test scope).
-            unsafe {
-                match self.prior.take() {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
     }
 
     /// Retained regression test for the riskiest mechanism in the

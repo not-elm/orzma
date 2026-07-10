@@ -74,8 +74,17 @@ impl RawSettings {
         let shortcuts = self.build_shortcuts(diags, &table);
         let user_set: BTreeSet<&str> = self.shortcuts.bindings.keys().map(String::as_str).collect();
 
-        let losers = Self::conflicting_shortcut_actions(diags, &shortcuts, &user_set);
+        // NOTE: `revert_leader` must be decided BEFORE the leader-shadow
+        // check runs: when the leader chord itself is about to revert to
+        // the built-in default, it never reaches the resolved `Shortcuts`,
+        // so there is no shadow left to repair — computing the shadow
+        // victim anyway would force-unbind an action that was never
+        // actually unreachable.
         let revert_leader = Self::leader_needs_revert(diags, &shortcuts);
+        let mut losers = Self::conflicting_shortcut_actions(diags, &shortcuts, &user_set);
+        if !revert_leader {
+            losers.extend(Self::leader_shadow_victims(diags, &shortcuts));
+        }
         if losers.is_empty() && !revert_leader {
             return shortcuts;
         }
@@ -159,14 +168,23 @@ impl RawSettings {
     /// Re-emits `self.vi_mode.bindings` as a `toml::Table` and feeds it
     /// through the `ViModeConfig` deserializer, mirroring
     /// `collect_shortcut_bindings` / `build_shortcuts`: each action's key
-    /// array is pre-validated as a whole (mirrors `resolve_shortcuts`'s
-    /// per-entry granularity — one action is one entry), so a bad key in one
-    /// action's array skips only that action, not the whole `[vi-mode]`
-    /// table. Any key collision the merged result exposes is then repaired
-    /// by dropping the key from every losing action but the winner: the
-    /// first user-set action (its key present in `self.vi_mode.bindings`)
-    /// sharing the key, or — when the whole group is built-in defaults —
-    /// the first action in fixed `VI_MODE_ACTION_KEYS` order (see
+    /// array is pre-validated key-by-key (mirrors `collect_shortcut_bindings`'s
+    /// per-entry granularity), so a bad key skips only itself — the
+    /// surviving valid keys of that action are still inserted, instead of
+    /// discarding the whole action back to its built-in default. Duplicate
+    /// keys WITHIN one action's own array are also deduped here (warn, keep
+    /// the first occurrence) — a `["k", "k"]` array must not read as a
+    /// cross-action collision below (both entries "belong" to the same
+    /// winner, so `dupe.actions.iter().filter(|&a| a != winner)` would find
+    /// nothing to remove and silently keep the redundant key). If every key
+    /// in an action turns out bad, the action is inserted as an empty array
+    /// (the user's binding is honored as an explicit unbind), never
+    /// silently reverted to the built-in default. Any key collision ACROSS
+    /// actions that the merged result still exposes is then repaired by
+    /// dropping the key from every losing action but the winner: the first
+    /// user-set action (its key present in `self.vi_mode.bindings`) sharing
+    /// the key, or — when the whole group is built-in defaults — the first
+    /// action in fixed `VI_MODE_ACTION_KEYS` order (see
     /// `first_user_set_or_first`).
     fn resolve_vi_mode(&self, diags: &mut Vec<Diagnostic>) -> ViModeConfig {
         let mut table = Table::new();
@@ -178,19 +196,28 @@ impl RawSettings {
                 });
                 continue;
             }
-            match keys
-                .iter()
-                .find_map(|k| parse_vi_mode_key(k).err().map(|e| (k, e)))
-            {
-                Some((bad_key, e)) => diags.push(Diagnostic {
-                    severity: Severity::Warn,
-                    message: format!("vi-mode `{action}` key `{bad_key}`: {e}; action skipped"),
-                }),
-                None => {
-                    let values = keys.iter().cloned().map(Value::String).collect();
-                    table.insert(action.clone(), Value::Array(values));
+            let mut seen: Vec<ViModeKey> = Vec::new();
+            let mut valid_keys: Vec<String> = Vec::new();
+            for k in keys {
+                match parse_vi_mode_key(k) {
+                    Ok(parsed) if seen.contains(&parsed) => diags.push(Diagnostic {
+                        severity: Severity::Warn,
+                        message: format!(
+                            "vi-mode `{action}` lists key `{k}` more than once; keeping one"
+                        ),
+                    }),
+                    Ok(parsed) => {
+                        seen.push(parsed);
+                        valid_keys.push(k.clone());
+                    }
+                    Err(e) => diags.push(Diagnostic {
+                        severity: Severity::Warn,
+                        message: format!("vi-mode `{action}` key `{k}`: {e}; skipped"),
+                    }),
                 }
             }
+            let values = valid_keys.into_iter().map(Value::String).collect();
+            table.insert(action.clone(), Value::Array(values));
         }
         let vi_mode: ViModeConfig = match Value::Table(table.clone()).try_into() {
             Ok(v) => v,
@@ -252,7 +279,11 @@ impl RawSettings {
     /// Copies `self.font` into a `FontConfig`: `size` is clamped to
     /// `(0, 200]` (warning on out-of-range), and each face's `style` is
     /// sanitized to `None` with a warning when it fails to parse — a bad
-    /// style must not reach a downstream `src/font` `.expect()`.
+    /// style must not reach a downstream `src/font` `.expect()`. Finally,
+    /// [`FontConfig::faces_with_ignored_style`] flags any face whose
+    /// (valid) `style` has no effective family (own or inherited from
+    /// `normal`) — the bundled font is used there and `style` is silently
+    /// ignored, so a `Warn` diagnostic is pushed per flagged face.
     fn resolve_font(&self, diags: &mut Vec<Diagnostic>) -> FontConfig {
         let default_size = FontConfig::default().size;
         let size = if self.font.size > 0.0 && self.font.size <= 200.0 {
@@ -267,7 +298,7 @@ impl RawSettings {
             });
             default_size
         };
-        FontConfig {
+        let font = FontConfig {
             size,
             normal: Self::resolve_font_face(
                 diags,
@@ -293,7 +324,16 @@ impl RawSettings {
                 &self.font.bold_italic.family,
                 &self.font.bold_italic.style,
             ),
+        };
+        for face in font.faces_with_ignored_style() {
+            diags.push(Diagnostic {
+                severity: Severity::Warn,
+                message: format!(
+                    "[font].{face}.style is set but no family is configured for it; using the bundled font and ignoring style"
+                ),
+            });
         }
+        font
     }
 
     /// Field-by-field copy of `self.mouse` into a `MouseConfig`, parsing
@@ -387,29 +427,13 @@ impl RawSettings {
     }
 
     /// Detects chord collisions among the merged `shortcuts`' direct and
-    /// leader-scoped bindings, plus a leader chord that shadows a direct
-    /// binding, pushing a `Warn` diagnostic for each and returning the
-    /// losing action labels to unbind. Within each conflict group, the
-    /// winner is picked by `first_user_set_or_first`: a user-set action
-    /// (present in `user_set`) always beats a colliding built-in default;
-    /// among several user-set actions (or a group that is entirely
-    /// built-in defaults), the first action in fixed (`bindings_iter`)
-    /// order wins.
-    ///
-    /// The leader-shadow check below is NOT re-derived from `user_set`: a
-    /// `Leader::Chord` only ever exists because the user explicitly set
-    /// `leader` to a chord (the built-in default leader is a bare
-    /// `ModifierTap`, never a `Chord`), so the leader is already the
-    /// user-set party whenever this check fires and today's "leader wins,
-    /// the shadowed direct binding is unbound" behavior already matches
-    /// the new rule for the common case (a built-in-default direct
-    /// binding loses to a user-set leader). The one case this does not
-    /// cover — a user ALSO explicitly binding that same direct action to
-    /// the leader's chord — is left as "leader wins" on purpose: unlike a
-    /// plain action-vs-action collision, making the direct binding win
-    /// would mean reverting the leader itself, which cascades to every
-    /// other `<Leader>`-scoped binding instead of unbinding one action, so
-    /// it is not a clear analog of the rest of this rule.
+    /// leader-scoped bindings, pushing a `Warn` diagnostic for each and
+    /// returning the losing action labels to unbind. Within each conflict
+    /// group, the winner is picked by `first_user_set_or_first`: a
+    /// user-set action (present in `user_set`) always beats a colliding
+    /// built-in default; among several user-set actions (or a group that
+    /// is entirely built-in defaults), the first action in fixed
+    /// (`bindings_iter`) order wins.
     fn conflicting_shortcut_actions(
         diags: &mut Vec<Diagnostic>,
         shortcuts: &Shortcuts,
@@ -435,20 +459,47 @@ impl RawSettings {
                 }
             }
         }
-        if let Some(Leader::Chord(leader_chord)) = shortcuts.leader.as_ref()
-            && let Some((action, _, _)) = shortcuts
-                .direct_chords()
-                .find(|(_, chord, _)| *chord == leader_chord)
-        {
-            diags.push(Diagnostic {
-                severity: Severity::Warn,
-                message: format!(
-                    "leader chord {leader_chord} shadows the direct binding for `{action}`; unbinding `{action}`"
-                ),
-            });
-            losers.push(action);
-        }
         losers
+    }
+
+    /// Action labels whose direct binding chord equals a `Leader::Chord`
+    /// leader's own chord — the leader intercepts that chord before any of
+    /// their direct bindings could ever fire. ALL such direct bindings are
+    /// returned, not just the first: with `leader = "Cmd+V"` and a user
+    /// binding `copy = "Cmd+V"` colliding with the default `paste =
+    /// "Cmd+V"`, `conflicting_shortcut_actions` above already resolves
+    /// `copy` as the winner over `paste` — but `copy` itself is ALSO
+    /// shadowed by the leader chord, and stopping at the first match would
+    /// leave it bound yet unreachable behind the leader. Pushes one `Warn`
+    /// diagnostic per victim.
+    ///
+    /// Not called when the leader itself is about to revert to the
+    /// built-in default (see `resolve_shortcuts`): a `Leader::Chord` only
+    /// ever exists because the user explicitly set `leader` to a chord
+    /// (the built-in default leader is a bare `ModifierTap`, never a
+    /// `Chord`), so the leader is already the user-set party whenever this
+    /// check fires — but a leader chord that reverts never reaches the
+    /// resolved `Shortcuts`, so there is nothing left to shadow.
+    fn leader_shadow_victims(
+        diags: &mut Vec<Diagnostic>,
+        shortcuts: &Shortcuts,
+    ) -> Vec<&'static str> {
+        let Some(Leader::Chord(leader_chord)) = shortcuts.leader.as_ref() else {
+            return Vec::new();
+        };
+        shortcuts
+            .direct_chords()
+            .filter(|(_, chord, _)| *chord == leader_chord)
+            .map(|(action, _, _)| {
+                diags.push(Diagnostic {
+                    severity: Severity::Warn,
+                    message: format!(
+                        "leader chord {leader_chord} shadows the direct binding for `{action}`; unbinding `{action}`"
+                    ),
+                });
+                action
+            })
+            .collect()
     }
 
     /// True when the merged `shortcuts`' leader is a chord whose key has no
@@ -807,5 +858,120 @@ mod tests {
         let (cfg, diags) = RawSettings::default().resolve();
         assert!(diags.is_empty(), "{diags:?}");
         assert_eq!(cfg, OrzmaConfigs::default());
+    }
+
+    // NOTE: the brief's draft for this test asserted `quit` resolves to its
+    // built-in default (Cmd+Q). That does not match the actual semantics:
+    // `quit` is only a "leader-shadow victim" here because it was
+    // explicitly rebound to `Cmd+.` (nothing anywhere in the pipeline
+    // reverts a chord collision with `Cmd+.` back to `Cmd+Q`) — once the
+    // leader itself reverts (unmappable `.` key) and the fix skips
+    // force-unbinding the now-inapplicable shadow victim, `quit` simply
+    // keeps its user-set chord `Cmd+.`. Asserting `Cmd+.` here (not
+    // `Cmd+Q`) reflects the actual fixed behavior described by F3: "do NOT
+    // unbind the leader-shadow victim when the leader reverts".
+    #[test]
+    fn leader_revert_does_not_unbind_shadow_victim() {
+        let mut raw = RawSettings::default();
+        raw.shortcuts.leader = Some("Cmd+.".into());
+        raw.shortcuts.bindings = BTreeMap::from([("quit".into(), "Cmd+.".into())]);
+        let (cfg, diags) = raw.resolve();
+        assert!(
+            diags.iter().any(|d| d.message.contains("physical")),
+            "the leader revert must still warn: {diags:?}"
+        );
+        assert_eq!(
+            cfg.shortcuts.leader,
+            Shortcuts::default().leader,
+            "the leader must revert to the built-in default"
+        );
+        let quit = cfg
+            .shortcuts
+            .quit
+            .as_ref()
+            .expect("quit must not be force-unbound once the leader itself reverted");
+        assert_eq!(quit.chord().to_string(), "Cmd+.");
+    }
+
+    #[test]
+    fn leader_shadow_unbinds_all_direct_bindings_on_leader_chord() {
+        let mut raw = RawSettings::default();
+        raw.shortcuts.leader = Some("Cmd+V".into());
+        raw.shortcuts.bindings = BTreeMap::from([("copy".into(), "Cmd+V".into())]);
+        let (cfg, diags) = raw.resolve();
+        assert!(
+            cfg.shortcuts.copy.is_none(),
+            "copy must not be left silently bound-but-dead behind the leader chord"
+        );
+        assert!(
+            cfg.shortcuts.paste.is_none(),
+            "the default paste binding is also shadowed by the same leader chord"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.message.contains("copy") && d.message.contains("shadow")),
+            "a warning must name copy as unbound by the leader shadow: {diags:?}"
+        );
+        assert_eq!(
+            cfg.shortcuts.leader,
+            Some(Leader::Chord(parse_key_chord("Cmd+V").unwrap()))
+        );
+    }
+
+    #[test]
+    fn vi_mode_bad_key_in_array_keeps_valid_subset() {
+        let mut raw = RawSettings::default();
+        raw.vi_mode.bindings =
+            BTreeMap::from([("cursor-up".into(), vec!["k".into(), "bad-typo".into()])]);
+        let (cfg, diags) = raw.resolve();
+        assert_eq!(cfg.vi_mode.cursor_up, vec![parse_vi_mode_key("k").unwrap()]);
+        assert!(
+            diags.iter().any(|d| d.message.contains("bad-typo")),
+            "a warning must name the bad key: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn vi_mode_all_bad_keys_unbinds_action_instead_of_reverting_to_default() {
+        let mut raw = RawSettings::default();
+        raw.vi_mode.bindings = BTreeMap::from([("cursor-up".into(), vec!["bad-typo".into()])]);
+        let (cfg, diags) = raw.resolve();
+        assert!(
+            cfg.vi_mode.cursor_up.is_empty(),
+            "an action whose only key(s) are bad must resolve as unbound, not reverted to the \
+             built-in default"
+        );
+        assert!(diags.iter().any(|d| d.message.contains("bad-typo")));
+    }
+
+    #[test]
+    fn vi_mode_duplicate_key_within_one_action_is_deduped() {
+        let mut raw = RawSettings::default();
+        raw.vi_mode.bindings = BTreeMap::from([("cursor-up".into(), vec!["k".into(), "k".into()])]);
+        let (cfg, diags) = raw.resolve();
+        assert_eq!(cfg.vi_mode.cursor_up, vec![parse_vi_mode_key("k").unwrap()]);
+        assert!(
+            diags.iter().any(|d| d.message.contains("more than once")),
+            "a warning must flag the repeated key: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn font_style_without_family_warns() {
+        let mut raw = RawSettings::default();
+        raw.font.bold.style = Some("Bold".into());
+        let (cfg, diags) = raw.resolve();
+        assert_eq!(
+            cfg.font.bold.style.as_deref(),
+            Some("Bold"),
+            "a valid style is still applied even though it will be ignored downstream"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == Severity::Warn && d.message.contains("bold")),
+            "a warning must name the face whose style is set without a family: {diags:?}"
+        );
     }
 }

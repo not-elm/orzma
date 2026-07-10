@@ -174,8 +174,11 @@ repeat_time_ms = 500
 # ("<Leader:r>s" = same, but re-fires within repeat_time_ms), or "" to unbind.
 # An unknown action name here warns and is skipped; every other binding still
 # loads. Rebinding to a chord already used by another action no longer fails
-# startup — it warns, and whichever action is listed FIRST in the "Shortcut
-# actions" table below keeps the chord; the other is unbound.
+# startup — it warns instead. A binding you set here always wins over a
+# colliding built-in default (the default yields automatically); when two of
+# YOUR OWN bindings collide with each other instead, whichever is listed
+# FIRST in the "Shortcut actions" table below keeps the chord and the other
+# is unbound.
 
 # --- existing actions ---
 paste                 = "Cmd+V"        # Standard terminal paste; set paste = "<Leader>p" for the tmux-style leader binding.
