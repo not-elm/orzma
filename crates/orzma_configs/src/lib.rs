@@ -62,11 +62,16 @@ impl OrzmaConfigs {
     ///
     /// Returns `Default::default()` when the resolved path does not exist.
     /// Any other I/O failure, TOML parse error, or validation failure is
-    /// surfaced as `OrzmaConfigsError`.
-    pub fn load() -> OrzmaConfigsResult<Self> {
-        Self::load_with_env(&path::SystemEnv)
-    }
-
+    /// surfaced as `OrzmaConfigsError`. This is the legacy typed reader: the
+    /// live app resolves config from `bevy::settings` groups instead, and
+    /// this is now only reachable through the `test_support` feature's
+    /// `load_with_overrides`.
+    // NOTE: with the `test_support` feature off (the default build), this
+    // has no caller, so `dead_code` fires; `#[expect]` would then fail to
+    // compile WITH the feature on, since the lint stops firing once
+    // `test_support::load_with_overrides` calls this. `allow` is the
+    // documented escape hatch for a lint that only fires conditionally.
+    #[cfg_attr(not(feature = "test_support"), allow(dead_code))]
     fn load_with_env(env: &dyn path::Env) -> OrzmaConfigsResult<Self> {
         let configured_path = path::resolve_config_path(env)?;
         tracing::info!(path = %configured_path.display(), "resolving orzma config path");

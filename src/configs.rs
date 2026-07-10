@@ -45,9 +45,9 @@ impl Plugin for OrzmaConfigsPlugin {
 
 /// Crate-internal mutex guarding `ORZMA_CONFIG` env-var mutations across
 /// tests. Any test (in any module) that mutates the process env BEFORE
-/// constructing `OrzmaConfigsPlugin` (or anything else that calls
-/// `OrzmaConfigs::load`) MUST acquire this guard for the duration
-/// of the construction.
+/// constructing `OrzmaConfigsPlugin` (or anything else that resolves the
+/// legacy config path, e.g. `orzma_configs::path::resolve_config_path`)
+/// MUST acquire this guard for the duration of the construction.
 #[cfg(test)]
 pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
     use std::sync::Mutex;

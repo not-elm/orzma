@@ -23,8 +23,8 @@ use std::path::PathBuf;
 /// If a `<prefs>/orzma/.migrated` marker is already present, this is a no-op
 /// (already migrated). Otherwise, if a legacy `~/.config/orzma/config.toml`
 /// (or `$ORZMA_CONFIG` / `$XDG_CONFIG_HOME` override, via the same
-/// precedence `OrzmaConfigs::load` used) exists and is readable, its
-/// contents are converted at the presence level via
+/// precedence `orzma_configs::path::resolve_config_path` applies) exists and
+/// is readable, its contents are converted at the presence level via
 /// [`RawSettings::from_legacy_toml`] and written into the `bevy::settings`
 /// group `Resource`s in `world` — so the very next `resolve_and_insert`
 /// call reflects the migrated values. A one-shot `Startup` system is then

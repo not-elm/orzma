@@ -1,6 +1,6 @@
-//! Resolves which file `OrzmaConfigs::load` should read. Wraps env access
-//! behind a trait so tests can substitute a deterministic implementation
-//! without mutating process-wide environment variables.
+//! Resolves which file the legacy typed config reader should read. Wraps env
+//! access behind a trait so tests can substitute a deterministic
+//! implementation without mutating process-wide environment variables.
 
 use crate::OrzmaConfigsError;
 use crate::OrzmaConfigsResult;
@@ -19,8 +19,8 @@ const HOME_CONFIG_DIR: &str = ".config";
 /// use; the trait's `var` / `home_dir` surface is intentionally narrow
 /// so test implementations stay simple. `resolve_config_path` is the
 /// other consumer; it is `pub` so the root crate's one-time legacy
-/// migration (`src/configs/migrate.rs`) can resolve the same legacy path
-/// `OrzmaConfigs::load` would have used.
+/// migration (`src/configs/migrate.rs`) can resolve the legacy config
+/// path directly.
 pub trait Env {
     /// Returns the value of `key`, treating an empty string as unset.
     fn var(&self, key: &str) -> Option<String>;
@@ -40,7 +40,9 @@ impl Env for SystemEnv {
     }
 }
 
-/// Returns the path that `OrzmaConfigs::load` should read.
+/// Returns the path that the legacy config reader should read: the
+/// one-time migration in the root crate's `src/configs/migrate.rs`, and
+/// `test_support`'s legacy typed reader.
 ///
 /// Precedence: `$ORZMA_CONFIG` → `$XDG_CONFIG_HOME/orzma/config.toml` →
 /// `<home_dir>/.config/orzma/config.toml`. Returns `HomeDirNotFound` only
