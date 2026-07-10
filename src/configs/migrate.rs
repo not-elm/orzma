@@ -18,16 +18,6 @@ use orzma_configs::RawSettings;
 use orzma_configs::path::{SystemEnv, resolve_config_path};
 use std::path::PathBuf;
 
-/// File name of the migration marker, a sibling of `settings.toml` under the
-/// app's `bevy::settings` preferences directory.
-const MARKER_FILE_NAME: &str = ".migrated";
-
-/// Resource carrying the migration marker path, consumed by the one-shot
-/// `Startup` system [`save_and_mark_migrated`] registered from
-/// [`migrate_if_needed`].
-#[derive(Resource)]
-struct MigrationMarker(PathBuf);
-
 /// Runs the legacy-config migration once, if needed.
 ///
 /// If a `<prefs>/orzma/.migrated` marker is already present, this is a no-op
@@ -44,7 +34,13 @@ struct MigrationMarker(PathBuf);
 /// file (other than simply not existing), or an unwritable marker are all
 /// logged via `tracing::warn!` and otherwise ignored — the app always
 /// starts, falling back to defaults for whatever could not be migrated.
-pub(crate) fn migrate_if_needed(world: &mut World) {
+///
+/// A legacy file that exists but is not valid TOML is also skipped — NOT
+/// treated as "no legacy config": neither the groups nor the marker are
+/// written, so the user's real (currently unparseable) config is left
+/// untouched on disk and migration retries on the next launch once they fix
+/// it, instead of being silently and permanently replaced with defaults.
+pub(super) fn migrate_if_needed(world: &mut World) {
     let Some(prefs_dir) = bevy_platform::dirs::preferences_dir() else {
         tracing::warn!(
             "could not resolve the platform preferences directory; skipping legacy config migration"
@@ -80,10 +76,17 @@ pub(crate) fn migrate_if_needed(world: &mut World) {
         }
     };
 
-    let (raw, diags) = RawSettings::from_legacy_toml(&text);
-    for diag in &diags {
-        tracing::warn!(target: "orzma::config::migrate", "{}", diag.message);
-    }
+    let raw = match RawSettings::from_legacy_toml(&text) {
+        Ok(raw) => raw,
+        Err(source) => {
+            tracing::warn!(
+                path = %legacy_path.display(),
+                %source,
+                "legacy orzma config is not valid TOML; skipping migration until it is fixed and orzma is relaunched"
+            );
+            return;
+        }
+    };
     apply_migrated_groups(world, &raw);
     tracing::info!(
         from = %legacy_path.display(),
@@ -96,6 +99,16 @@ pub(crate) fn migrate_if_needed(world: &mut World) {
         .resource_mut::<Schedules>()
         .add_systems(Startup, save_and_mark_migrated);
 }
+
+/// File name of the migration marker, a sibling of `settings.toml` under the
+/// app's `bevy::settings` preferences directory.
+const MARKER_FILE_NAME: &str = ".migrated";
+
+/// Resource carrying the migration marker path, consumed by the one-shot
+/// `Startup` system [`save_and_mark_migrated`] registered from
+/// [`migrate_if_needed`].
+#[derive(Resource)]
+struct MigrationMarker(PathBuf);
 
 /// Writes each migrated `Raw*` section into its corresponding
 /// `bevy::settings` group `Resource`, overwriting whatever default

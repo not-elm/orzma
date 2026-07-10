@@ -10,7 +10,6 @@ use crate::raw::{
     RawFace, RawFont, RawInactivePane, RawKeyboard, RawMouse, RawOrzma, RawScrollback, RawSettings,
     RawShortcuts, RawViMode,
 };
-use crate::{Diagnostic, Severity};
 use toml::Value;
 use toml::value::Table;
 
@@ -18,23 +17,17 @@ impl RawSettings {
     /// Converts legacy config TOML text into a [`RawSettings`] at the
     /// presence level: a section is parsed field-by-field from a raw
     /// `toml::Table` (not the typed, `deny_unknown_fields` legacy structs),
-    /// so unknown or malformed entries are skipped rather than rejecting the
-    /// whole file. Unparseable TOML never panics — it yields
-    /// `RawSettings::default()` plus one [`Severity::Warn`] diagnostic.
-    pub fn from_legacy_toml(text: &str) -> (RawSettings, Vec<Diagnostic>) {
-        let table: Table = match toml::from_str(text) {
-            Ok(t) => t,
-            Err(source) => {
-                let diag = Diagnostic {
-                    severity: Severity::Warn,
-                    message: format!(
-                        "legacy orzma config is not valid TOML: {source}; using defaults"
-                    ),
-                };
-                return (RawSettings::default(), vec![diag]);
-            }
-        };
-        let raw = RawSettings {
+    /// so unknown or malformed entries within an otherwise-valid document are
+    /// skipped rather than rejecting the whole file.
+    ///
+    /// Returns `Err` only when `text` itself is not valid TOML. Callers MUST
+    /// treat an `Err` as "migration skipped, retry later" — never persist
+    /// `RawSettings::default()` in its place, since that would silently and
+    /// permanently discard the user's real (just currently unparseable)
+    /// config.
+    pub fn from_legacy_toml(text: &str) -> Result<RawSettings, toml::de::Error> {
+        let table: Table = toml::from_str(text)?;
+        Ok(RawSettings {
             shortcuts: RawShortcuts::from_legacy_section(section(&table, "shortcuts")),
             vi_mode: RawViMode::from_legacy_section(section(&table, "vi-mode")),
             font: RawFont::from_legacy_section(section(&table, "font")),
@@ -43,8 +36,7 @@ impl RawSettings {
             inactive_pane: RawInactivePane::from_legacy_section(section(&table, "inactive_pane")),
             orzma: RawOrzma::from_legacy_section(section(&table, "orzma")),
             scrollback: RawScrollback::from_legacy_section(section(&table, "scrollback")),
-        };
-        (raw, Vec::new())
+        })
     }
 }
 
@@ -316,7 +308,7 @@ mod tests {
     #[test]
     fn only_user_set_bindings_migrate() {
         let legacy = "[shortcuts]\nquit = \"Cmd+Shift+Q\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(
             raw.shortcuts.bindings.get("quit").map(String::as_str),
             Some("Cmd+Shift+Q")
@@ -330,14 +322,14 @@ mod tests {
     #[test]
     fn vi_mode_single_string_becomes_array() {
         let legacy = "[vi-mode]\nup = \"k\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.vi_mode.bindings.get("up"), Some(&vec!["k".to_string()]));
     }
 
     #[test]
     fn vi_mode_array_stays_array() {
         let legacy = "[vi-mode]\ndown = [\"j\", \"ArrowDown\"]\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(
             raw.vi_mode.bindings.get("down"),
             Some(&vec!["j".to_string(), "ArrowDown".to_string()])
@@ -347,14 +339,14 @@ mod tests {
     #[test]
     fn vi_mode_unset_actions_are_not_frozen() {
         let legacy = "[vi-mode]\nup = \"k\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert!(!raw.vi_mode.bindings.contains_key("down"));
     }
 
     #[test]
     fn shortcuts_kebab_timeout_keys_map_to_snake_case_fields() {
         let legacy = "[shortcuts]\nleader-tap-timeout-ms = 900\nrepeat-time-ms = 42\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.shortcuts.leader_tap_timeout_ms, 900);
         assert_eq!(raw.shortcuts.repeat_time_ms, 42);
     }
@@ -362,14 +354,14 @@ mod tests {
     #[test]
     fn shortcuts_leader_copies_through_unchanged() {
         let legacy = "[shortcuts]\nleader = \"Ctrl+A\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.shortcuts.leader.as_deref(), Some("Ctrl+A"));
     }
 
     #[test]
     fn shortcuts_empty_string_unbind_is_preserved() {
         let legacy = "[shortcuts]\nquit = \"\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(
             raw.shortcuts.bindings.get("quit").map(String::as_str),
             Some("")
@@ -379,13 +371,13 @@ mod tests {
     #[test]
     fn scrollback_seed_lines_kebab_maps_to_snake_case() {
         let legacy = "[scrollback]\nseed-lines = 5000\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.scrollback.seed_lines, 5000);
     }
 
     #[test]
     fn scrollback_omitted_keeps_default() {
-        let (raw, _) = RawSettings::from_legacy_toml("");
+        let raw = RawSettings::from_legacy_toml("").expect("valid legacy toml");
         assert_eq!(
             raw.scrollback.seed_lines,
             RawScrollback::default().seed_lines
@@ -395,7 +387,7 @@ mod tests {
     #[test]
     fn font_section_copies_present_fields_keeps_omitted_defaults() {
         let legacy = "[font]\nsize = 14.0\n[font.normal]\nfamily = \"Iosevka\"\nstyle = \"Bold\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.font.size, 14.0);
         assert_eq!(raw.font.normal.family.as_deref(), Some("Iosevka"));
         assert_eq!(raw.font.normal.style.as_deref(), Some("Bold"));
@@ -406,14 +398,14 @@ mod tests {
     #[test]
     fn font_inline_face_table_is_accepted() {
         let legacy = "[font]\nnormal = { family = \"Iosevka\" }\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.font.normal.family.as_deref(), Some("Iosevka"));
     }
 
     #[test]
     fn mouse_section_copies_present_fields_keeps_omitted_defaults() {
         let legacy = "[mouse]\nlines_per_notch = 5\nfine_modifier = \"ctrl\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.mouse.lines_per_notch, 5);
         assert_eq!(raw.mouse.fine_modifier, "ctrl");
         assert_eq!(raw.mouse.fine_lines, RawMouse::default().fine_lines);
@@ -422,14 +414,14 @@ mod tests {
     #[test]
     fn keyboard_option_as_alt_copied_as_string() {
         let legacy = "[keyboard]\noption_as_alt = \"both\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.keyboard.option_as_alt, "both");
     }
 
     #[test]
     fn inactive_pane_section_copies_present_fields() {
         let legacy = "[inactive_pane]\nenabled = false\ntint = 0.3\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert!(!raw.inactive_pane.enabled);
         assert_eq!(raw.inactive_pane.tint, 0.3);
         assert_eq!(raw.inactive_pane.dim, RawInactivePane::default().dim);
@@ -438,30 +430,34 @@ mod tests {
     #[test]
     fn orzma_shell_copied_when_present() {
         let legacy = "[orzma]\nshell = \"/usr/bin/fish\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(raw.orzma.shell.as_deref(), Some("/usr/bin/fish"));
     }
 
     #[test]
     fn empty_legacy_config_yields_full_defaults() {
-        let (raw, diags) = RawSettings::from_legacy_toml("");
-        assert!(diags.is_empty());
+        let raw = RawSettings::from_legacy_toml("").expect("empty text is valid (empty) toml");
         assert_eq!(raw, RawSettings::default());
     }
 
     #[test]
-    fn malformed_toml_falls_back_to_default_with_one_warning() {
-        let (raw, diags) = RawSettings::from_legacy_toml("this is not [ valid toml");
+    fn malformed_toml_is_a_parse_error() {
+        let err = RawSettings::from_legacy_toml("this is not [ valid toml")
+            .expect_err("malformed TOML must not silently fall back to defaults");
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn valid_minimal_toml_is_ok() {
+        let raw = RawSettings::from_legacy_toml("[shortcuts]\n")
+            .expect("a valid-but-minimal document must parse, even though it sets nothing");
         assert_eq!(raw, RawSettings::default());
-        assert_eq!(diags.len(), 1);
-        assert_eq!(diags[0].severity, Severity::Warn);
     }
 
     #[test]
     fn unknown_top_level_section_does_not_panic_or_fail() {
         let legacy = "[not-a-real-section]\nfoo = \"bar\"\n[shortcuts]\nquit = \"Cmd+Q\"\n";
-        let (raw, diags) = RawSettings::from_legacy_toml(legacy);
-        assert!(diags.is_empty());
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert_eq!(
             raw.shortcuts.bindings.get("quit").map(String::as_str),
             Some("Cmd+Q")
@@ -471,7 +467,7 @@ mod tests {
     #[test]
     fn wrong_typed_binding_value_is_skipped_not_fatal() {
         let legacy = "[shortcuts]\nquit = 5\npaste = \"Cmd+Shift+V\"\n";
-        let (raw, _) = RawSettings::from_legacy_toml(legacy);
+        let raw = RawSettings::from_legacy_toml(legacy).expect("valid legacy toml");
         assert!(!raw.shortcuts.bindings.contains_key("quit"));
         assert_eq!(
             raw.shortcuts.bindings.get("paste").map(String::as_str),
