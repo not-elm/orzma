@@ -17,9 +17,10 @@ const HOME_CONFIG_DIR: &str = ".config";
 ///
 /// External callers should construct or pass `SystemEnv` for production
 /// use; the trait's `var` / `home_dir` surface is intentionally narrow
-/// so test implementations stay simple. The crate-internal
-/// `resolve_config_path` is the other consumer but is `pub(crate)` and
-/// not part of the external API.
+/// so test implementations stay simple. `resolve_config_path` is the
+/// other consumer; it is `pub` so the root crate's one-time legacy
+/// migration (`src/configs/migrate.rs`) can resolve the same legacy path
+/// `OrzmaConfigs::load` would have used.
 pub trait Env {
     /// Returns the value of `key`, treating an empty string as unset.
     fn var(&self, key: &str) -> Option<String>;
@@ -44,7 +45,7 @@ impl Env for SystemEnv {
 /// Precedence: `$ORZMA_CONFIG` → `$XDG_CONFIG_HOME/orzma/config.toml` →
 /// `<home_dir>/.config/orzma/config.toml`. Returns `HomeDirNotFound` only
 /// when all three lookups fail.
-pub(crate) fn resolve_config_path(env: &dyn Env) -> OrzmaConfigsResult<PathBuf> {
+pub fn resolve_config_path(env: &dyn Env) -> OrzmaConfigsResult<PathBuf> {
     if let Some(p) = env.var(ENV_ORZMA_CONFIG) {
         return Ok(PathBuf::from(p));
     }

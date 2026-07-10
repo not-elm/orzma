@@ -22,6 +22,7 @@ pub mod error;
 pub mod font;
 pub mod inactive_pane;
 pub mod keyboard;
+pub mod migrate;
 pub mod mouse;
 pub mod orzma;
 pub mod path;

@@ -16,6 +16,7 @@ use groups::{
 use orzma_configs::OrzmaConfigs;
 
 mod groups;
+mod migrate;
 
 /// Bevy Resource wrapping the resolved `OrzmaConfigs`.
 #[derive(Resource, Debug, Default, Deref)]
@@ -37,6 +38,7 @@ impl Plugin for OrzmaConfigsPlugin {
             .register_type::<ScrollbackSettings>()
             .register_type::<OrzmaSettings>()
             .add_plugins(SettingsPlugin::new("orzma"));
+        migrate::migrate_if_needed(app.world_mut());
         resolve_and_insert(app.world_mut());
     }
 }

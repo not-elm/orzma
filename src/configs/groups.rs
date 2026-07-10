@@ -2,6 +2,9 @@
 //! each `[section]` of the user's config, and the `From<&Group> for Raw…`
 //! conversions that hand each group's live values to
 //! `orzma_configs::RawSettings::resolve` to produce a typed `OrzmaConfigs`.
+//! Also holds the reverse `From<&Raw…> for Group` conversions, used by the
+//! one-time legacy migration (`src/configs/migrate.rs`) to populate these
+//! groups from a `RawSettings` built off the user's old config file.
 
 use bevy::prelude::*;
 use bevy::settings::{ReflectSettingsGroup, SettingsGroup};
@@ -19,7 +22,7 @@ use std::collections::HashMap;
 /// domain layer (`orzma_configs::shortcuts::Shortcuts::default`), not here —
 /// `bevy::settings` replaces the whole map field on load, so per-entry
 /// override merging must happen downstream in `RawSettings::resolve`.
-#[derive(Resource, SettingsGroup, Reflect, Clone, Debug)]
+#[derive(Resource, SettingsGroup, Reflect, Clone, Debug, PartialEq)]
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "shortcuts")]
 pub(crate) struct ShortcutSettings {
@@ -59,6 +62,21 @@ impl From<&ShortcutSettings> for RawShortcuts {
     }
 }
 
+impl From<&RawShortcuts> for ShortcutSettings {
+    fn from(value: &RawShortcuts) -> Self {
+        ShortcutSettings {
+            leader: value.leader.clone(),
+            leader_tap_timeout_ms: value.leader_tap_timeout_ms,
+            repeat_time_ms: value.repeat_time_ms,
+            bindings: value
+                .bindings
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        }
+    }
+}
+
 /// `[vi-mode]` persistence group: action key -> list of key strings.
 ///
 /// `bindings` defaults empty for the same reason as `ShortcutSettings::bindings`.
@@ -73,6 +91,18 @@ pub(crate) struct ViModeSettings {
 impl From<&ViModeSettings> for RawViMode {
     fn from(value: &ViModeSettings) -> Self {
         RawViMode {
+            bindings: value
+                .bindings
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        }
+    }
+}
+
+impl From<&RawViMode> for ViModeSettings {
+    fn from(value: &RawViMode) -> Self {
+        ViModeSettings {
             bindings: value
                 .bindings
                 .iter()
@@ -97,6 +127,15 @@ pub(crate) struct FontFaceConfig {
 impl From<&FontFaceConfig> for RawFace {
     fn from(value: &FontFaceConfig) -> Self {
         RawFace {
+            family: value.family.clone(),
+            style: value.style.clone(),
+        }
+    }
+}
+
+impl From<&RawFace> for FontFaceConfig {
+    fn from(value: &RawFace) -> Self {
+        FontFaceConfig {
             family: value.family.clone(),
             style: value.style.clone(),
         }
@@ -135,6 +174,18 @@ impl Default for FontSettings {
 impl From<&FontSettings> for RawFont {
     fn from(value: &FontSettings) -> Self {
         RawFont {
+            size: value.size,
+            normal: (&value.normal).into(),
+            bold: (&value.bold).into(),
+            italic: (&value.italic).into(),
+            bold_italic: (&value.bold_italic).into(),
+        }
+    }
+}
+
+impl From<&RawFont> for FontSettings {
+    fn from(value: &RawFont) -> Self {
+        FontSettings {
             size: value.size,
             normal: (&value.normal).into(),
             bold: (&value.bold).into(),
@@ -222,6 +273,26 @@ impl From<&MouseSettings> for RawMouse {
     }
 }
 
+impl From<&RawMouse> for MouseSettings {
+    fn from(value: &RawMouse) -> Self {
+        MouseSettings {
+            lines_per_notch: value.lines_per_notch,
+            fine_modifier: value.fine_modifier.clone(),
+            fine_lines: value.fine_lines,
+            max_protocol_events_per_frame: value.max_protocol_events_per_frame,
+            cells_per_notch: value.cells_per_notch,
+            axis_lock_ratio: value.axis_lock_ratio,
+            double_click_timeout_ms: value.double_click_timeout_ms,
+            click_drift_px: value.click_drift_px,
+            autoscroll_base_period_ms: value.autoscroll_base_period_ms,
+            autoscroll_min_period_ms: value.autoscroll_min_period_ms,
+            autoscroll_step_ms: value.autoscroll_step_ms,
+            drag_threshold_px: value.drag_threshold_px,
+            divider_grab_tolerance_px: value.divider_grab_tolerance_px,
+        }
+    }
+}
+
 /// `[keyboard]` persistence group: which Option key(s) act as Meta on macOS.
 /// `option_as_alt` is carried as a `String` for the same reason as
 /// `MouseSettings.fine_modifier`.
@@ -244,6 +315,14 @@ impl Default for KeyboardSettings {
 impl From<&KeyboardSettings> for RawKeyboard {
     fn from(value: &KeyboardSettings) -> Self {
         RawKeyboard {
+            option_as_alt: value.option_as_alt.clone(),
+        }
+    }
+}
+
+impl From<&RawKeyboard> for KeyboardSettings {
+    fn from(value: &RawKeyboard) -> Self {
+        KeyboardSettings {
             option_as_alt: value.option_as_alt.clone(),
         }
     }
@@ -295,6 +374,19 @@ impl From<&InactivePaneSettings> for RawInactivePane {
     }
 }
 
+impl From<&RawInactivePane> for InactivePaneSettings {
+    fn from(value: &RawInactivePane) -> Self {
+        InactivePaneSettings {
+            enabled: value.enabled,
+            dim: value.dim,
+            tint_color: value.tint_color.clone(),
+            tint: value.tint,
+            webview_dim: value.webview_dim,
+            webview_desaturate: value.webview_desaturate,
+        }
+    }
+}
+
 /// `[orzma]` persistence group: single-terminal mode configuration.
 #[derive(Resource, SettingsGroup, Reflect, Clone, Debug, Default)]
 #[reflect(Resource, SettingsGroup, Default)]
@@ -312,8 +404,16 @@ impl From<&OrzmaSettings> for RawOrzma {
     }
 }
 
+impl From<&RawOrzma> for OrzmaSettings {
+    fn from(value: &RawOrzma) -> Self {
+        OrzmaSettings {
+            shell: value.shell.clone(),
+        }
+    }
+}
+
 /// `[scrollback]` persistence group.
-#[derive(Resource, SettingsGroup, Reflect, Clone, Debug)]
+#[derive(Resource, SettingsGroup, Reflect, Clone, Debug, PartialEq)]
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "scrollback")]
 pub(crate) struct ScrollbackSettings {
@@ -330,6 +430,14 @@ impl Default for ScrollbackSettings {
 impl From<&ScrollbackSettings> for RawScrollback {
     fn from(value: &ScrollbackSettings) -> Self {
         RawScrollback {
+            seed_lines: value.seed_lines,
+        }
+    }
+}
+
+impl From<&RawScrollback> for ScrollbackSettings {
+    fn from(value: &RawScrollback) -> Self {
+        ScrollbackSettings {
             seed_lines: value.seed_lines,
         }
     }
@@ -419,5 +527,29 @@ mod tests {
         let world = World::new();
         let raw = collect_raw(&world);
         assert_eq!(raw, RawSettings::default());
+    }
+
+    #[test]
+    fn shortcut_settings_round_trips_through_raw() {
+        let mut original = ShortcutSettings {
+            leader: Some("Ctrl+A".to_string()),
+            leader_tap_timeout_ms: 900,
+            repeat_time_ms: 42,
+            ..ShortcutSettings::default()
+        };
+        original
+            .bindings
+            .insert("quit".to_string(), "Cmd+Shift+Q".to_string());
+        let raw: RawShortcuts = (&original).into();
+        let round_tripped: ShortcutSettings = (&raw).into();
+        assert_eq!(original, round_tripped);
+    }
+
+    #[test]
+    fn scrollback_settings_round_trips_through_raw() {
+        let original = ScrollbackSettings { seed_lines: 12345 };
+        let raw: RawScrollback = (&original).into();
+        let round_tripped: ScrollbackSettings = (&raw).into();
+        assert_eq!(original, round_tripped);
     }
 }
