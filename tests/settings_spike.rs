@@ -67,7 +67,6 @@ use std::any::TypeId;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-
 use bevy::prelude::*;
 use bevy::settings::{ReflectSettingsGroup, SaveSettingsSync, SettingsGroup, SettingsPlugin};
 
