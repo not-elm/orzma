@@ -89,18 +89,24 @@ impl RawSettings {
     /// entry-by-entry, inserting only the entries that parse into `table` so
     /// one bad chord only skips its own binding (a whole-struct `try_into`
     /// would reject every binding at once, resetting all of them to
-    /// `Shortcuts::default()`). An empty string is a valid unbind and passes
-    /// through to the deserializer untouched.
+    /// `Shortcuts::default()`). An empty string is a valid unbind — for
+    /// `leader` it means "disabled" — and passes through to the deserializer
+    /// untouched, without going through `parse_leader` (which rejects the
+    /// empty string as a parse error, not a disable request).
     fn collect_shortcut_bindings(&self, table: &mut Table, diags: &mut Vec<Diagnostic>) {
         if let Some(leader) = &self.shortcuts.leader {
-            match parse_leader(leader) {
-                Ok(_) => {
-                    table.insert("leader".into(), Value::String(leader.clone()));
+            if leader.is_empty() {
+                table.insert("leader".into(), Value::String(String::new()));
+            } else {
+                match parse_leader(leader) {
+                    Ok(_) => {
+                        table.insert("leader".into(), Value::String(leader.clone()));
+                    }
+                    Err(e) => diags.push(Diagnostic {
+                        severity: Severity::Warn,
+                        message: format!("leader `{leader}`: {e}; using built-in default leader"),
+                    }),
                 }
-                Err(e) => diags.push(Diagnostic {
-                    severity: Severity::Warn,
-                    message: format!("leader `{leader}`: {e}; using built-in default leader"),
-                }),
             }
         }
         for (action, chord) in &self.shortcuts.bindings {
@@ -468,7 +474,7 @@ impl RawSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::shortcuts::Key;
+    use crate::shortcuts::{Key, parse_key_chord};
     use std::collections::BTreeMap;
 
     #[test]
@@ -637,6 +643,30 @@ mod tests {
         );
         assert!(cfg.shortcuts.quit.is_none());
         assert!(cfg.shortcuts.detach_session.is_some());
+    }
+
+    #[test]
+    fn empty_leader_disables_leader_without_warning() {
+        let mut raw = RawSettings::default();
+        raw.shortcuts.leader = Some("".into());
+        let (cfg, diags) = raw.resolve();
+        assert_eq!(cfg.shortcuts.leader, None);
+        assert!(
+            !diags.iter().any(|d| d.message.contains("leader")),
+            "empty leader must not produce a warning: {diags:?}"
+        );
+    }
+
+    #[test]
+    fn valid_leader_resolves_normally() {
+        let mut raw = RawSettings::default();
+        raw.shortcuts.leader = Some("Ctrl+A".into());
+        let (cfg, diags) = raw.resolve();
+        assert!(diags.is_empty(), "{diags:?}");
+        assert_eq!(
+            cfg.shortcuts.leader,
+            Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap()))
+        );
     }
 
     #[test]
