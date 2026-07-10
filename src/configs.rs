@@ -10,6 +10,8 @@
 use bevy::prelude::*;
 use orzma_configs::OrzmaConfigs;
 
+mod groups;
+
 /// Bevy Resource wrapping the resolved `OrzmaConfigs`.
 #[derive(Resource, Debug, Default, Deref)]
 pub(crate) struct OrzmaConfigsResource(pub(crate) OrzmaConfigs);
