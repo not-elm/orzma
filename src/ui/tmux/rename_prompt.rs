@@ -140,7 +140,7 @@ enum RenameStep {
 struct RenameBar;
 
 fn spawn_rename_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>) {
-    let font = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
+    let ui = ui_font.as_deref().cloned().unwrap_or_default();
     commands
         .spawn((
             Node {
@@ -160,11 +160,7 @@ fn spawn_rename_ui(mut commands: Commands, ui_font: Option<Res<TerminalUiFont>>)
         .with_children(|parent| {
             parent.spawn((
                 Text::new(""),
-                TextFont {
-                    font: font.into(),
-                    font_size: FontSize::Px(theme::UI_FONT_SIZE),
-                    ..default()
-                },
+                ui.text_font(FontSize::Px(theme::UI_FONT_SIZE)),
                 TextColor(theme::SELECTION_FG),
             ));
         });

@@ -12,8 +12,8 @@ orzma resolves the config path in this order:
 3. `~/.config/orzma/config.toml` — the default.
 
 Unknown sections are rejected at startup, as are unknown keys in `[orzma]`,
-`[keyboard]`, `[shortcuts]`, and `[vi-mode]`. Unknown keys in `[font]`,
-`[mouse]`, and `[inactive_pane]` are silently ignored. Most invalid values are
+`[keyboard]`, `[shortcuts]`, `[vi-mode]`, and `[font]`. Unknown keys in
+`[mouse]` and `[inactive_pane]` are silently ignored. Most invalid values are
 startup errors too; the few that are silently clamped or reverted are noted
 inline below.
 
@@ -32,12 +32,36 @@ change — omitted keys fall back to these defaults.
 
 [font]
 size = 11.25              # f32, logical px. Must be 0 < size <= 200, else startup error.
-# Optional font-file overrides for the GUI (absolute path or ~/...).
-# Omit to use the bundled JetBrains Mono.
-# normal      = "~/Library/Fonts/MyMono-Regular.ttf"
-# bold        = "~/Library/Fonts/MyMono-Bold.ttf"
-# italic      = "~/Library/Fonts/MyMono-Italic.ttf"
-# bold_italic = "~/Library/Fonts/MyMono-BoldItalic.ttf"
+# Each face is a table of { family, style }. Omit [font] entirely to use the
+# bundled JetBrains Mono Nerd Font. A face's `family`, when omitted, inherits
+# `normal.family`; its `style`, when omitted, uses the face's default
+# (Regular / Bold / Italic / Bold Italic).
+#
+# `family` is resolved against installed system fonts; a configured family that
+# is not installed is a STARTUP ERROR (no silent fallback). `style` selects a
+# weight + slant: standard names (Regular/Bold/Italic/Bold Italic) plus common
+# weights (Thin, Light, Medium, SemiBold, ExtraBold, Black, ...) optionally with
+# Italic/Oblique. An unknown style token is a config error. (Unlike Alacritty,
+# `style` is matched by weight+slant attributes, not by exact subfamily name.)
+#
+# [font.normal]
+# family = "JetBrains Mono"
+# style  = "Regular"
+# [font.bold]
+# style  = "Bold"                 # inherits family = "JetBrains Mono"
+# [font.italic]
+# family = "Cascadia Code"
+# style  = "Italic"
+# [font.bold_italic]
+# style  = "Bold Italic"
+#
+# ui = { family = "Inter", style = "Medium" }
+# The UI-chrome face (window bar, prompts, indicators). `family` and `style`
+# each inherit from `normal` when omitted (ui.family -> normal.family,
+# ui.style -> normal.style). A configured `ui.family` that is not installed is
+# a startup error, same as the terminal faces. `style` uses the same weight +
+# slant syntax and is applied to UI text. When no family resolves anywhere
+# (bundled fallback), style rounds to the nearest of the four bundled faces.
 
 [keyboard]
 # macOS only. Which Option key sends Meta instead of composing.

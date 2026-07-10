@@ -69,15 +69,11 @@ fn attach_indicator_to_surface_host(
                 ViModeIndicator,
                 IndicatorCache::default(),
                 Text::new(""),
-                TextFont {
-                    font: ui_font
-                        .as_deref()
-                        .map(|f| f.0.clone())
-                        .unwrap_or_default()
-                        .into(),
-                    font_size: FontSize::Px(theme::VI_MODE_INDICATOR_FONT_SIZE_PX),
-                    ..default()
-                },
+                ui_font
+                    .as_deref()
+                    .cloned()
+                    .unwrap_or_default()
+                    .text_font(FontSize::Px(theme::VI_MODE_INDICATOR_FONT_SIZE_PX)),
                 BackgroundColor(palette::VI_MODE_INDICATOR_BG),
                 TextColor(palette::VI_MODE_INDICATOR_FG),
                 Node {

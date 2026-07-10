@@ -11,18 +11,91 @@
 
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
-use bevy::text::{Font, FontCx};
-use fontique::{Blob, Script};
-use orzma_configs::font::FontConfig;
-use orzma_configs::path::{SystemEnv, expand_user_path};
+use bevy::text::{Font, FontCx, FontSize, FontSource, FontStyle, FontWeight, TextFont};
+use fontique::{Blob, Collection, Script, SourceCache};
+use orzma_configs::font::{FontFaceConfig, FontSlant, FontStyleSpec};
+use orzma_tty_renderer::bundled::FALLBACK_REGULAR;
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
-use std::path::Path;
+use std::str::FromStr;
+use std::sync::Arc;
 
-/// Strong handle to the UI font asset (regular face). Inserted by
-/// `bridge_font_config`. UI builders read this resource to set
-/// `TextFont { font, ... }`.
-#[derive(Resource, Clone)]
-pub struct TerminalUiFont(pub Handle<Font>);
+mod resolve;
+
+/// UI-chrome font: the family `source` plus the `weight`/`slant` applied at
+/// every UI `TextFont` site (window bar, prompts, indicators). Built by
+/// `bridge_font_config` from `[font].ui`, inheriting `[font].normal` per field.
+#[derive(Resource, Clone, Default)]
+pub struct TerminalUiFont {
+    /// Family or bundled-handle source handed to `TextFont.font`.
+    source: FontSource,
+    /// Weight applied to `TextFont.weight`.
+    weight: FontWeight,
+    /// Slant applied to `TextFont.style`.
+    style: FontStyle,
+}
+
+impl TerminalUiFont {
+    /// A `TextFont` for a UI text node at `size`, carrying this face's family,
+    /// weight, and slant.
+    pub fn text_font(&self, size: FontSize) -> TextFont {
+        TextFont {
+            font: self.source.clone(),
+            font_size: size,
+            weight: self.weight,
+            style: self.style,
+            ..default()
+        }
+    }
+
+    /// Resolves the UI face from `[font].ui`, inheriting `normal` per field:
+    /// `family` falls back to `normal`'s (using its already-resolved result via
+    /// `regular_from_family`), `style` falls back to `normal.style` then
+    /// Regular. A configured `ui.family` that is absent aborts startup. When no
+    /// family resolves, the bundled face matching the resolved weight/slant is
+    /// used (bundled has only four faces).
+    fn resolve(
+        collection: &mut Collection,
+        fonts_assets: &mut Assets<Font>,
+        ui: &FontFaceConfig,
+        normal: &FontFaceConfig,
+        regular_from_family: bool,
+    ) -> Self {
+        let spec = ui
+            .style
+            .as_deref()
+            .or(normal.style.as_deref())
+            .map(|s| FontStyleSpec::from_str(s).expect("style validated at config load"))
+            .unwrap_or(FontStyleSpec {
+                weight: 400,
+                slant: FontSlant::Normal,
+            });
+        let (weight, style) = ui_text_attrs(spec);
+
+        let source = if let Some(family) = ui.family.as_deref() {
+            if !resolve::family_present(collection, family) {
+                panic!(
+                    "orzma: font family {family:?} configured for the ui face was not found; install it or fix [font].ui in your config",
+                );
+            }
+            FontSource::Family(family.into())
+        } else if regular_from_family {
+            let inherited = normal
+                .family
+                .as_deref()
+                .expect("regular_from_family implies a normal family");
+            FontSource::Family(inherited.into())
+        } else {
+            let handle = fonts_assets.add(Font::from_bytes(bundled_face_bytes(spec).to_vec()));
+            FontSource::Handle(handle)
+        };
+
+        Self {
+            source,
+            weight,
+            style,
+        }
+    }
+}
 
 /// Strong handle to the bundled Nerd Font, used only for the window-bar
 /// powerline separator glyphs (U+E0B0 / U+E0B2). Independent of
@@ -46,47 +119,6 @@ impl Plugin for FontBridgePlugin {
     }
 }
 
-/// Loads bytes for one face. Returns the file contents if `path` is set
-/// AND expansion succeeds AND read succeeds; otherwise returns the
-/// bundled bytes. Failures are warned, not propagated — partial override
-/// is a feature.
-fn load_face_bytes(path: Option<&Path>, bundled: &'static [u8], face: FontFace) -> Vec<u8> {
-    let Some(p) = path else {
-        return bundled.to_vec();
-    };
-    let Some(expanded) = expand_user_path(p, &SystemEnv) else {
-        tracing::warn!(?face, path = %p.display(), "font path expansion failed; using bundled");
-        return bundled.to_vec();
-    };
-    match std::fs::read(&expanded) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            tracing::warn!(?face, path = %expanded.display(), %err, "font path read failed; using bundled");
-            bundled.to_vec()
-        }
-    }
-}
-
-/// Validates one face's bytes by attempting to parse them as a font.
-/// Returns the original bytes on success; on failure (parse error), warns
-/// and returns the bundled bytes for that face.
-fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -> Vec<u8> {
-    // Zero-copy validation: FontRef borrows the slice instead of consuming
-    // a Vec, so we don't clone 13 MB of font data just to throw away the
-    // parsed FontArc immediately after.
-    match ab_glyph::FontRef::try_from_slice(&bytes) {
-        Ok(_) => bytes,
-        Err(err) => {
-            tracing::warn!(
-                ?face,
-                %err,
-                "font face failed to parse; substituting bundled bytes for THAT face only"
-            );
-            bundled.to_vec()
-        }
-    }
-}
-
 /// Registers the bundled CJK fallback font into parley's fontique
 /// collection and appends its family to the Han / Hiragana / Katakana
 /// script-fallback chains, making it discoverable for spans whose
@@ -102,10 +134,7 @@ fn validate_or_bundled(bytes: Vec<u8>, bundled: &'static [u8], face: FontFace) -
 /// any `Font` asset is ever removed — orzma never removes font assets
 /// after Startup; re-run this registration if that changes.
 fn register_cjk_fallback(mut font_cx: ResMut<FontCx>) {
-    let blob = Blob::new(
-        std::sync::Arc::new(orzma_tty_renderer::bundled::FALLBACK_REGULAR)
-            as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>,
-    );
+    let blob = Blob::new(Arc::new(FALLBACK_REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
     let registered = font_cx.collection.register_fonts(blob, None);
     let family_ids: Vec<_> = registered.iter().map(|(id, _)| *id).collect();
     for script in [
@@ -128,74 +157,169 @@ fn bridge_font_config(
     mut fonts_assets: ResMut<Assets<Font>>,
     mut terminal_fonts: ResMut<TerminalFonts>,
     mut font_size: ResMut<TerminalFontSize>,
+    mut font_cx: ResMut<FontCx>,
     configs: Res<OrzmaConfigsResource>,
 ) {
     font_size.0 = configs.font.size;
-    let font: &FontConfig = &configs.font;
+    let font = &configs.font;
 
-    let powerline = make_ui_font_handle(bundled::REGULAR.to_vec(), &mut fonts_assets);
-    commands.insert_resource(PowerlineFont(powerline.clone()));
+    let powerline = fonts_assets.add(Font::from_bytes(bundled::REGULAR.to_vec()));
+    commands.insert_resource(PowerlineFont(powerline));
 
-    // Fast path: no override → use the renderer's default TerminalFonts
-    // (already inserted by TerminalFontPlugin) and feed the same bundled
-    // regular bytes to Assets<Font>. Skips ~52 MB of needless allocations
-    // and ~5 redundant ab_glyph / bevy_text parses on the common cold path.
-    let no_override = font.normal.is_none()
-        && font.bold.is_none()
-        && font.italic.is_none()
-        && font.bold_italic.is_none();
-    if no_override {
-        commands.insert_resource(TerminalUiFont(powerline));
-        return;
-    }
+    // NOTE: materialize &mut FontContext once, before the terminal-family
+    // branch, so both the terminal-face resolution and the UI family probe
+    // borrow `collection` / `source_cache` as disjoint places (going through
+    // DerefMut per call would borrow all of FontCx twice and fail to compile).
+    let cx = &mut **font_cx;
 
-    let regular_bytes =
-        load_face_bytes(font.normal.as_deref(), bundled::REGULAR, FontFace::Regular);
-    let bold_bytes = load_face_bytes(font.bold.as_deref(), bundled::BOLD, FontFace::Bold);
-    let italic_bytes = load_face_bytes(font.italic.as_deref(), bundled::ITALIC, FontFace::Italic);
-    let bold_italic_bytes = load_face_bytes(
-        font.bold_italic.as_deref(),
-        bundled::BOLD_ITALIC,
-        FontFace::BoldItalic,
+    let regular_family = font.normal.family.as_deref();
+
+    let regular_from_family = if font.has_no_configured_family() {
+        false
+    } else {
+        let bold_family = font.bold.family.as_deref().or(regular_family);
+        let italic_family = font.italic.family.as_deref().or(regular_family);
+        let bold_italic_family = font.bold_italic.family.as_deref().or(regular_family);
+        let [regular, bold, italic, bold_italic] = [
+            (
+                regular_family,
+                font.normal.style.as_deref(),
+                FontFace::Regular,
+                bundled::REGULAR,
+            ),
+            (
+                bold_family,
+                font.bold.style.as_deref(),
+                FontFace::Bold,
+                bundled::BOLD,
+            ),
+            (
+                italic_family,
+                font.italic.style.as_deref(),
+                FontFace::Italic,
+                bundled::ITALIC,
+            ),
+            (
+                bold_italic_family,
+                font.bold_italic.style.as_deref(),
+                FontFace::BoldItalic,
+                bundled::BOLD_ITALIC,
+            ),
+        ]
+        .map(|(family, style, face, bundled)| {
+            ResolvedFace::resolve(
+                &mut cx.collection,
+                &mut cx.source_cache,
+                family,
+                style,
+                face,
+                bundled,
+            )
+        });
+        let regular_from_family = regular.from_family;
+        *terminal_fonts = TerminalFonts::from_faces(
+            (regular.bytes, regular.index),
+            (bold.bytes, bold.index),
+            (italic.bytes, italic.index),
+            (bold_italic.bytes, bold_italic.index),
+            bundled::FALLBACK_REGULAR.to_vec(),
+            bundled::FALLBACK_BOLD.to_vec(),
+            bundled::FALLBACK_ITALIC.to_vec(),
+            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
+        )
+        .expect("validated bytes must parse");
+        regular_from_family
+    };
+
+    let ui_font = TerminalUiFont::resolve(
+        &mut cx.collection,
+        &mut fonts_assets,
+        &font.ui,
+        &font.normal,
+        regular_from_family,
     );
-
-    // NOTE: validate-per-face is load-bearing. Without it, a corrupt
-    // override on ANY face drops ALL overrides — the all-or-nothing
-    // regression that commit 09213e7 fixed.
-    let regular_bytes = validate_or_bundled(regular_bytes, bundled::REGULAR, FontFace::Regular);
-    let bold_bytes = validate_or_bundled(bold_bytes, bundled::BOLD, FontFace::Bold);
-    let italic_bytes = validate_or_bundled(italic_bytes, bundled::ITALIC, FontFace::Italic);
-    let bold_italic_bytes = validate_or_bundled(
-        bold_italic_bytes,
-        bundled::BOLD_ITALIC,
-        FontFace::BoldItalic,
-    );
-
-    let ui_regular_bytes = regular_bytes.clone();
-
-    let new_fonts = TerminalFonts::from_bytes(
-        regular_bytes,
-        bold_bytes,
-        italic_bytes,
-        bold_italic_bytes,
-        orzma_tty_renderer::bundled::FALLBACK_REGULAR.to_vec(),
-        orzma_tty_renderer::bundled::FALLBACK_BOLD.to_vec(),
-        orzma_tty_renderer::bundled::FALLBACK_ITALIC.to_vec(),
-        orzma_tty_renderer::bundled::FALLBACK_BOLD_ITALIC.to_vec(),
-    )
-    .expect("validated bytes must parse");
-    *terminal_fonts = new_fonts;
-
-    let handle = make_ui_font_handle(ui_regular_bytes, &mut fonts_assets);
-    commands.insert_resource(TerminalUiFont(handle));
+    commands.insert_resource(ui_font);
 }
 
-/// Builds the UI-side `Handle<Font>` from the regular face bytes.
-/// `Font::from_bytes` is infallible in Bevy 0.19 (parsing happens later,
-/// at fontique registration); the bytes reaching this point were already
-/// validated per-face by `validate_or_bundled`.
-fn make_ui_font_handle(regular_bytes: Vec<u8>, fonts_assets: &mut Assets<Font>) -> Handle<Font> {
-    fonts_assets.add(Font::from_bytes(regular_bytes))
+/// One primary face resolved for the terminal grid: its bytes, `.ttc` index,
+/// and whether it came from a system family (vs a bundled fallback).
+struct ResolvedFace {
+    bytes: Vec<u8>,
+    index: u32,
+    from_family: bool,
+}
+
+impl ResolvedFace {
+    /// Resolves one face: a configured `family` at its `style` (or the face's
+    /// default attributes when `style` is omitted) through the system font
+    /// collection. A face with no configured family uses `bundled`; a configured
+    /// family that cannot be resolved aborts startup (no silent fallback).
+    fn resolve(
+        collection: &mut Collection,
+        source_cache: &mut SourceCache,
+        family: Option<&str>,
+        style: Option<&str>,
+        face: FontFace,
+        bundled: &'static [u8],
+    ) -> Self {
+        let Some(family) = family else {
+            return Self::bundled(bundled);
+        };
+        // NOTE: style was validated at config load; a parse here cannot fail. If
+        // a future change loosens `validate()`'s style check, this `.expect()`
+        // starts panicking at Startup instead of returning InvalidFontStyle
+        // before the app ever gets here.
+        let attributes = match style {
+            Some(s) => resolve::attributes_of(
+                FontStyleSpec::from_str(s).expect("style validated at config load"),
+            ),
+            None => resolve::face_attributes(face),
+        };
+        match resolve::resolve_configured_face(collection, source_cache, family, attributes) {
+            Ok((bytes, index)) => Self {
+                bytes,
+                index,
+                from_family: true,
+            },
+            Err(resolve::FamilyNotFound) => panic!(
+                "orzma: font family {family:?} configured for the {face:?} face was not found; install it or fix [font] in your config",
+            ),
+        }
+    }
+
+    /// Bundled fallback for one face: the bundled bytes at index 0, marked as not
+    /// resolved from a family.
+    fn bundled(bundled: &[u8]) -> Self {
+        Self {
+            bytes: bundled.to_vec(),
+            index: 0,
+            from_family: false,
+        }
+    }
+}
+
+/// Maps a parsed `FontStyleSpec` to bevy_text's `TextFont` weight + slant.
+fn ui_text_attrs(spec: FontStyleSpec) -> (FontWeight, FontStyle) {
+    let style = match spec.slant {
+        FontSlant::Normal => FontStyle::Normal,
+        FontSlant::Italic => FontStyle::Italic,
+        FontSlant::Oblique => FontStyle::Oblique(None),
+    };
+    (FontWeight(spec.weight), style)
+}
+
+/// Picks the bundled static face nearest to `spec`. The bundle ships only four
+/// faces, so intermediate weights (Light/Medium/SemiBold) round to Regular or
+/// Bold. Used only when no system family resolves for the UI face.
+fn bundled_face_bytes(spec: FontStyleSpec) -> &'static [u8] {
+    let bold = spec.weight >= 600;
+    let italic = spec.slant != FontSlant::Normal;
+    match (bold, italic) {
+        (false, false) => bundled::REGULAR,
+        (true, false) => bundled::BOLD,
+        (false, true) => bundled::ITALIC,
+        (true, true) => bundled::BOLD_ITALIC,
+    }
 }
 
 #[cfg(test)]
@@ -206,9 +330,10 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
     use bevy::window::{PrimaryWindow, Window, WindowResolution};
+    use fontique::{FontInfoOverride, FontWeight};
     use orzma_tty_renderer::TerminalFontPlugin;
     use orzma_tty_renderer::bundled;
-    use std::io::Write;
+    use std::sync::Arc;
 
     /// RAII guard for a process-environment variable. Constructing it via
     /// `EnvVarGuard::set(...)` sets the variable; dropping it removes
@@ -253,9 +378,14 @@ mod tests {
         }
     }
 
-    fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
+    fn make_test_app(
+        config: Option<&std::path::Path>,
+    ) -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
         let guard = crate::configs::env_guard();
-        let env = EnvVarGuard::unset("ORZMA_CONFIG");
+        let env = match config {
+            Some(path) => EnvVarGuard::set("ORZMA_CONFIG", path),
+            None => EnvVarGuard::unset("ORZMA_CONFIG"),
+        };
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -279,7 +409,7 @@ mod tests {
 
     #[test]
     fn default_config_keeps_bundled_jbm_in_terminal_fonts() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
         let fonts = app.world().resource::<TerminalFonts>();
         assert_eq!(
@@ -291,151 +421,30 @@ mod tests {
 
     #[test]
     fn default_config_inserts_terminal_ui_font_with_strong_handle() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
         let ui_font = app
             .world()
             .get_resource::<TerminalUiFont>()
             .expect("TerminalUiFont must be inserted on the cold path");
+        let FontSource::Handle(handle) = &ui_font.source else {
+            panic!(
+                "cold path must insert a FontSource::Handle, got {:?}",
+                ui_font.source
+            );
+        };
         // A strong handle from Assets::add stores the asset under the
         // returned handle. Look it up to verify it resolves.
         let assets = app.world().resource::<Assets<Font>>();
         assert!(
-            assets.get(&ui_font.0).is_some(),
+            assets.get(handle).is_some(),
             "TerminalUiFont handle must resolve to an asset stored in Assets<Font>"
         );
     }
 
     #[test]
-    fn configured_normal_path_overrides_regular_face() {
-        // Use the bundled JetBrains Mono regular bytes as the "override" — the
-        // test verifies the bytes flow through std::fs::read, not that
-        // they differ from bundled. Write to a temp file and point
-        // ORZMA_CONFIG at a TOML that uses it.
-        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_normal");
-        let _ = std::fs::create_dir_all(&tmp_dir);
-        let ttf_path = tmp_dir.join("regular.ttf");
-        std::fs::write(&ttf_path, bundled::REGULAR).expect("write temp ttf");
-
-        let toml_path = tmp_dir.join("config.toml");
-        let mut f = std::fs::File::create(&toml_path).expect("create toml");
-        writeln!(f, "[font]\nnormal = \"{}\"\n", ttf_path.to_string_lossy()).expect("write toml");
-        drop(f);
-
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml_path);
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
-        app.update();
-
-        let fonts = app.world().resource::<TerminalFonts>();
-        assert_eq!(
-            fonts.regular.font_data(),
-            bundled::REGULAR,
-            "regular face bytes equal the override file (which happens to contain bundled bytes)"
-        );
-
-        let _ = std::fs::remove_file(&ttf_path);
-        let _ = std::fs::remove_file(&toml_path);
-    }
-
-    #[test]
-    fn missing_normal_path_falls_back_to_bundled() {
-        let nonexistent = std::env::temp_dir().join("orzma_font_bridge_test_missing.ttf");
-        let _ = std::fs::remove_file(&nonexistent);
-        let toml = std::env::temp_dir().join("orzma_font_bridge_test_missing.toml");
-        std::fs::write(
-            &toml,
-            format!("[font]\nnormal = \"{}\"\n", nonexistent.to_string_lossy()),
-        )
-        .expect("write toml");
-
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
-        app.update();
-
-        let fonts = app.world().resource::<TerminalFonts>();
-        assert_eq!(
-            fonts.regular.font_data(),
-            bundled::REGULAR,
-            "regular face falls back to bundled when configured path does not exist"
-        );
-
-        let _ = std::fs::remove_file(&toml);
-    }
-
-    #[test]
-    fn normal_path_set_does_not_inherit_to_bold() {
-        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_no_inherit");
-        let _ = std::fs::create_dir_all(&tmp_dir);
-        let normal_path = tmp_dir.join("only-regular.ttf");
-        std::fs::write(&normal_path, bundled::REGULAR).expect("write");
-        let toml = tmp_dir.join("config.toml");
-        std::fs::write(
-            &toml,
-            format!("[font]\nnormal = \"{}\"\n", normal_path.to_string_lossy()),
-        )
-        .expect("write toml");
-
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
-        app.update();
-
-        let fonts = app.world().resource::<TerminalFonts>();
-        assert_eq!(
-            fonts.bold.font_data(),
-            bundled::BOLD,
-            "bold face must NOT inherit from normal_path; it stays bundled bold"
-        );
-
-        let _ = std::fs::remove_file(&normal_path);
-        let _ = std::fs::remove_file(&toml);
-    }
-
-    #[test]
     fn cjk_fallback_registered_in_font_collection() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
 
         let mut font_cx = app.world_mut().resource_mut::<FontCx>();
@@ -460,7 +469,7 @@ mod tests {
 
     #[test]
     fn bridge_sets_terminal_font_size_from_default_config() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
         let size = app.world().resource::<TerminalFontSize>();
         assert_eq!(
@@ -474,22 +483,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("orzma_font_size_override.toml");
         std::fs::write(&tmp, "[font]\nsize = 16.0\n").expect("write toml");
 
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
         app.update();
 
         let size = app.world().resource::<TerminalFontSize>();
@@ -503,7 +497,7 @@ mod tests {
 
     #[test]
     fn powerline_font_resource_is_inserted_and_resolves() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
 
         let handle = app
@@ -522,64 +516,241 @@ mod tests {
     }
 
     #[test]
-    fn corrupt_bold_path_falls_back_per_face_without_dropping_normal_override() {
-        // Write a corrupt "bold" TTF (just random bytes that won't parse)
-        // and a valid "normal" TTF (bundled JetBrains Mono regular). Verify
-        // bridge_font_config keeps the normal override AND replaces only
-        // the corrupt bold with bundled bold.
-        let tmp_dir = std::env::temp_dir().join("orzma_font_bridge_test_corrupt_bold");
-        let _ = std::fs::create_dir_all(&tmp_dir);
-        let normal_path = tmp_dir.join("regular.ttf");
-        std::fs::write(&normal_path, bundled::REGULAR).expect("write regular");
-        let bold_path = tmp_dir.join("bold.ttf");
-        std::fs::write(&bold_path, b"this is not a valid TTF").expect("write corrupt bold");
-        let toml = tmp_dir.join("config.toml");
+    #[should_panic(expected = "was not found")]
+    fn configured_absent_family_aborts_startup() {
+        let tmp = std::env::temp_dir().join("orzma_font_absent_family.toml");
+        std::fs::write(&tmp, "[font.normal]\nfamily = \"no-such-family-8b3d2\"\n")
+            .expect("write toml");
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+        app.update();
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Registers the bundled JBM regular/bold faces into the test app's
+    /// `FontCx` collection under known family names BEFORE `app.update()`
+    /// runs `bridge_font_config`, so the resolution is deterministic and
+    /// does not depend on any host-installed font.
+    #[test]
+    fn configured_family_resolves_terminal_fonts_ui_font_and_bold_override() {
+        let tmp = std::env::temp_dir().join("orzma_font_family_success_path.toml");
         std::fs::write(
-            &toml,
-            format!(
-                "[font]\nnormal = \"{}\"\nbold = \"{}\"\n",
-                normal_path.to_string_lossy(),
-                bold_path.to_string_lossy(),
-            ),
+            &tmp,
+            "[font.normal]\nfamily = \"OrzmaTestMono\"\n[font.bold]\nfamily = \"OrzmaTestMonoBold\"\n",
         )
         .expect("write toml");
 
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &toml);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+
+        {
+            let mut font_cx = app.world_mut().resource_mut::<FontCx>();
+            let regular_blob =
+                Blob::new(Arc::new(bundled::REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+            font_cx.collection.register_fonts(
+                regular_blob,
+                Some(FontInfoOverride {
+                    family_name: Some("OrzmaTestMono"),
+                    ..Default::default()
+                }),
+            );
+            let bold_blob =
+                Blob::new(Arc::new(bundled::BOLD) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+            font_cx.collection.register_fonts(
+                bold_blob,
+                Some(FontInfoOverride {
+                    family_name: Some("OrzmaTestMonoBold"),
+                    ..Default::default()
+                }),
+            );
+        }
+
         app.update();
 
+        let ui_font = app
+            .world()
+            .get_resource::<TerminalUiFont>()
+            .expect("TerminalUiFont must be inserted when the configured family resolves");
+        assert_eq!(
+            ui_font.source,
+            FontSource::Family("OrzmaTestMono".into()),
+            "a family that resolves must produce FontSource::Family, not the bundled handle"
+        );
+
         let fonts = app.world().resource::<TerminalFonts>();
-        // Regular must remain the user-supplied (= bundled-regular bytes
-        // here, but reached via the override path).
         assert_eq!(
             fonts.regular.font_data(),
             bundled::REGULAR,
-            "normal override must survive a corrupt bold override"
+            "regular face must resolve to the bytes registered under `normal`"
         );
-        // Bold must fall back to bundled because the user-supplied bold
-        // is corrupt.
         assert_eq!(
             fonts.bold.font_data(),
             bundled::BOLD,
-            "corrupt bold override must fall back to bundled bold"
+            "bold face must resolve via `bold`, not fall back to `normal`'s bytes"
+        );
+        assert_eq!(
+            fonts.italic.font_data(),
+            bundled::REGULAR,
+            "italic face (no italic override) must fall back to `normal` via .or()"
         );
 
-        let _ = std::fs::remove_file(&normal_path);
-        let _ = std::fs::remove_file(&bold_path);
-        let _ = std::fs::remove_file(&toml);
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    /// Registers TWO faces (weight 400 and weight 700) under the SAME family
+    /// name, then configures `normal.style = "Bold"`. A single-face family
+    /// would resolve regardless of style, so this proves the style-derived
+    /// attributes actually drove weight selection: the `normal` slot must
+    /// pick the weight-700 face, not the family's first-registered weight-400
+    /// face.
+    #[test]
+    fn configured_style_selects_weight_within_same_family() {
+        let tmp = std::env::temp_dir().join("orzma_font_style_selects_weight.toml");
+        std::fs::write(
+            &tmp,
+            "[font.normal]\nfamily = \"OrzmaWeighted\"\nstyle = \"Bold\"\n",
+        )
+        .expect("write toml");
+
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+
+        {
+            let mut font_cx = app.world_mut().resource_mut::<FontCx>();
+            let regular_blob =
+                Blob::new(Arc::new(bundled::REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+            font_cx.collection.register_fonts(
+                regular_blob,
+                Some(FontInfoOverride {
+                    family_name: Some("OrzmaWeighted"),
+                    weight: Some(FontWeight::new(400.0)),
+                    ..Default::default()
+                }),
+            );
+            let bold_blob =
+                Blob::new(Arc::new(bundled::BOLD) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+            font_cx.collection.register_fonts(
+                bold_blob,
+                Some(FontInfoOverride {
+                    family_name: Some("OrzmaWeighted"),
+                    weight: Some(FontWeight::new(700.0)),
+                    ..Default::default()
+                }),
+            );
+        }
+
+        app.update();
+
+        let fonts = app.world().resource::<TerminalFonts>();
+        assert_eq!(
+            fonts.regular.font_data(),
+            bundled::BOLD,
+            "style = \"Bold\" must select the weight-700 face, not the family's weight-400 face"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn ui_text_attrs_maps_weight_and_slant() {
+        let (w, s) = ui_text_attrs(FontStyleSpec {
+            weight: 600,
+            slant: FontSlant::Italic,
+        });
+        assert_eq!(w, bevy::text::FontWeight(600));
+        assert_eq!(s, bevy::text::FontStyle::Italic);
+    }
+
+    #[test]
+    fn bundled_face_bytes_selects_by_weight_and_slant() {
+        // NOTE: compare by content (`==`), not `std::ptr::eq`. `bundled::REGULAR`
+        // et al. are `pub const`, not `static` (see `bundled.rs`'s module doc);
+        // without LTO, each `include_bytes!` reference across the
+        // orzma_tty_renderer -> orzma crate boundary gets its own embedded copy,
+        // so two textually distinct usage sites hold equal bytes at different
+        // addresses. `std::ptr::eq` would spuriously fail here in a plain `cargo
+        // test` build (no LTO), even though the selection logic is correct.
+        let case = |weight, slant| bundled_face_bytes(FontStyleSpec { weight, slant });
+        assert_eq!(case(400, FontSlant::Normal), bundled::REGULAR);
+        assert_eq!(case(700, FontSlant::Normal), bundled::BOLD);
+        assert_eq!(case(400, FontSlant::Italic), bundled::ITALIC);
+        assert_eq!(case(800, FontSlant::Italic), bundled::BOLD_ITALIC);
+        assert_eq!(case(500, FontSlant::Normal), bundled::REGULAR);
+    }
+
+    #[test]
+    fn configured_ui_family_and_style_resolve_independently() {
+        let tmp = std::env::temp_dir().join("orzma_ui_font_independent.toml");
+        std::fs::write(
+            &tmp,
+            "[font.normal]\nfamily = \"OrzmaTestMono\"\n[font.ui]\nfamily = \"OrzmaTestUi\"\nstyle = \"Bold\"\n",
+        )
+        .expect("write toml");
+
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+        {
+            let mut font_cx = app.world_mut().resource_mut::<FontCx>();
+            for (name, bytes) in [
+                ("OrzmaTestMono", bundled::REGULAR),
+                ("OrzmaTestUi", bundled::BOLD),
+            ] {
+                let blob = Blob::new(Arc::new(bytes) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+                font_cx.collection.register_fonts(
+                    blob,
+                    Some(FontInfoOverride {
+                        family_name: Some(name),
+                        ..Default::default()
+                    }),
+                );
+            }
+        }
+        app.update();
+
+        let ui_font = app.world().get_resource::<TerminalUiFont>().unwrap();
+        assert_eq!(
+            ui_font.source,
+            FontSource::Family("OrzmaTestUi".into()),
+            "ui.family must win independently of normal"
+        );
+        assert_eq!(
+            ui_font.weight,
+            bevy::text::FontWeight(700),
+            "ui.style = Bold"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    #[should_panic(expected = "was not found")]
+    fn configured_absent_ui_family_aborts_startup() {
+        let tmp = std::env::temp_dir().join("orzma_absent_ui_family.toml");
+        std::fs::write(&tmp, "[font.ui]\nfamily = \"no-such-ui-family-1a2b\"\n")
+            .expect("write toml");
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+        app.update();
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn configured_ui_style_only_no_family_uses_bundled_handle() {
+        let tmp = std::env::temp_dir().join("orzma_ui_style_only_no_family.toml");
+        std::fs::write(&tmp, "[font.ui]\nstyle = \"Bold\"\n").expect("write toml");
+
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+        app.update();
+
+        let ui_font = app
+            .world()
+            .get_resource::<TerminalUiFont>()
+            .expect("TerminalUiFont must be inserted on the bundled fallback path");
+        assert!(
+            matches!(ui_font.source, FontSource::Handle(_)),
+            "style-only with no family anywhere must take the bundled Handle branch, got {:?}",
+            ui_font.source
+        );
+        assert_eq!(
+            ui_font.weight,
+            bevy::text::FontWeight(700),
+            "ui.style = Bold must resolve to weight 700"
+        );
+
+        let _ = std::fs::remove_file(&tmp);
     }
 }

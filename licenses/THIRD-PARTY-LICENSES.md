@@ -5626,6 +5626,7 @@ Used by:
 - objc2-core-audio 0.3.2
 - objc2-core-foundation 0.3.2
 - objc2-core-graphics 0.3.2
+- objc2-core-text 0.3.2
 - objc2-encode 4.1.0
 - objc2-foundation 0.2.2
 - objc2-foundation 0.3.2

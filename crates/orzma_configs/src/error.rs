@@ -72,6 +72,16 @@ pub enum OrzmaConfigsError {
         size: f32,
     },
 
+    /// A `[font].<face>.style` string (face ∈ normal / bold / italic /
+    /// bold_italic / ui) did not parse to a known weight + slant.
+    #[error("invalid font style {value:?} for the {face} face")]
+    InvalidFontStyle {
+        /// The face label (`normal` / `bold` / `italic` / `bold_italic` / `ui`).
+        face: &'static str,
+        /// The offending style string.
+        value: String,
+    },
+
     /// Neither `$XDG_CONFIG_HOME` nor a home directory could be resolved.
     #[error("could not determine config directory (no $XDG_CONFIG_HOME and no home dir)")]
     HomeDirNotFound,
@@ -103,6 +113,18 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "could not determine config directory (no $XDG_CONFIG_HOME and no home dir)"
+        );
+    }
+
+    #[test]
+    fn invalid_font_style_display() {
+        let err = OrzmaConfigsError::InvalidFontStyle {
+            face: "italic",
+            value: "Blod".into(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "invalid font style \"Blod\" for the italic face"
         );
     }
 }

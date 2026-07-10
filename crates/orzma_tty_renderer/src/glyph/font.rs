@@ -2,13 +2,15 @@ use crate::bundled::{
     BOLD, BOLD_ITALIC, FALLBACK_BOLD, FALLBACK_BOLD_ITALIC, FALLBACK_ITALIC, FALLBACK_REGULAR,
     ITALIC, REGULAR, SYMBOL_REGULAR,
 };
-use ab_glyph::{Font, FontArc, ScaleFont};
+use ab_glyph::{Font, FontArc, FontVec, ScaleFont};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use ttf_parser::Face as TtfFace;
 
-/// Error returned by `TerminalFonts::from_bytes` when one of the supplied
-/// per-face byte buffers fails `ab_glyph::FontArc::try_from_vec`.
+/// Error returned by `TerminalFonts::from_faces` (the actual producer;
+/// `from_bytes` delegates to it) when a face's bytes fail to parse — primary
+/// faces via `ab_glyph::FontVec::try_from_vec_and_index`, fallback faces via
+/// `FontArc::try_from_vec`.
 #[derive(Debug, thiserror::Error)]
 pub enum FontLoadError {
     /// `FontArc::try_from_vec` rejected the bytes for this face.
@@ -170,6 +172,10 @@ pub struct TerminalFonts {
     /// no weight/style variants, so one face serves every `FontFace`. Always
     /// the bundled Noto Sans Symbols 2 — never user-overridable.
     pub symbol: FontArc,
+    /// `.ttc` face index of the regular face. Every ttf-parser reparse of the
+    /// regular face (cell metrics, em-scale) MUST use this index — parsing a
+    /// collection face at index 0 reads a different face and yields wrong metrics.
+    regular_index: u32,
 }
 
 /// Computes the worst-case rightward overflow (in physical px) over ASCII
@@ -204,8 +210,8 @@ fn max_ascii_overflow_for_face(face: &FontArc, px_scale: f32, cell_w_phys_floor:
 /// Returns a face's em-scale `(ascender − descender) / units_per_em` — the
 /// factor that maps a physical font size in pixels to the `ab_glyph::PxScale`
 /// whose em-square renders at exactly that pixel size.
-fn em_scale_of(font: &FontArc) -> f32 {
-    let face = TtfFace::parse(font.font_data(), 0)
+fn em_scale_of(font: &FontArc, index: u32) -> f32 {
+    let face = TtfFace::parse(font.font_data(), index)
         .expect("ttf-parser parse failed for a face ab_glyph already accepted");
     let asc = i32::from(face.ascender());
     let desc = i32::from(face.descender());
@@ -220,71 +226,45 @@ fn bundled_symbol_face() -> FontArc {
     FontArc::try_from_slice(SYMBOL_REGULAR).expect("bundled NotoSansSymbols2-Regular load")
 }
 
+/// Builds one primary `FontArc` from owned bytes at a `.ttc` face index,
+/// tagging parse failures with the offending face.
+fn primary_face(bytes: Vec<u8>, index: u32, face: FontFace) -> Result<FontArc, FontLoadError> {
+    FontVec::try_from_vec_and_index(bytes, index)
+        .map(FontArc::from)
+        .map_err(|source| FontLoadError::ParseFailed { face, source })
+}
+
+/// Builds one fallback `FontArc` from owned bytes (always face index 0),
+/// tagging parse failures with the offending face.
+fn fallback_face(bytes: Vec<u8>, face: FontFace) -> Result<FontArc, FontLoadError> {
+    FontArc::try_from_vec(bytes).map_err(|source| FontLoadError::ParseFailed { face, source })
+}
+
 impl TerminalFonts {
-    /// Constructs a `TerminalFonts` from eight owned TTF byte buffers, one
-    /// per face (four primary + four fallback). `Vec<u8>` is required by
-    /// `ab_glyph::FontArc::try_from_vec`; callers responsible for runtime
-    /// font loading (e.g., the Bevy font-bridge plugin) read bytes from disk,
-    /// build `Vec<u8>`, and call this. On per-face parse failure, returns
-    /// `FontLoadError::ParseFailed` naming the offending face — callers may
-    /// then substitute bundled bytes for that face and retry.
-    ///
-    /// The symbol fallback face is loaded internally from the bundled
-    /// Noto Sans Symbols 2 — it is not user-overridable, so callers do not
-    /// supply it.
-    pub fn from_bytes(
-        regular: Vec<u8>,
-        bold: Vec<u8>,
-        italic: Vec<u8>,
-        bold_italic: Vec<u8>,
+    /// Constructs a `TerminalFonts` from four primary `(bytes, .ttc index)`
+    /// pairs plus four fallback byte buffers. Each primary face is loaded at its
+    /// own collection index; fallback + symbol faces are always index 0. Stores
+    /// the regular face's index for later metric reparses. On per-face parse
+    /// failure returns `FontLoadError::ParseFailed` naming the face.
+    pub fn from_faces(
+        regular: (Vec<u8>, u32),
+        bold: (Vec<u8>, u32),
+        italic: (Vec<u8>, u32),
+        bold_italic: (Vec<u8>, u32),
         fallback_regular: Vec<u8>,
         fallback_bold: Vec<u8>,
         fallback_italic: Vec<u8>,
         fallback_bold_italic: Vec<u8>,
     ) -> Result<Self, FontLoadError> {
-        let regular =
-            FontArc::try_from_vec(regular).map_err(|source| FontLoadError::ParseFailed {
-                face: FontFace::Regular,
-                source,
-            })?;
-        let bold = FontArc::try_from_vec(bold).map_err(|source| FontLoadError::ParseFailed {
-            face: FontFace::Bold,
-            source,
-        })?;
-        let italic =
-            FontArc::try_from_vec(italic).map_err(|source| FontLoadError::ParseFailed {
-                face: FontFace::Italic,
-                source,
-            })?;
-        let bold_italic =
-            FontArc::try_from_vec(bold_italic).map_err(|source| FontLoadError::ParseFailed {
-                face: FontFace::BoldItalic,
-                source,
-            })?;
-        let fallback_regular = FontArc::try_from_vec(fallback_regular).map_err(|source| {
-            FontLoadError::ParseFailed {
-                face: FontFace::Regular,
-                source,
-            }
-        })?;
-        let fallback_bold =
-            FontArc::try_from_vec(fallback_bold).map_err(|source| FontLoadError::ParseFailed {
-                face: FontFace::Bold,
-                source,
-            })?;
-        let fallback_italic = FontArc::try_from_vec(fallback_italic).map_err(|source| {
-            FontLoadError::ParseFailed {
-                face: FontFace::Italic,
-                source,
-            }
-        })?;
-        let fallback_bold_italic =
-            FontArc::try_from_vec(fallback_bold_italic).map_err(|source| {
-                FontLoadError::ParseFailed {
-                    face: FontFace::BoldItalic,
-                    source,
-                }
-            })?;
+        let regular_index = regular.1;
+        let regular = primary_face(regular.0, regular.1, FontFace::Regular)?;
+        let bold = primary_face(bold.0, bold.1, FontFace::Bold)?;
+        let italic = primary_face(italic.0, italic.1, FontFace::Italic)?;
+        let bold_italic = primary_face(bold_italic.0, bold_italic.1, FontFace::BoldItalic)?;
+        let fallback_regular = fallback_face(fallback_regular, FontFace::Regular)?;
+        let fallback_bold = fallback_face(fallback_bold, FontFace::Bold)?;
+        let fallback_italic = fallback_face(fallback_italic, FontFace::Italic)?;
+        let fallback_bold_italic = fallback_face(fallback_bold_italic, FontFace::BoldItalic)?;
         let symbol = bundled_symbol_face();
         Ok(Self {
             regular,
@@ -296,7 +276,44 @@ impl TerminalFonts {
             fallback_italic,
             fallback_bold_italic,
             symbol,
+            regular_index,
         })
+    }
+
+    /// Constructs a `TerminalFonts` from eight owned TTF byte buffers, one
+    /// per face (four primary + four fallback). `Vec<u8>` is required by
+    /// `ab_glyph::FontArc::try_from_vec`; callers responsible for runtime
+    /// font loading (e.g., the Bevy font-bridge plugin) read bytes from disk,
+    /// build `Vec<u8>`, and call this. On per-face parse failure, returns
+    /// `FontLoadError::ParseFailed` naming the offending face — callers may
+    /// then substitute bundled bytes for that face and retry.
+    ///
+    /// The symbol fallback face is loaded internally from the bundled
+    /// Noto Sans Symbols 2 — it is not user-overridable, so callers do not
+    /// supply it.
+    ///
+    /// Delegates to [`Self::from_faces`] with face index 0 for all four
+    /// primary faces.
+    pub fn from_bytes(
+        regular: Vec<u8>,
+        bold: Vec<u8>,
+        italic: Vec<u8>,
+        bold_italic: Vec<u8>,
+        fallback_regular: Vec<u8>,
+        fallback_bold: Vec<u8>,
+        fallback_italic: Vec<u8>,
+        fallback_bold_italic: Vec<u8>,
+    ) -> Result<Self, FontLoadError> {
+        Self::from_faces(
+            (regular, 0),
+            (bold, 0),
+            (italic, 0),
+            (bold_italic, 0),
+            fallback_regular,
+            fallback_bold,
+            fallback_italic,
+            fallback_bold_italic,
+        )
     }
 
     /// Returns the primary face matching `face`.
@@ -328,7 +345,7 @@ impl TerminalFonts {
     /// Returns full pixel metrics for the regular face at the requested
     /// physical pixel size. See [`CellMetrics`] for individual field semantics.
     pub fn cell_metrics_px(&self, phys_size_px: u16) -> CellMetrics {
-        let face = TtfFace::parse(self.regular.font_data(), 0)
+        let face = TtfFace::parse(self.regular.font_data(), self.regular_index)
             .expect(
                 "regular face: ttf-parser parse failed (bundled or user-supplied via FontBridgePlugin); \
                  if a user override is in effect this means the override file passed ab_glyph but \
@@ -393,7 +410,7 @@ impl TerminalFonts {
     /// Returns the `ab_glyph::PxScale` value for the primary regular face at the
     /// given physical pixel size. Used by `cell_metrics_px` and `glyph/atlas.rs`.
     pub(crate) fn px_scale_value(&self, phys_size_px: u16) -> f32 {
-        f32::from(phys_size_px) * em_scale_of(&self.regular)
+        f32::from(phys_size_px) * em_scale_of(&self.regular, self.regular_index)
     }
 
     /// Returns the `PxScale` value for the CJK fallback face so its em-square
@@ -401,14 +418,14 @@ impl TerminalFonts {
     /// fallback from rasterizing larger than the grid expects. Mirrors
     /// [`Self::px_scale_value`] but reads `self.fallback_regular`'s metrics.
     pub(crate) fn fallback_px_scale_value(&self, phys_size_px: u16) -> f32 {
-        f32::from(phys_size_px) * em_scale_of(&self.fallback_regular)
+        f32::from(phys_size_px) * em_scale_of(&self.fallback_regular, 0)
     }
 
     /// Returns the `PxScale` value for the symbol fallback face so its
     /// em-square renders at the same physical pixel size as the primary's.
     /// Mirrors [`Self::px_scale_value`] but reads `self.symbol`'s metrics.
     pub(crate) fn symbol_px_scale_value(&self, phys_size_px: u16) -> f32 {
-        f32::from(phys_size_px) * em_scale_of(&self.symbol)
+        f32::from(phys_size_px) * em_scale_of(&self.symbol, 0)
     }
 
     /// Returns the primary regular face's `'0'` advance in physical pixels —
@@ -445,6 +462,7 @@ impl Default for TerminalFonts {
             fallback_bold_italic: FontArc::try_from_slice(FALLBACK_BOLD_ITALIC)
                 .expect("UDEVGothic35-BoldItalic load"),
             symbol: bundled_symbol_face(),
+            regular_index: 0,
         }
     }
 }
@@ -482,6 +500,48 @@ impl FontFace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::bundled;
+
+    #[test]
+    fn from_faces_index_zero_matches_from_bytes() {
+        let via_bytes = TerminalFonts::from_bytes(
+            bundled::REGULAR.to_vec(),
+            bundled::BOLD.to_vec(),
+            bundled::ITALIC.to_vec(),
+            bundled::BOLD_ITALIC.to_vec(),
+            bundled::FALLBACK_REGULAR.to_vec(),
+            bundled::FALLBACK_BOLD.to_vec(),
+            bundled::FALLBACK_ITALIC.to_vec(),
+            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
+        )
+        .expect("from_bytes");
+        let via_faces = TerminalFonts::from_faces(
+            (bundled::REGULAR.to_vec(), 0),
+            (bundled::BOLD.to_vec(), 0),
+            (bundled::ITALIC.to_vec(), 0),
+            (bundled::BOLD_ITALIC.to_vec(), 0),
+            bundled::FALLBACK_REGULAR.to_vec(),
+            bundled::FALLBACK_BOLD.to_vec(),
+            bundled::FALLBACK_ITALIC.to_vec(),
+            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
+        )
+        .expect("from_faces");
+        assert_eq!(via_faces.regular_index, 0);
+        assert_eq!(
+            via_bytes.regular.font_data(),
+            via_faces.regular.font_data(),
+            "from_faces(index 0) and from_bytes must produce the same regular face"
+        );
+        let mb = via_bytes.cell_metrics_px(12);
+        let mf = via_faces.cell_metrics_px(12);
+        assert!((mb.advance_phys - mf.advance_phys).abs() < 0.001);
+        assert!((mb.line_height_phys - mf.line_height_phys).abs() < 0.001);
+    }
+
+    #[test]
+    fn default_terminal_fonts_regular_index_is_zero() {
+        assert_eq!(TerminalFonts::default().regular_index, 0);
+    }
 
     /// `cell_metrics_px(12)` returns sensible values for JetBrains Mono
     /// Nerd Font Mono Regular at 12px. Empirical ranges were measured

@@ -148,14 +148,14 @@ fn rebuild_window_bar(
     };
     commands.entity(bar).despawn_related::<Children>();
 
-    let font = ui_font.as_deref().map(|f| f.0.clone()).unwrap_or_default();
+    let ui = ui_font.as_deref().cloned().unwrap_or_default();
     let pl_font = powerline_font
         .as_deref()
         .map(|f| f.0.clone())
-        .unwrap_or_else(|| font.clone());
+        .unwrap_or_default();
 
     let session_name = session.iter().next().map(|s| s.name.as_str()).unwrap_or("");
-    build_session_block(&mut commands, bar, session_name, &font, &pl_font);
+    build_session_block(&mut commands, bar, session_name, &ui, &pl_font);
 
     let mut entries: Vec<(u32, WindowId, String, bool, WindowFlags)> = windows
         .iter()
@@ -180,7 +180,7 @@ fn rebuild_window_bar(
             &name,
             active,
             flags,
-            &font,
+            &ui,
             &pl_font,
         );
     }
@@ -192,7 +192,7 @@ fn build_session_block(
     commands: &mut Commands,
     bar: Entity,
     session_name: &str,
-    font: &Handle<Font>,
+    ui: &TerminalUiFont,
     pl_font: &Handle<Font>,
 ) {
     let block = commands
@@ -210,11 +210,7 @@ fn build_session_block(
     commands.spawn((
         Text::new(session_name.to_string()),
         TextColor(palette::FOREGROUND),
-        TextFont {
-            font: font.clone().into(),
-            font_size: FontSize::Px(theme::UI_FONT_SIZE),
-            ..default()
-        },
+        ui.text_font(FontSize::Px(theme::UI_FONT_SIZE)),
         ChildOf(block),
     ));
     commands.spawn((
@@ -245,7 +241,7 @@ fn build_window_entry(
     name: &str,
     active: bool,
     flags: WindowFlags,
-    font: &Handle<Font>,
+    ui: &TerminalUiFont,
     pl_font: &Handle<Font>,
 ) {
     let (label_color, flag_color) = entry_colors(active, flags);
@@ -279,15 +275,7 @@ fn build_window_entry(
                 ChildOf(entry),
             ))
             .id();
-        spawn_entry_label(
-            commands,
-            fill,
-            &label,
-            &suffix,
-            label_color,
-            flag_color,
-            font,
-        );
+        spawn_entry_label(commands, fill, &label, &suffix, label_color, flag_color, ui);
     } else {
         let pad = commands
             .spawn((
@@ -299,15 +287,7 @@ fn build_window_entry(
                 ChildOf(entry),
             ))
             .id();
-        spawn_entry_label(
-            commands,
-            pad,
-            &label,
-            &suffix,
-            label_color,
-            flag_color,
-            font,
-        );
+        spawn_entry_label(commands, pad, &label, &suffix, label_color, flag_color, ui);
     }
 
     // Always spawn the chevron so active and inactive entries share the same
@@ -335,27 +315,19 @@ fn spawn_entry_label(
     suffix: &str,
     label_color: Color,
     flag_color: Color,
-    font: &Handle<Font>,
+    ui: &TerminalUiFont,
 ) {
     commands.spawn((
         Text::new(label.to_string()),
         TextColor(label_color),
-        TextFont {
-            font: font.clone().into(),
-            font_size: FontSize::Px(theme::UI_FONT_SIZE),
-            ..default()
-        },
+        ui.text_font(FontSize::Px(theme::UI_FONT_SIZE)),
         ChildOf(parent),
     ));
     if !suffix.is_empty() {
         commands.spawn((
             Text::new(suffix.to_string()),
             TextColor(flag_color),
-            TextFont {
-                font: font.clone().into(),
-                font_size: FontSize::Px(theme::UI_FONT_SIZE),
-                ..default()
-            },
+            ui.text_font(FontSize::Px(theme::UI_FONT_SIZE)),
             ChildOf(parent),
         ));
     }
