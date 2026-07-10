@@ -72,7 +72,7 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
-bevy = { version = "0.19", features = ["default_font", "system_clipboard", "system_font_discovery"] }
+bevy = { version = "0.19", features = ["default_font", "system_clipboard", "system_font_discovery", "bevy_settings"] }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }
