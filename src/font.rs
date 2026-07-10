@@ -14,8 +14,10 @@ use bevy::prelude::*;
 use bevy::text::{Font, FontCx, FontSource};
 use fontique::{Blob, Collection, Script, SourceCache};
 use orzma_configs::font::FontStyleSpec;
+use orzma_tty_renderer::bundled::FALLBACK_REGULAR;
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
 use std::str::FromStr;
+use std::sync::Arc;
 
 mod resolve;
 
@@ -63,10 +65,7 @@ impl Plugin for FontBridgePlugin {
 /// any `Font` asset is ever removed — orzma never removes font assets
 /// after Startup; re-run this registration if that changes.
 fn register_cjk_fallback(mut font_cx: ResMut<FontCx>) {
-    let blob = Blob::new(
-        std::sync::Arc::new(orzma_tty_renderer::bundled::FALLBACK_REGULAR)
-            as std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>,
-    );
+    let blob = Blob::new(Arc::new(FALLBACK_REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
     let registered = font_cx.collection.register_fonts(blob, None);
     let family_ids: Vec<_> = registered.iter().map(|(id, _)| *id).collect();
     for script in [
