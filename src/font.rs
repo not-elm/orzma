@@ -672,7 +672,6 @@ mod tests {
         assert_eq!(case(700, FontSlant::Normal), bundled::BOLD);
         assert_eq!(case(400, FontSlant::Italic), bundled::ITALIC);
         assert_eq!(case(800, FontSlant::Italic), bundled::BOLD_ITALIC);
-        // Intermediate weight rounds down to Regular.
         assert_eq!(case(500, FontSlant::Normal), bundled::REGULAR);
     }
 
