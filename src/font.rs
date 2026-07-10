@@ -27,11 +27,11 @@ mod resolve;
 #[derive(Resource, Clone, Default)]
 pub struct TerminalUiFont {
     /// Family or bundled-handle source handed to `TextFont.font`.
-    pub source: FontSource,
+    source: FontSource,
     /// Weight applied to `TextFont.weight`.
-    pub weight: FontWeight,
+    weight: FontWeight,
     /// Slant applied to `TextFont.style`.
-    pub style: FontStyle,
+    style: FontStyle,
 }
 
 impl TerminalUiFont {
@@ -725,6 +725,32 @@ mod tests {
             .expect("write toml");
         let (mut app, _guard, _env) = make_test_app(Some(&tmp));
         app.update();
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn configured_ui_style_only_no_family_uses_bundled_handle() {
+        let tmp = std::env::temp_dir().join("orzma_ui_style_only_no_family.toml");
+        std::fs::write(&tmp, "[font.ui]\nstyle = \"Bold\"\n").expect("write toml");
+
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+        app.update();
+
+        let ui_font = app
+            .world()
+            .get_resource::<TerminalUiFont>()
+            .expect("TerminalUiFont must be inserted on the bundled fallback path");
+        assert!(
+            matches!(ui_font.source, FontSource::Handle(_)),
+            "style-only with no family anywhere must take the bundled Handle branch, got {:?}",
+            ui_font.source
+        );
+        assert_eq!(
+            ui_font.weight,
+            bevy::text::FontWeight(700),
+            "ui.style = Bold must resolve to weight 700"
+        );
+
         let _ = std::fs::remove_file(&tmp);
     }
 }
