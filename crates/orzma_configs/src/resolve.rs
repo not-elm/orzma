@@ -69,10 +69,10 @@ impl RawSettings {
     fn resolve_shortcuts(&self, diags: &mut Vec<Diagnostic>) -> Shortcuts {
         let mut table = Table::new();
         self.collect_shortcut_bindings(&mut table, diags);
-        let shortcuts = self.build_shortcuts(&table, diags);
+        let shortcuts = self.build_shortcuts(diags, &table);
 
-        let losers = Self::conflicting_shortcut_actions(&shortcuts, diags);
-        let revert_leader = Self::leader_needs_revert(&shortcuts, diags);
+        let losers = Self::conflicting_shortcut_actions(diags, &shortcuts);
+        let revert_leader = Self::leader_needs_revert(diags, &shortcuts);
         if losers.is_empty() && !revert_leader {
             return shortcuts;
         }
@@ -82,7 +82,7 @@ impl RawSettings {
         if revert_leader {
             table.remove("leader");
         }
-        self.build_shortcuts(&table, diags)
+        self.build_shortcuts(diags, &table)
     }
 
     /// Pre-validates `self.shortcuts.leader` and `self.shortcuts.bindings`
@@ -130,7 +130,7 @@ impl RawSettings {
     /// failure here would be a bug in that pre-validation rather than a bad
     /// user value — it is surfaced as an `Error` diagnostic rather than
     /// silently resetting all shortcuts to their defaults.
-    fn build_shortcuts(&self, table: &Table, diags: &mut Vec<Diagnostic>) -> Shortcuts {
+    fn build_shortcuts(&self, diags: &mut Vec<Diagnostic>, table: &Table) -> Shortcuts {
         let mut shortcuts: Shortcuts = match Value::Table(table.clone()).try_into() {
             Ok(s) => s,
             Err(e) => {
@@ -205,7 +205,7 @@ impl RawSettings {
                 diags.push(Diagnostic {
                     severity: Severity::Warn,
                     message: format!(
-                        "vi-mode key `{}` is bound to both `{winner}` and `{loser}`; keeping `{winner}`",
+                        "duplicate vi-mode key `{}` is bound to both `{winner}` and `{loser}`; keeping `{winner}`",
                         dupe.key
                     ),
                 });
@@ -257,28 +257,28 @@ impl RawSettings {
         FontConfig {
             size,
             normal: Self::resolve_font_face(
+                diags,
                 "normal",
                 &self.font.normal.family,
                 &self.font.normal.style,
-                diags,
             ),
             bold: Self::resolve_font_face(
+                diags,
                 "bold",
                 &self.font.bold.family,
                 &self.font.bold.style,
-                diags,
             ),
             italic: Self::resolve_font_face(
+                diags,
                 "italic",
                 &self.font.italic.family,
                 &self.font.italic.style,
-                diags,
             ),
             bold_italic: Self::resolve_font_face(
+                diags,
                 "bold_italic",
                 &self.font.bold_italic.family,
                 &self.font.bold_italic.style,
-                diags,
             ),
         }
     }
@@ -379,8 +379,8 @@ impl RawSettings {
     /// losing action labels to unbind. The first action in fixed
     /// (`bindings_iter`) order wins each collision.
     fn conflicting_shortcut_actions(
-        shortcuts: &Shortcuts,
         diags: &mut Vec<Diagnostic>,
+        shortcuts: &Shortcuts,
     ) -> Vec<&'static str> {
         let mut losers = Vec::new();
         for conflicts in [
@@ -421,7 +421,7 @@ impl RawSettings {
     /// True when the merged `shortcuts`' leader is a chord whose key has no
     /// physical mapping, meaning every `<Leader>`-scoped binding would be
     /// unreachable. Pushes a `Warn` diagnostic when true.
-    fn leader_needs_revert(shortcuts: &Shortcuts, diags: &mut Vec<Diagnostic>) -> bool {
+    fn leader_needs_revert(diags: &mut Vec<Diagnostic>, shortcuts: &Shortcuts) -> bool {
         if let Some(Leader::Chord(chord)) = shortcuts.leader.as_ref()
             && !chord.key.maps_to_physical_key()
         {
@@ -440,10 +440,10 @@ impl RawSettings {
     /// `style` is sanitized to `None` (with a `Warn` diagnostic) when it does
     /// not parse as a `FontStyleSpec`.
     fn resolve_font_face(
+        diags: &mut Vec<Diagnostic>,
         label: &'static str,
         family: &Option<String>,
         style: &Option<String>,
-        diags: &mut Vec<Diagnostic>,
     ) -> FontFaceConfig {
         let style = match style {
             None => None,
@@ -479,7 +479,6 @@ mod tests {
         assert!(diags.iter().all(|d| d.severity == Severity::Warn));
         let quit = cfg.shortcuts.quit.as_ref().unwrap().chord();
         assert!(quit.modifiers.meta && quit.modifiers.shift);
-        // A binding the user did NOT set keeps its built-in default.
         assert!(cfg.shortcuts.paste.is_some());
     }
 
@@ -510,9 +509,7 @@ mod tests {
                 .iter()
                 .any(|d| d.severity == Severity::Warn && d.message.contains("Cmd+Foo"))
         );
-        // A bad leader falls back to the built-in default leader...
         assert_eq!(cfg.shortcuts.leader, Shortcuts::default().leader);
-        // ...and does NOT reset the user's other bindings.
         let quit = cfg.shortcuts.quit.as_ref().unwrap().chord();
         assert!(quit.modifiers.meta && quit.modifiers.shift);
     }
@@ -530,9 +527,7 @@ mod tests {
                 .iter()
                 .any(|d| d.severity == Severity::Warn && d.message.contains("quit"))
         );
-        // The bad chord is skipped; `quit` falls back to its built-in default.
         assert_eq!(cfg.shortcuts.quit, Shortcuts::default().quit);
-        // `paste` still resolves to the user's override.
         let paste = cfg.shortcuts.paste.as_ref().unwrap().chord();
         assert!(paste.modifiers.meta && paste.modifiers.shift);
     }
@@ -555,7 +550,6 @@ mod tests {
                 parse_vi_mode_key("Ctrl+9").unwrap(),
             ]
         );
-        // An action the user did NOT override keeps its built-in default.
         assert_eq!(cfg.vi_mode.cursor_down, ViModeConfig::default().cursor_down);
     }
 
@@ -622,8 +616,9 @@ mod tests {
                 .iter()
                 .any(|d| d.message.to_lowercase().contains("duplicate"))
         );
-        // `copy` precedes `quit` in the fixed action order (`bindings_iter`),
-        // so `copy` wins the collision and `quit` is unbound.
+        // NOTE: `copy` precedes `quit` in the fixed action order
+        // (`bindings_iter`), so `copy` wins the collision and `quit` is
+        // unbound — without this, the outcome would look arbitrary.
         let copy = cfg.shortcuts.copy.as_ref().unwrap().chord();
         assert!(copy.modifiers.meta && copy.key == Key::Char('j'));
         assert!(cfg.shortcuts.quit.is_none());
@@ -640,10 +635,7 @@ mod tests {
                 .iter()
                 .any(|d| d.message.contains("quit") && d.message.contains("shadow"))
         );
-        // `quit`'s built-in default (`Cmd+Q`) is shadowed by the leader; it
-        // is unbound rather than causing a hard failure.
         assert!(cfg.shortcuts.quit.is_none());
-        // The leader itself, and the leader-scoped binding, still resolve.
         assert!(cfg.shortcuts.detach_session.is_some());
     }
 
@@ -668,11 +660,11 @@ mod tests {
         assert!(
             diags
                 .iter()
-                .any(|d| d.message.to_lowercase().contains("duplicate")
-                    || d.message.contains("bound to both"))
+                .any(|d| d.message.to_lowercase().contains("duplicate"))
         );
-        // `yank` precedes `exit` in the fixed action order, so `yank` keeps
-        // `x` and `exit` loses it (but keeps its other key, `q`).
+        // NOTE: `yank` precedes `exit` in the fixed action order, so `yank`
+        // keeps `x` and `exit` loses it (but keeps its other key, `q`) —
+        // without this, the outcome would look arbitrary.
         assert!(cfg.vi_mode.yank.iter().any(|k| k.to_string() == "x"));
         assert!(!cfg.vi_mode.exit.iter().any(|k| k.to_string() == "x"));
         assert!(cfg.vi_mode.exit.iter().any(|k| k.to_string() == "q"));

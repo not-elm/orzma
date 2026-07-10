@@ -661,8 +661,8 @@ mod tests {
             VI_MODE_ACTION_KEYS.len(),
             ViModeConfig::default().bindings_iter().count()
         );
-        // "Ctrl+9" is not any action's default key, so it is guaranteed to
-        // change whichever field it lands on.
+        // NOTE: "Ctrl+9" is not any action's default key, so it is
+        // guaranteed to change whichever field it lands on.
         for key in VI_MODE_ACTION_KEYS {
             let t = format!("{key} = \"Ctrl+9\"\n");
             let cfg: ViModeConfig = toml::from_str(&t).expect(key);
