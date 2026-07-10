@@ -32,7 +32,7 @@ pub mod shortcuts;
 pub mod vi_mode;
 
 /// Fully-resolved orzma configuration.
-#[derive(Deserialize, Clone, Debug, Default)]
+#[derive(Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(default, deny_unknown_fields)]
 pub struct OrzmaConfigs {
     /// Shortcut configuration.

@@ -105,7 +105,7 @@ impl Default for RawFont {
 
 /// `[mouse]` section, mirroring `MouseConfig` field-for-field (the enum
 /// field is carried as a `String` pending `resolve`'s parse).
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RawMouse {
     /// Lines scrolled per notch.
     pub lines_per_notch: u32,
@@ -135,15 +135,49 @@ pub struct RawMouse {
     pub divider_grab_tolerance_px: f32,
 }
 
+impl Default for RawMouse {
+    // NOTE: derived `Default` would zero every field (e.g.
+    // `double_click_timeout_ms = 0`, `lines_per_notch = 0`), which is not a
+    // usable mouse config; mirror `MouseConfig::default()` (`mouse.rs`) exactly.
+    fn default() -> Self {
+        RawMouse {
+            lines_per_notch: 3,
+            fine_modifier: "alt".to_string(),
+            fine_lines: 1,
+            max_protocol_events_per_frame: 8,
+            cells_per_notch: 0.5,
+            axis_lock_ratio: 0.9,
+            double_click_timeout_ms: 400,
+            click_drift_px: 8.0,
+            autoscroll_base_period_ms: 50,
+            autoscroll_min_period_ms: 16,
+            autoscroll_step_ms: 4,
+            drag_threshold_px: 4.0,
+            divider_grab_tolerance_px: 4.0,
+        }
+    }
+}
+
 /// `[keyboard]` section: which Option key(s) act as Meta on macOS.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RawKeyboard {
     /// `option_as_alt` value (`"none"` / `"left"` / `"right"` / `"both"`).
     pub option_as_alt: String,
 }
 
+impl Default for RawKeyboard {
+    // NOTE: derived `Default` would set `option_as_alt = ""`, which fails to
+    // parse as any `OptionAsAlt` variant; mirror `KeyboardConfig::default()`
+    // (`keyboard.rs`), whose `option_as_alt` is `OptionAsAlt::None` ("none").
+    fn default() -> Self {
+        RawKeyboard {
+            option_as_alt: "none".to_string(),
+        }
+    }
+}
+
 /// `[inactive_pane]` section, mirroring `InactivePaneConfig` field-for-field.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RawInactivePane {
     /// Whether inactive panes are treated at all.
     pub enabled: bool,
@@ -157,6 +191,22 @@ pub struct RawInactivePane {
     pub webview_dim: f32,
     /// Inactive-webview desaturation.
     pub webview_desaturate: f32,
+}
+
+impl Default for RawInactivePane {
+    // NOTE: derived `Default` would set `enabled = false` and every unit-range
+    // field to `0.0`, disabling inactive-pane treatment entirely; mirror
+    // `InactivePaneConfig::default()` (`inactive_pane.rs`) exactly.
+    fn default() -> Self {
+        RawInactivePane {
+            enabled: true,
+            dim: 1.0,
+            tint_color: "#3a3b45".to_string(),
+            tint: 0.85,
+            webview_dim: 0.55,
+            webview_desaturate: 0.6,
+        }
+    }
 }
 
 /// `[orzma]` section: single-terminal mode configuration.
