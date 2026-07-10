@@ -321,8 +321,10 @@ If that bites, set `repeat_time_ms = 0` (disables repeat globally) or drop the
 
 Each row below is one entry you can set under `[shortcuts.bindings]` (see the
 example above). The table also fixes the tie-break order used when two
-actions end up bound to the same chord (see "Note on the leader" below): the
-action listed first wins.
+actions end up bound to the same chord (see "Note on the leader" below): a
+binding you set explicitly always wins over a colliding built-in default (the
+default yields automatically, with a warning); when several of *your*
+bindings collide with each other, the action listed first wins.
 
 | Action | Default | What it does |
 | --- | --- | --- |
@@ -396,13 +398,16 @@ not time out on its own.
 Two consequences of the stock `<Leader>` defaults worth knowing:
 
 - **Rebinding a `<Leader>` chord that a stock default already uses** (e.g.
-  `enter-vi-mode = "<Leader>c"`, which collides with the default
-  `new-window = "<Leader>c"`) no longer fails startup. It now warns, and
-  whichever action is listed FIRST in the table above keeps the chord — here
-  `enter-vi-mode` precedes `new-window`, so `enter-vi-mode` wins and
-  `new-window` is unbound automatically. If you want both actions reachable,
-  unbind the stock default explicitly (`new-window = ""`) or pick a free
-  chord instead of relying on the tie-break.
+  `rename-session = "<Leader>c"`, which collides with the default
+  `new-window = "<Leader>c"`) no longer fails startup. It now warns, and your
+  explicit binding always wins over the colliding built-in default — here
+  `rename-session` is the one you set, so it keeps the chord and `new-window`
+  is unbound automatically, even though `new-window` is listed earlier in the
+  table above. (If two of *your own* bindings collide with each other instead
+  — no built-in default involved — the one listed FIRST in the table above
+  wins between them.) If you want both actions reachable, unbind the losing
+  one explicitly (`new-window = ""`) or pick a free chord instead of relying
+  on the tie-break.
 - **An empty `leader` (`leader = ""`) disables the leader outright.** No
   `<Leader>...`-scoped binding fires (they become inert), and no warning is
   logged — this is a deliberate way to turn the leader off, not an invalid
@@ -446,10 +451,13 @@ A `[vi-mode.bindings]` entry is an optional `Ctrl+` prefix plus exactly one key.
   examples below).
 - **Duplicate keys now warn instead of failing startup**: if the same key
   string is bound to more than one `[vi-mode.bindings]` action, orzma logs a
-  warning naming every colliding action and keeps the key on whichever
-  action is listed FIRST in the "Vi-mode actions" table below; every other
-  colliding action just loses that one key (its remaining keys, if any, stay
-  bound). Unknown action names under `[vi-mode.bindings]` also warn now
+  warning naming every colliding action and keeps the key on the action you
+  bound it to explicitly — a key you set under `[vi-mode.bindings]` always
+  wins over a colliding built-in default. If several of *your own* actions
+  collide with each other instead (no built-in default involved), the one
+  listed FIRST in the "Vi-mode actions" table below wins between them. Every
+  other colliding action just loses that one key (its remaining keys, if any,
+  stay bound). Unknown action names under `[vi-mode.bindings]` also warn now
   (instead of failing startup) and that one entry is skipped; everything
   else in your config still loads.
 

@@ -1437,9 +1437,11 @@ mod tests {
             SHORTCUT_ACTION_KEYS.len(),
             Shortcuts::default().bindings_iter().count()
         );
-        // NOTE: `resolve.rs::conflicting_shortcut_actions` picks the winner of
-        // a chord collision by `bindings_iter()` order, and `docs/configs.md`
-        // documents the tie-break as "the action listed first [in
+        // NOTE: `resolve.rs::conflicting_shortcut_actions` (via
+        // `first_user_set_or_first`) picks the winner of a chord collision
+        // among same-provenance actions (all user-set, or all built-in
+        // default) by `bindings_iter()` order, and `docs/configs.md`
+        // documents that tie-break as "the action listed first [in
         // SHORTCUT_ACTION_KEYS / the doc table] wins". Those two claims are
         // only both true if this order pin holds; a reorder of one list
         // without the other would silently desync the docs from behavior.

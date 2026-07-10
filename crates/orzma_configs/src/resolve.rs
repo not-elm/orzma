@@ -65,13 +65,16 @@ impl RawSettings {
     /// routing, `""`-unbind handling, and per-field defaulting. Then repairs
     /// any chord collision or leader problem the merged result exposes (see
     /// `conflicting_shortcut_actions` / `leader_needs_revert`) by dropping
-    /// the losing binding instead of failing the whole config.
+    /// the losing binding instead of failing the whole config. A user-set
+    /// action (its key present in `self.shortcuts.bindings`) always beats a
+    /// colliding built-in default; see `first_user_set_or_first`.
     fn resolve_shortcuts(&self, diags: &mut Vec<Diagnostic>) -> Shortcuts {
         let mut table = Table::new();
         self.collect_shortcut_bindings(&mut table, diags);
         let shortcuts = self.build_shortcuts(diags, &table);
+        let user_set: BTreeSet<&str> = self.shortcuts.bindings.keys().map(String::as_str).collect();
 
-        let losers = Self::conflicting_shortcut_actions(diags, &shortcuts);
+        let losers = Self::conflicting_shortcut_actions(diags, &shortcuts, &user_set);
         let revert_leader = Self::leader_needs_revert(diags, &shortcuts);
         if losers.is_empty() && !revert_leader {
             return shortcuts;
@@ -160,8 +163,11 @@ impl RawSettings {
     /// per-entry granularity — one action is one entry), so a bad key in one
     /// action's array skips only that action, not the whole `[vi-mode]`
     /// table. Any key collision the merged result exposes is then repaired
-    /// by dropping the key from every losing action but the first (in fixed
-    /// `VI_MODE_ACTION_KEYS` order).
+    /// by dropping the key from every losing action but the winner: the
+    /// first user-set action (its key present in `self.vi_mode.bindings`)
+    /// sharing the key, or — when the whole group is built-in defaults —
+    /// the first action in fixed `VI_MODE_ACTION_KEYS` order (see
+    /// `first_user_set_or_first`).
     fn resolve_vi_mode(&self, diags: &mut Vec<Diagnostic>) -> ViModeConfig {
         let mut table = Table::new();
         for (action, keys) in &self.vi_mode.bindings {
@@ -200,14 +206,15 @@ impl RawSettings {
         let Err(dupes) = vi_mode.validate_no_duplicate_keys() else {
             return vi_mode;
         };
+        let user_set: BTreeSet<&str> = self.vi_mode.bindings.keys().map(String::as_str).collect();
         let mut remaining: BTreeMap<&'static str, Vec<ViModeKey>> = vi_mode
             .bindings_iter()
             .map(|(label, keys, _)| (label, keys.clone()))
             .collect();
         let mut touched = BTreeSet::new();
         for dupe in &dupes {
-            let winner = dupe.actions[0];
-            for &loser in &dupe.actions[1..] {
+            let winner = Self::first_user_set_or_first(&dupe.actions, &user_set);
+            for loser in dupe.actions.iter().copied().filter(|&a| a != winner) {
                 diags.push(Diagnostic {
                     severity: Severity::Warn,
                     message: format!(
@@ -382,11 +389,31 @@ impl RawSettings {
     /// Detects chord collisions among the merged `shortcuts`' direct and
     /// leader-scoped bindings, plus a leader chord that shadows a direct
     /// binding, pushing a `Warn` diagnostic for each and returning the
-    /// losing action labels to unbind. The first action in fixed
-    /// (`bindings_iter`) order wins each collision.
+    /// losing action labels to unbind. Within each conflict group, the
+    /// winner is picked by `first_user_set_or_first`: a user-set action
+    /// (present in `user_set`) always beats a colliding built-in default;
+    /// among several user-set actions (or a group that is entirely
+    /// built-in defaults), the first action in fixed (`bindings_iter`)
+    /// order wins.
+    ///
+    /// The leader-shadow check below is NOT re-derived from `user_set`: a
+    /// `Leader::Chord` only ever exists because the user explicitly set
+    /// `leader` to a chord (the built-in default leader is a bare
+    /// `ModifierTap`, never a `Chord`), so the leader is already the
+    /// user-set party whenever this check fires and today's "leader wins,
+    /// the shadowed direct binding is unbound" behavior already matches
+    /// the new rule for the common case (a built-in-default direct
+    /// binding loses to a user-set leader). The one case this does not
+    /// cover — a user ALSO explicitly binding that same direct action to
+    /// the leader's chord — is left as "leader wins" on purpose: unlike a
+    /// plain action-vs-action collision, making the direct binding win
+    /// would mean reverting the leader itself, which cascades to every
+    /// other `<Leader>`-scoped binding instead of unbinding one action, so
+    /// it is not a clear analog of the rest of this rule.
     fn conflicting_shortcut_actions(
         diags: &mut Vec<Diagnostic>,
         shortcuts: &Shortcuts,
+        user_set: &BTreeSet<&str>,
     ) -> Vec<&'static str> {
         let mut losers = Vec::new();
         for conflicts in [
@@ -395,8 +422,8 @@ impl RawSettings {
         ] {
             let Err(dupes) = conflicts else { continue };
             for dupe in dupes {
-                let winner = dupe.actions[0];
-                for &loser in &dupe.actions[1..] {
+                let winner = Self::first_user_set_or_first(&dupe.actions, user_set);
+                for loser in dupe.actions.iter().copied().filter(|&a| a != winner) {
                     diags.push(Diagnostic {
                         severity: Severity::Warn,
                         message: format!(
@@ -468,6 +495,23 @@ impl RawSettings {
             family: family.clone(),
             style,
         }
+    }
+
+    /// Picks the winner of a conflict group already in fixed
+    /// (`bindings_iter`) order: the first action present in `user_set`, or
+    /// — when none of the group is user-set (the built-in defaults are
+    /// conflict-free by design, so this is a safety fallback) — the first
+    /// action in the group. Shared by `conflicting_shortcut_actions` and
+    /// `resolve_vi_mode`'s duplicate-key repair.
+    fn first_user_set_or_first(
+        actions: &[&'static str],
+        user_set: &BTreeSet<&str>,
+    ) -> &'static str {
+        actions
+            .iter()
+            .copied()
+            .find(|&action| user_set.contains(action))
+            .unwrap_or(actions[0])
     }
 }
 
@@ -622,12 +666,38 @@ mod tests {
                 .iter()
                 .any(|d| d.message.to_lowercase().contains("duplicate"))
         );
-        // NOTE: `copy` precedes `quit` in the fixed action order
-        // (`bindings_iter`), so `copy` wins the collision and `quit` is
-        // unbound — without this, the outcome would look arbitrary.
+        // NOTE: both `quit` and `copy` are user-set here (both keys are
+        // present in `raw.shortcuts.bindings`), so the user-set-beats-default
+        // rule does not distinguish them — the tie-break falls through to
+        // fixed action order (`bindings_iter`), where `copy` precedes `quit`,
+        // so `copy` wins and `quit` is unbound. See
+        // `user_binding_beats_colliding_default` below for the mixed
+        // user-set-vs-default case this tie-break rule does NOT cover.
         let copy = cfg.shortcuts.copy.as_ref().unwrap().chord();
         assert!(copy.modifiers.meta && copy.key == Key::Char('j'));
         assert!(cfg.shortcuts.quit.is_none());
+    }
+
+    #[test]
+    fn user_binding_beats_colliding_default() {
+        let mut raw = RawSettings::default();
+        // `Cmd+V` is the built-in default chord for `paste`; binding `copy`
+        // to it explicitly must make `copy` win, not `paste`, even though
+        // `paste` precedes `copy` in fixed action order.
+        raw.shortcuts.bindings = BTreeMap::from([("copy".into(), "Cmd+V".into())]);
+        let (cfg, diags) = raw.resolve();
+        let copy = cfg.shortcuts.copy.as_ref().unwrap().chord();
+        assert!(copy.modifiers.meta && copy.key == Key::Char('v'));
+        assert!(
+            cfg.shortcuts.paste.is_none(),
+            "the built-in default must yield to the user-set binding"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == Severity::Warn && d.message.contains("paste")),
+            "a warning must name the losing default `paste`: {diags:?}"
+        );
     }
 
     #[test]
@@ -692,12 +762,44 @@ mod tests {
                 .iter()
                 .any(|d| d.message.to_lowercase().contains("duplicate"))
         );
-        // NOTE: `yank` precedes `exit` in the fixed action order, so `yank`
-        // keeps `x` and `exit` loses it (but keeps its other key, `q`) —
-        // without this, the outcome would look arbitrary.
+        // NOTE: both `yank` and `exit` are user-set here (both keys are
+        // present in `raw.vi_mode.bindings`), so the user-set-beats-default
+        // rule does not distinguish them — the tie-break falls through to
+        // fixed action order (`bindings_iter`), where `yank` precedes `exit`,
+        // so `yank` keeps `x` and `exit` loses it (but keeps its other key,
+        // `q`). See `user_vi_binding_beats_colliding_default` below for the
+        // mixed user-set-vs-default case this tie-break rule does NOT cover.
         assert!(cfg.vi_mode.yank.iter().any(|k| k.to_string() == "x"));
         assert!(!cfg.vi_mode.exit.iter().any(|k| k.to_string() == "x"));
         assert!(cfg.vi_mode.exit.iter().any(|k| k.to_string() == "q"));
+    }
+
+    #[test]
+    fn user_vi_binding_beats_colliding_default() {
+        let mut raw = RawSettings::default();
+        // Default `cursor-left` includes key `h`; explicitly binding `yank`
+        // to `h` must make `yank` keep it, not the built-in default, even
+        // though `cursor-left` precedes `yank` in fixed action order.
+        raw.vi_mode.bindings = BTreeMap::from([("yank".into(), vec!["h".into()])]);
+        let (cfg, diags) = raw.resolve();
+        assert!(cfg.vi_mode.yank.iter().any(|k| k.to_string() == "h"));
+        assert!(
+            !cfg.vi_mode.cursor_left.iter().any(|k| k.to_string() == "h"),
+            "the built-in default must yield the key to the user-set binding"
+        );
+        assert!(
+            cfg.vi_mode
+                .cursor_left
+                .iter()
+                .any(|k| k.to_string() == "ArrowLeft"),
+            "cursor-left keeps its other default key"
+        );
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.severity == Severity::Warn && d.message.contains("cursor-left")),
+            "a warning must name the losing default `cursor-left`: {diags:?}"
+        );
     }
 
     #[test]

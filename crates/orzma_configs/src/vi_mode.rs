@@ -661,12 +661,14 @@ mod tests {
             VI_MODE_ACTION_KEYS.len(),
             ViModeConfig::default().bindings_iter().count()
         );
-        // NOTE: `resolve.rs::resolve_vi_mode`'s duplicate-key repair keeps the
-        // first action in `bindings_iter()` order, and `docs/configs.md`
-        // documents the analogous shortcuts tie-break as "the action listed
-        // first wins" — both claims hold only if this order pin holds; a
-        // reorder of one list without the other would silently desync intent
-        // from behavior.
+        // NOTE: `resolve.rs::resolve_vi_mode`'s duplicate-key repair (via
+        // `first_user_set_or_first`) keeps the first action in
+        // `bindings_iter()` order among same-provenance actions (all
+        // user-set, or all built-in default), and `docs/configs.md` documents
+        // the analogous shortcuts tie-break as "the action listed first
+        // wins" — both claims hold only if this order pin holds; a reorder of
+        // one list without the other would silently desync intent from
+        // behavior.
         let iter_order: Vec<&'static str> = ViModeConfig::default()
             .bindings_iter()
             .map(|(label, _, _)| label)
