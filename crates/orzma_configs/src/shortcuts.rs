@@ -1008,7 +1008,7 @@ fn tap_modifier_token(m: TapModifier) -> &'static str {
 /// Parses a non-empty `leader` value: a single allowed tap-modifier token →
 /// `ModifierTap`; anything else → `parse_key_chord` → `Chord`. A bare `Shift`
 /// (and any other bare modifier) errors via `parse_key_chord` (no key).
-fn parse_leader(value: &str) -> Result<Leader, KeyChordParseError> {
+pub(crate) fn parse_leader(value: &str) -> Result<Leader, KeyChordParseError> {
     if let Some(m) = single_tap_modifier(value) {
         return Ok(Leader::ModifierTap(m));
     }
@@ -1428,6 +1428,15 @@ mod tests {
 
     #[test]
     fn every_action_key_routes() {
+        // NOTE: one-directional drift guard — the loop below only checks
+        // that listed keys route; this length check catches the other
+        // direction, a new `Shortcuts` field added without a matching
+        // `SHORTCUT_ACTION_KEYS` entry (which would silently make that
+        // action unconfigurable from TOML).
+        assert_eq!(
+            SHORTCUT_ACTION_KEYS.len(),
+            Shortcuts::default().bindings_iter().count()
+        );
         // NOTE: `quit`'s own built-in default IS `Cmd+Q`, so overriding it
         // with that same chord would be a no-op and falsely fail this guard;
         // `Ctrl+Alt+Shift+9` is not any action's default (which use at most
