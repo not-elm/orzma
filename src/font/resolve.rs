@@ -49,7 +49,10 @@ pub(super) struct FamilyNotFound;
 /// font bytes. Used by the UI-font path, which hands parley a
 /// `FontSource::Family` and needs only a presence check (parley selects the
 /// face at render time).
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "used only by tests until the UI-font path wires it into TerminalUiFont resolution; #[expect] would fail because the test target compiles it as live"
+)]
 pub(super) fn family_present(collection: &mut Collection, family: &str) -> bool {
     collection.family_id(family).is_some()
 }
