@@ -136,6 +136,12 @@ fn apply_migrated_groups(world: &mut World, raw: &RawSettings) {
 /// first, or the save were left queued, a crash between the two would leave
 /// a marker on disk with no migrated settings file behind it, permanently
 /// losing the user's legacy config.
+///
+/// The marker's parent directory is created explicitly rather than assumed
+/// to already exist from the `SaveSettingsSync::Always` write above: if a
+/// future change ever made that save target a different path (or fail
+/// silently), a missing settings directory here would make the marker write
+/// fail every launch, and the app would re-run migration forever.
 fn save_and_mark_migrated(world: &mut World) {
     // NOTE: `Always`, not `IfChanged`. `apply_migrated_groups`'s
     // `insert_resource` calls happen inside `OrzmaConfigsPlugin::build`,
@@ -152,6 +158,16 @@ fn save_and_mark_migrated(world: &mut World) {
     let Some(marker) = world.remove_resource::<MigrationMarker>() else {
         return;
     };
+    if let Some(dir) = marker.0.parent()
+        && let Err(source) = std::fs::create_dir_all(dir)
+    {
+        tracing::warn!(
+            path = %dir.display(),
+            %source,
+            "failed to create the settings directory for the migration marker; migration will retry on next launch"
+        );
+        return;
+    }
     if let Err(source) = std::fs::write(&marker.0, "") {
         tracing::warn!(
             path = %marker.0.display(),

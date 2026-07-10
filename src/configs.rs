@@ -71,6 +71,9 @@ fn resolve_and_insert(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsStr;
+    use std::ffi::OsString;
+    use tempfile::TempDir;
 
     #[test]
     fn resolve_and_insert_produces_default_resource() {
@@ -83,5 +86,130 @@ mod tests {
             .get_resource::<OrzmaConfigsResource>()
             .expect("resource inserted");
         assert_eq!(res.0, OrzmaConfigs::default());
+    }
+
+    /// RAII guard for a process-environment variable. `EnvVarGuard::set` /
+    /// `::unset` snapshot the prior value and restore it (or remove the var,
+    /// if it was previously unset) on drop, even on panic. Duplicated from
+    /// `src/font.rs`'s test-only `EnvVarGuard` rather than shared: that one
+    /// is private to `font.rs`'s own test module.
+    ///
+    /// The caller MUST hold [`env_guard`] for the full lifetime of every
+    /// `EnvVarGuard` to keep env mutations serialized across tests.
+    struct EnvVarGuard {
+        key: &'static str,
+        prior: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let prior = std::env::var_os(key);
+            // SAFETY: caller holds env_guard() for the duration of this guard.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, prior }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let prior = std::env::var_os(key);
+            // SAFETY: caller holds env_guard() for the duration of this guard.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, prior }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: caller still holds env_guard() (LIFO drop order keeps
+            // this ahead of the MutexGuard's own drop within each test scope).
+            unsafe {
+                match self.prior.take() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    /// Retained regression test for the riskiest mechanism in the
+    /// `bevy::settings` migration: `HashMap`/`Vec` binding maps round-tripping
+    /// through a REAL `SettingsPlugin` disk load. This is deliberately NOT a
+    /// hermetic bypass (unlike `resolve_and_insert_produces_default_resource`
+    /// above, which skips `SettingsPlugin` entirely) and NOT the migration
+    /// path (skipped here via a pre-written `.migrated` marker, so this
+    /// exercises the steady-state load instead).
+    ///
+    /// Writes a `settings.toml` in the exact on-disk shape `bevy::settings`
+    /// itself would have written, at the exact path
+    /// `bevy_platform::dirs::preferences_dir()` resolves to under an
+    /// isolated `$HOME`, then runs the real `OrzmaConfigsPlugin` (the same
+    /// `register_type` -> `SettingsPlugin` -> `migrate_if_needed` ->
+    /// `resolve_and_insert` sequence `main.rs` runs) and asserts the
+    /// `HashMap<String, String>` (`[shortcuts.bindings]`) and
+    /// `HashMap<String, Vec<String>>` (`[vi-mode.bindings]`) fields both
+    /// reached the resolved `OrzmaConfigsResource`.
+    #[test]
+    fn steady_state_settings_toml_round_trips_maps_through_real_settings_plugin() {
+        let _guard = env_guard();
+        let tempdir = TempDir::new().expect("create isolated $HOME");
+        let _home = EnvVarGuard::set("HOME", tempdir.path());
+        let _xdg_config_home = EnvVarGuard::set("XDG_CONFIG_HOME", tempdir.path().join(".config"));
+        let _orzma_config = EnvVarGuard::unset("ORZMA_CONFIG");
+
+        let prefs_dir = bevy_platform::dirs::preferences_dir()
+            .expect("preferences dir resolves under the isolated $HOME");
+        let settings_dir = prefs_dir.join("orzma");
+        std::fs::create_dir_all(&settings_dir).expect("create settings dir");
+        std::fs::write(
+            settings_dir.join("settings.toml"),
+            "[shortcuts.bindings]\n\
+             quit = \"Cmd+Shift+Q\"\n\
+             \n\
+             [vi-mode.bindings]\n\
+             cursor-down = [\"k\", \"ArrowUp\"]\n",
+        )
+        .expect("write settings.toml");
+        std::fs::write(settings_dir.join(".migrated"), "").expect("write migration marker");
+
+        let mut app = App::new();
+        app.add_plugins(OrzmaConfigsPlugin);
+
+        let res = app
+            .world()
+            .get_resource::<OrzmaConfigsResource>()
+            .expect("OrzmaConfigsPlugin must insert OrzmaConfigsResource");
+
+        let quit = res
+            .shortcuts
+            .quit
+            .as_ref()
+            .expect("quit must still be bound")
+            .chord();
+        assert_eq!(
+            quit.to_string(),
+            "Cmd+Shift+Q",
+            "the HashMap<String, String> [shortcuts.bindings] entry must survive a real disk load"
+        );
+        assert_ne!(
+            res.shortcuts.quit,
+            OrzmaConfigs::default().shortcuts.quit,
+            "must be the disk override (Cmd+Shift+Q), not the built-in default (Cmd+Q)"
+        );
+
+        let cursor_down: Vec<String> = res
+            .vi_mode
+            .cursor_down
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            cursor_down,
+            vec!["k".to_string(), "ArrowUp".to_string()],
+            "the HashMap<String, Vec<String>> [vi-mode.bindings] entry must survive a real \
+             disk load, with both keys present in the Vec"
+        );
     }
 }

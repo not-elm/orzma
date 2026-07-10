@@ -1437,6 +1437,20 @@ mod tests {
             SHORTCUT_ACTION_KEYS.len(),
             Shortcuts::default().bindings_iter().count()
         );
+        // NOTE: `resolve.rs::conflicting_shortcut_actions` picks the winner of
+        // a chord collision by `bindings_iter()` order, and `docs/configs.md`
+        // documents the tie-break as "the action listed first [in
+        // SHORTCUT_ACTION_KEYS / the doc table] wins". Those two claims are
+        // only both true if this order pin holds; a reorder of one list
+        // without the other would silently desync the docs from behavior.
+        let iter_order: Vec<&'static str> = Shortcuts::default()
+            .bindings_iter()
+            .map(|(label, _, _)| label)
+            .collect();
+        assert_eq!(
+            SHORTCUT_ACTION_KEYS, iter_order,
+            "SHORTCUT_ACTION_KEYS order must match bindings_iter() label order"
+        );
         // NOTE: `quit`'s own built-in default IS `Cmd+Q`, so overriding it
         // with that same chord would be a no-op and falsely fail this guard;
         // `Ctrl+Alt+Shift+9` is not any action's default (which use at most

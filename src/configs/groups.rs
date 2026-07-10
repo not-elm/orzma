@@ -445,13 +445,9 @@ impl From<&RawScrollback> for ScrollbackSettings {
 
 /// Reads each settings group `Resource` from `world`, falling back to the
 /// group's `Default` when absent — so a world without `SettingsPlugin`
-/// resolves to the domain defaults (hermetic for tests).
-// NOTE: only this file's tests call `collect_raw` today; `OrzmaConfigsPlugin`
-// wires it into the real load path in a later task. `#[expect]` can't be used
-// here because the dead-code lint only fires in the non-test compilation
-// (this fn IS used under `#[cfg(test)]`), so the lint firing is itself
-// cfg-conditional — the documented `#[allow]` fallback case in rust.md.
-#[cfg_attr(not(test), allow(dead_code))]
+/// resolves to the domain defaults (hermetic for tests). Called by
+/// `resolve_and_insert` (`src/configs.rs`) in the real load path, and
+/// directly by this file's tests.
 pub(crate) fn collect_raw(world: &World) -> RawSettings {
     RawSettings {
         shortcuts: (&world

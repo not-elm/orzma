@@ -661,6 +661,20 @@ mod tests {
             VI_MODE_ACTION_KEYS.len(),
             ViModeConfig::default().bindings_iter().count()
         );
+        // NOTE: `resolve.rs::resolve_vi_mode`'s duplicate-key repair keeps the
+        // first action in `bindings_iter()` order, and `docs/configs.md`
+        // documents the analogous shortcuts tie-break as "the action listed
+        // first wins" — both claims hold only if this order pin holds; a
+        // reorder of one list without the other would silently desync intent
+        // from behavior.
+        let iter_order: Vec<&'static str> = ViModeConfig::default()
+            .bindings_iter()
+            .map(|(label, _, _)| label)
+            .collect();
+        assert_eq!(
+            VI_MODE_ACTION_KEYS, iter_order,
+            "VI_MODE_ACTION_KEYS order must match bindings_iter() label order"
+        );
         // NOTE: "Ctrl+9" is not any action's default key, so it is
         // guaranteed to change whichever field it lands on.
         for key in VI_MODE_ACTION_KEYS {
