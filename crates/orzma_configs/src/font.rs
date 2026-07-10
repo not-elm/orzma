@@ -64,7 +64,7 @@ impl FontConfig {
 
     /// The four terminal faces paired with their `[font]` key labels, in fixed
     /// order — the single source of truth for the face set.
-    pub(crate) fn faces(&self) -> [(&'static str, &FontFaceConfig); 4] {
+    pub fn faces(&self) -> [(&'static str, &FontFaceConfig); 4] {
         [
             ("normal", &self.normal),
             ("bold", &self.bold),

@@ -98,10 +98,7 @@ fn bridge_font_config(
     let powerline = fonts_assets.add(Font::from_bytes(bundled::REGULAR.to_vec()));
     commands.insert_resource(PowerlineFont(powerline.clone()));
 
-    let no_family = font.normal.family.is_none()
-        && font.bold.family.is_none()
-        && font.italic.family.is_none()
-        && font.bold_italic.family.is_none();
+    let no_family = font.faces().iter().all(|(_, face)| face.family.is_none());
     if no_family {
         commands.insert_resource(TerminalUiFont(FontSource::Handle(powerline)));
         return;
@@ -287,9 +284,14 @@ mod tests {
         }
     }
 
-    fn make_test_app() -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
+    fn make_test_app(
+        config: Option<&std::path::Path>,
+    ) -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
         let guard = crate::configs::env_guard();
-        let env = EnvVarGuard::unset("ORZMA_CONFIG");
+        let env = match config {
+            Some(path) => EnvVarGuard::set("ORZMA_CONFIG", path),
+            None => EnvVarGuard::unset("ORZMA_CONFIG"),
+        };
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())
@@ -313,7 +315,7 @@ mod tests {
 
     #[test]
     fn default_config_keeps_bundled_jbm_in_terminal_fonts() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
         let fonts = app.world().resource::<TerminalFonts>();
         assert_eq!(
@@ -325,7 +327,7 @@ mod tests {
 
     #[test]
     fn default_config_inserts_terminal_ui_font_with_strong_handle() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
         let ui_font = app
             .world()
@@ -348,7 +350,7 @@ mod tests {
 
     #[test]
     fn cjk_fallback_registered_in_font_collection() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
 
         let mut font_cx = app.world_mut().resource_mut::<FontCx>();
@@ -373,7 +375,7 @@ mod tests {
 
     #[test]
     fn bridge_sets_terminal_font_size_from_default_config() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
         let size = app.world().resource::<TerminalFontSize>();
         assert_eq!(
@@ -387,22 +389,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("orzma_font_size_override.toml");
         std::fs::write(&tmp, "[font]\nsize = 16.0\n").expect("write toml");
 
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
         app.update();
 
         let size = app.world().resource::<TerminalFontSize>();
@@ -416,7 +403,7 @@ mod tests {
 
     #[test]
     fn powerline_font_resource_is_inserted_and_resolves() {
-        let (mut app, _guard, _env) = make_test_app();
+        let (mut app, _guard, _env) = make_test_app(None);
         app.update();
 
         let handle = app
@@ -440,22 +427,7 @@ mod tests {
         let tmp = std::env::temp_dir().join("orzma_font_absent_family.toml");
         std::fs::write(&tmp, "[font.normal]\nfamily = \"no-such-family-8b3d2\"\n")
             .expect("write toml");
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
         app.update();
         let _ = std::fs::remove_file(&tmp);
     }
@@ -473,22 +445,7 @@ mod tests {
         )
         .expect("write toml");
 
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
 
         {
             let mut font_cx = app.world_mut().resource_mut::<FontCx>();
@@ -559,22 +516,7 @@ mod tests {
         )
         .expect("write toml");
 
-        let _guard = crate::configs::env_guard();
-        let _env = EnvVarGuard::set("ORZMA_CONFIG", &tmp);
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins)
-            .add_plugins(AssetPlugin::default())
-            .add_plugins(TextPlugin)
-            .init_asset::<Font>();
-        let mut window = Window {
-            resolution: WindowResolution::new(800, 600),
-            ..default()
-        };
-        window.resolution.set_scale_factor(1.0);
-        app.world_mut().spawn((window, PrimaryWindow));
-        app.add_plugins(TerminalFontPlugin);
-        app.add_plugins(OrzmaConfigsPlugin);
-        app.add_plugins(FontBridgePlugin);
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
 
         {
             let mut font_cx = app.world_mut().resource_mut::<FontCx>();

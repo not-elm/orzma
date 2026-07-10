@@ -234,6 +234,12 @@ fn primary_face(bytes: Vec<u8>, index: u32, face: FontFace) -> Result<FontArc, F
         .map_err(|source| FontLoadError::ParseFailed { face, source })
 }
 
+/// Builds one fallback `FontArc` from owned bytes (always face index 0),
+/// tagging parse failures with the offending face.
+fn fallback_face(bytes: Vec<u8>, face: FontFace) -> Result<FontArc, FontLoadError> {
+    FontArc::try_from_vec(bytes).map_err(|source| FontLoadError::ParseFailed { face, source })
+}
+
 impl TerminalFonts {
     /// Constructs a `TerminalFonts` from four primary `(bytes, .ttc index)`
     /// pairs plus four fallback byte buffers. Each primary face is loaded at its
@@ -255,30 +261,10 @@ impl TerminalFonts {
         let bold = primary_face(bold.0, bold.1, FontFace::Bold)?;
         let italic = primary_face(italic.0, italic.1, FontFace::Italic)?;
         let bold_italic = primary_face(bold_italic.0, bold_italic.1, FontFace::BoldItalic)?;
-        let fallback_regular = FontArc::try_from_vec(fallback_regular).map_err(|source| {
-            FontLoadError::ParseFailed {
-                face: FontFace::Regular,
-                source,
-            }
-        })?;
-        let fallback_bold =
-            FontArc::try_from_vec(fallback_bold).map_err(|source| FontLoadError::ParseFailed {
-                face: FontFace::Bold,
-                source,
-            })?;
-        let fallback_italic = FontArc::try_from_vec(fallback_italic).map_err(|source| {
-            FontLoadError::ParseFailed {
-                face: FontFace::Italic,
-                source,
-            }
-        })?;
-        let fallback_bold_italic =
-            FontArc::try_from_vec(fallback_bold_italic).map_err(|source| {
-                FontLoadError::ParseFailed {
-                    face: FontFace::BoldItalic,
-                    source,
-                }
-            })?;
+        let fallback_regular = fallback_face(fallback_regular, FontFace::Regular)?;
+        let fallback_bold = fallback_face(fallback_bold, FontFace::Bold)?;
+        let fallback_italic = fallback_face(fallback_italic, FontFace::Italic)?;
+        let fallback_bold_italic = fallback_face(fallback_bold_italic, FontFace::BoldItalic)?;
         let symbol = bundled_symbol_face();
         Ok(Self {
             regular,
