@@ -34,24 +34,23 @@ impl FromStr for FontStyleSpec {
     type Err = InvalidFontStyleToken;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut weight = None;
-        let mut slant = None;
-        for raw in s.split_whitespace() {
-            let word = raw.replace('-', "").to_lowercase();
-            if let Some(w) = weight_name(&word) {
-                weight = Some(w);
-            } else if let Some(sl) = FontSlant::parse(&word) {
-                slant = Some(sl);
-            } else {
-                return Err(InvalidFontStyleToken {
-                    token: raw.to_string(),
-                });
-            }
-        }
-        Ok(Self {
-            weight: weight.unwrap_or(400),
-            slant: slant.unwrap_or(FontSlant::Normal),
-        })
+        // Collapse away spaces and hyphens so "Extra Bold", "extra-bold", and
+        // "ExtraBold" all reduce to one token, and "Bold Italic" / "BoldItalic"
+        // both become "bolditalic".
+        let normalized: String = s
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != '-')
+            .flat_map(char::to_lowercase)
+            .collect();
+        let (rest, slant) = FontSlant::strip(&normalized);
+        let weight = if rest.is_empty() {
+            400
+        } else {
+            weight_name(rest).ok_or_else(|| InvalidFontStyleToken {
+                token: s.trim().to_string(),
+            })?
+        };
+        Ok(Self { weight, slant })
     }
 }
 
@@ -71,19 +70,25 @@ fn weight_name(word: &str) -> Option<u16> {
 }
 
 impl FontSlant {
-    fn parse(word: &str) -> Option<Self> {
-        Some(match word {
-            "italic" => Self::Italic,
-            "oblique" => Self::Oblique,
-            _ => return None,
-        })
+    /// Strips a leading or trailing slant name (`italic` / `oblique`) from the
+    /// normalized `token`, returning the remaining weight portion and the slant
+    /// (`Normal` when none is present).
+    fn strip(token: &str) -> (&str, Self) {
+        for (name, slant) in [("italic", Self::Italic), ("oblique", Self::Oblique)] {
+            if let Some(rest) = token.strip_suffix(name) {
+                return (rest, slant);
+            }
+            if let Some(rest) = token.strip_prefix(name) {
+                return (rest, slant);
+            }
+        }
+        (token, Self::Normal)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
 
     fn spec(s: &str) -> FontStyleSpec {
         FontStyleSpec::from_str(s).expect("valid style")
@@ -138,10 +143,32 @@ mod tests {
     }
 
     #[test]
-    fn accepts_hyphenated_and_concatenated_weight_names() {
+    fn accepts_hyphenated_concatenated_and_space_separated_weight_names() {
         assert_eq!(spec("extra-bold").weight, 800);
         assert_eq!(spec("ExtraBold").weight, 800);
         assert_eq!(spec("ultra-light").weight, 200);
+        // Space-separated multi-word weight names, as macOS Font Book displays.
+        assert_eq!(spec("Extra Bold").weight, 800);
+        assert_eq!(spec("Semi Bold").weight, 600);
+        assert_eq!(spec("Ultra Light").weight, 200);
+    }
+
+    #[test]
+    fn accepts_concatenated_and_multiword_weight_slant() {
+        assert_eq!(
+            spec("BoldItalic"),
+            FontStyleSpec {
+                weight: 700,
+                slant: FontSlant::Italic
+            }
+        );
+        assert_eq!(
+            spec("Extra Bold Italic"),
+            FontStyleSpec {
+                weight: 800,
+                slant: FontSlant::Italic
+            }
+        );
     }
 
     #[test]

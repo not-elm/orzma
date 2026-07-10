@@ -39,28 +39,6 @@ pub(super) fn attributes_of(spec: FontStyleSpec) -> Attributes {
     }
 }
 
-/// Resolves `family` at `attributes` to `(font-file bytes, .ttc face index)`,
-/// or `None` when no face resolves — either the family name is absent from the
-/// collection, or it is present but the query returns no match. A present family
-/// that merely lacks the exact requested weight/style still returns `Some` (the
-/// closest match). `resolve_configured_face` maps a `None` here to `FamilyNotFound`.
-fn resolve_face_bytes(
-    collection: &mut Collection,
-    source_cache: &mut SourceCache,
-    family: &str,
-    attributes: Attributes,
-) -> Option<(Vec<u8>, u32)> {
-    let mut query = collection.query(source_cache);
-    query.set_families([QueryFamily::Named(family)]);
-    query.set_attributes(attributes);
-    let mut resolved = None;
-    query.matches_with(|font| {
-        resolved = Some((font.blob.as_ref().to_vec(), font.index));
-        QueryStatus::Stop
-    });
-    resolved
-}
-
 /// The configured family did not resolve to a usable face — either its name is
 /// absent from the collection (system font DB), or it is present but no face
 /// matched the query.
@@ -81,6 +59,28 @@ pub(super) fn resolve_configured_face(
         return Err(FamilyNotFound);
     }
     resolve_face_bytes(collection, source_cache, family, attributes).ok_or(FamilyNotFound)
+}
+
+/// Resolves `family` at `attributes` to `(font-file bytes, .ttc face index)`,
+/// or `None` when no face resolves — either the family name is absent from the
+/// collection, or it is present but the query returns no match. A present family
+/// that merely lacks the exact requested weight/style still returns `Some` (the
+/// closest match). `resolve_configured_face` maps a `None` here to `FamilyNotFound`.
+fn resolve_face_bytes(
+    collection: &mut Collection,
+    source_cache: &mut SourceCache,
+    family: &str,
+    attributes: Attributes,
+) -> Option<(Vec<u8>, u32)> {
+    let mut query = collection.query(source_cache);
+    query.set_families([QueryFamily::Named(family)]);
+    query.set_attributes(attributes);
+    let mut resolved = None;
+    query.matches_with(|font| {
+        resolved = Some((font.blob.as_ref().to_vec(), font.index));
+        QueryStatus::Stop
+    });
+    resolved
 }
 
 #[cfg(test)]
