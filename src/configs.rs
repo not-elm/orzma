@@ -27,7 +27,7 @@ pub(crate) struct OrzmaConfigsPlugin;
 
 impl Plugin for OrzmaConfigsPlugin {
     fn build(&self, app: &mut App) {
-        // register_type BEFORE SettingsPlugin (else map/nested fields load empty).
+        // NOTE: register_type BEFORE SettingsPlugin (else map/nested fields load empty).
         app.register_type::<ShortcutSettings>()
             .register_type::<ViModeSettings>()
             .register_type::<FontSettings>()
@@ -39,6 +39,18 @@ impl Plugin for OrzmaConfigsPlugin {
             .add_plugins(SettingsPlugin::new("orzma"));
         resolve_and_insert(app.world_mut());
     }
+}
+
+/// Crate-internal mutex guarding `ORZMA_CONFIG` env-var mutations across
+/// tests. Any test (in any module) that mutates the process env BEFORE
+/// constructing `OrzmaConfigsPlugin` (or anything else that calls
+/// `OrzmaConfigs::load`) MUST acquire this guard for the duration
+/// of the construction.
+#[cfg(test)]
+pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::Mutex;
+    static ENV_GUARD: Mutex<()> = Mutex::new(());
+    ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 /// Reads the settings groups (or `$ORZMA_CONFIG`, Task 8), resolves them,
@@ -54,25 +66,13 @@ fn resolve_and_insert(world: &mut World) {
     world.insert_resource(OrzmaConfigsResource(cfg));
 }
 
-/// Crate-internal mutex guarding `ORZMA_CONFIG` env-var mutations across
-/// tests. Any test (in any module) that mutates the process env BEFORE
-/// constructing `OrzmaConfigsPlugin` (or anything else that calls
-/// `OrzmaConfigs::load`) MUST acquire this guard for the duration
-/// of the construction.
-#[cfg(test)]
-pub(crate) fn env_guard() -> std::sync::MutexGuard<'static, ()> {
-    use std::sync::Mutex;
-    static ENV_GUARD: Mutex<()> = Mutex::new(());
-    ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn resolve_and_insert_produces_default_resource() {
-        // Hermetic: no SettingsPlugin, no disk. collect_raw falls back to Default
+        // NOTE: Hermetic test: no SettingsPlugin, no disk. collect_raw falls back to Default
         // for any group not present, so an empty world resolves to the defaults.
         let mut app = App::new();
         resolve_and_insert(app.world_mut());
@@ -80,6 +80,6 @@ mod tests {
             .world()
             .get_resource::<OrzmaConfigsResource>()
             .expect("resource inserted");
-        assert_eq!(res.0, orzma_configs::OrzmaConfigs::default());
+        assert_eq!(res.0, OrzmaConfigs::default());
     }
 }
