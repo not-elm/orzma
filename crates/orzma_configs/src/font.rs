@@ -62,9 +62,16 @@ impl FontConfig {
             .collect()
     }
 
+    /// Whether no face configures a font family — every face's `family` is
+    /// absent, so the bundled default font is used.
+    #[inline]
+    pub fn has_no_configured_family(&self) -> bool {
+        self.faces().iter().all(|(_, c)| c.family.is_none())
+    }
+
     /// The four terminal faces paired with their `[font]` key labels, in fixed
     /// order — the single source of truth for the face set.
-    pub fn faces(&self) -> [(&'static str, &FontFaceConfig); 4] {
+    pub const fn faces(&self) -> [(&'static str, &FontFaceConfig); 4] {
         [
             ("normal", &self.normal),
             ("bold", &self.bold),

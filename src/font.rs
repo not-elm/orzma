@@ -98,8 +98,7 @@ fn bridge_font_config(
     let powerline = fonts_assets.add(Font::from_bytes(bundled::REGULAR.to_vec()));
     commands.insert_resource(PowerlineFont(powerline.clone()));
 
-    let no_family = font.faces().iter().all(|(_, face)| face.family.is_none());
-    if no_family {
+    if font.has_no_configured_family() {
         commands.insert_resource(TerminalUiFont(FontSource::Handle(powerline)));
         return;
     }
