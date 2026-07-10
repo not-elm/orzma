@@ -11,9 +11,9 @@
 
 use crate::configs::OrzmaConfigsResource;
 use bevy::prelude::*;
-use bevy::text::{Font, FontCx, FontSource};
+use bevy::text::{Font, FontCx, FontSize, FontSource, FontStyle, FontWeight, TextFont};
 use fontique::{Blob, Collection, Script, SourceCache};
-use orzma_configs::font::FontStyleSpec;
+use orzma_configs::font::{FontFaceConfig, FontSlant, FontStyleSpec};
 use orzma_tty_renderer::bundled::FALLBACK_REGULAR;
 use orzma_tty_renderer::{FontFace, TerminalFontInitSet, TerminalFontSize, TerminalFonts, bundled};
 use std::str::FromStr;
@@ -21,12 +21,81 @@ use std::sync::Arc;
 
 mod resolve;
 
-/// UI font source (regular face) consumed by UI text builders as
-/// `TextFont { font: ui_font.0.clone(), ... }`. Either a `FontSource::Family`
-/// (when a system family resolved) or a `FontSource::Handle` to the bundled
-/// regular face. Inserted by `bridge_font_config`.
-#[derive(Resource, Clone)]
-pub struct TerminalUiFont(pub FontSource);
+/// UI-chrome font: the family `source` plus the `weight`/`slant` applied at
+/// every UI `TextFont` site (window bar, prompts, indicators). Built by
+/// `bridge_font_config` from `[font].ui`, inheriting `[font].normal` per field.
+#[derive(Resource, Clone, Default)]
+pub struct TerminalUiFont {
+    /// Family or bundled-handle source handed to `TextFont.font`.
+    pub source: FontSource,
+    /// Weight applied to `TextFont.weight`.
+    pub weight: FontWeight,
+    /// Slant applied to `TextFont.style`.
+    pub style: FontStyle,
+}
+
+impl TerminalUiFont {
+    /// A `TextFont` for a UI text node at `size`, carrying this face's family,
+    /// weight, and slant.
+    pub fn text_font(&self, size: FontSize) -> TextFont {
+        TextFont {
+            font: self.source.clone(),
+            font_size: size,
+            weight: self.weight,
+            style: self.style,
+            ..default()
+        }
+    }
+
+    /// Resolves the UI face from `[font].ui`, inheriting `normal` per field:
+    /// `family` falls back to `normal`'s (using its already-resolved result via
+    /// `regular_from_family`), `style` falls back to `normal.style` then
+    /// Regular. A configured `ui.family` that is absent aborts startup. When no
+    /// family resolves, the bundled face matching the resolved weight/slant is
+    /// used (bundled has only four faces).
+    fn resolve(
+        collection: &mut Collection,
+        fonts_assets: &mut Assets<Font>,
+        ui: &FontFaceConfig,
+        normal: &FontFaceConfig,
+        regular_from_family: bool,
+    ) -> Self {
+        let spec = ui
+            .style
+            .as_deref()
+            .or(normal.style.as_deref())
+            .map(|s| FontStyleSpec::from_str(s).expect("style validated at config load"))
+            .unwrap_or(FontStyleSpec {
+                weight: 400,
+                slant: FontSlant::Normal,
+            });
+        let (weight, style) = ui_text_attrs(spec);
+
+        let source = if let Some(family) = ui.family.as_deref() {
+            if !resolve::family_present(collection, family) {
+                panic!(
+                    "orzma: font family {family:?} configured for the ui face was not found; install it or fix [font].ui in your config",
+                );
+            }
+            FontSource::Family(family.into())
+        } else if regular_from_family {
+            let inherited = normal
+                .family
+                .as_deref()
+                .expect("regular_from_family implies a normal family");
+            FontSource::Family(inherited.into())
+        } else {
+            let handle = fonts_assets.add(Font::from_bytes(bundled_face_bytes(spec).to_vec()));
+            FontSource::Handle(handle)
+        };
+
+        Self {
+            source,
+            weight,
+            style,
+        }
+    }
+}
 
 /// Strong handle to the bundled Nerd Font, used only for the window-bar
 /// powerline separator glyphs (U+E0B0 / U+E0B2). Independent of
@@ -95,78 +164,81 @@ fn bridge_font_config(
     let font = &configs.font;
 
     let powerline = fonts_assets.add(Font::from_bytes(bundled::REGULAR.to_vec()));
-    commands.insert_resource(PowerlineFont(powerline.clone()));
+    commands.insert_resource(PowerlineFont(powerline));
 
-    if font.has_no_configured_family() {
-        commands.insert_resource(TerminalUiFont(FontSource::Handle(powerline)));
-        return;
-    }
+    // NOTE: materialize &mut FontContext once, before the terminal-family
+    // branch, so both the terminal-face resolution and the UI family probe
+    // borrow `collection` / `source_cache` as disjoint places (going through
+    // DerefMut per call would borrow all of FontCx twice and fail to compile).
+    let cx = &mut **font_cx;
 
     let regular_family = font.normal.family.as_deref();
-    let bold_family = font.bold.family.as_deref().or(regular_family);
-    let italic_family = font.italic.family.as_deref().or(regular_family);
-    let bold_italic_family = font.bold_italic.family.as_deref().or(regular_family);
 
-    // NOTE: materialize &mut FontContext once so `collection` and `source_cache`
-    // borrow as disjoint places. Going through `DerefMut` on `font_cx` per call
-    // instead would borrow all of FontCx twice and fail to compile.
-    let cx = &mut **font_cx;
-    let [regular, bold, italic, bold_italic] = [
-        (
-            regular_family,
-            font.normal.style.as_deref(),
-            FontFace::Regular,
-            bundled::REGULAR,
-        ),
-        (
-            bold_family,
-            font.bold.style.as_deref(),
-            FontFace::Bold,
-            bundled::BOLD,
-        ),
-        (
-            italic_family,
-            font.italic.style.as_deref(),
-            FontFace::Italic,
-            bundled::ITALIC,
-        ),
-        (
-            bold_italic_family,
-            font.bold_italic.style.as_deref(),
-            FontFace::BoldItalic,
-            bundled::BOLD_ITALIC,
-        ),
-    ]
-    .map(|(family, style, face, bundled)| {
-        ResolvedFace::resolve(
-            &mut cx.collection,
-            &mut cx.source_cache,
-            family,
-            style,
-            face,
-            bundled,
+    let regular_from_family = if font.has_no_configured_family() {
+        false
+    } else {
+        let bold_family = font.bold.family.as_deref().or(regular_family);
+        let italic_family = font.italic.family.as_deref().or(regular_family);
+        let bold_italic_family = font.bold_italic.family.as_deref().or(regular_family);
+        let [regular, bold, italic, bold_italic] = [
+            (
+                regular_family,
+                font.normal.style.as_deref(),
+                FontFace::Regular,
+                bundled::REGULAR,
+            ),
+            (
+                bold_family,
+                font.bold.style.as_deref(),
+                FontFace::Bold,
+                bundled::BOLD,
+            ),
+            (
+                italic_family,
+                font.italic.style.as_deref(),
+                FontFace::Italic,
+                bundled::ITALIC,
+            ),
+            (
+                bold_italic_family,
+                font.bold_italic.style.as_deref(),
+                FontFace::BoldItalic,
+                bundled::BOLD_ITALIC,
+            ),
+        ]
+        .map(|(family, style, face, bundled)| {
+            ResolvedFace::resolve(
+                &mut cx.collection,
+                &mut cx.source_cache,
+                family,
+                style,
+                face,
+                bundled,
+            )
+        });
+        let regular_from_family = regular.from_family;
+        *terminal_fonts = TerminalFonts::from_faces(
+            (regular.bytes, regular.index),
+            (bold.bytes, bold.index),
+            (italic.bytes, italic.index),
+            (bold_italic.bytes, bold_italic.index),
+            bundled::FALLBACK_REGULAR.to_vec(),
+            bundled::FALLBACK_BOLD.to_vec(),
+            bundled::FALLBACK_ITALIC.to_vec(),
+            bundled::FALLBACK_BOLD_ITALIC.to_vec(),
         )
-    });
-
-    let regular_from_family = regular.from_family;
-    let new_fonts = TerminalFonts::from_faces(
-        (regular.bytes, regular.index),
-        (bold.bytes, bold.index),
-        (italic.bytes, italic.index),
-        (bold_italic.bytes, bold_italic.index),
-        bundled::FALLBACK_REGULAR.to_vec(),
-        bundled::FALLBACK_BOLD.to_vec(),
-        bundled::FALLBACK_ITALIC.to_vec(),
-        bundled::FALLBACK_BOLD_ITALIC.to_vec(),
-    )
-    .expect("validated bytes must parse");
-    *terminal_fonts = new_fonts;
-
-    let ui_font = match (regular_from_family, regular_family) {
-        (true, Some(family)) => FontSource::Family(family.into()),
-        _ => FontSource::Handle(powerline),
+        .expect("validated bytes must parse");
+        regular_from_family
     };
-    commands.insert_resource(TerminalUiFont(ui_font));
+
+    let ui_font = TerminalUiFont::resolve(
+        &mut cx.collection,
+        &mut fonts_assets,
+        &font.ui,
+        &font.normal,
+        regular_from_family,
+    );
+    commands.insert_resource(ui_font);
 }
 
 /// One primary face resolved for the terminal grid: its bytes, `.ttc` index,
@@ -223,6 +295,30 @@ impl ResolvedFace {
             index: 0,
             from_family: false,
         }
+    }
+}
+
+/// Maps a parsed `FontStyleSpec` to bevy_text's `TextFont` weight + slant.
+fn ui_text_attrs(spec: FontStyleSpec) -> (FontWeight, FontStyle) {
+    let style = match spec.slant {
+        FontSlant::Normal => FontStyle::Normal,
+        FontSlant::Italic => FontStyle::Italic,
+        FontSlant::Oblique => FontStyle::Oblique(None),
+    };
+    (FontWeight(spec.weight), style)
+}
+
+/// Picks the bundled static face nearest to `spec`. The bundle ships only four
+/// faces, so intermediate weights (Light/Medium/SemiBold) round to Regular or
+/// Bold. Used only when no system family resolves for the UI face.
+fn bundled_face_bytes(spec: FontStyleSpec) -> &'static [u8] {
+    let bold = spec.weight >= 600;
+    let italic = spec.slant != FontSlant::Normal;
+    match (bold, italic) {
+        (false, false) => bundled::REGULAR,
+        (true, false) => bundled::BOLD,
+        (false, true) => bundled::ITALIC,
+        (true, true) => bundled::BOLD_ITALIC,
     }
 }
 
@@ -331,10 +427,10 @@ mod tests {
             .world()
             .get_resource::<TerminalUiFont>()
             .expect("TerminalUiFont must be inserted on the cold path");
-        let FontSource::Handle(handle) = &ui_font.0 else {
+        let FontSource::Handle(handle) = &ui_font.source else {
             panic!(
                 "cold path must insert a FontSource::Handle, got {:?}",
-                ui_font.0
+                ui_font.source
             );
         };
         // A strong handle from Assets::add stores the asset under the
@@ -474,7 +570,7 @@ mod tests {
             .get_resource::<TerminalUiFont>()
             .expect("TerminalUiFont must be inserted when the configured family resolves");
         assert_eq!(
-            ui_font.0,
+            ui_font.source,
             FontSource::Family("OrzmaTestMono".into()),
             "a family that resolves must produce FontSource::Family, not the bundled handle"
         );
@@ -549,6 +645,87 @@ mod tests {
             "style = \"Bold\" must select the weight-700 face, not the family's weight-400 face"
         );
 
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn ui_text_attrs_maps_weight_and_slant() {
+        let (w, s) = ui_text_attrs(FontStyleSpec {
+            weight: 600,
+            slant: FontSlant::Italic,
+        });
+        assert_eq!(w, bevy::text::FontWeight(600));
+        assert_eq!(s, bevy::text::FontStyle::Italic);
+    }
+
+    #[test]
+    fn bundled_face_bytes_selects_by_weight_and_slant() {
+        // NOTE: compare by content (`==`), not `std::ptr::eq`. `bundled::REGULAR`
+        // et al. are `pub const`, not `static` (see `bundled.rs`'s module doc);
+        // without LTO, each `include_bytes!` reference across the
+        // orzma_tty_renderer -> orzma crate boundary gets its own embedded copy,
+        // so two textually distinct usage sites hold equal bytes at different
+        // addresses. `std::ptr::eq` would spuriously fail here in a plain `cargo
+        // test` build (no LTO), even though the selection logic is correct.
+        let case = |weight, slant| bundled_face_bytes(FontStyleSpec { weight, slant });
+        assert_eq!(case(400, FontSlant::Normal), bundled::REGULAR);
+        assert_eq!(case(700, FontSlant::Normal), bundled::BOLD);
+        assert_eq!(case(400, FontSlant::Italic), bundled::ITALIC);
+        assert_eq!(case(800, FontSlant::Italic), bundled::BOLD_ITALIC);
+        // Intermediate weight rounds down to Regular.
+        assert_eq!(case(500, FontSlant::Normal), bundled::REGULAR);
+    }
+
+    #[test]
+    fn configured_ui_family_and_style_resolve_independently() {
+        let tmp = std::env::temp_dir().join("orzma_ui_font_independent.toml");
+        std::fs::write(
+            &tmp,
+            "[font.normal]\nfamily = \"OrzmaTestMono\"\n[font.ui]\nfamily = \"OrzmaTestUi\"\nstyle = \"Bold\"\n",
+        )
+        .expect("write toml");
+
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+        {
+            let mut font_cx = app.world_mut().resource_mut::<FontCx>();
+            for (name, bytes) in [
+                ("OrzmaTestMono", bundled::REGULAR),
+                ("OrzmaTestUi", bundled::BOLD),
+            ] {
+                let blob = Blob::new(Arc::new(bytes) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+                font_cx.collection.register_fonts(
+                    blob,
+                    Some(FontInfoOverride {
+                        family_name: Some(name),
+                        ..Default::default()
+                    }),
+                );
+            }
+        }
+        app.update();
+
+        let ui_font = app.world().get_resource::<TerminalUiFont>().unwrap();
+        assert_eq!(
+            ui_font.source,
+            FontSource::Family("OrzmaTestUi".into()),
+            "ui.family must win independently of normal"
+        );
+        assert_eq!(
+            ui_font.weight,
+            bevy::text::FontWeight(700),
+            "ui.style = Bold"
+        );
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    #[should_panic(expected = "was not found")]
+    fn configured_absent_ui_family_aborts_startup() {
+        let tmp = std::env::temp_dir().join("orzma_absent_ui_family.toml");
+        std::fs::write(&tmp, "[font.ui]\nfamily = \"no-such-ui-family-1a2b\"\n")
+            .expect("write toml");
+        let (mut app, _guard, _env) = make_test_app(Some(&tmp));
+        app.update();
         let _ = std::fs::remove_file(&tmp);
     }
 }

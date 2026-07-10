@@ -22,7 +22,7 @@ use bevy::ecs::schedule::SystemCondition;
 use bevy::ecs::schedule::common_conditions::{not, resource_exists_and_changed};
 use bevy::ecs::system::{Commands, Query, Res, ResMut};
 use bevy::prelude::default;
-use bevy::text::{FontSize, LineBreak, TextColor, TextFont, TextLayout};
+use bevy::text::{FontSize, LineBreak, TextColor, TextLayout};
 use bevy::ui::widget::Text;
 use bevy::ui::{
     BackgroundColor, BorderColor, ComputedNode, Display, GlobalZIndex, Node, PositionType,
@@ -649,11 +649,7 @@ fn spawn_grapheme_cell(
     commands
         .spawn((
             Text::new(text),
-            TextFont {
-                font: ui_font.0.clone(),
-                font_size: FontSize::Px(font_size.0),
-                ..default()
-            },
+            ui_font.text_font(FontSize::Px(font_size.0)),
             TextColor(Color::WHITE),
             TextLayout {
                 linebreak: LineBreak::NoWrap,
@@ -799,9 +795,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(
-            bevy::text::FontSource::default(),
-        ));
+        app.insert_resource(crate::font::TerminalUiFont::default());
         app.insert_resource(TerminalFontSize(9.0));
         app.init_resource::<ImeGraphemePool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
@@ -825,9 +819,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(
-            bevy::text::FontSource::default(),
-        ));
+        app.insert_resource(crate::font::TerminalUiFont::default());
         app.insert_resource(TerminalFontSize(12.0));
         app.insert_resource(TerminalCellMetricsResource {
             metrics: metrics(8.0, 16.0),
@@ -902,9 +894,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(
-            bevy::text::FontSource::default(),
-        ));
+        app.insert_resource(crate::font::TerminalUiFont::default());
         app.insert_resource(TerminalFontSize(12.0));
         // advance 10, line height 16 → cell pitch 10×16 logical px at scale 1.
         app.insert_resource(TerminalCellMetricsResource {
@@ -991,9 +981,7 @@ mod tests {
     fn spawn_creates_grapheme_pool_and_underline() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(
-            bevy::text::FontSource::default(),
-        ));
+        app.insert_resource(crate::font::TerminalUiFont::default());
         app.insert_resource(TerminalFontSize(12.0));
         app.init_resource::<ImeGraphemePool>();
         app.add_systems(Startup, spawn_ime_overlay_once);
@@ -1046,9 +1034,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(
-            bevy::text::FontSource::default(),
-        ));
+        app.insert_resource(crate::font::TerminalUiFont::default());
         app.insert_resource(TerminalFontSize(12.0));
         app.insert_resource(TerminalCellMetricsResource {
             metrics: metrics(10.0, 16.0),
@@ -1172,9 +1158,7 @@ mod tests {
 
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
-        app.insert_resource(crate::font::TerminalUiFont(
-            bevy::text::FontSource::default(),
-        ));
+        app.insert_resource(crate::font::TerminalUiFont::default());
         app.insert_resource(TerminalFontSize(12.0));
         app.insert_resource(TerminalCellMetricsResource {
             metrics: metrics(10.0, 16.0),
