@@ -156,8 +156,8 @@ seed_lines = 2000   # usize. Lines of tmux history fetched and seeded into scrol
 # "Shift" is not allowed as a tap.
 #
 # Omit this key entirely to use the built-in default ("Cmd" tap). An empty
-# string is NOT a way to disable the leader (see "Note on the leader" below
-# for why, and for the actual way to turn individual `<Leader>` bindings off).
+# string ("") disables the leader outright: no "<Leader>..."-scoped binding
+# fires (see "Note on the leader" below).
 leader = "Cmd"
 # Modifier-tap window (ms): a press+release within this time, with no intervening
 # key or mouse press, counts as a tap. Default 300; 0 reverts to 300.
@@ -297,7 +297,9 @@ duplicated modifier (`Cmd+Meta+S`), or more than one key (`Cmd+S+T`) — no
 longer fail startup. For a `[shortcuts.bindings]` entry, orzma logs a
 warning and skips just that one binding; for `leader`, orzma logs a warning
 and falls back to the built-in default leader. Either way, the rest of your
-config loads normally.
+config loads normally. `leader = ""` (the empty string on its own, not an
+invalid chord) is a special case: it disables the leader intentionally and
+does not warn — see "Note on the leader" below.
 
 ## Repeatable bindings (`<Leader:r>`)
 
@@ -401,13 +403,14 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   `new-window` is unbound automatically. If you want both actions reachable,
   unbind the stock default explicitly (`new-window = ""`) or pick a free
   chord instead of relying on the tie-break.
-- **An empty `leader` no longer disables `<Leader>`-bound actions.** Unlike
-  previous versions, `leader = ""` is now treated as an *invalid* value — it
-  warns and falls back to the built-in default leader (`Cmd` tap) instead of
-  turning the leader off. There is currently no single setting that disables
-  the leader; to get the same effect, unbind every `<Leader>`-bound action
-  you don't want individually under `[shortcuts.bindings]` (or rebind the
-  ones you need to direct chords, e.g. `next-window = "Cmd+]"`).
+- **An empty `leader` (`leader = ""`) disables the leader outright.** No
+  `<Leader>...`-scoped binding fires (they become inert), and no warning is
+  logged — this is a deliberate way to turn the leader off, not an invalid
+  value. This is different from *omitting* `leader` entirely, which uses the
+  built-in default (`Cmd` tap). To keep the leader on but drop just a few
+  `<Leader>`-bound actions, unbind them individually under
+  `[shortcuts.bindings]` instead (or rebind them to direct chords, e.g.
+  `next-window = "Cmd+]"`).
 
 ## Vi-mode keys
 
