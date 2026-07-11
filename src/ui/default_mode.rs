@@ -1,7 +1,6 @@
 //! Default-mode UI subtree: lazily (re)spawns the single `OrzmaTerminal` shell
-//! under `UiRoot` while in `AppMode::Default`.
+//! under `UiRoot`.
 
-use crate::app_mode::AppMode;
 use crate::input::focus::KeyboardFocused;
 use crate::session::default::spawn::{OrzmaSpawnOptions, OrzmaTerminalBundle, OrzmaTerminalConfig};
 use crate::ui::UiRoot;
@@ -12,17 +11,15 @@ use orzma_webview::ControlPlaneHandle;
 #[derive(Component)]
 pub(crate) struct DefaultModeUi;
 
-/// Bevy plugin that ensures the Default-mode UI subtree exists while in
-/// `AppMode::Default`. Gated by the absence of `DefaultModeUi`.
+/// Bevy plugin that ensures the Default-mode UI subtree exists. Gated by the
+/// absence of `DefaultModeUi`.
 pub(super) struct DefaultModeUiPlugin;
 
 impl Plugin for DefaultModeUiPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            ensure_default_mode_ui.run_if(
-                in_state(AppMode::Default).and_then(not(any_with_component::<DefaultModeUi>)),
-            ),
+            ensure_default_mode_ui.run_if(not(any_with_component::<DefaultModeUi>)),
         );
     }
 }
@@ -98,15 +95,12 @@ fn spawn_default_mode_container(commands: &mut Commands, ui_root: Entity) -> Ent
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_mode::AppMode;
-    use bevy::state::app::StatesPlugin;
     use orzma_webview::TokenRegistry;
     use std::path::PathBuf;
 
-    fn build_app(initial_mode: AppMode) -> App {
+    fn build_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(initial_mode);
+        app.add_plugins(MinimalPlugins);
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins((
             crate::session::default::DefaultSessionPlugin { shell: None },
@@ -117,7 +111,7 @@ mod tests {
 
     #[test]
     fn spawns_default_mode_ui_once() {
-        let mut app = build_app(AppMode::Default);
+        let mut app = build_app();
         app.update();
         let world = app.world_mut();
         let mut q = world.query_filtered::<(), With<DefaultModeUi>>();
@@ -133,44 +127,8 @@ mod tests {
     }
 
     #[test]
-    fn default_shell_survives_mode_roundtrip() {
-        let mut app = build_app(AppMode::Default);
-        app.update();
-
-        let shell_entity = {
-            let world = app.world_mut();
-            world
-                .query_filtered::<Entity, With<DefaultShell>>()
-                .single(world)
-                .expect("DefaultShell spawned")
-        };
-
-        app.world_mut()
-            .resource_mut::<NextState<AppMode>>()
-            .set(AppMode::Tmux);
-        app.update();
-
-        app.world_mut()
-            .resource_mut::<NextState<AppMode>>()
-            .set(AppMode::Default);
-        app.update();
-
-        assert!(
-            app.world_mut().get_entity(shell_entity).is_ok(),
-            "DefaultShell entity survived Default → Tmux → Default round-trip"
-        );
-
-        let world = app.world_mut();
-        let count = world
-            .query_filtered::<(), With<DefaultShell>>()
-            .iter(world)
-            .count();
-        assert_eq!(count, 1, "exactly one DefaultShell after round-trip");
-    }
-
-    #[test]
     fn default_shell_registers_a_resolvable_webview_token() {
-        let mut app = build_app(AppMode::Default);
+        let mut app = build_app();
         let tokens = TokenRegistry::default();
         app.world_mut().insert_resource(ControlPlaneHandle {
             sock_path: PathBuf::from("/tmp/ctl.sock"),

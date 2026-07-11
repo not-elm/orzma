@@ -3,7 +3,6 @@
 //! The translation lives here (not in `orzma_configs`) so the config crate
 //! stays free of any `bevy` dependency.
 
-use crate::app_mode::AppMode;
 use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
@@ -64,9 +63,7 @@ impl Plugin for ShortcutsPlugin {
                         .run_if(resource_exists_and_changed::<FocusedWebview>)
                         .before(LeaderGate::Detect),
                 ),
-            )
-            .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
-            .add_systems(OnExit(AppMode::Default), reset_leader_phase);
+            );
     }
 }
 
@@ -416,9 +413,8 @@ pub(crate) fn test_shortcuts_with_direct_chord(
 }
 
 /// Clears the leader phase (pending or repeat window), any armed hold-to-repeat,
-/// and any in-progress modifier tap on an `AppMode` transition or a webview
-/// focus change, so a leader engaged/armed in one context never fires in
-/// another.
+/// and any in-progress modifier tap on a webview focus change, so a leader
+/// engaged/armed before the focus change never fires after it.
 fn reset_leader_phase(
     mut leader_phase: ResMut<LeaderPhase>,
     mut held_repeat: ResMut<HeldRepeatKey>,

@@ -1,15 +1,14 @@
-//! Host-side input for `AppMode::Default`: maintains the crate's
-//! `KeyboardDisabled` / `MouseDisabled` markers from the coarse guards (IME,
-//! focus, webview). The frame's shortcut messages (resolved by
+//! Host-side input: maintains the crate's `KeyboardDisabled` / `MouseDisabled`
+//! markers from the coarse guards (IME, focus, webview). The frame's shortcut
+//! messages (resolved by
 //! `crate::input::keyboard::key_effect::classify_key_batch`) are applied by
 //! `crate::input::shortcuts::default_mode`'s per-message systems — vi-mode
 //! entry, the shared `[vi-mode]` key table (while vi mode is active),
 //! direct-chord and leader paste, and raw-key typing
 //! (`crate::action::clipboard::PasteAction`, `TerminalKeyInput`). Quit and
 //! release-webview-focus are handled upstream; the pane/window actions are
-//! no-ops in Default mode.
+//! no-ops.
 
-use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::input::focus::{KeyboardDisabled, MouseDisabled};
 use crate::input::ime::{ImeCommit, ImeState};
@@ -28,18 +27,13 @@ use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
 use orzma_webview::{NonInteractive, Webview, webview_hit_at};
 
-/// Registers the host-side input systems for `AppMode::Default`.
+/// Registers the host-side input systems.
 pub(super) struct DefaultHostInputPlugin;
 
 impl Plugin for DefaultHostInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            maintain_input_gates
-                .before(InputPhase::Hover)
-                .run_if(in_state(AppMode::Default)),
-        )
-        .add_observer(apply_ime_commit_to_terminal);
+        app.add_systems(Update, maintain_input_gates.before(InputPhase::Hover))
+            .add_observer(apply_ime_commit_to_terminal);
     }
 }
 

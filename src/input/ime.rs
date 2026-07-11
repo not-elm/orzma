@@ -372,12 +372,11 @@ fn webview_ime_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_mode::AppMode;
     use crate::surface::OrzmaTerminal;
     use bevy::app::App;
     use bevy::ecs::entity::Entity;
     use bevy::ecs::system::RunSystemOnce;
-    use bevy::prelude::{AppExtStates, MinimalPlugins, default};
+    use bevy::prelude::{MinimalPlugins, default};
     use bevy::state::app::StatesPlugin;
     use bevy::window::{Ime, Window, WindowResolution};
     use orzma_tmux::{ActivePane, PaneId, TmuxPane};
@@ -601,7 +600,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -648,7 +646,6 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<ImeState>();
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -747,7 +744,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -928,7 +924,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,
@@ -985,7 +980,6 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.init_resource::<FocusedWebview>();
-        app.init_state::<AppMode>();
         app.insert_resource(TerminalCellMetricsResource {
             metrics: CellMetrics {
                 advance_phys: 8.0,

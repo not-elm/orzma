@@ -1,27 +1,24 @@
 //! Default-mode paste applier: writes `PasteToTerminal` text into the target
-//! terminal's PTY as (optionally bracketed) paste bytes. Gated on
-//! `AppMode::Default` at registration.
+//! terminal's PTY as (optionally bracketed) paste bytes.
 
 use super::{PasteToTerminal, build_paste_bytes};
-use crate::app_mode::AppMode;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use orzma_tmux::TmuxPane;
 use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
-/// Registers the Default-mode paste applier, gated on `AppMode::Default`.
+/// Registers the Default-mode paste applier.
 pub(super) struct PasteDefaultModePlugin;
 
 impl Plugin for PasteDefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_observer(on_paste_default_mode.run_if(in_state(AppMode::Default)));
+        app.add_observer(on_paste_default_mode);
     }
 }
 
 /// Applies `PasteToTerminal` to a PTY-attached terminal: snaps a scrolled-back
-/// viewport to the bottom, then writes the (optionally bracketed) paste bytes.
-/// The registration `run_if` is the authoritative mode routing; the query
-/// filters stay as defense in depth.
+/// viewport to the bottom, then writes the (optionally bracketed) paste
+/// bytes. The query filters select only PTY-attached terminals.
 fn on_paste_default_mode(
     ev: On<PasteToTerminal>,
     mut terminals: Query<
@@ -45,12 +42,10 @@ fn on_paste_default_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::state::app::StatesPlugin;
 
     fn default_mode_app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Default);
+        app.add_plugins(MinimalPlugins);
         app.add_plugins(PasteDefaultModePlugin);
         app
     }
@@ -97,54 +92,5 @@ mod tests {
         // Reaching here proves the PTY-write path was not taken: the tmux
         // pane entity has no PtyHandle/Coalescer, so the query cannot match
         // it regardless of the Without<TmuxPane> filter.
-    }
-
-    #[test]
-    fn paste_to_terminal_in_tmux_mode_does_not_run_default_applier() {
-        use bevy::ecs::system::RunSystemOnce;
-        use orzma_tty_engine::{SpawnOptions, TerminalBundle};
-
-        let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Tmux);
-        app.add_plugins(PasteDefaultModePlugin);
-
-        let opts = SpawnOptions {
-            cols: 10,
-            rows: 5,
-            shell: "/bin/sh".into(),
-            cwd: None,
-            env: Vec::new(),
-        };
-        let bundle = TerminalBundle::spawn(opts).expect("spawn /bin/sh");
-        let entity = app.world_mut().spawn((OrzmaTerminal, bundle)).id();
-
-        app.world_mut()
-            .run_system_once(
-                move |mut terminals: Query<(&mut TerminalHandle, &mut Coalescer)>| {
-                    let (mut handle, _) = terminals.get_mut(entity).unwrap();
-                    for _ in 0..20 {
-                        handle.advance(b"line\r\n");
-                    }
-                    handle.scroll_vt_only(1);
-                    assert!(
-                        !handle.is_at_bottom(),
-                        "fixture precondition: terminal must start scrolled back"
-                    );
-                },
-            )
-            .unwrap();
-
-        app.world_mut().trigger(PasteToTerminal {
-            terminal: entity,
-            text: "hello".to_string(),
-        });
-        app.update();
-
-        let handle = app.world().get::<TerminalHandle>(entity).unwrap();
-        assert!(
-            !handle.is_at_bottom(),
-            "the default paste applier is run_if-gated on AppMode::Default and must not snap the viewport in Tmux mode"
-        );
     }
 }

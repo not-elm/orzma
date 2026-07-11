@@ -29,15 +29,12 @@ impl Plugin for DefaultSessionPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app_mode::AppMode;
-    use bevy::state::app::StatesPlugin;
     use spawn::OrzmaTerminalConfig;
 
     #[test]
     fn config_shell_forwards_to_orzma_terminal_config() {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin));
-        app.insert_state(AppMode::Default);
+        app.add_plugins(MinimalPlugins);
         app.add_plugins(DefaultSessionPlugin {
             shell: Some("/bin/fish".into()),
         });

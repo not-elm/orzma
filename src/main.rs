@@ -1,7 +1,6 @@
 //! orzma Bevy GUI entry point.
 
 mod action;
-mod app_mode;
 mod bootstrap;
 mod cef_profile;
 mod configs;
@@ -16,7 +15,6 @@ mod ui;
 mod window_title;
 
 use crate::action::ActionPlugin;
-use crate::app_mode::AppModePlugin;
 use crate::cef_profile::CefProfileDir;
 use crate::input::focus::FocusSyncPlugin;
 use crate::input::hyperlink::HyperlinkInputPlugin;
@@ -54,7 +52,6 @@ fn main() {
             cef_plugin(orzma_registry.clone(), cef_profile.path()),
         ))
         .add_plugins((
-            AppModePlugin,
             SurfacePlugin,
             DefaultSessionPlugin {
                 shell: pre_configs.orzma.shell.clone(),

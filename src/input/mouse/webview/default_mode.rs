@@ -1,18 +1,17 @@
-//! Default-mode (`AppMode::Default`) webview pointer routing: forwards left
-//! press/release and pointer motion to the inline CEF child under the cursor on
-//! the single Default shell surface, via the mode-agnostic core in
+//! Webview pointer routing for the shell surface: forwards left press/release
+//! and pointer motion to the inline CEF child under the cursor on the single
+//! Default shell surface, via the mode-agnostic core in
 //! `crate::input::mouse::webview`.
 //!
-//! The pointer system runs EVERY frame in `AppMode::Default` (not message-gated)
-//! so an in-flight press is released when input is suppressed (window unfocused),
-//! never leaving CEF logically pressed. Double-handling with the
+//! The pointer system runs EVERY frame (not message-gated) so an in-flight
+//! press is released when input is suppressed (window unfocused), never
+//! leaving CEF logically pressed. Double-handling with the
 //! terminal's `dispatch_mouse_buttons` is avoided by the `MouseDisabled`
 //! rect-claim gate in `crate::input::default_mode::maintain_input_gates`: over an
 //! interactive rect the shell is `MouseDisabled` (dispatch yields, the webview
 //! gets the click); off-rect the press clears webview focus here and falls
 //! through to the terminal.
 
-use crate::app_mode::AppMode;
 use crate::input::InputPhase;
 use crate::input::mouse::cell_dims;
 use crate::input::mouse::webview::{
@@ -39,31 +38,26 @@ pub(super) struct MouseWebviewDefaultModePlugin;
 
 impl Plugin for MouseWebviewDefaultModePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            default_webview_pointer
-                .in_set(InputPhase::Dispatch)
-                .run_if(in_state(AppMode::Default)),
-        )
-        .add_systems(
-            Update,
-            forward_default_webview_mouse_moves
-                .in_set(InputPhase::Hover)
-                .run_if(in_state(AppMode::Default).and_then(on_message::<CursorMoved>)),
-        )
-        .add_systems(
-            Update,
-            forward_default_webview_wheel
-                .in_set(InputPhase::Dispatch)
-                .run_if(in_state(AppMode::Default).and_then(on_message::<MouseWheel>)),
-        );
+        app.add_systems(Update, default_webview_pointer.in_set(InputPhase::Dispatch))
+            .add_systems(
+                Update,
+                forward_default_webview_mouse_moves
+                    .in_set(InputPhase::Hover)
+                    .run_if(on_message::<CursorMoved>),
+            )
+            .add_systems(
+                Update,
+                forward_default_webview_wheel
+                    .in_set(InputPhase::Dispatch)
+                    .run_if(on_message::<MouseWheel>),
+            );
     }
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor on the
-/// Default shell. Runs every frame in `AppMode::Default`: a suppressed frame
-/// (window unfocused) drains the reader and releases an in-flight press so
-/// the focused page is not left logically pressed.
+/// Default shell. Runs EVERY frame: a suppressed frame (window unfocused)
+/// drains the reader and releases an in-flight press so the focused page is
+/// not left logically pressed.
 fn default_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
