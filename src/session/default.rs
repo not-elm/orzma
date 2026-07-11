@@ -9,17 +9,12 @@ mod layout;
 use bevy::prelude::*;
 
 /// Bevy plugin for the Default-mode shell lifecycle (spawn / layout / exit).
-pub(crate) struct DefaultSessionPlugin {
-    /// Shell override forwarded to `spawn::DefaultSpawnPlugin`.
-    pub shell: Option<String>,
-}
+pub(crate) struct DefaultSessionPlugin;
 
 impl Plugin for DefaultSessionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins((
-            spawn::DefaultSpawnPlugin {
-                shell: self.shell.clone(),
-            },
+            spawn::DefaultSpawnPlugin,
             exit::DefaultExitPlugin,
             layout::DefaultLayoutPlugin,
         ));
@@ -30,24 +25,27 @@ impl Plugin for DefaultSessionPlugin {
 mod tests {
     use super::*;
     use crate::app_mode::AppMode;
+    use crate::configs::OrzmaConfigsResource;
     use bevy::state::app::StatesPlugin;
     use spawn::OrzmaTerminalConfig;
 
     #[test]
-    fn config_shell_forwards_to_orzma_terminal_config() {
+    fn shell_synced_from_resolved_config_at_startup() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin));
         app.insert_state(AppMode::Default);
-        app.add_plugins(DefaultSessionPlugin {
-            shell: Some("/bin/fish".into()),
-        });
+        let mut cfg = orzma_configs::OrzmaConfigs::default();
+        cfg.orzma.shell = Some("/usr/bin/fish".into());
+        app.insert_resource(OrzmaConfigsResource(cfg));
+        app.add_plugins(DefaultSessionPlugin);
+        app.update();
         assert_eq!(
             app.world()
                 .resource::<OrzmaTerminalConfig>()
                 .shell
                 .as_deref(),
-            Some("/bin/fish"),
-            "DefaultSessionPlugin must forward shell through DefaultSpawnPlugin into OrzmaTerminalConfig",
+            Some("/usr/bin/fish"),
+            "DefaultSessionPlugin must sync shell from OrzmaConfigsResource into OrzmaTerminalConfig at Startup",
         );
     }
 }

@@ -326,6 +326,7 @@ fn bundled_face_bytes(spec: FontStyleSpec) -> &'static [u8] {
 mod tests {
     use super::*;
     use crate::configs::OrzmaConfigsPlugin;
+    use crate::test_support::EnvVarGuard;
     use ab_glyph::Font as AbFont;
     use bevy::asset::AssetPlugin;
     use bevy::text::TextPlugin;
@@ -334,58 +335,56 @@ mod tests {
     use orzma_tty_renderer::TerminalFontPlugin;
     use orzma_tty_renderer::bundled;
     use std::sync::Arc;
+    use tempfile::TempDir;
 
-    /// RAII guard for a process-environment variable. Constructing it via
-    /// `EnvVarGuard::set(...)` sets the variable; dropping it removes
-    /// it. The Drop runs even on panic, so a test that panics inside
-    /// `app.update()` no longer leaks the stale env var into the next
-    /// test (which would then run against a misconfigured `ORZMA_CONFIG`
-    /// after recovering from the poisoned `env_guard` mutex).
+    /// Bundles every env override `make_test_app` needs, plus the backing
+    /// `TempDir`, so a single value keeps them all alive for the test.
     ///
-    /// The caller MUST hold `crate::configs::env_guard()` for the full
-    /// lifetime of every `EnvVarGuard` to keep env mutations serialized
-    /// across tests.
-    struct EnvVarGuard {
-        key: &'static str,
+    /// # Invariants
+    ///
+    /// `$HOME` / `$XDG_CONFIG_HOME` MUST be redirected into `_tempdir`
+    /// alongside `$ORZMA_CONFIG`: `OrzmaConfigsPlugin::build` now runs the
+    /// one-time legacy-config migration (`crate::configs::migrate`), which
+    /// resolves both the legacy config path and the `bevy::settings`
+    /// preferences directory from the real `$HOME` / `$XDG_CONFIG_HOME` when
+    /// left unset. Without this redirection, a test that points
+    /// `$ORZMA_CONFIG` at an existing temp file would have that file treated
+    /// as "the legacy config to migrate now" and PERSISTED — for real — to
+    /// the developer's actual `~/Library/Preferences/orzma/` (or
+    /// `~/.config/orzma/` on Linux/CI), and every later test in the same
+    /// process would then load that leftover file, silently corrupting
+    /// their expected defaults.
+    struct TestEnvIsolation {
+        _tempdir: TempDir,
+        _home: EnvVarGuard,
+        _xdg_config_home: EnvVarGuard,
+        _orzma_config: EnvVarGuard,
     }
 
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
-            // SAFETY: caller holds env_guard for the duration of this guard.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-            Self { key }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            // SAFETY: caller holds env_guard for the duration of this guard.
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            // SAFETY: caller still holds env_guard (drop runs before the
-            // env_guard MutexGuard because of LIFO drop order within
-            // each test scope).
-            unsafe {
-                std::env::remove_var(self.key);
+    impl TestEnvIsolation {
+        fn new(config: Option<&std::path::Path>) -> Self {
+            let tempdir = TempDir::new().expect("create isolated $HOME for font test");
+            let home = EnvVarGuard::set("HOME", tempdir.path());
+            let xdg_config_home =
+                EnvVarGuard::set("XDG_CONFIG_HOME", tempdir.path().join(".config"));
+            let orzma_config = match config {
+                Some(path) => EnvVarGuard::set("ORZMA_CONFIG", path),
+                None => EnvVarGuard::unset("ORZMA_CONFIG"),
+            };
+            TestEnvIsolation {
+                _tempdir: tempdir,
+                _home: home,
+                _xdg_config_home: xdg_config_home,
+                _orzma_config: orzma_config,
             }
         }
     }
 
     fn make_test_app(
         config: Option<&std::path::Path>,
-    ) -> (App, std::sync::MutexGuard<'static, ()>, EnvVarGuard) {
+    ) -> (App, std::sync::MutexGuard<'static, ()>, TestEnvIsolation) {
         let guard = crate::configs::env_guard();
-        let env = match config {
-            Some(path) => EnvVarGuard::set("ORZMA_CONFIG", path),
-            None => EnvVarGuard::unset("ORZMA_CONFIG"),
-        };
+        let env = TestEnvIsolation::new(config);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .add_plugins(AssetPlugin::default())

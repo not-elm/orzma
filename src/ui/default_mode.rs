@@ -135,7 +135,7 @@ mod tests {
         app.insert_state(initial_mode);
         app.world_mut().spawn((Node::default(), UiRoot));
         app.add_plugins((
-            crate::session::default::DefaultSessionPlugin { shell: None },
+            crate::session::default::DefaultSessionPlugin,
             DefaultModeUiPlugin,
         ));
         app

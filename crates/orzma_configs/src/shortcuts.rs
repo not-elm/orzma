@@ -865,6 +865,50 @@ pub enum Shortcut {
     RenameSession,
 }
 
+/// The kebab-case TOML key for every `Shortcuts` action field (`leader` and
+/// the two `_ms` timeout scalars excluded), in `bindings_iter` order. The
+/// single source of truth `crate::resolve` diffs a user's `[shortcuts]`
+/// binding map against; kept honest by the `every_action_key_routes` test
+/// below.
+pub(crate) const SHORTCUT_ACTION_KEYS: &[&str] = &[
+    "paste",
+    "copy",
+    "release-webview-focus",
+    "quit",
+    "enter-vi-mode",
+    "detach-session",
+    "select-left-pane",
+    "select-down-pane",
+    "select-up-pane",
+    "select-right-pane",
+    "split-vertical-pane",
+    "split-horizontal-pane",
+    "kill-pane",
+    "zoom-pane",
+    "resize-left-pane",
+    "resize-down-pane",
+    "resize-up-pane",
+    "resize-right-pane",
+    "new-window",
+    "kill-window",
+    "next-window",
+    "previous-window",
+    "next-session",
+    "previous-session",
+    "select-window-0",
+    "select-window-1",
+    "select-window-2",
+    "select-window-3",
+    "select-window-4",
+    "select-window-5",
+    "select-window-6",
+    "select-window-7",
+    "select-window-8",
+    "select-window-9",
+    "rename-window",
+    "rename-session",
+];
+
 /// The literal token marking a leader-scoped binding value (`<Leader>x`).
 /// Matched case-insensitively at the START of the value only.
 const LEADER_TOKEN: &str = "<Leader>";
@@ -892,7 +936,7 @@ fn strip_leader_prefix(value: &str) -> Option<(&str, bool)> {
 /// `repeat: true`; otherwise the value parses as `Direct`. The remainder is
 /// parsed by `parse_key_chord`, so `"<Leader>"` (empty remainder) is an
 /// error.
-fn parse_binding(value: &str) -> Result<Binding, KeyChordParseError> {
+pub(crate) fn parse_binding(value: &str) -> Result<Binding, KeyChordParseError> {
     match strip_leader_prefix(value) {
         Some((rest, repeat)) => {
             parse_key_chord(rest).map(|chord| Binding::Leader { chord, repeat })
@@ -964,7 +1008,7 @@ fn tap_modifier_token(m: TapModifier) -> &'static str {
 /// Parses a non-empty `leader` value: a single allowed tap-modifier token →
 /// `ModifierTap`; anything else → `parse_key_chord` → `Chord`. A bare `Shift`
 /// (and any other bare modifier) errors via `parse_key_chord` (no key).
-fn parse_leader(value: &str) -> Result<Leader, KeyChordParseError> {
+pub(crate) fn parse_leader(value: &str) -> Result<Leader, KeyChordParseError> {
     if let Some(m) = single_tap_modifier(value) {
         return Ok(Leader::ModifierTap(m));
     }
@@ -1380,6 +1424,45 @@ mod tests {
         // NOTE: drift guard — adding a Shortcuts field without its
         // bindings_iter() entry silently unbinds the action.
         assert_eq!(Shortcuts::default().bindings_iter().count(), 36);
+    }
+
+    #[test]
+    fn every_action_key_routes() {
+        // NOTE: one-directional drift guard — the loop below only checks
+        // that listed keys route; this length check catches the other
+        // direction, a new `Shortcuts` field added without a matching
+        // `SHORTCUT_ACTION_KEYS` entry (which would silently make that
+        // action unconfigurable from TOML).
+        assert_eq!(
+            SHORTCUT_ACTION_KEYS.len(),
+            Shortcuts::default().bindings_iter().count()
+        );
+        // NOTE: `resolve.rs::conflicting_shortcut_actions` (via
+        // `first_user_set_or_first`) picks the winner of a chord collision
+        // among same-provenance actions (all user-set, or all built-in
+        // default) by `bindings_iter()` order, and `docs/configs.md`
+        // documents that tie-break as "the action listed first [in
+        // SHORTCUT_ACTION_KEYS / the doc table] wins". Those two claims are
+        // only both true if this order pin holds; a reorder of one list
+        // without the other would silently desync the docs from behavior.
+        let iter_order: Vec<&'static str> = Shortcuts::default()
+            .bindings_iter()
+            .map(|(label, _, _)| label)
+            .collect();
+        assert_eq!(
+            SHORTCUT_ACTION_KEYS, iter_order,
+            "SHORTCUT_ACTION_KEYS order must match bindings_iter() label order"
+        );
+        // NOTE: `quit`'s own built-in default IS `Cmd+Q`, so overriding it
+        // with that same chord would be a no-op and falsely fail this guard;
+        // `Ctrl+Alt+Shift+9` is not any action's default (which use at most
+        // one modifier, or none for a bare leader-scoped chord), so it is
+        // guaranteed to change whichever field it lands on.
+        for key in SHORTCUT_ACTION_KEYS {
+            let t = format!("{key} = \"Ctrl+Alt+Shift+9\"\n");
+            let s: Shortcuts = toml::from_str(&t).expect(key);
+            assert_ne!(s, Shortcuts::default(), "key {key} did not route");
+        }
     }
 
     #[test]

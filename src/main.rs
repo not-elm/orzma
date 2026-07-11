@@ -12,6 +12,8 @@ mod render;
 mod session;
 mod surface;
 mod system_set;
+#[cfg(test)]
+mod test_support;
 mod theme;
 mod ui;
 mod window_title;
@@ -48,7 +50,6 @@ fn main() {
     ensure_terminfo_env();
     ensure_utf8_locale_env();
 
-    let pre_configs = orzma_configs::OrzmaConfigs::load().unwrap_or_default();
     let orzma_registry = WebviewAssetRegistry::default();
     let cef_profile = CefProfileDir::acquire().expect("create per-process CEF profile directory");
     App::new()
@@ -62,9 +63,7 @@ fn main() {
         .add_plugins((
             AppModePlugin,
             SurfacePlugin,
-            DefaultSessionPlugin {
-                shell: pre_configs.orzma.shell.clone(),
-            },
+            DefaultSessionPlugin,
             TerminalHandlePlugin,
             TerminalRendererPlugin,
             RenderPlugin,

@@ -26,6 +26,7 @@ arboard = { version = "3.6.1", default-features = false, features = ["wayland-da
 bevy = { workspace = true }
 bevy_cef = { workspace = true }
 bevy_cef_core = { workspace = true }
+bevy_platform = "0.19"
 orzma_tty_renderer = { path = "crates/orzma_tty_renderer" }
 orzma_tty_engine = { path = "crates/orzma_tty_engine" }
 orzma_webview = { path = "crates/orzma_webview" }
@@ -72,7 +73,7 @@ repository = "https://github.com/not-elm/orzma"
 publish = false
 
 [workspace.dependencies]
-bevy = { version = "0.19", features = ["default_font", "system_clipboard", "system_font_discovery"] }
+bevy = { version = "0.19", features = ["default_font", "system_clipboard", "system_font_discovery", "bevy_settings"] }
 anyhow = { version = "1" }
 thiserror = { version = "2" }
 serde = { version = "1", features = ["derive"] }

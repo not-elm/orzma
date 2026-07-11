@@ -1,6 +1,7 @@
 //! Default-mode standalone terminal spawn: the PTY bundle, spawn options, and
 //! the shell-override config resource.
 
+use crate::configs::OrzmaConfigsResource;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use orzma_tty_engine::{SpawnOptions, TerminalBundle};
@@ -75,17 +76,31 @@ pub(crate) fn full_size_node() -> Node {
     }
 }
 
-/// Inserts the shell-override config resource read by `ensure_default_mode_ui`.
-pub(super) struct DefaultSpawnPlugin {
-    /// Shell override from the loaded configs; `None` defers to `$SHELL`.
-    pub shell: Option<String>,
-}
+/// Inserts the shell-override config resource read by `ensure_default_mode_ui`
+/// and syncs it from the resolved config at `Startup`.
+pub(super) struct DefaultSpawnPlugin;
 
 impl Plugin for DefaultSpawnPlugin {
     fn build(&self, app: &mut App) {
-        app.insert_resource(OrzmaTerminalConfig {
-            shell: self.shell.clone(),
-        });
+        app.insert_resource(OrzmaTerminalConfig { shell: None })
+            .add_systems(Startup, sync_shell_from_config);
+    }
+}
+
+/// Copies the configured shell into `OrzmaTerminalConfig` once at Startup.
+///
+/// Runs before `ensure_default_mode_ui` (`Update`) reads it — `Update` always
+/// follows `Startup`, so no explicit ordering is needed. Takes `Option<Res<..>>`
+/// because the `build_app` UI tests (`src/ui/default_mode.rs`) add
+/// `DefaultSpawnPlugin` and call `update()` without inserting
+/// `OrzmaConfigsResource`; a non-optional `Res` would panic them. No-op when
+/// the resource is absent.
+fn sync_shell_from_config(
+    mut term: ResMut<OrzmaTerminalConfig>,
+    configs: Option<Res<OrzmaConfigsResource>>,
+) {
+    if let Some(configs) = configs {
+        term.shell = configs.0.orzma.shell.clone();
     }
 }
 
@@ -118,5 +133,23 @@ mod tests {
     #[test]
     fn shell_resolution_falls_back_to_sh() {
         assert_eq!(resolve_shell(None, None), "/bin/sh");
+    }
+
+    #[test]
+    fn shell_synced_from_resolved_config_at_startup() {
+        let mut app = App::new();
+        let mut cfg = orzma_configs::OrzmaConfigs::default();
+        cfg.orzma.shell = Some("/usr/bin/fish".into());
+        app.insert_resource(OrzmaConfigsResource(cfg));
+        app.insert_resource(OrzmaTerminalConfig { shell: None });
+        app.add_systems(Startup, sync_shell_from_config);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<OrzmaTerminalConfig>()
+                .shell
+                .as_deref(),
+            Some("/usr/bin/fish")
+        );
     }
 }

@@ -459,6 +459,53 @@ impl ViModeConfig {
     }
 }
 
+/// The kebab-case TOML key for every `ViModeConfig` action field, in
+/// `bindings_iter` order. The single source of truth `crate::resolve` diffs a
+/// user's `[vi-mode]` binding map against; kept honest by the
+/// `every_vi_action_key_routes` test below.
+pub(crate) const VI_MODE_ACTION_KEYS: &[&str] = &[
+    "cursor-left",
+    "cursor-down",
+    "cursor-up",
+    "cursor-right",
+    "line-start",
+    "line-end",
+    "line-first-char",
+    "next-word",
+    "previous-word",
+    "next-word-end",
+    "next-space",
+    "previous-space",
+    "next-space-end",
+    "screen-top",
+    "screen-middle",
+    "screen-bottom",
+    "previous-paragraph",
+    "next-paragraph",
+    "matching-bracket",
+    "history-top",
+    "history-bottom",
+    "page-up",
+    "page-down",
+    "half-page-up",
+    "half-page-down",
+    "scroll-up",
+    "scroll-down",
+    "toggle-selection",
+    "toggle-line-selection",
+    "toggle-rect-selection",
+    "yank",
+    "exit",
+    "search-forward",
+    "search-backward",
+    "search-next",
+    "search-previous",
+    "jump-forward",
+    "jump-backward",
+    "jump-to-forward",
+    "jump-to-backward",
+];
+
 /// TOML value shape for one action: a single key string or an array.
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -601,6 +648,42 @@ mod tests {
     #[test]
     fn default_has_no_duplicate_keys() {
         assert!(ViModeConfig::default().validate_no_duplicate_keys().is_ok());
+    }
+
+    #[test]
+    fn every_vi_action_key_routes() {
+        // NOTE: one-directional drift guard — the loop below only checks
+        // that listed keys route; this length check catches the other
+        // direction, a new `ViModeConfig` field added without a matching
+        // `VI_MODE_ACTION_KEYS` entry (which would silently make that
+        // action unconfigurable from TOML).
+        assert_eq!(
+            VI_MODE_ACTION_KEYS.len(),
+            ViModeConfig::default().bindings_iter().count()
+        );
+        // NOTE: `resolve.rs::resolve_vi_mode`'s duplicate-key repair (via
+        // `first_user_set_or_first`) keeps the first action in
+        // `bindings_iter()` order among same-provenance actions (all
+        // user-set, or all built-in default), and `docs/configs.md` documents
+        // the analogous shortcuts tie-break as "the action listed first
+        // wins" — both claims hold only if this order pin holds; a reorder of
+        // one list without the other would silently desync intent from
+        // behavior.
+        let iter_order: Vec<&'static str> = ViModeConfig::default()
+            .bindings_iter()
+            .map(|(label, _, _)| label)
+            .collect();
+        assert_eq!(
+            VI_MODE_ACTION_KEYS, iter_order,
+            "VI_MODE_ACTION_KEYS order must match bindings_iter() label order"
+        );
+        // NOTE: "Ctrl+9" is not any action's default key, so it is
+        // guaranteed to change whichever field it lands on.
+        for key in VI_MODE_ACTION_KEYS {
+            let t = format!("{key} = \"Ctrl+9\"\n");
+            let cfg: ViModeConfig = toml::from_str(&t).expect(key);
+            assert_ne!(cfg, ViModeConfig::default(), "key {key} did not route");
+        }
     }
 
     #[test]
