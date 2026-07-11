@@ -65,6 +65,7 @@ impl Plugin for ShortcutsPlugin {
                         .before(LeaderGate::Detect),
                 ),
             )
+            .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
             .add_systems(OnExit(AppMode::Default), reset_leader_phase);
     }
 }
