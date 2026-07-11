@@ -4,9 +4,9 @@
 //! clear `FocusedWebview`), and fans out the remaining effects as the four
 //! per-responsibility shortcut messages (`ShortcutMessage`, `ViModeMessage`,
 //! `TypeMessage`, `WebviewForwardMessage`). The per-mode appliers
-//! (`crate::input::shortcuts::default_mode`, `crate::input::shortcuts::tmux`)
-//! consume those messages and apply the mode-specific events. This is the
-//! sole system that steps `LeaderPhase`.
+//! (`crate::input::shortcuts::default_mode`) consume those messages and apply
+//! the mode-specific events. This is the sole system that steps
+//! `LeaderPhase`.
 
 use crate::action::vi::ResolvedViModeKeys;
 use crate::app_mode::AppMode;
@@ -20,8 +20,6 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, WebviewForwardMessage, clear_leader_phase,
 };
-use crate::ui::tmux::confirm_prompt::ConfirmState;
-use crate::ui::tmux::rename_prompt::RenamePrompt;
 use crate::ui::vi_mode::ViModeState;
 use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
@@ -49,14 +47,11 @@ impl Plugin for KeyboardHandlerPlugin {
     }
 }
 
-/// The modal-guard and mode inputs `resolve_key_effects` reads: the tmux modal
-/// prompts, IME state, and the active `AppMode` that gates the tmux-only prompt
-/// guards.
+/// The modal-guard and mode inputs `resolve_key_effects` reads: the vi-search
+/// prompt, IME state, and the active `AppMode`.
 #[derive(SystemParam)]
 struct ModalGuards<'w> {
     vi_mode_prompt: Res<'w, ViModePrompt>,
-    confirm_state: Option<Res<'w, ConfirmState>>,
-    rename_prompt: Option<Res<'w, RenamePrompt>>,
     ime: Res<'w, ImeState>,
     app_mode: Res<'w, State<AppMode>>,
 }
@@ -76,9 +71,9 @@ struct ClassifyInputs<'w> {
 /// shortcut messages. Runs in both `AppMode`s (gated only on
 /// `on_message::<KeyboardInput>`), in `InputPhase::FocusedKey` /
 /// `ShortcutSet::Resolve` / `LeaderGate::Advance`. The sole `LeaderPhase`-stepping
-/// system: on a coarse guard (a tmux modal prompt, IME composition, or an
-/// unfocused window) it clears the leader, drains the frame's keys, and writes no
-/// messages; otherwise it classifies the keys, applies `Quit` (`AppExit`) and
+/// system: on a coarse guard (IME composition or an unfocused window) it
+/// clears the leader, drains the frame's keys, and writes no messages;
+/// otherwise it classifies the keys, applies `Quit` (`AppExit`) and
 /// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every other
 /// effect to its typed message (`ShortcutMessage`, `ViModeMessage`,
 /// `TypeMessage`, `WebviewForwardMessage`).
@@ -99,18 +94,12 @@ fn resolve_key_effects(
 ) {
     let mode = guards.app_mode.get().clone();
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    // NOTE: the prompt guards (vi-mode prompt, confirm-before, rename) are
-    // tmux-only by design. Those resources are set by tmux actions and cleared
-    // only by their own handlers — never on a mode transition — so a prompt left
-    // open when the tmux connection drops (falling back to Default) would
-    // otherwise drain EVERY key and freeze Default keyboard input. IME + window
-    // focus guard both modes. When a guard fires, drain (don't replay) the
-    // frame's keys and write no messages, so no key leaks to the terminal,
-    // tmux, or the prefix state machine (and no preedit key is double-sent).
-    let prompt_open = mode == AppMode::Tmux
-        && (guards.vi_mode_prompt.open.is_some()
-            || guards.confirm_state.is_some()
-            || guards.rename_prompt.is_some());
+    // NOTE: the vi-search prompt guard is inert today (nothing opens the
+    // prompt); it is removed with `ui/vi_search.rs` in a later task. IME +
+    // window focus guard all input. When a guard fires, drain (don't replay)
+    // the frame's keys and write no messages, so no key leaks to the terminal
+    // or the prefix state machine (and no preedit key is double-sent).
+    let prompt_open = mode == AppMode::Tmux && guards.vi_mode_prompt.open.is_some();
     if prompt_open || guards.ime.is_composing() || !focused_window {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {

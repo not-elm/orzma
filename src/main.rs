@@ -8,7 +8,6 @@ mod configs;
 mod error;
 mod font;
 mod input;
-mod render;
 mod session;
 mod surface;
 mod system_set;
@@ -33,7 +32,6 @@ use orzma_tty_engine::TerminalHandlePlugin;
 use orzma_tty_renderer::TerminalRendererPlugin;
 use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use orzma_webview_host::WebviewAssetRegistry;
-use render::tmux::RenderPlugin;
 use session::default::DefaultSessionPlugin;
 use session::tmux::TmuxLifecyclePlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
@@ -67,7 +65,6 @@ fn main() {
             },
             TerminalHandlePlugin,
             TerminalRendererPlugin,
-            RenderPlugin,
             TmuxLifecyclePlugin,
             ActionPlugin,
             OrzmaConfigsPlugin,

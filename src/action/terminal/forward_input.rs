@@ -1,5 +1,5 @@
 //! Backend-bytes event for PTY-less terminal surfaces; the host owns the
-//! observer that routes it to the real backend (`crate::input::tmux::forward`).
+//! observer that routes it to the real backend.
 
 use bevy::prelude::*;
 

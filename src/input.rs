@@ -1,5 +1,5 @@
 //! Root of the host input pipeline: keyboard, mouse, focus, gesture and binding primitives, IME, hyperlink-hover, shortcuts, option-as-alt, and the
-//! per-mode (`default_mode`, `tmux`) dispatchers.
+//! `default_mode` dispatchers.
 
 mod bindings;
 pub(crate) mod default_mode;
@@ -10,13 +10,11 @@ pub(crate) mod keyboard;
 pub(crate) mod mouse;
 pub(crate) mod option_as_alt;
 pub(crate) mod shortcuts;
-pub(crate) mod tmux;
 
 use crate::{
     input::{
         default_mode::DefaultHostInputPlugin, keyboard::KeyboardInputPlugin,
         mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
-        tmux::TmuxInputPlugin,
     },
     system_set::OrzmaSystems,
 };
@@ -31,9 +29,8 @@ use orzma_configs::shortcuts::Modifiers;
 pub(crate) enum InputPhase {
     Hover,
     Dispatch,
-    /// Keyboard shortcut dispatch and tmux key forwarding
-    /// (`apply_tmux_shortcuts`) run in this slot, after `Dispatch` has applied
-    /// any IME events so the forwarder sees fresh `ImeState`.
+    /// Keyboard shortcut dispatch runs in this slot, after `Dispatch` has
+    /// applied any IME events so the dispatcher sees fresh `ImeState`.
     FocusedKey,
 }
 
@@ -47,7 +44,6 @@ impl Plugin for OrzmaInputPlugin {
             OptionAsAltPlugin,
             KeyboardInputPlugin,
             MouseInputPlugin,
-            TmuxInputPlugin,
             DefaultHostInputPlugin,
         ))
         .configure_sets(

@@ -1,7 +1,6 @@
 //! Shared terminal-surface geometry: cursor physical-pixel → pane-local px →
 //! cell (column/row/side). Mode-agnostic — used by the pointer router
 //! (`crate::input::mouse::webview`), both mode pipelines, and hyperlink hover.
-//! The `TmuxPane`-specific hit-test lives in `crate::input::tmux::pane_hit`.
 
 use bevy::ecs::entity::Entity;
 use bevy::math::Vec2;
@@ -61,8 +60,8 @@ pub(crate) fn cell_at_local(
     (col, row, side_of(frac_x))
 }
 
-/// Maps a window cursor position (physical px) to the active `TmuxPane`'s
-/// visible `(col, row, side)`, clamped to `[0, cols) × [0, rows)`. Returns
+/// Maps a window cursor position (physical px) to a pane's visible
+/// `(col, row, side)`, clamped to `[0, cols) × [0, rows)`. Returns
 /// `None` when the projection is degenerate (zero-area node). The point is
 /// clamped (not rejected) when it falls outside the pane so a drag that leaves
 /// the pane edge still extends the selection to the nearest cell.
@@ -96,8 +95,7 @@ pub(crate) fn cells_for(w_px: u32, h_px: u32, cell_w: f32, cell_h: f32) -> (u16,
 /// or `None` when the cursor is over none. "Topmost" is the highest
 /// `ComputedStackIndex` (Bevy's resolved front-to-back UI order); ties
 /// break by `Entity` for determinism. The Default-mode pointer/gate path uses
-/// this to pick the single shell (or the frontmost surface) under the cursor;
-/// tmux keeps its own multi-pane `tmux_pane_at_phys` resolution.
+/// this to pick the single shell (or the frontmost surface) under the cursor.
 pub(crate) fn topmost_surface_at<'a>(
     cursor_phys: Vec2,
     candidates: impl Iterator<

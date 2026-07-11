@@ -28,9 +28,8 @@ use orzma_webview::{Webview, focused_webview_of};
 
 /// IME-committed text destined for the keyboard-focused terminal surface.
 ///
-/// Per-backend observers apply it: the tmux observer in `src/input/tmux/forward.rs`
-/// sends it over the control socket (targeting tmux panes); the Default observer
-/// in `src/input/default_mode.rs` writes the local PTY via `TerminalKeyInput`.
+/// The observer in `src/input/default_mode.rs` applies it, writing the local
+/// PTY via `TerminalKeyInput`.
 #[derive(EntityEvent, Debug, Clone)]
 pub(crate) struct ImeCommit {
     #[event_target]
@@ -41,8 +40,8 @@ pub(crate) struct ImeCommit {
 /// Bevy plugin that registers `ImeState` and the IME-event handling
 /// systems. Ordering: `ime_policy_system` runs before `read_ime_events`
 /// (chained); both run in `InputPhase::Dispatch`, ahead of
-/// `InputPhase::FocusedKey` where `apply_tmux_shortcuts` forwards keys to the
-/// active pane (and gates on `ImeState`, so IME must apply first).
+/// `InputPhase::FocusedKey`, whose dispatcher gates on `ImeState`, so IME
+/// must apply first.
 pub struct ImePlugin;
 
 impl Plugin for ImePlugin {
@@ -298,8 +297,7 @@ fn ime_policy_system(
 /// `ImeCommit` to the keyboard-focused surface. The commit is suppressed (the
 /// state machine still runs, so `ImeState` stays consistent) when EITHER any
 /// webview owns keyboard focus OR the focused surface is in vi mode. The
-/// commit transport is applied by per-backend observers
-/// (`src/input/tmux/forward.rs`, `src/input/default_mode.rs`).
+/// commit transport is applied by the observer in `src/input/default_mode.rs`.
 fn read_ime_events(
     mut commands: Commands,
     mut events: MessageReader<Ime>,

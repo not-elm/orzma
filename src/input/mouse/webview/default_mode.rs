@@ -1,8 +1,7 @@
 //! Default-mode (`AppMode::Default`) webview pointer routing: forwards left
 //! press/release and pointer motion to the inline CEF child under the cursor on
 //! the single Default shell surface, via the mode-agnostic core in
-//! `crate::input::mouse::webview`. The tmux equivalent is `crate::input::mouse::button::tmux`;
-//! this is the single-surface analogue (no pane arbitration / gesture hand-off).
+//! `crate::input::mouse::webview`.
 //!
 //! The pointer system runs EVERY frame in `AppMode::Default` (not message-gated)
 //! so an in-flight press is released when input is suppressed (window unfocused /

@@ -1,13 +1,12 @@
-//! Shared CEF pointer routing helpers for both the default-mode router and the
-//! tmux gesture arbiter: forwards left press/release and pointer motion to the
-//! inline CEF child under the cursor, on ANY `OrzmaTerminal` surface (a tmux
-//! pane or the Default-mode shell). The mode-specific systems
-//! (`crate::input::mouse::button::tmux`, `crate::input::mouse::webview::default_mode`) resolve
-//! which surface is under the cursor — multi-pane hit-test for tmux, the
-//! single shell for Default — and then delegate the CEF forwarding + focus to
-//! the helpers here. Inline webviews are Node/Mesh-free `ChildOf` children
-//! (`orzma_webview`), so `bevy_cef`'s native picking cannot reach them; this
-//! manual forwarding is the only path that delivers clicks to them.
+//! Shared CEF pointer routing helpers for the default-mode router: forwards left
+//! press/release and pointer motion to the inline CEF child under the cursor, on
+//! ANY `OrzmaTerminal` surface. The mode-specific system
+//! (`crate::input::mouse::webview::default_mode`) resolves which surface is
+//! under the cursor — the single shell for Default — and then delegates the
+//! CEF forwarding + focus to the helpers here. Inline webviews are Node/Mesh-free
+//! `ChildOf` children (`orzma_webview`), so `bevy_cef`'s native picking cannot
+//! reach them; this manual forwarding is the only path that delivers clicks to
+//! them.
 
 use crate::input::mouse::cell_dims;
 use crate::surface::OrzmaTerminal;
@@ -206,10 +205,9 @@ pub(in crate::input::mouse) struct WebviewMoveDeps<'a> {
     pub pressed_buttons: &'a ButtonInput<MouseButton>,
 }
 
-/// Resolves the surface under `cursor_phys` via `resolve` (single-shell hit-test
-/// for Default mode, multi-pane tmux hit-test for tmux mode) and forwards pointer
-/// motion to the inline CEF child there through `forward_webview_move`. A `None`
-/// resolution forwards nothing.
+/// Resolves the surface under `cursor_phys` via `resolve` (the Default-mode
+/// single-shell hit-test) and forwards pointer motion to the inline CEF child
+/// there through `forward_webview_move`. A `None` resolution forwards nothing.
 pub(in crate::input::mouse) fn forward_webview_move_at(
     deps: &WebviewMoveDeps,
     resolve: impl Fn(Vec2) -> Option<(Entity, Vec2)>,
