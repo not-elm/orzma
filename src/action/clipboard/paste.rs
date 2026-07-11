@@ -4,8 +4,7 @@
 //! construction.
 
 use crate::{
-    action::clipboard::paste::default_mode::PasteDefaultModePlugin,
-    surface::OrzmaTerminal,
+    action::clipboard::paste::default_mode::PasteDefaultModePlugin, surface::OrzmaTerminal,
 };
 use bevy::{clipboard::ClipboardError, prelude::*};
 

@@ -29,13 +29,12 @@ pub(super) struct MouseWheelInputPlugin;
 
 impl Plugin for MouseWheelInputPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WheelAccumulator>()
-            .add_systems(
-                Update,
-                dispatch_mouse_wheel
-                    .in_set(InputPhase::Dispatch)
-                    .run_if(on_any_mouse_message()),
-            );
+        app.init_resource::<WheelAccumulator>().add_systems(
+            Update,
+            dispatch_mouse_wheel
+                .in_set(InputPhase::Dispatch)
+                .run_if(on_any_mouse_message()),
+        );
     }
 }
 
