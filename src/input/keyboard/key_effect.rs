@@ -592,11 +592,8 @@ mod tests {
 
     #[test]
     fn pending_skips_bare_modifier_then_second_key() {
-        let sc = test_shortcuts_with_repeat_prefix(
-            KeyCode::KeyD,
-            Shortcut::DetachSession,
-            Duration::ZERO,
-        );
+        let sc =
+            test_shortcuts_with_repeat_prefix(KeyCode::KeyD, Shortcut::KillPane, Duration::ZERO);
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [
@@ -613,7 +610,7 @@ mod tests {
         assert_eq!(
             effects,
             vec![KeyEffect::Shortcut {
-                action: Shortcut::DetachSession,
+                action: Shortcut::KillPane,
                 via_leader: true,
             }],
             "the leading bare modifier must not consume the pending slot; the real \
@@ -624,7 +621,7 @@ mod tests {
 
     #[test]
     fn pending_suppresses_type_for_second_key() {
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::DetachSession, ms(500));
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::KillPane, ms(500));
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [press(KeyCode::KeyA, Key::Character("a".into()))];
@@ -645,7 +642,7 @@ mod tests {
 
     #[test]
     fn pending_types_trailing_same_frame_key() {
-        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::DetachSession, ms(500));
+        let sc = test_shortcuts_with_repeat_prefix(KeyCode::KeyZ, Shortcut::KillPane, ms(500));
         let resolved_vi_mode = ResolvedViModeKeys::default();
         let mut phase = LeaderPhase::Pending;
         let events = [

@@ -44,7 +44,8 @@ impl Plugin for ShortcutsDefaultModePlugin {
 /// (direct paste fires outside vi mode; a leader paste fires unconditionally),
 /// and copy (fires unconditionally — vi mode included; no-selection is a
 /// no-op downstream). `Quit` / `ReleaseWebviewFocus` are handled upstream in
-/// `resolve_key_effects`; pane/window actions are no-ops.
+/// `resolve_key_effects`; pane/window actions are no-ops until the built-in
+/// multiplexer lands.
 /// Registered in `ShortcutSet::Apply`, gated on `on_message::<ShortcutMessage>`.
 pub(in crate::input) fn apply_default_shortcuts(
     mut commands: Commands,
@@ -65,8 +66,7 @@ pub(in crate::input) fn apply_default_shortcuts(
                 }
             }
             Shortcut::Copy => trigger_selection_copy(&mut commands, msg.focused),
-            Shortcut::DetachSession
-            | Shortcut::SelectPane(_)
+            Shortcut::SelectPane(_)
             | Shortcut::ResizePane(_)
             | Shortcut::SplitPane(_)
             | Shortcut::KillPane
@@ -75,11 +75,8 @@ pub(in crate::input) fn apply_default_shortcuts(
             | Shortcut::KillWindow
             | Shortcut::NextWindow
             | Shortcut::PreviousWindow
-            | Shortcut::NextSession
-            | Shortcut::PreviousSession
             | Shortcut::SelectWindow(_)
             | Shortcut::RenameWindow
-            | Shortcut::RenameSession
             | Shortcut::Quit
             | Shortcut::ReleaseWebviewFocus => {}
         }

@@ -355,199 +355,174 @@ pub struct Shortcuts {
         serialize_with = "ser_binding_or_unbind"
     )]
     pub quit: Option<Binding>,
-    /// Enter vi mode: Alacritty vi mode in `AppMode::Default`, tmux
-    /// vi-mode in `AppMode::Tmux`.
+    /// Enter vi mode: Alacritty vi mode on the focused terminal.
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub enter_vi_mode: Option<Binding>,
-    /// Detach the current tmux session and switch to Default mode.
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub detach_session: Option<Binding>,
-    /// Focus the pane to the left (tmux mode only).
+    /// Focus the pane to the left (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_left_pane: Option<Binding>,
-    /// Focus the pane below (tmux mode only).
+    /// Focus the pane below (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_down_pane: Option<Binding>,
-    /// Focus the pane above (tmux mode only).
+    /// Focus the pane above (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_up_pane: Option<Binding>,
-    /// Focus the pane to the right (tmux mode only).
+    /// Focus the pane to the right (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_right_pane: Option<Binding>,
-    /// Split the active pane side-by-side — vertical divider, tmux `-h` (tmux mode only).
+    /// Split the active pane side-by-side — vertical divider, tmux `-h` (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub split_vertical_pane: Option<Binding>,
-    /// Split the active pane stacked — horizontal divider, tmux `-v` (tmux mode only).
+    /// Split the active pane stacked — horizontal divider, tmux `-v` (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub split_horizontal_pane: Option<Binding>,
-    /// Kill the active pane, after a confirm prompt (tmux mode only).
+    /// Kill the active pane, after a confirm prompt (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub kill_pane: Option<Binding>,
-    /// Toggle zoom on the active pane (tmux mode only).
+    /// Toggle zoom on the active pane (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub zoom_pane: Option<Binding>,
-    /// Resize the active pane's border left by 5 cells, repeatable (tmux mode only).
+    /// Resize the active pane's border left by 5 cells, repeatable (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_left_pane: Option<Binding>,
-    /// Resize the active pane's border down by 5 cells, repeatable (tmux mode only).
+    /// Resize the active pane's border down by 5 cells, repeatable (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_down_pane: Option<Binding>,
-    /// Resize the active pane's border up by 5 cells, repeatable (tmux mode only).
+    /// Resize the active pane's border up by 5 cells, repeatable (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_up_pane: Option<Binding>,
-    /// Resize the active pane's border right by 5 cells, repeatable (tmux mode only).
+    /// Resize the active pane's border right by 5 cells, repeatable (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub resize_right_pane: Option<Binding>,
-    /// Open a new window (tmux mode only).
+    /// Open a new window (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub new_window: Option<Binding>,
-    /// Kill the active window, after a confirm prompt (tmux mode only).
+    /// Kill the active window, after a confirm prompt (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub kill_window: Option<Binding>,
-    /// Switch to the next window (tmux mode only).
+    /// Switch to the next window (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub next_window: Option<Binding>,
-    /// Switch to the previous window (tmux mode only).
+    /// Switch to the previous window (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub previous_window: Option<Binding>,
-    /// Switch to the next session (tmux mode only).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub next_session: Option<Binding>,
-    /// Switch to the previous session (tmux mode only).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub previous_session: Option<Binding>,
-    /// Switch to the window at tmux index 0 (tmux mode only).
+    /// Switch to the window at tmux index 0 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_0: Option<Binding>,
-    /// Switch to the window at tmux index 1 (tmux mode only).
+    /// Switch to the window at tmux index 1 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_1: Option<Binding>,
-    /// Switch to the window at tmux index 2 (tmux mode only).
+    /// Switch to the window at tmux index 2 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_2: Option<Binding>,
-    /// Switch to the window at tmux index 3 (tmux mode only).
+    /// Switch to the window at tmux index 3 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_3: Option<Binding>,
-    /// Switch to the window at tmux index 4 (tmux mode only).
+    /// Switch to the window at tmux index 4 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_4: Option<Binding>,
-    /// Switch to the window at tmux index 5 (tmux mode only).
+    /// Switch to the window at tmux index 5 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_5: Option<Binding>,
-    /// Switch to the window at tmux index 6 (tmux mode only).
+    /// Switch to the window at tmux index 6 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_6: Option<Binding>,
-    /// Switch to the window at tmux index 7 (tmux mode only).
+    /// Switch to the window at tmux index 7 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_7: Option<Binding>,
-    /// Switch to the window at tmux index 8 (tmux mode only).
+    /// Switch to the window at tmux index 8 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_8: Option<Binding>,
-    /// Switch to the window at tmux index 9 (tmux mode only).
+    /// Switch to the window at tmux index 9 (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub select_window_9: Option<Binding>,
-    /// Open the rename prompt for the active window (tmux mode only).
+    /// Open the rename prompt for the active window (no effect until the built-in multiplexer lands).
     #[serde(
         deserialize_with = "deser_binding_or_unbind",
         serialize_with = "ser_binding_or_unbind"
     )]
     pub rename_window: Option<Binding>,
-    /// Open the rename prompt for the session (tmux mode only).
-    #[serde(
-        deserialize_with = "deser_binding_or_unbind",
-        serialize_with = "ser_binding_or_unbind"
-    )]
-    pub rename_session: Option<Binding>,
     /// Timeout (ms) for a modifier-tap leader: press+release within this window
     /// with no intervening key/mouse press counts as a tap. Default 300; 0 is
     /// normalized to 300.
@@ -570,7 +545,6 @@ impl Default for Shortcuts {
             release_webview_focus: Some(parse_default_binding("<Leader>u")),
             quit: Some(Binding::Direct(parse_default_chord("Cmd+Q"))),
             enter_vi_mode: Some(parse_default_binding("<Leader>s")),
-            detach_session: Some(parse_default_binding("<Leader>x")),
             select_left_pane: Some(parse_default_binding("<Leader>h")),
             select_down_pane: Some(parse_default_binding("<Leader>j")),
             select_up_pane: Some(parse_default_binding("<Leader>k")),
@@ -587,8 +561,6 @@ impl Default for Shortcuts {
             kill_window: Some(parse_default_binding("<Leader>Shift+X")),
             next_window: Some(parse_default_binding("<Leader>]")),
             previous_window: Some(parse_default_binding("<Leader>[")),
-            next_session: Some(parse_default_binding("<Leader>Shift+]")),
-            previous_session: Some(parse_default_binding("<Leader>Shift+[")),
             select_window_0: Some(parse_default_binding("<Leader>0")),
             select_window_1: Some(parse_default_binding("<Leader>1")),
             select_window_2: Some(parse_default_binding("<Leader>2")),
@@ -600,7 +572,6 @@ impl Default for Shortcuts {
             select_window_8: Some(parse_default_binding("<Leader>8")),
             select_window_9: Some(parse_default_binding("<Leader>9")),
             rename_window: Some(parse_default_binding("<Leader>r")),
-            rename_session: Some(parse_default_binding("<Leader>Shift+R")),
             leader_tap_timeout_ms: 300,
             repeat_time_ms: 500,
         }
@@ -623,11 +594,6 @@ impl Shortcuts {
             ),
             ("quit", &self.quit, Shortcut::Quit),
             ("enter-vi-mode", &self.enter_vi_mode, Shortcut::EnterViMode),
-            (
-                "detach-session",
-                &self.detach_session,
-                Shortcut::DetachSession,
-            ),
             (
                 "select-left-pane",
                 &self.select_left_pane,
@@ -688,12 +654,6 @@ impl Shortcuts {
                 &self.previous_window,
                 Shortcut::PreviousWindow,
             ),
-            ("next-session", &self.next_session, Shortcut::NextSession),
-            (
-                "previous-session",
-                &self.previous_session,
-                Shortcut::PreviousSession,
-            ),
             (
                 "select-window-0",
                 &self.select_window_0,
@@ -745,11 +705,6 @@ impl Shortcuts {
                 Shortcut::SelectWindow(9),
             ),
             ("rename-window", &self.rename_window, Shortcut::RenameWindow),
-            (
-                "rename-session",
-                &self.rename_session,
-                Shortcut::RenameSession,
-            ),
         ]
         .into_iter()
     }
@@ -818,8 +773,8 @@ pub enum SplitOrientation {
     Horizontal,
 }
 
-/// Shortcut actions. GUI-local actions plus the tmux pane/window operations
-/// (the latter are inert outside `AppMode::Tmux`).
+/// Shortcut actions. GUI-local actions plus the pane/window operations
+/// (the latter have no effect until the built-in multiplexer lands).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shortcut {
     /// Paste the system clipboard into the active terminal.
@@ -830,39 +785,30 @@ pub enum Shortcut {
     ReleaseWebviewFocus,
     /// Quits the orzma application.
     Quit,
-    /// Detaches from the tmux session and returns to Default single-terminal mode.
-    DetachSession,
-    /// Enters vi mode: Alacritty vi mode in `AppMode::Default`, tmux
-    /// vi-mode in `AppMode::Tmux`.
+    /// Enters vi mode: Alacritty vi mode on the focused terminal.
     EnterViMode,
-    /// Focuses the neighbor pane in the given direction (tmux mode only).
+    /// Focuses the neighbor pane in the given direction (no effect until the built-in multiplexer lands).
     SelectPane(PaneDirection),
-    /// Splits the active pane (tmux mode only).
+    /// Splits the active pane (no effect until the built-in multiplexer lands).
     SplitPane(SplitOrientation),
-    /// Kills the active pane after a confirm prompt (tmux mode only).
+    /// Kills the active pane after a confirm prompt (no effect until the built-in multiplexer lands).
     KillPane,
-    /// Toggles zoom on the active pane (tmux mode only).
+    /// Toggles zoom on the active pane (no effect until the built-in multiplexer lands).
     ZoomPane,
-    /// Resizes the active pane's border in the given direction (tmux mode only).
+    /// Resizes the active pane's border in the given direction (no effect until the built-in multiplexer lands).
     ResizePane(PaneDirection),
-    /// Opens a new window in the current session (tmux mode only).
+    /// Opens a new window in the current session (no effect until the built-in multiplexer lands).
     NewWindow,
-    /// Kills the active window after a confirm prompt (tmux mode only).
+    /// Kills the active window after a confirm prompt (no effect until the built-in multiplexer lands).
     KillWindow,
-    /// Switches to the next window (tmux mode only).
+    /// Switches to the next window (no effect until the built-in multiplexer lands).
     NextWindow,
-    /// Switches to the previous window (tmux mode only).
+    /// Switches to the previous window (no effect until the built-in multiplexer lands).
     PreviousWindow,
-    /// Switches the tmux client to the next session (tmux mode only).
-    NextSession,
-    /// Switches the tmux client to the previous session (tmux mode only).
-    PreviousSession,
-    /// Switches to the window with this tmux display index (tmux mode only).
+    /// Switches to the window with this tmux display index (no effect until the built-in multiplexer lands).
     SelectWindow(u8),
-    /// Opens the rename prompt for the active window (tmux mode only).
+    /// Opens the rename prompt for the active window (no effect until the built-in multiplexer lands).
     RenameWindow,
-    /// Opens the rename prompt for the session (tmux mode only).
-    RenameSession,
 }
 
 /// The literal token marking a leader-scoped binding value (`<Leader>x`).
@@ -1370,16 +1316,16 @@ mod tests {
             s.copy,
             Some(Binding::Direct(parse_key_chord("Cmd+C").unwrap()))
         );
-        assert_eq!(s.bindings_iter().count(), 36);
+        assert_eq!(s.bindings_iter().count(), 32);
         assert_eq!(s.direct_chords().count(), 3);
-        assert_eq!(s.leader_chords().count(), 33);
+        assert_eq!(s.leader_chords().count(), 29);
     }
 
     #[test]
     fn bindings_iter_count_is_pinned_to_field_count() {
         // NOTE: drift guard — adding a Shortcuts field without its
         // bindings_iter() entry silently unbinds the action.
-        assert_eq!(Shortcuts::default().bindings_iter().count(), 36);
+        assert_eq!(Shortcuts::default().bindings_iter().count(), 32);
     }
 
     #[test]
@@ -1433,13 +1379,6 @@ mod tests {
             })
         );
         assert_eq!(
-            s.rename_session,
-            Some(Binding::Leader {
-                chord: parse_key_chord("Shift+R").unwrap(),
-                repeat: false,
-            })
-        );
-        assert_eq!(
             s.paste,
             Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
         );
@@ -1479,7 +1418,7 @@ new-window = "Cmd+T"
         let toml = r#"
 leader = "Ctrl+A"
 enter-vi-mode = "<Leader>s"
-detach-session = "<Leader>d"
+rename-window = "<Leader>d"
 "#;
         let s: Shortcuts = toml::from_str(toml).unwrap();
         assert_eq!(
@@ -1494,7 +1433,7 @@ detach-session = "<Leader>d"
             })
         );
         assert_eq!(
-            s.detach_session,
+            s.rename_window,
             Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
@@ -1504,7 +1443,7 @@ detach-session = "<Leader>d"
             s.paste,
             Some(Binding::Direct(parse_key_chord("Cmd+V").unwrap()))
         );
-        assert_eq!(s.leader_chords().count(), 33);
+        assert_eq!(s.leader_chords().count(), 29);
     }
 
     #[test]
@@ -1531,7 +1470,7 @@ detach-session = "<Leader>d"
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
-            detach_session: Some(Binding::Leader {
+            rename_window: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1540,7 +1479,7 @@ detach-session = "<Leader>d"
         let err = s.validate_no_leader_conflicts().unwrap_err();
         assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"enter-vi-mode"));
-        assert!(err[0].actions.contains(&"detach-session"));
+        assert!(err[0].actions.contains(&"rename-window"));
     }
 
     #[test]
@@ -1550,7 +1489,7 @@ detach-session = "<Leader>d"
                 chord: parse_key_chord("d").unwrap(),
                 repeat: true,
             }),
-            detach_session: Some(Binding::Leader {
+            rename_window: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1559,13 +1498,13 @@ detach-session = "<Leader>d"
         let err = s.validate_no_leader_conflicts().unwrap_err();
         assert_eq!(err.len(), 1);
         assert!(err[0].actions.contains(&"enter-vi-mode"));
-        assert!(err[0].actions.contains(&"detach-session"));
+        assert!(err[0].actions.contains(&"rename-window"));
     }
 
     #[test]
     fn default_shortcuts_json_snapshot() {
         let json = serde_json::to_string(&Shortcuts::default()).unwrap();
-        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","detach-session":"<Leader>X","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","next-session":"<Leader>Shift+]","previous-session":"<Leader>Shift+[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","rename-session":"<Leader>Shift+R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
+        let expected = r#"{"leader":"Cmd","paste":"Cmd+V","copy":"Cmd+C","release-webview-focus":"<Leader>U","quit":"Cmd+Q","enter-vi-mode":"<Leader>S","select-left-pane":"<Leader>H","select-down-pane":"<Leader>J","select-up-pane":"<Leader>K","select-right-pane":"<Leader>L","split-vertical-pane":"<Leader>I","split-horizontal-pane":"<Leader>O","kill-pane":"<Leader>P","zoom-pane":"<Leader>Z","resize-left-pane":"<Leader:r>Shift+H","resize-down-pane":"<Leader:r>Shift+J","resize-up-pane":"<Leader:r>Shift+K","resize-right-pane":"<Leader:r>Shift+L","new-window":"<Leader>C","kill-window":"<Leader>Shift+X","next-window":"<Leader>]","previous-window":"<Leader>[","select-window-0":"<Leader>0","select-window-1":"<Leader>1","select-window-2":"<Leader>2","select-window-3":"<Leader>3","select-window-4":"<Leader>4","select-window-5":"<Leader>5","select-window-6":"<Leader>6","select-window-7":"<Leader>7","select-window-8":"<Leader>8","select-window-9":"<Leader>9","rename-window":"<Leader>R","leader-tap-timeout-ms":300,"repeat-time-ms":500}"#;
         assert_eq!(json, expected);
     }
 
@@ -1573,7 +1512,7 @@ detach-session = "<Leader>d"
     fn serialize_leader_binding_emits_leader_token() {
         let s = Shortcuts {
             leader: Some(Leader::Chord(parse_key_chord("Ctrl+A").unwrap())),
-            detach_session: Some(Binding::Leader {
+            rename_window: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1585,7 +1524,7 @@ detach-session = "<Leader>d"
             "leader serializes as its chord string; got {json}"
         );
         assert!(
-            json.contains(r#""detach-session":"<Leader>D""#),
+            json.contains(r#""rename-window":"<Leader>D""#),
             "a Leader binding serializes with the <Leader> token; got {json}"
         );
     }
@@ -1629,8 +1568,7 @@ detach-session = "<Leader>d"
 
     #[test]
     fn shortcuts_parses_bare_modifier_leader_and_timeout() {
-        let toml =
-            "leader = \"Cmd\"\nleader-tap-timeout-ms = 250\ndetach-session = \"<Leader>d\"\n";
+        let toml = "leader = \"Cmd\"\nleader-tap-timeout-ms = 250\nrename-window = \"<Leader>d\"\n";
         let s: Shortcuts = toml::from_str(toml).unwrap();
         assert_eq!(s.leader, Some(Leader::ModifierTap(TapModifier::Meta)));
         assert_eq!(s.leader_tap_timeout_ms, 250);
@@ -1697,7 +1635,7 @@ detach-session = "<Leader>d"
     #[test]
     fn serialize_repeat_leader_binding_emits_repeat_token() {
         let s = Shortcuts {
-            detach_session: Some(Binding::Leader {
+            rename_window: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: true,
             }),
@@ -1705,7 +1643,7 @@ detach-session = "<Leader>d"
         };
         let json = serde_json::to_string(&s).unwrap();
         assert!(
-            json.contains(r#""detach-session":"<Leader:r>D""#),
+            json.contains(r#""rename-window":"<Leader:r>D""#),
             "a repeat Leader binding serializes with the <Leader:r> token; got {json}"
         );
     }
@@ -1717,7 +1655,7 @@ detach-session = "<Leader>d"
                 chord: parse_key_chord("s").unwrap(),
                 repeat: true,
             }),
-            detach_session: Some(Binding::Leader {
+            rename_window: Some(Binding::Leader {
                 chord: parse_key_chord("d").unwrap(),
                 repeat: false,
             }),
@@ -1732,7 +1670,7 @@ detach-session = "<Leader>d"
         assert!(
             entries
                 .iter()
-                .any(|(l, _, _, r)| *l == "detach-session" && !*r)
+                .any(|(l, _, _, r)| *l == "rename-window" && !*r)
         );
     }
 

@@ -779,7 +779,7 @@ mod tests {
                 OrzmaShortcut {
                     keycode: KeyCode::KeyD,
                     modifiers: mods(false, false, false, false),
-                    action: Shortcut::DetachSession,
+                    action: Shortcut::KillPane,
                     repeat: true,
                 },
                 OrzmaShortcut {
@@ -828,7 +828,7 @@ mod tests {
         let mut phase = LeaderPhase::Repeat { deadline: ms(500) };
         assert!(matches!(
             step_leader(&mut phase, &sc, KeyCode::KeyD, no_mods(), ms(100)),
-            LeaderStep::RunAction(Shortcut::DetachSession)
+            LeaderStep::RunAction(Shortcut::KillPane)
         ));
         assert_eq!(phase, LeaderPhase::Repeat { deadline: ms(600) });
     }
@@ -1085,13 +1085,13 @@ mod tests {
     fn step_leader_ignores_bare_modifier_and_survives_to_second_chord() {
         // Reproduces [0]: the second chord's Ctrl modifier emits its own Pressed
         // event before KeyD; it must not consume the pending phase. Leader
-        // Ctrl+B, prefix detach-session = Ctrl+D.
+        // Ctrl+B, prefix kill-pane = Ctrl+D.
         let sc = Shortcuts {
             direct: Vec::new(),
             prefix: vec![OrzmaShortcut {
                 keycode: KeyCode::KeyD,
                 modifiers: mods(true, false, false, false),
-                action: Shortcut::DetachSession,
+                action: Shortcut::KillPane,
                 repeat: false,
             }],
             leader: Some(ResolvedLeader::Chord(
@@ -1155,7 +1155,7 @@ mod tests {
                 mods(true, false, false, false),
                 ms(0)
             ),
-            LeaderStep::RunAction(Shortcut::DetachSession)
+            LeaderStep::RunAction(Shortcut::KillPane)
         ));
         assert_eq!(phase, LeaderPhase::Idle);
     }
@@ -1197,20 +1197,20 @@ mod tests {
     #[test]
     fn resolve_from_chords_accepts_leader_chords() {
         let config = ConfigShortcuts {
-            detach_session: Some(Binding::Leader {
+            kill_pane: Some(Binding::Leader {
                 chord: orzma_configs::shortcuts::parse_key_chord("d").unwrap(),
                 repeat: true,
             }),
             ..Default::default()
         };
         let resolved = resolve_from_chords(config.leader_chords());
-        let detach = resolved
+        let kill_pane = resolved
             .iter()
-            .find(|s| s.action == Shortcut::DetachSession)
-            .expect("detach-session must resolve as a leader chord");
-        assert_eq!(detach.keycode, KeyCode::KeyD);
+            .find(|s| s.action == Shortcut::KillPane)
+            .expect("kill-pane must resolve as a leader chord");
+        assert_eq!(kill_pane.keycode, KeyCode::KeyD);
         assert!(
-            detach.repeat,
+            kill_pane.repeat,
             "the <Leader:r> flag must reach the resolved table"
         );
     }
@@ -1557,7 +1557,7 @@ mod tests {
 
     #[test]
     fn build_shortcuts_leaves_default_cmd_leader_inert_without_leader_bindings() {
-        // NOTE: `ConfigShortcuts::default()` ships 33 leader-scoped actions
+        // NOTE: `ConfigShortcuts::default()` ships 29 leader-scoped actions
         // (plus the direct `paste`/`quit` chords), so `OrzmaConfigs::default()`
         // alone no longer exercises the inert-leader path; every leader binding
         // is explicitly unbound here to reproduce a config with no leader
@@ -1567,7 +1567,6 @@ mod tests {
                 paste: None,
                 release_webview_focus: None,
                 enter_vi_mode: None,
-                detach_session: None,
                 select_left_pane: None,
                 select_down_pane: None,
                 select_up_pane: None,
@@ -1584,8 +1583,6 @@ mod tests {
                 kill_window: None,
                 next_window: None,
                 previous_window: None,
-                next_session: None,
-                previous_session: None,
                 select_window_0: None,
                 select_window_1: None,
                 select_window_2: None,
@@ -1597,7 +1594,6 @@ mod tests {
                 select_window_8: None,
                 select_window_9: None,
                 rename_window: None,
-                rename_session: None,
                 ..Default::default()
             },
             ..Default::default()
@@ -1611,7 +1607,7 @@ mod tests {
     fn build_shortcuts_activates_default_cmd_leader_with_a_leader_binding() {
         let config = OrzmaConfigs {
             shortcuts: ConfigShortcuts {
-                detach_session: Some(Binding::Leader {
+                kill_pane: Some(Binding::Leader {
                     chord: orzma_configs::shortcuts::parse_key_chord("d").unwrap(),
                     repeat: false,
                 }),
