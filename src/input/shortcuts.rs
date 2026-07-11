@@ -67,7 +67,8 @@ impl Plugin for ShortcutsPlugin {
 }
 
 /// One resolved keyboard shortcut action, fanned out from `resolve_key_effects`
-/// to the per-mode appliers. Excludes `Quit` / `ReleaseWebviewFocus` (handled
+/// to the default-mode appliers (`crate::input::shortcuts::default_mode`).
+/// Excludes `Quit` / `ReleaseWebviewFocus` (handled
 /// inline in `resolve_key_effects`). `focused` is the `KeyboardFocused` surface;
 /// `in_vi_mode` gates the vi-mode re-entry and paste-suppression rules.
 #[derive(Message)]
@@ -82,7 +83,8 @@ pub(in crate::input) struct ShortcutMessage {
     pub in_vi_mode: bool,
 }
 
-/// One matched `[vi-mode]` key, fanned out to the per-mode appliers.
+/// One matched `[vi-mode]` key, fanned out to the default-mode appliers
+/// (`crate::input::shortcuts::default_mode`).
 #[derive(Message)]
 pub(in crate::input) struct ViModeMessage {
     /// The vi-mode action to run.
@@ -113,13 +115,15 @@ pub(in crate::input) struct ShortcutMessages<'w> {
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:
 /// `resolve_key_effects` (`Resolve`) fans out the per-responsibility messages
-/// before the per-mode appliers (`Apply`) read them, so every message is
-/// consumed the same frame it is written.
+/// before the default-mode appliers (`crate::input::shortcuts::default_mode`,
+/// `Apply`) read them, so every message is consumed the same frame it is
+/// written.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub(in crate::input) enum ShortcutSet {
     /// `resolve_key_effects`: classifies keys and fans out the typed messages.
     Resolve,
-    /// The per-mode appliers: read the typed messages and apply their effects.
+    /// The default-mode appliers (`crate::input::shortcuts::default_mode`):
+    /// read the typed messages and apply their effects.
     Apply,
 }
 

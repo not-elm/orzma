@@ -3,7 +3,7 @@
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
 //! clear `FocusedWebview`), and fans out the remaining effects as the three
 //! per-responsibility shortcut messages (`ShortcutMessage`, `ViModeMessage`,
-//! `TypeMessage`). The per-mode appliers
+//! `TypeMessage`). The default-mode appliers
 //! (`crate::input::shortcuts::default_mode`) consume those messages and apply
 //! the mode-specific events. This is the sole system that steps
 //! `LeaderPhase`.
