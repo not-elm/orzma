@@ -279,8 +279,10 @@ impl RawSettings {
     /// Copies `self.font` into a `FontConfig`: `size` is clamped to
     /// `(0, 200]` (warning on out-of-range), and each face's `style` is
     /// sanitized to `None` with a warning when it fails to parse — a bad
-    /// style must not reach a downstream `src/font` `.expect()`. Finally,
-    /// [`FontConfig::faces_with_ignored_style`] flags any face whose
+    /// style must not reach a downstream `src/font` `.expect()`. This
+    /// includes the UI-chrome face (`ui`), resolved the same presence-level,
+    /// warn-and-continue way as the four terminal faces. Finally,
+    /// [`FontConfig::faces_with_ignored_style`] flags any terminal face whose
     /// (valid) `style` has no effective family (own or inherited from
     /// `normal`) — the bundled font is used there and `style` is silently
     /// ignored, so a `Warn` diagnostic is pushed per flagged face.
@@ -324,6 +326,7 @@ impl RawSettings {
                 &self.font.bold_italic.family,
                 &self.font.bold_italic.style,
             ),
+            ui: Self::resolve_font_face(diags, "ui", &self.font.ui.family, &self.font.ui.style),
         };
         for face in font.faces_with_ignored_style() {
             diags.push(Diagnostic {

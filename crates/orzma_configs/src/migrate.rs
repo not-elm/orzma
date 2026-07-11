@@ -33,7 +33,7 @@ const TOP_LEVEL_SECTIONS: &[&str] = &[
 const SHORTCUTS_SCALAR_KEYS: &[&str] = &["leader", "leader-tap-timeout-ms", "repeat-time-ms"];
 
 /// `[font]` top-level keys.
-const FONT_KEYS: &[&str] = &["size", "normal", "bold", "italic", "bold_italic"];
+const FONT_KEYS: &[&str] = &["size", "normal", "bold", "italic", "bold_italic", "ui"];
 
 /// `[font.<face>]` keys.
 const FONT_FACE_KEYS: &[&str] = &["family", "style"];
@@ -112,7 +112,7 @@ impl RawSettings {
         }
         if let Some(t) = section(&table, "font") {
             warn_unknown_section_keys(&mut diags, "font", t, FONT_KEYS);
-            for face_label in ["normal", "bold", "italic", "bold_italic"] {
+            for face_label in ["normal", "bold", "italic", "bold_italic", "ui"] {
                 if let Some(face) = t.get(face_label).and_then(Value::as_table) {
                     let label = format!("font.{face_label}");
                     warn_unknown_section_keys(&mut diags, &label, face, FONT_FACE_KEYS);
@@ -252,7 +252,9 @@ impl RawFont {
     /// field names are already the new snake_case spellings (no
     /// `rename_all` was ever applied to `FontConfig`), so each field is
     /// copied straight through when present; an omitted field keeps
-    /// `RawFont::default()`'s value.
+    /// `RawFont::default()`'s value. `ui` is included for parity with the
+    /// four terminal faces, even though no legacy release ever wrote it —
+    /// an omitted `[font.ui]` simply keeps the default empty face.
     fn from_legacy_section(section: Option<&Table>) -> Self {
         let default = RawFont::default();
         let Some(section) = section else {
@@ -266,6 +268,7 @@ impl RawFont {
             bold_italic: RawFace::from_legacy_face(
                 section.get("bold_italic").and_then(Value::as_table),
             ),
+            ui: RawFace::from_legacy_face(section.get("ui").and_then(Value::as_table)),
         }
     }
 }

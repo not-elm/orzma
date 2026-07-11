@@ -35,6 +35,10 @@ pub struct FontConfig {
     pub italic: FontFaceConfig,
     /// The bold-italic face; `family`/`style` default from `normal` / Bold Italic.
     pub bold_italic: FontFaceConfig,
+    /// The UI-chrome face (window bar, prompts, indicators). `family` and
+    /// `style` each inherit from `normal` when omitted (not from this face's
+    /// own defaults); resolution and rendering live in `src/font`.
+    pub ui: FontFaceConfig,
 }
 
 impl Default for FontConfig {
@@ -45,6 +49,7 @@ impl Default for FontConfig {
             bold: FontFaceConfig::default(),
             italic: FontFaceConfig::default(),
             bold_italic: FontFaceConfig::default(),
+            ui: FontFaceConfig::default(),
         }
     }
 }
@@ -62,9 +67,16 @@ impl FontConfig {
             .collect()
     }
 
+    /// Whether no face configures a font family — every face's `family` is
+    /// absent, so the bundled default font is used.
+    #[inline]
+    pub fn has_no_configured_family(&self) -> bool {
+        self.faces().iter().all(|(_, c)| c.family.is_none())
+    }
+
     /// The four terminal faces paired with their `[font]` key labels, in fixed
     /// order — the single source of truth for the face set.
-    pub fn faces(&self) -> [(&'static str, &FontFaceConfig); 4] {
+    pub const fn faces(&self) -> [(&'static str, &FontFaceConfig); 4] {
         [
             ("normal", &self.normal),
             ("bold", &self.bold),
@@ -132,5 +144,24 @@ mod tests {
         let inherited: FontConfig =
             toml::from_str("[normal]\nfamily = \"Iosevka\"\n[bold]\nstyle = \"Bold\"").unwrap();
         assert!(inherited.faces_with_ignored_style().is_empty());
+    }
+
+    #[test]
+    fn parses_ui_face_inline_and_section() {
+        let inline: FontConfig =
+            toml::from_str("ui = { family = \"Inter\", style = \"Medium\" }").unwrap();
+        assert_eq!(inline.ui.family.as_deref(), Some("Inter"));
+        assert_eq!(inline.ui.style.as_deref(), Some("Medium"));
+
+        let section: FontConfig =
+            toml::from_str("[ui]\nfamily = \"Inter\"\nstyle = \"Bold Italic\"").unwrap();
+        assert_eq!(section.ui.family.as_deref(), Some("Inter"));
+        assert_eq!(section.ui.style.as_deref(), Some("Bold Italic"));
+    }
+
+    #[test]
+    fn ui_defaults_to_empty_face() {
+        let f: FontConfig = toml::from_str("").unwrap();
+        assert_eq!(f.ui, FontFaceConfig::default());
     }
 }

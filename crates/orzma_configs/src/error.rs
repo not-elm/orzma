@@ -72,10 +72,11 @@ pub enum OrzmaConfigsError {
         size: f32,
     },
 
-    /// A `[font]` face's `style` string contained an unrecognized token.
+    /// A `[font].<face>.style` string (face ∈ normal / bold / italic /
+    /// bold_italic / ui) did not parse to a known weight + slant.
     #[error("invalid font style {value:?} for the {face} face")]
     InvalidFontStyle {
-        /// The face label (`normal` / `bold` / `italic` / `bold_italic`).
+        /// The face label (`normal` / `bold` / `italic` / `bold_italic` / `ui`).
         face: &'static str,
         /// The offending style string.
         value: String,

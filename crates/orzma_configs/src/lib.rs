@@ -138,7 +138,12 @@ impl OrzmaConfigs {
         if !(size > 0.0 && size <= 200.0) {
             return Err(OrzmaConfigsError::InvalidFontSize { size });
         }
-        for (face, cfg) in self.font.faces() {
+        for (face, cfg) in self
+            .font
+            .faces()
+            .into_iter()
+            .chain(std::iter::once(("ui", &self.font.ui)))
+        {
             if let Some(style) = cfg.style.as_deref()
                 && FontStyleSpec::from_str(style).is_err()
             {
@@ -236,6 +241,17 @@ mod validate_tests {
         configs.font.bold.style = Some("SemiBold Italic".into());
         configs.font.bold.family = Some("Iosevka".into());
         assert!(configs.validate().is_ok());
+    }
+
+    #[test]
+    fn invalid_ui_style_is_rejected() {
+        let mut configs = OrzmaConfigs::default();
+        configs.font.ui.style = Some("Blod".into());
+        let err = configs.validate().unwrap_err();
+        assert!(
+            matches!(err, OrzmaConfigsError::InvalidFontStyle { face: "ui", .. }),
+            "ui.style typo must be reported with face = \"ui\", got {err:?}"
+        );
     }
 
     #[test]

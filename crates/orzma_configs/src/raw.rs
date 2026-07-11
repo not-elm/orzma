@@ -73,7 +73,7 @@ pub struct RawFace {
     pub style: Option<String>,
 }
 
-/// `[font]` section: size plus the four terminal faces.
+/// `[font]` section: size plus the four terminal faces and the UI-chrome face.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RawFont {
     /// Terminal font size in logical pixels.
@@ -86,6 +86,8 @@ pub struct RawFont {
     pub italic: RawFace,
     /// The bold-italic face.
     pub bold_italic: RawFace,
+    /// The UI-chrome face (window bar, prompts, indicators).
+    pub ui: RawFace,
 }
 
 impl Default for RawFont {
@@ -99,6 +101,7 @@ impl Default for RawFont {
             bold: RawFace::default(),
             italic: RawFace::default(),
             bold_italic: RawFace::default(),
+            ui: RawFace::default(),
         }
     }
 }

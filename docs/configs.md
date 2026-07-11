@@ -111,6 +111,17 @@ size = 11.25              # f32, logical px. Out of range (must be 0 < size <= 2
 # style  = "Italic"
 # [font.bold_italic]
 # style  = "Bold Italic"
+#
+# ui = { family = "Inter", style = "Medium" }
+# The UI-chrome face (window bar, prompts, indicators). `family` and `style`
+# each inherit from `normal` when omitted (ui.family -> normal.family,
+# ui.style -> normal.style). A configured `ui.family` that is not installed is
+# still a STARTUP ERROR, same as the terminal faces (no silent fallback — see
+# "Unknown keys and invalid values" above). `style` uses the same weight +
+# slant syntax and is applied to UI text; an unknown style token warns and
+# falls back to none, same as the terminal faces. When no family resolves
+# anywhere (bundled fallback), style rounds to the nearest of the four bundled
+# faces.
 
 [keyboard]
 # macOS only. Which Option key sends Meta instead of composing.

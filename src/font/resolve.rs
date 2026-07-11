@@ -45,6 +45,14 @@ pub(super) fn attributes_of(spec: FontStyleSpec) -> Attributes {
 #[derive(Debug)]
 pub(super) struct FamilyNotFound;
 
+/// Whether `family` exists in the collection, without resolving or copying any
+/// font bytes. Used by the UI-font path, which hands parley a
+/// `FontSource::Family` and needs only a presence check (parley selects the
+/// face at render time).
+pub(super) fn family_present(collection: &mut Collection, family: &str) -> bool {
+    collection.family_id(family).is_some()
+}
+
 /// Resolves a *configured* face, distinguishing an absent family (`Err`) from a
 /// present family (fontique returns its closest match for the attributes). Looks
 /// up `family_id` first because `Query::set_families` silently skips unknown
@@ -187,5 +195,20 @@ mod tests {
         )
         .expect("registered family resolves");
         assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn family_present_true_for_registered_family() {
+        let (mut collection, _sc) = deterministic_collection();
+        let blob = Blob::new(Arc::new(bundled::REGULAR) as Arc<dyn AsRef<[u8]> + Send + Sync>);
+        let registered = collection.register_fonts(blob, None);
+        let family = collection.family_name(registered[0].0).unwrap().to_string();
+        assert!(family_present(&mut collection, &family));
+    }
+
+    #[test]
+    fn family_present_false_for_absent_family() {
+        let (mut collection, _sc) = deterministic_collection();
+        assert!(!family_present(&mut collection, "no-such-family-7fe12"));
     }
 }

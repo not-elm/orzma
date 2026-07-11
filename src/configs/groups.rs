@@ -142,7 +142,8 @@ impl From<&RawFace> for FontFaceConfig {
     }
 }
 
-/// `[font]` persistence group: size plus the four terminal faces.
+/// `[font]` persistence group: size plus the four terminal faces and the
+/// UI-chrome face.
 #[derive(Resource, SettingsGroup, Reflect, Clone, Debug)]
 #[reflect(Resource, SettingsGroup, Default)]
 #[settings_group(group = "font")]
@@ -157,6 +158,8 @@ pub(crate) struct FontSettings {
     pub(crate) italic: FontFaceConfig,
     /// The bold-italic face.
     pub(crate) bold_italic: FontFaceConfig,
+    /// The UI-chrome face (window bar, prompts, indicators).
+    pub(crate) ui: FontFaceConfig,
 }
 
 impl Default for FontSettings {
@@ -167,6 +170,7 @@ impl Default for FontSettings {
             bold: FontFaceConfig::default(),
             italic: FontFaceConfig::default(),
             bold_italic: FontFaceConfig::default(),
+            ui: FontFaceConfig::default(),
         }
     }
 }
@@ -179,6 +183,7 @@ impl From<&FontSettings> for RawFont {
             bold: (&value.bold).into(),
             italic: (&value.italic).into(),
             bold_italic: (&value.bold_italic).into(),
+            ui: (&value.ui).into(),
         }
     }
 }
@@ -191,6 +196,7 @@ impl From<&RawFont> for FontSettings {
             bold: (&value.bold).into(),
             italic: (&value.italic).into(),
             bold_italic: (&value.bold_italic).into(),
+            ui: (&value.ui).into(),
         }
     }
 }
