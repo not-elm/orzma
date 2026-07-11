@@ -1,7 +1,7 @@
 //! OSC 8 hyperlink hover detection and cursor-icon control — the single
 //! authority for `HyperlinkHoverState` (the renderer underline) and the window
-//! `CursorIcon` over every terminal surface: tmux panes, the Default-mode shell,
-//! and webview hosts (all are `OrzmaTerminal` entities). Over a linked cell the
+//! `CursorIcon` over every terminal surface: the Default-mode shell and
+//! webview hosts (all are `OrzmaTerminal` entities). Over a linked cell the
 //! cursor becomes a pointer while the platform activation modifier
 //! (`link_modifier_held`) is held, and text otherwise; over a webview host the
 //! cursor is left to `bevy_cef`'s `SystemCursorIconPlugin`. Surfaces with input
@@ -399,7 +399,7 @@ mod tests {
         assert_eq!(
             hover.entity,
             Some(term),
-            "hover must resolve to the Default-mode OrzmaTerminal (no TmuxPane) under the cursor"
+            "hover must resolve to the Default-mode OrzmaTerminal under the cursor"
         );
         assert_eq!(
             hover.hyperlink_id,

@@ -45,9 +45,8 @@ impl Plugin for MouseWebviewPlugin {
 pub(in crate::input::mouse) struct WebviewPress(pub Option<Entity>);
 
 /// Queries/resources the webview routing needs, bundled to stay within Bevy's
-/// system-parameter limit. Mode-agnostic: the surface-geometry lookup is
-/// `With<OrzmaTerminal>` (both tmux panes and the Default shell are
-/// `OrzmaTerminal`), not `TmuxPane`. `focused_webview` / `browsers` are optional
+/// system-parameter limit. The surface-geometry lookup is `With<OrzmaTerminal>`,
+/// matching every terminal surface. `focused_webview` / `browsers` are optional
 /// so CEF-less tests construct it (state effects still apply).
 #[derive(SystemParam)]
 pub(in crate::input::mouse) struct WebviewRouteParams<'w, 's> {

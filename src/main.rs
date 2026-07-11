@@ -4,7 +4,6 @@ mod action;
 mod bootstrap;
 mod cef_profile;
 mod configs;
-mod error;
 mod font;
 mod input;
 mod session;

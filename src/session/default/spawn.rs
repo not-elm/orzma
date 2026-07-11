@@ -62,9 +62,7 @@ impl OrzmaTerminalBundle {
 }
 
 /// Full-window absolute layout for the standalone Default-mode terminal.
-/// Shared by the spawn bundle and the detach-restore path, which must undo
-/// adoption's `Display::None` overwrite with the identical node shape.
-pub(crate) fn full_size_node() -> Node {
+fn full_size_node() -> Node {
     Node {
         position_type: PositionType::Absolute,
         left: Val::Px(0.0),

@@ -97,8 +97,6 @@ pub(in crate::input) struct ViModeMessage {
 pub(in crate::input) struct TypeMessage {
     /// The logical key, for text/printable-key mapping.
     pub logical: Key,
-    /// The physical key, for named-key mapping.
-    pub key_code: KeyCode,
     /// The `KeyboardFocused` surface, or `None` when none is focused.
     pub focused: Option<Entity>,
     /// The frame's modifier snapshot.

@@ -13,10 +13,6 @@ impl Plugin for DefaultExitPlugin {
     }
 }
 
-// NOTE: not Default-only despite the module path — detached tmux panes never
-// emit TerminalChildExit, but the adopted tmux gateway keeps OrzmaTerminal and
-// a real PtyHandle, so this observer also fires (alongside
-// on_gateway_child_exit) when the gateway shell dies during tmux mode.
 fn on_child_exit(
     ev: On<TerminalChildExit>,
     mut exit: MessageWriter<AppExit>,

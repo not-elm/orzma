@@ -393,10 +393,9 @@ mod tests {
                     app.world_mut()
                         .write_message(ViModeMessage { action, focused });
                 }
-                KeyEffect::Type { logical, key_code } => {
+                KeyEffect::Type { logical, .. } => {
                     app.world_mut().write_message(TypeMessage {
                         logical,
-                        key_code,
                         focused,
                         mods,
                     });

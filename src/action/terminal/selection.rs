@@ -49,9 +49,8 @@ pub(crate) struct TerminalSelectionCopy {
     pub entity: Entity,
 }
 
-/// Triggers a `TerminalSelectionCopy` on the focused terminal, if any. Shared
-/// by the Default- and Tmux-mode shortcut appliers so the mode-independent copy
-/// dispatch lives in one place rather than byte-identical arms in each.
+/// Triggers a `TerminalSelectionCopy` on the focused terminal, if any. Used by
+/// the Default-mode shortcut applier's `Shortcut::Copy` arm.
 pub(crate) fn trigger_selection_copy(commands: &mut Commands, focused: Option<Entity>) {
     if let Some(entity) = focused {
         commands.trigger(TerminalSelectionCopy { entity });

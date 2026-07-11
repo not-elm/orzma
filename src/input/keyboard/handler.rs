@@ -152,10 +152,9 @@ fn resolve_key_effects(
             KeyEffect::ViMode(action) => {
                 messages.vi_mode.write(ViModeMessage { action, focused });
             }
-            KeyEffect::Type { logical, key_code } => {
+            KeyEffect::Type { logical, .. } => {
                 messages.type_keys.write(TypeMessage {
                     logical,
-                    key_code,
                     focused,
                     mods,
                 });
@@ -215,7 +214,7 @@ mod tests {
         focused: Option<Entity>,
         in_vi_mode: Option<bool>,
         mods: Option<Modifiers>,
-        last_typed: Option<(Key, KeyCode)>,
+        last_typed: Option<Key>,
     }
 
     impl Captured {
@@ -244,7 +243,7 @@ mod tests {
             cap.typed += 1;
             cap.focused = m.focused;
             cap.mods = Some(m.mods);
-            cap.last_typed = Some((m.logical.clone(), m.key_code));
+            cap.last_typed = Some(m.logical.clone());
         }
         for m in webview_forward.read() {
             cap.webview_forward += 1;
@@ -318,7 +317,7 @@ mod tests {
         );
         assert_eq!(
             cap.last_typed,
-            Some((Key::Character("a".into()), KeyCode::KeyA)),
+            Some(Key::Character("a".into())),
             "a plain key resolves to one TypeMessage"
         );
         assert_eq!(cap.focused, Some(term));
