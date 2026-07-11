@@ -3,7 +3,6 @@
 //! root aggregates their per-file plugins and hosts the shared attached /
 //! detached apply helper.
 
-mod forward_input;
 mod mouse_write;
 mod open_uri;
 mod selection;
@@ -19,7 +18,6 @@ use crate::{
 use bevy::prelude::*;
 use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 
-pub(crate) use forward_input::TerminalForwardInput;
 pub(crate) use mouse_write::TerminalMouseWrite;
 pub(crate) use open_uri::TerminalOpenUri;
 pub(crate) use selection::{
