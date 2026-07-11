@@ -11,8 +11,7 @@ use bevy::prelude::*;
 use orzma_configs::vi_mode::ViModeScroll;
 use orzma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
 
-/// Registers the local VI apply observers. `ViPromptRequest` /
-/// `ViSearchStepRequest` have no local applier yet (ignored by design).
+/// Registers the local VI apply observers.
 pub(super) struct ViApplierPlugin;
 
 impl Plugin for ViApplierPlugin {

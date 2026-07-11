@@ -34,10 +34,7 @@ use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use orzma_webview_host::WebviewAssetRegistry;
 use session::default::DefaultSessionPlugin;
 use ui::ime_overlay::ImeOverlayPlugin;
-use ui::{
-    OrzmaUiPlugin, vi_mode::ViModePlugin, vi_mode_indicator::ViModeIndicatorPlugin,
-    vi_search::ViModePromptPlugin,
-};
+use ui::{OrzmaUiPlugin, vi_mode::ViModePlugin, vi_mode_indicator::ViModeIndicatorPlugin};
 
 fn main() {
     // NOTE: must run before App::new() spawns any thread — they write process
@@ -77,7 +74,6 @@ fn main() {
             },
             ViModePlugin,
             ViModeIndicatorPlugin,
-            ViModePromptPlugin,
             WindowTitlePlugin,
             FocusSyncPlugin,
             HyperlinkInputPlugin,

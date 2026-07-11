@@ -1,4 +1,4 @@
-//! `AppMode`s, resolves the frame's pressed keys through the pure
+//! Resolves the frame's pressed keys through the pure
 //! `crate::input::resolve::classify_key_batch` decider, handles the two
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
 //! clear `FocusedWebview`), and fans out the remaining effects as the four
@@ -9,7 +9,6 @@
 //! `LeaderPhase`.
 
 use crate::action::vi::ResolvedViModeKeys;
-use crate::app_mode::AppMode;
 use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
@@ -21,7 +20,6 @@ use crate::input::shortcuts::{
     Shortcuts, TypeMessage, ViModeMessage, WebviewForwardMessage, clear_leader_phase,
 };
 use crate::ui::vi_mode::ViModeState;
-use crate::ui::vi_search::ViModePrompt;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;
@@ -47,15 +45,6 @@ impl Plugin for KeyboardHandlerPlugin {
     }
 }
 
-/// The modal-guard and mode inputs `resolve_key_effects` reads: the vi-search
-/// prompt, IME state, and the active `AppMode`.
-#[derive(SystemParam)]
-struct ModalGuards<'w> {
-    vi_mode_prompt: Res<'w, ViModePrompt>,
-    ime: Res<'w, ImeState>,
-    app_mode: Res<'w, State<AppMode>>,
-}
-
 /// The classifier inputs `resolve_key_effects` feeds to `classify_key_batch`: the
 /// shortcut table, resolved vi-mode keys, held modifier keys, and the
 /// real-time clock the leader timeout is measured against.
@@ -68,7 +57,7 @@ struct ClassifyInputs<'w> {
 }
 
 /// Resolves the frame's pressed keys and fans out the per-responsibility
-/// shortcut messages. Runs in both `AppMode`s (gated only on
+/// shortcut messages. Runs unconditionally (gated only on
 /// `on_message::<KeyboardInput>`), in `InputPhase::FocusedKey` /
 /// `ShortcutSet::Resolve` / `LeaderGate::Advance`. The sole `LeaderPhase`-stepping
 /// system: on a coarse guard (IME composition or an unfocused window) it
@@ -85,22 +74,15 @@ fn resolve_key_effects(
     mut leader_phase: ResMut<LeaderPhase>,
     mut held_repeat: ResMut<HeldRepeatKey>,
     mut messages: ShortcutMessages,
-    guards: ModalGuards,
+    ime: Res<ImeState>,
     inputs: ClassifyInputs,
     windows: Query<&Window, With<PrimaryWindow>>,
     focused_surface: Query<Entity, With<KeyboardFocused>>,
     vi_modes: Query<(), With<ViModeState>>,
     forward_keys: Query<&ForwardKeys>,
 ) {
-    let mode = guards.app_mode.get().clone();
     let focused_window = windows.single().map(|w| w.focused).unwrap_or(false);
-    // NOTE: the vi-search prompt guard is inert today (nothing opens the
-    // prompt); it is removed with `ui/vi_search.rs` in a later task. IME +
-    // window focus guard all input. When a guard fires, drain (don't replay)
-    // the frame's keys and write no messages, so no key leaks to the terminal
-    // or the prefix state machine (and no preedit key is double-sent).
-    let prompt_open = mode == AppMode::Tmux && guards.vi_mode_prompt.open.is_some();
-    if prompt_open || guards.ime.is_composing() || !focused_window {
+    if ime.is_composing() || !focused_window {
         clear_leader_phase(&mut leader_phase);
         if held_repeat.0.is_some() {
             held_repeat.0 = None;
@@ -220,7 +202,6 @@ mod tests {
     use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
-    use bevy::state::app::StatesPlugin;
     use orzma_configs::shortcuts::Modifiers;
     use orzma_tmux::{PaneId, TmuxPane};
     use std::time::Duration;
@@ -281,7 +262,6 @@ mod tests {
     fn resolve_app(shortcuts: Shortcuts) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
-            .add_plugins(StatesPlugin)
             .add_plugins(KeyboardHandlerPlugin)
             .add_message::<KeyboardInput>()
             .add_message::<ShortcutMessage>()
@@ -296,10 +276,8 @@ mod tests {
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
             .init_resource::<ResolvedViModeKeys>()
-            .init_resource::<ViModePrompt>()
             .init_resource::<Captured>()
             .insert_resource(shortcuts)
-            .insert_state(AppMode::Default)
             .configure_sets(Update, (ShortcutSet::Resolve, ShortcutSet::Apply).chain())
             .add_systems(
                 Update,

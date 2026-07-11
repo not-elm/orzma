@@ -10,7 +10,6 @@ pub mod palette;
 pub mod root;
 pub mod vi_mode;
 pub mod vi_mode_indicator;
-pub(crate) mod vi_search;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never
 /// despawned. Hosts the `DefaultModeUi` subtree as a child.

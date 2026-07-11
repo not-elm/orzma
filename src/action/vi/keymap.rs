@@ -11,10 +11,8 @@ use bevy::input::keyboard::{Key, KeyCode};
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Modifiers;
 use orzma_configs::vi_mode::{
-    ViModeAction, ViModeBaseKey, ViModeKey, ViModeMotion, ViModeNamedKey, ViModePromptDir,
-    ViModeSelection,
+    ViModeAction, ViModeBaseKey, ViModeKey, ViModeMotion, ViModeNamedKey, ViModeSelection,
 };
-use orzma_tmux::PromptKind;
 use orzma_tty_engine::{SelectionType, ViMotion};
 use std::collections::HashMap;
 
@@ -233,25 +231,9 @@ fn selection_type(selection: ViModeSelection) -> SelectionType {
     }
 }
 
-#[expect(
-    dead_code,
-    reason = "wired again when local vi-mode search ships; kept so the conversion is ready for ViModeAction::Prompt's reconnection"
-)]
-fn prompt_kind(dir: ViModePromptDir) -> PromptKind {
-    match dir {
-        ViModePromptDir::SearchForward => PromptKind::SearchForward,
-        ViModePromptDir::SearchBackward => PromptKind::SearchBackward,
-        ViModePromptDir::JumpForward => PromptKind::JumpForward,
-        ViModePromptDir::JumpBackward => PromptKind::JumpBackward,
-        ViModePromptDir::JumpToForward => PromptKind::JumpToForward,
-        ViModePromptDir::JumpToBackward => PromptKind::JumpToBackward,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::vi::{ViPromptRequest, ViSearchStepRequest};
     use orzma_configs::vi_mode::{ViModeConfig, ViModeScroll, ViModeSearchStep};
 
     fn resolved_default() -> ResolvedViModeKeys {
@@ -361,68 +343,6 @@ mod tests {
                 }
             ),
             Some(ViModeAction::SearchStep(ViModeSearchStep::Previous))
-        );
-    }
-
-    #[test]
-    fn prompt_action_is_inert_for_v1() {
-        use bevy::ecs::system::RunSystemOnce;
-        use orzma_configs::vi_mode::{ViModeAction, ViModePromptDir};
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        let fired = Arc::new(AtomicBool::new(false));
-        let fired_write = fired.clone();
-        app.add_observer(move |_ev: On<ViPromptRequest>| {
-            fired_write.store(true, Ordering::SeqCst);
-        });
-        let entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .run_system_once(move |mut commands: Commands| {
-                trigger_vi_mode_action(
-                    &mut commands,
-                    entity,
-                    ViModeAction::Prompt(ViModePromptDir::SearchForward),
-                );
-            })
-            .unwrap();
-        app.update();
-        assert!(
-            !fired.load(Ordering::SeqCst),
-            "Prompt action must be inert in v1"
-        );
-    }
-
-    #[test]
-    fn search_step_action_is_inert_for_v1() {
-        use bevy::ecs::system::RunSystemOnce;
-        use orzma_configs::vi_mode::{ViModeAction, ViModeSearchStep};
-        use std::sync::Arc;
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-        let fired = Arc::new(AtomicBool::new(false));
-        let fired_write = fired.clone();
-        app.add_observer(move |_ev: On<ViSearchStepRequest>| {
-            fired_write.store(true, Ordering::SeqCst);
-        });
-        let entity = app.world_mut().spawn_empty().id();
-        app.world_mut()
-            .run_system_once(move |mut commands: Commands| {
-                trigger_vi_mode_action(
-                    &mut commands,
-                    entity,
-                    ViModeAction::SearchStep(ViModeSearchStep::Next),
-                );
-            })
-            .unwrap();
-        app.update();
-        assert!(
-            !fired.load(Ordering::SeqCst),
-            "SearchStep action must be inert in v1"
         );
     }
 }
