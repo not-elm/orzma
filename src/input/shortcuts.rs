@@ -39,7 +39,6 @@ impl Plugin for ShortcutsPlugin {
             .add_message::<ShortcutMessage>()
             .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
-            .add_message::<WebviewForwardMessage>()
             .init_resource::<Shortcuts>()
             .init_resource::<LeaderPhase>()
             .init_resource::<HeldRepeatKey>()
@@ -103,27 +102,13 @@ pub(in crate::input) struct TypeMessage {
     pub mods: Modifiers,
 }
 
-/// One key to forward to the focused webview's declared forward-key chord.
-#[derive(Message)]
-pub(in crate::input) struct WebviewForwardMessage {
-    /// The logical key, for text/printable-key mapping.
-    pub logical: Key,
-    /// The physical key, for named-key mapping.
-    pub key_code: KeyCode,
-    /// The `KeyboardFocused` surface, or `None` when none is focused.
-    pub focused: Option<Entity>,
-    /// The frame's modifier snapshot.
-    pub mods: Modifiers,
-}
-
-/// The four shortcut-effect message writers `resolve_key_effects` fans out to,
+/// The three shortcut-effect message writers `resolve_key_effects` fans out to,
 /// bundled to stay within Bevy's system-parameter limit.
 #[derive(SystemParam)]
 pub(in crate::input) struct ShortcutMessages<'w> {
     pub shortcut: MessageWriter<'w, ShortcutMessage>,
     pub vi_mode: MessageWriter<'w, ViModeMessage>,
     pub type_keys: MessageWriter<'w, TypeMessage>,
-    pub webview_forward: MessageWriter<'w, WebviewForwardMessage>,
 }
 
 /// Orders the two halves of shortcut dispatch inside `InputPhase::FocusedKey`:

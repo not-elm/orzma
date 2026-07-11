@@ -1,9 +1,9 @@
 //! Resolves the frame's pressed keys through the pure
 //! `crate::input::resolve::classify_key_batch` decider, handles the two
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
-//! clear `FocusedWebview`), and fans out the remaining effects as the four
+//! clear `FocusedWebview`), and fans out the remaining effects as the three
 //! per-responsibility shortcut messages (`ShortcutMessage`, `ViModeMessage`,
-//! `TypeMessage`, `WebviewForwardMessage`). The per-mode appliers
+//! `TypeMessage`). The per-mode appliers
 //! (`crate::input::shortcuts::default_mode`) consume those messages and apply
 //! the mode-specific events. This is the sole system that steps
 //! `LeaderPhase`.
@@ -17,7 +17,7 @@ use crate::input::keyboard::key_effect::{
 };
 use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
-    Shortcuts, TypeMessage, ViModeMessage, WebviewForwardMessage, clear_leader_phase,
+    Shortcuts, TypeMessage, ViModeMessage, clear_leader_phase,
 };
 use crate::ui::vi_mode::ViModeState;
 use bevy::ecs::system::SystemParam;
@@ -65,7 +65,7 @@ struct ClassifyInputs<'w> {
 /// otherwise it classifies the keys, applies `Quit` (`AppExit`) and
 /// `ReleaseWebviewFocus` (clear `FocusedWebview`) inline, and writes every other
 /// effect to its typed message (`ShortcutMessage`, `ViModeMessage`,
-/// `TypeMessage`, `WebviewForwardMessage`).
+/// `TypeMessage`).
 fn resolve_key_effects(
     mut exit: MessageWriter<AppExit>,
     mut events: MessageReader<KeyboardInput>,
@@ -159,14 +159,10 @@ fn resolve_key_effects(
                     mods,
                 });
             }
-            KeyEffect::WebviewForward { logical, key_code } => {
-                messages.webview_forward.write(WebviewForwardMessage {
-                    logical,
-                    key_code,
-                    focused,
-                    mods,
-                });
-            }
+            // NOTE: WebviewForward is classified (not suppressed, not typed) so
+            // the chord reaches the focused webview through CEF's native
+            // keyboard path; there is no message to deliver host-side.
+            KeyEffect::WebviewForward { .. } => {}
         }
     }
     let ms = ModifiersState {
@@ -210,7 +206,6 @@ mod tests {
         shortcuts: Vec<(Shortcut, bool)>,
         vi_mode: usize,
         typed: usize,
-        webview_forward: usize,
         focused: Option<Entity>,
         in_vi_mode: Option<bool>,
         mods: Option<Modifiers>,
@@ -219,7 +214,7 @@ mod tests {
 
     impl Captured {
         fn message_count(&self) -> usize {
-            self.shortcuts.len() + self.vi_mode + self.typed + self.webview_forward
+            self.shortcuts.len() + self.vi_mode + self.typed
         }
     }
 
@@ -228,7 +223,6 @@ mod tests {
         mut shortcuts: MessageReader<ShortcutMessage>,
         mut vi_mode: MessageReader<ViModeMessage>,
         mut typed: MessageReader<TypeMessage>,
-        mut webview_forward: MessageReader<WebviewForwardMessage>,
     ) {
         for m in shortcuts.read() {
             cap.shortcuts.push((m.action, m.via_leader));
@@ -245,11 +239,6 @@ mod tests {
             cap.mods = Some(m.mods);
             cap.last_typed = Some(m.logical.clone());
         }
-        for m in webview_forward.read() {
-            cap.webview_forward += 1;
-            cap.focused = m.focused;
-            cap.mods = Some(m.mods);
-        }
     }
 
     fn capture_exit(mut reader: MessageReader<AppExit>, mut cap: ResMut<Captured>) {
@@ -264,7 +253,6 @@ mod tests {
             .add_message::<ShortcutMessage>()
             .add_message::<ViModeMessage>()
             .add_message::<TypeMessage>()
-            .add_message::<WebviewForwardMessage>()
             .add_message::<AppExit>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<ImeState>()
