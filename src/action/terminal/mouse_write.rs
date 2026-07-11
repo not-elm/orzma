@@ -47,11 +47,3 @@ fn on_terminal_mouse_write(
         |_commands, _handle, _entity| false,
     );
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::surface::OrzmaTerminal;
-    use orzma_tty_engine::TerminalHandle;
-
-}
