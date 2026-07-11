@@ -8,7 +8,6 @@ use crate::configs::OrzmaConfigsResource;
 use crate::input::InputPhase;
 use crate::input::bindings::{FineModifier, OrzmaMouseConfig};
 use crate::input::shortcuts::default_mode::ShortcutsDefaultModePlugin;
-use crate::input::shortcuts::tmux::ShortcutsTmuxModePlugin;
 use bevy::ecs::system::SystemParam;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -26,13 +25,12 @@ use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
 pub(in crate::input) mod default_mode;
-pub(in crate::input) mod tmux;
 
 pub(super) struct ShortcutsPlugin;
 
 impl Plugin for ShortcutsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((ShortcutsDefaultModePlugin, ShortcutsTmuxModePlugin))
+        app.add_plugins(ShortcutsDefaultModePlugin)
             .configure_sets(
                 Update,
                 (ShortcutSet::Resolve, ShortcutSet::Apply)
@@ -67,7 +65,6 @@ impl Plugin for ShortcutsPlugin {
                         .before(LeaderGate::Detect),
                 ),
             )
-            .add_systems(OnExit(AppMode::Tmux), reset_leader_phase)
             .add_systems(OnExit(AppMode::Default), reset_leader_phase);
     }
 }
@@ -210,8 +207,7 @@ struct OrzmaShortcut {
 }
 
 /// The startup-resolved orzma shortcut tables. Built once from
-/// `OrzmaConfigsResource`; consumed by the tmux and Default keyboard
-/// dispatchers.
+/// `OrzmaConfigsResource`; consumed by the keyboard dispatcher.
 #[derive(Resource, Default, Debug, Clone)]
 pub(crate) struct Shortcuts {
     direct: Vec<OrzmaShortcut>,

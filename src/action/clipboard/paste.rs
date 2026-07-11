@@ -1,19 +1,15 @@
 //! Paste action pipeline: `on_paste` reads the system clipboard for a
-//! `PasteAction` target and hands the text to the mode-gated appliers as
+//! `PasteAction` target and hands the text to the paste applier as
 //! `PasteToTerminal`; also hosts `build_paste_bytes`, the shared paste-byte
 //! construction.
 
 use crate::{
-    action::clipboard::paste::{
-        default_mode::PasteDefaultModePlugin, tmux_mode::PasteTmuxModePlugin,
-    },
+    action::clipboard::paste::default_mode::PasteDefaultModePlugin,
     surface::OrzmaTerminal,
 };
 use bevy::{clipboard::ClipboardError, prelude::*};
-use orzma_tmux::TmuxPane;
 
 mod default_mode;
-mod tmux_mode;
 
 /// Pastes the system clipboard into the target terminal entity.
 #[derive(EntityEvent, Debug, Clone)]
@@ -29,7 +25,7 @@ pub(super) struct ClipboardPasteActionPlugin;
 impl Plugin for ClipboardPasteActionPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_paste)
-            .add_plugins((PasteDefaultModePlugin, PasteTmuxModePlugin));
+            .add_plugins(PasteDefaultModePlugin);
     }
 }
 
@@ -90,13 +86,13 @@ fn build_paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     }
 }
 
-/// Carries clipboard text to paste into a specific terminal or tmux pane
-/// entity. Emitted by `on_paste` once the clipboard has been read, so the
-/// mode appliers (`default_mode` / `tmux_mode`) never touch the clipboard
-/// resource and stay testable by triggering this event directly.
+/// Carries clipboard text to paste into a specific terminal entity. Emitted
+/// by `on_paste` once the clipboard has been read, so the paste applier never
+/// touches the clipboard resource and stays testable by triggering this event
+/// directly.
 #[derive(EntityEvent, Debug, Clone)]
 struct PasteToTerminal {
-    /// The terminal or tmux pane entity to paste into.
+    /// The terminal entity to paste into.
     #[event_target]
     terminal: Entity,
     /// The non-empty clipboard text to paste.
@@ -140,7 +136,7 @@ fn on_paste(
     ev: On<PasteAction>,
     mut commands: Commands,
     mut clipboard: ResMut<Clipboard>,
-    targets: Query<(), Or<(With<OrzmaTerminal>, With<TmuxPane>)>>,
+    targets: Query<(), With<OrzmaTerminal>>,
 ) {
     if targets.get(ev.entity).is_err() {
         return;
