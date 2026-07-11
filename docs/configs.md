@@ -311,7 +311,7 @@ Two consequences of the stock `<Leader>` defaults worth knowing:
   actions. Unbind the stock default explicitly (`new-window = ""`) or pick a
   free chord.
 - **`leader = ""` disables every `<Leader>`-bound action at once** — with the
-  stock defaults that includes all 30 leader-bound actions above, silently
+  stock defaults that includes all 29 leader-bound actions above, silently
   (a warning is logged, but startup succeeds). If you disable the leader,
   rebind the actions you need to direct chords, e.g. `next-window = "Cmd+]"`.
 
