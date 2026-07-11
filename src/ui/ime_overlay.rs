@@ -677,59 +677,10 @@ mod tests {
     use bevy::math::Vec2;
     use bevy::prelude::MinimalPlugins;
     use bevy::window::Ime;
-    use orzma_tmux::PaneId;
-    use orzma_tmux::{ActivePane, TmuxPane};
     use orzma_tty_renderer::CellMetrics;
-    use tmux_control_parser::CellDims;
 
     #[test]
-    fn suppresses_cursor_on_active_tmux_pane_while_composing() {
-        let mut app = App::new();
-        app.add_plugins(MinimalPlugins);
-
-        let mut state = ImeState::default();
-        apply_event(
-            &mut state,
-            &Ime::Preedit {
-                window: Entity::from_bits(1),
-                value: "こんに".into(),
-                cursor: Some((3, 3)),
-            },
-        );
-        assert!(state.is_composing(), "preedit must set the composition");
-        app.insert_resource(state);
-
-        let pane = app
-            .world_mut()
-            .spawn((
-                TmuxPane {
-                    id: PaneId(1),
-                    dims: CellDims {
-                        width: 0,
-                        height: 0,
-                        xoff: 0,
-                        yoff: 0,
-                    },
-                },
-                ActivePane,
-                KeyboardFocused,
-                TerminalGrid::default(),
-            ))
-            .id();
-
-        app.world_mut()
-            .run_system_once(suppress_terminal_cursor_during_ime)
-            .unwrap();
-
-        let grid = app.world().get::<TerminalGrid>(pane).expect("grid");
-        assert!(
-            grid.suppress_cursor,
-            "the active tmux pane must suppress its cursor while composing"
-        );
-    }
-
-    #[test]
-    fn suppresses_cursor_on_focused_terminal_without_tmux() {
+    fn suppresses_cursor_on_focused_terminal() {
         use crate::surface::OrzmaTerminal;
 
         let mut app = App::new();

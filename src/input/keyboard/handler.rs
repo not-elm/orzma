@@ -203,9 +203,7 @@ mod tests {
     use bevy::input::ButtonState;
     use bevy::input::keyboard::Key;
     use orzma_configs::shortcuts::Modifiers;
-    use orzma_tmux::{PaneId, TmuxPane};
     use std::time::Duration;
-    use tmux_control_parser::CellDims;
 
     #[derive(Resource, Default)]
     struct Captured {
@@ -293,18 +291,6 @@ mod tests {
             PrimaryWindow,
         ));
         app
-    }
-
-    fn tmux_pane(id: u32) -> TmuxPane {
-        TmuxPane {
-            id: PaneId(id),
-            dims: CellDims {
-                width: 80,
-                height: 24,
-                xoff: 0,
-                yoff: 0,
-            },
-        }
     }
 
     fn press_key(app: &mut App, key_code: KeyCode, logical: Key) {
@@ -438,22 +424,6 @@ mod tests {
             cap.message_count(),
             0,
             "ReleaseWebviewFocus is handled inline and never reaches a ShortcutMessage"
-        );
-    }
-
-    #[test]
-    fn focused_resolves_for_tmux_pane() {
-        let mut app = resolve_app(Shortcuts::default());
-        let pane = app
-            .world_mut()
-            .spawn((OrzmaTerminal, tmux_pane(1), KeyboardFocused))
-            .id();
-        press_key(&mut app, KeyCode::KeyA, Key::Character("a".into()));
-        app.update();
-        assert_eq!(
-            app.world().resource::<Captured>().focused,
-            Some(pane),
-            "a KeyboardFocused tmux pane resolves as the message's focused field"
         );
     }
 

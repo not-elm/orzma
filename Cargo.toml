@@ -37,9 +37,6 @@ libc = "0.2"
 open = { workspace = true }
 orzma_configs = { path = "crates/orzma_configs" }
 orzma_webview_host = { path = "crates/webview_host", features = ["cef"] }
-orzma_tmux = { path = "crates/orzma_tmux" }
-tmux_control = { path = "crates/tmux_control" }
-tmux_control_parser = { path = "crates/tmux_control_parser" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
