@@ -105,11 +105,7 @@ fn sync_focused_webview(
 
 /// Returns `true` when host-side keyboard input should be suppressed: IME
 /// composing, window not focused, or a webview owns the keyboard.
-pub(crate) fn should_disable_input(
-    composing: bool,
-    window_focused: bool,
-    webview_focused: bool,
-) -> bool {
+fn should_disable_input(composing: bool, window_focused: bool, webview_focused: bool) -> bool {
     composing || !window_focused || webview_focused
 }
 

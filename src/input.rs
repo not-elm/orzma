@@ -3,7 +3,7 @@
 
 mod bindings;
 pub(crate) mod focus;
-pub(crate) mod hyperlink;
+mod hyperlink;
 pub(crate) mod ime;
 pub(crate) mod keyboard;
 pub(crate) mod mouse;

@@ -4,10 +4,10 @@
 use crate::ui::root::OrzmaUiRootPlugin;
 use bevy::prelude::*;
 
-pub(crate) mod ime_overlay;
+mod ime_overlay;
 pub mod root;
 pub(crate) mod shell_surface;
-pub mod vi_mode_indicator;
+mod vi_mode_indicator;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never
 /// despawned. Hosts the `ShellSurfaceUi` subtree as a child.

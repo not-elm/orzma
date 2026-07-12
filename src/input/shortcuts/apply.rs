@@ -48,10 +48,7 @@ impl Plugin for ShortcutsApplyPlugin {
 /// `resolve_key_effects`; pane/window actions are no-ops until the built-in
 /// multiplexer lands.
 /// Registered in `ShortcutSet::Apply`, gated on `on_message::<ShortcutMessage>`.
-pub(in crate::input) fn apply_shortcuts(
-    mut commands: Commands,
-    mut shortcuts: MessageReader<ShortcutMessage>,
-) {
+fn apply_shortcuts(mut commands: Commands, mut shortcuts: MessageReader<ShortcutMessage>) {
     for msg in shortcuts.read() {
         match msg.action {
             Shortcut::EnterViMode => {
@@ -87,10 +84,7 @@ pub(in crate::input) fn apply_shortcuts(
 /// Applies matched `[vi-mode]` keys from `ViModeMessage` on the focused
 /// terminal. Registered in `ShortcutSet::Apply`, gated on
 /// `on_message::<ViModeMessage>`.
-pub(in crate::input) fn apply_vi_mode(
-    mut commands: Commands,
-    mut vi_mode: MessageReader<ViModeMessage>,
-) {
+fn apply_vi_mode(mut commands: Commands, mut vi_mode: MessageReader<ViModeMessage>) {
     for msg in vi_mode.read() {
         if let Some(entity) = msg.focused {
             trigger_vi_mode_action(&mut commands, entity, msg.action);
@@ -101,10 +95,7 @@ pub(in crate::input) fn apply_vi_mode(
 /// Types raw keys from `TypeMessage` into the focused terminal as
 /// `TerminalKeyInput`. Runs after the shortcut/copy appliers. Registered in
 /// `ShortcutSet::Apply`, gated on `on_message::<TypeMessage>`.
-pub(in crate::input) fn apply_type(
-    mut commands: Commands,
-    mut type_keys: MessageReader<TypeMessage>,
-) {
+fn apply_type(mut commands: Commands, mut type_keys: MessageReader<TypeMessage>) {
     for msg in type_keys.read() {
         if let Some(entity) = msg.focused
             && let Some(key) = bevy_key_to_terminal_key(&msg.logical)

@@ -23,7 +23,7 @@ use orzma_configs::vi_mode::ViModeAction;
 use orzma_tty_engine::{ButtonConfig, WheelConfig};
 use std::time::Duration;
 
-pub(in crate::input) mod apply;
+mod apply;
 
 pub(super) struct ShortcutsPlugin;
 

@@ -45,7 +45,7 @@ pub(crate) struct ImeCommit {
 /// (chained); both run in `InputPhase::Dispatch`, ahead of
 /// `InputPhase::FocusedKey`, whose dispatcher gates on `ImeState`, so IME
 /// must apply first.
-pub struct ImePlugin;
+pub(super) struct ImePlugin;
 
 impl Plugin for ImePlugin {
     fn build(&self, app: &mut App) {

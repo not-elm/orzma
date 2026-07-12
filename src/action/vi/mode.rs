@@ -19,7 +19,7 @@ use orzma_tty_engine::{Coalescer, TerminalHandle};
 /// `crate::action::clipboard` copy plugin adds the write-seam observer.
 /// `ViModeState` is inserted/removed per-entity by the observers
 /// themselves; no global system needed.
-pub struct ViModePlugin;
+pub(super) struct ViModePlugin;
 
 impl Plugin for ViModePlugin {
     fn build(&self, app: &mut App) {

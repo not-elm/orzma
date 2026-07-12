@@ -30,7 +30,7 @@ const VI_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
 
 /// Bevy Plugin: wires the vi-mode indicator's attach + refresh systems
 /// and the exit observer.
-pub struct ViModeIndicatorPlugin;
+pub(super) struct ViModeIndicatorPlugin;
 
 impl Plugin for ViModeIndicatorPlugin {
     fn build(&self, app: &mut App) {
