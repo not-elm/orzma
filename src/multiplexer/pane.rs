@@ -1,5 +1,7 @@
 //! Multiplexer pane domain: the pane component and its cwd cache.
 
+pub(crate) mod spawn;
+
 use bevy::prelude::*;
 use std::path::PathBuf;
 
