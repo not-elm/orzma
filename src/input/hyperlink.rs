@@ -196,6 +196,22 @@ fn cursor_decision(target: HoverTarget) -> Option<SystemCursorIcon> {
     }
 }
 
+/// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
+/// (the arrow) on the primary window so the hover system in this module
+/// can mutate the component without first having to insert it. The arrow
+/// is the default for non-terminal regions; the hover system narrows it to
+/// the I-beam over terminal text.
+fn insert_initial_cursor_icon(
+    mut commands: Commands,
+    windows: Query<Entity, (With<PrimaryWindow>, Without<CursorIcon>)>,
+) {
+    for window in windows.iter() {
+        commands
+            .entity(window)
+            .insert(CursorIcon::System(SystemCursorIcon::Default));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,21 +569,5 @@ mod tests {
             Some(&CursorIcon::System(SystemCursorIcon::Pointer)),
             "over a webview host the cursor is left untouched for bevy_cef to own"
         );
-    }
-}
-
-/// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
-/// (the arrow) on the primary window so the hover system in this module
-/// can mutate the component without first having to insert it. The arrow
-/// is the default for non-terminal regions; the hover system narrows it to
-/// the I-beam over terminal text.
-fn insert_initial_cursor_icon(
-    mut commands: Commands,
-    windows: Query<Entity, (With<PrimaryWindow>, Without<CursorIcon>)>,
-) {
-    for window in windows.iter() {
-        commands
-            .entity(window)
-            .insert(CursorIcon::System(SystemCursorIcon::Default));
     }
 }
