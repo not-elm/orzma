@@ -13,7 +13,7 @@ pub(crate) struct WindowTitlePlugin;
 
 impl Plugin for WindowTitlePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, update_default_window_title);
+        app.add_systems(Update, update_window_title);
     }
 }
 
@@ -21,7 +21,7 @@ const APP_NAME: &str = "orzma";
 
 const SUFFIX: &str = " — orzma";
 
-fn update_default_window_title(
+fn update_window_title(
     mut window: Query<&mut Window, With<PrimaryWindow>>,
     focused: Query<&TerminalTitle, (With<OrzmaTerminal>, With<KeyboardFocused>)>,
     terminals: Query<(), With<OrzmaTerminal>>,
@@ -35,13 +35,13 @@ fn update_default_window_title(
     // at all, so a stale title cannot linger before the deferred terminal spawn
     // flushes.
     if let Ok(title) = focused.single() {
-        apply_title(&mut window, format_default(title.0.as_deref()));
+        apply_title(&mut window, format_title(title.0.as_deref()));
     } else if terminals.is_empty() {
-        apply_title(&mut window, format_default(None));
+        apply_title(&mut window, format_title(None));
     }
 }
 
-fn format_default(title: Option<&str>) -> String {
+fn format_title(title: Option<&str>) -> String {
     match title.map(str::trim) {
         Some(t) if !t.is_empty() => format!("{t}{SUFFIX}"),
         _ => APP_NAME.to_string(),
@@ -59,28 +59,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_some_title_gets_suffix() {
-        assert_eq!(format_default(Some("vim")), "vim — orzma");
+    fn some_title_gets_suffix() {
+        assert_eq!(format_title(Some("vim")), "vim — orzma");
     }
 
     #[test]
-    fn default_empty_title_is_app_name() {
-        assert_eq!(format_default(Some("")), "orzma");
+    fn empty_title_is_app_name() {
+        assert_eq!(format_title(Some("")), "orzma");
     }
 
     #[test]
-    fn default_none_title_is_app_name() {
-        assert_eq!(format_default(None), "orzma");
+    fn none_title_is_app_name() {
+        assert_eq!(format_title(None), "orzma");
     }
 
     #[test]
-    fn default_whitespace_only_title_is_app_name() {
-        assert_eq!(format_default(Some("   ")), "orzma");
+    fn whitespace_only_title_is_app_name() {
+        assert_eq!(format_title(Some("   ")), "orzma");
     }
 
     #[test]
-    fn default_trims_surrounding_whitespace() {
-        assert_eq!(format_default(Some("  vim  ")), "vim — orzma");
+    fn trims_surrounding_whitespace() {
+        assert_eq!(format_title(Some("  vim  ")), "vim — orzma");
     }
 
     fn primary_window_title(app: &mut App) -> String {
@@ -95,7 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn default_system_sets_focused_terminal_title() {
+    fn system_sets_focused_terminal_title() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(WindowTitlePlugin);
@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn default_resets_to_app_name_when_no_terminal_exists() {
+    fn resets_to_app_name_when_no_terminal_exists() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(WindowTitlePlugin);
@@ -130,7 +130,7 @@ mod tests {
     }
 
     #[test]
-    fn default_holds_last_title_when_terminal_exists_but_unfocused() {
+    fn holds_last_title_when_terminal_exists_but_unfocused() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_plugins(WindowTitlePlugin);

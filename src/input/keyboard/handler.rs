@@ -3,12 +3,12 @@
 //! mode-independent effects inline (Quit → `AppExit`, release-webview-focus →
 //! clear `FocusedWebview`), and fans out the remaining effects as the three
 //! per-responsibility shortcut messages (`ShortcutMessage`, `ViModeMessage`,
-//! `TypeMessage`). The default-mode appliers
-//! (`crate::input::shortcuts::default_mode`) consume those messages and apply
-//! the mode-specific events. This is the sole system that steps
+//! `TypeMessage`). The appliers (`crate::input::shortcuts::apply`) consume
+//! those messages and apply the events. This is the sole system that steps
 //! `LeaderPhase`.
 
 use crate::action::vi::ResolvedViModeKeys;
+use crate::action::vi::mode::ViModeState;
 use crate::input::current_modifiers;
 use crate::input::focus::KeyboardFocused;
 use crate::input::ime::{ImeState, resolve_focused_surface};
@@ -19,7 +19,6 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, clear_leader_phase,
 };
-use crate::ui::vi_mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;

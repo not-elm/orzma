@@ -1,10 +1,9 @@
-//! Root of the host input pipeline: keyboard, mouse, focus, gesture and binding primitives, IME, hyperlink-hover, shortcuts, option-as-alt, and the
-//! `default_mode` dispatchers.
+//! Root of the host input pipeline: keyboard, mouse, focus, gesture and
+//! binding primitives, IME, hyperlink-hover, shortcuts, and option-as-alt.
 
 mod bindings;
-pub(crate) mod default_mode;
 pub(crate) mod focus;
-pub(crate) mod hyperlink;
+mod hyperlink;
 pub(crate) mod ime;
 pub(crate) mod keyboard;
 pub(crate) mod mouse;
@@ -13,8 +12,9 @@ pub(crate) mod shortcuts;
 
 use crate::{
     input::{
-        default_mode::DefaultHostInputPlugin, keyboard::KeyboardInputPlugin,
-        mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin, shortcuts::ShortcutsPlugin,
+        focus::FocusSyncPlugin, hyperlink::HyperlinkInputPlugin, ime::ImePlugin,
+        keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
+        shortcuts::ShortcutsPlugin,
     },
     system_set::OrzmaSystems,
 };
@@ -34,7 +34,8 @@ pub(crate) enum InputPhase {
     FocusedKey,
 }
 
-/// Bevy Plugin that registers the keyboard shortcut handling pipeline.
+/// Bevy Plugin that registers the host input pipeline (keyboard, mouse, IME,
+/// focus gates, hyperlink hover, shortcuts).
 pub struct OrzmaInputPlugin;
 
 impl Plugin for OrzmaInputPlugin {
@@ -44,7 +45,9 @@ impl Plugin for OrzmaInputPlugin {
             OptionAsAltPlugin,
             KeyboardInputPlugin,
             MouseInputPlugin,
-            DefaultHostInputPlugin,
+            FocusSyncPlugin,
+            ImePlugin,
+            HyperlinkInputPlugin,
         ))
         .configure_sets(
             Update,

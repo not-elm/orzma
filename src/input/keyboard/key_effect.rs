@@ -1,6 +1,6 @@
 //! Pure decision layer for keyboard-shortcut dispatch: the `KeyEffect`
 //! intermediate representation plus the single decider `classify_key_batch`
-//! that the Default-mode keyboard dispatcher wires into. No ECS handles —
+//! that the keyboard dispatcher wires into. No ECS handles —
 //! fully unit-testable without a Bevy `App`.
 
 use crate::action::vi::ResolvedViModeKeys;
@@ -15,7 +15,7 @@ use orzma_webview::NormalizedChord;
 use std::time::Duration;
 
 /// One decided effect of a single pressed key, produced by `classify_key_batch`.
-/// The Default-mode appliers interpret each variant; this type carries no ECS
+/// The appliers interpret each variant; this type carries no ECS
 /// handles so the decider stays pure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum KeyEffect {
@@ -854,8 +854,8 @@ mod tests {
                 action: Shortcut::Paste,
                 via_leader: false,
             }],
-            "the decider still emits the direct paste action; the Default \
-             applier is what suppresses it in vi mode (via `via_leader || \
+            "the decider still emits the direct paste action; apply_shortcuts \
+             is what suppresses it in vi mode (via `via_leader || \
              !in_vi_mode`), so a direct paste never fires while vi mode is \
              active"
         );

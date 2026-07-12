@@ -5,9 +5,9 @@ use bevy::prelude::*;
 use orzma_tty_engine::TerminalChildExit;
 
 /// Registers the shell-exit observer.
-pub(super) struct DefaultExitPlugin;
+pub(super) struct ExitPlugin;
 
-impl Plugin for DefaultExitPlugin {
+impl Plugin for ExitPlugin {
     fn build(&self, app: &mut App) {
         app.add_observer(on_child_exit);
     }

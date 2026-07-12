@@ -1,13 +1,13 @@
 //! Webview pointer routing for the shell surface: forwards left press/release
 //! and pointer motion to the inline CEF child under the cursor on the single
-//! Default shell surface, via the mode-agnostic core in
+//! shell surface, via the core in
 //! `crate::input::mouse::webview`.
 //!
 //! The pointer system runs EVERY frame (not message-gated) so an in-flight
 //! press is released when input is suppressed (window unfocused), never
 //! leaving CEF logically pressed. Double-handling with the
 //! terminal's `dispatch_mouse_buttons` is avoided by the `MouseDisabled`
-//! rect-claim gate in `crate::input::default_mode::maintain_input_gates`: over an
+//! rect-claim gate in `crate::input::focus::maintain_input_gates`: over an
 //! interactive rect the shell is `MouseDisabled` (dispatch yields, the webview
 //! gets the click); off-rect the press clears webview focus here and falls
 //! through to the terminal.
@@ -32,22 +32,22 @@ use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::prelude::TerminalOverlays;
 use orzma_webview::{NonInteractive, Webview};
 
-/// Registers the Default-mode webview pointer systems. The shared
+/// Registers the webview pointer systems. The shared
 /// `WebviewPress` resource is owned by the parent `MouseWebviewPlugin`.
-pub(super) struct MouseWebviewDefaultModePlugin;
+pub(super) struct MouseWebviewRouterPlugin;
 
-impl Plugin for MouseWebviewDefaultModePlugin {
+impl Plugin for MouseWebviewRouterPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, default_webview_pointer.in_set(InputPhase::Dispatch))
+        app.add_systems(Update, route_webview_pointer.in_set(InputPhase::Dispatch))
             .add_systems(
                 Update,
-                forward_default_webview_mouse_moves
+                forward_webview_mouse_moves
                     .in_set(InputPhase::Hover)
                     .run_if(on_message::<CursorMoved>),
             )
             .add_systems(
                 Update,
-                forward_default_webview_wheel
+                forward_webview_wheel
                     .in_set(InputPhase::Dispatch)
                     .run_if(on_message::<MouseWheel>),
             );
@@ -55,10 +55,10 @@ impl Plugin for MouseWebviewDefaultModePlugin {
 }
 
 /// Forwards left press/release to the inline CEF child under the cursor on the
-/// Default shell. Runs EVERY frame: a suppressed frame (window unfocused)
+/// shell surface. Runs EVERY frame: a suppressed frame (window unfocused)
 /// drains the reader and releases an in-flight press so the focused page is
 /// not left logically pressed.
-fn default_webview_pointer(
+fn route_webview_pointer(
     mut webview_press: ResMut<WebviewPress>,
     mut webview_route: WebviewRouteParams,
     mut buttons: MessageReader<MouseButtonInput>,
@@ -122,9 +122,9 @@ fn default_webview_pointer(
     }
 }
 
-/// Forwards pointer motion over an interactive inline rect of the Default shell
+/// Forwards pointer motion over an interactive inline rect of the shell surface
 /// to the child's CEF browser via the shared `forward_webview_move_at`.
-fn forward_default_webview_mouse_moves(
+fn forward_webview_mouse_moves(
     mut cursor_msg: MessageReader<CursorMoved>,
     surfaces: Query<
         (
@@ -171,12 +171,12 @@ fn forward_default_webview_mouse_moves(
 }
 
 /// Forwards the mouse wheel to the FOCUSED inline webview under the cursor on the
-/// Default shell (raw CEF wheel, focus-gated). When no focused webview is under
+/// shell surface (raw CEF wheel, focus-gated). When no focused webview is under
 /// the pointer the reader is drained and the wheel cedes to
 /// `crate::input::mouse::wheel::dispatch_mouse_wheel` (terminal scrollback) through its own
 /// reader; over the rect the shell is `MouseDisabled` (rect-claim gate), so that
 /// dispatcher yields and only the page scrolls. Gated to wheel frames.
-fn forward_default_webview_wheel(
+fn forward_webview_wheel(
     mut wheel: MessageReader<MouseWheel>,
     focused_webview: Res<FocusedWebview>,
     webview_parents: Query<&ChildOf, With<Webview>>,
@@ -261,17 +261,17 @@ mod tests {
         }
     }
 
-    /// Default shell at window center (400,300), size 800x600 → top-left (0,0),
+    /// The shell surface at window center (400,300), size 800x600 → top-left (0,0),
     /// with one interactive inline rect rows 2..12, cols 3..43 (phys y 32..192,
     /// x 24..344 at the 8x16 px cell pitch). Returns `(app, shell, child)`.
-    fn make_default_webview_app() -> (App, Entity, Entity) {
+    fn make_webview_app() -> (App, Entity, Entity) {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.add_message::<MouseButtonInput>();
         app.init_resource::<WebviewPress>();
         app.init_resource::<FocusedWebview>();
         app.insert_resource(test_metrics());
-        app.add_systems(Update, default_webview_pointer);
+        app.add_systems(Update, route_webview_pointer);
 
         let mut overlays = TerminalOverlays::default();
         overlays.rects[0] = IVec4::new(2, 3, 10, 40);
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn default_press_over_inline_rect_focuses_child() {
-        let (mut app, _shell, child) = make_default_webview_app();
+        let (mut app, _shell, child) = make_webview_app();
         set_cursor(&mut app, Vec2::new(40.0, 48.0));
         write_left(&mut app, ButtonState::Pressed);
         app.update();
@@ -351,7 +351,7 @@ mod tests {
 
     #[test]
     fn default_off_rect_press_clears_focus_and_records_no_press() {
-        let (mut app, _shell, child) = make_default_webview_app();
+        let (mut app, _shell, child) = make_webview_app();
         app.world_mut().resource_mut::<FocusedWebview>().0 = Some(child);
         set_cursor(&mut app, Vec2::new(400.0, 400.0));
         write_left(&mut app, ButtonState::Pressed);
@@ -370,7 +370,7 @@ mod tests {
 
     #[test]
     fn default_suppressed_frame_releases_in_flight_press() {
-        let (mut app, _shell, child) = make_default_webview_app();
+        let (mut app, _shell, child) = make_webview_app();
         app.world_mut().resource_mut::<WebviewPress>().0 = Some(child);
         let win = app
             .world_mut()

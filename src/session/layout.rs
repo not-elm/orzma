@@ -10,9 +10,9 @@ use orzma_tty_engine::{Coalescer, PtyHandle, TerminalHandle};
 use orzma_tty_renderer::TerminalCellMetricsResource;
 
 /// Registers the window-fill resize system.
-pub(super) struct DefaultLayoutPlugin;
+pub(super) struct LayoutPlugin;
 
-impl Plugin for DefaultLayoutPlugin {
+impl Plugin for LayoutPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<OrzmaLastSize>()
             .add_message::<WindowResized>()

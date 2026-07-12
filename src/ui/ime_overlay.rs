@@ -38,7 +38,7 @@ use orzma_tty_renderer::prelude::TerminalGrid;
 
 /// Bevy plugin that spawns the IME overlay entity tree at Startup and
 /// schedules `position_ime_overlay` in PostUpdate.
-pub struct ImeOverlayPlugin;
+pub(super) struct ImeOverlayPlugin;
 
 impl Plugin for ImeOverlayPlugin {
     fn build(&self, app: &mut App) {

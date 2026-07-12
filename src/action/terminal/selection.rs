@@ -50,7 +50,7 @@ pub(crate) struct TerminalSelectionCopy {
 }
 
 /// Triggers a `TerminalSelectionCopy` on the focused terminal, if any. Used by
-/// the Default-mode shortcut applier's `Shortcut::Copy` arm.
+/// the shortcut applier's `Shortcut::Copy` arm.
 pub(crate) fn trigger_selection_copy(commands: &mut Commands, focused: Option<Entity>) {
     if let Some(entity) = focused {
         commands.trigger(TerminalSelectionCopy { entity });

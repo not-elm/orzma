@@ -2,6 +2,8 @@
 //! fired by the vi-mode key gather and applied by `vi/applier.rs`'s
 //! local terminal-engine observers, for every terminal surface.
 
+pub(crate) mod mode;
+
 mod applier;
 mod keymap;
 
@@ -61,6 +63,10 @@ pub(crate) struct ViActionPlugin;
 
 impl Plugin for ViActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((keymap::ViModeKeymapPlugin, applier::ViApplierPlugin));
+        app.add_plugins((
+            keymap::ViModeKeymapPlugin,
+            applier::ViApplierPlugin,
+            mode::ViModePlugin,
+        ));
     }
 }

@@ -1,6 +1,6 @@
 //! OSC 8 hyperlink hover detection and cursor-icon control — the single
 //! authority for `HyperlinkHoverState` (the renderer underline) and the window
-//! `CursorIcon` over every terminal surface: the Default-mode shell and
+//! `CursorIcon` over every terminal surface: the shell terminal and
 //! webview hosts (all are `OrzmaTerminal` entities). Over a linked cell the
 //! cursor becomes a pointer while the platform activation modifier
 //! (`link_modifier_held`) is held, and text otherwise; over a webview host the
@@ -29,21 +29,23 @@ use orzma_configs::shortcuts::Modifiers;
 use orzma_tty_renderer::TerminalCellMetricsResource;
 use orzma_tty_renderer::schema::{HyperlinkHoverState, TerminalGrid};
 
-/// Plugin: registers `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
-pub(crate) struct HyperlinkInputPlugin;
+/// Plugin: registers `insert_initial_cursor_icon` at `Startup` and
+/// `hyperlink_hover_and_cursor` in `InputPhase::Hover`.
+pub(super) struct HyperlinkInputPlugin;
 
 impl Plugin for HyperlinkInputPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Update,
-            hyperlink_hover_and_cursor
-                .run_if(
-                    on_message::<MouseMotion>
-                        .or_else(on_message::<CursorMoved>)
-                        .or_else(on_message::<KeyboardInput>),
-                )
-                .in_set(InputPhase::Hover),
-        );
+        app.add_systems(Startup, insert_initial_cursor_icon)
+            .add_systems(
+                Update,
+                hyperlink_hover_and_cursor
+                    .run_if(
+                        on_message::<MouseMotion>
+                            .or_else(on_message::<CursorMoved>)
+                            .or_else(on_message::<KeyboardInput>),
+                    )
+                    .in_set(InputPhase::Hover),
+            );
     }
 }
 
@@ -195,6 +197,22 @@ fn cursor_decision(target: HoverTarget) -> Option<SystemCursorIcon> {
     }
 }
 
+/// Inserts an initial `CursorIcon::System(SystemCursorIcon::Default)`
+/// (the arrow) on the primary window so the hover system in this module
+/// can mutate the component without first having to insert it. The arrow
+/// is the default for non-terminal regions; the hover system narrows it to
+/// the I-beam over terminal text.
+fn insert_initial_cursor_icon(
+    mut commands: Commands,
+    windows: Query<Entity, (With<PrimaryWindow>, Without<CursorIcon>)>,
+) {
+    for window in windows.iter() {
+        commands
+            .entity(window)
+            .insert(CursorIcon::System(SystemCursorIcon::Default));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn hover_over_default_mode_terminal_link_sets_state_and_pointer() {
+    fn hover_over_terminal_link_sets_state_and_pointer() {
         use orzma_tty_renderer::schema::{Cell, HyperlinkId, HyperlinkUri};
 
         let mut app = App::new();
@@ -399,7 +417,7 @@ mod tests {
         assert_eq!(
             hover.entity,
             Some(term),
-            "hover must resolve to the Default-mode OrzmaTerminal under the cursor"
+            "hover must resolve to the OrzmaTerminal under the cursor"
         );
         assert_eq!(
             hover.hyperlink_id,

@@ -4,10 +4,8 @@
 //! host carries `ViModeState` and shows `[offset/total]` over the
 //! pane's top-right corner.
 
+use crate::action::vi::mode::ViModeState;
 use crate::font::TerminalUiFont;
-use crate::theme;
-use crate::ui::palette;
-use crate::ui::vi_mode::ViModeState;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
 use bevy::ecs::lifecycle::Remove;
@@ -15,9 +13,24 @@ use bevy::ecs::observer::On;
 use bevy::ecs::schedule::common_conditions::any_with_component;
 use bevy::prelude::*;
 
+/// Background color of the vi-mode indicator chip. tmux-style bright
+/// yellow so the chip reads as a deliberate HUD element on top of the
+/// terminal grid.
+const VI_MODE_INDICATOR_BG: Color = Color::srgb(0.95, 0.85, 0.20);
+/// Foreground (text) color of the vi-mode indicator chip. Near-black
+/// for contrast against `VI_MODE_INDICATOR_BG`.
+const VI_MODE_INDICATOR_FG: Color = Color::srgb(0.10, 0.10, 0.10);
+/// Font size of the vi-mode indicator chip's text. Smaller than Bevy's
+/// 20px default so the chip reads as a compact HUD label instead of
+/// competing with the terminal grid.
+const VI_MODE_INDICATOR_FONT_SIZE_PX: f32 = 11.0;
+/// Horizontal padding inside the vi-mode indicator chip. Kept tight
+/// because the chip's text is also smaller than the surrounding UI.
+const VI_MODE_INDICATOR_PADDING_X_PX: f32 = 4.0;
+
 /// Bevy Plugin: wires the vi-mode indicator's attach + refresh systems
 /// and the exit observer.
-pub struct ViModeIndicatorPlugin;
+pub(super) struct ViModeIndicatorPlugin;
 
 impl Plugin for ViModeIndicatorPlugin {
     fn build(&self, app: &mut App) {
@@ -71,17 +84,14 @@ fn attach_indicator_to_surface_host(
                     .as_deref()
                     .cloned()
                     .unwrap_or_default()
-                    .text_font(FontSize::Px(theme::VI_MODE_INDICATOR_FONT_SIZE_PX)),
-                BackgroundColor(palette::VI_MODE_INDICATOR_BG),
-                TextColor(palette::VI_MODE_INDICATOR_FG),
+                    .text_font(FontSize::Px(VI_MODE_INDICATOR_FONT_SIZE_PX)),
+                BackgroundColor(VI_MODE_INDICATOR_BG),
+                TextColor(VI_MODE_INDICATOR_FG),
                 Node {
                     position_type: PositionType::Absolute,
                     top: Val::Px(0.0),
                     right: Val::Px(0.0),
-                    padding: UiRect::axes(
-                        Val::Px(theme::VI_MODE_INDICATOR_PADDING_X_PX),
-                        Val::Px(0.0),
-                    ),
+                    padding: UiRect::axes(Val::Px(VI_MODE_INDICATOR_PADDING_X_PX), Val::Px(0.0)),
                     display: Display::None,
                     ..default()
                 },
@@ -239,7 +249,7 @@ mod tests {
 
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::vi_mode::ViModeState);
+            .insert(crate::action::vi::mode::ViModeState);
         app.update();
 
         let chip = find_indicator_child(&app, host).expect("chip");
@@ -276,7 +286,7 @@ mod tests {
             handle.enter_vi_mode(&mut coalescer);
             handle.scroll_page_up(&mut coalescer);
             entity.insert((handle, coalescer));
-            entity.insert(crate::ui::vi_mode::ViModeState);
+            entity.insert(crate::action::vi::mode::ViModeState);
         }
         app.update();
 
@@ -301,7 +311,7 @@ mod tests {
         app.update();
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::vi_mode::ViModeState);
+            .insert(crate::action::vi::mode::ViModeState);
         // First tick after ViModeState insertion: chip becomes visible and
         // Text is written from "" to "[0/0]" (becoming_visible path).
         app.update();
@@ -339,7 +349,7 @@ mod tests {
         app.update();
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::vi_mode::ViModeState);
+            .insert(crate::action::vi::mode::ViModeState);
         app.update();
 
         // Sanity: chip is visible.
@@ -354,7 +364,7 @@ mod tests {
         // immediately (within the same Bevy command queue).
         app.world_mut()
             .entity_mut(host)
-            .remove::<crate::ui::vi_mode::ViModeState>();
+            .remove::<crate::action::vi::mode::ViModeState>();
         // Flush observers — observers run at the command queue sync point;
         // call update() to be conservative.
         app.update();
