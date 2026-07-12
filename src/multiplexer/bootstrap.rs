@@ -5,6 +5,7 @@
 use crate::input::focus::KeyboardFocused;
 use crate::multiplexer::layout::MultiplexerLayout;
 use crate::multiplexer::pane::MultiplexerPane;
+use crate::multiplexer::pane::layout::LayoutPlugin;
 use crate::multiplexer::pane::spawn::{
     MultiplexerPaneBundle, MultiplexerPaneSpawnOptions, PaneCwdPlugin,
 };
@@ -28,8 +29,8 @@ struct OrzmaTerminalConfig {
 /// PTY, never despawned on error). `window` links the container back to its
 /// window entity for the window-switch/layout systems in later PR-1 tasks.
 #[derive(Component)]
-struct WindowContainer {
-    window: Entity,
+pub(super) struct WindowContainer {
+    pub(super) window: Entity,
 }
 
 /// Aggregates the multiplexer's PTY-side lifecycle: the cwd cache, the shell
@@ -46,6 +47,7 @@ impl Plugin for MultiplexerPlugin {
             shell: self.shell.clone(),
         })
         .add_plugins(PaneCwdPlugin)
+        .add_plugins(LayoutPlugin)
         .add_systems(
             Update,
             ensure_bootstrap.run_if(

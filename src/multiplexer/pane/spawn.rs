@@ -3,6 +3,7 @@
 //! sibling's working directory.
 
 use crate::multiplexer::pane::PaneCwd;
+use crate::multiplexer::pane::layout::PaneLastCells;
 use crate::surface::OrzmaTerminal;
 use bevy::prelude::*;
 use orzma_tty_engine::{SpawnOptions, TerminalBundle, TerminalCurrentDir};
@@ -30,6 +31,7 @@ pub(crate) struct MultiplexerPaneBundle {
     marker: OrzmaTerminal,
     node: Node,
     cwd: PaneCwd,
+    last_cells: PaneLastCells,
 }
 
 impl MultiplexerPaneBundle {
@@ -53,6 +55,7 @@ impl MultiplexerPaneBundle {
             marker: OrzmaTerminal,
             node: full_size_node(),
             cwd: PaneCwd::default(),
+            last_cells: PaneLastCells::default(),
         })
     }
 }
