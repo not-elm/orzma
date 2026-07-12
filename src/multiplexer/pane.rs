@@ -6,7 +6,7 @@ pub(crate) mod layout;
 pub(crate) mod spawn;
 
 use crate::input::focus::KeyboardFocused;
-use crate::multiplexer::bootstrap::WindowContainer;
+use crate::multiplexer::bootstrap::{OrzmaTerminalConfig, WindowContainer};
 use crate::multiplexer::layout::{PaneRect, SplitAxis};
 use crate::multiplexer::pane::layout::PANE_GAP_PX;
 use crate::multiplexer::pane::spawn::{MultiplexerPaneBundle, MultiplexerPaneSpawnOptions};
@@ -47,10 +47,12 @@ const MIN_PANE_CELLS: f32 = 2.0;
 ///
 /// Un-zooms the window first, then rejects (no-op + warn, no PTY spawned) a
 /// split that would shrink either resulting child below `MIN_PANE_CELLS`
-/// cells. Otherwise spawns the new pane's PTY — cwd seeded from the target's
-/// cached `PaneCwd`, env from `ControlPlaneHandle` — BEFORE mutating the
-/// tree, so a failed spawn leaves the layout untouched. On success, inserts
-/// the new leaf, moves the window's `active_pane`, and parents the new pane
+/// cells. Otherwise spawns the new pane's PTY — shell from
+/// `OrzmaTerminalConfig` (the same override `ensure_bootstrap` honors), cwd
+/// seeded from the target's cached `PaneCwd`, env from `ControlPlaneHandle`
+/// — BEFORE mutating the tree, so a failed spawn leaves the layout
+/// untouched. On success, inserts the new leaf, moves the window's
+/// `active_pane`, and parents the new pane
 /// under its OWN fresh pane container (never the target's), so the exit
 /// cascade's per-pane `ChildOf`-despawn (`pane/exit.rs`) never takes a
 /// surviving sibling down with it.
@@ -59,6 +61,7 @@ fn on_split_pane(
     mut commands: Commands,
     mut windows: Query<&mut MultiplexerWindow>,
     mut layouts: Query<&mut MultiplexerLayoutComp>,
+    config: Res<OrzmaTerminalConfig>,
     panes: Query<(&MultiplexerPane, &PaneCwd)>,
     containers: Query<(Entity, &WindowContainer, &ComputedNode)>,
     metrics: Option<Res<TerminalCellMetricsResource>>,
@@ -122,9 +125,9 @@ fn on_split_pane(
         .map(|c| c.surface_env(new_pane).to_vec())
         .unwrap_or_default();
     match MultiplexerPaneBundle::spawn(MultiplexerPaneSpawnOptions {
+        shell: config.shell.clone(),
         cwd: cwd.0.clone(),
         env,
-        ..default()
     }) {
         Ok(bundle) => {
             layout.0.split(target, new_pane, axis);
@@ -260,17 +263,18 @@ mod tests {
         (window, window_container, pane)
     }
 
-    fn build_app(metrics: TerminalCellMetricsResource) -> App {
+    fn build_app(metrics: TerminalCellMetricsResource, shell: Option<String>) -> App {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins);
         app.insert_resource(metrics);
+        app.insert_resource(OrzmaTerminalConfig { shell });
         app.add_observer(on_split_pane);
         app
     }
 
     #[test]
     fn split_below_minimum_size_is_a_noop_and_spawns_no_pane() {
-        let mut app = build_app(cell_metrics());
+        let mut app = build_app(cell_metrics(), None);
         // area.w = 20.0 is below the vertical-split threshold of 33.0 for
         // this cell/gap combination, so the split must be rejected.
         let (window, _, pane) = spawn_one_pane_window(&mut app, Vec2::new(20.0, 600.0));
@@ -303,7 +307,7 @@ mod tests {
 
     #[test]
     fn split_success_spawns_sibling_and_moves_active_pane() {
-        let mut app = build_app(cell_metrics());
+        let mut app = build_app(cell_metrics(), None);
         let (window, window_container, target) =
             spawn_one_pane_window(&mut app, Vec2::new(800.0, 600.0));
         let target_parent = app
@@ -350,6 +354,53 @@ mod tests {
         assert_eq!(
             new_parents_parent, window_container,
             "the new pane container must be parented under the window's WindowContainer"
+        );
+    }
+
+    #[test]
+    fn split_with_unspawnable_shell_leaves_tree_unchanged() {
+        // NOTE: on macOS, `spawn_login_shell` wraps the shell in `/usr/bin/login`
+        // (an executable that exists), so a merely-nonexistent path fails only
+        // inside the grandchild `zsh -fc "exec ..."`, not synchronously — a plain
+        // bad path here would make this test flake between "spawned" and "not
+        // spawned" depending on platform. A NUL byte breaks the `CString`
+        // conversion `std::process::Command::spawn` performs on every arg
+        // (including the embedded exec string) before it forks, so the PTY spawn
+        // fails synchronously and portably.
+        let mut app = build_app(
+            cell_metrics(),
+            Some("/nonexistent/shell\0-does-not-exist".into()),
+        );
+        let (window, _, target) = spawn_one_pane_window(&mut app, Vec2::new(800.0, 600.0));
+
+        app.world_mut().trigger(SplitPaneRequest {
+            pane: target,
+            axis: SplitAxis::Vertical,
+        });
+        app.world_mut().flush();
+        app.update();
+
+        let world = app.world_mut();
+        let mut panes = world.query_filtered::<(), With<MultiplexerPane>>();
+        assert_eq!(
+            panes.iter(world).count(),
+            1,
+            "a failed PTY spawn must not leave a new pane behind"
+        );
+        assert_eq!(
+            world
+                .get::<MultiplexerLayoutComp>(window)
+                .unwrap()
+                .0
+                .leaves()
+                .len(),
+            1,
+            "the layout tree must be unchanged when the spawn fails"
+        );
+        assert_eq!(
+            world.get::<MultiplexerWindow>(window).unwrap().active_pane,
+            target,
+            "active_pane must be unchanged when the spawn fails"
         );
     }
 }

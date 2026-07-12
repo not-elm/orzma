@@ -18,12 +18,13 @@ use crate::ui::multiplexer::WorkspaceContainer;
 use bevy::prelude::*;
 use orzma_webview::ControlPlaneHandle;
 
-/// Shell override resource, read by the bootstrap pane spawn.
+/// Shell override resource, read by the bootstrap pane spawn and by
+/// `crate::multiplexer::pane`'s split-pane spawn.
 ///
 /// `None` means fall back to `$SHELL` (then `/bin/sh`) at spawn time.
 #[derive(Resource)]
-struct OrzmaTerminalConfig {
-    shell: Option<String>,
+pub(in crate::multiplexer) struct OrzmaTerminalConfig {
+    pub(in crate::multiplexer) shell: Option<String>,
 }
 
 /// Per-window container node hosting that window's pane containers; one per
