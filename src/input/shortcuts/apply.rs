@@ -45,8 +45,8 @@ impl Plugin for ShortcutsApplyPlugin {
 /// (direct paste fires outside vi mode; a leader paste fires unconditionally),
 /// and copy (fires unconditionally — vi mode included; no-selection is a
 /// no-op downstream). `Quit` / `ReleaseWebviewFocus` are handled upstream in
-/// `resolve_key_effects`; pane/window actions are no-ops until the built-in
-/// multiplexer lands.
+/// `resolve_key_effects`; pane/window actions are handled by the multiplexer
+/// applier (`input/shortcuts/multiplexer.rs`).
 /// Registered in `ShortcutSet::Apply`, gated on `on_message::<ShortcutMessage>`.
 fn apply_shortcuts(mut commands: Commands, mut shortcuts: MessageReader<ShortcutMessage>) {
     for msg in shortcuts.read() {

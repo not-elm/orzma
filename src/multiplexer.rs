@@ -3,6 +3,7 @@
 pub(crate) mod bootstrap;
 pub(crate) mod layout;
 pub(crate) mod pane;
+pub(crate) mod request;
 pub(crate) mod window;
 
 pub(crate) use bootstrap::MultiplexerPlugin;
