@@ -17,7 +17,6 @@ pub(crate) struct PaneCwd(pub Option<PathBuf>);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::prelude::*;
 
     #[test]
     fn pane_component_roundtrips() {

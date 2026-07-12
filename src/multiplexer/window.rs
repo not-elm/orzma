@@ -27,7 +27,6 @@ pub(crate) struct MultiplexerLayoutComp(pub MultiplexerLayout);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bevy::prelude::*;
 
     #[test]
     fn window_component_roundtrips() {
