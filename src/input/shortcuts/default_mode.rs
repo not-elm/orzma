@@ -4,13 +4,14 @@
 
 use crate::{
     action::{
-        clipboard::PasteAction, terminal::trigger_selection_copy, vi::trigger_vi_mode_action,
+        clipboard::PasteAction,
+        terminal::trigger_selection_copy,
+        vi::{mode::EnterViModeActionEvent, trigger_vi_mode_action},
     },
     input::{
         keyboard::bevy_key_to_terminal_key,
         shortcuts::{ShortcutMessage, ShortcutSet, TypeMessage, ViModeMessage},
     },
-    ui::vi_mode::EnterViModeActionEvent,
 };
 use bevy::prelude::*;
 use orzma_configs::shortcuts::Shortcut;

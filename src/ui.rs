@@ -8,7 +8,6 @@ pub(crate) mod default_mode;
 pub(crate) mod ime_overlay;
 pub mod palette;
 pub mod root;
-pub mod vi_mode;
 pub mod vi_mode_indicator;
 
 /// Marker for the single root UI Node entity. Spawned once in Startup, never

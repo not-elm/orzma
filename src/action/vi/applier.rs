@@ -6,7 +6,7 @@ use crate::action::clipboard::CopyAction;
 use crate::action::vi::{
     ViExitRequest, ViMotionRequest, ViScrollRequest, ViSelectionToggleRequest, ViYankRequest,
 };
-use crate::ui::vi_mode::ExitViMode;
+use crate::action::vi::mode::ExitViMode;
 use bevy::prelude::*;
 use orzma_configs::vi_mode::ViModeScroll;
 use orzma_tty_engine::{Coalescer, SelectionType, TerminalHandle};
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn yank_writes_selection_to_clipboard_and_exits() {
-        use crate::ui::vi_mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
+        use crate::action::vi::mode::{EnterViModeActionEvent, ViModePlugin, ViModeState};
         use bevy::ecs::system::RunSystemOnce;
         use orzma_tty_engine::{SpawnOptions, TerminalBundle, ViMotion};
 

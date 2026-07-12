@@ -15,7 +15,7 @@ use crate::input::ime::{ImeCommit, ImeState};
 use crate::surface::OrzmaTerminal;
 use crate::surface::geometry::phys_to_pane_local;
 use crate::surface::geometry::topmost_surface_at;
-use crate::ui::vi_mode::ViModeState;
+use crate::action::vi::mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui::{ComputedNode, ComputedStackIndex, UiGlobalTransform};
@@ -164,7 +164,7 @@ mod tests {
         apply_default_shortcuts, apply_default_type, apply_default_vi_mode,
     };
     use crate::input::shortcuts::{ShortcutMessage, Shortcuts, TypeMessage, ViModeMessage};
-    use crate::ui::vi_mode::EnterViModeActionEvent;
+    use crate::action::vi::mode::EnterViModeActionEvent;
     use bevy::app::App;
     use bevy::ecs::resource::Resource;
     use bevy::input::keyboard::{Key, KeyCode};

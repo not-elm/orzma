@@ -8,7 +8,7 @@
 
 use crate::input::InputPhase;
 use crate::input::focus::KeyboardFocused;
-use crate::ui::vi_mode::ViModeState;
+use crate::action::vi::mode::ViModeState;
 use bevy::app::{App, Plugin, Update};
 use bevy::ecs::entity::Entity;
 use bevy::ecs::event::EntityEvent;

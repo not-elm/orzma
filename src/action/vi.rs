@@ -4,6 +4,7 @@
 
 mod applier;
 mod keymap;
+pub(crate) mod mode;
 
 use bevy::prelude::*;
 pub(crate) use keymap::{ResolvedViModeKeys, trigger_vi_mode_action};
@@ -61,6 +62,10 @@ pub(crate) struct ViActionPlugin;
 
 impl Plugin for ViActionPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((keymap::ViModeKeymapPlugin, applier::ViApplierPlugin));
+        app.add_plugins((
+            keymap::ViModeKeymapPlugin,
+            applier::ViApplierPlugin,
+            mode::ViModePlugin,
+        ));
     }
 }

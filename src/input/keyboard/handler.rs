@@ -19,7 +19,7 @@ use crate::input::shortcuts::{
     HeldRepeatKey, LeaderGate, LeaderPhase, ShortcutMessage, ShortcutMessages, ShortcutSet,
     Shortcuts, TypeMessage, ViModeMessage, clear_leader_phase,
 };
-use crate::ui::vi_mode::ViModeState;
+use crate::action::vi::mode::ViModeState;
 use bevy::ecs::system::SystemParam;
 use bevy::input::keyboard::{KeyCode, KeyboardInput};
 use bevy::prelude::*;

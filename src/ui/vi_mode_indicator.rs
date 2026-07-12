@@ -7,7 +7,7 @@
 use crate::font::TerminalUiFont;
 use crate::theme;
 use crate::ui::palette;
-use crate::ui::vi_mode::ViModeState;
+use crate::action::vi::mode::ViModeState;
 use bevy::app::{App, Plugin};
 use bevy::ecs::component::Component;
 use bevy::ecs::lifecycle::Remove;
@@ -239,7 +239,7 @@ mod tests {
 
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::vi_mode::ViModeState);
+            .insert(crate::action::vi::mode::ViModeState);
         app.update();
 
         let chip = find_indicator_child(&app, host).expect("chip");
@@ -276,7 +276,7 @@ mod tests {
             handle.enter_vi_mode(&mut coalescer);
             handle.scroll_page_up(&mut coalescer);
             entity.insert((handle, coalescer));
-            entity.insert(crate::ui::vi_mode::ViModeState);
+            entity.insert(crate::action::vi::mode::ViModeState);
         }
         app.update();
 
@@ -301,7 +301,7 @@ mod tests {
         app.update();
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::vi_mode::ViModeState);
+            .insert(crate::action::vi::mode::ViModeState);
         // First tick after ViModeState insertion: chip becomes visible and
         // Text is written from "" to "[0/0]" (becoming_visible path).
         app.update();
@@ -339,7 +339,7 @@ mod tests {
         app.update();
         app.world_mut()
             .entity_mut(host)
-            .insert(crate::ui::vi_mode::ViModeState);
+            .insert(crate::action::vi::mode::ViModeState);
         app.update();
 
         // Sanity: chip is visible.
@@ -354,7 +354,7 @@ mod tests {
         // immediately (within the same Bevy command queue).
         app.world_mut()
             .entity_mut(host)
-            .remove::<crate::ui::vi_mode::ViModeState>();
+            .remove::<crate::action::vi::mode::ViModeState>();
         // Flush observers — observers run at the command queue sync point;
         // call update() to be conservative.
         app.update();
