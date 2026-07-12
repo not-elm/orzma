@@ -13,22 +13,18 @@ mod window_title;
 
 use crate::action::ActionPlugin;
 use crate::cef_profile::CefProfileDir;
-use crate::input::focus::FocusSyncPlugin;
-use crate::input::hyperlink::HyperlinkInputPlugin;
 use crate::surface::SurfacePlugin;
 use crate::window_title::WindowTitlePlugin;
 use bevy::prelude::*;
 use configs::OrzmaConfigsPlugin;
 use font::FontBridgePlugin;
 use input::OrzmaInputPlugin;
-use input::ime::ImePlugin;
 use orzma_tty_engine::TerminalHandlePlugin;
 use orzma_tty_renderer::TerminalRendererPlugin;
 use orzma_webview::{OrzmaWebviewPlugin, cef_plugin};
 use orzma_webview_host::WebviewAssetRegistry;
 use session::DefaultSessionPlugin;
-use ui::ime_overlay::ImeOverlayPlugin;
-use ui::{OrzmaUiPlugin, vi_mode_indicator::ViModeIndicatorPlugin};
+use ui::OrzmaUiPlugin;
 
 fn main() {
     // NOTE: must run before App::new() spawns any thread — they write process
@@ -64,12 +60,7 @@ fn main() {
             OrzmaWebviewPlugin {
                 orzma_assets: orzma_registry,
             },
-            ViModeIndicatorPlugin,
             WindowTitlePlugin,
-            FocusSyncPlugin,
-            HyperlinkInputPlugin,
-            ImePlugin,
-            ImeOverlayPlugin,
         ))
         .run();
 }

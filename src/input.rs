@@ -12,6 +12,7 @@ pub(crate) mod shortcuts;
 
 use crate::{
     input::{
+        focus::FocusSyncPlugin, hyperlink::HyperlinkInputPlugin, ime::ImePlugin,
         keyboard::KeyboardInputPlugin, mouse::MouseInputPlugin, option_as_alt::OptionAsAltPlugin,
         shortcuts::ShortcutsPlugin,
     },
@@ -43,6 +44,9 @@ impl Plugin for OrzmaInputPlugin {
             OptionAsAltPlugin,
             KeyboardInputPlugin,
             MouseInputPlugin,
+            FocusSyncPlugin,
+            ImePlugin,
+            HyperlinkInputPlugin,
         ))
         .configure_sets(
             Update,

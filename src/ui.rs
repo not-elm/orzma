@@ -19,6 +19,11 @@ pub struct OrzmaUiPlugin;
 
 impl Plugin for OrzmaUiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((OrzmaUiRootPlugin, shell_surface::DefaultModeUiPlugin));
+        app.add_plugins((
+            OrzmaUiRootPlugin,
+            shell_surface::DefaultModeUiPlugin,
+            ime_overlay::ImeOverlayPlugin,
+            vi_mode_indicator::ViModeIndicatorPlugin,
+        ));
     }
 }
